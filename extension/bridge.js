@@ -33,11 +33,14 @@ let nextDocumentId = 0;
 self._engineLog = [];
 self._engineCrashOccurred = 0;
 
-/* A URL with an opaque HOLE ("{}"/"{tag}") is not concretely fetchable (used to gate reply/chunk fetch).
+/* A URL with an opaque HOLE is not concretely fetchable (used to gate reply/chunk fetch). Asked in
+   lib/callsite-url.js, in endpoint.c's own hole grammar: the `/\{[a-z]*\}/` that stood here answered NO for
+   every shape this engine emits (a digit, a dot or a paren in the name defeated it), so the gate matched `{}`
+   and `{id}` and let `{orphan3.arg0.replace()}` through to safeFetch as a percent-encoded literal path against
+   the page's own origin — a request for an address the page's code never determined.
    Endpoint IDENTITY (hole-normalization, shape/concrete collapse) is the ENGINE's now — the host's
    normHoles/SEG_HOLE/pathSegs/mergeCallsites/dedupShapeConcrete were DELETED. */
-const HOLE = /\{[a-z]*\}/;
-const hasHole = (s) => HOLE.test(s || "");
+const hasHole = (s) => astAddressHasHole(s || "");
 
 /* Map the engine's ONE structured `@RESULT <json>` line -> the analysis object the brain consumes.
    The ENGINE builds + DEDUPS the whole result (endpoints/params/headers/body, @S sinks, page errors,
@@ -274,12 +277,38 @@ function clusterKeyOf(msg) {
    -> new key -> stale frontier invalidated. Inline-only pages fall back to the HTML hash (rare; they're
    small, finish in one visit, never park). */
 /* The document's bundle IDENTITY is computed by the ENGINE (qjs_bundle_id, a real Lexbor <script> scan) —
-   NOT a host-side regex. The frontier key = origin | that id, is only a RELEVANCE grouping for which parked
-   recipes to pull on resume (recipes self-identify by function SOURCE hash, so a coarse key is sound). */
+   NOT a host-side regex.
+   THE KEY IS THE DOCUMENT'S ADDRESS AND ITS PROGRAM, AND THE SENTENCE THAT STOOD HERE WAS FALSE ABOUT THIS
+   TREE. It said the key "is only a RELEVANCE grouping for which parked recipes to pull on resume (recipes
+   self-identify by function SOURCE hash, so a coarse key is sound)". No recipe carries a source hash: the
+   grammar solver/cold.c writes is `f<chain-id>,<reward>` — a POSITIONAL id into the decision chain that
+   document's own scripts built, in the order they asked their questions — and solver/cold.c's own DFAIL asks
+   for `JS_OrphanHash` to be REBUILT (deleted at 1dd6bbe4) for a record kind that does not exist yet. A source
+   hash could not make a coarse key sound even if it existed, because it locates a FUNCTION and a recipe is a
+   PATH: there is no hash under which "arm 3 of question 7" means the same thing in a different program.
+   WHAT THE COARSE KEY COST, MEASURED ON REAL ROUTE SETS: `document_bundle_id` hashes the external <script src>
+   set, and an SPA ships one bundle to every route — app.netlify.com `/`, `/login`, `/signup` and `/teams` all
+   hash to `1qi62vn`; app.asana.com `/`, `/-/login` and `/0/home` all to `1mksgsl`. Under `origin|bundle` those
+   are ONE entry, and frontierPut REPLACES, so route B's residue overwrote route A's — and worse than losing
+   it: solver/engine.c seeds a session from the recipes OR from a boot flow, never both ("they are ALTERNATIVES"),
+   so route B opened holding route A's decision vectors and NO boot flow. Route B's own document was never
+   explored from script 0, and route A's arms were replayed positionally against route B's program.
+   SO THE KEY NAMES THE DOCUMENT THE RECIPES REPLAY IN: its ADDRESS (DOM §4.5 "Interface Document" — the
+   document's URL is the browser's own name for it, it is what the engine derives the principal from and what
+   every relative URL resolves against, and it is what tells one SPA route from another) plus the PROGRAM the
+   engine identified. The bundle half is retained for exactly what it always did: a redeploy changes a
+   content-hashed src, so the key changes and the stale residue is invalidated rather than replayed against
+   new code. The origin half is subsumed — an address carries its origin — and originOf is still asserted
+   below, as the statement that this zone can serialize a principal from the address the engine accepted.
+   WHAT THIS COSTS, STATED RATHER THAN HIDDEN: a document whose ADDRESS is volatile (a per-request id in the
+   query) now keys a new entry per visit and never resumes. That is the honest reading — a residue for a
+   document at an address nobody will visit again is not resumable — and it is strictly better than the
+   alternative it replaces, which was to resume it inside a DIFFERENT document. */
 /* Cross-session flow FRONTIER (IndexedDB): the learned surface (globalStore) already persists; this
-   persists the UNFINISHED frontier as compact replay recipes, keyed by origin+bundle-hash (a changed
-   bundle invalidates stale orphan indices). A parked frontier resumes next visit/session -> ONE
-   continuous attention across sessions, extracting more breadth each time until fully explored. */
+   persists the UNFINISHED frontier as compact replay recipes, keyed by the document's ADDRESS plus the
+   bundle hash (a changed bundle invalidates a residue written against other code). A parked frontier
+   resumes next visit/session -> ONE continuous attention across sessions, extracting more breadth each
+   time until fully explored. */
 /* THE STORE VERSION IS THE ENTRY GRAMMAR'S VERSION, and the upgrade transaction is where a grammar change is
    executed (IndexedDB §5.7 "Upgrading a database", §2.7.3 "Upgrade transactions"). v2 added `responseHeaders`
    (see frontierDoc); a v1 entry cannot state the response its document was created from, so it cannot be
@@ -371,6 +400,11 @@ async function frontierPut(key, entry) {
   try {
     const db = await idbOpen();
     await new Promise((res, rej) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+    /* THE RANKING VIEW MOVES WITH THE STORE, ON THE ONE DOOR THAT WRITES IT AND ONLY ONCE THE WRITE LANDED —
+       so a refused write leaves a row claiming a residue the store does not hold, which is the one way this
+       projection could start lying. It is skipped entirely when the index has not been built yet: an unbuilt
+       index is rebuilt from the store, which by then contains this. */
+    if (_frontierIndexBuilt) { if (entry && entry.recipes) _frontierIndex.set(key, frontierRow(entry)); else _frontierIndex.delete(key); }
   } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
 }
 async function frontierAll() {
@@ -379,21 +413,74 @@ async function frontierAll() {
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").getAll(); t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("scan", e); return []; }
 }
-/* HOST-level value-of-information for a PARKED frontier's rehydration order. It shares the engine's WFQ
-   POLICY (rank by value + an exploration bonus, never drop a work item) but NOT the engine's exact formula:
-   flow_weight is additive `val + optimism − per-opcode cpu-aging`; a parked frontier has no live per-opcode
-   CPU to age by, so its expected FUTURE productivity is best estimated by emit-per-VISIT (efficiency),
-   guarded against 0/0 on an unvisited entry (so the spec's anti-ratio point — the 0/0 degeneracy on unrun
-   LIVE flows — doesn't apply here). Same attention, two levels; the estimator adapts to each level's
-   granularity. The duplicate JS scheduler lib/priority.js was DELETED. */
-function frontierWeight(e) {
-  const emit = (e && e.emit) || 0, visits = (e && e.visits) || 0;
-  const rate = visits ? emit / visits : emit;   // expected emit per rehydration — future productivity, not raw total
-  const exploreBonus = 1 / (visits + 1);         // optimism: never starve an unvisited / under-visited frontier
-  return 1 + rate + exploreBonus;
+/* THE LEVEL-1 WEIGHT OF A WORK ITEM THAT IS NOT RESIDENT — a parked frontier, or a document waiting for an
+   instance. It shares the engine's WFQ POLICY (rank by value + an exploration bonus, never drop a work item)
+   but NOT the engine's exact formula: flow_weight is `val + optimism − cpu-aging`; a work item with no
+   instance has no live CPU to age by, so its expected FUTURE productivity is estimated by emit-per-VISIT.
+   IT IS IN THE ENGINE'S OWN CURRENCY, AND THE CONSTANT THAT MADE IT A SECOND SCALE IS DELETED. `1 + rate +
+   bonus` stood here, and the `1 +` is exactly what stops two levels of one WFQ from being one order: an
+   UNVISITED entry read 2.0 while an UNRUN FLOW — the same statement one level down, reward 0 plus the full
+   optimism bonus — reads 1.0 (solver/flow.c: "a never-run flow carries the FULL optimism bonus, so its weight
+   is its reward + 1.0"). Every cold entry therefore outranked every live engine whose top flow had aged below
+   2.0, unconditionally and for no reason anybody chose. flow_credit_emit counts "ONE EMISSION IS ONE POINT"
+   and `emit` counts findings the same way, so with the constant gone the two terms are the same quantity and
+   the comparison the pool now makes — is a non-resident item worth more than the RAM a resident one holds —
+   is a comparison rather than a coincidence of scales.
+   A ZERO-VISIT ROW IS A POSITIVE STATEMENT, NOT A DEFAULT: it says this item has never been SERVED at this
+   level, which is what a waiting document is, and its weight is then the full optimism bonus and nothing
+   else. The duplicate JS scheduler lib/priority.js was DELETED. */
+const FRONTIER_UNSERVED = { emit: 0, visits: 0 };
+function frontierWeight(row) {
+  DCHECK(row && typeof row.emit === "number" && row.emit >= 0 && row.emit === row.emit,
+         "a Level-1 work item was ranked with no emission count — `emit` is written by every frontierPut and " +
+         "is the reward half of the one WFQ order, so an absent one would rank this item by its optimism " +
+         "bonus alone and report a productive parked frontier as one that has never found anything");
+  DCHECK(typeof row.visits === "number" && row.visits >= 0 && Number.isInteger(row.visits),
+         "a Level-1 work item was ranked with no service count — `visits` is both the divisor of the reward " +
+         "and the decay of the optimism bonus, so an absent one makes an item that has been rehydrated a " +
+         "hundred times indistinguishable from one that has never been tried");
+  DCHECK(row.visits > 0 || row.emit === 0,
+         "a work item that has never been served carries emissions — nothing can have emitted before it ran, " +
+         "so the rate below would be a total masquerading as a per-visit expectation");
+  const rate = row.visits ? row.emit / row.visits : 0;   // expected emit per admission — future productivity
+  return rate + 1 / (row.visits + 1);                    // reward + optimism; no aging (nothing is burning CPU)
 }
-/* No separate cold-tier scheduler: parked frontiers are rehydrated into the SAME pool by _hostOps.admit
-   (ranked by frontierWeight, gated by the RAM budget) when live work drains — ONE WFQ, not two loops. */
+/* THE COLD TIER'S RANKING VIEW, WHICH IS NOT THE COLD TIER. The Level-1 order asks two numbers of a parked
+   frontier and the store answers with a whole parked DOCUMENT — its bytes, its script inventory, its header
+   list — so ranking by `getAll` deserialized every page this profile has ever parked in order to sort by
+   `emit` and `visits`. That was affordable only while rehydration was gated on "nothing live is running";
+   the gate is gone (it was a second admission policy beside the one WFQ), so the order is asked on every
+   scheduler round and the content may not ride with it.
+   IT IS A PROJECTION OF ONE STORE, NOT A SECOND REGISTRY, and the thing that makes that true is that this zone
+   is the store's ONLY writer: frontierPut is the one door and it updates this on its way through, so a row
+   here and an entry there cannot disagree. It is built once per zone lifetime from the store itself, which is
+   the only moment the two could differ. */
+const _frontierIndex = new Map();   // key -> { key, sourceUrl, emit, visits }
+let _frontierIndexBuilt = false;
+function frontierRow(e) {
+  DCHECK(typeof e.key === "string" && e.key !== "",
+         "a cold-tier entry carries no key — it is the name the pool holds this item under while it ranks it, " +
+         "and an entry the ranking cannot name is one it can neither admit nor exclude from being admitted twice");
+  DCHECK(typeof e.sourceUrl === "string" && e.sourceUrl !== "",
+         "a cold-tier entry carries no document address — the pool excludes a parked item whose document a " +
+         "LIVE tab already holds, and an item with no address is one it would rehydrate into a second " +
+         "instance beside the tab that is already running it");
+  return { key: e.key, sourceUrl: e.sourceUrl, emit: e.emit, visits: e.visits };
+}
+async function frontierIndex() {
+  if (_frontierIndexBuilt) return _frontierIndex;
+  for (const e of await frontierAll()) {
+    /* THE STORE'S OWN INVARIANT, ASSERTED WHERE IT IS READ BACK. frontierPut DELETES an entry with no recipes
+       rather than storing one, so every row in this store has them; the `e && e.recipes` filter that stood at
+       the rehydration site read that invariant as an option and would have skipped a residue silently. */
+    DCHECK(e && typeof e.recipes === "string" && e.recipes !== "",
+           "the cross-session frontier holds an entry with no parked recipes — frontierPut deletes rather than " +
+           "storing one, so this is a residue whose flows were dropped between the park and the store");
+    _frontierIndex.set(e.key, frontierRow(e));
+  }
+  _frontierIndexBuilt = true;
+  return _frontierIndex;
+}
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
    HOST-LEVEL WFQ (Level-1 of the ONE attention): interleave the LIVE document engines by value-of-
    information, in SLICES, so no single document (or one deep path within it) monopolizes CPU. Each
@@ -462,7 +549,66 @@ function _bootingCount() {
 function _admissionHasHeadroom() {
   if (_pool.length === 0) return true;     // always admit >= 1 so a lone document runs
   if (_bootingCount() > 0) return false;   // an instance that has not reported is a term the sum is missing
-  return _residentBytes() < HOT_RAM_BUDGET;
+  return !_atRamFloor();
+}
+/* THE FLOOR ITSELF, WHICH IS A DIFFERENT FACT FROM "MAY ANOTHER INSTANCE BE BUILT" AND IS NOW ASKED SEPARATELY.
+   A reservation in flight blocks admission and is NOT a reason to evict a running document — it is a reason to
+   wait for the number it has not reported yet. Written once because both askers must mean the same floor: the
+   sum of what the live instances last reported, against the working-set budget.
+   AND IT IS NO LONGER A REFUSAL. A wasm Memory never shrinks, so this predicate going true once is permanent
+   for the instances that made it true — which is exactly why answering it by declining every admission
+   deadlocked the whole extension. What answers it now is `_hostOps.evictee`: the one order decides which
+   resident engine gives its memory up, and the residue goes to the cold tier where it keeps its place. */
+function _atRamFloor() {
+  return _residentBytes() >= HOT_RAM_BUDGET;
+}
+/* THE ONE LEVEL-1 CANDIDATE ORDER — the highest-value work item that is NOT resident, whichever kind it is.
+   §scheduler: "Cold-tail resume is the SAME admission step (not a separate loop)". A waiting document and a
+   parked frontier are the same kind of thing to this order — work with no instance — and the ONE thing that
+   used to separate them was a liveness gate (`!_waiting.length && !_pool.some(e => !e._cold)`), i.e. "a cold
+   item competes only when nothing live exists". In continuous browsing that is never true, so a flow parked
+   last week could never compete at Level-1 regardless of its value, which is a SECOND admission policy beside
+   the one WFQ and §THERE IS NO GRIND calls that the cardinal violation. It is deleted; value decides.
+   A WAITING DOCUMENT RANKS AS UNSERVED, AND THAT IS COMPUTED RATHER THAN INVENTED. Its frontier key is
+   `address|bundle` and the bundle half is the ENGINE's Lexbor <script> scan — this zone may not guess it (a
+   host-side regex over the markup is exactly what §Architecture forbids), so the host does not yet know WHICH
+   residue this visit will resume and may not attribute another key's history to it. What it does know is that
+   this item has never been served at this level, which is the same statement solver/flow.c makes about a flow
+   it has never run, and it carries the same weight: the full optimism bonus, 1.0. The residue is then picked
+   up where it IS known — engineRoot's frontierGet, once the engine has answered.
+   AN ADDRESS A LIVE DOCUMENT HOLDS IS NOT ALSO A COLD CANDIDATE. The parked entry and the open tab are ONE
+   work item: the tab's engine resumes that residue itself, and rehydrating it beside the tab would replay one
+   document's flows in two instances. The exclusion is by ADDRESS rather than by key precisely because the key
+   is not yet known for the live half — and it is exact only because the address is now IN the key. */
+/* THE PICK IS SYNCHRONOUS, AND THE INDEX IS WHY IT CAN BE. Its caller must not suspend between choosing a
+   candidate and building its instance: a cluster can be rooted by a concurrent service round (hostNotice's
+   create arm), so a pick made before a suspension and acted on after it would reach engineCreate's
+   one-instance-per-cluster assert with a cluster that has just acquired one. The caller awaits frontierIndex()
+   once and hands the map in; from there this reads only in-memory state. */
+function _bestCandidate(idx) {
+  DCHECK(idx instanceof Map,
+         "the Level-1 pick was asked without the cold tier's ranking view — its caller awaits frontierIndex() " +
+         "so that this pick and the instance it leads to are one uninterrupted turn, and a pick that fetched " +
+         "its own would suspend in the middle of that");
+  const live = new Set();
+  for (const e of _pool) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
+  let best = null;
+  for (const job of _waiting) {
+    /* A SUB-FRAME NEVER ROOTS A CLUSTER — its embedder names it (see admit), so it is not admissible and is
+       therefore not a candidate. It keeps its place in `_waiting` and is answered by the instance that
+       creates it; nothing here drops it. */
+    if (job.msg.frameId && _isRealOrigin(job.msg.origin)) { live.add(job.msg.sourceUrl); continue; }
+    live.add(job.msg.sourceUrl);
+    const w = frontierWeight(FRONTIER_UNSERVED);
+    if (!best || w > best.w) best = { kind: "doc", job, w };
+  }
+  for (const row of idx.values()) {
+    if (live.has(row.sourceUrl)) continue;
+    if (_pool.some((p) => p.fkey === row.key)) continue;
+    const w = frontierWeight(row);
+    if (!best || w > best.w) best = { kind: "cold", row, w };
+  }
+  return best;
 }
 
 /* THE NAVIGATION RESPONSE'S HEADER LIST, IN THE ONE FORM THAT CROSSES AN ABI — the HTTP field lines the
@@ -779,21 +925,40 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   DCHECK(_bidRaw !== 0, "the engine answered a bundle id of 0 — document_bundle_id never returns one, and a 0 " +
                         "collides every document's frontier key with every other's");
   const _bid = _bidRaw.toString(36);
-  /* THE FRONTIER KEY'S ORIGIN HALF. originOf answers "" for an address that does not parse, and "" is a key
-     every such document would share — but qjs_init has already CHECKed that this address parses, so an empty
-     one here means the two parsers disagree rather than that the page had no origin. */
-  const _fkeyOrigin = originOf(msg && msg.sourceUrl);
-  DCHECK(_fkeyOrigin !== "", "this zone could not serialize an origin from a document address the engine's own " +
-                             "url.c accepted — the frontier key's origin half would be empty for every such page");
-  const fkey = _fkeyOrigin + "|" + _bid;
+  /* THE ADDRESS PARSES IN THIS ZONE TOO — asserted here even though the origin is no longer concatenated into
+     the key, because it is the statement the key's ADDRESS half rests on. originOf answers "" for an address
+     this zone cannot parse, and qjs_init has already CHECKed that the engine's own url.c parsed it, so an
+     empty answer means the two parsers disagree about what document this is — under which the pool would key
+     a residue by a string one of them does not consider an address at all. */
+  DCHECK(originOf(msg && msg.sourceUrl) !== "",
+         "this zone could not serialize an origin from a document address the engine's own url.c accepted — " +
+         "the frontier key would name a document by a string the two parsers do not agree is one");
+  const fkey = msg.sourceUrl + "|" + _bid;
   const prior = persist ? await frontierGet(fkey) : null;
+  /* THE RESIDUE THIS SESSION IS ABOUT TO REPLAY BELONGS TO THIS DOCUMENT. The engine seeds its frontier from
+     these recipes INSTEAD of a boot flow, so a residue from another document is not a degraded resume — it is
+     a frontier of flows standing on a path this program never took, with this document's own first flow
+     absent. Under the key as it stands this is an identity; it is written down because it fires the moment a
+     term leaves the key that this comparison still carries, which is exactly how the coarse key came to look
+     sound for as long as it did. */
+  DCHECK(!prior || prior.sourceUrl === msg.sourceUrl,
+         "the cold tier answered this document's frontier key with a residue parked by a document at a " +
+         "DIFFERENT address (" + (prior && prior.sourceUrl) + " vs " + msg.sourceUrl + ") — the engine seeds " +
+         "from recipes instead of a boot flow, so this document would be replayed along another one's " +
+         "decision vectors and never explored from its own first script");
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
   await rend.renderer.begin((prior && prior.recipes) ? prior.recipes : "");
   // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
   // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
   // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
-  // global). The query param does NOT change the frontier key (origin+bundle), so a later plain visit resumes.
+  // global). THE QUERY PARAM IS PART OF THE FRONTIER KEY, which it was not while the key was origin+bundle:
+  // the key is the document's ADDRESS plus the bundle id, so `?__forcepark=1` names its own entry and a later
+  // PLAIN visit to the same route resumes nothing. That is the correct reading rather than a cost — the
+  // residue was parked by a document at that address, and a document at a different address is a different
+  // document — and it is what the round trip verifies against: the stored sourceUrl carries the param, so a
+  // rehydration re-derives the same key and the `!(prior && prior.recipes)` guard below still keeps a resumed
+  // session from re-parking forever.
   // The park is DEFERRED N steps (not requested here, before any step) so it fires MID-EXPLORATION — after
   // boot + the first flow bursts have RUN, FORKED, and SUSPENDED — exactly like a production RAM-pressure park
   // (hostSchedule requests park only after engines have stepped, line ~285). Requesting it pre-step parked at
@@ -932,7 +1097,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   // sink gets reported as exploitable. A load that does not load answers `bytes: null`, which is a navigable
   // that still exists showing an error page, exactly as the engine's own child_document reads it.
   const fetchedDocument = async (u) => {
-    if (!canFetch) return { csp: null, bytes: null };
+    if (!canFetch) return { headers: {}, bytes: null };
     try {
       const abs = new URL(u, msg.sourceUrl).href;
       // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed:
@@ -944,14 +1109,21 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
              "CSP kills a sink gets reported as exploitable");
       /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page, which is what
          a null body means to the engine's child_document. That is a real §7.4 outcome, not a softening. */
-      if (!r.ok) return { csp: null, bytes: null };
+      if (!r.ok) return { headers: {}, bytes: null };
       /* THE BYTES, because a Document is PARSED from a byte sequence. This answered `r.body` while that was
          `resp.text()`'s UTF-8 decode, so a document served in any other encoding reached lexbor already
          replaced with U+FFFD and HTML §13.2.3.2's encoding sniffing — the BOM, then the transport charset,
          then §13.2.3.3's prescan — had nothing left to decide. The engine owes that algorithm; this zone owes
          it the bytes. */
-      return { csp: r.headers["content-security-policy"] || null, bytes: r.body };
-    } catch (e) { RETHROW_FATAL(e); return { csp: null, bytes: null }; }
+      /* THE WHOLE HEADER LIST, NOT ONE POLICY PULLED OUT OF IT. This answered
+         `r.headers["content-security-policy"] || null` — one name, chosen here — so HTML §7.1.3's opener
+         policy, §7.1.4's embedder policy and §7.5.1's `Origin-Agent-Cluster` could not reach a navigated
+         Document at ALL, and every document a navigation created got the agent-cluster keying and the
+         cross-origin isolation of a response that sent nothing. Which names matter is the ENGINE's question,
+         in the browser components that own those standards; this zone relays what the response carried, the
+         same way it already does for the document that roots an instance (responseFieldLines). */
+      return { headers: r.headers, bytes: r.body };
+    } catch (e) { RETHROW_FATAL(e); return { headers: {}, bytes: null }; }
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
      this zone stamps on everything it sends — both are read only by the notice router below, which is the
@@ -1157,10 +1329,14 @@ async function engineJoin(eng, msg, docName, topLevelUrl) {
    what "ONE WFQ policy at both levels" means — and restating it here would additionally be a branch on a state
    the producer cannot be in, since qjs_top_weight DCHECKs `g_begun` (main.c) and qjs_begin is what sets it. */
 async function engineRecordFacts(eng) {
-  /* -INFINITY IS AN ANSWER, NOT A BROKEN ONE. `engine_top_weight` is `flow_best() ? flow_weight(b) : -1.0/0.0`
-     (solver/engine.c), so negative infinity is the engine's POSITIVE statement that its frontier holds no
-     runnable flow — and it is the RIGHT statement, because that is precisely the value that ranks below every
-     real weight in the comparisons below. Demanding a finite number here rejected the producer's own vocabulary:
+  /* -INFINITY IS AN ANSWER, NOT A BROKEN ONE. `engine_top_weight` is
+     `flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0` (solver/engine.c), so negative infinity is the
+     engine's POSITIVE statement that its frontier holds no runnable flow — and it is the RIGHT statement,
+     because that is precisely the value that ranks below every real weight in the comparisons below. THAT
+     SENTENCE PREDATES THE C THAT MAKES IT TRUE: the engine asked flow_best, which ranks EVERY member including
+     the ones parked on this very host, so an engine whose whole frontier was waiting published the weight of a
+     flow it could not run — it burned no CPU, so that weight never aged, so the evictee pick below could never
+     reach it. Demanding a finite number here rejected the producer's own vocabulary:
      every drained engine aborted its round, was destroyed and re-provisioned, and aborted again — 43279 crashes
      against 0 completed runs on a single fixture page, with the pool still reporting a live framed renderer, so
      nothing about the shape of the pool said anything was wrong.
@@ -1349,6 +1525,11 @@ function hostClusterOf(key) {
    One entry per operation that actually crossed, dropped with the instance that asked (engineFinalize). */
 const _remoteOps = new Map();   // token -> { asker, req }
 let _nextRemoteToken = 1;
+/* §7.3.2.3's "let group be a NEW browsing context group", as the only thing this zone needs of one: an id no
+   other group has. It is minted here and never derived from anything an engine said, for the same reason the
+   rendezvous token above is — a group id decides which documents share a heap, and an untrusted instance that
+   could name an existing group could put its own document behind another origin's principal. */
+let _nextSwapGroup = 1;
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
@@ -1404,8 +1585,25 @@ async function hostNotice(eng, line) {
        creation URL sits before it. The C router already reads it this way — its splitter stops at the policy
        and keeps the remainder verbatim — and two readers of one format that disagree about where a field ends
        are two formats. */
-    const policy = (loaded && loaded.csp) || f.slice(6).join("\t") || "";
-    if (policy) msg.responseHeaders["content-security-policy"] = policy;
+    DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
+           "the document load answered no header list — §7.5.1 creates the child's Document from its " +
+           "response's headers, and a missing list is a producer that stopped writing one rather than a " +
+           "response that carried none, which is the empty object");
+    for (const _n of Object.keys(loaded.headers)) msg.responseHeaders[_n] = loaded.headers[_n];
+    /* AND THE CREATOR'S CLONE IS THE FALLBACK FOR THE POLICY ALONE — §7.1.7/§7.4 in the order the spec states
+       them: a Document is judged against the policy container its own response carried, and a response that
+       carried none inherits the clone of its creator's, which is the field the notice carries. It is applied
+       only when the response carried no `Content-Security-Policy`, which is now a question about the relayed
+       list rather than about a single field this zone had extracted.
+       THE CLONE IS THE REST OF THE RECORD, not one field: it is a raw CSP header value and HTTP allows HTAB
+       inside one (this engine's own CSP parser treats tab as source-list whitespace), so a policy carrying one
+       splits into more fields than the record has. That is also why it is LAST and why the top-level creation
+       URL sits before it. The C router already reads it this way — its splitter stops at the policy and keeps
+       the remainder verbatim — and two readers of one format that disagree about where a field ends are two
+       formats. */
+    const inheritedPolicy = f.slice(6).join("\t") || "";
+    if (!msg.responseHeaders["content-security-policy"] && inheritedPolicy)
+      msg.responseHeaders["content-security-policy"] = inheritedPolicy;
     /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, which the CREATOR decided (§7.4: the creator's own for a nested
        navigable, the navigable's own address for an auxiliary one) and this zone carries, because the new
        instance cannot see what embeds it. §8.1.3.5 reads it to decide whether the child is a SECURE CONTEXT,
@@ -1452,6 +1650,59 @@ async function hostNotice(eng, line) {
        boot turns out. AWAITED, because the notices of one round are acted on IN ORDER: a page opens a window
        and posts to it in the same turn, so the instance must exist before the post that names it is routed. */
     await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true)._readyP;
+    return;
+  }
+  /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
+     opener policy", step 10: a navigation whose response's opener policy does not match the navigable's active
+     document's builds its Document in a NEW top-level browsing context in a NEW browsing context group, and the
+     old browsing context is left behind (the emitting instance has already recorded that, which is what makes
+     the opener's own handle answer `closed === true`).
+     SO THIS IS THE ONE PROVISIONING THAT MUST NOT JOIN. An instance is `(browsing context group, origin)` and a
+     swap changes the FIRST half, so a swapped-to document at an origin this pool already runs is still a
+     SEPARATE heap — joining it to the existing instance would put the two principals COOP exists to separate
+     behind one heap and one object graph. The group id is therefore minted HERE and by a counter: it is a
+     routing fact, this zone's alone (SECURITY.md), and deriving it from anything the engine said would let an
+     untrusted instance name a group that already exists.
+     THREE FIELDS AND NO MORE, because §7.3.2.3 creates the new browsing context "with null, null, and group" —
+     a NULL CREATOR, so there is no policy container to clone, no opener policy to inherit and no opener link to
+     make. The swapped-to navigable is a top-level traversable, so HTML §8.1.3.1's top-level creation URL for
+     its environments is its own address, derived here rather than sent twice and able to disagree.
+     AND THE BYTES ARE LOADED BY THIS ZONE, not carried on the record: the emitting instance HAS the response
+     (it needed the headers to obtain the opener policy that decided the swap) and may not hand it over — an
+     untrusted engine that could supply bytes AND a principal could name any origin's document into existence.
+     RESIDUAL, and it is one request too many rather than a wrong answer: a real browser commits the response it
+     already has, and this fetches the address again, so a server that answers differently gives the new
+     instance a document the first response's policy did not describe. Closing it is this zone remembering its
+     OWN reply to the `document.fetch` that navigation already made, keyed by (instance, address). */
+  if (f[0] === "navigable.swap") {
+    DCHECK(f.length >= 4 && !!f[1] && !!f[2],
+           "a navigable.swap notice was short of its fields — the engine writes the new document's name, the " +
+           "address it is loading and the origin it computed, and a record missing either of the first two " +
+           "names a Document this zone cannot provision while the navigable it replaces is already closed");
+    DCHECK(!hostHolderOf(f[1]),
+           "§7.1.3.2's swap named a document this pool already holds — the name is minted fresh for each swap " +
+           "(solver/world.h), so a collision is one instance provisioned for two Documents, which is one heap " +
+           "answering for two");
+    const swapped = await eng.fetchedDocument(f[2]);
+    DCHECK(swapped && (swapped.bytes === null || swapped.bytes instanceof Uint8Array),
+           "the swapped-to document load answered neither bytes nor the null that means it did not load");
+    DCHECK(swapped.headers && typeof swapped.headers === "object",
+           "the swapped-to document load answered no header list — §7.5.1 creates its Document from the " +
+           "response's headers, and §7.1.3 obtains the opener policy that decides its new group's cross-origin " +
+           "isolation mode out of the same list");
+    const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
+                      sourceUrl: f[2], origin: originOf(f[2]), groupId: "swap:" + (_nextSwapGroup++),
+                      responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
+    for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
+    /* NO INHERITED POLICY LINE HERE, and its absence is the spec rather than a field this record forgot: the
+       create arm above falls back to the creator's cloned container for a response that carried none, and a
+       swapped-to Document HAS no creator to clone one from. A response with no `Content-Security-Policy` is a
+       Document under no policy, which is what §7.3.2.1 with a null creator produces. */
+    DCHECK(hostClusterOf(clusterKeyOf(swapMsg)) === null,
+           "§7.1.3.2's swap minted a browsing-context group this pool already runs an instance for — the group " +
+           "id is a fresh counter, so a hit means two swaps were given one id and the second would JOIN the " +
+           "heap the first built, which is exactly the boundary a group switch exists to draw");
+    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], f[2], true)._readyP;
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -1696,7 +1947,11 @@ async function engineServiceHostRequests(eng) {
     // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
     // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
     // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
-    await engineAnswer(eng, id, { csp: r.csp }, r.bytes);
+    /* §7.4 step 14's answer: the RESPONSE'S HEADER LIST as the HTTP field lines it delivered, and the
+       document as BYTES. It carried one extracted policy (`{csp}`) — see fetchedDocument. The field-line form
+       is the one a header list crosses this ABI in and is exactly what qjs_init takes, so a navigated Document
+       and a rooted one are built from the identical shape by the identical parse. */
+    await engineAnswer(eng, id, { headers: responseFieldLines(r.headers) }, r.bytes);
   }
 }
 /* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
@@ -1888,18 +2143,26 @@ async function hostSchedule(pool, ops) {
        the only thing that moves an engine between hot and fetching is this loop, and a detached service round
        touches only the engine it belongs to (which is not in `hot`). */
     if (ops.setFloor) await ops.setFloor(best, hot.length > 1 ? runner : -1e300);   // outranked-by-runner-up => yield; lone engine => run on
-    // Normally step `best` (the highest-value engine). But under RAM pressure with >1 engine competing for the
-    // working-set floor, step the LOWEST-value engine after flagging it to PARK — evicting it to the IDB cold
-    // tier (residue -> replay recipes) frees RAM so the top engines keep running (Level-1: "the lowest-weight
-    // one is EVICTED under pressure"). Parking needs a step (the flag is read inside qjs_step), and `best` never
-    // steps the low engine, so we must target it directly. A LONE over-budget engine is never parked: no slot
-    // contention, it runs to completion (admission gates new docs until it frees its slot; hard OOM crashes loud).
+    /* Normally step `best` (the highest-value engine). At the RAM floor, step the engine the ONE order says
+       must give up its memory — after flagging it to PARK, which evicts it to the IDB cold tier (residue ->
+       replay recipes) so the work item that outranks it can have the RAM. Parking needs a step (the flag is
+       read inside qjs_step) and `best` never steps that engine, so it is targeted directly.
+       THE CONDITION THAT USED TO SELECT IT IS DELETED, AND IT WAS THE DEADLOCK. `hot.length > 1` said a LONE
+       over-budget engine is never parked because "no slot contention, it runs to completion" — and on a real
+       site an engine does not run to completion. A wasm Memory never shrinks, so the first instance to touch
+       the floor closed admission for the whole extension for the rest of the session: measured at pool = 1,
+       residentBytes 539,820,032 against a 512 MiB floor, 142 documents waiting, and topWeight and
+       residentBytes byte-identical over six minutes. §scheduler: "STARVE means deprioritize-and-page
+       (resumable, cross-session), NEVER terminate" — and the cold tier exists precisely so that the ONLY
+       engine can still yield its residue. There is no count in the question any more: `ops.evictee` asks the
+       one Level-1 order whether anything that is NOT resident is worth more than the worst thing that IS. */
     let target = best;
-    if (ops.requestPark && ops.underPressure && hot.length > 1 && ops.underPressure()) {
-      target = hot[0];
-      for (const e of hot) if (ops.weight(e) < ops.weight(target)) target = e;
-      await ops.requestPark(target);
-    }
+    DCHECK(typeof ops.evictee === "function" && typeof ops.requestPark === "function",
+           "the pool was driven with no eviction op — the RAM floor is answered by the WFQ giving up the " +
+           "lowest-value resident engine, so without it the floor is answered by refusing every admission " +
+           "forever and one document holds the whole extension");
+    const evict = await ops.evictee(hot);
+    if (evict) { target = evict; await ops.requestPark(evict); }
     /* THE PARK FLAG AND THE STEP THAT READS IT STAY ORDERED ACROSS THE BOUNDARY, and not by luck: both are
        calls on ONE renderer's port, which is point-to-point and delivers in order, and this loop makes no other
        call into that instance in between. The pair was atomic when it was two ccalls; it is sequenced now. */
@@ -1973,8 +2236,17 @@ let _hostDriving = false;
    a second heap for one similar-origin window agent. `joinedRooted` is the pre-existing case beside it (a
    RESHIP re-delivery, a sub-frame of an instance already running), kept apart so one cannot be read as the
    other. `peakBooting` is the high-water mark of simultaneous reservations, which is what says whether this
-   run ever had two provisionings in flight at once. */
-const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0 };
+   run ever had two provisionings in flight at once.
+   `evicted` AND `rehydrated` ARE THE TWO ENDS OF THE RAM FLOOR, counted apart because their DIFFERENCE is the
+   only thing that says whether the floor is doing its job or churning. One eviction that is never rehydrated
+   is a document that gave its memory to a better one; an eviction and a rehydration of the SAME item, round
+   after round, is the Level-1 ratchet solver/flow.h names (a resident engine's weight ages by CPU without
+   bound while a parked item's estimate does not, so a mature document sinks below every page that arrives
+   afterwards and its own cold row then wins it straight back). Nothing here truncates that — it is measured
+   so the primitive flow.h asks for, start-time fair queueing's virtual time applied at LEVEL-1, is built
+   against a number rather than against a suspicion. */
+const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0,
+                        evicted: 0, rehydrated: 0 };
 const _hostOps = {
   weight: engineWeight,
   /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
@@ -1989,11 +2261,47 @@ const _hostOps = {
            "against it, and a NaN floor makes every comparison false so the flow never yields");
     await eng.r.renderer.setYieldFloor(floor);
   },
-  underPressure: () => _residentBytes() >= HOT_RAM_BUDGET,   // summed live wasm memory over the working-set floor
-  /* THE COLD-TIER PARK, whose engine half is an unbuilt capability that says so: qjs_request_park is a bare
-     DFAIL naming the serializer to write. The catch here swallowed exactly that — the abort a DFAIL exists to
-     produce was turned into a no-op, so the host went on believing it had evicted an engine that never parked
-     and the missing capability had no symptom at all. It is the forcing function; it is not caught. */
+  /* WHICH RESIDENT ENGINE MUST GIVE UP ITS RAM, ASKED OF THE ONE ORDER — the third moment of the SAME question
+     `admit` asks and `frontierWeight` answers, and the reason those are no longer three policies. Admission
+     asks it when there is room, this asks it when there is not, and rehydration is not a separate question at
+     all (a parked frontier is simply a candidate that is not resident).
+     THE FLOOR IS THE ONLY GATE, AND IT IS THE FLOOR RATHER THAN `_admissionHasHeadroom`. Those two are
+     different facts and were one before: a RESERVATION in flight also blocks admission, and a boot that has
+     not reported yet is not a reason to evict a running document — it is a reason to wait for the number.
+     STRICTLY GREATER, so a tie leaves the incumbent holding the RAM. That is the identical comparison
+     solver/flow.c's flow_pick makes one level down ("the thread moves only for a flow that is strictly
+     better"), and it is what stops two items of equal weight from paying a park and a rehydration to swap
+     places. It is not a bound: the loser keeps its place, its weight and every flow it holds.
+     WHAT IT CAN STILL DO IS CHURN, NAMED HERE BECAUSE IT IS MEASURED RATHER THAN SUSPECTED (`evicted` and
+     `rehydrated` beside each other in _reserveStats). The two sides of this comparison are not denominated
+     the same way through time: a resident engine's weight AGES by CPU without bound (solver/flow.h: "a
+     document's best flow falls by one point per second of unproductive CPU while a document that boots today
+     enters at 1.0… past it a mature document is outranked by every page that arrives afterwards"), while a
+     parked item's `emit/visits` is a RATE that does not fall — so a productive heavy document can sink below
+     the floor's rivals, park, and win its own slot straight back on the next round. Every such cycle does
+     real work (the replay re-explores) and admission still interleaves the waiting tabs around it, so it is a
+     COST and not a starvation — and the primitive that removes it is the one flow.h already names: start-time
+     fair queueing's virtual time, applied at LEVEL-1 so an item RE-ENTERING the resident set enters at the
+     resident set's virtual time instead of resetting its own clock by leaving. Not invented here, because
+     every substitute for it is a decay constant somebody picked. */
+  evictee: async (hot) => {
+    if (!_atRamFloor()) return null;   // there is room: nothing has to give anything up
+    const cand = _bestCandidate(await frontierIndex());
+    if (!cand) return null;                        // nothing is waiting for the memory
+    let worst = null;
+    for (const e of hot) if (!worst || engineWeight(e) < engineWeight(worst)) worst = e;
+    if (!worst) return null;                       // every live engine is mid-round; the floor is re-asked next round
+    if (!(cand.w > engineWeight(worst))) return null;
+    _reserveStats.evicted++;
+    return worst;
+  },
+  /* THE COLD-TIER PARK. The catch that stood here swallowed the engine's own abort, so the host went on
+     believing it had evicted an engine that never parked. It is the forcing function; it is not caught.
+     THE CAPABILITY IT USED TO NAME AS UNBUILT IS BUILT: this comment said "qjs_request_park is a bare DFAIL
+     naming the serializer to write", and main.c's qjs_request_park DCHECKs `g_begun` and calls
+     engine_request_park, which raises `g_park_req`; engine_sched_slice takes it at the next step boundary,
+     switches the running flow out, writes every member through cold_park and answers ENGINE_STEP_DONE. A
+     comment that names another file's absence is a claim about that file, and this one outlived it. */
   requestPark: async (eng) => { await eng.r.renderer.requestPark(); },
   /* INCREMENTAL MERGE (coarse cadence): snapshot a HOT engine's current findings + merge to the cumulative
      moat WITHOUT waiting for a finalize that an unbounded engine never reaches. First sight starts the clock,
@@ -2063,12 +2371,29 @@ const _hostOps = {
     try { await engineServiceFetch(eng); await engineRecordFacts(eng); }
     finally { if (eng._dropped) eng.r.destroy(); }
   },
-  admit: async () => {   // gate CREATION to the RAM budget: build an instance only under memory pressure headroom
-    // 1) seat waiting LIVE documents (the user's open tabs) first
+  /* ADMISSION IS THE ONE ORDER ASKED WHERE THERE IS ROOM — the same question `evictee` asks where there is
+     not. It runs in two parts and they are DIFFERENT KINDS OF QUESTION, which is why the ranked part no
+     longer contains the routing part:
+       (1) ROUTING, WHICH COSTS NO RAM AND IS THEREFORE NOT RANKED AND NOT GATED. A waiting document whose
+           agent cluster already has an instance JOINS it, and a sub-frame waits for its embedder to name it.
+           Both used to sit INSIDE the RAM-gated walk, so a same-origin iframe of a page that was already
+           running could not attach to its own agent while the pool was at the floor — a join blocked by a
+           budget it does not spend.
+       (2) ADMISSION, over the ONE candidate order (_bestCandidate): a waiting document and a parked frontier
+           compete by value, and the only thing that holds an item back is the RAM floor — never a liveness
+           gate saying a cold item may not compete. That gate (`!_waiting.length && !_pool.some(e => !e._cold)`)
+           is deleted: in continuous browsing there is always a live document, so a flow parked last week
+           could never be reached regardless of its value. */
+  admit: async () => {
+    /* THE ONE SUSPENSION IN THIS FUNCTION, TAKEN FIRST AND DELIBERATELY. Everything below it — the routing
+       walk, the pick, and the synchronous half of engineCreate that takes the pool slot — then runs in one
+       uninterrupted turn, which is what makes "the pool is the register of who holds what" true at the moment
+       the register is consulted. */
+    const _coldRanking = await frontierIndex();
     /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
        defer below) and a shift would either drop it or spin this loop forever re-reading it. */
     let i = 0;
-    while (i < _waiting.length && _admissionHasHeadroom()) {
+    while (i < _waiting.length) {
       const job = _waiting[i];
       /* ONE INSTANCE PER AGENT CLUSTER, ASKED OF THE POOL — which IS the register of who holds what, so nothing
          here remembers a document it no longer holds. This asked ONE INSTANCE PER DOCUMENT, by documentId, and
@@ -2133,61 +2458,89 @@ const _hostOps = {
          (the create arm names that residual — the sandbox flag set is not yet carried on the notice), so such a
          document is correctly its own cluster of one and roots it here. */
       if (!isTop && _isRealOrigin(job.msg.origin)) { i++; continue; }
-      _waiting.splice(i, 1);
-      /* THE JOB IS ATTACHED TO THE RESERVATION BEFORE ANYTHING SUSPENDS, which is what makes the boot's failure
-         path the ONE owner of every caller on this document. It used to be pushed after the await, so a
-         creation that aborted answered this job here (`crashResult`) while any caller that had joined in the
-         meantime was answered by nobody — two settlement owners for one record, split by timing.
-         boot/creation abort: LOUD failure, not a quiet degenerate result, and that is engineBootFailed's now:
-         it banners once, answers every attached caller with the crash record, destroys the frame and takes the
-         reservation back out of the pool. An invariant abort from the creation path (the init return code, the
-         bundle id, the frontier key's origin) is NOT a boot abort — it is this zone's contract with the engine
-         breaking — so it travels on through `_readyP` to hostSchedule's own failure arm. */
-      const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false);
-      DCHECK(hostClusterOf(key) === eng,
-             "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
-             "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
-             "pool that does not hold it is the race this reservation exists to close, still open");
-      eng._resolvers.push(job);
-      await eng._readyP;
+      i++;
     }
-    // 2) ONE frontier: when no LIVE work is pending/running and RAM has headroom, rehydrate the highest-value
-    //    COLD recipes into the SAME pool so they interleave with (and by) the one WFQ — not a second scheduler.
-    if (!_waiting.length && !_pool.some((e) => !e._cold) && _admissionHasHeadroom()) {
-      const cold = (await frontierAll()).filter((e) => e && e.recipes && !_pool.some((p) => p.fkey === e.key));
-      cold.sort((a, b) => frontierWeight(b) - frontierWeight(a));   // one global value order
-      for (const c of cold) {
-        if (!_admissionHasHeadroom()) break;
-        /* THE WHOLE PARKED DOCUMENT COMES BACK THROUGH ONE READER, and the recipe's flows resume inside it.
-           `frontierDoc` is the same shape the park wrote, asserted the same way in the other direction, so
-           the field the tier was missing (`responseHeaders` — the policy container) cannot go missing again
-           from one end only. */
-        const doc = frontierDoc(c, "came back from the cold tier");
-        /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
-           document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
-           c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
-           site refuses to deliver a message for an empty one rather than inventing one. */
-        /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
-           browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
-           no live document it may share a heap with, and the frontier key (origin|bundle, already unique per
-           recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
-           what lets the origin half stay "" for a recipe whose principal is empty: an empty half of a key
-           whose other half is unique collides with nothing, so nothing is invented. */
-        const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
-                      origin: doc.origin, groupId: "cold:" + c.key,
-                      responseHeaders: doc.responseHeaders,
-                      topLevelUrl: doc.topLevelUrl, credentialed: c.credentialed, persist: true };
-        /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
-           is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
-           one place on every creation path rather than one arm per call site. What was left in the catch was
-           an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
-           caught something it immediately gave back. A rehydrated cold recipe always participates in the
-           frontier and never has a caller, which is the `cold` argument. */
-        /* THE STORED DOCUMENT IS PASSED AS IT WAS PARKED. `c.html || ""` stood here and it defeated
-           engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
-           reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
-        await engineCreate(doc.code, doc.html, msg, true, null, null, true)._readyP;
+    /* (2) THE ONE ADMISSION, over the ONE order. Nothing distinguishes a waiting tab from a parked frontier
+       here except its weight, which is the whole of what "Cold-tail resume is the SAME admission step" means.
+       ONE PER ROUND, WHICH IS THE LEVEL-1 LOOP'S OWN SHAPE AND NOT A BUDGET. hostSchedule is "rank, advance the
+       winner, re-rank" and an admission is an advance: seating the whole backlog inside one call would rank 142
+       documents against a working set measured before any of them existed, and would hold the pool through 142
+       sequential boots while the engines already resident ran not one step. Re-asking per round also re-reads
+       the floor after a step has moved it. AND IT IS WHAT KEEPS A FAILING REHYDRATION FROM SPINNING: a cold
+       entry whose document aborts on boot leaves the pool through engineBootFailed and is a candidate again, so
+       a loop that kept picking inside one call would never return; picked once per round it banners once per
+       round, loudly, with every other engine still being stepped in between. */
+    const cand = _admissionHasHeadroom() ? _bestCandidate(_coldRanking) : null;
+    if (cand) {
+      DCHECK(cand.kind === "doc" || cand.kind === "cold",
+             "the admission order produced a candidate of a kind this zone has no way to build (`" +
+             cand.kind + "`) — every work item that is not resident is either a document waiting for an " +
+             "instance or a parked frontier, and a third would be silently skipped by whichever of the two " +
+             "arms below happened to be the fallback");
+      if (cand.kind === "doc") {
+        const job = cand.job;
+        const key = clusterKeyOf(job.msg);
+        const j = _waiting.indexOf(job);
+        DCHECK(j >= 0,
+               "the admission order picked a waiting document that is no longer waiting — `_waiting` is only " +
+               "spliced by this function and by hostClear, and a job admitted twice is one document answered " +
+               "by two instances and one caller resolved by whichever finishes first");
+        _waiting.splice(j, 1);
+        /* THE JOB IS ATTACHED TO THE RESERVATION BEFORE ANYTHING SUSPENDS, which is what makes the boot's failure
+           path the ONE owner of every caller on this document. It used to be pushed after the await, so a
+           creation that aborted answered this job here (`crashResult`) while any caller that had joined in the
+           meantime was answered by nobody — two settlement owners for one record, split by timing.
+           boot/creation abort: LOUD failure, not a quiet degenerate result, and that is engineBootFailed's now:
+           it banners once, answers every attached caller with the crash record, destroys the frame and takes the
+           reservation back out of the pool. An invariant abort from the creation path (the init return code, the
+           bundle id, the frontier key's address) is NOT a boot abort — it is this zone's contract with the engine
+           breaking — so it travels on through `_readyP` to hostSchedule's own failure arm. */
+        const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false);
+        DCHECK(hostClusterOf(key) === eng,
+               "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
+               "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
+               "pool that does not hold it is the race this reservation exists to close, still open");
+        eng._resolvers.push(job);
+        await eng._readyP;
+        return;
       }
+      /* THE WHOLE PARKED DOCUMENT COMES BACK THROUGH ONE READER, and the recipe's flows resume inside it.
+         `frontierDoc` is the same shape the park wrote, asserted the same way in the other direction, so
+         the field the tier was missing (`responseHeaders` — the policy container) cannot go missing again
+         from one end only.
+         THE CONTENT IS FETCHED HERE AND NOT AT THE RANKING, which is the other half of why the cold tier has a
+         ranking VIEW. The order reads two numbers; only the item it PICKS is deserialized. */
+      const stored = await frontierGet(cand.row.key);
+      DCHECK(stored,
+             "the cold tier's ranking view named an entry the store does not hold — this zone is the store's " +
+             "only writer and frontierPut updates the view on its way through, so a row with no entry is the " +
+             "projection and the store having drifted apart");
+      const doc = frontierDoc(stored, "came back from the cold tier");
+      /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
+         document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
+         c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
+         site refuses to deliver a message for an empty one rather than inventing one. */
+      /* A RESUMED RECIPE IS A CLUSTER OF ONE, and its GROUP says so rather than borrowing a tab's. The
+         browsing-context group it parked in is gone — the tab was closed, or the session was — so there is
+         no live document it may share a heap with, and the frontier key (address|bundle, already unique per
+         recipe and never equal to a tab id) is the honest name for the group it resumes into. That is also
+         what lets the origin half stay "" for a recipe whose principal is empty: an empty origin on a key
+         whose group is unique collides with nothing, so nothing is invented. */
+      const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
+                    origin: doc.origin, groupId: "cold:" + cand.row.key,
+                    responseHeaders: doc.responseHeaders,
+                    topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed, persist: true };
+      /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
+         is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
+         one place on every creation path rather than one arm per call site. What was left in the catch was
+         an invariant abort, which `RETHROW_FATAL` was already rethrowing, so the arm could only ever have
+         caught something it immediately gave back. A rehydrated cold recipe always participates in the
+         frontier and never has a caller, which is the `cold` argument. */
+      /* THE STORED DOCUMENT IS PASSED AS IT WAS PARKED. `c.html || ""` stood here and it defeated
+         engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
+         reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
+      _reserveStats.rehydrated++;
+      await engineCreate(doc.code, doc.html, msg, true, null, null, true)._readyP;
     }
   },
   finish: async (eng) => {   // fully explored, or self-parked under RAM pressure -> persist residue to the cold tier + resolve/merge
@@ -2408,7 +2761,9 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            pool: pool, waiting: _waiting.length, residentBytes: _residentBytes(),
            reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
                            booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,
-                           joinedBooting: _reserveStats.joinedBooting, joinedRooted: _reserveStats.joinedRooted },
+                           joinedBooting: _reserveStats.joinedBooting, joinedRooted: _reserveStats.joinedRooted,
+                           evicted: _reserveStats.evicted, rehydrated: _reserveStats.rehydrated },
+           coldRows: _frontierIndexBuilt ? _frontierIndex.size : null,   // null = the ranking view has not been asked for yet
            runs: self._engineLog.length, recent: self._engineLog.slice(-4),
            crashes: self._engineCrashOccurred };
 };
@@ -2430,6 +2785,7 @@ async function frontierClear() {
   try {
     const db = await idbOpen();
     await new Promise((res, rej) => { const t = db.transaction("frontier", "readwrite").objectStore("frontier").clear(); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+    _frontierIndex.clear();   // the ranking view is the store's projection: a cleared store ranks nothing
   } catch (e) { RETHROW_FATAL(e); frontierFail("clear", e); }
 }
 async function hostClear() {

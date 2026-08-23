@@ -65,6 +65,15 @@ char *header_list_get(const HeaderList *l, const char *name);
  * header list and building it twice would make `get` join two responses' values together. */
 void header_list_parse_field_lines(HeaderList *l, const char *block);
 
+/* THE INVERSE, for a host that HOLDS a header list and has to hand it across that same ABI — the C runners
+   answering §7.4 step 14's document fetch out of their own HTTP. It is stated here beside the parse rather
+   than open-coded at each caller because the two are one format: a serializer that disagreed with the parse
+   above by one byte would deliver headers no server sent, and the callers that would notice are the ones that
+   decide a Document's policy container, its opener policy and its agent cluster key.
+   Returns a malloc'd NUL-terminated block the caller frees. An EMPTY list serializes to the empty string,
+   which is what the parse reads as "a response that carried no headers" — the same statement from both ends. */
+char *header_list_field_lines(const HeaderList *l);
+
 /* §5.1 "fill", AS A SUB-SEQUENCE. Converting a `HeadersInit` is [[OwnPropertyKeys]] and then a [[Get]] and a
    ToString per key — every one of them the page's code on a Proxy or an accessor, so every one of them a
    request. It lives outside the Headers constructor because `fetch(u, {headers: ...})` performs the SAME

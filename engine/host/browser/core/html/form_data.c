@@ -30,6 +30,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
+#include "solver/concolic.h"
 
 /* §5's ENTRY: a name, and a value that is EITHER a USVString OR a File. It was the URL Standard's urlencoded
    list, whose value is bytes, and that was right for exactly as long as nothing could be a File — the file
@@ -82,6 +83,18 @@ static const char *fd_entry_bytes(JSContext *ctx, const FdEntry *e, size_t *plen
     if (bytes) {
         *pfile = blob_file_name_of(e->value);
         return bytes;
+    }
+    /* AN UNKNOWN ENTRY CONTRIBUTES ITS DISPLAY SHAPE, which is the same answer endpoint_record gives a concolic
+       URL and fb_value gives a concolic form entry: the request body then reads `q={location.hash}` and names
+       where the value came from, rather than inventing one or converting at a boundary that cannot. Borrowed
+       from the value like the Blob arm above, so `*pcstr` stays NULL and the caller releases nothing. */
+    if (concolic_is(e->value)) {
+        const char *shape = concolic_shape_c(e->value);
+        DCHECK(shape != NULL, "a FormData entry's unknown value reached the serializer with no display shape — "
+                              "every concolic is minted with one, so this part would carry no bytes at all and "
+                              "the request body would lose the field");
+        *plen = shape ? strlen(shape) : 0;
+        return shape;
     }
     *pcstr = JS_ToCStringLen(ctx, plen, e->value);
     return *pcstr;
@@ -464,10 +477,12 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
             blob_bytes_of(l->e[i].value, NULL, &parts[i].btype);
             DCHECK(cstr == NULL, "a File entry's bytes came out of the string pool");
         } else {
-            DCHECK(cstr != NULL,
+            DCHECK(cstr != NULL || concolic_is(l->e[i].value),
                    "a part with no filename was built out of a Blob rather than out of a string — §5's create "
                    "an entry converts every Blob to a File, so an entry holding a nameless Blob never went "
-                   "through it, and step 1's newline normalization would run over binary bytes");
+                   "through it, and step 1's newline normalization would run over binary bytes. An UNKNOWN "
+                   "entry is the third shape and is not from the pool: its bytes are its display shape, "
+                   "borrowed from the value");
             parts[i].norm  = fd_normalize_newlines(bytes, vlen, &parts[i].vlen);
             parts[i].bytes = parts[i].norm;
             JS_FreeCString(ctx, cstr);
@@ -551,8 +566,19 @@ static JSValue fd_entry_value(JSContext *ctx, JSValueConst v, JSValueConst filen
     const char *name;
     JSValue r;
 
-    if (!bytes)
+    /* THE USVString ARM OVER UNKNOWN EXTERNAL INPUT IS THE UNKNOWN, and converting it here aborted the engine.
+       §7.1.19 ToString step 10 sends an object to ToPrimitive, and a concolic carrier is one — the conversion
+       boundary owes C a real string and cannot derive one, so `JS_ToString` on an unknown is the crash the
+       axios caller fixture died on (`fd.append(k, cfg.value)` reached from its own toFormData). The other
+       consumer of this list was already written for it: html_form.c's fb_value gives a concolic entry its
+       display SHAPE at §4.10.22.4, so the producer converting it away is what disagreed. Keeping the unknown
+       keeps §Solver's rule that opacity survives coercion — a later `fd.get(name)` still forks a branch, and
+       the serializer below asks for the bytes at ITS own edge. */
+    if (!bytes) {
+        if (concolic_is(v))
+            return JS_DupValue(ctx, v);
         return JS_ToString(ctx, v);   /* the USVString arm — already a string, the declaration converted it */
+    }
     if (have_filename) {
         name = JS_ToCStringLen(ctx, &nlen, filename);
         if (!name) return JS_EXCEPTION;

@@ -427,14 +427,14 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
            order as soon as possible` is what `s.async = false` puts an element in, and §4.12.1's own steps for
            it are "if scripts[0] is not el, then abort" — the element holds its place against the others, so it
            takes a slot in the flow's sequence and the flow stops there until the reply fills it. */
-        if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u, st);
+        if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u, st, el);
         else {
             DCHECK(sched == SCRIPT_SCHED_IN_ORDER_ASAP,
                    "an injected external script was scheduled somewhere other than the two `as soon as "
                    "possible` destinations — §4.12.1 reaches the when-parsed list and the pending "
                    "parsing-blocking script only for an element with a non-null parser document, and every "
                    "element that reaches this half was inserted by page code");
-            engine_queue_docscript_url(document_doc(ctx), u, st);
+            engine_queue_docscript_url(document_doc(ctx), u, st, el);
         }
         free(u);
         return;
@@ -466,10 +466,14 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
                case have no position at all (§13.2.7 waits for the set only before the load event), so the tail
                of this flow's sequence is a correct place for both. */
             if (n_len) {
+                /* AND THE ELEMENT GOES WITH THE PROGRAM, at both destinations: §4.12.1.1's "execute the
+                   script element" is a switch on EL and its classic arm sets this document's §3.1.7
+                   `currentScript` to it for the run — which is what a page reads back to find its own
+                   `<script>` and, through it, the prefix its lazy chunks are served from. */
                 if (st == SCRIPT_TYPE_MODULE) engine_queue_element_script(document_doc(ctx),
-                                                                          (const char *)txt, st);
+                                                                          (const char *)txt, st, el);
                 else                          engine_queue_script_immediate(document_doc(ctx),
-                                                                            (const char *)txt);
+                                                                            (const char *)txt, el);
             }
             lxb_dom_document_destroy_text(n->owner_document, txt);
         }

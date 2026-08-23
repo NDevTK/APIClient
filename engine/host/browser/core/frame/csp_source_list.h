@@ -36,11 +36,12 @@
  * every browser applies, and the whole cascade below it resolves from a document real Chrome does not have.
  * §6.7.3.2 is therefore no longer the answer; it is §6.7.3.3's FIRST STEP, and the caller decides nothing.
  *
- * WHAT IS STILL NOT BUILT IS ONE PRIMITIVE AND IT CRASHES BY NAME: §6.7.3.3 step 5.2.2 needs SHA-256/384/512
- * over the source, and this engine has no digest of any kind (`SubtleCrypto` is a string in
- * browser/platform_names.h and nothing else). A hash-source in a governing directive therefore DFAILs rather
- * than answering "Does Not Match", because that answer is indistinguishable from a computed one and is wrong
- * for exactly the page whose own inline block the hash was published for. */
+ * AND STEP 5.2.2 IS ANSWERED RATHER THAN CRASHED. It needs SHA-256/384/512 over the source, which this engine
+ * now has as a component of its own (core/crypto/secure_hash.h, a port of FIPS PUB 180-4), reached through the
+ * same one door Web Cryptography §14.3.5's digest() goes through. What stood here instead was a DFAIL naming
+ * the primitive to build — deliberately, because "Does Not Match" would have been indistinguishable from a
+ * computed answer and wrong for exactly the page whose own inline block the hash was published for. The
+ * primitive exists, so the crash is gone with it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_CSP_SOURCE_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_CSP_SOURCE_LIST_H
 #include <stdbool.h>

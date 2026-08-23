@@ -97,18 +97,20 @@ static JSContext *active_realm(JSContext *ctx, JSValueConst proxy)
  * worklet global scopes, so "for each" runs zero times. That is the correct implementation of those steps and
  * not an omission — a Worker subsystem arrives with its own owner set and its own entry here.
  *
- * STEP 9 IS SESSION HISTORY: "if document's node navigable is non-null, then set document's node navigable's
- * active session history entry's document state's document to null." §7.4.1's entries exist
- * (core/frame/session_history.c) and so does the READER of the field this nulls — §7.4.6.1's traversal asks
- * whether the target entry's document state names a live Document and crashes naming §7.4.5's
- * populate-a-session-history-entry when it does not. What is still missing is somewhere for the write to LAND:
- * §7.4.1 puts the entries on the TRAVERSABLE, so they outlive any one Document, while this engine holds them on
- * the navigable's REALM — and destroying a document destroys that realm and the entries with it, so there is no
- * entry left here to null a field on. Nulling one before the realm goes would write to a record that is about to
- * be freed and would be read by nobody. The build that changes this is the one that moves the entries list to
- * the traversable so a destroyed document's entry survives it, and §7.4.6.1's cross-document assertion is what
- * will then be reached by a traversal back to it. What step 8 records — the browsing context is null — is the
- * fact a page reads, through §7.2.2.1's `closed`. */
+ * STEPS 8 AND 9 ARE ONE WRITE, AND STEP 9 IS THE RECLAMATION. Step 8 records the fact a page reads through
+ * §7.2.2.1's `closed`; step 9 — "Set document's node navigable's active session history entry's document
+ * state's document to null" — is the NAVIGABLE letting go of the Document, because §7.3.1 "Navigables" defines
+ * a navigable's active document as "its active session history entry's document" and §7.4.1.1 "Session history
+ * entries" defines that as "its document state's document". This engine holds that binding on the navigable's
+ * WindowProxy, and the Window half of it is the one counted reference anything here has to a child document's
+ * whole REALM (core/frame/navigable.h: a realm is kept alive by its own function objects and those hang off its
+ * Window). So the two go together in window_proxy_set_destroyed and neither has a site of its own.
+ * IT USED TO SAY THIS STEP HAD NOWHERE TO LAND, on the reasoning that §7.4.1 puts entries on the TRAVERSABLE
+ * while this engine holds them on the navigable's realm — which is true of the ENTRY LIST and says nothing
+ * about the field step 9 nulls. The field is the active document, the navigable is what holds it, and while
+ * that paragraph stood it was the only thing between this engine and reclaiming a realm: every child document
+ * ever created stayed fully allocated behind a navigable that had announced its destruction. A gap recorded
+ * instead of closed is worse than one nobody noticed, because it reads as a decision. */
 static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
 {
     JSContext *cctx = active_realm(ctx, proxy);
@@ -136,7 +138,9 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
                "queues this walks are not all of them, and whichever one it missed will run page code in a "
                "document whose browsing context is null");
     }
-    /* STEP 8 — the browsing context is null, which is the half of §7.2.2.1's `closed` that destruction owns. */
+    /* STEPS 8 AND 9 — the browsing context is null, and the navigable stops naming this Document. LAST, which
+       is the standard's own order and is load-bearing here: every step above reads the active document through
+       active_realm, and step 9 is what makes that answer NULL from now on. */
     window_proxy_set_destroyed(ctx, proxy);
 }
 

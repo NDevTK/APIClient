@@ -130,15 +130,17 @@ unsigned document_bundle_id(lxb_html_document_t *dom) {
 
 DocScripts document_exec_scripts(lxb_html_document_t *dom) {
     struct scr_ctx c; dom_collect_scripts(dom, &c);
-    DocScripts ds = { NULL, NULL, NULL, NULL, 0 };
+    DocScripts ds = { NULL, NULL, NULL, NULL, NULL, 0 };
     if (c.n) {
         ds.bodies = calloc((size_t)c.n, sizeof(char *));
         ds.srcs   = calloc((size_t)c.n, sizeof(char *));
         ds.types  = calloc((size_t)c.n, sizeof(ScriptType));
         ds.sched  = calloc((size_t)c.n, sizeof(ScriptSchedule));
-        if (!ds.bodies || !ds.srcs || !ds.types || !ds.sched) {
-            free(ds.bodies); free(ds.srcs); free(ds.types); free(ds.sched); free(c.els);
-            ds.bodies = ds.srcs = NULL; ds.types = NULL; ds.sched = NULL;
+        /* §4.12.1.1's "execute the script element" is a switch on EL, so the row keeps it — see the header. */
+        ds.els    = calloc((size_t)c.n, sizeof(lxb_dom_element_t *));
+        if (!ds.bodies || !ds.srcs || !ds.types || !ds.sched || !ds.els) {
+            free(ds.bodies); free(ds.srcs); free(ds.types); free(ds.sched); free(ds.els); free(c.els);
+            ds.bodies = ds.srcs = NULL; ds.types = NULL; ds.sched = NULL; ds.els = NULL;
             return ds;
         }
     }
@@ -182,6 +184,7 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
                 char *u = malloc(sl + 1);
                 if (u) { memcpy(u, src, sl); u[sl] = 0;
                          ds.srcs[ds.n] = u; ds.bodies[ds.n] = NULL; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
+                         ds.els[ds.n] = el;
                          ds.n++; }
             }
             continue;
@@ -190,10 +193,20 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
         if (txt && tl) {
             char *b = malloc(tl + 1);
             if (b) { memcpy(b, txt, tl); b[tl] = 0; ds.types[ds.n] = ty; ds.sched[ds.n] = sc;
+                     ds.els[ds.n] = el;
                      ds.bodies[ds.n++] = b; }
         }
         if (txt) lxb_dom_document_destroy_text(lxb_dom_interface_node(el)->owner_document, txt);
     }
+    /* EVERY ROW OF THIS TABLE IS ONE ELEMENT OF THIS TREE, asserted at the producer because this is the one
+       place it is structurally true: both branches above write `els` beside the body or the address they wrote.
+       Downstream the column may legitimately be absent — a host driving a synthesized program list has rows no
+       `<script>` produced — so a consumer cannot check it, and this is where a forgotten write would be. */
+    for (int k = 0; k < ds.n; k++)
+        DCHECK(ds.els[k] != NULL,
+               "a document's script inventory holds a row with no `script` element — HTML §4.12.1.1 "
+               "\"execute the script element\" is a switch on EL and its classic arm sets §3.1.7's "
+               "currentScript to it, so a row without one runs its program with that member left null");
     free(c.els);
     return ds;
 }
@@ -201,6 +214,8 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
 void doc_scripts_free(DocScripts *ds) {
     if (!ds || !ds->bodies) return;
     for (int i = 0; i < ds->n; i++) { free(ds->bodies[i]); if (ds->srcs) free(ds->srcs[i]); }
-    free(ds->bodies); free(ds->srcs); free(ds->types); free(ds->sched);
-    ds->bodies = ds->srcs = NULL; ds->types = NULL; ds->sched = NULL; ds->n = 0;
+    /* `els` holds BORROWED pointers into the tree the scan walked — the array is this table's, the nodes are
+       the document's, so the array is freed and nothing in it is. */
+    free(ds->bodies); free(ds->srcs); free(ds->types); free(ds->sched); free(ds->els);
+    ds->bodies = ds->srcs = NULL; ds->types = NULL; ds->sched = NULL; ds->els = NULL; ds->n = 0;
 }

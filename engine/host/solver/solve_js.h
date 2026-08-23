@@ -69,4 +69,31 @@ typedef void (*SolveJsEmit)(void *user, const char *breakout);
    because its `locate` walks a tree and returns the FIRST match. */
 int solve_js_breakouts(const char *output, SolveJsEmit emit, void *user);
 
+/* IS THE HOLE AT `at` AN EXECUTABLE POSITION? — §@S's CONTEXT-ESCAPED fitness rung, which is the SAME scan
+ * answering the SAME question from the other side.
+ *
+ * `solve_js_breakouts` asks "which §12 state are these bytes in, so that an escape can be constructed"; this
+ * asks "are these bytes in NO state at all", which is what the constructed escape was FOR. §12 opens by saying
+ * the source text "is first converted into a sequence of input elements […] scanned from left to right,
+ * repeatedly taking the longest possible sequence of code points as the next input element", so a hole at
+ * which an input element BEGINS is one whose bytes the grammar reads as source. Every other answer the scan
+ * can give — a §12.9.4 string, a §12.9.6 template, a §12.4 comment, a §12.9.5 literal, the interior of a
+ * §12.7 IdentifierName — is a state the bytes are still trapped inside.
+ *
+ * IT IS NOT A SECOND DERIVATION. Nothing is constructed and no breakout is emitted; the rung is HOW CLOSE a
+ * candidate got, and re-execution still decides whether it fires. That separation is the point: a breakout can
+ * ARRIVE at its sink (bytes present) without ESCAPING (still inside the literal it was written into), and
+ * without this those two failures were one number.
+ *
+ * SOUND-ONLY, IN THE DIRECTION THAT MATTERS. Every state the scan cannot decide — §12.1's goal symbol at a
+ * `/`, a string the page never terminated — answers 0, so an escape is never CLAIMED on a scan that could not
+ * be made. A rung that over-claims promotes a candidate that cannot fire; one that under-claims merely leaves
+ * it ordered where it was.
+ *
+ * `at` must index a byte of `output` and that byte must be ASCII alphanumeric — the same requirement
+ * SOLVE_JS_LOCATOR is designed around and for the same reason: every scanner here reads it as an ordinary
+ * character of whatever state it is in, and a byte that could open a string, a comment or an escape would
+ * change the scan it is being used to measure. The @S fire marker's own first byte satisfies it. */
+int solve_js_at_source(const char *output, size_t at);
+
 #endif

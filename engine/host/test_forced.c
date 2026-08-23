@@ -7,6 +7,7 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include "core/crypto/secure_hash.h"
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -287,18 +288,66 @@ static const char *HTML =
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
-    "Object.defineProperty(rx, 'flag', { get: function(){ return this._f; }, set: function(v){ this._f = v; }, configurable: true });</script>"
+    "Object.defineProperty(rx, 'flag', { get: function(){ return this._f; }, set: function(v){ this._f = v; }, configurable: true });"
+    /* HTML §4.12.1.1 "Processing model", the last step of "prepare the script element": "Otherwise, immediately
+       execute the script element el, even if other scripts are already executing." This is the FIRST of the
+       document's <script>s, so the program it injects belongs at a slot INSIDE the document's own sequence —
+       between script 1 and script 2 — which is the one position the scheduler could not name while the
+       document's scripts lived in a table separate from the flow's own rows: the slot arithmetic went NEGATIVE
+       and a `CHECK` (fatal in release, and it fired on a real site) stopped the run there.
+       THE PROBE IS THE ORDER AND NOT THE ABSENCE OF A CRASH. `__so` is appended to by each program in turn and
+       the LAST <script> of the document reports it, so the two possible answers are different strings: `ABXC`
+       is the injected row at its own position, and `ABC` is the same row taken to the TAIL of the sequence —
+       which is where an engine that cannot address a slot inside the document's scripts would have to put it,
+       and where it would then run after the program that reports. */
+    "var __so = 'A';"
+    "var soEl = document.createElement('script');"
+    "soEl.textContent = \"__so += 'X';\";"
+    "document.body.appendChild(soEl);"
+    "__so += 'B';</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
     "if (navigator.maxTouchPoints > 0) { fetch('/api/touch?v=touch'); } else { fetch('/api/touch?v=mouse'); }"
     "if (screen.width < 768) { fetch('/api/layout?v=mobile'); } else { fetch('/api/layout?v=desktop'); }"
+    /* 13.12 Binary Bitwise Operators AND 13.9 Bitwise Shift Operators over UNKNOWN INPUT — the family that had
+       no concolic semantics, so `h = (h << 5) ^ h | 0` (a minified bundle's string hash) reached the ToNumber
+       boundary and aborted the whole document; three of thirty real signed-out product pages died there.
+       `screen.width` is a concolic carrying a real example, so 6.1.6.1.16 NumberBitwiseOp / 6.1.6.1.9
+       Number::leftShift / 6.1.6.1.11 Number::unsignedRightShift RUN on that example while the RESULT stays
+       unknown — which the branch proves by forking. A collapse to NaN or to a bare number leaves one arm. */
+    "var bwm = screen.width & 1023; if (bwm > 100) { fetch('/api/bwfork?v=bwwide'); } else { fetch('/api/bwfork?v=bwnarrow'); }"
+    "fetch('/api/bwhash?h=' + (((screen.width << 5) ^ (screen.width >>> 3)) | 0));"
+    /* THE OBJECT SIDE ON THE TRAMPOLINE, with a concolic on the other side. 13.15.3 step 3's ToNumeric(left)
+       must NOT be performed at the operator's C boundary when the left is unknown (its ToNumeric is step 7's
+       operation, which the hook answers), and step 4's ToPrimitive(right) is the PAGE's code with a loop in it,
+       so it parks on the trampoline and resumes at the exact point. The result is still unknown, so the
+       comparison forks — both arms are the claim. */
+    "var bwo = { valueOf: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 12; } };"
+    "fetch('/api/bwtramp?v=' + ((screen.width & bwo) !== 0 ? 'bwand' : 'bwzero'));"
     "var ac0c = new AbortController(); var ac0 = ac0c.signal;"
     "ac0.addEventListener({ toString: function(){ var n = 0; for (var i = 0; i < 500; i++) { n += i; } return 'abort'; } }, function(){ fetch('/api/idlcoerce?v=coerced'); });"   /* addEventListener's `type` is a Web IDL DOMString: the toString is the PAGE's code and has a loop in it, so the machine parks on step_tostring_run and resumes at the exact stage — and the listener is registered under the string that call RETURNED, which the abort below proves by firing it */
     "ac0c.abort();"
     "var ac = new AbortController(); ac.signal.addEventListener('abort', function(e){ fetch('/api/aborted?v=' + (e.isTrusted && e.type === 'abort' && e.target === ac.signal ? 'fired' : 'wrong')); }); ac.abort();"   /* the controller's signal is the REAL state machine: abort() reads [[Signal]] as an internal slot and fires `abort`, whose listener runs as its own task on this flow */
     "var tsig = AbortSignal.timeout({ valueOf: function(){ var n = 0; for (var i = 0; i < 2000; i++) { n += i; } return n; } });"   /* [EnforceRange] unsigned long long is ToNumber on the PAGE's object: the loop inside valueOf preempts, so the timeout machine must suspend and resume at the exact stage it parked on */
     "if (tsig.aborted) { fetch('/api/deadline?v=expired'); } else { fetch('/api/deadline?v=live'); }"   /* a timeout's aborted flag is UNKNOWN, so both arms run and the fallback path's endpoint is learned too */   /* THE responsive gate: a bundle routes, hosts assets and often bases its API on this, so both arms must be reached */   /* the desktop-vs-touch gate, the same shape over a numeric member */
+    /* §13.15.3 ApplyStringOrNumericBinaryOperator STEP 1.c, ASKED OF THE EXAMPLE — "If leftPrimitive is a
+       String or rightPrimitive is a String" — which is what decides whether `+` concatenates or ADDS. The
+       concolic derivation had one arm, so `num + 1000000` carried the example "19201000000" where the code
+       computed 1001920, and §@H publishes a computed value as an OBSERVED fact: every endpoint downstream of
+       an arithmetic `+` named an address the bundle does not address. THREE SEPARATE CLAIMS.
+       `addfork` is the one that must NOT change: the sum is still unknown, so the comparison forks and both
+       arms' endpoints are learned — a numeric arm that collapsed to a bare number deletes one of them.
+       `addnum` reads the example back through the path parameter endpoint.c aligns against the shape: `num`
+       cancels, so the segment is `v1000000` under 6.1.6.1.7 Number::add ( x, y ) and `v19200998080` under a
+       string concatenation, and the one exact match is the whole assertion.
+       `addstr` is the regression that would cost the most — a String on the left and a concolic whose example
+       is a NUMBER on the right is step 1.c's own case, and it is the `'/api/' + cfg.region` this surface is
+       stated around; it reads `r1920` under both arms and must keep doing so. */
+    "var addn = num + 1000000;"
+    "if (addn > 0) { fetch('/api/addfork?v=addpos'); } else { fetch('/api/addfork?v=addneg'); }"
+    "fetch('/api/addnum/v' + (addn - num));"
+    "fetch('/api/addstr/r' + num);"
     /* THE REAL DOM, through document/Element/Node rather than a host-edge stand-in. Four things the tree
        components must get right and had no fixture for: interface members live on a PROTOTYPE (so two elements
        share one function object), `[LegacyNullToEmptyString] DOMString data` turns null into "" instead of the
@@ -1180,6 +1229,26 @@ static const char *HTML =
        measured ZERO endpoints against one flow, which is what this row exists to keep from happening again. */
     "function orphanNeverCalled(role){ fetch('/api/orphan/report');"
     " if (role === 'admin') { fetch('/api/orphan/admin-only'); } }"
+    /* AND THE SEAM INSIDE ONE, which the two rows above cannot see: they assert an orphan RUNS and that its
+       parameter is unknown, and both are true of a body driven start-to-finish with nothing to preempt at.
+       A driven orphan's frame is a CALL-ROOT flow (JS_FlowNewCall), so a back-edge in its body must reach the
+       preempt hook, park the flow as a COW snapshot and resume it — 3000 times here, under FORK_PREEMPT. The
+       terminal value is in the PATH rather than a query parameter so one exact match decides it: `loop3000`
+       says the loop ran to its end and every one of those resumes was byte-identical, where a dropped or
+       reordered resume produces some other number and a lost one produces no endpoint at all. */
+    "function orphanLoops(){ var s = 0; for (var i = 0; i < 3000; i++) { s = s + 1; }"
+    " fetch('/api/orphan/loop' + s); }"
+    /* AND AN ORPHAN THAT COMPARES ITS UNKNOWN AGAINST AN OBJECT, which is the FIRST thing a real library does
+       with an argument it was handed and which took four unmodified bundles' engine instances down before this
+       row existed: axios's `isPlainObject` and vue's own walk are both `while (n !== Object.prototype)`. The
+       equality's other operand is an Object, and §7.1.19 ToString step 10 sends one to ToPrimitive — the page's
+       valueOf/toString, run from a C activation with no flow base under it — so spelling it aborted the whole
+       instance and every finding went with it. §7.2.14 IsStrictlyEqual step 1 returns false whenever
+       SameType(x, y) is false, so there is nothing for such a comparison to pin the unknown to: the predicate
+       forks and carries no pin. The claim is the endpoint BEHIND the walk, because an abort emits none. */
+    "function orphanIdentity(o){ var n = o;"
+    " while (n != null && n !== Object.prototype) { n = Object.getPrototypeOf(n); }"
+    " fetch('/api/orphan/identity'); }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
        still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
@@ -1406,21 +1475,41 @@ static const char *HTML =
     "var _ifok = !!_cw && _cw.self === _cw && _cw.window === _cw && _cw.frames === _cw &&"
     " _cw.globalThis === _cw && _cw.parent === window && _cw.top === window && _cw.opener === null &&"
     " _cw.closed === false && _cw.name === 'fr';"
+    /* AND ONE READ THAT REACHES THE ACTIVE DOCUMENT, which is what makes the removal below a RECLAMATION probe
+       rather than a flag probe. Every member above is answered from the navigable's own record, so none of them
+       builds anything: without this line the srcless child stays unmaterialized for the whole fixture and the
+       destroy has no realm to let go of. `document` forwards to the child's Window, so the initial about:blank
+       Document and its realm exist from here on — ONE PER FLOW, which is the shape the ceiling is made of. */
+    "_ifok = _ifok && !!_cw.document && _cw.document !== document;"
     /* §4.8.5's REMOVING STEPS: the element loses its navigable, and the proxy the page still holds stays the
        same object while reporting a destroyed one. */
     "document.body.removeChild(_if);"
     "_ifok = _ifok && _if.contentWindow === null && _cw.closed === true && _cw.name === '' &&"
     " _cw.self === _cw && _if.getAttribute('name') === 'fr';"
+    /* AND THE PROXY THE PAGE IS STILL HOLDING HAS NO ACTIVE DOCUMENT — HTML §7.5.10's own note ("even after
+       destruction, the Document object itself might still be accessible to script, in the case where we are
+       destroying a child navigable") is about a reference the PAGE kept, and `_cw` is exactly that reference.
+       Step 9 nulled the navigable's active document, so this read must not reach one AND must not build one:
+       a proxy whose realm slot is empty because it was released reads identically to one that has never been
+       materialized, and only the destroyed flag tells them apart (window_proxy.c's proxy_realm asserts it).
+       The `undefined` is §7.2.3's own surface answering a name it does not carry, which is this engine's
+       pre-existing answer for every through-read on a closed navigable and not a value this probe chose. */
+    "_ifok = _ifok && _cw.document === undefined;"
     "fetch('/api/iframenav?v=' + (_ifok ? 'ifnav' : 'wrong'));"
 
     /* WHAT IS NOT PROBED HERE, AND WHY IT IS NOT A CHOICE: an iframe with a REAL `src`. It would exercise the
        whole of §7.4 step 14 — the load job asks the host for the address, PARKS, resumes with the response and
-       runs the child's own scripts — and the srcless probe above reaches none of that, because about:blank has
-       no response to fetch. It was written, and it aborts: a fixture statement runs in EVERY flow, a src'd
-       navigable materializes a realm rather than deferring it (its scripts are an observable), and a realm is
-       never reclaimed — so this fixture's ~7000 flows ask for ~7000 child realms and the heap is gone at 4022.
-       That is the ceiling child_document's CHECK names, and it is the next mechanism, not a probe to soften.
-       The path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
+       runs the child's own scripts — and about:blank reaches none of that, because it has no response to fetch.
+       IT IS NOT WHAT MAKES THE REALM COUNT CLIMB, though, and that distinction is what the two lines added
+       above are for. A srcless navigable that something READS THROUGH is materialized exactly as a src'd one
+       is, so the probe now costs ONE CHILD REALM PER FLOW with no load in it — the ceiling's shape, isolated
+       from the fetch. What the removal then exercises is §7.5.10 step 9: the navigable lets go of the Document,
+       which is the one counted reference this engine holds to a child realm, and the realm is garbage as soon
+       as no world still names it (core/frame/window_proxy.h). READ `childRealms` ON THE @HEAP LINE: it must
+       track the flows that are currently BETWEEN the read and the removal, not the flows that have ever run.
+       A count equal to the flow count says a world is still holding one — the delta blobs of drained flows,
+       or a collection that never ran — and neither is fixed by making this probe cheaper.
+       The src'd path is not unexercised meanwhile: `node engine/wpt.mjs html/browsers` runs hundreds of src'd
        iframes at flow counts a realm-per-flow can still pay for. */
 
     /* HTML §8.6's TIMER TASK SOURCE, and §8.1.7's ordering around it — neither of which this fixture exercised
@@ -1598,6 +1687,43 @@ static const char *HTML =
     " _ut.onabort = function(){ _uq = _ut.error.name; }; };"
     "_u.onerror = function(){ fetch('/api/idbuniq?v=' + _uq + ':' + _u.error.name); };"
     "</script>"
+    /* THE LAST <script> OF THE DOCUMENT, and it exists only to REPORT — see the injection in script 1. It has
+       to be a document script rather than a task, because what is being proved is that a program injected from
+       a NON-FINAL <script> took a position ahead of the document's remaining ones. */
+    "<script>__so += 'C'; fetch('/api/scriptorder?seq=' + __so);</script>"
+    /* HTML §3.1.7 "DOM tree accessors"'s `currentScript`, and the §4.12.1.1 "Processing model" bracket that
+       writes it. THE FIXTURE PROVES THE DESIGN AND NOT THE MEMBER: a getter that reads a slot is one line, and
+       what is hard here is that "run the classic script" is a WORK ITEM — it begins at one scheduler step and
+       ends at another, with sibling flows running programs of their own in between — so a C save/restore
+       bracket around the compile would answer one flow's element to another and would pass any fixture that
+       runs a single script.
+       `csB` FORKS ON UNKNOWN INPUT AND ONE ARM INJECTS A SCRIPT, which is what makes the two arms run
+       DIFFERENT elements at the same cursor: the admin arm's `csINJ` runs at the slot §4.12.1.1's "immediately
+       execute the script element" names, while the other arm is at `csC`. Under a slot that is not per-flow,
+       whichever arm ran second reads the other's element and `/api/csend` reports `csINJ`.
+       THE READ IS `getAttribute` AND THE FETCH IS BUILT FROM IT, because that is the real shape: nodejs.org's
+       chunk preamble derives its asset prefix from `document.currentScript.getAttribute("src")`, so an
+       undefined `currentScript` computes every lazy-chunk URL wrong — the moat surface, not a nicety. */
+    "<script id=csA>window.__cs = document.currentScript.getAttribute('id') + ':' +"
+    " (document.currentScript.getAttribute('src') === null ? 'inline' : 'src');</script>"
+    "<script id=csB>"
+    "if (state.admin) { var csi = document.createElement('script'); csi.setAttribute('id', 'csINJ');"
+    " csi.textContent = \"fetch('/api/csinj?el=' + document.currentScript.getAttribute('id'));\";"
+    " document.body.appendChild(csi); }"
+    /* §3.1.7: "Returns null if the Document is not currently executing a script … (e.g., because the running
+       script is an event handler, or a timeout)". This is step 4's restore observed from OUTSIDE the bracket:
+       the timer callback is a task of this flow that runs after every program of the document has completed,
+       so a slot that was never restored reports the last element that ran instead of null. */
+    "setTimeout(function(){ fetch('/api/cstimer?el=' +"
+    " (document.currentScript === null ? 'null' : document.currentScript.getAttribute('id'))); }, 0);"
+    "</script>"
+    /* §4.12.1.1's MODULE arm asserts `currentScript` is null and never sets it — the standard's own assertion,
+       which is a DCHECK at the module compile and is observable here. `import.meta` is what a module reads
+       instead, which is why the member is not merely unset but has to be NULL. */
+    "<script type=module>fetch('/api/csmod?el=' +"
+    " (document.currentScript === null ? 'null' : 'LEAK'));</script>"
+    "<script id=csC>fetch('/api/csend?el=' + __cs + '|' +"
+    " document.currentScript.getAttribute('id'));</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -2207,6 +2333,108 @@ static void policy_container_selftest(void)
  * IT IS THE CASE THAT TURNS AN ABORT INTO A WRONG ANSWER IF IT IS GOT WRONG. §6.7.3.2 alone answers "Blocked"
  * for every nonce-bearing policy, which is right for injected content and refuses a `<style nonce=…>` real
  * Chrome applies — so the whole cascade below it would then resolve from a document no browser has. */
+/* FIPS PUB 180-4, CHECKED AGAINST PUBLISHED KNOWN ANSWERS — because a cryptographic primitive that agrees with
+ * itself proves nothing at all. Every expected value below is transcribed from RFC 6234 §8.5's test driver,
+ * which is the IETF's restatement of this standard and ships the vectors with it; the empty-message row is the
+ * one this fixture adds, and its oracle is an independent implementation cross-checked against those same
+ * eight published vectors before it was asked for the ninth.
+ *
+ * THE MESSAGES ARE CHOSEN FOR THE BLOCK BOUNDARY AND NOT FOR VARIETY. "abc" fits one block with room for the
+ * padding. RFC 6234's TEST2_1 is 56 bytes, which for a 512-bit block leaves NO room for the 64-bit length —
+ * so SHA-1 and SHA-256 must pad into a SECOND block, which is the case an implementation gets wrong. TEST2_2
+ * is 112 bytes and does the same to the 1024-bit block of SHA-384 and SHA-512. The empty message exercises the
+ * path where the padding is the entire message. */
+static void secure_hash_selftest(void)
+{
+    static const char T1[]  = "abc";
+    static const char T21[] = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    static const char T22[] = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn"
+                              "hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+    static const struct { SecureHashAlgorithm alg; const char *msg; size_t len; const char *hex; } KAT[] = {
+        /* RFC 6234 §8.5, SHA1 tests 1 and 2 */
+        { SECURE_HASH_SHA1,   T1,  sizeof T1 - 1,  "A9993E364706816ABA3E25717850C26C9CD0D89D" },
+        { SECURE_HASH_SHA1,   T21, sizeof T21 - 1, "84983E441C3BD26EBAAE4AA1F95129E5E54670F1" },
+        /* RFC 6234 §8.5, SHA256 tests 1 and 2 */
+        { SECURE_HASH_SHA256, T1,  sizeof T1 - 1,
+          "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD" },
+        { SECURE_HASH_SHA256, T21, sizeof T21 - 1,
+          "248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD419DB06C1" },
+        /* RFC 6234 §8.5, SHA384 tests 1 and 2 */
+        { SECURE_HASH_SHA384, T1,  sizeof T1 - 1,
+          "CB00753F45A35E8BB5A03D699AC65007272C32AB0EDED163"
+          "1A8B605A43FF5BED8086072BA1E7CC2358BAECA134C825A7" },
+        { SECURE_HASH_SHA384, T22, sizeof T22 - 1,
+          "09330C33F71147E83D192FC782CD1B4753111B173B3B05D2"
+          "2FA08086E3B0F712FCC7C71A557E2DB966C3E9FA91746039" },
+        /* RFC 6234 §8.5, SHA512 tests 1 and 2 */
+        { SECURE_HASH_SHA512, T1,  sizeof T1 - 1,
+          "DDAF35A193617ABACC417349AE20413112E6FA4E89A97EA2"
+          "0A9EEEE64B55D39A2192992A274FC1A836BA3C23A3FEEBBD"
+          "454D4423643CE80E2A9AC94FA54CA49F" },
+        { SECURE_HASH_SHA512, T22, sizeof T22 - 1,
+          "8E959B75DAE313DA8CF4F72814FC143F8F7779C6EB9F7FA1"
+          "7299AEADB6889018501D289E4900F7E4331B99DEC4B5433A"
+          "C7D329EEB6DD26545E96E55B874BE909" },
+        /* The empty message: §5.1's padding is the whole of what is hashed. */
+        { SECURE_HASH_SHA1,   "", 0, "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709" },
+        { SECURE_HASH_SHA256, "", 0,
+          "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" },
+        { SECURE_HASH_SHA384, "", 0,
+          "38B060A751AC96384CD9327EB1B1E36A21FDB71114BE0743"
+          "4C0CC7BF63F6E1DA274EDEBFE76F65FBD51AD2F14898B95B" },
+        { SECURE_HASH_SHA512, "", 0,
+          "CF83E1357EEFB8BDF1542850D66D8007D620E4050B5715DC"
+          "83F4A921D36CE9CE47D0D13C5D85F2B0FF8318D2877EEC2F"
+          "63B931BD47417A81A538327AF927DA3E" },
+    };
+    static const char HEX[] = "0123456789ABCDEF";
+    size_t k;
+
+    for (k = 0; k < sizeof KAT / sizeof KAT[0]; k++) {
+        uint8_t out[SECURE_HASH_MAX_DIGEST];
+        char got[2 * SECURE_HASH_MAX_DIGEST + 1];
+        size_t n = secure_hash_digest_size(KAT[k].alg), i;
+        SecureHash h;
+
+        secure_hash_init(&h, KAT[k].alg);
+        secure_hash_update(&h, (const uint8_t *)KAT[k].msg, KAT[k].len);
+        secure_hash_finish(&h, out, sizeof out);
+        for (i = 0; i < n; i++) { got[2 * i] = HEX[out[i] >> 4]; got[2 * i + 1] = HEX[out[i] & 15]; }
+        got[2 * n] = 0;
+        CHECK(strlen(KAT[k].hex) == 2 * n,
+              "a known-answer row's digest is not the length FIPS 180-4 Figure 1 gives its algorithm — the row "
+              "and the table disagree, and one of them is a transcription error");
+        CHECK(strcmp(got, KAT[k].hex) == 0,
+              "FIPS 180-4 answered a PUBLISHED known-answer vector wrongly — the port is wrong, and every "
+              "digest this engine has ever produced is with it");
+    }
+
+    /* THE STREAMING SPLIT MUST NOT CHANGE THE ANSWER, which is the property the digest member depends on: it
+       feeds ONE message block per turn and yields between them, so a partial-block buffer that mishandled a
+       boundary would produce a different digest for the same message depending on how the scheduler sliced it.
+       Every split of the 56-byte vector is taken, which is every state the buffer can be left in. */
+    {
+        size_t cut;
+
+        for (cut = 0; cut <= sizeof T21 - 1; cut++) {
+            uint8_t out[SECURE_HASH_MAX_DIGEST];
+            char got[2 * SECURE_HASH_MAX_DIGEST + 1];
+            size_t i;
+            SecureHash h;
+
+            secure_hash_init(&h, SECURE_HASH_SHA256);
+            secure_hash_update(&h, (const uint8_t *)T21, cut);
+            secure_hash_update(&h, (const uint8_t *)T21 + cut, (sizeof T21 - 1) - cut);
+            secure_hash_finish(&h, out, sizeof out);
+            for (i = 0; i < 32; i++) { got[2 * i] = HEX[out[i] >> 4]; got[2 * i + 1] = HEX[out[i] & 15]; }
+            got[64] = 0;
+            CHECK(strcmp(got, "248D6A61D20638B8E5C026930C3E6039A33CE45964FF2167F6ECEDD419DB06C1") == 0,
+                  "a message split across two updates hashed differently from the same message in one — the "
+                  "digest a page gets would then depend on where the scheduler happened to preempt the walk");
+        }
+    }
+}
+
 static void csp_element_matching_selftest(void)
 {
     static const char *SRC =
@@ -2268,6 +2496,79 @@ static void csp_element_matching_selftest(void)
         policy_container_free(other);
         policy_container_free(cased);
         policy_container_free(upper);
+    }
+
+    /* §6.7.3.3 STEP 5.2.2 — THE HASH ARM, which used to be a DFAIL naming the digest to build. The expected
+       values are the base64 of FIPS 180-4's digest over the same twelve bytes the fixture's first <style>
+       carries, produced by an implementation cross-checked against RFC 6234's published vectors — the same
+       oracle secure_hash_selftest above uses, and for the same reason.
+       WHAT MAKES THIS THE TEST AND NOT A ROUND TRIP is the second half of each pair: ONE BYTE of the published
+       hash is changed, and the identical element must then be Blocked. A hash arm that answered "Matches" for
+       everything, or that compared lengths and nothing else, passes the first line of every pair. */
+    {
+        static const char S256[] = "style-src 'sha256-p0bF+un5yUb9MBO6xRb8kPHlY2BdpHVtLiFkDrZPF64='";
+        static const char S384[] = "style-src 'sha384-fmjM3tAll81TWJvySQni8SaBymKJ5GlctvLrjS0TwyC8mMAW"
+                                                    "6RDB6buj8mJRR2Dg'";
+        static const char S512[] = "style-src 'sha512-ADKwpJY0f2osTsQ2rmUDaXZKZ3/ULiwyJYXVFAAUxw8Oh4Bq"
+                                                    "MFlllZdCVwhLKbNk4+NFO7HzMJ3X7I4K69XhLQ=='";
+        /* THE SAME SHA-512 HASH SPELLED IN BASE64URL — `/` written `_` and `+` written `-`, which is what
+           §2.3.1's base64-value grammar admits and what step 5.2.2's replacement normalises. The two policies
+           must give the SAME verdict, and the vector was picked because its base64 contains both characters:
+           a hash with neither would pass this line with no replacement implemented at all. */
+        static const char S512URL[] = "style-src 'sha512-ADKwpJY0f2osTsQ2rmUDaXZKZ3_ULiwyJYXVFAAUxw8Oh4Bq"
+                                                       "MFlllZdCVwhLKbNk4-NFO7HzMJ3X7I4K69XhLQ=='";
+        /* The last character of the base64-value changed, and nothing else. */
+        static const char S256BAD[] = "style-src 'sha256-p0bF+un5yUb9MBO6xRb8kPHlY2BdpHVtLiFkDrZPF65='";
+        /* §2.3.1's ABNF literals are case-insensitive (RFC 5234 §2.3), which for a hash-source is the
+           ALGORITHM half; step 5.2.2 says so again in its own words ("an ASCII case-insensitive match for
+           "sha256""). The base64-value stays data. */
+        static const char S256CASE[] = "style-src 'SHA256-p0bF+un5yUb9MBO6xRb8kPHlY2BdpHVtLiFkDrZPF64='";
+        /* §2.3.1 admits sha256/sha384/sha512 and NOTHING ELSE, so this expression is not a hash-source at all:
+           §6.7.3.2 therefore ignores it, `'unsafe-inline'` is NOT overridden, and the element runs. It is the
+           one case where the grammar's exactness is observable from a policy. */
+        static const char S1[] = "style-src 'unsafe-inline' 'sha1-b4xQTHDAiKMmuZc8XlQ3hGJcGh0='";
+        static const struct { const char *policy; int expect; const char *why; } ROWS[] = {
+            { S256,    1, "a <style> whose SHA-256 the policy publishes must RUN — the whole point of a hash "
+                          "source, and the answer 'Does Not Match' would have blocked the page's own block" },
+            { S384,    1, "the same, with §6.7.3.3 step 5.2.2's SHA-384 arm" },
+            { S512,    1, "the same, with its SHA-512 arm" },
+            { S512URL, 1, "a base64url-spelled hash must match the same block — step 5.2.2 replaces '-' with "
+                          "'+' and '_' with '/' before comparing" },
+            { S256CASE,1, "the hash-algorithm part is matched ASCII case-insensitively" },
+            { S256BAD, 0, "one byte of the published hash changed must BLOCK the identical element" },
+            { S1,      1, "'sha1-…' is not a hash-source in §2.3.1's grammar, so §6.7.3.2 ignores it and the "
+                          "'unsafe-inline' beside it is NOT overridden" },
+        };
+        size_t k;
+
+        for (k = 0; k < sizeof ROWS / sizeof ROWS[0]; k++) {
+            PolicyContainer *p = policy_container_new(ROWS[k].policy, self_origin, NULL);
+
+            CHECK(!!policy_allows_inline(p, CSP_INLINE_STYLE, bare, S, slen) == ROWS[k].expect, ROWS[k].why);
+            /* The ELEMENT is not what a hash arm reads — §6.7.3.3 step 5 is over `source` alone — so the
+               nonce-less and the nonced element must answer alike under a hash policy. */
+            CHECK(!!policy_allows_inline(p, CSP_INLINE_STYLE, nonced, S, slen) == ROWS[k].expect,
+                  "§6.7.3.3's hash arm reads the SOURCE and not the element, so a nonce on the element must "
+                  "not change its answer");
+            policy_container_free(p);
+        }
+
+        /* §6.7.3.3 STEPS 3-4's 'unsafe-hashes' FLAG, which is the whole of what extends the hash arm past
+           "script" and "style". Without it a STYLE ATTRIBUTE's source never reaches step 5 at all. */
+        {
+            PolicyContainer *plain = policy_container_new(S256, self_origin, NULL);
+            PolicyContainer *hashes = policy_container_new(
+                "style-src 'unsafe-hashes' 'sha256-p0bF+un5yUb9MBO6xRb8kPHlY2BdpHVtLiFkDrZPF64='",
+                self_origin, NULL);
+
+            CHECK(!policy_allows_inline(plain, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
+                  "a hash alone must NOT admit a style attribute — §6.7.3.3 step 5's condition is `type is "
+                  "\"script\" or \"style\", or unsafe-hashes flag is true`");
+            CHECK(policy_allows_inline(hashes, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
+                  "…and 'unsafe-hashes' beside it must, which is the only thing that flag does");
+            policy_container_free(plain);
+            policy_container_free(hashes);
+        }
     }
     dom_document_destroy(dom);
 }
@@ -2762,8 +3063,9 @@ static int hostreq_answer_all(JSContext *ctx)
                                                               : JS_NULL;
             } else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
                 /* §7.4 STEP 14'S NETWORK HALF — this fixture standing in for it exactly as it stands in for
-                   the peer above, so the load's suspend/resume runs end to end. `{body, csp}` is ONE answer
-                   because a policy is a property of THE RESPONSE. The body is a DOCUMENT WITH A SCRIPT,
+                   the peer above, so the load's suspend/resume runs end to end. `{body, headers}` is ONE
+                   answer because everything §7.5.1 creates a Document from is a property of THE RESPONSE.
+                   The body is a DOCUMENT WITH A SCRIPT,
                    because the only thing that proves a navigation happened is the loaded document RUNNING. */
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
@@ -2772,7 +3074,11 @@ static int hostreq_answer_all(JSContext *ctx)
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one. */
                 JS_SetPropertyStr(ctx, v, "body",
                                   JS_NewArrayBufferCopy(ctx, (const uint8_t *)DOC, sizeof DOC - 1));
-                JS_SetPropertyStr(ctx, v, "csp", JS_NULL);
+                /* THE RESPONSE'S HEADER LIST, as the field lines §7.4 step 14's answer carries — EMPTY here,
+                   which is a response that carried no headers and is the statement this fixture can honestly
+                   make: it serves these bytes out of a string literal. It was `csp: null`, one narrowed
+                   field, which is the shape that kept §7.1.3's opener policy out of a navigated Document. */
+                JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, ""));
             } else {
                 v = JS_NewStringLen(ctx, tab + 1, (size_t)(end - tab - 1));
             }
@@ -2828,6 +3134,13 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
        decides an observable (`window.originAgentCluster`) and a fixture that read uninitialized memory for it
        would be flaky in the one direction nobody looks at. */
     agent.requests_oac = false;
+    /* §7.1.3's OPENER POLICY, and the same sentence: this fixture's document comes from no response, so there
+       is no `Cross-Origin-Opener-Policy` header to have sent and §7.1.3's INITIAL value is what §7.3.2.3
+       creates the browsing context group with — leaving its cross-origin isolation mode `none`. Stated rather
+       than left to the struct's padding, because it decides `window.crossOriginIsolated` and HR-TIME §4's
+       clock resolution, and a fixture reading uninitialized memory for it would be flaky in the one direction
+       nobody looks at. */
+    agent.opener_policy = OPENER_POLICY_UNSAFE_NONE;
     platform_agent_init(ctx, &agent);
 }
 
@@ -2869,6 +3182,12 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     idl_install_method(ctx, g, "appendChild", 1, g_id_append_child);
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
+    /* AN UNKNOWN CARRYING A NUMERIC EXAMPLE, which is what §13.15.3 step 1.c's arm turns on. Its display form
+       is a HOLE so endpoint.c mints a path parameter for it and aligns the computed address against the shape,
+       which is how the example is readable at all: a query value is read off the SHAPE. No source this fixture
+       already reaches has both halves — `screen.width` carries a Number and displays unbraced, `{state}`
+       displays as a hole and carries no example. */
+    JS_SetPropertyStr(ctx, g, "num", concolic_new(ctx, "{num}", "{num}", JS_NewInt32(ctx, 1920)));
     /* INDEXED DATABASE §2.7/§2.8's two operations, until §4.6/§4.9/§5.1 exist to state them as members. */
     JS_FreeValue(ctx, g);
 }
@@ -3729,6 +4048,33 @@ static int s_stage(const char *js, const char *sink, const char *src) {
     return atoi(e + sizeof PARKED - 1) > 0 ? S_RAN : S_SEEN;
 }
 
+/* A FIRE-VERIFIED PoC IS A FIELD OF ITS OWN RECORD, NEVER A SUBSTRING OF THE DOCUMENT — and reading it the
+ * other way made the fixture's ONE passing @S row a false green, in a run that had fired nothing at all.
+ *
+ * THE CONTRADICTION IS IN THE SMOKE LINE ITSELF AND NEEDS NO NEW MEASUREMENT: `s-url=1` stood beside
+ * `s-url-atsink=0`, and `s_stage` returns S_FIRED — which is >= S_ARRIVED — for exactly the records that carry
+ * a `poc`. So `s-url-atsink=0` says that record has none, while `s-url=1` said a URL breakout was fire-verified.
+ * Both rows were computed from the same bytes by the same function call, and they cannot both be true.
+ * WHAT SATISFIED THE OLD ROW was three loose `strstr`s over the WHOLE @S array — the class name, the source,
+ * and the payload text — and solve_json_array prints a parked search's OWN CANDIDATE LIST (`payloads`, which
+ * for SINK_URL is `javascript:X9()` and `javascript:X9()//`, its two written-down vectors). So a search that
+ * had never once arrived at its sink satisfied every conjunct out of its own to-do list. That is the exact
+ * defect CLAUDE.md §Architecture names: a plausible datum is indistinguishable from a measurement, and this
+ * one was worse than a 0 row because it was the only @S row reading green.
+ * The pattern below is the record shape solve.h declares, in order, with the PoC anchored to its own key — so
+ * a payload can only satisfy it from the `poc` of the (sink, source) record it belongs to. It is a PREFIX
+ * match on the payload because a class with several vectors may fire any of them, and prefixing is what lets
+ * the row name the vector without claiming which one. */
+static int s_poc(const char *js, const char *sink, const char *src, const char *poc) {
+    char pat[384];
+    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\",\"poc\":\"%s", sink, src, poc);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an @S PoC row's expected record did not fit its buffer — a truncated pattern matches a PREFIX of "
+          "the record, so the row would assert less than it names and report green for a payload it never saw");
+    return strstr(js, pat) != NULL;
+}
+
 /* Fill `out` with the rows this invocation carries and answer how many. Every row's `ok` is computed here, so
    the mid-run report and the final one are the same function of the same bytes. */
 static int probes_eval(const char *js, Probe *out, int cap) {
@@ -3797,6 +4143,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        row could not tell "the orphan ran" from "the orphan ran with a fabricated argument". */
     int orphan_driven = strstr(js, "\"/api/orphan/report\"") != NULL;
     int orphan_gate   = strstr(js, "\"/api/orphan/admin-only\"") != NULL;
+    /* AND THE THIRD CLAIM: the loop INSIDE a driven orphan suspended and resumed. The number is computed by the
+       body across 3000 back-edge preempts, so the exact path is the whole assertion — a resume that dropped,
+       reordered or restarted an iteration lands on a different number and this row goes red with the wrong
+       value visible, rather than on a timeout with nothing in it. */
+    int orphan_loop   = strstr(js, "\"/api/orphan/loop3000\"") != NULL;
+    /* AND THE FOURTH: the driven body compared its unknown against an OBJECT and survived it. Nothing about
+       the request is interesting — reaching it at all is the claim, because spelling that operand aborted the
+       instance and an abort emits NO endpoints, so this row and every row above it went dark together. */
+    int orphan_ident  = strstr(js, "\"/api/orphan/identity\"") != NULL;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
        API-value learning, through the Response the shipped fetch component actually hands back. */
@@ -4045,6 +4400,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int uafork_tt = (strstr(js, "\"/api/uafork\"") && strstr(js, "chrome") && strstr(js, "other"));
     int touchfork_tt = (strstr(js, "\"/api/touch\"") && strstr(js, "touch") && strstr(js, "mouse"));
     int layoutfork_tt = (strstr(js, "\"/api/layout\"") && strstr(js, "mobile") && strstr(js, "desktop"));
+    /* THE BITWISE/SHIFT FAMILY OVER UNKNOWN INPUT. Both arms present is the whole claim: a `&` whose result
+       collapsed to a bare number (or to NaN) decides the branch and the sibling is never reached, which is
+       precisely the coverage §Re-execution means by "opacity SURVIVES numeric coercion". `bwhash` asserts only
+       that the shift/xor chain COMPLETED — before the family had concolic semantics it aborted the document,
+       so the endpoint's existence is the measurement. `bwtramp` is the mixed shape: an unknown on the left and
+       the page's own suspending valueOf on the right. */
+    int bwfork_tt  = (strstr(js, "\"/api/bwfork\"") && strstr(js, "bwwide") && strstr(js, "bwnarrow"));
+    int bwhash_tt  = (strstr(js, "\"/api/bwhash\"") != NULL);
+    int bwtramp_tt = (strstr(js, "\"/api/bwtramp\"") && strstr(js, "bwand") && strstr(js, "bwzero"));
     /* the controller's `abort` listener actually ran, and the timeout's unknown flag forked both ways */
     int abortfire_tt = (strstr(js, "\"/api/aborted\"") && strstr(js, "fired"));
     /* a DOMString argument coerced through the PAGE's toString (with a loop in it), then used as the real
@@ -4057,6 +4421,40 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int tcnull_tt   = (strstr(js, "\"/api/tcnull\"")  && strstr(js, "nochild") && !strstr(js, "\"child\""));
     int nodeval_tt  = (strstr(js, "\"/api/nodeval\"") && strstr(js, "\"null\""));
     int tcset_tt    = (strstr(js, "\"/api/tcset\"")   && strstr(js, "tcSET"));
+    /* §13.15.3 STEP 1.c OVER THE EXAMPLES, three separate claims. `addfork` is the INVARIANT: the sum stayed
+       unknown, so both arms ran — a numeric arm that answered with a bare number would decide the branch and
+       lose one endpoint. `addnum` is the MEASUREMENT: `num` cancels, so §6.1.6.1.7 Number::add ( x, y )
+       leaves exactly `v1000000` in the path parameter endpoint.c aligns, where a string concatenation leaves
+       `v19200998080` — the quoted match is exact, so the old answer cannot satisfy it, which is why the
+       constant is one the two arms spell differently. `addstr` is the string arm, required to stay byte-for-
+       byte what it was: a String on either side takes step 1.c whatever the other side's example is. */
+    int addfork_tt  = (strstr(js, "\"/api/addfork\"") && strstr(js, "addpos") && strstr(js, "addneg"));
+    int addnum_tt   = (strstr(js, "/api/addnum/")     && strstr(js, "\"v1000000\""));
+    int addstr_tt   = (strstr(js, "/api/addstr/")     && strstr(js, "\"r1920\""));
+    /* §4.12.1.1's "immediately execute the script element" AT A POSITION INSIDE THE DOCUMENT'S OWN SEQUENCE.
+       The match is EXACT and the near-miss is the whole point: `ABXC` is the injected program at the slot after
+       the <script> that injected it, and `ABC` is that same program pushed to the TAIL — the only place a
+       scheduler whose cursor walked the document's scripts before the flow's own rows could put it, and the
+       place from which it runs after the program that reports. `ABC` must NOT satisfy this row, which is why
+       the token is quoted whole rather than searched for as a substring of the sequence. */
+    int scriptorder_tt = (strstr(js, "\"/api/scriptorder\"") && strstr(js, "\"ABXC\""));
+
+    /* HTML §3.1.7's `currentScript`, in THREE rows because these are three independent claims and one boolean
+       over them would say only that one of three unrelated things is wrong.
+       `current-script` is the GETTER: the running element, answered per element, with §4.12.1.1's classic arm
+       having set it — `csA:inline|csC` is script A's own id and the absence of a `src` on it, reported by
+       script C under C's own id. A slot that leaked between programs reads `csA:inline|csA`; a slot that leaked
+       between FLOWS reads `csINJ` for the arm that did not inject.
+       `current-script-restore` is STEP 4 observed from outside the bracket — the timer task and the module arm
+       both have to see null, and they are one row because they are one claim about the slot being empty when
+       no script element is executing.
+       `current-script-inject` is the arm that INJECTED: §4.12.1.1's "immediately execute the script element"
+       runs `csINJ` at the slot after the program that appended it, and the element that program reads is its
+       OWN — not the one that injected it, which is what a slot written by the injecting program would give. */
+    int cscurrent_tt = (strstr(js, "\"/api/csend\"") && strstr(js, "\"csA:inline|csC\""));
+    int csrestore_tt = (strstr(js, "\"/api/cstimer\"") && strstr(js, "\"/api/csmod\"") &&
+                        !strstr(js, "\"LEAK\""));
+    int csinject_tt = (strstr(js, "\"/api/csinj\"") && strstr(js, "\"csINJ\""));
     /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces. */
     static const char *const NODE_ALGOS[][2] = {
         { "\"/api/nodeconst\"",   "isconst" },   /* Node.ELEMENT_NODE, the constants on the interface object */
@@ -4257,20 +4655,20 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        closing quote. The deleted CANDS_JS wrote a second `;` that no §12 rule asks for, and the assertion
        carried it; a payload one byte longer than the state requires is exactly what a derivation must stop
        producing, so the expected text is the derivation's. @S HTML: fire-verified via Lexbor re-parse. */
-    int s_eval = strstr(ss, "\"sink\":\"eval\"") && strstr(ss, "{state}.code") && strstr(ss, "';X9()//");
+    int s_eval = s_poc(ss, "eval", "{state}.code", "';X9()//");
     /* THE SECOND §12 STATE, and it is the half that distinguishes a derivation from a renamed table: the same
        sink class, a different lexical state, and an escape no fixed list contained. The expected text is
        JSON-escaped because the escape IS a LineTerminator — §12.4 puts it outside the comment — so what the
        report carries is a backslash and an `n`, not a byte a payload table could have spelled. */
-    int s_evalc = strstr(ss, "{state}.note") && strstr(ss, "\\nX9()");
-    int s_html = strstr(ss, "\"sink\":\"innerHTML\"") && strstr(ss, "{state}.html") && strstr(ss, "<svg onload=X9()>");
-    int s_url = strstr(ss, "\"sink\":\"location\"") && strstr(ss, "{state}.next") && strstr(ss, "javascript:X9()");
+    int s_evalc = s_poc(ss, "eval", "{state}.note", "\\nX9()");
+    int s_html = s_poc(ss, "innerHTML", "{state}.html", "<svg onload=X9()>");
+    int s_url = s_poc(ss, "location", "{state}.next", "javascript:X9()");
     /* THE SOURCE'S BROWSER TRANSFORM, asserted end to end: a breakout through the REAL Location, whose value
        the browser percent-encodes per the fragment set and prefixes with `#`. The apostrophe is not in that set,
        so `';X9()//` arrives intact and fires — and it fires through `'#';X9()//'`, the leading `#` included.
        Before the transform existed the payload was handed over raw, so this fired for the wrong reason and an
        HTML-context breakout through the same source would have fired too, which a browser would not. */
-    int s_loc = strstr(ss, "\"source\":\"" LOCATION_HASH_SRC "\"") && strstr(ss, "';X9()//");
+    int s_loc = s_poc(ss, "eval", LOCATION_HASH_SRC, "';X9()//");
     /* THE NEGATIVE HALF, and it is an assertion about the REPORT, not about a missing line. The same source
        into an HTML sink must produce NO PoC — the fragment set encodes `<`, so every HTML candidate arrives as
        `%3C` and parses as text — and must still be REPORTED, as a parked search carrying the encode set that
@@ -4292,6 +4690,28 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int st_url   = s_stage(ss, "location",  "{state}.next");
     int st_loc   = s_stage(ss, "eval",      LOCATION_HASH_SRC);
     int st_lpark = s_stage(ss, "innerHTML", LOCATION_HASH_SRC);
+
+    /* …AND THE TWO SETS ARE HELD AGAINST EACH OTHER, WHICH IS WHAT WOULD HAVE CAUGHT THE FALSE GREEN THE DAY
+       IT APPEARED. A verdict row and its stage row are computed from the SAME bytes about the SAME record, so
+       "this PoC is fire-verified" and "this record carries no PoC" cannot both be true — and they stood side
+       by side in one smoke line (`s-url=1` beside `s-url-atsink=0`) for as long as the verdict was three loose
+       greps over the whole document. Two rows that can disagree and are never compared are two rows the reader
+       has to notice by eye, which is the same failure as a field nobody reads.
+       ONE DIRECTION ONLY, because only one of them is an implication: a FIRED row demands S_FIRED, while a
+       0 verdict beside S_FIRED would be a record whose PoC text is not the one the derivation must produce —
+       which is a real state the fixture must be able to report rather than crash on, and it is exactly what a
+       regressed derivation looks like. */
+    DCHECK(!s_eval  || st_eval  == S_FIRED, "the @S eval verdict is green for a record whose own stage says it "
+                                            "carries no PoC — one of the two is not reading the record it names");
+    DCHECK(!s_evalc || st_evalc == S_FIRED, "the @S eval-comment verdict is green for a record whose own stage "
+                                            "says it carries no PoC");
+    DCHECK(!s_html  || st_html  == S_FIRED, "the @S markup verdict is green for a record whose own stage says "
+                                            "it carries no PoC");
+    DCHECK(!s_url   || st_url   == S_FIRED, "the @S URL verdict is green for a record whose own stage says it "
+                                            "carries no PoC — this is the pair that stood contradictory in the "
+                                            "smoke line, satisfied out of a parked search's own candidate list");
+    DCHECK(!s_loc   || st_loc   == S_FIRED, "the @S fragment-source verdict is green for a record whose own "
+                                            "stage says it carries no PoC");
 
     /* THE PROBES, DECLARED ONCE. This was a 46-term conjunction and a separate printf listing 43 of them, which
        is two hand-maintained lists of the same thing — so a probe could be computed and joined to NEITHER, and
@@ -4358,6 +4778,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "preempt", async_preempt, "/api/asyncloop", SESS_EXPLORE },
         { "orphan", orphan_driven, "orphanNeverCalled", SESS_EXPLORE },
         { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE },
+        { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE },
+        { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
@@ -4377,6 +4799,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
         { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
         { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE },
+        { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE },
+        { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
+        { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE },
         { "abort", abortfire_tt, "/api/aborted", SESS_EXPLORE },
         { "deadline", deadline_tt, "/api/deadline", SESS_EXPLORE },
         { "idl", idlcoerce_tt, "/api/idlcoerce", SESS_EXPLORE },
@@ -4385,6 +4810,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE },
+        { "add-fork", addfork_tt, "/api/addfork", SESS_EXPLORE },
+        { "add-number", addnum_tt, "/api/addnum", SESS_EXPLORE },
+        { "add-string", addstr_tt, "/api/addstr", SESS_EXPLORE },
+        { "script-order", scriptorder_tt, "/api/scriptorder", SESS_EXPLORE },
+        { "current-script", cscurrent_tt, "/api/csend", SESS_EXPLORE },
+        { "current-script-restore", csrestore_tt, "/api/cstimer", SESS_EXPLORE },
+        { "current-script-inject", csinject_tt, "/api/csinj", SESS_EXPLORE },
         { "owfork", owfork_tt, "/api/owfork", SESS_EXPLORE },
         { "genfork", genfork_tt, "/api/genfork", SESS_EXPLORE },
         { "gen2fork", gen2fork_tt, "/api/gen2fork", SESS_EXPLORE },
@@ -4606,6 +5038,9 @@ int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
     policy_container_selftest();
+    /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would
+       otherwise be reported as a CSP verdict being wrong. */
+    secure_hash_selftest();
     csp_element_matching_selftest();
     csp_url_matching_selftest();
     document_policy_selftest();
@@ -4658,7 +5093,9 @@ int main(int argc, char **argv) {
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {
         /* The fixture built this document, so the navigable's name is the initial "" and is known. */
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
+        /* §7.5.1's OPENER POLICY ROW — §7.1.3's initial value, for the same reason the agent's is: this
+           fixture's document came from no response. */
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "", OPENER_POLICY_UNSAFE_NONE);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no
            header-borne policy. That is a fact about it, not a gap. */
@@ -4706,7 +5143,7 @@ int main(int argc, char **argv) {
        session installs neither: its document drains, and its rows are about what the tier REBUILT. */
     if (cold_park_path)            engine_set_park_hook(fixture_want_park);
     else if (!cold_resume_path)    engine_set_park_hook(fixture_have_answers);
-    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.n, cold_residue);   /* @H + @S detection */
+    engine_run(ctx, scripts.bodies, scripts.srcs, scripts.types, scripts.els, scripts.n, cold_residue);   /* @H + @S detection */
     /* No verify call: the candidate re-fires are FLOWS on the same frontier, so engine_run already ran them. */
     doc_scripts_free(&scripts);
     dom_document_destroy(dom);

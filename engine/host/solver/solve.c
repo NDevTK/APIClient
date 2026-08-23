@@ -3,6 +3,7 @@
 #include "solver/solve.h"
 #include "solver/solve_html.h"
 #include "solver/solve_js.h"
+#include "solver/solve_filter.h"
 #include "core/json_buf.h"
 #include "core/frame/policy_container.h"
 #include "core/html/trusted_types.h"
@@ -73,8 +74,30 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    navigation that reproduces it". That was printed under a fire-verified fragment XSS whose reproduction is one
    navigation, the one the researcher had just performed. The root is a fact about the VALUE, so it is read off
    the value at the detector (concolic_root_c) and carried here beside the identity, never re-derived from it. */
+/* …AND THE TWO RUNGS THAT SIT BETWEEN THEM, WHICH IS THE WHOLE OF WHY A CANDIDATE NEVER GOT A SECOND TURN.
+   §@S says the search is "DISTANCE-DIRECTED (a fitness of {filter-survived, sink-reached, context-escaped,
+   handler-fires} the WFQ reads)". Two of those four had an observation site and BOTH of them are at or past
+   the sink, so a candidate's reward was 0 for its entire runway and a flow that carried the attacker's bytes
+   nine tenths of the way was worth exactly what an unstarted one was. flow_weight reads `val` and nothing
+   else, and a candidate records no endpoints by design (endpoint_suppress), so "distance-directed" was true of
+   nothing: measured on the smoke fixture, every @S candidate sat at reward 0 and the ordering reached each one
+   about once.
+   `surv_run`/`surv_len` ARE THE FIRST RUNG, and they are a FRACTION held as its two halves rather than a
+   double, because the report has to be able to say WHICH numbers ("11 of 14 bytes") and a rounded ratio cannot.
+   The pair is the BEST any candidate of this search has achieved, so the credit is a RATCHET on a distance:
+   each improvement pays exactly the fraction it added and the whole rung is worth at most 1.0 across the
+   search's entire life, however many times it is observed. That is the same "credit once at the crossing"
+   `reached` uses, generalised from a boolean to a distance — a boolean has one crossing and a distance has as
+   many as it has improvements, and neither can be re-earned. It needs no minimum run length (which would be a
+   magic number): a coincidental short run in a string the candidate never touched can claim only its own
+   fraction of ONE rung, exactly once, because the ratchet never pays for the same ground twice.
+   `escaped` IS THE THIRD, and it is boolean per arrival like `reached`: the bytes are at an executable
+   position or they are not. It is what separates the two failures `reached` reported identically — bytes that
+   ARRIVED and bytes that GOT OUT — and until it existed the popup stated which of the two had happened from
+   the sink CLASS, with nothing measuring it. */
 typedef struct {
     char *src; char *root; int sink; int tried; int reached; int turns; int fires;
+    int surv_run, surv_len; int escaped;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
        so the list GROWS after seeding has already happened, and a one-shot "this sink is seeded" latch cannot
@@ -367,6 +390,12 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->reached = 0;
     e->turns = 0;
     e->fires = 0;
+    /* THE TWO NEW RUNGS TAKE THE SAME LINE AS THE OTHER FOUR, and the comment above this block is why: the
+       array is realloc'd and never zeroed, so a field left out here reads whatever the allocator held. For a
+       best-so-far ratchet that is not merely a wrong report — a garbage `surv_len` makes the first real
+       observation compare against a maximum nothing ever achieved and the rung never pays at all. */
+    e->surv_run = 0; e->surv_len = 0;
+    e->escaped = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
     *created = 1;
     flow_credit_emit(1.0);   /* a NEW attacker-source-reaches-sink: value-of-information for the running flow */
@@ -528,7 +557,95 @@ static void breakout_arrived(Cand *e) {
            "a derived-context sink recorded a BREAKOUT arriving while its search holds nothing but its own "
            "context probe — a breakout of such a class exists only because the probe run returned one, so "
            "these bytes were not built by this search");
+    /* §@S's SECOND FITNESS RUNG, PAID INTO THE WFQ — "the search is DISTANCE-DIRECTED (a fitness of
+       {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)". flow_weight reads `val`
+       and nothing else, and a candidate flow records no endpoints by design (endpoint_suppress), so until this
+       line the ONLY thing that could ever raise a candidate's reward was record_sink — the LAST rung, a
+       fire-verified PoC. A candidate that carried the attacker's bytes all the way to the sink and did not
+       break out of it was worth exactly as much to the scheduler as one that had not started, so the near-miss
+       §@S says to mutate toward the gap was outranked by every arm of the exploration tree and never ran again.
+       ONCE PER SEARCH, at the 0→1 crossing, and that is what "NEW" means in §WFQ's "accumulated emitted VALUE
+       (new @H+@S)" — the same shape sink_search uses one function up, where only the call that CREATED the
+       search credits it. It is not a seen-set and truncates nothing: every later arrival still derives, still
+       fires and still raises `reached`; what is not repeated is the CREDIT for an observation already made. */
+    if (e->reached == 0) flow_credit_emit(1.0);
     e->reached++;
+}
+
+/* §@S's FIRST FITNESS RUNG — "filter-survived" — AND THE ONLY ONE THAT IS OBSERVED INSIDE THE RUNWAY.
+   The other three all report at or past the sink of the candidate's OWN class, so a flow that had not got
+   there yet was worth nothing whatever it had done. This one is asked of EVERY string that reaches ANY
+   code-execution sink during a candidate run, before the class partition, because that is what the question
+   is: not "did this breakout arrive at its sink" but "how much of what the page was given is still alive".
+   A candidate for the eval sink whose bytes turn up at a markup write has demonstrably survived the page's own
+   filter and travelled through its code — §@S(2)'s "moved" — and until this line that observation was
+   discarded by `candidate_search` returning NULL.
+   THE SEARCH IS THE FLOW'S OWN, not the sink's. A flow carries one substitution for one (source, sink class),
+   so the progress belongs to that search wherever the bytes surface; asking the SINK which search to credit
+   would credit whichever one happens to own the write.
+   IT IS A `CHECK` FOR THE REASON record_sink STATES ABOUT ITS OWN TWO: the pointer is dereferenced below, so a
+   DCHECK alone turns a dev-mode abort into a release segfault. A candidate flow exists only because detection
+   opened its search, and solve_flow_begin asserts the same entry on every switch-in.
+   NO CREDIT FOR GROUND ALREADY PAID FOR. The pair on the entry is the BEST any candidate of this search has
+   reached; an observation that does not beat it pays nothing, and one that does pays exactly the fraction it
+   added. So the rung is worth at most 1.0 over the search's whole life, it can never be re-earned, and it
+   truncates nothing — every arrival is still measured, still derives, still fires. */
+static void filter_survived(const char *out) {
+    Flow *f = flow_running();
+    FilterObs o;
+    Cand *e;
+    double had, now;
+
+    CHECK(f != NULL && f->cand_src != NULL && f->cand_payload != NULL && f->cand_sink != NULL,
+          "solve: a string reached a code-execution sink inside a candidate run while the running flow holds "
+          "no substitution — this rung measures the sink's output against the bytes THIS flow injected, so a "
+          "flow with none is not a candidate at all, and all three are dereferenced immediately below");
+    e = search_of(f->cand_src, sink_class_of_name(f->cand_sink));
+    CHECK(e != NULL,
+          "solve: a candidate flow's bytes reached a sink for a search this session has no entry for — the "
+          "candidate exists only because detection opened one and a cold-resumed one re-registers before it "
+          "runs an opcode, so an absent entry is a search dropped under a live flow");
+
+    solve_filter_survival(out, f->cand_payload, &o);
+    DCHECK(o.len > 0, "a candidate flow carries an empty payload — see solve_filter.c's own assert");
+    if (o.run == 0) return;                  /* none of this candidate is in this string: an OBSERVATION */
+    /* Cross-multiplied so the comparison is exact rather than a float one, and so the zero state — no
+       observation yet, held as 0/0 — is the one case that falls through rather than comparing against itself. */
+    if (e->surv_len != 0 && (long)o.run * e->surv_len <= (long)e->surv_run * o.len) return;
+    now = (double)o.run / (double)o.len;
+    had = e->surv_len ? (double)e->surv_run / (double)e->surv_len : 0.0;
+    DCHECK(now > had,
+           "the filter-survival ratchet is about to pay for ground it has already paid for — the comparison "
+           "one line up is the whole of what makes this rung worth at most one point, so a credit that is not "
+           "an improvement is a value leak that reorders the frontier on noise");
+    e->surv_run = o.run; e->surv_len = o.len;
+    flow_credit_emit(now - had);
+}
+
+/* §@S's THIRD FITNESS RUNG — "context-escaped" — AND IT IS NOT THE SAME FACT AS ARRIVING OR AS FIRING.
+   ARRIVING is `reached`: the breakout's bytes are in the string the sink was handed. FIRING is the marker
+   actually calling, which only re-execution decides and which §@S accepts as the sole proof. Between them sits
+   the question the whole derivation exists to answer — are the bytes OUT of the state they were written into —
+   and it had no observation site at all, so a breakout that landed inside the literal it was meant to leave
+   and one that reached an executable position and threw were the same number.
+   EACH CLASS ANSWERS IT FROM ITS OWN LANGUAGE and none of them re-derives anything: the eval sink asks the
+   same §12 scan that built the escape whether the marker now begins an input element, the markup sink reads
+   the marker out of an auto-firing handler in the REAL parse it already runs (HTML §8.1.1 Introduction lists
+   "event handler content attributes" among the mechanisms that "cause author-provided executable code to
+   run"), and the URL sink asks whether the delivered address survived as a `javascript:` one, which for a
+   single-context sink IS the escape.
+   ONCE PER SEARCH AT THE 0->1 CROSSING — the shape breakout_arrived uses, and for its reason: this is a
+   boolean fact about the search, so it has exactly one crossing and repeating the credit would pay twice for
+   one observation. */
+static void escape_reached(Cand *e) {
+    DCHECK(e != NULL, "a context escape was recorded against no search — the caller resolved one to record the "
+                      "arrival that must precede it");
+    DCHECK(e->reached > 0,
+           "a breakout was observed in an EXECUTABLE position at a sink its own bytes have not been recorded "
+           "as ARRIVING at — every escape site runs downstream of breakout_arrived on the same string, so an "
+           "escape with no arrival behind it means the two are being asked about different strings");
+    if (e->escaped == 0) flow_credit_emit(1.0);
+    e->escaped++;
 }
 
 static Cand *candidate_search(int sink) {
@@ -556,10 +673,16 @@ static void derive_html_context(Cand *e, const char *html) { solve_html_breakout
 void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {                          /* candidate run: the arg is the injected+wrapped CONCRETE code */
         Cand *e;
+        const char *code;
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
-        if (!(e = candidate_search(SINK_EVAL))) return;   /* another class's search owns this write */
-        const char *code = JS_ToCString(ctx, arg);
-        if (code) {
+        /* THE STRING IS CONVERTED BEFORE THE CLASS PARTITION, which is what puts the filter rung inside the
+           runway. The partition below decides whose SINK this is; the survival measurement is about the
+           running flow's own bytes and is true wherever they surface, so asking it first is not a reordering
+           of the same work — it is the only place the observation exists at all. */
+        if (!(code = JS_ToCString(ctx, arg))) return;
+        filter_survived(code);
+        if (!(e = candidate_search(SINK_EVAL))) { JS_FreeCString(ctx, code); return; }   /* another class's search owns this write */
+        {
             /* THE SAME PARTITION THE MARKUP SINK MAKES, and for the same two reasons. Each candidate kind is
                told apart by the bytes IT injects, which the other cannot contain: the CONTEXT PROBE carries the
                inert locator and no X9 (that is what makes it inert), a derived BREAKOUT carries X9 and no
@@ -586,7 +709,18 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
                fired here and fires nothing in a browser. Re-execution is the oracle §@S asks for, and the
                engine's own evaluation IS the re-execution. */
             if (strstr(code, SOLVE_JS_LOCATOR))  derive_js_context(e, code);
-            else if (strstr(code, "X9"))         breakout_arrived(e);
+            else if (strstr(code, "X9")) {
+                const char *m;
+                breakout_arrived(e);
+                /* §@S's CONTEXT-ESCAPED RUNG for the JS class, asked of the SAME §12 scan that built the
+                   escape. EVERY occurrence is asked, and the first that begins an input element answers: a
+                   page that writes the source twice puts the marker in two states, and one of them being an
+                   executable position is what "this candidate got out" means. The break is not an early exit
+                   past unfinished work — the rung is a boolean about the search, so a second yes says nothing
+                   the first did not. */
+                for (m = code; (m = strstr(m, "X9")) != NULL; m += 2)
+                    if (solve_js_at_source(code, (size_t)(m - code))) { escape_reached(e); break; }
+            }
             JS_FreeCString(ctx, code);
         }
         return;                                 /* the marker records the PoC when the engine runs these bytes */
@@ -602,9 +736,20 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
    of input this walk exists to run — so descending by C frame made the oracle's own depth attacker-controlled.
    Lexbor's nodes carry `parent`, so the traversal needs no stack at all: descend to first_child, else take
    `next`, else climb until a `next` exists, never above the level the walk started at. */
-static void html_fire_walk(Cand *e, lxb_dom_node_t *node) {
+/* …AND IT ANSWERS §@S's CONTEXT-ESCAPED RUNG ON THE WAY, because the walk is already standing exactly where
+   the question is decided. HTML §8.1.1 Introduction lists the mechanisms that "cause author-provided
+   executable code to run" and "event handler content attributes" is one of them, so a handler attribute whose
+   VALUE carries the marker is the markup class's definition of an executable position — the breakout left the
+   §13.2.5 state it was written into and reached one. Returns whether any did.
+   WHICH IS NOT THE SAME AS `fires`, and the two must not be read as one. `fires` counts every auto-firing
+   handler in the parse, INCLUDING the page's own markup surrounding the injection point; the escape counts
+   only handlers the breakout's own bytes are in. A page whose innerHTML template already contains an
+   `<img onerror=…>` raises `fires` for a candidate that escaped nothing, which is precisely the reading the
+   parked-search card used to state as a fact about the payload. */
+static int html_fire_walk(Cand *e, lxb_dom_node_t *node) {
     lxb_dom_node_t *top = node->parent;   /* the level the walk must not climb above */
     lxb_dom_node_t *n = node;
+    int at_exec = 0;
 
     while (n) {
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -614,7 +759,15 @@ static void html_fire_walk(Cand *e, lxb_dom_node_t *node) {
                 size_t vl = 0;
                 const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)H[h], strlen(H[h]), &vl);
                 /* APPEND: an event handler fires from a TASK, so it takes the tail like every other task. */
-                if (v && vl) { e->fires++; fire_js((const char *)v, vl, DYN_POS_APPEND); }
+                if (v && vl) {
+                    /* THE ATTRIBUTE VALUE IS NOT NUL-TERMINATED — it is a (pointer, length) out of the DOM —
+                       so the marker is searched inside its own bounds. A `strstr` here would read whatever
+                       follows the value in Lexbor's own storage. */
+                    for (size_t k = 0; k + 2 <= vl; k++)
+                        if (v[k] == 'X' && v[k + 1] == '9') { at_exec = 1; break; }
+                    e->fires++;
+                    fire_js((const char *)v, vl, DYN_POS_APPEND);
+                }
             }
         }
         if (n->first_child) { n = n->first_child; continue; }
@@ -624,6 +777,7 @@ static void html_fire_walk(Cand *e, lxb_dom_node_t *node) {
         }
         if (n) n = n->next;
     }
+    return at_exec;
 }
 /* AN ORACLE MAY NOT ANSWER "NO" BECAUSE IT COULD NOT ASK. All three of these were swallowed conditions, and
    what each of them swallowed is the same thing: a failure to build the parse silently becomes "this breakout
@@ -656,7 +810,7 @@ static void html_fire(Cand *e, const char *html) {
     DCHECK(root != NULL, "a completed HTML parse produced no document element — §13.2.6 inserts html, head and "
                          "body for every input including the empty one, so the tree this oracle is about to "
                          "walk was built by something that is not the parser");
-    html_fire_walk(e, lxb_dom_interface_node(root));
+    if (html_fire_walk(e, lxb_dom_interface_node(root))) escape_reached(e);
     dom_document_destroy(doc);
 }
 
@@ -669,6 +823,12 @@ static void url_fire(Cand *e, JSContext *ctx, const char *url) {
         /* APPEND: HTML §7.4.2.2 "Beginning navigation" queues a global task on the navigation and traversal
            task source to navigate to a javascript: URL, so §7.4.2.3.2's evaluation is a TASK — the same
            position engine_queue_javascript_url gives the real one. */
+        /* §@S's CONTEXT-ESCAPED RUNG for the one class that has a single context. There is nothing to derive
+           here — navigating executes the `javascript:` scheme and nothing else does — so the escape IS this
+           test: the address the page built out of the attacker's bytes survived as a `javascript:` URL. It is
+           still not the FIRE: the evaluation §7.4.2.3.2 "The javascript: URL special case" performs is queued
+           as a task below, and the marker has to actually call inside it. */
+        escape_reached(e);
         e->fires++;
         fire_js(js, strlen(js), DYN_POS_APPEND);
     }
@@ -677,18 +837,19 @@ static void url_fire(Cand *e, JSContext *ctx, const char *url) {
 void solve_url_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
         Cand *e;
+        const char *url;
         if (concolic_is(arg)) return;
-        if (!(e = candidate_search(SINK_URL))) return;   /* another class's search owns this write */
-        const char *url = JS_ToCString(ctx, arg);
+        /* CONVERTED BEFORE THE CLASS PARTITION — see solve_eval_sink for why the filter rung is asked first. */
+        if (!(url = JS_ToCString(ctx, arg))) return;
+        filter_survived(url);
+        if (!(e = candidate_search(SINK_URL))) { JS_FreeCString(ctx, url); return; }   /* another class's search owns this write */
         /* THE SAME PARTITION THE OTHER TWO CLASSES MAKE, and this sink was missing it. Every non-concolic URL
            the page wrote during a candidate run went to url_fire — including the page's OWN `javascript:`
            hrefs, whose JS was then queued as a program once per candidate. This class has no context probe, so
            the marker alone identifies its bytes: `CANDS_URL`'s vectors are the only strings this search ever
            injects and both carry X9. */
-        if (url) {
-            if (strstr(url, "X9")) { breakout_arrived(e); url_fire(e, ctx, url); }
-            JS_FreeCString(ctx, url);
-        }
+        if (strstr(url, "X9")) { breakout_arrived(e); url_fire(e, ctx, url); }
+        JS_FreeCString(ctx, url);
         return;
     }
     if (!concolic_is(arg)) return;
@@ -700,10 +861,13 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
 void solve_html_sink(JSContext *ctx, JSValueConst arg) {
     if (is_verifying()) {
         Cand *e;
+        const char *html;
         if (concolic_is(arg)) return;   /* injection didn't reach this write */
-        if (!(e = candidate_search(SINK_HTML))) return;   /* another class's search owns this write */
-        const char *html = JS_ToCString(ctx, arg);
-        if (html) {
+        /* CONVERTED BEFORE THE CLASS PARTITION — see solve_eval_sink for why the filter rung is asked first. */
+        if (!(html = JS_ToCString(ctx, arg))) return;
+        filter_survived(html);
+        if (!(e = candidate_search(SINK_HTML))) { JS_FreeCString(ctx, html); return; }   /* another class's search owns this write */
+        {
             /* TWO CANDIDATE KINDS REACH THIS WRITE, and each is told apart by the bytes IT injects — which the
                other cannot contain. The CONTEXT PROBE carries the inert locator and no X9 (that is what makes
                it inert); a derived BREAKOUT carries X9 and no locator (it is built from the tokenizer state,
@@ -1021,6 +1185,25 @@ char *solve_json_array(JSContext *ctx) {
            and have not got as far as the sink. One is a WFQ question and the other is a distance question. */
         json_buf_puts(&b, ",\"turns\":");
         snprintf(t, sizeof t, "%d", g_pending[i].turns); json_buf_puts(&b, t);
+        /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
+           REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
+           bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:0` is a
+           document nobody has explored far enough and `turns:900,reached:0,survived:11,survivedOf:14` is a
+           FILTER eating the candidate eleven-fourteenths of the way in — the same report before, opposite work.
+           `escaped` is how many arrivals reached an EXECUTABLE position, which `reached` could not say and
+           which `fires` only approximates: `fires` counts every auto-firing handler in the parse INCLUDING the
+           page's own markup, so a card reading it alone stated "none reached an executable position" as a fact
+           about the payload on evidence that was partly about the template around it.
+           BOTH ARE UNCONDITIONAL, and 0 is a real value each of them must be able to say (nothing of any
+           candidate has been seen at any sink; nothing has got out of its context). `survivedOf:0` beside
+           `survived:0` is the same statement said once — no observation has been recorded — and not a length
+           this file failed to write. */
+        json_buf_puts(&b, ",\"survived\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].surv_run); json_buf_puts(&b, t);
+        json_buf_puts(&b, ",\"survivedOf\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].surv_len); json_buf_puts(&b, t);
+        json_buf_puts(&b, ",\"escaped\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].escaped); json_buf_puts(&b, t);
         /* AND WHAT WAS ACTUALLY TRIED, which three counts cannot say. `tried` is how many runs, `reached` how
            many arrived and `turns` how many turns the scheduler gave them — all quantities, and the state this
            search is most often in wants a STRING: a breakout that ARRIVED and did not fire is a question about

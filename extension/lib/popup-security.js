@@ -99,37 +99,53 @@ function _encodeSentence(item) {
 //   * `turns:0` — the WFQ has never once given this search the thread. Nothing has RUN, so "N breakouts run"
 //     was itself false: `tried` is raised where a candidate is SEEDED (solve_seed_candidates), `turns` where
 //     one is switched in (solve_flow_begin). This is a scheduling question.
-//   * `turns:N, reached:0` — the candidates have held the thread and their bytes have not ARRIVED at the sink.
-//     A distance-through-the-document question, and the opposite action from the one above.
-//   * `reached:M, fires:0` — they arrived and none reached an EXECUTABLE position: the source's own transform
-//     defeated the breakout. A question about the BYTES.
-//   * `reached:M, fires:F>0` — a program EXISTS and has not been run yet. That belongs to the flow's sequence,
-//     and this card becomes a fired PoC when it runs.
-// `fires` ABSENT is the fifth statement, not a missing fourth: solve.c emits it only for a class whose
-// `queues_fire` is set, and the eval class evaluates its own argument (ECMAScript §19.2.1 eval ( source ), and
-// §20.2.1.1.1 CreateDynamicFunction ( ctor, newTarget, kind, paramArgs, bodyArg ) for the Function form), so
-// there is no queue to count. A `0` written there would read as "nothing executable" when it means "nothing to
-// queue" — which is why this reads the absence positively rather than defaulting it.
+//   * `turns:N, reached:0, survived:0` — the candidates have held the thread and NONE of their bytes has been
+//     seen at any sink at all. A distance-through-the-document question, and the opposite action from above.
+//   * `turns:N, reached:0, survived:S>0` — their bytes DID get through the page's own transforms, S of L of
+//     them, and no whole breakout arrived. The page's FILTER is what is eating the candidate: a question about
+//     the BYTES, arriving long before the sink, and until `survived` existed it printed as the line above it.
+//   * `reached:M, escaped:0` — they arrived and none reached an EXECUTABLE position: the bytes are still
+//     inside the literal, comment or text they were written into. Also a question about the BYTES.
+//   * `reached:M, escaped:E>0` — a program EXISTS and has not been run yet. That belongs to the flow's
+//     sequence, and this card becomes a fired PoC when it runs.
+// THE THIRD STATE USED TO BE READ OFF `fires` AND THAT WAS THE WRONG FIELD. `fires` counts every auto-firing
+// handler in the parse INCLUDING the page's own template markup, so an innerHTML template that already carries
+// an `<img onerror=…>` raised it for a candidate that escaped nothing — and this card stated "NONE reached an
+// executable position" as a fact about the payload on evidence that was partly about the markup around it.
+// `escaped` is the observation itself (solve.h: the eval sink asks ECMAScript §12's own scan whether the marker
+// BEGINS an input element, the markup sink reads it out of an auto-firing handler, the URL sink asks whether
+// the address survived as a `javascript:` one), so that is what the sentence is now computed from.
+// `fires` ABSENT is a statement and not a missing field: solve.c emits it only for a class whose `queues_fire`
+// is set, and the eval class evaluates its own argument (ECMAScript §19.2.1 eval ( source ), and §20.2.1.1.1
+// CreateDynamicFunction ( ctor, newTarget, kind, paramArgs, bodyArg ) for the Function form), so there is no
+// queue to count. A `0` written there would read as "nothing executable" when it means "nothing to queue" —
+// which is why this reads the absence positively rather than defaulting it.
 function _parkedProgress(item) {
+  var held = 'its candidates have held the thread ' + item.turns + ' time' + (item.turns === 1 ? "" : "s");
+  var got  = item.survived + ' of ' + item.survivedOf + ' bytes of the furthest candidate';
+
   if (item.turns === 0)
     return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
          + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is a '
          + 'scheduling state and not a search that failed';
+  if (item.reached === 0 && item.survived === 0)
+    return held + ' and NONE of their bytes has been seen at any sink — the flows run and do not get this far '
+         + 'through the document, so this is still a distance question and not one about the payload';
   if (item.reached === 0)
-    return 'its candidates have held the thread ' + item.turns + ' time' + (item.turns === 1 ? "" : "s")
-         + ' and none of their bytes has ARRIVED at the sink — the flows run and do not get this far through '
-         + 'the document';
-  if (item.fires === undefined)
-    return item.reached + ' breakout' + (item.reached === 1 ? " arrived" : "s arrived") + ' at the sink and '
-         + 'did not fire — this sink EVALUATES its own argument, so there is no queued program to count and '
-         + 'the escape did not survive into executable syntax';
-  if (item.fires === 0)
+    return held + ' and ' + got + ' survived the page\'s own transforms to a sink, but no whole breakout has '
+         + 'ARRIVED at this sink — the page\'s FILTER is what is eating the candidate, and that is a question '
+         + 'about the BYTES rather than about the schedule';
+  if (item.escaped === 0)
     return item.reached + ' breakout' + (item.reached === 1 ? "" : "s") + ' arrived at the sink and NONE '
-         + 'reached an executable position — the source\'s own transform defeated the breakout, so the bytes '
-         + 'land as text the parse never runs. This is a question about the payload, not about the schedule';
-  return item.fires + ' executable program' + (item.fires === 1 ? "" : "s") + ' queued from ' + item.reached
-       + ' arrival' + (item.reached === 1 ? "" : "s") + ' and not yet run — the breakout EXISTS; this card '
-       + 'becomes a fired PoC when the flow that holds it is scheduled';
+         + 'reached an executable position — the bytes are still inside the literal, comment or text they were '
+         + 'written into, so the parse never runs them (' + got + ' survived). A question about the payload';
+  if (item.fires === undefined)
+    return item.escaped + ' arrival' + (item.escaped === 1 ? "" : "s") + ' reached an executable position and '
+         + 'the marker did not call — this sink EVALUATES its own argument, so the escape is out of its §12 '
+         + 'state and the Script the page built around it either does not parse or threw before the call';
+  return item.fires + ' executable program' + (item.fires === 1 ? "" : "s") + ' queued from ' + item.escaped
+       + ' escaped arrival' + (item.escaped === 1 ? "" : "s") + ' and not yet run — the breakout EXISTS; this '
+       + 'card becomes a fired PoC when the flow that holds it is scheduled';
 }
 
 // WHAT THE SEARCH ACTUALLY RAN, which is the field of the four that is not a count — and the state a parked
@@ -307,8 +323,8 @@ function renderSecurityPanel() {
 
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, fires?,
-    // payloads, sourceEncodes?, delivery?, deliveryPrefix?} for a parked one. This card used to read `shape`,
+    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, survived,
+    // survivedOf, escaped, fires?, payloads, sourceEncodes?, delivery?, deliveryPrefix?} for a parked one. This card used to read `shape`,
     // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
     // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
     // `shape`) could not appear for any finding the engine has ever emitted. A bridge edge asserts its
@@ -440,6 +456,34 @@ function renderSecurityPanel() {
         + "the card is about to state WHICH question this search is stuck on out of numbers it does not have "
         + "(sink=" + pit.sink + " source=" + pit.source + " reached=" + JSON.stringify(pit.reached)
         + " turns=" + JSON.stringify(pit.turns) + ")");
+      // THE TWO MIDDLE RUNGS ARE ASSERTED LIKE THE OTHERS AND FOR THE SAME REASON. solve_json_array writes
+      // `survived`, `survivedOf` and `escaped` unconditionally on the parked shape, and 0 is a real value each
+      // of them must be able to say — so an `|| 0` here would turn "this relay dropped the field" into "the
+      // page's filter ate everything", which is the confident-wrong-instruction failure this card exists to
+      // end. `survivedOf:0` beside `survived:0` is one statement said once (no observation recorded), never a
+      // length the engine failed to write, which is why the pair is asserted together rather than separately.
+      DCHECK(typeof pit.survived === "number" && typeof pit.survivedOf === "number"
+             && typeof pit.escaped === "number" && pit.survived <= pit.survivedOf,
+        "a parked @S record reached the popup without survived/survivedOf/escaped, or with a surviving run "
+        + "longer than the candidate it survived out of — solve_json_array emits all three on every parked "
+        + "entry and the run is a substring of the candidate by construction, so the card is about to state "
+        + "WHICH question this search is stuck on out of numbers that are not measurements (sink=" + pit.sink
+        + " survived=" + JSON.stringify(pit.survived) + " survivedOf=" + JSON.stringify(pit.survivedOf)
+        + " escaped=" + JSON.stringify(pit.escaped) + ")");
+      // AND THE IMPLICATIONS BETWEEN THE FOUR RUNGS, which are the only thing that can say the four numbers
+      // are about the same search rather than four counters that happen to travel together. An escape is
+      // observed on a string a breakout ARRIVED in (solve.c asserts the same at its origin); and for a class
+      // that queues a fire, every escape is recorded in the same block that queues one, so an escape with no
+      // queued program is those two blocks having come apart.
+      DCHECK(pit.escaped === 0 || pit.reached > 0,
+        "a parked @S record claims a breakout reached an executable position at a sink its bytes never "
+        + "arrived at — arrival and escape are read off the SAME string, so this pair was measured on two "
+        + "(sink=" + pit.sink + " reached=" + pit.reached + " escaped=" + pit.escaped + ")");
+      DCHECK(pit.escaped === 0 || pit.fires === undefined || pit.fires > 0,
+        "a parked @S record claims an escape for a sink class that queues its fire, while nothing was ever "
+        + "queued — for those classes the escape is observed in the same block that queues the program, so "
+        + "one without the other means solve.c's fire oracle and its escape rung came apart (sink=" + pit.sink
+        + " escaped=" + pit.escaped + " fires=" + JSON.stringify(pit.fires) + ")");
       DCHECK(pit.fires === undefined || typeof pit.fires === "number",
         "a parked @S record carries a `fires` that is not a count — the field is emitted only for a sink class "
         + "whose breakout becomes a QUEUED program, and its absence is the statement that this class evaluates "

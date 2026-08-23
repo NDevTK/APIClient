@@ -702,3 +702,30 @@ int solve_js_breakouts(const char *output, SolveJsEmit emit, void *user) {
     }
     return n;
 }
+
+/* §@S's CONTEXT-ESCAPED RUNG — see solve_js.h. The scan is the derivation's, unchanged; only the question is
+   different, and it is the one JS_SOURCE already answers. `construct` is deliberately not reached: its DFAILs
+   name the states this file cannot build an escape OUT of, and being unable to build one is not a reason to
+   crash while merely asking whether a candidate already got out. */
+int solve_js_at_source(const char *output, size_t at) {
+    Scan z;
+    Hole h;
+
+    DCHECK(output != NULL, "the @S context-escape rung was asked about the lexical state of nothing");
+    z.s = output; z.n = strlen(output); z.at = at;
+    z.prev = PREV_NONE; z.sol = 1; z.brace = 0; z.tpl = NULL; z.ntpl = z.tplcap = 0;
+    DCHECK(at < z.n,
+           "the @S context-escape rung was asked about an offset past the end of the sink's own argument — the "
+           "caller found its marker INSIDE that string, so an offset outside it is one computed against a "
+           "different string entirely");
+    DCHECK((output[at] >= 'a' && output[at] <= 'z') || (output[at] >= 'A' && output[at] <= 'Z') ||
+           (output[at] >= '0' && output[at] <= '9'),
+           "the @S context-escape rung was asked about an offset whose byte is not ASCII alphanumeric — every "
+           "scanner here reads that byte as an ordinary character of whatever state it is in, and a byte that "
+           "could open a string, a comment or an escape would change the very scan being used to measure it. "
+           "It is the same requirement SOLVE_JS_LOCATOR is built around; the fire marker satisfies it, and a "
+           "caller passing anything else is addressing the scan with something that is not a marker");
+    h = scan(&z);
+    free(z.tpl);
+    return h.st == JS_SOURCE;
+}

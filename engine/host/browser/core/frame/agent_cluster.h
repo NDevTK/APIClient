@@ -7,7 +7,7 @@
  * into each of them is the defect CLAUDE.md names: one fact answered from four places, drifting the day one of
  * them learns something the others do not. So the cluster is a component and the four read it.
  *
- * ONE FACT IS NOT ONE BOOLEAN. §7.1.4's cross-origin isolation mode has THREE values and its readers split on
+ * ONE FACT IS NOT ONE BOOLEAN. §7.3.2.3's cross-origin isolation mode has THREE values and its readers split on
  * different cuts of them: origin-keying asks "not `none`" (so `logical` counts) and the capability asks "is
  * `concrete`" (so `logical` does not). This file held one bool for both, which was invisible only because the
  * mode is `none` in every build so far. The mode is the fact; each reader takes its own question to it.
@@ -26,12 +26,13 @@
  * server actually sent. An OPAQUE origin is unconditionally origin-keyed and always was: §7.1.1.1's
  * obtain-a-site returns the origin itself for one, so the key is an origin with no header involved.
  *
- * THE MODE IS STILL `none`, AND WHAT IS MISSING IS NO LONGER A HEADER. §7.1.3's opener policy and §7.1.4's
- * embedder policy are both obtained from that same header list now; what nothing performs is §7.1.3.2's
- * BROWSING CONTEXT GROUP SWITCH, the one step in the standard that ever sets a group's mode, and §7.5.1's
- * opener-policy row on the Document that it reads. navigation_params.c crashes by name at a response that
- * would need either, so this file's `none` is the right answer for every response it is reached with rather
- * than a conservative one.
+ * THE MODE IS THE GROUP'S AND THIS FILE ASKS FOR IT. §7.3.2.3 puts the cross-origin isolation mode on the
+ * BROWSING CONTEXT GROUP and §7.1.3.2 is the one algorithm that ever assigns it, from §7.1.3's opener policy
+ * obtained off the navigation response — so the fact lives in core/frame/browsing_context_group.h, created
+ * once per agent beside this cluster and read here. A page served `Cross-Origin-Opener-Policy: same-origin`
+ * beside a `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation now reaches `concrete`, which
+ * is what makes `crossOriginIsolated`'s second conjunct — §7.2.2's permissions-policy question — the next
+ * thing to build; the DFAIL in the definition names it.
  * §7.1.5's SANDBOXING FLAG SET IS NOT THE MISSING PIECE, and it is named because the two used to be described
  * as one absence. That set is carried now (core/frame/sandboxing.h) and it is a field of the DOCUMENT rather
  * than of the policy container, which is where §7.5.1's creation table puts it — and it says nothing about

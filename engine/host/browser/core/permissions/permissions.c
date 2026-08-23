@@ -439,10 +439,12 @@ void permissions_init(JSContext *ctx)
     g_atom_name = JS_NewAtom(ctx, "name");
     CHECK(g_atom_name != JS_ATOM_NULL, "PermissionDescriptor's `name` could not be interned");
     g_id_query = idl_method_id_step(ctx, PQ_ARGS, 1, NULL, 0, &PQ_DECL, 0);
-    /* THE ONE ARGUMENT IS DECLARED OPTIONAL SO THE PROLOGUE'S COUNT CHECK CANNOT THROW. `query()` with no
-       arguments must REJECT with a TypeError, not throw one (Web IDL §3.7.7, because the operation returns a
-       promise) — and the body's own `object` test is what produces that rejection. */
-    idl_optional_from(0);
+    /* §6.1's `Promise<PermissionStatus> query(object permissionDesc)`. The return type is a DECLARATION now,
+       so Web IDL §3.7.7 turns the prologue's arity TypeError into a rejection in the one place that rule
+       belongs. This used to be `idl_optional_from(0)` — the one argument declared OPTIONAL so the count check
+       could not throw at all — which produced the same answer for `query()` by making the member's IDL say
+       something it does not say, and which each new promise-returning member had to remember. */
+    idl_returns_promise();
     realm_declare_intrinsic(permissions_install_realm);
 }
 

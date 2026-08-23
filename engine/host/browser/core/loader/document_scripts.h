@@ -56,8 +56,16 @@ unsigned document_bundle_id(lxb_html_document_t *dom);
    in run order, what it still decides is whether an entry holds a POSITION at all: a member of the ASAP SET has
    none (§13.2.7 waits for that set only before the load event), so a seam that can express "park on this and
    run it whenever it arrives" reads `sched` to do so.
+   `els[i]` is entry i's `script` ELEMENT, and it is here for the reason `types[i]` is: by the time the
+   scheduler holds a body the element is behind it, and HTML §4.12.1.1 "Processing model"'s "execute the script
+   element" needs the element itself — its classic arm sets `document`'s §3.1.7 `currentScript` to it, and a page
+   reads `document.currentScript.getAttribute("src")` to derive its own asset prefix. It is a BORROWED pointer
+   into the tree `dom` owns, never freed by doc_scripts_free, and it must never outlive that tree or cross a
+   park: it names a node, and a node has no identity outside this session.
    Caller frees via doc_scripts_free. */
-typedef struct { char **bodies; char **srcs; ScriptType *types; ScriptSchedule *sched; int n; } DocScripts;
+typedef struct {
+    char **bodies; char **srcs; ScriptType *types; ScriptSchedule *sched; lxb_dom_element_t **els; int n;
+} DocScripts;
 DocScripts document_exec_scripts(lxb_html_document_t *dom);
 void       doc_scripts_free(DocScripts *ds);
 

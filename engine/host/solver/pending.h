@@ -105,6 +105,17 @@
  * program is compiled in the realm of the DOCUMENT it belongs to (solver/flow.h) — which for a script appended
  * into an iframe's tree is that frame's document and not the session's. It is SHARE because it belongs to the
  * record: an arm forked while the load is in flight is loading the same script into the same document. */
+/* `scriptEl` IS THE `script` ELEMENT WHOSE PROGRAM THE REPLY WILL BE, for that same kind and for the same
+ * reason one field down: HTML §4.12.1.1 "Processing model"'s "execute the script element" is a switch on EL,
+ * and its "classic" arm sets that document's §3.1.7 `currentScript` to it for the whole of the run. A park is
+ * where the element would otherwise be lost — the flow leaves html_script_prepare with the node in hand and
+ * comes back to a URL and a reply — so the element rides the record to the drain, which puts it on the row.
+ * IT IS THE ELEMENT'S WRAPPER AND NOT A POINTER, which is what makes it storable at all: this record is a JS
+ * value, so a raw `lxb_dom_element_t *` in it would be a pointer inside a structure the runtime walks and the
+ * cold tier measures. The wrapper is the node's ONE identity object (core/dom/node.h), so naming the node
+ * through it costs nothing and keeps the record made of JS values. JS_UNDEFINED for a park no element caused.
+ * SHARE, because it belongs to the record for the reason `doc` does: an arm forked while the load is in flight
+ * is loading the same script for the same element. */
 #define PENDING_FIELDS(X)                    \
     X(RESOLVE,    "resolve",   PEND_SHARE)   \
     X(VALUE,      "value",     PEND_SHARE)   \
@@ -121,7 +132,8 @@
     X(METHOD,     "method",    PEND_SHARE)   \
     X(HEADERS,    "headers",   PEND_STRUCT)  \
     X(BODY,       "body",      PEND_SHARE)   \
-    X(DOC,        "doc",       PEND_SHARE)
+    X(DOC,        "doc",       PEND_SHARE)  \
+    X(SCRIPT_EL,  "scriptEl",  PEND_SHARE)
 
 enum {
 #define PEND_ENUM(id, name, copy) PEND_##id,

@@ -835,6 +835,20 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
+    /* `navigable.swap <new doc> <url> <origin>` — HTML §7.1.3.2's browsing context group SWAP, which is the
+       SAME provisioning act and a different record because the two operations differ in every field the create
+       carries beyond these three. There is no CREATOR (§7.3.2.3 creates the new browsing context "with null,
+       null, and group"), so there is no policy container to clone and no opener policy to inherit; and the
+       swapped-to navigable IS a top-level traversable, so HTML §8.1.3.1's top-level creation URL for its
+       environments is its own address rather than something only the creator could state. Hence the empty
+       policy and the address passed twice below — derived here, not sent twice and able to disagree.
+       A NEW GROUP IS A NEW PROCESS HERE FOR THE SAME REASON A CROSS-ORIGIN CHILD IS: SECURITY.md keys an
+       instance on `(browsing context group, origin)`, and a swap changes the first half. */
+    if (nf == 4 && !strcmp(f[0], "navigable.swap")) {
+        wpt_spawn_child(f[1], f[2], f[3], "", f[2]);
+        free(whole);
+        return;
+    }
     /* `windowproxy.post <target doc> <world> <target origin> <base64>` — §9.4.4 across instances. THE ORIGIN
        IS STAMPED HERE, by the zone that knows who sent it: the engine may not name its own sender
        (SECURITY.md), so the notice carries none and this adds the one it knows. */
@@ -950,7 +964,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
            agent. `{body, csp}` is ONE answer because a policy is a property of THE RESPONSE; a body of null is
            a fetch that did not load, which is still a document the navigable gets. */
         else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
-            char *csp, *body;
+            char *field_lines, *body;
             HeaderList h;
             size_t len = 0;
             JSValue v = JS_NewObject(ctx);
@@ -960,14 +974,12 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                                   "so the buffer is what has to grow");
             memcpy(op, tab + 1, n); op[n] = 0;
             body = wpt_get_headers(strchr(op, '\t') + 1, &len, &h);
-            /* THE ANSWER IS STILL `{body, csp}` AND THAT IS THE NEXT THING TO WIDEN, not a choice made here.
-               A child navigable's Document is created from THIS response, so everything §7.5.1 reads off a
-               header list belongs in this answer — but the seam that carries it into the child (window_proxy's
-               `creator_csp`, then navigable_realm's `csp` argument) is a policy TEXT and not a container, so
-               the list is narrowed to the one field that fits. §7.1.4's embedder policy and §7.1.3's opener
-               policy stop at the same wall, and core/frame/navigation_params.c crashes by name where a
-               response needs them. */
-            csp = header_list_get(&h, "content-security-policy");
+            /* THE ANSWER IS `{body, headers}`: a navigated Document is created from THIS response, so
+               everything §7.5.1 reads off a header list belongs in it. It used to be `{body, csp}` — one field
+               narrowed out of the list by this runner — which is why §7.1.3's opener policy and §7.1.4's
+               embedder policy could not be obtained for one at all. The block is the same field-line form
+               qjs_init takes, serialized by the component that parses it so the two cannot disagree. */
+            field_lines = header_list_field_lines(&h);
             header_list_free(&h);
             /* §2.2.5's BODY IS A BYTE SEQUENCE, and this answer carries one as one. It was
                `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so a corpus document served in any
@@ -975,9 +987,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                FETCHED, on bytes HTML's own encoding sniffing had not looked at yet. */
             JS_SetPropertyStr(ctx, v, "body",
                               body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
-            JS_SetPropertyStr(ctx, v, "csp", csp ? JS_NewString(ctx, csp) : JS_NULL);
+            JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
             free(body);
-            free(csp);
+            free(field_lines);
             /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
                program, and a load that did not load is `{body: null}` rather than a throw. */
             engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
@@ -1263,7 +1275,7 @@ static JSRuntime *g_rt;
  * already cost this gate four standards. What stays in this function is this runner's own: the solver
  * bootstrap it needs to exercise real components, and its network edge. */
 static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin,
-                           const char *top_level_url, bool requests_oac)
+                           const char *top_level_url, bool requests_oac, OpenerPolicyValue opener_policy)
 {
     PlatformAgent agent;
 
@@ -1322,6 +1334,9 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        delivers this header through `?pipe=header(...)` and `.headers` sidecars and nothing else. This host
        reads no header itself: the list goes through §7.4.6's navigation params like the product host's. */
     agent.requests_oac = requests_oac;
+    /* §7.1.3's OPENER POLICY of the response that created this document — §7.3.2.3's group is created with it,
+       and it comes through §7.4.6's navigation params like every other fact this host reads off a response. */
+    agent.opener_policy = opener_policy;
     platform_agent_init(ctx, &agent);
 }
 
@@ -1453,7 +1468,7 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);
     ctx = JS_NewContext(rt);
-    wpt_agent_init(ctx, doc_name, origin, top_level_url, np.requests_oac);
+    wpt_agent_init(ctx, doc_name, origin, top_level_url, np.requests_oac, np.opener.value);
     /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD, because what a document of this build IS is this runner's
        answer and not the engine's — a child with a different platform surface would make every fidelity number
        measured in it a number about a different browser. */
@@ -1470,7 +1485,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
     {
         /* THE RUNNER LOADED THIS DOCUMENT ITSELF, so it knows the navigable's name is the spec's initial "" —
            nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "");
+        /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same
+           response the params above came from, so this runner and the product host give a root navigable the
+           identical row from the identical computation. */
+        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "", np.opener.value);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* §7.5.1's Document, from the navigation params the response decided — §7.4.5's final sandboxing flag
            set and §7.1.7 step 3's CSP list both come out of the one place a response is read
@@ -1670,7 +1688,7 @@ static int wpt_child_main(int argc, char **argv)
             }
         }
     }
-    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.n, /*forking*/0, NULL);
+    engine_sched_begin(ctx, ds.bodies, ds.srcs, ds.types, ds.els, ds.n, /*forking*/0, NULL);
     /* THE DOCUMENT RUNS BEFORE THE FIRST QUESTION ARRIVES, which is what makes a child a participant rather
        than an empty frame — message-opener.html's whole body is one script that posts to its opener, and that
        post has to be on this channel before the parent asks anything. */
@@ -1878,7 +1896,13 @@ int main(int argc, char **argv)
        FORKING IS OFF: this gate measures the browser half against a spec oracle, so a concolic branch must not
        explore both arms — the same choice the child half makes, and the same one the @S candidate re-fire
        makes for its own reason. */
-    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, g_prog_n, /*forking*/0, NULL);
+    /* NO ELEMENT COLUMN, AND THAT IS A STATEMENT ABOUT THIS LIST. These programs are the harness's own —
+       a prologue, testharness.js, the report hook, an epilogue — flattened by wpt_program out of a
+       document rather than collected as its `<script>` elements, so no row of it came from one. §3.1.7's
+       `currentScript` is null while each of them runs, which is that section's answer for a document that
+       is not executing a script element. The OTHER entry above passes document_exec_scripts's column. */
+    engine_sched_begin(ctx, g_prog_bodies, g_prog_srcs, g_prog_types, /*els*/NULL, g_prog_n,
+                       /*forking*/0, NULL);
     for (;;) {
         int r = engine_sched_step();
         int did;

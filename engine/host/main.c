@@ -150,7 +150,8 @@ static int                  g_joined_cap;
    UserActivation, and reported numbers for those areas as if it had run them). What is left in a host is only
    what is genuinely the host's: its EDGES — WHO answers the network, WHO evaluates a string handler — which
    are parameters rather than presence, and which each component asserts for itself at its first use. */
-static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac)
+static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
+                              OpenerPolicyValue opener_policy)
 {
     PlatformAgent agent;
 
@@ -166,6 +167,10 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
        params) and merely CARRIED here — this host reads no header, which is the same split as the origin
        beside it: the zone states bytes, the engine decides what they mean. */
     agent.requests_oac = requests_oac;
+    /* §7.1.3's OPENER POLICY of the response that created this document, which §7.3.2.3's group is created
+       with — carried here for the same reason `requests_oac` beside it is: the browser component that reads a
+       response decided it (§7.4.6's navigation params), and this host reads no header. */
+    agent.opener_policy = opener_policy;
     platform_agent_init(ctx, &agent);
 }
 
@@ -400,7 +405,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
     /* The web-platform surface, installed on the BASELINE — before any flow runs, so these globals are
        pre-flow state and never land in a delta. Each is a real component under browser/; what is not built
        yet is absent, and the page's own throw on reading it names the next one to write. */
-    engine_agent_init(g_ctx, origin, top_level_url, np.requests_oac);
+    engine_agent_init(g_ctx, origin, top_level_url, np.requests_oac, np.opener.value);
     /* §7.4 CALLS BACK HERE FOR A SAME-ORIGIN CHILD: a same-origin document is a second REALM in this heap
        (HTML's similar-origin window agent), and what the platform surface of a document of THIS build is, is
        this file's answer and nobody else's. */
@@ -411,7 +416,10 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
         /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME. The document was navigated to by the real
            browser, and a cross-origin opener may have set `name` before navigating — which is exactly how
            window.name became an attacker source. The read is concolic until something states it. */
-        JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL);
+        /* §7.5.1's OPENER POLICY ROW for the root Document — §7.1.3's policy obtained from the response
+           this instance was started with. It is the navigable's because §7.1.3.2 and §7.3.2.1 both read it off
+           a browsing context's active document (core/frame/window_proxy.h). */
+        JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL, np.opener.value);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
            response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
@@ -564,7 +572,9 @@ QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, c
            carries no name field, so `window.name` is unknown external input and reads concolic until something
            states it. That is what `window_proxy_new_self` spells with a NULL, and what the §7.4 mint beside it
            cannot spell at all (it answers "" for a name it was not given, because §7.4 always knows one). */
-        JSValue proxy = window_proxy_new_self(cctx, doc, NULL);
+        /* §7.5.1's OPENER POLICY ROW for the joined Document, from ITS response's header list — read by
+           the same component over the same shape, because this is the same algorithm over a second response. */
+        JSValue proxy = window_proxy_new_self(cctx, doc, NULL, np.opener.value);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
         /* THE PRINCIPAL AND CSP §2.2.2's SELF-ORIGIN ARE BOTH THE AGENT'S OWN RECORD, serialized — not a
@@ -599,7 +609,7 @@ QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, c
        `<script>` scan, and it is FREED here rather than borrowed for the session: engine_join_document copies
        every body it queues and resolves every `src` it parks on. */
     scripts = document_exec_scripts(dom);
-    engine_join_document(cctx, doc, scripts.bodies, scripts.srcs, scripts.types, scripts.n);
+    engine_join_document(cctx, doc, scripts.bodies, scripts.srcs, scripts.types, scripts.els, scripts.n);
     doc_scripts_free(&scripts);
 
     navigation_params_free(&np);
@@ -632,7 +642,7 @@ QJS_EXPORT void qjs_begin(const char *recipes)
        delta, its DOM writes, its suspended frames, its constraint, its chunks and the replies it was owed are
        all regenerated by that replay — which is also how §Time-travel-resume gets what it asks for, a flow that
        carries its own path forward while its example VALUES track today's server. */
-    engine_sched_begin(g_ctx, g_scripts.bodies, g_scripts.srcs, g_scripts.types, g_scripts.n,
+    engine_sched_begin(g_ctx, g_scripts.bodies, g_scripts.srcs, g_scripts.types, g_scripts.els, g_scripts.n,
                        /*forking*/1, recipes);
     g_begun = 1;
 }

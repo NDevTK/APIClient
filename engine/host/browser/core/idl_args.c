@@ -258,6 +258,9 @@ typedef struct {
        NULL-terminated array counted in two places is two statements of one number. */
     int        nsteps;
     bool       variadic;    /* the last declared type applies to every argument from there on */
+    /* WEB IDL §3.7.7's PROMISE RETURN TYPE — see idl_returns_promise. It is a fact about the member's
+       DECLARATION and not about its body, which is why it lives here and not on IdlStepDecl. */
+    bool       returns_promise;
     JSClassID  iface;       /* the brand an IDL_STRING_UNLESS_IFACE position tests against */
     /* THE NARROWING half of that brand — see idl_iface_narrow. NULL for a member whose interface a class id
        already names exactly, which is most of them. */
@@ -1240,6 +1243,55 @@ static int js_idl_args_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     custom_elements_reactions_push(&s->ce);
     rr = js_idl_args_step_inner(ctx, st, cb_result, out_cb, out_argc);
     custom_elements_reactions_pop();
+    /* WEB IDL §3.7.7's CREATE AN OPERATION FUNCTION, ITS LAST TWO STEPS — and they cover EVERYTHING above,
+     * which is the whole reason they are asked here and not inside any member.
+     *
+     *   "Let steps be the following series of steps … : Try running the following steps: … If jsValue does not
+     *    implement the interface target, throw a TypeError … Let <operation, values> be the result of passing S
+     *    and args to the overload resolution algorithm … set R to the result of running the method steps …
+     *    And then, if an exception E was thrown: If op has a return type that is a promise type, then return
+     *    ! Call(%Promise.reject%, %Promise%, «E»). Otherwise, end these steps and allow the exception to
+     *    propagate."
+     *
+     * THE `Try` OPENS BEFORE THE BRAND CHECK AND CLOSES AFTER THE METHOD STEPS, so a promise-returning
+     * operation NEVER throws synchronously: not for a wrong receiver, not for too few arguments, not for an
+     * argument whose conversion failed, and not for its own algorithm. `crypto.subtle.digest('SHA-256', {})`
+     * rejects; it does not throw, and a bundle that wrote `.catch` around it and nothing else is relying on
+     * exactly that.
+     *
+     * IT REPLACES A PER-MEMBER WORKAROUND AND THAT IS WHY IT IS WORTH A MECHANISM. Without it the only way to
+     * reject rather than throw was for the member to declare types that CANNOT fail — `IDL_ANY` plus
+     * `idl_optional_from(0)` — and then re-derive the argument's type in its own body, which is the
+     * hand-written brand test this file's type list exists to have exactly one of. Every promise-returning
+     * member added since would have had to remember the trick, and the ones that did not would throw where the
+     * platform rejects.
+     *
+     * THE PROMISE IS A NEW ONE, NOT THE MEMBER'S OWN CAPABILITY. §3.7.7 says %Promise.reject%, so a member
+     * whose algorithm already created a capability and then threw hands back a DIFFERENT, rejected promise and
+     * abandons its own — which is what the spec describes and is unobservable, since a promise the member
+     * never returned has no reactions on it. */
+    if (rr == JS_STEP_ABRUPT && s->hdr.arg >= 0 && s->hdr.arg < g_n && idl_member(s->hdr.arg)->returns_promise) {
+        JSValue exc = JS_GetException(ctx);
+        JSValue funcs[2];
+        JSValue promise;
+
+        DCHECK(!JS_IsUninitialized(exc),
+               "a member with a promise return type completed abruptly with no live exception — §3.7.7's `And "
+               "then, if an exception E was thrown` has no E to reject with, so the abrupt came from somewhere "
+               "that did not throw");
+        promise = JS_NewPromiseCapability(ctx, funcs);
+        CHECK(!JS_IsException(promise),
+              "§3.7.7's Promise.reject could not be allocated — a promise-returning operation that answers "
+              "with neither a promise nor a throw is a call a page can only hang on");
+        if (JS_CallAsFlow(ctx, funcs[1], exc) < 0)
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, funcs[0]);
+        JS_FreeValue(ctx, funcs[1]);
+        JS_FreeValue(ctx, exc);
+        JS_FreeValue(ctx, s->result);
+        s->result = promise;
+        rr = JS_STEP_DONE;
+    }
 #if APICLIENT_DEV
     {
         int64_t d = idl_now_ms() - t0;
@@ -1476,6 +1528,14 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                   "against — the class is half of what that type states");
             t = idl_is_iface(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
         }
+        /* §3.2.26 over `(object or DOMString)`, read in the union algorithm's own ORDER — which is the whole
+           of the difference between this and IDL_STRING_OR_DICT. The union names no nullable and no dictionary
+           type, so `null` never reaches an object arm: it falls past every Object clause to the string one and
+           becomes the four characters "null". Reading it as "an object is the object, everything else is a
+           string" agrees on every ordinary case and is the same sentence; it is written as one clause because
+           that is what §3.2.26 leaves once the arms are named. */
+        if (t == IDL_STRING_UNLESS_OBJECT)
+            t = JS_IsObject(a) ? IDL_ANY : IDL_DOMSTRING;
 
         /* §3.2.20's NULLABLE RULE over the two interface-valued types: null AND undefined are the IDL null, and
            what survives takes the un-nullable type's own conversion — which is why this collapses the TYPE
@@ -2644,6 +2704,17 @@ void idl_arg_default(int index, IdlDictDefault dflt, const char *dflt_str)
    idl_optional_from and idl_arg_default: both of those measure positions against `idl_declared_positions`,
    which a variadic tail shortens by one, so a member that said it afterwards would have had its optional
    index and its defaults checked against a list one longer than the one it declares. */
+void idl_returns_promise(void)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "a promise return type was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(!m->returns_promise, "a member declared its promise return type twice");
+    m->returns_promise = true;
+}
+
 void idl_variadic(void)
 {
     IdlMember *m;

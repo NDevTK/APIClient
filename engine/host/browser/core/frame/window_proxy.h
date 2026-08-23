@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "quickjs.h"
+#include "core/frame/opener_policy.h"
 #include "core/frame/sandboxing.h"
 #include "core/url/origin.h"
 
@@ -66,8 +67,16 @@ void window_proxy_free(JSContext *ctx);
    §2.2's own note says the field exists so that a document which inherited its policy resolves `'self'`
    against the origin that policy came FROM, and the initial about:blank is exactly such a document. NULL only
    where `creator_csp` is — the self proxy, whose realm the host already built. */
+/* `opener_policy` is HTML §7.3.2.1's INHERITED OPENER POLICY for the initial about:blank Document this
+   navigable is created with: "if creator's origin is same origin with creator's relevant settings object's
+   top-level origin, then set document's opener policy to creator's browsing context's TOP-LEVEL browsing
+   context's active document's opener policy". §7.1.3's `unsafe-none` otherwise, which is a real answer and not
+   an absence — a creator that is cross-origin with its own top inherits nothing. It is the CREATOR's decision
+   and is stated here for the same reason `creator_csp` is: the navigable being created cannot be asked, and by
+   the time its Document is materialized the creator's top may have been navigated. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
-                         bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
+                         bool is_popup, SandboxFlags creation_sandbox_flags, OpenerPolicyValue opener_policy,
+                         const char *creator_csp,
                          const char *creator_csp_self_origin, const char *creator_base_url,
                          const char *top_level_url,
                          const Origin *top_level_origin, JSValueConst parent, JSValueConst opener);
@@ -108,7 +117,11 @@ bool window_proxy_is_popup(JSValueConst proxy);
    That is the standard's own answer for the two addresses a URL cannot carry an origin for: an `about:blank`
    top-level environment (§7.3.2.1 creates every top-level browsing context at that address) inherits the
    source, and a real address gives §4.7's tuple. */
-JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name);
+/* `opener_policy` is §7.5.1's OPENER POLICY ROW of the Document the host built this realm for — §7.1.3's
+   policy obtained from the response that created it (core/frame/navigation_params.h). This is the one
+   navigable §7.3.2.1 did not create, so there is nothing to inherit: the host states what the response said,
+   exactly as it states the address and the header list it came from. */
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy);
 
 /* THE ONE WindowProxy FOR A DOCUMENT — this agent's own when it hosts it, and otherwise a proxy over a
    navigable whose active document lives in ANOTHER WASM instance, minted here on the first ask and answered
@@ -154,11 +167,51 @@ bool window_proxy_closing(JSValueConst proxy);
    fact asked from one place so both spellings of close() make the same test. */
 bool window_proxy_is_top_level(JSValueConst proxy);
 
-/* §7.5.10 STEP 8: this navigable's active document was destroyed, so its browsing context is null — the half
-   of §7.2.2.1's `closed` that destruction owns, and what §7.5.10 step 5's wait reads off each child navigable.
-   Written only by the destroy job (core/frame/document_lifecycle.c). */
+/* HTML §7.5.10 "Destroying documents" STEPS 8 AND 9, WHICH ARE ONE WRITE HERE.
+ *
+ * Step 8 is "Set document's browsing context to null" — the half of §7.2.2.1's `closed` that destruction owns,
+ * and what §7.5.10 step 5's wait reads off each child navigable. Step 9 is "Set document's node navigable's
+ * active session history entry's document state's document to null", and that is the NAVIGABLE letting go of
+ * the Document: §7.3.1 "Navigables" says "a navigable's active document is its active session history entry's
+ * document" and §7.4.1.1 "Session history entries" says "to get a session history entry's document, return its
+ * document state's document", so step 9 makes this navigable's ACTIVE DOCUMENT null.
+ *
+ * THAT SECOND HALF IS THE ENGINE'S ONLY RECLAMATION EDGE, which is why the two may not be separate calls. A
+ * realm is kept alive by its own function objects and those hang off its Window (core/frame/navigable.h), so
+ * the navigable's reference to that Window is the ONE counted reference this engine holds to a child document's
+ * entire realm. A destroy that set the flag and kept the Window announced a destruction and reclaimed nothing:
+ * the count of live child realms could only ever rise, and a session that visits sites continuously has no
+ * other way for one to fall. Written together, no site can perform one and forget the other.
+ *
+ * IT IS A REFERENCE DROP AND NEVER A FREE, and that distinction is what makes it safe with a flow parked inside
+ * the document being destroyed. This write is per-flow like every other read of this record (it goes through
+ * proxy_of), so a sibling arm that never removed the frame keeps its own binding and its own Window; and a flow
+ * SUSPENDED in the destroyed document holds that realm through its own frames, jobs and delta, none of which
+ * this touches. The realm therefore lives exactly as long as some world can still reach it, and dies as the
+ * garbage CYCLE navigable.h describes when none can — decided by the collector, which is the only thing that
+ * can decide it, rather than by whichever flow happened to run the destroy job. Written only by the destroy job
+ * (core/frame/document_lifecycle.c). */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
+
+/* HTML §7.1.3.2 "Browsing context group switches due to opener policy", step 10 — THE OTHER WRITER of
+ * §7.2.2.1's "this's browsing context is null", and the one that is not a destruction.
+ *
+ * Its note is the whole of it: "In this case we are going to perform a browsing context group swap.
+ * browsingContext will not be used by the new Document that we are about to create." The navigation goes on to
+ * build its Document in a NEW top-level browsing context, in a new group — which SECURITY.md's
+ * `(browsing context group, origin)` key makes another WASM instance — and this record is what the page's own
+ * handle on the window keeps pointing at. browsing-the-web's MAKE ACTIVE ("Set document's browsing context's
+ * WindowProxy's [[Window]] internal slot value to window") goes through the DOCUMENT's browsing context, so on
+ * an ordinary navigation the handle follows the navigable and on a swap it does not: it keeps the Window it
+ * had, and `closed` is true about it from here on. That is the observable the opener sees, and severing the
+ * opener link instead would leave it reading `closed === false` on a window real Chrome has already cut off.
+ *
+ * IT DESTROYS NOTHING, which is why it is not `window_proxy_set_destroyed`. The Document, its Window and its
+ * realm are exactly where they were — a read through the handle still answers about THAT document — and
+ * `window_proxy_destroyed` still answers false, so §7.5.10 may later run over this navigable in full and
+ * reclaim it. Written by core/frame/browsing_context_group.c, which is where the swap is. */
+void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy);
 
 /* THE SUBTREE WAIT — §7.4.2.4's totalTasks, §7.5.9 step 5's numberUnloaded and §7.5.10 step 5's
    numberDestroyed are one mechanism, on the navigable that is waiting and counted DOWN. `_set` records how
@@ -335,9 +388,21 @@ const Origin *window_proxy_origin(JSValueConst proxy);
    `realm` is BORROWED — the agent owns every realm it built (navigable.c) — and the superseded one is NOT torn
    down here: a flow parked inside it resumes there, which is what makes it a time-travel entity rather than a
    page a browser could throw away. */
+/* `opener_policy` is §7.5.1's OPENER POLICY ROW of the Document this navigation creates — "opener policy …
+   navigationParams's cross-origin opener policy", obtained from the response the load fetched. It is the
+   OPERATION's like every other argument here and is never read back off the navigable, which at this moment
+   still holds the document being replaced. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
                            const char *url, const char *top_level_url, const Origin *top_level_origin,
-                           const Origin *origin);
+                           const Origin *origin, OpenerPolicyValue opener_policy);
+
+/* HTML §7.5.1's OPENER POLICY ROW of this navigable's ACTIVE DOCUMENT — the value §7.1.3.2's group-switch
+   check and §7.3.2.1's creation inheritance both read, and the reason the row is held on the navigable rather
+   than on a Document object is in window_proxy.c beside the field: both readers walk from a browsing context
+   to whichever Document is active in it, and a navigable holding the initial about:blank has no realm to hold
+   one until something touches it. PER FLOW. Asked of a REMOTE proxy this CRASHES rather than answering
+   `unsafe-none`, which is a legal value and would be indistinguishable from an answer. */
+OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy);
 
 /* HAS THIS NAVIGABLE'S ACTIVE DOCUMENT BEEN REPLACED BY A NAVIGATION — HTML §7.4.4 step 4's "document's IS
    INITIAL about:blank", asked of the navigable because that is what can answer it. §7.4 creates every navigable

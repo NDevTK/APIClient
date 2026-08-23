@@ -5,6 +5,7 @@
 #include "check.h"
 #include "core/agent_state.h"
 #include "core/console/console.h"
+#include "core/crypto/crypto.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/abort.h"
 #include "core/dom/document.h"
@@ -28,6 +29,7 @@
 #include "core/file/file_system_writable.h"
 #include "core/file/storage_manager.h"
 #include "core/frame/agent_cluster.h"
+#include "core/frame/browsing_context_group.h"
 #include "core/frame/history.h"
 #include "core/frame/navigate_event_fire.h"
 #include "core/frame/navigation.h"
@@ -131,6 +133,7 @@ static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_hand
 static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
 static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
+static void d_crypto(JSContext *c, const PlatformAgent *a) { (void)a; crypto_init(c); }
 static void d_storage_shed(JSContext *c, const PlatformAgent *a) { (void)a; storage_shed_init(c); }
 static void d_storage(JSContext *c, const PlatformAgent *a) { (void)a; storage_init(c); }
 static void d_window_storage(JSContext *c, const PlatformAgent *a) { (void)a; window_storage_init(c); }
@@ -250,6 +253,12 @@ static void r_fs_writable(JSRuntime *rt) { fs_writable_free(rt); }
 static void r_fs_handle(JSRuntime *rt) { (void)rt; fs_handle_free(); }
 static void r_fs_access(JSRuntime *rt) { (void)rt; file_system_access_free(); }
 static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
+/* WEB CRYPTOGRAPHY's two components hold class ids, per-realm slots, a step id and ONE INTERNED ATOM (the
+   Algorithm dictionary's `name`), all of which are the AGENT's. The atom is the reason this row exists rather
+   than being left to the realm teardown: an atom is a JSAtomStruct and not a GC object, so a release nobody
+   calls is invisible to JS_FreeRuntime's object walk and shows up only in its atom walk, by description.
+   §14's release is reached through §10's, because §10 declares it. */
+static void r_crypto(JSRuntime *rt) { (void)rt; crypto_free(); }
 /* STORAGE §4.3's TWO SHEDS ARE THE AGENT'S, and that is the same argument §2.1's set of databases
    makes two rows down: storage is keyed by ORIGIN, §Security makes an instance an origin-keyed agent
    cluster, so the shed a same-origin child navigable reaches is THIS one rather than a second. What a C
@@ -470,6 +479,13 @@ static const PlatformComponent PLATFORM[] = {
        installs in declaration order. */
     { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
     { "file_picker",         d_file_picker,         NULL,        r_file_picker },
+    /* WEB CRYPTOGRAPHY §10's Crypto and §14's SubtleCrypto. ONE ROW for both, because §10 declares §14 as its
+       own dependency the way Permissions declares PermissionStatus — a host that had one and not the other
+       would answer `crypto.subtle` with an object from another realm or with nothing. Neither has a document
+       half: §3.7 gives every realm its own interface prototype, `crypto` and `crypto.subtle` are both
+       `[SameObject]` PER REALM, and a nested navigable's `crypto` is its own — so both install through
+       core/realm.h. */
+    { "crypto",              d_crypto,              NULL,        r_crypto },
     /* WEB STORAGE — Storage §4's model, then HTML §12.2.1's interface over it, then §12.2.2's and
        §12.2.3's two Window getters, in that order because each reads the one before it. The model is
        first for a second reason its own file states: its shed, shelf, bucket and bottles are built HERE,
@@ -697,6 +713,14 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "Storage",               "storage" },
     { "localStorage",          "window_storage" },
     { "sessionStorage",        "window_storage" },
+    /* WEB CRYPTOGRAPHY's three names — §10's interface object, §14's, and the Window member the mixin's
+       partial declares. `crypto` is on browser/platform_names.h, so the absent-global seam declines to mint a
+       concolic for it and a `window.crypto` that resolves to nothing answers `undefined` instead of throwing:
+       an install that silently stopped happening would restore exactly the silent defect these witnesses
+       exist to refuse. */
+    { "Crypto",                "crypto" },
+    { "SubtleCrypto",          "crypto" },
+    { "crypto",                "crypto" },
     { "DOMStringList",         "dom_string_list" },
     { "IDBKeyRange",           "idb_key_range" },
     { "indexedDB",             "indexed_db" },
@@ -834,6 +858,13 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
        also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
        what every document of this agent then shares. */
     origin_agent_adopt(agent->origin);
+    /* AND THE BROWSING CONTEXT GROUP, BEFORE THE CLUSTER, BECAUSE §8.1.2.2 TAKES IT AS AN ARGUMENT. Its
+       signature is "obtain a similar-origin window agent, given an origin, a BROWSING CONTEXT GROUP and a
+       boolean requestsOAC", and its step 3 reads that group's cross-origin isolation mode — so a group created
+       after the cluster would be a group whose mode the allocation could not have seen. §7.3.2.3's group is
+       the other half of the `(browsing context group, origin)` key SECURITY.md makes this instance, and it
+       installs nothing, so like the cluster below it is not a row on the list. */
+    browsing_context_group_create(agent->opener_policy);
     /* AND THE AGENT'S CLUSTER, IN THE SAME BREATH AND FOR THE SAME REASON. §8.1.2.2's obtain-a-similar-origin-
        window-agent is what ALLOCATES the agent this whole call is bringing up, and its key is derived from the
        origin adopted on the line above — so it is not a row on the list either: it installs nothing, and it has
@@ -867,6 +898,10 @@ void platform_agent_free(void)
        WindowProxy holds one as a POD pointer inside the bytes its COW delta captures — so the whole table is
        released here, once, when nothing is left that could read it. */
     agent_cluster_release();   /* the cluster names an origin, so it goes BEFORE the origins it named */
+    /* AND THE GROUP AFTER THE CLUSTER, which is the reverse of the creation order above: §8.1.2.2
+       allocated the cluster FROM the group's mode, so the group is what the cluster was derived from and
+       goes second. */
+    browsing_context_group_release();
     origin_release();
     /* EVERY DECLARED SLOT IS BACK WHERE A FRESH PROCESS WOULD HAVE FOUND IT, asserted here because here is the
        last instant at which the question has an answer: after this the agent is gone and the next reader of a

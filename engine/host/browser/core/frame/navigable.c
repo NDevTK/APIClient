@@ -11,6 +11,10 @@
 #include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
+#include "core/frame/opener_policy.h"   /* §7.1.3's policy and §7.1.3.2's group-switch decision */
+#include "core/frame/browsing_context_group.h"   /* and §7.1.3.2's swap, which is what that decision reaches */
+#include "core/frame/secure_context.h"  /* §8.1.3.5, which §7.1.3 step 2 asks of the reserved environment */
+#include "core/fetch/headers.h"         /* the response's header list, as the field lines it crosses the ABI in */
 #include "core/dom/document.h"
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
@@ -23,6 +27,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"              /* §8.1.3.1's environment: the creator's top-level creation URL */
 #include "solver/engine.h"
+#include "solver/flow.h"             /* the realm teardown's assert: what the frontier still names by HANDLE */
 #include "solver/world.h"
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
@@ -87,12 +92,31 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
     int i;
 
     (void)rt;
-    document_free(cctx);
+    /* THE LIST IS WALKED FIRST NOW, AND document_free LAST, because the ASSERT below reads the record that
+       call releases and is only answerable for a realm this component built. A realm that is not in the list
+       is the root's, or one some other part of the host made, and neither has a navigable behind it. */
     for (i = 0; i < g_realms_n; i++) {
         if (g_realms[i] != cctx) continue;
+        /* THE ASSERT THAT MAKES THE FREE SAFE, AND IT IS ABOUT THE FRONTIER RATHER THAN ABOUT THIS REALM.
+           Reaching here means the collector proved this realm unreachable, so every holder it can SEE is
+           already gone — a flow suspended inside this document holds it through COUNTED references (its
+           frames, its jobs, its parked continuation, the dups its COW delta took at each capture), so a realm
+           a flow can resume into cannot arrive here at all. That is the whole reason §7.5.10's reclamation is
+           a reference DROP and never a free, and the reason no flow is terminated or paged to make one.
+           WHAT THE COLLECTOR CANNOT SEE IS A DOCUMENT HANDLE. A flow's program queue names the document each
+           row is compiled in as a `uint32_t` (solver/flow.h's `dyn_doc`), which holds nothing and stays
+           perfectly readable after the realm behind it is gone — so it is the one way the frontier can still
+           be standing on a document the collector has just decided is garbage, and that row would later be
+           compiled through the doc->realm row document_free is about to clear. */
+        DCHECK(flow_programs_for_document(document_doc(cctx)) == 0,
+               "a realm was torn down while the frontier still held QUEUED PROGRAMS for its document — a "
+               "program row names its document by HANDLE and holds no reference, so the collector could not "
+               "see it and compiling that row afterwards asks a doc->realm row this teardown clears. Whatever "
+               "still owns those rows has to own a reference to the document too, or drop them with it");
         g_realms[i] = g_realms[--g_realms_n];   /* order means nothing here; membership does */
-        return;
+        break;
     }
+    document_free(cctx);
 }
 
 
@@ -292,13 +316,18 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
                        "script element` with a type other than classic — §4.12.1.1 sends every module to one "
                        "of the three lists before that step, so the schedule and the type disagree about one "
                        "element");
-                engine_queue_script(doc, ds.bodies[i]);
+                /* THE ELEMENT ENTRY, because this row HAS an element: engine_queue_script is the entry for a
+                   program no `<script>` caused, and a row seeded out of a document's inventory is never one.
+                   Same position (this seed builds the sequence in document order, so APPEND *is* in place) and
+                   the same type the assert above has just pinned; what it adds is the element §4.12.1.1's
+                   "execute the script element" switches on and sets §3.1.7's `currentScript` to. */
+                engine_queue_element_script(doc, ds.bodies[i], ds.types[i], ds.els[i]);
             } else {
                 DCHECK(ds.types[i] == SCRIPT_TYPE_MODULE,
                        "an inline entry of a document's script inventory is scheduled somewhere other than its "
                        "own parse position and is not a module — §4.12.1.1 owes no fetch for a classic script "
                        "whose source it already has, so nothing else can reach a list from an inline row");
-                engine_queue_element_script(doc, ds.bodies[i], ds.types[i]);
+                engine_queue_element_script(doc, ds.bodies[i], ds.types[i], ds.els[i]);
             }
             continue;
         }
@@ -310,8 +339,8 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
         /* THE SET PARKS AND THE ORDERED PASSES TAKE A SLOT — the whole difference between having a position and
            not needing one. A parked reply becomes a program of this flow whenever it drains, which is the
            arrival order a SET is entitled to; a slot holds the sequence at this script until its reply fills it. */
-        if (pass == SCRIPT_PASS_ASAP) engine_pending_script_url(cctx, abs_url, ds.types[i]);
-        else                          engine_queue_docscript_url(doc, abs_url, ds.types[i]);
+        if (pass == SCRIPT_PASS_ASAP) engine_pending_script_url(cctx, abs_url, ds.types[i], ds.els[i]);
+        else                          engine_queue_docscript_url(doc, abs_url, ds.types[i], ds.els[i]);
         free(abs_url);
     }
     doc_scripts_free(&ds);
@@ -455,14 +484,21 @@ typedef struct {
    wait for the host's answer is a sub-sequence within that step (`req` is its cursor) and not a step of its
    own — no page code of this document runs across it, because the document does not exist yet. */
 #define NAV_LOAD_STAGES(X) \
-    X(NAV_LOAD_FETCH, "HTML §7.4 step 14 → §7.11 navigate (fetch the destination, then §7.2.6's policy " \
-                      "container and §7.11's create and initialize a Document object over the response)")
+    X(NAV_LOAD_FETCH, "HTML §7.4 step 14 → §7.4.5 populate a session history entry (fetch the destination, " \
+                      "then §7.1.7's policy container, §7.1.3's opener policy and §7.5.1's create and " \
+                      "initialize a Document object over the response)")
 enum { NAV_LOAD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NAV_LOAD_STEPS[] = { NAV_LOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* THE RESPONSE IS `{body, csp}` — one answer, because a policy is a property of THE RESPONSE and asking for it
-   separately is asking a second time and may get a second answer. A missing or null `body` is a fetch that did
-   not load, which is a document the navigable still gets (an error page is a document). */
+/* THE RESPONSE IS `{body, headers}` — one answer, because everything §7.5.1 creates a Document from is a
+   property of THE RESPONSE and asking for any of it separately is asking a second time and may get a second
+   answer. It was `{body, csp}`, one policy the trusted zone had pulled out of the list, and that is why a
+   navigated Document could not have an opener policy, an embedder policy or an `Origin-Agent-Cluster` answer
+   at all: the seam had thrown the rest away. `headers` is the HTTP field lines the response delivered, which
+   is the same form qjs_init takes for the root document's response — one shape, one parse (core/fetch/
+   headers.h), and Fetch's own `get` is then what decides what a REPEATED header means. A missing or null
+   `body` is a fetch that did not load, which is a document the navigable still gets (an error page is a
+   document). */
 static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     NavLoadState *s = st;
@@ -471,10 +507,25 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     const char *addr, *csp = NULL, *tlu;
     const uint8_t *body = NULL;
     const Origin *origin, *tlo;
-    JSValue bodyv = JS_UNDEFINED, cspv = JS_UNDEFINED;
+    JSValue bodyv = JS_UNDEFINED, headersv = JS_UNDEFINED;
     const char *self_origin = NULL;
     const char *about_base = NULL;
+    const char *field_lines = NULL;
+    /* THE RESPONSE'S WHOLE HEADER LIST, because several standards read different names out of ONE list and
+       Fetch's own `get` is what decides what a repeated header means — the same sentence main.c's qjs_init
+       makes about the root document's response, and the reason this seam carries field lines rather than one
+       extracted policy. It carried `{body, csp}`, one policy pulled out by the trusted zone, so §7.1.3's
+       opener policy and §7.1.4's embedder policy could not be obtained for a navigated Document at all. */
+    HeaderList response_headers;
+    /* §7.4.5's "let responseCOOP be a NEW opener policy" — the value every arm keeps except a top-level
+       traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
+    OpenerPolicy response_coop;
+    char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
     bool inherited = false;
+    /* §7.1.3.2's `swapGroup`, once its arm has RUN — so the whole of the load below it is skipped. It is not a
+       second copy of the predicate's answer: a load that swapped has no Document to create in this heap and no
+       binding to move, and one flag is what keeps those two facts from being asked twice. */
+    bool swapped = false;
     size_t body_len = 0;
     JSContext *cctx;
     SandboxFlags final_flags, csp_flags;
@@ -484,6 +535,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    memset(&response_headers, 0, sizeof response_headers);
+    opener_policy_init(&response_coop);   /* §7.4.5: "Let responseCOOP be a new opener policy" */
     DCHECK(s->hdr.stage == NAV_LOAD_FETCH, "the document-load job resumed at a stage §7.4 does not have");
     DCHECK(window_proxy_is(proxy), "the document-load job was given something that is not a WindowProxy");
     addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
@@ -520,7 +573,24 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     origin = origin_by_id(oid);
     if (fetches) {
         bodyv = JS_GetPropertyStr(ctx, answer, "body");
-        cspv  = JS_GetPropertyStr(ctx, answer, "csp");
+        /* THE HEADER LIST, AS THE HTTP FIELD LINES THE RESPONSE DELIVERED — `name: value`, one per line, the
+           one form a header list crosses an ABI in (core/fetch/headers.h) and exactly what qjs_init takes for
+           the root document's response. DCHECKed rather than defaulted: the trusted zone always states one
+           (the empty string IS a response that carried no headers), so a missing field is a producer that
+           stopped writing it, and a `|| ""` here would silently give every navigated Document the policy
+           container, opener policy and sandboxing flags of a response with no headers at all. */
+        headersv = JS_GetPropertyStr(ctx, answer, "headers");
+        DCHECK(JS_IsString(headersv),
+               "§7.4 step 14's response answer carries no `headers` field — the trusted zone states the "
+               "response's HTTP field lines (the empty string is a response that carried none), and §7.5.1 "
+               "creates a Document out of them: without the list this navigation gets no policy container, no "
+               "opener policy and no CSP-derived sandboxing flags, with nothing to say so");
+        field_lines = JS_ToCString(ctx, headersv);
+        header_list_parse_field_lines(&response_headers, field_lines);
+        /* Fetch §2.2.2's `get`, which JOINS repeated headers with ", " — CSP §2.2's own serialization of a
+           policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
+           one map entry and could not express two `Content-Security-Policy` headers at all. */
+        resp_csp = header_list_get(&response_headers, "content-security-policy");
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
            field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
@@ -537,7 +607,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        carries because whose clone it is belongs to the operation (navigable_load_enqueue). A document made
        from no response has only the second, which is the whole of why an `about:blank` child runs its scripts
        under its creator's CSP. */
-    if (!JS_IsUndefined(cspv) && !JS_IsNull(cspv)) csp = JS_ToCString(ctx, cspv);
+    if (resp_csp) csp = resp_csp;
     else if (!JS_IsNull(step_arg(&s->hdr, 3))) { csp = JS_ToCString(ctx, step_arg(&s->hdr, 3)); inherited = true; }
     /* AND CSP §2.2's SELF-ORIGIN OF THAT LIST, which follows from WHICH of the two policies was taken and
        from nothing else. §2.2.2 sets it to the RESPONSE's URL's origin, which for this load is the origin the
@@ -564,12 +634,6 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                "takes the about base URL from the initiator, and without it every relative URL in the loaded "
                "Document resolves against `about:blank`, whose opaque path makes the parse FAIL");
         about_base = JS_ToCString(ctx, step_arg(&s->hdr, 5));
-    }
-    if (window_proxy_materialized(proxy)) {
-        doc = world_mint_doc(window_proxy_doc(proxy));
-        world_doc_adopt(doc);
-    } else {
-        doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
     }
     /* WHERE THE NEW DOCUMENT'S ENVIRONMENT SITS, which HTML §8.1.3.1 answers by asking what this navigable IS
        rather than what it is loading. Navigating a TOP-LEVEL TRAVERSABLE moves the top-level environment to
@@ -609,15 +673,78 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "engine determined that origin when the navigation was enqueued, before the response existed. Move "
            "§7.3.1's determine-the-origin for a navigation to the point the response arrives (here), keeping "
            "the enqueue-time answer only for the `about:` destinations that have no response");
-    cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, csp,
-                           inherited ? self_origin : origin_serialized(origin), about_base, final_flags);
-    window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin);
+    /* HTML §7.4.5's OPENER-POLICY ARM, and its CONDITION is the whole shape of it: "If navigable is a TOP-LEVEL
+       TRAVERSABLE: set responseCOOP to the result of obtaining an opener policy given response and request's
+       reserved client. Set coopEnforcementResult to the result of ENFORCING the response's opener policy …".
+       A child navigable never obtains one, which is why an `<iframe src>` that happens to be served a COOP
+       header keeps §7.4.5's "new opener policy" — and it is the same fact §7.1.3.2's obtain-a-browsing-context-
+       to-use-for-a-navigation-response states from the other end in its step 2 ("if browsingContext is not a
+       top-level browsing context, then return browsingContext"). The `about:` arms of §7.4.5 keep it too, each
+       under its own "let coop be a NEW opener policy".
+       §8.1.3.5's SECURE-CONTEXT ANSWER IS OVER THE TOP-LEVEL CREATION URL, which for a top-level traversable
+       is the address being loaded — §7.1.3 step 2 returns the default policy for a non-secure context, so a
+       COOP header served over plain http decides nothing. */
+    if (fetches && window_proxy_is_top_level(proxy)) {
+        opener_policy_obtain(&response_coop, &response_headers,
+                             secure_context_url_potentially_trustworthy(tlu));
+        /* §7.4.5, in the same arm and immediately after the enforcement: "If finalSandboxFlags is not empty and
+           responseCOOP's value is not `unsafe-none`, then set response to an APPROPRIATE NETWORK ERROR and
+           break" — the standard's own note: "one cannot simultaneously provide a clean slate to a response
+           using opener policy and sandbox the result of navigating to that response". This engine has no
+           network-error response to substitute: a failed load reaches §7.5.1 as absent bytes, which is a
+           DIFFERENT thing (a navigable showing an error page whose policy came from somewhere). */
+        DCHECK(final_flags == 0 || response_coop.value == OPENER_POLICY_UNSAFE_NONE,
+               "§7.4.5 turns this response into a NETWORK ERROR — its opener policy is not `unsafe-none` and "
+               "the final sandboxing flag set is not empty, and the standard refuses to give a clean slate to "
+               "a response it is also sandboxing. Build §7.4.5's network-error response as a value the load "
+               "carries (it is not the same as a fetch that failed, which is a real response this engine "
+               "already models as absent bytes)");
+        /* §7.1.3.2's ENFORCE A RESPONSE'S OPENER POLICY, reduced to the one item its consumer reads — "needs a
+           browsing context group switch" — over the enforcement result §7.4.5 starts this navigation with:
+           "url … navigable's active document's URL; origin … navigable's ACTIVE DOCUMENT's origin; opener
+           policy … navigable's ACTIVE DOCUMENT's opener policy". Both of those come off the navigable, which
+           is what window_proxy.h's row is for and why a lazily-materialized initial about:blank can still
+           answer. `isInitialAboutBlank` is §7.4.4 step 4's, read from the navigable's own side. */
+        if (opener_policy_switch_required(!window_proxy_ever_navigated(proxy), origin,
+                                          window_proxy_origin(proxy), response_coop.value,
+                                          window_proxy_opener_policy(proxy))) {
+            /* §7.1.3.2's SWAP ARM, performed by core/frame/browsing_context_group.c — a new top-level browsing
+               context in a NEW group, announced to the host as a SECOND INSTANCE, and this navigable's browsing
+               context discarded. THIS NAVIGATION THEN CREATES NO DOCUMENT HERE, which is what `swapped` gates
+               below: `navigable_realm` would build the swapped Document's realm in this heap, which is the
+               second agent cluster in one JSRuntime SECURITY.md's key forbids, and `window_proxy_navigate`
+               would move this navigable's binding onto it — precisely the update §7.1.3.2 withholds, and the
+               update whose ABSENCE is what makes the opener's handle answer `closed`. The document NAME is not
+               minted either: §7.5.1's own note says the Window, Document and agent on the swapped-past side
+               "will not end up being used". */
+            swapped = true;
+            browsing_context_group_swap(ctx, proxy, addr, origin, final_flags);
+        }
+    }
+    header_list_free(&response_headers);
+    if (!swapped) {
+        if (window_proxy_materialized(proxy)) {
+            doc = world_mint_doc(window_proxy_doc(proxy));
+            world_doc_adopt(doc);
+        } else {
+            doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
+        }
+        cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, csp,
+                               inherited ? self_origin : origin_serialized(origin), about_base, final_flags);
+        /* §7.5.1's OPENER POLICY ROW for the Document this navigation creates — "opener policy …
+           navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP above. It moves with
+           the rest of the binding because a navigation is what replaces a navigable's active document. */
+        window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin, response_coop.value);
+    }
+    opener_policy_free(&response_coop);
     JS_FreeCString(ctx, self_origin);
     JS_FreeCString(ctx, about_base);
-    JS_FreeCString(ctx, csp);
+    if (inherited) JS_FreeCString(ctx, csp);
+    free(resp_csp);
+    JS_FreeCString(ctx, field_lines);
     /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
        lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */
-    JS_FreeValue(ctx, cspv);
+    JS_FreeValue(ctx, headersv);
     JS_FreeValue(ctx, bodyv);
     if (s->req) {
         /* §7.4 step 14's response is the HOST'S OWN — it fetched the bytes; it did not run a peer's program —
@@ -1097,6 +1224,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        to disagree with its opener's. */
     const Origin *creator_tlo = window_proxy_top_level_origin(document_window_proxy(ctx));
     const Origin *tlo;
+    /* §7.3.2.1's inherited opener policy for the initial about:blank this create makes the navigable with —
+       computed below, beside the two §8.1.3.1 fields it is decided the same way as. */
+    OpenerPolicyValue inherited_coop;
 
     DCHECK(creator_policy != NULL,
            "§7.4 was asked to clone a policy container from a document that has none — document_install builds "
@@ -1156,12 +1286,47 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            this agent's. The destination's origin belongs to the LOAD and travels with the job (which is why
            the job carries a handle); recording it here would give the initial Document a principal it never
            had — the same "an operation takes its inputs with it" split the address already makes. */
+        /* HTML §7.3.2.1's INHERITED OPENER POLICY, the last step of create-a-new-browsing-context-and-
+           document's "if creator is non-null" block: "If creator's origin is same origin with creator's
+           relevant settings object's TOP-LEVEL ORIGIN, then set document's opener policy to creator's browsing
+           context's TOP-LEVEL browsing context's active document's opener policy."
+           THE CONDITION NAMES §8.1.3.1's FIELD, not the top navigable's active document's origin — the
+           creator's own environment answers it without walking anywhere, and `creator_tlo` above is that
+           field. The creator is a document of THIS instance, so its origin is the agent's.
+           AND THE CONDITION IS WHAT MAKES THE READ LOCAL: same origin with the top-level origin means the
+           top-level Document is same-origin with this one, hence in the same `(browsing context group,
+           origin)` agent cluster, hence in this instance. The one shape that is not — a same-origin document
+           nested through a cross-origin one — reaches window_proxy_opener_policy's remote crash, which names
+           the cross-instance read to build rather than inventing a value.
+           `unsafe-none` OTHERWISE is §7.1.3's initial value and a real answer: a creator that is cross-origin
+           with its own top inherits nothing, which is why a `same-origin-allow-popups` page's cross-origin
+           iframe does not pass that value on to the popups IT opens.
+           A CROSS-ORIGIN CHILD IS THE PEER'S TO DECIDE and this arm is not reached for one: the notice below
+           carries the creator's policy container and its top-level creation URL, and it does NOT yet carry
+           this row, so a peer instance's initial about:blank starts at §7.1.3's initial value. That is a field
+           to add to the notice beside the policy, and it is named here rather than guessed at from the peer's
+           own response. */
+        inherited_coop = OPENER_POLICY_UNSAFE_NONE;
+        if (origin_same(origin_agent(), creator_tlo)) {
+            JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
+
+            DCHECK(window_proxy_is(top),
+                   "§7.3.2.1 walked to this document's TOP-LEVEL browsing context and found no navigable — "
+                   "every navigable is its own top or has one, and the walk ends at a WindowProxy either way");
+            inherited_coop = window_proxy_opener_policy(top);
+            JS_FreeValue(ctx, top);
+        }
         proxy = window_proxy_new(ctx, child, "about:blank", origin_agent(), name, feat && feat->is_popup,
                                  /* §7.1.5's creation sandboxing flags, decided above. §7.2 hands exactly this
                                     set to the initial about:blank Document as its ACTIVE SANDBOXING FLAG SET,
                                     and it is kept on the navigable for the same reason the policy is: that
                                     Document's realm is materialized later, possibly by another document. */
                                  creation_flags,
+                                 /* §7.3.2.1's INHERITED OPENER POLICY, decided above. It rides here for the
+                                    same reason the flags and the policy do: the initial about:blank Document
+                                    this navigable is created with is materialized later, and by then the
+                                    creator's top-level Document may have been replaced by a navigation. */
+                                 inherited_coop,
                                  /* §7.2.6/§7.4: a navigable created with no address has no response to carry a
                                     policy, so it CLONES THE CREATOR'S — the SAME `csp` this function already
                                     sends to a PEER instance for a cross-origin child, which is where the gap

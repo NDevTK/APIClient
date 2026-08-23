@@ -42,6 +42,8 @@
 #include <string.h>
 
 #include "check.h"
+#include "quickjs.h"
+#include "core/crypto/secure_hash.h"
 #include "core/frame/csp_source_list.h"
 
 static bool csp_base64_char(char c)
@@ -93,19 +95,66 @@ bool csp_source_is_nonce(CspToken expression)
     return csp_quoted_base64_tail(expression, sizeof PREFIX - 1);
 }
 
-bool csp_source_is_hash(CspToken expression)
-{
-    /* hash-algorithm is one of three, and each spelling is its own opening literal. A table rather than a
-       parse of the algorithm name, because the production admits exactly these three and nothing else — an
-       expression naming `'sha1-…'` is not a hash-source at all and must not override 'unsafe-inline'. */
-    static const char *const OPENERS[] = { "'sha256-", "'sha384-", "'sha512-", NULL };
-    size_t i;
+/* §2.3.1's hash-algorithm, and §6.7.3.3 step 5.2.2's mapping from it to a digest, in ONE table. The production
+   admits exactly these three and nothing else — an expression naming `'sha1-…'` is not a hash-source at all
+   and must not override 'unsafe-inline' — and step 5.2.2's three "is an ASCII case-insensitive match for
+   'sha256' / 'sha384' / 'sha512'" clauses are the same three read from the other end. Two tables would be two
+   statements of one grammar, and the day they disagreed the recogniser would accept an expression the matcher
+   could not evaluate, which is the state this file was in when it had only the first half. */
+static const struct { const char *opener; SecureHashAlgorithm alg; } CSP_HASH_ALGORITHMS[] = {
+    { "'sha256-", SECURE_HASH_SHA256 },
+    { "'sha384-", SECURE_HASH_SHA384 },
+    { "'sha512-", SECURE_HASH_SHA512 },
+};
+#define CSP_HASH_ALGORITHMS_N ((int)(sizeof CSP_HASH_ALGORITHMS / sizeof CSP_HASH_ALGORITHMS[0]))
 
-    for (i = 0; OPENERS[i]; i++) {
-        if (!csp_prefix_ci(expression, OPENERS[i])) continue;
-        return csp_quoted_base64_tail(expression, strlen(OPENERS[i]));
+/* THE WHOLE DECOMPOSITION OF A hash-source, produced once: does the token match the grammar, which digest its
+   hash-algorithm part names, and where its base64-value part is. §6.7.3.3 step 5.2.2 needs all three and
+   §6.7.3.2 needs only the first, which is what csp_source_is_hash asks for. */
+static bool csp_hash_source_parse(CspToken expression, SecureHashAlgorithm *palg,
+                                  const char **pvalue, size_t *pvalue_len)
+{
+    int i;
+
+    for (i = 0; i < CSP_HASH_ALGORITHMS_N; i++) {
+        size_t k = strlen(CSP_HASH_ALGORITHMS[i].opener);
+
+        if (!csp_prefix_ci(expression, CSP_HASH_ALGORITHMS[i].opener)) continue;
+        if (!csp_quoted_base64_tail(expression, k)) return false;
+        if (palg) *palg = CSP_HASH_ALGORITHMS[i].alg;
+        /* The base64-value part: everything between the opening literal and the closing U+0027. */
+        if (pvalue) *pvalue = expression.p + k;
+        if (pvalue_len) *pvalue_len = expression.n - k - 1;
+        return true;
     }
     return false;
+}
+
+bool csp_source_is_hash(CspToken expression)
+{
+    return csp_hash_source_parse(expression, NULL, NULL, NULL);
+}
+
+/* §6.7.3.3 step 5.2.2's `expected`: "expression's base64-value part, with all '-' characters replaced with
+   '+', and all '_' characters replaced with '/'", compared against `actual` for identity. The replacement is
+   applied AS THE COMPARISON rather than into a buffer, because that is all it is for — the standard's own note
+   says it "normalizes hashes expressed in base64url encoding into base64 encoding for matching".
+   THE PADDING IS NOT NORMALISED, and that is the standard and not an omission: `actual` is RFC 4648 §4's
+   encoding, which always pads, and step 5.2.2 asks whether the two are IDENTICAL. A policy that wrote its
+   hash without the trailing '=' does not match, in this engine and in the standard. */
+static bool csp_hash_value_equal(const char *actual, size_t actual_len, const char *expected, size_t expected_len)
+{
+    size_t i;
+
+    if (actual_len != expected_len) return false;
+    for (i = 0; i < actual_len; i++) {
+        char e = expected[i];
+
+        if (e == '-') e = '+';
+        else if (e == '_') e = '/';
+        if (actual[i] != e) return false;
+    }
+    return true;
 }
 
 bool csp_source_list_contains(const CspDirective *directive, const char *keyword)
@@ -290,16 +339,45 @@ CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_
                        "element whose parser document is null");
                 continue;
             }
-            /* STEP 5.2.2 — the DIGEST, which is the one primitive this file cannot fake. `csp_source_is_hash`
-               recognises the grammar and nothing in this engine can evaluate it. */
-            if (csp_source_is_hash(e)) {
-                DFAIL("§6.7.3.3 step 5.2.2 reached a hash-source in a governing directive and this engine has "
-                      "no message digest — it must base64-encode SHA-256, SHA-384 or SHA-512 (chosen by the "
-                      "expression's hash-algorithm part) over the source bytes and compare it against the "
-                      "expression's base64-value with '-' mapped to '+' and '_' to '/'. `SubtleCrypto` is a "
-                      "string in browser/platform_names.h and nothing else, so BIND a digest (host edge or "
-                      "engine intrinsic) rather than hand-rolling one here. Answering Does Not Match instead "
-                      "reports the page's OWN inline block — the one the hash was published for — as blocked");
+            /* STEP 5.2.2 — the DIGEST:
+                 "If expression matches the hash-source grammar:
+                    Let algorithm be null.
+                    If expression's hash-algorithm part is an ASCII case-insensitive match for "sha256", set
+                    algorithm to SHA-256.  [and likewise sha384 / sha512]
+                    If algorithm is not null:
+                      Let actual be the result of base64 encoding the result of applying algorithm to source.
+                      Let expected be expression's base64-value part, with all '-' characters replaced with
+                      '+', and all '_' characters replaced with '/'.
+                      If actual is identical to expected, return "Matches"."
+               `algorithm is not null` is not a branch here: §2.3.1's hash-algorithm production admits exactly
+               the three spellings the table above lists, so a token that matched the grammar named one of
+               them — which is what makes the parse return the digest rather than a bool the caller re-derives.
+               THE BASE64 IS THE ENGINE'S OWN, not a fourth one written here. "base64 encoding" links to
+               RFC 4648 §4, which is what JS_Base64Encode implements for `btoa`; a codec re-implemented beside
+               the one that already runs is the second reading this file exists to avoid. */
+            {
+                SecureHashAlgorithm alg;
+                const char *b64 = NULL;
+                size_t b64_len = 0;
+
+                if (csp_hash_source_parse(e, &alg, &b64, &b64_len)) {
+                    uint8_t digest[SECURE_HASH_MAX_DIGEST];
+                    /* RFC 4648 §4 turns the largest digest FIPS 180-4 Figure 1 lists (64 bytes) into 88
+                       characters; the assert below is what keeps that arithmetic and this array one fact. */
+                    char actual[96];
+                    SecureHash h;
+                    size_t n;
+
+                    secure_hash_init(&h, alg);
+                    secure_hash_update(&h, (const uint8_t *)source, source_len);
+                    secure_hash_finish(&h, digest, sizeof digest);
+                    n = JS_Base64Encode(actual, sizeof actual, digest, secure_hash_digest_size(alg));
+                    CHECK(n > 0, "§6.7.3.3 step 5.2.2's base64 encoding did not fit the buffer this file sizes "
+                                 "for it — the size is RFC 4648 §4's over FIPS 180-4 Figure 1's largest digest, "
+                                 "so a refusal here means one of those two changed and the other did not");
+                    if (csp_hash_value_equal(actual, n, b64, b64_len))
+                        return CSP_MATCHES;
+                }
             }
         }
     }

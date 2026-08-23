@@ -292,9 +292,13 @@ async function service(e) {
     if (!op.startsWith('document.fetch\t')) continue;
     /* THE TRAILING 0 IS THE NORMAL COMPLETION — an answer is a completion record, and this zone fetched bytes
        rather than relaying another instance's program, so it has nothing to have thrown in. */
-    /* §7.4 step 14's answer: the POLICY as JSON, the document as BYTES. A Document is parsed from a byte
-       sequence, and this zone hands one over rather than a string it decoded first. */
-    e.answer(id, { csp: null }, HTML_B);
+    /* §7.4 step 14's answer: the RESPONSE'S HEADER LIST as JSON, the document as BYTES. A Document is parsed
+       from a byte sequence, and this zone hands one over rather than a string it decoded first. The header
+       list crosses as the HTTP FIELD LINES the response delivered — the empty string is a response that
+       carried none, which is what this driver serves these bytes out of a literal with. It used to carry one
+       extracted policy (`{csp: null}`), which is the shape that kept §7.1.3's opener policy out of every
+       navigated Document. */
+    e.answer(id, { headers: "" }, HTML_B);
   }
   await drainNotices(e);
   return r !== 0;
@@ -339,6 +343,22 @@ async function drainNotices(e) {
     if (f[0] === 'navigable.create') {
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
       else engines.push(await makeEngine(HTML_B, f[3], f[1], f.slice(6).join('\t'), f[5]));
+    }
+    /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
+       a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
+       NULL CREATOR, so there is no policy container to clone and no top-level creation URL only the creator
+       could state (a top-level traversable's is its own address). The instance is NEW rather than joined
+       because a swap changes the group, which is half of SECURITY.md's `(browsing context group, origin)` key.
+       NOT REACHED BY THIS FIXTURE, and that is stated rather than left to be discovered: `a` opens a
+       CROSS-ORIGIN window, which navigable.c hands to the create notice without ever fetching, so no load job
+       of `a`'s obtains an opener policy at all. What would drive it is a SAME-ORIGIN `window.open` — the
+       navigable is then built in `a`'s own heap and its load job runs here — answered by the `document.fetch`
+       branch above with a `cross-origin-opener-policy: same-origin` field line, which `a`'s own `unsafe-none`
+       does not match. That is one line in HTML_A and one URL-keyed header in the reply this driver serves. */
+    else if (f[0] === 'navigable.swap') {
+      if (f.length < 4 || !f[1] || !f[2]) fail(`a navigable.swap notice was short of its fields: ${n}`);
+      if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
+      engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2]));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone

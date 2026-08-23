@@ -95,7 +95,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    and they must never be confused:
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
-     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T[,"fires":F],"payloads":[..]
+     parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
+                      "survivedOf":L,"escaped":E[,"fires":F],"payloads":[..]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -118,7 +119,33 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    and `tried:2,reached:0,turns:900` is one whose flows have run and have not got as far as the sink. The first
    is a scheduling question and the second a distance-through-the-document one, they take opposite actions, and
    with two numbers they were the same report.
-   `payloads` IS THE ONE FIELD OF THE FOUR THAT IS NOT A COUNT, and the search's most common state is the one
+   `survived`/`survivedOf` AND `escaped` ARE THE TWO MIDDLE RUNGS, and they are the fields that make the other
+   three actionable rather than merely different. §@S says the search is "DISTANCE-DIRECTED (a fitness of
+   {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)"; only the second and fourth
+   of those had an observation site, and BOTH of them are at or past the sink, so a candidate's reward was 0
+   for its entire runway and nothing could prefer a near-miss to an unstarted flow.
+   `survived` is the LONGEST CONTIGUOUS RUN of a candidate's own bytes that has ever been seen in a string a
+   re-execution handed ANY code-execution sink, and `survivedOf` is the length of the candidate that achieved
+   it — held as a pair rather than a ratio because the card has to be able to say WHICH numbers. A run and not
+   a tally: an escape is a SEQUENCE, so twelve of its bytes scattered are worth nothing and four adjacent are
+   worth something. It answers the question `reached:0` could not: `turns:900,reached:0,survived:0` is a
+   document nobody has explored far enough, and `turns:900,reached:0,survived:11,survivedOf:14` is the page's
+   own FILTER eating the candidate eleven-fourteenths of the way in. They took opposite work and were one
+   report. §@S(2)'s other forms — dropped, escaped, re-encoded — are not separate numbers here on purpose: a
+   byte the page re-encoded cannot break a sink out of its context, so for a FITNESS it is exactly "did not
+   survive", and reporting `&lt;` as a surviving `<` is the false-PoC direction.
+   `escaped` is how many arrivals reached an EXECUTABLE position, which is the fact between ARRIVING and
+   FIRING and which nothing measured. Each class answers it from its own language: the eval sink asks the same
+   ECMAScript §12 "ECMAScript Language: Lexical Grammar" scan that built the escape whether the marker now
+   BEGINS an input element; the markup sink reads the marker out of an auto-firing handler in the real parse it
+   already runs (HTML §8.1.1 Introduction lists "event handler content attributes" among the mechanisms that
+   cause author-provided executable code to run); the URL sink asks whether the delivered address survived as a
+   `javascript:` one, which for a single-context sink IS the escape. It is NOT `fires`, which counts every
+   auto-firing handler in the parse INCLUDING the page's own template markup — so `escaped:0` is a statement
+   about the PAYLOAD and `fires:0` is only sometimes one. Every state the scan cannot decide answers 0: an
+   escape is never claimed on a scan that could not be made, because a rung that over-claims promotes a
+   candidate that cannot fire while one that under-claims merely leaves it where it was.
+   `payloads` IS THE ONE FIELD THAT IS NOT A COUNT, and the search's most common state is the one
    that needs it: a breakout that ARRIVED and did not fire is a question about the BYTES, and no quantity
    answers it. Entry 0 of a derived class is its inert context probe — it is one of the runs `tried` counts, so
    omitting it would make the list disagree with the count, and it is told apart by carrying no marker.

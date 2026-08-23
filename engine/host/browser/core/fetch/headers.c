@@ -94,6 +94,41 @@ void header_list_set(HeaderList *l, const char *name, const char *value)
     header_list_append(l, name, value);
 }
 
+char *header_list_field_lines(const HeaderList *l)
+{
+    size_t n = 1;
+    char *out, *w;
+    int i;
+
+    DCHECK(l != NULL, "a header list was serialized from nothing — an EMPTY list is the response that carried "
+                      "no headers, and it is a list; NULL is a caller that has none to serialize");
+    for (i = 0; i < l->n; i++)
+        n += strlen(l->e[i].name) + 2 + strlen(l->e[i].value) + 1;   /* "name: value\n" */
+    out = malloc(n);
+    CHECK(out != NULL, "headers: OOM serializing a response's field lines");
+    w = out;
+    for (i = 0; i < l->n; i++) {
+        /* RFC 9112 forbids CR and LF inside a field value and a `Headers` object enforces it, so a value
+           carrying one did not come off a response — and splitting it here would present the parse on the
+           other side with headers nobody delivered. Asserted where the name of the offending header is still
+           in hand, which is the same place extension/bridge.js asserts it for the other producer. */
+        DCHECK(!strchr(l->e[i].value, '\n') && !strchr(l->e[i].value, '\r'),
+               "a response header value carries CR or LF — RFC 9112 forbids both inside a field value, so this "
+               "value did not come off a response, and serializing it would deliver field lines the server "
+               "never sent");
+        {
+            size_t nn = strlen(l->e[i].name), vn = strlen(l->e[i].value);
+
+            memcpy(w, l->e[i].name, nn); w += nn;
+            *w++ = ':'; *w++ = ' ';
+            memcpy(w, l->e[i].value, vn); w += vn;
+            *w++ = '\n';
+        }
+    }
+    *w = 0;
+    return out;
+}
+
 void header_list_parse_field_lines(HeaderList *l, const char *block)
 {
     const char *p = block;

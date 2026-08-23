@@ -10,11 +10,14 @@
  * The WFQ orders flows by an anytime-bandit priority: accumulated emitted VALUE + a UCB optimism bonus
  * (∝ 1/(1 + service) so a never-run flow is never starved) − CPU aging (a monopolizer that burns CPU without
  * emitting sinks below productive+unrun flows). ORDER-only: it never drops a work item.
- * THE MONOPOLIZER IS A FORK CHAIN, NOT A FLOW, which is why `cpu` is charged up the fork tree: an arm that burns
- * the document and departs is one of N names one exploration wears, and billing the name lets the chain age
- * forever without sinking. See the `cpu`/`born`/`acct` fields and flow.c's FlowAcct. */
+ * THE MONOPOLIZER IS A FORK CHAIN, NOT A FLOW, which is why the AGING term reads the FAMILY's service and not
+ * the flow's: an arm is one of N names one exploration wears, the reward is copied to every one of them, and
+ * billing each name separately lets the chain age forever without sinking. See the `cpu`/`family`/`acct` fields
+ * and flow.c's FlowAcct. */
 #ifndef ENGINE_HOST_SOLVER_FLOW_H
 #define ENGINE_HOST_SOLVER_FLOW_H
+
+#include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
 #include "solver/world.h"
@@ -75,22 +78,29 @@ typedef struct Flow {
        int64 rather than long because `long` is 32 bits in wasm: 2147 seconds of unproductive CPU would overflow
        it, and a NEGATIVE cpu makes the monopolizer the highest-ranked flow in the frontier — the exact failure
        this term exists to prevent, arriving silently after 36 minutes.
-       AND IT IS THE CHAIN'S SERVICE, NOT ONLY THIS FLOW'S OWN, which is the other half of whether the term works
-       and was the other half of why it did not. A flow that DEPARTS hands what it burned to the flow that forked
-       it, because a fork chain is one monopolizer wearing N names: quickjs.c's unknown-length walk forks a "stop
-       at n" arm per position, each arm runs the rest of the document and finishes, and with the charge billed to
-       the arm the seconds went to flows that ceased to exist while the walker was charged for the per-position
-       ask alone. Measured: 22 of 26 probe rows flat at 0 from sample 16 of 113, each waiting on a sibling the
-       family outranked for the whole run. See flow.c's FlowAcct and acct_charge_departed. */
+       AND IT IS NO LONGER WHAT THE AGING READS, which is the correction this field carries. `cpu` is the
+       OPTIMISM term's quantity and only that — §scheduler's bonus is "∝ 1/(visits+1)", visits are this flow's
+       own turns at the thread, and an arm inherits its parent's count at a fork so branching cannot buy a fresh
+       bonus. The aging reads `family` below. The two have different reset points on purpose: an emission by ANY
+       arm forgives the family's aging, while `cpu` is reset only for the arm that emitted. */
     int64_t cpu;
-    /* WHAT THIS FLOW INHERITED — the value of `cpu` at the instant it was FORKED (0 for a from-baseline flow, and
-       reset to 0 by an emission along with `cpu` itself). It is the ONE thing that keeps the chain's charge exact:
-       what a departing flow owes upward is `cpu - born`, the service it burned BEYOND the prefix its ancestors'
-       own `cpu` already records, so every microsecond of thread time is charged to the chain exactly once. */
-    int64_t born;
+    /* THE ACCOUNT THE AGING TERM READS — the root of this flow's fork family, shared by every arm of it, holding
+       the thread time the whole family has burned since any of its arms last emitted. A from-baseline flow founds
+       one (it points at its own `acct`); a FORK joins its parent's (flow_fork_inherit), which is what makes "a
+       fork chain is one monopolizer wearing N names" true of the arithmetic: the reward is stated once per
+       family and copied to every name, so the aging that cancels it is charged once per family too.
+       MEASURED BEFORE IT EXISTED: `svcMax` 1124 notches against `svcFamMax` 8910 on a 686-member frontier — the
+       family had burned 7.93x what its largest single arm showed, against `valMax` 10.0 and an optimism range of
+       1.0, so every from-baseline flow (every @S candidate session, every joined document's boot flow, every
+       cold-tier resume) waited on N separate arms each paying the family's whole reward off alone. `candSvcMax`
+       was 1: the security search had one quantum in fifteen minutes.
+       IT IS NOT THE ANCESTRY. `acct`/`up` below records who forked whom and is what keeps this root addressable;
+       this is a DIRECT pointer at the root so flow_weight costs one indirection rather than a walk — which it
+       must, because flow_weight is evaluated inside DCHECK conditions where a compressing find is forbidden. */
+    FlowAcct *family;
     /* THIS FLOW'S PLACE IN THE FORK TREE — minted with the flow, attached under its parent's by
-       flow_fork_inherit, and refcounted so it outlives the flow whenever something below it can still be
-       charged. It is what makes `cpu` above reachable after this Flow is freed; see flow.c. */
+       flow_fork_inherit, and refcounted so the family root above stays addressable for exactly as long as any
+       descendant can still read it. See flow.c. */
     FlowAcct *acct;
 
     /* INTERLEAVING STATE — persisted while this flow is PAUSED so the scheduler can run another flow and come
@@ -170,12 +180,17 @@ typedef struct Flow {
        its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
        slot), which is a heap write the COW delta already isolates per flow — so it is still per-flow, and it is
        now also per-document, which is what it always had to be. */
-    int   script_i;        /* position in the script sequence: static [0,n), then this flow's dyn chunks [n, n+dyn_n) */
-    /* A POSITION IN IT MAY BE A SCRIPT WHOSE SOURCE HAS NOT ARRIVED, at either end of that split, and the flow
-       STOPS at it — which is what gives every document of this agent §4.12.1's order rather than the order its
-       replies happen to land in. In the static half the slot is the session document's, shared by every flow at
-       that index; in the dyn half it is this flow's own entry (engine.c's DYN_SCRIPT_SRC), holding the address
-       until the reply replaces it with the program. */
+    int   script_i;        /* position in this flow's ONE program sequence: a row of `dyn`, on [0, dyn_n) */
+    /* ONE SEQUENCE AND ONE ADDRESS SPACE. The cursor used to walk the SESSION document's own scripts out of a
+       separate table on [0, n) and only then this flow's rows on [n, n+dyn_n), through an offset every reader
+       restated. The document's scripts are seeded as rows of `dyn` at creation now (flow_set_seed_hook), so
+       there is no half to be in — which is also what makes §4.12.1.1's "immediately execute the script element"
+       expressible at every position rather than only past the document's last <script>.
+       A POSITION MAY BE A SCRIPT WHOSE SOURCE HAS NOT ARRIVED, and the flow STOPS at it — which is what gives
+       every document of this agent §4.12.1's order rather than the order its replies happen to land in. The
+       row is this flow's own (engine.c's DYN_SCRIPT_SRC), holding the address until the reply replaces it with
+       the program; one host fetch still answers every flow parked on that address, because engine_provide
+       fills every register that names it. */
     /* THE HIGHEST SCRIPT INDEX THIS FLOW HAS COMPILED, so that compiling one twice can be caught. A flow runs
        each program in its sequence ONCE; a preempted flow RESUMES its suspended frame and never re-enters
        JS_FlowNew for a program it already started. Re-compiling is a REPLAY, which this engine does not do — a
@@ -242,6 +257,23 @@ typedef struct Flow {
        document rather than by themselves are ONE module and the second evaluates nothing. Parallel to
        `dyn_cand` for the reason stated there — the seven arrays are allocated, copied and freed together. */
     char **dyn_url;
+    /* AND THE `script` ELEMENT THE ROW IS THE PROGRAM OF, or NULL for a row no element put there.
+       HTML §4.12.1.1 "Processing model"'s "execute the script element" is a switch on EL, and its "classic" arm
+       sets the document's §3.1.7 `currentScript` to that element for the whole of the run — so the element is a
+       fact about the ROW, exactly as its type and its address are, and it has to travel with the row because
+       the run is a WORK ITEM: the program starts in one scheduler step and finishes in another, with siblings
+       running in between, so nothing at the completion could re-derive which element this was.
+       NULL IS A POSITIVE STATEMENT AND NOT A HOLE — it is §3.1.7's own answer for a program with no `script`
+       element behind it, which is most of them: a §8.6 string handler, a lazy chunk's reply, §7.4.2.3.2's
+       `javascript:` URL, an @S candidate and a cross-agent operation's program are all classic scripts that no
+       element caused, and a document running one of them has `currentScript` null.
+       A BORROWED NODE POINTER, AND IT MAY NEVER CROSS A PARK. The cold tier stores a RECIPE and replays the
+       document from its first script, so a resumed flow re-queues its rows and no pointer here outlives the
+       session — which is exactly why the element can be a pointer at all. A snapshot FORK copies it, which is
+       sound for the same reason the DOM base chain is: the sibling holds a reference on the segment the node
+       was created in. Parallel to `dyn_cand` for the reason stated there — the arrays are allocated, copied
+       and freed together. */
+    lxb_dom_element_t **dyn_el;
     /* AND WHETHER EACH ROW IS A TASK OR THE SYNCHRONOUS TAIL OF THE PROGRAM THAT CAUSED IT (a DynPos,
        engine.h). The position a row was queued at is not consumed by the insertion — it is a fact the row
        KEEPS, because the MICROTASK CHECKPOINT is placed against it. HTML §8.1.4.4 "Calling scripts" performs
@@ -362,8 +394,18 @@ void  flow_registry_free(JSContext *ctx);
    IS. A flow with a recorded path gets it by having its `dec_blob` installed after the add — by the fork that
    prepared it, or by the cold tier that rebuilt it — because that path is a reference on a SHARED chain and
    never an array this call could take ownership of. Dups `fn`. Returns the stored Flow* (stable until removed).
-   Never fails (OOM aborts via CHECK — a dropped flow corrupts the frontier). */
+   Never fails (OOM aborts via CHECK — a dropped flow corrupts the frontier).
+   The flow is SEEDED with this agent's root document's programs as rows of its own queue, because that is what
+   a fresh timeline of this document IS — see flow_set_seed_hook. A creator whose flow must NOT start there
+   (the fork, which inherits its parent's rows; a joined document's boot flow, which is seeded with that
+   document's) says so by name through flow_add_unseeded. */
 Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent);
+Flow *flow_add_unseeded(JSContext *ctx, JSValueConst fn, WorldId parent);
+/* WHAT A NEW FLOW'S PROGRAM SEQUENCE IS, answered by the component that owns the document's script inventory
+   (solver/engine.c) and asked at the ONE place a flow is created. Installed when a session opens and removed
+   when it closes, for the reason every other scheduler hook is: this layer owns the frontier and may not
+   depend on what a document's programs are. */
+void flow_set_seed_hook(void (*fn)(Flow *f));
 /* How many flows this document ever created — the other half of the switch count. A run whose cost jumped needs
    to say WHICH grew: the frontier, or the work per flow. */
 long flow_created_count(void);
@@ -559,6 +601,18 @@ typedef struct {
        measurement cannot make is the stale-DFAIL shape wearing a number, so it is replaced by the row that
        makes it. */
     int64_t svc_min;
+    /* THE SERVICE OF THE WHOLE FORK FAMILY, IN THE SAME NOTCHES — and it DECIDES THE ORDER now, which is the
+       correction this row carries. It was added as a diagnostic beside the ranking, to answer whether the
+       reward SCALE was what a run was stuck on: `val` is copied at every fork while the aging meant to cancel
+       it was charged to whichever arm held the thread, so a family with N live arms presented its reward N
+       times and paid for it N times over. The reading came back 8910 against an `svc_max` of 1124 — a factor of
+       7.93 — and flow_weight's aging term now reads this quantity instead (flow.c's FlowAcct `fam_us`).
+       SO THE PAIR IS READ THE OTHER WAY ROUND FROM HERE ON. `svc_fam_max` is the AGING's own denominator and
+       `svc_max` is one member's share of it; their ratio is the fork factor of the widest family in the
+       frontier, which is a fact about the DOCUMENT's branching and no longer a defect in the ordering. What
+       would be a defect is `svc_fam_max` sitting far below `svc_max`, which cannot happen while every arm's
+       charge lands on the family — and flow_age_running asserts the invariant that makes it impossible. */
+    int64_t svc_fam_max;
 
     /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
      * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`
@@ -666,6 +720,10 @@ Flow *flow_rival_of(const Flow *cur);
  * flow's own weight cannot move except through an emission, and that pair of facts is exactly the invariant
  * engine.c's seam assertion holds the value yield to. */
 int64_t flow_service_notch(const Flow *f);
+/* …AND THE FAMILY'S, in the same unit — the AGING term's reading. Public for the same reason: a flow's weight
+   can move because THIS notch crossed while its own did not (a sibling of its family held the thread), so a
+   seam assertion that snapshots only flow_service_notch would fire on a legitimate rank change. */
+int64_t flow_family_notch(const Flow *f);
 
 /* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
  * the SAME comparator as flow_best read in the other direction. Not a second ranking: the flow that is paged
@@ -773,5 +831,19 @@ int   flow_is_member(const Flow *f);
 /* The i'th flow in registry order, or NULL past the end — a WALK over the frontier's members, which is what a
    register living on the flows needs. flow_best answers which one to RUN; this answers who exists. */
 Flow *flow_at(int i);
+
+/* HOW MANY QUEUED PROGRAMS THE WHOLE FRONTIER STILL HOLDS FOR ONE DOCUMENT — the count over every member's
+ * `dyn_doc` column, summed.
+ *
+ * IT EXISTS BECAUSE THAT COLUMN IS THE ONE HOLDER OF A DOCUMENT THE COLLECTOR CANNOT SEE. Every other way a
+ * flow names a realm is a counted JSValue — its suspended frames, its jobs, its parked continuation, the dups
+ * inside its COW delta — so a realm a flow can resume into cannot be collected, which is what makes reclamation
+ * safe at all. A `dyn_doc` entry is a uint32 HANDLE: it holds nothing, keeps nothing alive, and stays perfectly
+ * readable after the realm behind it is gone. So it is exactly the state a realm's teardown has to be asserted
+ * against, and core/frame/navigable.c asserts it at the one moment a realm dies.
+ *
+ * PURE: no allocation, no JS value touched, no reference taken — it is called from inside a collection (the
+ * realm-teardown hook fires there), where allocating or dup'ing would re-enter the walk that is running. */
+int   flow_programs_for_document(uint32_t doc);
 
 #endif

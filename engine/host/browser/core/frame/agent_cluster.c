@@ -2,34 +2,23 @@
    agent_cluster.h. */
 #include "check.h"
 #include "core/frame/agent_cluster.h"
+#include "core/frame/browsing_context_group.h"
 #include "core/idl_args.h"
 #include "core/url/origin.h"
 
-/* §7.1.4's CROSS-ORIGIN ISOLATION MODE for this browsing context group, and it is THREE-VALUED because its two
-   readers read it differently. §7.1.4 gives `none`, `logical` and `concrete`; §8.1.2.2's key allocation asks
+/* §7.3.2.3's CROSS-ORIGIN ISOLATION MODE for this browsing context group, and it is THREE-VALUED because its
+   two readers read it differently. §7.3.2.3 gives `none`, `logical` and `concrete`; §8.1.2.2's key allocation asks
    whether it is NOT `none`, while §7.2.2's cross-origin isolated capability asks whether it IS `concrete`. A
    single boolean answered both, which is one fact collapsed into the WRONG shape rather than into one place:
    under `logical` a Document is origin-keyed and `crossOriginIsolated` is FALSE, and a boolean cannot say that.
 
-   THE MODE IS SET BY ONE STEP OF ONE ALGORITHM, AND IT IS NOT A MISSING HEADER ANY MORE. §7.1.3.2's
-   obtain-a-browsing-context-to-use-for-a-navigation-response, on a browsing context group SWAP: "if
-   navigationCOOP's value is `same-origin-plus-COEP`, then set newBrowsingContext's group's cross-origin
-   isolation mode to either `logical` or `concrete`". A navigation response's HEADER LIST now reaches this
-   engine (core/frame/navigation_params.c) and both policies are obtained from it — §7.1.3's opener policy,
-   including the `same-origin-plus-COEP` that only a COOP and a COEP together produce, and §7.1.4's embedder
-   policy. What is absent is the SWAP and the §7.5.1 Document row it reads, so no group of this build has ever
-   been given a mode and the standard's initial value stands. navigation_params.c CRASHES at the exact response
-   that would need one, rather than this file quietly answering `none` for a page that is isolated. */
-typedef enum {
-    AC_ISOLATION_NONE = 0,
-    AC_ISOLATION_LOGICAL,
-    AC_ISOLATION_CONCRETE,
-} AcIsolationMode;
-
-static AcIsolationMode cross_origin_isolation_mode(void)
-{
-    return AC_ISOLATION_NONE;
-}
+   THE MODE IS NOT THIS COMPONENT'S FACT AND IS NO LONGER SPELLED HERE. §7.3.2.3 puts the cross-origin
+   isolation mode on the BROWSING CONTEXT GROUP, and §7.1.3.2's obtain-a-browsing-context-to-use-for-a-
+   navigation-response is the one step in the standard that ever assigns it ("if navigationCOOP's value is
+   `same-origin-plus-COEP`, then set newBrowsingContext's group's cross-origin isolation mode to either
+   `logical` or `concrete`"). Both live in core/frame/browsing_context_group.h now, which is where this file
+   asks — a second enum here would be one fact with two spellings, drifting the day one of them learns a value
+   the other does not. */
 
 /* §8.1.2.2's AGENT CLUSTER, for the ONE cluster this instance is. SECURITY.md keys a WASM instance on
    `(browsing context group, origin)`, which is exactly an agent cluster key, so there is one of these per
@@ -73,7 +62,7 @@ void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac)
 
     /* Step 1-2, and step 6's test over them: an OPAQUE origin's site is that origin. */
     g_is_origin_keyed = origin_is_opaque(origin);
-    if (cross_origin_isolation_mode() != AC_ISOLATION_NONE)
+    if (browsing_context_group_isolation_mode() != BROWSING_CONTEXT_GROUP_ISOLATION_NONE)
         g_is_origin_keyed = true;            /* step 3 */
     else if (requests_oac)
         g_is_origin_keyed = true;            /* step 5 */
@@ -99,13 +88,16 @@ bool agent_cluster_cross_origin_isolated(JSContext *ctx)
        cross-origin isolated capability — return true if both of the following hold, and false otherwise:
        realm's agent cluster's cross-origin-isolation mode is `concrete`, and window's associated Document is
        allowed to use the `cross-origin-isolated` feature." FIRST CONJUNCT, and note it is `concrete` alone —
-       §7.1.4's `logical` mode is the one where a page IS origin-keyed and this capability is still false. */
+       §7.3.2.3's `logical` mode is the one where a page IS origin-keyed and this capability is still false. */
     (void)ctx;   /* the SECOND conjunct is the Document's, and reads this environment — see the DFAIL below */
-    if (cross_origin_isolation_mode() != AC_ISOLATION_CONCRETE) return false;
-    /* SECOND CONJUNCT. It is unreachable while §7.1.3.2's browsing context group switch is unbuilt (see the
-       mode above), and it is a crash rather than a `true` because assuming it would hand every cross-origin-
-       isolated environment a capability the Document's permissions policy may deny — and the first thing that
-       reads the answer is HR-TIME §4's clock resolution, which a page measures directly. */
+    if (browsing_context_group_isolation_mode() != BROWSING_CONTEXT_GROUP_ISOLATION_CONCRETE)
+        return false;
+    /* SECOND CONJUNCT, AND IT IS REACHABLE NOW — a response carrying `Cross-Origin-Opener-Policy: same-origin`
+       beside a `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation gives this instance's
+       group the `concrete` mode (core/frame/browsing_context_group.h), which is the line above. It is a crash
+       rather than a `true` because assuming it would hand every cross-origin-isolated environment a capability
+       the Document's permissions policy may deny — and the first thing that reads the answer is HR-TIME §4's
+       clock resolution, which a page measures directly. */
     DFAIL("HTML §7.2.2's CROSS-ORIGIN ISOLATED CAPABILITY has its first conjunct — this agent cluster's "
           "cross-origin isolation mode is now `concrete` — and its second conjunct is the PERMISSIONS POLICY "
           "question: is the Document allowed to use the `cross-origin-isolated` feature. This build has no "

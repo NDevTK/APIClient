@@ -265,8 +265,10 @@
         reply: [
           { name: "weight", type: "double",
             why: "the Level-1 WFQ's one input, and -Infinity is an ANSWER: engine_top_weight is " +
-                 "`flow_best() ? flow_weight(b) : -1.0/0.0`, the engine's positive statement that its frontier " +
-                 "holds no runnable flow — and the right statement, since that value ranks below every real " +
+                 "`flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0`, the engine's positive statement that " +
+                 "its frontier holds no RUNNABLE flow — which this record has always claimed and which the C " +
+                 "side only now answers, since it used to ask flow_best over every member including the ones " +
+                 "waiting on the host — and the right statement, since that value ranks below every real " +
                  "weight by arithmetic rather than by a branch. Refusing it destroyed and re-provisioned every " +
                  "drained engine, 43279 times in one page load. NaN and +Infinity are still broken and the " +
                  "READER says so, because which non-finite values are meaningful is the consumer's vocabulary" },

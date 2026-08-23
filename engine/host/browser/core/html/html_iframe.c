@@ -256,6 +256,20 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
 
         /* §4.8.5: no navigable, no document. */
         if (JS_IsUndefined(nav)) { *presult = JS_NULL; return JS_STEP_DONE; }
+        /* §7.3.1.3 "Child navigables" STEP 2 CAN BIND NULL, and that is a DIFFERENT null from step 1's. Step 1
+           is "container's content navigable is null" — §7.3.1.6's destroy-a-child-navigable clearing the slot,
+           which is the line above. Step 2 is "let document be container's content navigable's ACTIVE DOCUMENT",
+           and §7.5.10 step 9 nulls that for every document in a destroyed SUBTREE while leaving each inner
+           container's slot exactly as it was: destroy-a-document-and-its-descendants destroys documents, and
+           only the container the page removed ever has its content navigable cleared. So a page holding an
+           `<iframe>` from inside a removed subtree reaches here with a navigable that has no active document,
+           and step 4 returns that null. Without this the read would build one — a Document for a browsing
+           context that is null — which is what window_proxy.c's proxy_realm now refuses outright. */
+        if (window_proxy_destroyed(nav)) {
+            JS_FreeValue(ctx, nav);
+            *presult = JS_NULL;
+            return JS_STEP_DONE;
+        }
         /* §7.3.1's content document step 3 filters BEFORE asking: a cross-origin child's document is null, and
            asking the peer for it would both leak and suspend a flow on a question whose answer is already
            known. THE FILTER IS SAME ORIGIN-DOMAIN, which is §7.1.1's other algorithm and the one this step

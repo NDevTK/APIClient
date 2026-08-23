@@ -145,8 +145,10 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
 JSValue concolic_source_wrap_joint(JSContext *ctx, const char *const *shapes, const char *const *srcs,
                                    int n, JSValue computed);
 
-/* Propagation through `+` — install with JS_SetConcolicAddHook. */
-int         concolic_add_hook(JSContext *ctx, JSValue *sp);
+/* Propagation through a CONCATENATION — installed as JSConcolicHooks.add (JS_SetConcolicHooks). `op` names
+   which spec algorithm the caller is performing, because 13.15.3's `+` has a numeric arm and 22.1.3.5's
+   String.prototype.concat does not; see JSConcolicAddOp in quickjs.h. */
+int         concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op);
 
 /* @S candidate injection: during a verification re-run, the source identified by `src` (a field path like
    "{state}.code") returns the concrete `payload` instead of a concolic. NULL/NULL clears it. */

@@ -110,6 +110,24 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
     JSContext *tctx;
     int r;
 
+    /* §7.5.10 STEP 7 FROM THE OTHER SIDE — "remove any tasks whose document is document from any task queue
+       (without running those tasks)". This task's document is the TARGET's and the task is standing on the
+       SENDER's flow queue, which is not a queue that walk can reach: it is keyed on the realm that ENQUEUED the
+       job (JS_DropJobsForContext / engine.c's engine_drop_jobs), and this one was enqueued by the poster. So
+       the same fact is stated here, where the task runs, and it is a POSITIVE statement rather than a guard: a
+       navigable whose active document was destroyed has no Window to fire at and no listeners left to fire.
+       ASKED AT EVERY STAGE, not only at the first: the destruction may be performed by one of this very
+       document's own `message` listeners (`frameElement.remove()` in a handler), and the listeners after it
+       belong to a document that no longer exists. Without this the fire's window_proxy_realm asks a destroyed
+       navigable for an active document and crashes naming a capability that is not the missing one. */
+    if (window_proxy_destroyed(target)) {
+        JS_FreeValue(ctx, cb_result);
+        JS_FreeValue(ctx, s->ev);
+        s->ev = JS_UNDEFINED;
+        return JS_STEP_DONE;
+    }
+    /* AND IT IS ASKED BEFORE THE DISPATCH, not after: STEP_DISPATCH jumps straight to the armed stage, so
+       anything written between it and the first STEP_ARM is code no entry ever executes. */
     STEP_DISPATCH(WM_DELIVER_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
 
     STEP_ARM(WD_DESERIALIZE);

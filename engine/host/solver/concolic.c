@@ -132,28 +132,61 @@ static char *shapef(const char *fmt, ...)
     return out;
 }
 
+/* WHICH KIND OF CONCRETE OPERAND THIS IS, AND WHETHER IT IS ONE THIS ENGINE MAY SPELL AT ALL — asked HERE and
+   nowhere else, because a comparison spells its other operand TWICE (once as half the predicate's identity,
+   once as the value the taken arm PINS the unknown to) and two classifications of one operand can disagree.
+   They did: this function has said since it was written that an OBJECT or a SYMBOL is unspellable, and
+   concolic_cmp_hook four hundred lines down called JS_ToCString on the same operand unconditionally. §7.1.19
+   ToString step 10 sends an Object to ToPrimitive, which runs the page's own valueOf/toString from a C
+   activation with no flow base under it — the abort JS_ToPrimitiveFree names — and step 2 throws a TypeError
+   for a Symbol, which that hook would have left PENDING on ctx while reporting success. Every library utility
+   that walks a prototype chain or tests an identity against a sentinel object reaches it on its first driven
+   call: `while (n !== Object.prototype)` took four real bundles' worth of engine instances down. */
+static const char *operand_tag(JSValueConst v)
+{
+    if (JS_IsString(v))    return "s";
+    if (JS_IsNumber(v))    return "n";
+    if (JS_IsBool(v))      return "b";
+    if (JS_IsNull(v))      return "z";
+    if (JS_IsUndefined(v)) return "u";
+    if (JS_IsBigInt(v))    return "g";
+    return NULL;   /* an Object or a Symbol — unspellable, see above */
+}
+
+/* THE OPERAND SPELLED — its §7.1.19 ToString, owned by the caller, NULL where it has none. This is also the
+   value an equality PINS to, and that is one fact rather than two: `""+x` is what a pinned source contributes
+   to a URL the page builds, so the pin and the identity must be the same bytes or a flow's later reads compute
+   a different string from the one the predicate matched. */
+static char *literal_tok(JSContext *ctx, JSValueConst v)
+{
+    const char *s;
+    char *r;
+
+    if (!operand_tag(v)) return NULL;
+    s = JS_ToCString(ctx, v);
+    if (!s) return NULL;
+    r = strdup(s);
+    CHECK(r, "concolic: OOM spelling a concrete operand");
+    JS_FreeCString(ctx, s);
+    return r;
+}
+
 /* A CONCRETE OPERAND'S IDENTITY IS ITS VALUE, AND ITS TYPE IS PART OF THAT — `x === 5` and `x === "5"` are two
    predicates and their operands print the same. An OBJECT or a SYMBOL has no identity this engine can spell
    (an object's is its address, which does not survive the park a resumed flow replays through, and coercing it
    would run the page's own `toString` from C), so it answers absent and both arms of the branch stay. */
 static char *literal_ident(JSContext *ctx, JSValueConst v)
 {
-    const char *tag, *s;
+    const char *tag = operand_tag(v);
     const char *f[2];
-    char *r;
+    char *tok, *r;
 
-    if (JS_IsString(v))         tag = "s";
-    else if (JS_IsNumber(v))    tag = "n";
-    else if (JS_IsBool(v))      tag = "b";
-    else if (JS_IsNull(v))      tag = "z";
-    else if (JS_IsUndefined(v)) tag = "u";
-    else if (JS_IsBigInt(v))    tag = "g";
-    else return NULL;
-    s = JS_ToCString(ctx, v);
-    if (!s) return NULL;
-    f[0] = tag; f[1] = s;
+    if (!tag) return NULL;
+    tok = literal_tok(ctx, v);
+    if (!tok) return NULL;
+    f[0] = tag; f[1] = tok;
     r = concolic_ident_compose("k", f, 2);
-    JS_FreeCString(ctx, s);
+    free(tok);
     return r;
 }
 
@@ -812,13 +845,32 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
     opq = ca ? a : b; other = ca ? b : a;
     src = concolic_src_c(opq);
     root = concolic_root_c(opq);   /* THE SAME OPERAND, or the assert at concolic_alloc has two facts about two values */
-    if (!concolic_is(other)) { const char *s = JS_ToCString(ctx, other); if (s) { tok = strdup(s); JS_FreeCString(ctx, s); } }
+    /* THE PIN TOKEN IS THE OTHER OPERAND SPELLED, AND ONLY AN OPERAND THIS ENGINE CAN SPELL HAS ONE — which is
+       the same question literal_ident answers, asked through the same classification so the two cannot
+       disagree. It read the operand with a bare JS_ToCString, which for an OBJECT is §7.1.19 ToString step 10
+       -> ToPrimitive from C with no flow base, and for a Symbol is step 2's TypeError left pending on ctx.
+       ABSENCE IS THE RIGHT ANSWER AND NOT A GAP. §7.2.14 IsStrictlyEqual step 1 returns false whenever
+       SameType(x, y) is false, so no string this solver could substitute for the unknown is ever === a given
+       object: there is nothing to pin to. §7.2.13 IsLooselyEqual step 12 converts the OBJECT with ToPrimitive,
+       i.e. runs the page's own code, so naming the object here would be inventing that call's result — which
+       §@H forbids in the same words it forbids inventing `6` for `x > 5`. The predicate still forks: the
+       comparison result below carries the operator and both operands' identities, and only the PIN is absent. */
+    if (!concolic_is(other)) tok = literal_tok(ctx, other);
     /* EQUALITY IS SYMMETRIC, so `x === 'a'` and `'a' === x` compose to ONE identity: the unknown operand is
        written first, and where BOTH are unknown the two identities are ordered between themselves. Without
        that the same predicate written the other way round would be a second fact and fork a second time —
        which costs work but is sound; the ordering is what makes the sound answer also the cheap one. */
     iu = ident_of_operand(ctx, opq);
     io = ident_of_operand(ctx, other);
+    /* THE TWO SPELLINGS OF ONE OPERAND AGREE, asserted where they meet. A token with no identity beside it is a
+       flow that PINS its source to a value no predicate key mentions — the pin outlives the branch and every
+       later read of that source computes it — while an identity with no token is the arm that was silently
+       dropped when the classifications diverged. Only a CONCRETE other operand is spelled at all; a concolic
+       one carries its own identity and pins nothing. */
+    DCHECK(concolic_is(other) ? tok == NULL : (tok != NULL) == (io != NULL),
+           "an equality's other operand was spelled as a pin token and as a predicate identity and the two "
+           "disagreed about whether it can be spelled at all — one of them is reading a value the other says "
+           "this engine cannot name");
     if (ca && cb && iu && io && strcmp(iu, io) > 0) { char *t = iu; iu = io; io = t; }
     res = pred_new(ctx, is_neq ? "!=" : "==", src, root, iu, io,
                    tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok);
@@ -936,16 +988,38 @@ static const char *carith_name(int op, int *unary)
     case JS_CARITH_DIV:  return "/";
     case JS_CARITH_MOD:  return "%";
     case JS_CARITH_POW:  return "**";
+    case JS_CARITH_AND:  return "&";
+    case JS_CARITH_OR:   return "|";
+    case JS_CARITH_XOR:  return "^";
+    case JS_CARITH_SHL:  return "<<";
+    case JS_CARITH_SAR:  return ">>";
+    case JS_CARITH_SHR:  return ">>>";
     default: DFAIL("concolic arithmetic with an unknown operator id"); return "?";
     }
 }
 
+/* WHICH OF THE TWO REAL OPERATIONS THIS OPERATOR IS. §6.1.6.1's numeric methods split cleanly in two: most
+   compute over the Number itself, and seven begin by narrowing their operands to 32 bits — §6.1.6.1.2
+   Number::bitwiseNOT ( number ), §6.1.6.1.9 Number::leftShift ( x, y ), §6.1.6.1.10 Number::signedRightShift
+   ( x, y ), §6.1.6.1.11 Number::unsignedRightShift ( x, y ) and §6.1.6.1.16 NumberBitwiseOp ( op, x, y ). A
+   double is the wrong carrier for the second group: §7.1.8 ToInt32 ( arg ) is "Let int be ? ToIntegerOrInfinity
+   (arg). Return 𝔽(ToFixedSizeInteger(int, signed, 32))", which is defined for every Number including the
+   infinities, while a C cast of a double outside the int32 range is undefined behaviour. So the engine's OWN
+   §7.1.8/§7.1.9 run on the example and the result is an exact integer JSValue. */
+static int carith_is_32bit(int op)
+{
+    return op == JS_CARITH_NOT || (op >= JS_CARITH_AND && op <= JS_CARITH_SHR);
+}
+
 static int carith_apply(int op, double a, double b, double *out)
 {
+    DCHECK(!carith_is_32bit(op),
+           "a 32-bit operator reached the double arithmetic — §6.1.6.1.2/.9/.10/.11/.16 begin with ToInt32 or "
+           "ToUint32, so casting their operands from a double is both wrong at the edges and undefined "
+           "behaviour outside the int32 range; carith_apply32 is the one that runs them");
     switch (op) {
     case JS_CARITH_NEG:  *out = -a; return 1;
     case JS_CARITH_PLUS: *out = a; return 1;
-    case JS_CARITH_NOT:  *out = (double)(~(int32_t)a); return 1;
     case JS_CARITH_INC:  *out = a + 1; return 1;
     case JS_CARITH_DEC:  *out = a - 1; return 1;
     case JS_CARITH_SUB:  *out = a - b; return 1;
@@ -955,6 +1029,50 @@ static int carith_apply(int op, double a, double b, double *out)
     case JS_CARITH_POW:  *out = pow(a, b); return 1;
     default: return 0;
     }
+}
+
+/* THE SEVEN 32-BIT OPERATIONS, run on the operands' EXAMPLES by the engine's own conversions. `exa`/`exb` are
+   borrowed; `*out` is a new owned JSValue on success. Returns 0 when a conversion threw — an example that
+   cannot convert produces NO example, which is the honest answer rather than a fabricated number. */
+static int carith_apply32(JSContext *ctx, int op, JSValueConst exa, JSValueConst exb, JSValue *out)
+{
+    int32_t ia = 0, ib = 0;
+    uint32_t ua = 0, ub = 0, sc;
+
+    DCHECK(carith_is_32bit(op), "carith_apply32 reached with an operator §6.1.6.1 computes over the Number");
+    DCHECK(op != JS_CARITH_NOT || JS_IsUndefined(exb),
+           "§6.1.6.1.2 Number::bitwiseNOT takes ONE argument — a second operand here means the interpreter "
+           "pushed a binary window for a unary operator");
+
+    if (op == JS_CARITH_SHR) {
+        /* §6.1.6.1.11: "Let leftNumber be ! ToUint32(x)." — the ONE operator whose left side is unsigned, which
+           is why >>> carries its own id instead of sharing >>'s. */
+        if (JS_ToUint32(ctx, &ua, exa) || JS_ToUint32(ctx, &ub, exb)) return 0;
+        sc = ub % 32;   /* §6.1.6.1.11: "Let shiftCount be ℝ(rightNumber) modulo 32." */
+        *out = JS_NewUint32(ctx, ua >> sc);
+        return 1;
+    }
+    if (JS_ToInt32(ctx, &ia, exa)) return 0;
+    if (op == JS_CARITH_NOT) {
+        /* §6.1.6.1.2: "Let oldValue be ! ToInt32(number). Return the bitwise complement of oldValue." */
+        *out = JS_NewInt32(ctx, ~ia);
+        return 1;
+    }
+    if (op == JS_CARITH_SHL || op == JS_CARITH_SAR) {
+        /* §6.1.6.1.9/.10: ToInt32 on the left, ToUint32 on the RIGHT, shiftCount modulo 32. */
+        if (JS_ToUint32(ctx, &ub, exb)) return 0;
+        sc = ub % 32;   /* §6.1.6.1.9/.10: "Let shiftCount be ℝ(rightNumber) modulo 32." */
+        /* The left shift is performed on the unsigned bit string §6.1.6.1.9 names, so a negative left operand
+           and an overflow are both defined here rather than undefined in C. */
+        *out = JS_NewInt32(ctx, op == JS_CARITH_SHL ? (int32_t)((uint32_t)ia << sc) : (ia >> sc));
+        return 1;
+    }
+    /* §6.1.6.1.16 NumberBitwiseOp: ToInt32 on both, then the bit string operation. */
+    if (JS_ToInt32(ctx, &ib, exb)) return 0;
+    *out = JS_NewInt32(ctx, op == JS_CARITH_AND ? (ia & ib)
+                          : op == JS_CARITH_OR  ? (ia | ib)
+                                                : (ia ^ ib));
+    return 1;
 }
 
 int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
@@ -967,7 +1085,14 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     JSValue example = JS_UNDEFINED, res;
 
     if (!ca && !cb) return 0;
+    DCHECK(nops == 1 || nops == 2,
+           "a concolic arithmetic hook was handed an arity no ECMAScript operator has — the operand window is "
+           "sp[-nops..sp[-1]] and the result is written to sp[-nops], so a third arity has no stack shape");
     name = carith_name(op, &unary);
+    DCHECK(unary == (nops == 1),
+           "the operator's declared arity disagrees with the operand count the interpreter pushed — the two "
+           "are one fact (JS_CARITH_*'s unary ids come first) and the identity composition reads the arity "
+           "from carith_name while the stack effect reads it from nops");
     src = ca ? concolic_src_c(a) : concolic_src_c(b);
     root = ca ? concolic_root_c(a) : concolic_root_c(b);
 
@@ -998,12 +1123,37 @@ int concolic_arith_hook(JSContext *ctx, JSValue *sp, int op, int nops) {
     {
         JSValue exa = ca ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
         JSValue exb = nops == 2 ? (cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b)) : JS_UNDEFINED;
+
+        /* AN EXAMPLE IS A PRIMITIVE. Every conversion below is §7.1.4 ToNumber, whose object case is
+           "Let primitiveValue be ? ToPrimitive(arg, number)" — running the page's valueOf from this C frame,
+           which has no flow base under it. A source or a derivation that attached an OBJECT example put a value
+           here that only crashes, so the assert names the producer rather than the coercion. */
+        DCHECK(!JS_IsObject(exa) && !JS_IsObject(exb),
+               "a concolic carries an OBJECT as its concrete example — an example is the value the engine "
+               "COMPUTED, so it is a primitive; ToNumber over an object one reaches ToPrimitive from C");
+
         if (!JS_IsUndefined(exa) && (nops == 1 || !JS_IsUndefined(exb))) {
-            double da = 0, db = 0, out = 0;
-            if (JS_ToFloat64(ctx, &da, exa) == 0 &&
-                (nops == 1 || JS_ToFloat64(ctx, &db, exb) == 0) &&
-                carith_apply(op, da, db, &out))
-                example = JS_NewFloat64(ctx, out);
+            if (carith_is_32bit(op)) {
+                JSValue r32 = JS_UNDEFINED;
+                if (carith_apply32(ctx, op, exa, exb, &r32))
+                    example = r32;
+            } else {
+                double da = 0, db = 0, out = 0;
+                int oka = JS_ToFloat64(ctx, &da, exa) == 0;
+                int okb = oka && (nops == 1 || JS_ToFloat64(ctx, &db, exb) == 0);
+                DCHECK(oka && okb,
+                       "a concolic's example could not be converted by §7.1.4 ToNumber — its steps 2 and 3 "
+                       "throw only for a Symbol or a BigInt, and no source in this engine mints either as an "
+                       "example, so the producer attached a value it never computed");
+                if (oka && okb && carith_apply(op, da, db, &out))
+                    example = JS_NewFloat64(ctx, out);
+            }
+            /* A CONVERSION THAT THREW LEFT ITS EXCEPTION STANDING IN THE CONTEXT, and the operator is about to
+               return 1 — a success — so the page's very next statement would have thrown a TypeError it never
+               wrote. The example is dropped (@H never invents) and the throw is dropped with it, because the
+               throw belongs to a coercion the PROGRAM did not perform. */
+            if (JS_IsUndefined(example) && JS_HasException(ctx))
+                JS_FreeValue(ctx, JS_GetException(ctx));
         }
         JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
     }
@@ -1338,13 +1488,98 @@ static char *cstr_dup(JSContext *ctx, JSValueConst v) {   /* concrete operand ->
     return r;
 }
 
-/* JSConcolicAddHook: `a + b` where a or b is concolic -> a DERIVED concolic. shape = display(a)++display(b)
-   (a concrete operand contributes its string, a concolic its shape); example = the concrete concat when BOTH
-   sides have a concrete value/example, else absent (unknown input stays unknown). Matches js_add_slow's stack
-   effect: both operands freed, result in sp[-2]. */
-int concolic_add_hook(JSContext *ctx, JSValue *sp) {
+/* §13.15.3 step 1.c's CONCLUSION, run on the two EXAMPLES: "Let leftString be ? ToString(leftPrimitive). Let
+   rightString be ? ToString(rightPrimitive). Return the string-concatenation of leftString and rightString."
+   `exa`/`exb` are borrowed; the result is a new owned JSValue, or JS_UNDEFINED for "no example". */
+static JSValue example_string_concat(JSContext *ctx, JSValueConst exa, JSValueConst exb) {
+    const char *pa, *pb;
+    JSValue example = JS_UNDEFINED;
+
+    pa = JS_ToCString(ctx, exa);
+    pb = pa ? JS_ToCString(ctx, exb) : NULL;
+    /* THE `if (e)` THAT USED TO STAND HERE WAS THE CONCEALMENT, not the safety. §Solver-half: the example
+       propagates because the engine RUNS the real op, so a `+` that quietly produced no example turns a
+       computed value into a shape — an @H row that says `{a}{b}` where the code determined `/api/us-east-1`
+       — and nothing anywhere says a concatenation was dropped. With the refusal edge underneath it a NULL
+       is the physical floor and nothing else, which is exactly what a CHECK is for. */
+    if (pa && pb) {
+        size_t l = strlen(pa) + strlen(pb) + 1;
+        char *e = reclaim_malloc(l);
+        CHECK(e, "concolic +: the concatenated example could not be allocated — the sum would carry a "
+                 "shape where the code computed a value");
+        snprintf(e, l, "%s%s", pa, pb);
+        example = JS_NewString(ctx, e);
+        free(e);
+    }
+    if (pa) JS_FreeCString(ctx, pa);
+    if (pb) JS_FreeCString(ctx, pb);
+    /* A CONVERSION THAT REFUSED LEFT ITS THROW STANDING and the operator is about to report SUCCESS, so the
+       page's next statement would throw a TypeError it never wrote. §7.1.19 ToString refuses only for a Symbol
+       (its step 2) and for an object whose ToPrimitive threw, and the caller's assert says neither operand is
+       one — so in dev this drains nothing and in release it drains what a compiled-out assert stopped saying. */
+    if (JS_IsUndefined(example) && JS_HasException(ctx))
+        JS_FreeValue(ctx, JS_GetException(ctx));
+    return example;
+}
+
+/* §13.15.3 steps 2-7 over the two EXAMPLES, once step 1.c has said neither is a String: step 2's "NOTE: At
+   this point, it must be a numeric operation", then "Let leftNumber be ? ToNumeric(leftValue)" and the same
+   for the right (§7.1.3 ToNumeric, which is §7.1.4 ToNumber for everything that is not a BigInt), then step
+   7's table entry for `+`, which is §6.1.6.1.7 Number::add ( x, y ). Number::add's steps ARE IEEE 754 binary64
+   addition — the NaN and infinity rows, the -0𝔽 + -0𝔽 row, and finally "Return 𝔽(ℝ(x) + ℝ(y))" — so the engine
+   RUNS the real operation here rather than re-implementing its cases. Borrowed operands; owned result, or
+   JS_UNDEFINED for "no example". */
+static JSValue example_number_add(JSContext *ctx, JSValueConst exa, JSValueConst exb) {
+    double da = 0, db = 0;
+    int oka = JS_ToFloat64(ctx, &da, exa) == 0;
+    int okb = oka && JS_ToFloat64(ctx, &db, exb) == 0;
+
+    /* §7.1.4 ToNumber step 2 — "If arg is either a Symbol or a BigInt, throw a TypeError exception" — is the
+       ONLY refusal a primitive can reach here, and no source or derivation in this engine mints either as an
+       example. So an arrival is a PRODUCER having attached a value it never computed. It is also where the
+       BigInt arm gets built when one does exist: §13.15.3 step 5's "If SameType(leftNumber, rightNumber) is
+       false, throw a TypeError exception" and step 6's §6.1.6.2.7 BigInt::add ( x, y ). Deliberately NOT built
+       on speculation — a BigInt example would be a fabricated observation with nothing producing it. */
+    DCHECK(oka && okb,
+           "a concolic's example refused §13.15.3 step 3/4's §7.1.3 ToNumeric — its only primitive refusals "
+           "are §7.1.4 ToNumber step 2's Symbol and BigInt, and no producer in this engine mints either as an "
+           "example; build §13.15.3 step 5's SameType test and step 6's §6.1.6.2.7 BigInt::add here when one "
+           "does");
+    if (!oka || !okb) {
+        /* The example is dropped (@H never invents) and the throw is dropped with it: it belongs to a
+           coercion the PROGRAM did not perform — the program's `+` is over the unknown, not over this
+           engine's guess at its concrete value, and a concolic operand's own type is not the example's. */
+        DCHECK(JS_HasException(ctx),
+               "§7.1.3 ToNumeric reported a refusal and left no exception standing — the drain below would "
+               "then take the NEXT operator's throw instead of this one's");
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_UNDEFINED;
+    }
+    return JS_NewFloat64(ctx, da + db);
+}
+
+/* A CONCATENATION WHERE EITHER OPERAND IS CONCOLIC -> a DERIVED concolic. `op` names which spec algorithm is
+   concatenating (JSConcolicAddOp in quickjs.h); matches js_add_slow's stack effect — both operands freed,
+   result in sp[-2].
+   THE SHAPE IS display(a)++display(b) FOR BOTH ARMS, and that is deliberate rather than an oversight of the
+   numeric one. The shape is a function of the OPERAND SHAPES ALONE, because .key_name spells an unknown
+   property key with it and relies on it being stable: `obj[x+1] = v` must write the slot `obj[x+1]` later
+   reads. Composing it from the arm instead would make one expression name two different slots depending on
+   whether an example happened to be known in that flow, which is a miss with nothing to report it.
+   THE EXAMPLE IS §13.15.3's OWN TEST, ASKED OF THE EXAMPLES. An example is a concrete value this engine
+   COMPUTED, so running the real operator on the two of them is running it on concrete operands, and step
+   1.c's test is over their types. Steps 1.a and 1.b are NOT performed here: js_add_slow calls this before any
+   coercion, and §7.1.1 over a real object is the page's own code, so the assert inside names the trampoline
+   that owes them. This hook reported `concolic(5) + 3` as `"53"` for as long as it had only
+   one arm, and §@H emits a computed value as an OBSERVED fact, so that string was published as a measurement
+   of an endpoint the code never addressed. The concolic RESULT is unchanged either way: provenance, shape and
+   identity are the same and a later branch still forks, which is what keeps both arms of the gate. */
+int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
+    DCHECK(op == JS_CONCOLIC_ADD_PLUS || op == JS_CONCOLIC_ADD_CONCAT,
+           "a concatenation reached the concolic derivation without naming which spec algorithm it is — "
+           "13.15.3 and 22.1.3.5 disagree about the numeric arm, so an unnamed caller has no answer here");
     if (!ca && !cb) return 0;
 
     char *sha = ca ? strdup(concolic_shape_c(a) ? concolic_shape_c(a) : "{}") : cstr_dup(ctx, a);
@@ -1360,22 +1595,24 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp) {
     JSValue exb = cb ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
     JSValue example = JS_UNDEFINED;
     if (!JS_IsUndefined(exa) && !JS_IsUndefined(exb)) {
-        const char *pa = JS_ToCString(ctx, exa), *pb = JS_ToCString(ctx, exb);
-        /* THE `if (e)` THAT USED TO STAND HERE WAS THE CONCEALMENT, not the safety. §Solver-half: the example
-           propagates because the engine RUNS the real op, so a `+` that quietly produced no example turns a
-           computed value into a shape — an @H row that says `{a}{b}` where the code determined `/api/us-east-1`
-           — and nothing anywhere says a concatenation was dropped. With the refusal edge underneath it a NULL
-           is the physical floor and nothing else, which is exactly what a CHECK is for. */
-        if (pa && pb) {
-            size_t l = strlen(pa) + strlen(pb) + 1;
-            char *e = reclaim_malloc(l);
-            CHECK(e, "concolic +: the concatenated example could not be allocated — the sum would carry a "
-                     "shape where the code computed a value");
-            snprintf(e, l, "%s%s", pa, pb);
-            example = JS_NewString(ctx, e);
-            free(e);
-        }
-        if (pa) JS_FreeCString(ctx, pa); if (pb) JS_FreeCString(ctx, pb);
+        /* STEP 1.c TESTS PRIMITIVES, and both of the ways a non-primitive can arrive here are named because
+           they are different bugs with different fixes. This one operand is either a CONCOLIC's example or a
+           CONCRETE operand handed straight over by the operator, and each has its own producer. */
+        DCHECK(!JS_IsObject(exa) && !JS_IsObject(exb) && !JS_IsSymbol(exa) && !JS_IsSymbol(exb),
+               "§13.15.3 step 1.c tests PRIMITIVES — its steps 1.a and 1.b §7.1.1 ToPrimitive both operands "
+               "first — and one operand here is not one. From the CONCOLIC side that is a producer having "
+               "attached a value this engine never computed: an example rides the value the interpreter "
+               "actually produced, so it is an operable primitive. From the CONCRETE side it is the operator "
+               "handing over its RAW operand: §7.1.1 there runs the PAGE's valueOf/toString, so it belongs on "
+               "the ToPrimitive trampoline (js_toprim_operand / do_toprim_tramp) BEFORE the arm is chosen — "
+               "choosing from an unconverted object takes the string arm for `x + {valueOf(){return 5}}`, "
+               "which §13.15.3 makes an addition");
+        /* §13.15.3 step 1.c: "If leftPrimitive is a String or rightPrimitive is a String". 22.1.3.5 asks no
+           such question — its pieces are already ToString'd — so it states the string arm and skips the test. */
+        if (op == JS_CONCOLIC_ADD_CONCAT || JS_IsString(exa) || JS_IsString(exb))
+            example = example_string_concat(ctx, exa, exb);
+        else
+            example = example_number_add(ctx, exa, exb);
     }
     JS_FreeValue(ctx, exa); JS_FreeValue(ctx, exb);
 

@@ -52,6 +52,7 @@
 #include "core/css/style_sheet_list.h"
 #include "core/encoding/encoding.h"   /* §3.1.1's encoding is an id in §4.2's registry, asked of it by name */
 #include "core/dom/document.h"
+#include "core/dom/document_current_script.h"
 #include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
 #include "solver/world.h"
@@ -2569,6 +2570,11 @@ void document_init(JSContext *ctx)
        operation in the platform that mutates an origin — so it is its own component, declared here beside the
        other four for the reason document_metadata_init's line gives. */
     document_domain_init(ctx);
+    /* §3.1.7's `currentScript` is a sixth member of that partial interface and a THIRD problem: its getter is
+       one line and everything about it is the §4.12.1.1 bracket that WRITES it, which is a per-flow slot rather
+       than a fact about this tree. Declared here for the reason the two above are — its install runs from
+       document_install_proto below, so a host cannot be the place that remembers it. */
+    document_current_script_init(ctx);
     document_fragment_init(ctx);   /* §4.7, before any fragment is wrapped as a bare Node */
     shadow_root_init(ctx);         /* §4.8, whose prototype chains to §4.7's — declared after it */
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
@@ -2644,6 +2650,10 @@ void document_install_proto(JSContext *ctx)
     /* SELECTION API §4.1's `Selection? getSelection()`. Installed by the component that owns the algorithm and
        the state, exactly as §6.6's two members above are. */
     selection_install_document_members(ctx, proto);
+    /* HTML §3.1.7's `currentScript`, and this realm's BASELINE record holding §3.1.7's initial null — built
+       with the realm for the reason the readiness record below is, and installed by the component that owns
+       §4.12.1.1's bracket rather than reflected into a member beside it. */
+    document_current_script_install(ctx, proto);
     /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element
        inserted by the FIRST flow to run does not find a list that flow created. */
     autofocus_install_document(ctx);
@@ -3235,6 +3245,7 @@ void document_agent_free(JSRuntime *rt)
     slot_free(rt);
     shadow_root_free(rt);
     document_fragment_free();
+    document_current_script_free();
     document_domain_free();
     document_metadata_free();
     /* THE PROTOTYPES ARE THE REALMS' — each is in its own class-proto slot and released with its context. What

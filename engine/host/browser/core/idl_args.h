@@ -267,6 +267,18 @@ typedef enum {
        brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
        class is declared beside the type, so this file needs to know nothing about what a Node is. */
     IDL_STRING_UNLESS_IFACE,
+    /* `(object or DOMString)` — Web Cryptography §14's `typedef (object or DOMString) AlgorithmIdentifier`,
+       and the only union in this platform whose object arm is the IDL type `object` itself. Its rule is the
+       same shape as the two above with a broader test: any Object crosses as itself, and EVERYTHING else —
+       null and undefined included — is the DOMString arm.
+       IT IS NOT IDL_STRING_OR_DICT AND THE DIFFERENCE IS OBSERVABLE. That type's union names a dictionary, so
+       §3.2.26's step for null/undefined sends them to the dictionary and a missing `required` member is a
+       TypeError; this union names none, so `digest(null, b)` becomes the four characters "null", which
+       normalizing an algorithm then reports as a "NotSupportedError" — a different exception, arriving through
+       a rejected promise rather than a throw. The dictionary conversion this type does NOT perform is
+       §18.4.4's, run by the member's own algorithm at the step the standard numbers it, which is what keeps a
+       throwing `name` getter a REJECTION (§14.3.5 step 3) rather than a synchronous TypeError. */
+    IDL_STRING_UNLESS_OBJECT,
     /* `BodyInit?` — Fetch's `(ReadableStream or Blob or BufferSource or FormData or URLSearchParams or
        USVString)?`. Its rule is a BRAND check like the two above, but against the BUFFER SOURCE shape rather
        than one class: an ArrayBuffer or any ArrayBufferView crosses as itself, null and undefined are the IDL
@@ -597,6 +609,24 @@ void idl_enum_values(const char *const *values);
    its eight siblings reach §2.2's Formatter, which calls the page's `toString`). A flag that composes with
    every declaration form is the same answer this file already gave for the brand and the enumeration list. */
 void idl_variadic(void);
+
+/* DECLARE THAT THIS MEMBER'S IDL RETURN TYPE IS A PROMISE — Web IDL §3.7.7's create an operation function,
+ * whose `Try` wraps the brand check, the overload resolution, EVERY argument conversion and the method steps,
+ * and whose last steps are: "if an exception E was thrown: If op has a return type that is a promise type,
+ * then return ! Call(%Promise.reject%, %Promise%, «E»). Otherwise, end these steps and allow the exception to
+ * propagate."
+ *
+ * SO IT IS A DECLARATION AND NOT A BODY'S JOB. `crypto.subtle.digest('SHA-256', {})` REJECTS — a page that
+ * wrote only `.catch` around it is relying on that, and a member that threw instead would take the whole flow
+ * down at a call site the bundle believed it had covered. Before this the only way to get it was to declare
+ * every argument `IDL_ANY`, call idl_optional_from(0) so the arity check could not throw, and re-derive each
+ * argument's type inside the body — a hand-written brand test per member, which is exactly what the type list
+ * above exists to have one of.
+ *
+ * Set AFTER the declaration, naming the member the LAST one made, exactly as idl_optional_from, idl_arg_default,
+ * idl_iface_brand, idl_enum_values and idl_variadic do, and for the same reason: the id a declaration returns
+ * is the RUNTIME's step id and not this pool's index. It composes with every declaration form. */
+void idl_returns_promise(void);
 
 int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
                        const IdlDictMember *members, int nmembers,

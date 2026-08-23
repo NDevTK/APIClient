@@ -105,3 +105,66 @@ void opener_policy_obtain(OpenerPolicy *out, const HeaderList *headers, bool sec
         sf_item_free(&it);
     }
 }
+
+bool opener_policy_values_match(OpenerPolicyValue document_coop, const Origin *document_origin,
+                                OpenerPolicyValue response_coop, const Origin *response_origin)
+{
+    DCHECK(document_origin != NULL && response_origin != NULL,
+           "§7.1.3's match opener policy values was asked about a policy with no origin beside it — step 3 "
+           "compares the two with §7.1.1's same origin, whose step 1 is an IDENTITY comparison, so an absent "
+           "record is a question that cannot be answered rather than one whose answer is false");
+    /* Step 1, BEFORE step 2: two `unsafe-none`s match with no origin comparison at all, which is why an
+       ordinary cross-origin navigation between two pages that send no header does not swap groups. */
+    if (document_coop == OPENER_POLICY_UNSAFE_NONE && response_coop == OPENER_POLICY_UNSAFE_NONE)
+        return true;
+    if (document_coop == OPENER_POLICY_UNSAFE_NONE || response_coop == OPENER_POLICY_UNSAFE_NONE)
+        return false;                                                                              /* step 2 */
+    /* Step 3, and it is an ORIGIN comparison and not a serialization one — §7.1.1's same origin step 1 is an
+       identity test, and every opaque origin serializes to "null", so a string compare would call two distinct
+       opaque origins the same one and match a policy across a boundary it never crossed. */
+    if (document_coop == response_coop && origin_same(document_origin, response_origin))
+        return true;
+    return false;                                                                                  /* step 4 */
+}
+
+bool opener_policy_popup_switch_required(const Origin *response_origin,
+                                         const Origin *active_document_navigation_origin,
+                                         OpenerPolicyValue response_coop, OpenerPolicyValue active_coop)
+{
+    /* Step 1. `noopener-allow-popups` severs REGARDLESS of the predecessor — §7.1.3: "this forces the creation
+       of a new top-level browsing context for the document, regardless of its predecessor" — so it is tested
+       before the matching arm that every other value goes through. */
+    if (response_coop == OPENER_POLICY_NOOPENER_ALLOW_POPUPS)
+        return true;
+    /* Step 2 — THE `same-origin-allow-popups` ARM, and the whole reason that value exists: a page that sends it
+       keeps a popup carrying no policy of its own in the page's group, where a plain `same-origin` page's popup
+       would be severed. Six of the thirty real signed-out product surfaces in this project's corpus send one of
+       these two headers, so this branch is the common one and not an edge. */
+    if ((active_coop == OPENER_POLICY_SAME_ORIGIN_ALLOW_POPUPS ||
+         active_coop == OPENER_POLICY_NOOPENER_ALLOW_POPUPS) &&
+        response_coop == OPENER_POLICY_UNSAFE_NONE)
+        return false;
+    if (opener_policy_values_match(active_coop, active_document_navigation_origin,
+                                   response_coop, response_origin))
+        return false;                                                                              /* step 3 */
+    return true;                                                                                   /* step 4 */
+}
+
+bool opener_policy_switch_required(bool is_initial_about_blank, const Origin *response_origin,
+                                   const Origin *active_document_navigation_origin,
+                                   OpenerPolicyValue response_coop, OpenerPolicyValue active_coop)
+{
+    /* Step 1. §7.4 creates EVERY navigable holding the initial about:blank Document, so the FIRST load into a
+       navigable a page opened is a popup navigation by this test and every later one is not — which is exactly
+       the distinction the two variants are written for. */
+    if (is_initial_about_blank)
+        return opener_policy_popup_switch_required(response_origin, active_document_navigation_origin,
+                                                   response_coop, active_coop);
+    /* Step 2 — "here we are dealing with a non-popup navigation", where the `same-origin-allow-popups` arm of
+       the popup variant is deliberately absent: navigating a top-level page to a document with a different
+       policy swaps groups whatever the predecessor allowed for its popups. */
+    if (opener_policy_values_match(active_coop, active_document_navigation_origin,
+                                   response_coop, response_origin))
+        return false;
+    return true;                                                                                   /* step 3 */
+}

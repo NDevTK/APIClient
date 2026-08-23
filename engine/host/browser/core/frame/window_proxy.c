@@ -126,6 +126,25 @@ typedef struct {
        need not be its creator's. A creation fact like `is_popup` — no flow can re-sandbox a navigable that
        exists — and one WORD, so the byte capture in proxy_of describes it completely. */
     SandboxFlags creation_sandbox_flags;
+    /* HTML §7.5.1's OPENER POLICY ROW OF THIS NAVIGABLE'S ACTIVE DOCUMENT — "opener policy … navigationParams's
+     * cross-origin opener policy" in create-and-initialize-a-Document's own creation table, beside "policy
+     * container" and "active sandboxing flag set", which are three separate items of one creation (§7.1.7's
+     * container has no such field — see core/frame/opener_policy.h).
+     *
+     * IT IS ON THE NAVIGABLE BECAUSE ITS TWO READERS BOTH ASK A NAVIGABLE. §7.1.3.2's obtain-a-browsing-
+     * context-to-use-for-a-navigation-response reads "browsingContext's active document's origin" and its
+     * opener policy to decide a group switch, and §7.3.2.1's create reads "creator's browsing context's
+     * top-level browsing context's ACTIVE DOCUMENT's opener policy". Neither ever holds a Document; both walk
+     * from a browsing context to whichever Document is active in it. And a navigable §7.4 created with no
+     * address holds the initial about:blank Document whose realm is materialized LAZILY, so a row kept only on
+     * a Document object could not be read at all for exactly the popup §7.1.3.2 is written about — the answer
+     * would depend on whether something had happened to touch the proxy first.
+     *
+     * PER-FLOW, AND THAT IS FREE: it is one enum word inside the bytes proxy_of captures, so an arm that
+     * navigated this navigable and a sibling that did not each read their own, and a parked flow resumes onto
+     * the value its world had. It moves with the rest of the binding in window_proxy_navigate — a navigation
+     * replaces the active document, and this is that document's row. */
+    OpenerPolicyValue opener_policy;
     /* HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's documents — kept beside
        the policy container because it is the same KIND of fact and arrives the same way: decided by the
        operation that created the navigable, read when a realm is finally built. §7.4 makes a CHILD navigable
@@ -173,6 +192,15 @@ typedef struct {
     uint8_t created_by_web_content;
     uint8_t closing;     /* §7.3's IS CLOSING — §7.2.2.1's close(), and only ever a top-level traversable */
     uint8_t destroyed;   /* §7.5.10 step 8 ran on this navigable's active document: its browsing context is null */
+    /* §7.1.3.2 step 10's SWAP LEFT THIS BROWSING CONTEXT BEHIND — "browsingContext will not be used by the new
+       Document that we are about to create" — so §7.2.2.1's "this's browsing context is null" is true of it for
+       a reason that has nothing to do with destruction. It is a SECOND byte and not a second writer of the one
+       above, because the two states differ in everything except `closed`: a destroyed navigable has NO active
+       document (step 9 released the Window and nulled the realm), while a swapped-past one still has the exact
+       Document it had — which is what makes a read through the opener's handle answer about THAT document
+       rather than about the one the navigation went on to create in another instance. Reusing `destroyed` would
+       have told proxy_realm that a navigable with a live realm has no document, which is the assert it makes. */
+    uint8_t bc_discarded;
     /* THE SUBTREE WAIT, COUNTED DOWN AND PER OPERATION — how many of this navigable's child navigables have
        still to report before this one's own body may run, for each of the operations that walk a subtree
        (§7.4.2.4's beforeunload check, §7.5.9's unload, §7.5.10's destroy). It is here because it is PER-FLOW
@@ -193,8 +221,13 @@ typedef struct {
 /* §7.2.2.1's `closed` GETTER, AS ONE EXPRESSION — "true if this's browsing context is null or its is closing
    is true". Written once here so that no member can ask half of it: a `closed` that read only the destroy
    flag would report a closing popup as open, and one that read only is-closing would report a removed frame
-   as open. Both of those were the single byte this replaced, in the two directions it could be wrong. */
-static bool wp_closed(const ProxyData *p) { return p->closing != 0 || p->destroyed != 0; }
+   as open. Both of those were the single byte this replaced, in the two directions it could be wrong.
+   "BROWSING CONTEXT IS NULL" HAS TWO WRITERS AND THIS IS WHERE THEY MEET — §7.5.10 step 8's destruction and
+   §7.1.3.2 step 10's swap, which discards a browsing context without destroying anything. Reading either alone
+   is the same class of half-answer as the two above: after a COOP group swap the opener's handle would report
+   the window it can no longer reach as open, and the engine would model a page real Chrome has cut off. */
+static bool wp_bc_null(const ProxyData *p) { return p->destroyed != 0 || p->bc_discarded != 0; }
+static bool wp_closed(const ProxyData *p) { return p->closing != 0 || wp_bc_null(p); }
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
@@ -372,6 +405,18 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            "the realm of a navigable whose active document is a PEER's was asked for — a same-origin navigable "
            "is a realm of this agent by construction, so this proxy is cross-origin and the read that reached "
            "here should have been a SecurityError");
+    /* AND A DESTROYED NAVIGABLE IS NEVER MATERIALIZED. §7.5.10 step 9 nulled this navigable's active document,
+       so a NULL realm on a destroyed navigable means "there is no document" and not "there is not one YET" —
+       the two are the same field and only this tells them apart. Without it the next read through the proxy
+       would BUILD a fresh Document for a navigable whose browsing context is null: navigable.h's deferral
+       running backwards, a realm allocated by the very destruction that was meant to give one back, and a page
+       the destroy had torn down answering out of a document nothing had ever run. §7.2.1's cross-origin list is
+       what a page may still read on a destroyed navigable, and proxy_forward_window answers every one of those
+       from this record without a realm, so a caller that reaches here has asked for an ACTIVE DOCUMENT. */
+    DCHECK(!p->destroyed,
+           "the ACTIVE DOCUMENT of a navigable §7.5.10 destroyed was asked for — that navigable has none "
+           "(step 9 nulls it), and materializing one here would build a Document for a browsing context that "
+           "is null; the members readable after a destruction are §7.2.1's list, answered from this record");
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
@@ -406,7 +451,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
 /* §7.4.2.2's NAVIGATE — see window_proxy.h. Reached from navigable.c, which owns the fetch and the realm. */
 void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm, uint32_t doc,
                            const char *url, const char *top_level_url, const Origin *top_level_origin,
-                           const Origin *origin)
+                           const Origin *origin, OpenerPolicyValue opener_policy)
 {
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
 
@@ -414,6 +459,25 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     DCHECK(realm != NULL, "a navigable was navigated to no realm — a Document this agent holds IS a realm, and "
                           "a cross-origin destination is a peer's document, which is a host route and not this");
     DCHECK(world_doc_hosted(doc), "a navigable was navigated to a document this agent does not hold");
+    /* A DESTROYED NAVIGABLE IS NOT NAVIGATED. §7.4.2.2 acts on the navigable's active document and §7.5.10
+       step 9 nulled it; the §7.4 step 14 load that could still have been in flight when the container was
+       removed is exactly what §7.5.10 step 7 takes off the queue without running (quickjs.c's
+       JS_DropJobsForContext walks the baseline list for that case by name). Reaching here means one of those
+       two stopped holding, and the write below would give a destroyed navigable a live Window again. */
+    DCHECK(!p->destroyed,
+           "a navigable whose active document §7.5.10 destroyed was NAVIGATED — §7.4.2.2 replaces an active "
+           "document and this navigable has none, so either the load job outlived step 7's drop or a "
+           "destroyed navigable was chosen as a navigation target");
+    /* AND A SWAPPED-PAST BROWSING CONTEXT IS NOT NAVIGATED EITHER, for a different reason with the same shape.
+       §7.1.3.2's swap moved this navigable's next Document into a browsing context in ANOTHER instance, so the
+       navigable a later `w.location = …` names is that one and not this record — which this instance cannot
+       navigate, because navigating another agent's navigable is a cross-instance OPERATION and there is none.
+       Writing the binding here instead would resurrect the window the swap closed. */
+    DCHECK(!p->bc_discarded,
+           "a browsing context §7.1.3.2's group SWAP discarded was NAVIGATED — the navigable moved to the "
+           "instance the swap provisioned, so this record is the one the page's handle reads `closed` off and "
+           "never a navigation target. BUILD the cross-instance navigate: a navigation of a navigable another "
+           "agent holds is an operation routed to that agent (core/frame/remote_op.h), not a local write");
     /* THE OLD WINDOW'S REFERENCE IS THIS SLOT'S, and the delta already dupped its own copy when the capture
        above ran — so releasing it here leaves the parked arm's copy intact and the live slot free to move. */
     JS_FreeValue(ctx, p->window);
@@ -445,10 +509,37 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
            "a navigable was navigated with no top-level origin for the new document's environment — §8.1.3.1 "
            "gives every environment one, and the realm the caller just built was built under it");
     p->top_level_origin = top_level_origin;   /* BORROWED and REPLACED rather than mutated — see the field */
+    /* §7.5.1's OPENER POLICY ROW OF THE DOCUMENT THIS NAVIGATION IS CREATING — "opener policy …
+       navigationParams's cross-origin opener policy". It moves here with the rest of the binding because it is
+       a fact of the ACTIVE DOCUMENT and this call is what replaces one; the value is the OPERATION's (obtained
+       from the response the load fetched) and is never re-derived from anything reachable through this proxy,
+       which by the time this runs is the document being replaced. */
+    p->opener_policy = opener_policy;
     /* THE NAVIGABLE IS NO LONGER SHOWING WHAT §7.4 CREATED IT WITH — see `ever_navigated`. Written here
        because this is the one site that replaces a navigable's active document, which is exactly what makes
        the flag answerable at all. */
     p->ever_navigated = 1;
+}
+
+/* §7.5.1's OPENER POLICY ROW, READ FROM THE NAVIGABLE'S SIDE — see the field. THROUGH proxy_of like every
+   other read of this record, so the answer is the running flow's: an arm that navigated this navigable to a
+   `same-origin` document and a sibling that did not are two worlds with two answers. */
+OpenerPolicyValue window_proxy_opener_policy(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "the opener policy of something that is not a WindowProxy was asked for");
+    /* A PEER'S NAVIGABLE HAS NO ANSWER HERE, and this crashes rather than reporting `unsafe-none` — which is a
+       legal value, so a default would be indistinguishable from a measurement. §7.3.2.1's inheritance reaches
+       a REMOTE top-level browsing context in exactly one shape (a same-origin document nested through a
+       cross-origin one), and answering it needs the cross-instance read window_proxy_window names. */
+    DCHECK(world_doc_hosted(p->doc),
+           "the §7.5.1 opener policy of a navigable in ANOTHER WASM instance was asked for — §7.1.3.2 and "
+           "§7.3.2.1 both read it off a browsing context's ACTIVE DOCUMENT, and that document is a peer's. "
+           "Build the cross-instance resolve the same way window_proxy_window names it: the flow SUSPENDS "
+           "here, the peer answers in its own scheduled turn under this flow's world, and the flow resumes "
+           "with the value");
+    return p->opener_policy;
 }
 
 /* HTML §7.4.4 step 4's "is initial about:blank", from the navigable's side — see `ever_navigated`. Read
@@ -487,7 +578,8 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 }
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
-                         bool is_popup, SandboxFlags creation_sandbox_flags, const char *creator_csp,
+                         bool is_popup, SandboxFlags creation_sandbox_flags, OpenerPolicyValue opener_policy,
+                         const char *creator_csp,
                          const char *creator_csp_self_origin, const char *creator_base_url,
                          const char *top_level_url,
                          const Origin *top_level_origin, JSValueConst parent, JSValueConst opener)
@@ -541,6 +633,14 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        says a browsing context's popup sandboxing flag set starts empty and an absent `sandbox` attribute is
        an empty iframe sandboxing flag set, so there is no third state here to spell. */
     p->creation_sandbox_flags = creation_sandbox_flags;
+    /* §7.3.2.1's INHERITED OPENER POLICY, decided by the CREATOR and stated by it: "if creator's origin is same
+       origin with creator's relevant settings object's top-level origin, then set document's opener policy to
+       creator's browsing context's top-level browsing context's active document's opener policy" — and
+       `unsafe-none` otherwise, which is §7.1.3's initial value and a real answer rather than an absence. It is
+       an argument for the same reason the creator's policy container beside it is: which of §7.3.2.1's two arms
+       applies is a fact about the OPERATION creating this navigable, and no inspection of the navigable being
+       created could recover it. */
+    p->opener_policy = opener_policy;
     /* EVERY ENVIRONMENT HAS A TOP-LEVEL CREATION URL, so unlike the policy container there is no "none" here
        to spell: §7.4 either nests the navigable (inherit the creator's) or makes it a top-level traversable
        (its own address), and both are addresses. A caller with nothing to pass has not decided which of the
@@ -570,7 +670,7 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
 /* §7.2.3's proxy for the REALM THAT IS ASKING — the one `window`, `self` and `e.source` are. Its realm is
    this one, which the caller is standing in rather than creating: the two differences from a §7.4 child are
    that the realm is handed over from the outside, and that nobody here stated the navigable's name. */
-JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy)
 {
     /* THE ORIGIN IS THE AGENT'S, and it is read from where §7.2.1's check reads it rather than passed in —
        an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
@@ -629,7 +729,7 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name)
     /* NO CREATOR BASE URL either, and for the same sentence: §7.4 did not create this navigable, so there is
        no creator whose base URL to pass on. Its Document comes from the response at this instance's address,
        which §2.4.3 gives a null about base URL. */
-    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, NULL,
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, opener_policy, NULL,
                            origin_serialized(origin_agent()), NULL, tlus, tlo, JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
@@ -753,16 +853,76 @@ bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
     return wp_closed(p);
 }
 
-/* §7.5.10 STEP 8's BROWSING CONTEXT IS NULL — the completion of a destruction, written only by the destroy
-   job. It is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
+/* §7.5.10 STEPS 8 AND 9 — the completion of a destruction, written only by the destroy job. See window_proxy.h
+   for why the two steps are one write and why the second of them is this engine's only reclamation edge.
+   Step 8 is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
    `closed`: a navigable whose top-level traversable is merely CLOSING has not been destroyed, and a wait that
    accepted `closed` would finish before its subtree had. */
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
 {
-    ProxyData *p = proxy_of(proxy);
-    (void)ctx;
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+
     DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context set to null");
-    p->destroyed = 1;
+    /* ONCE PER DOCUMENT, ASSERTED, because step 9 hands a reference back and a second run would hand back one
+       it no longer holds. Every path that could reach here twice already refuses to: descend_enqueue returns
+       for a destroyed navigable, the fan-out reports a destroyed child instead of queuing it, and §7.3's
+       close chains unload-then-destroy over a subtree whose members destroyed themselves at §7.5.9 step 20.
+       So a second arrival is one of those paths having stopped refusing, and it is silent without this. */
+    DCHECK(!p->destroyed,
+           "§7.5.10 destroyed one navigable's active document TWICE — the second run releases a Window "
+           "reference this record has already given back, and the first thing that reads the navigable "
+           "afterwards reads a freed global");
+    /* A PEER'S NAVIGABLE HAS NOTHING LOCAL TO RELEASE, and it is not destroyed from here either: the agent that
+       HOLDS the document runs §7.5.10 over it, and this side learns the outcome the way it learns `closed`. */
+    DCHECK(world_doc_hosted(p->doc),
+           "§7.5.10 was run over a navigable whose ACTIVE DOCUMENT is in another WASM instance — the ports, "
+           "the queued tasks and the Window are all the peer's, so the destruction is the peer's to perform "
+           "and this side has nothing to null");
+    p->destroyed = 1;                                          /* step 8 */
+    /* STEP 9 — the navigable stops naming the Document. THE DELTA ALREADY HOLDS ITS OWN DUP of this Window
+       (the capture above ran before the write), so releasing the live slot leaves every parked arm's copy
+       intact and rewinding this flow restores the binding exactly. That is the same argument
+       window_proxy_navigate makes one screen up, for the same field, and it is the whole reason a destruction
+       can give memory back at all without a flow losing the document it is standing in. */
+    JS_FreeValue(ctx, p->window);
+    p->window = JS_UNDEFINED;
+    p->realm  = NULL;
+    /* AND `materialized` NOW ANSWERS THE TRUTH: this navigable has no active document. proxy_realm asserts the
+       other side of that pair — a NULL realm on a DESTROYED navigable means "there is none", never "not yet". */
+    DCHECK(p->realm == NULL && JS_IsUndefined(p->window),
+           "§7.5.10 step 9 left a destroyed navigable still naming a Document — the realm behind it can then "
+           "never be reclaimed, because this reference is the one the collector cannot get past");
+}
+
+/* §7.1.3.2 STEP 10's DISCARD — the OTHER writer of "this's browsing context is null", and it releases nothing.
+   §7.5.10's write above is a destruction and hands the Window back; this one records that a browsing context
+   was LEFT BEHIND by a group swap while its Document goes on existing exactly as it was. That asymmetry is the
+   spec's, not a shortcut: step 10's note says only that the user agent "might destroy it at this point", and
+   this engine keeps a superseded document alive on every navigation because a flow parked inside it resumes
+   there.
+   PER FLOW through proxy_of, like every other write to this record: a sibling arm whose response carried no
+   such policy never swapped, and its handle stays open. */
+void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — the WHOLE binding rides the delta */
+    (void)ctx;
+
+    DCHECK(p != NULL, "something that is not a WindowProxy had its browsing context discarded");
+    DCHECK(!p->destroyed,
+           "§7.1.3.2's group swap discarded the browsing context of a navigable §7.5.10 had already destroyed — "
+           "a destroyed navigable has no active document to navigate, so the load that reached the swap was "
+           "running over a document that no longer exists");
+    DCHECK(!p->bc_discarded,
+           "§7.1.3.2's group swap discarded one browsing context TWICE — one navigation swaps once, and the "
+           "second announcement provisions a second instance for a document that already has one");
+    p->bc_discarded = 1;
+    /* AND §7.2.2.1's `closed` READS IT — asserted here because this byte and that getter are the whole contract
+       between the swap and the page. A `closed` that did not include this disjunct would leave the opener's own
+       handle reporting a window real Chrome has already cut off as one it can still reach, and §@S would emit a
+       breakout the browser forbids: a byte written where nothing reads it, which is silent everywhere else. */
+    DCHECK(wp_closed(p),
+           "a browsing context §7.1.3.2's swap has just discarded still answers §7.2.2.1's `closed` as false — "
+           "the getter's \"this's browsing context is null\" has two writers and is reading only one of them");
 }
 
 /* THE WAIT'S STEP 3 — the number of child navigables this one is waiting on for this operation, recorded

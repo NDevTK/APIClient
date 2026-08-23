@@ -178,6 +178,14 @@ const INTERFACES = {
      gap that matters: IDBFactory ships `open` and `cmp` and NOT `deleteDatabase` or `databases()`, each of
      which is a whole algorithm of §5 rather than a member. A row is what makes that count a number rather
      than a sentence in a comment somebody has to keep true. */
+  /* WEB CRYPTOGRAPHY §10 and §14. Both are rows from the day their components land, and the gap each one
+     reports is the plan rather than the neglect: Crypto ships `subtle` and NOT `getRandomValues` or
+     `randomUUID`, which need an answer to what randomness means for a solver whose flows resume
+     byte-identically across sessions; SubtleCrypto ships `digest` and none of the other eleven, every one of
+     which needs §13's CryptoKey model first. Without rows the audit would report both interfaces as nothing
+     at all rather than as thirteen members with a reason. */
+  Crypto:               "core/crypto/crypto.c",
+  SubtleCrypto:         "core/crypto/subtle_crypto.c",
   IDBKeyRange:          "core/indexeddb/idb_key_range.c",
   IDBFactory:           "core/indexeddb/indexed_db.c",
   /* §4.1's IDBRequest and §4.10's IDBTransaction. Each inherits EventTarget, so event_target.c is named

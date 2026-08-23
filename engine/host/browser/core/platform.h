@@ -45,6 +45,7 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+#include "core/frame/opener_policy.h"
 #include "core/frame/sandboxing.h"
 
 /* THE AGENT'S FACTS — what a declaration needs that is true of the whole similar-origin window agent. */
@@ -64,6 +65,16 @@ typedef struct {
        cluster key map even when it sends a different header. The document that roots the agent is the one
        whose header decides it. */
     bool requests_oac;
+    /* §7.1.3's OPENER POLICY VALUE of the response that created the document this agent is rooted at, which
+       §7.3.2.3's create-a-new-browsing-context-group takes because §7.1.3.2's swap is the only step that ever
+       gives a group a cross-origin isolation mode other than `none` (core/frame/browsing_context_group.h).
+       IT IS AN AGENT FACT FOR THE SAME REASON `requests_oac` above is, and a STRONGER one: SECURITY.md keys an
+       instance on `(browsing context group, origin)`, so the group is half the key that decided there is one
+       instance here — a navigable whose navigation swaps groups leaves this instance rather than changing this
+       value. It is the VALUE and not the whole policy because a group reads only that: the reporting endpoints
+       and the report-only half belong to the DOCUMENT, which carries them on its navigable
+       (core/frame/window_proxy.h). */
+    OpenerPolicyValue opener_policy;
 } PlatformAgent;
 
 /* ONE DOCUMENT'S FACTS. `url` and `origin` ARE TWO DIFFERENT FACTS and this struct is why they can no longer

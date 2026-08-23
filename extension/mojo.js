@@ -110,8 +110,11 @@
     if (t === "int32")   return typeof v === "number" && (v | 0) === v;
     /* `double` IS THE IEEE-754 TYPE AND THEREFORE CARRIES THE NON-FINITE VALUES, which is the whole reason a
        flow weight is declared as one rather than as an int32 with a sentinel beside it. `engine_top_weight` is
-       `flow_best() ? flow_weight(b) : -1.0/0.0`, so -Infinity is the engine's own vocabulary for a frontier
-       holding no runnable flow, and a transport that refused it is exactly the defect 355a03d2 fixed one layer
+       `flow_next_to_run(NULL) ? flow_weight(b) : -1.0/0.0`, so -Infinity is the engine's own vocabulary for a
+       frontier holding no runnable flow — which is what this line has always said and what the C side only now
+       answers: it used to ask flow_best, over EVERY member including the ones waiting on the host, so a fully
+       blocked engine published a weight belonging to a flow that could not run. A transport that refused
+       -Infinity is exactly the defect 355a03d2 fixed one layer
        up: every drained engine aborted its round, was destroyed and re-provisioned, 43279 times in one page
        load. WHICH non-finite values are meaningful is the consumer's rule and not this layer's — bridge.js
        narrows to {finite, -Infinity} at the read, where the vocabulary is known — so all a type check may say

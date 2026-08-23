@@ -75,25 +75,16 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
            "travel as a container (window_proxy.c's creator_csp and navigable.c's create notice both carry "
            "CSP TEXT today), put the embedder policy on it, and build §7.1.4.2's embedder policy checks");
 
-    /* §7.1.3's obtain, which §7.5.1's creation table gives the Document as its OPENER POLICY row. */
+    /* §7.1.3's obtain, which §7.5.1's creation table gives the Document as its OPENER POLICY row.
+       THE ROW HAS A HOME AND THE SWAP HAS A DECISION NOW, which is what used to be missing here — this line
+       stood beside a crash saying so, and six of the thirty real signed-out product surfaces in this project's
+       corpus (vercel, stripe, posthog, discourse, dropbox, fly.io) send a `Cross-Origin-Opener-Policy` and
+       therefore aborted at it before a single flow ran. The row is the NAVIGABLE's, because §7.1.3.2 and
+       §7.3.2.1 both read it off a browsing context's ACTIVE DOCUMENT (core/frame/window_proxy.h); the group
+       and its cross-origin isolation mode are core/frame/browsing_context_group.h's; and §7.1.3.2's four
+       decisions are in core/frame/opener_policy.h, asked by §7.4.5's own arm in core/frame/navigable.c and by
+       the hosts that root an agent at a response. */
     opener_policy_obtain(&out->opener, headers, secure_context);
-    /* THE OTHER HALF OF THE SAME ABSENCE, and it is the one that makes an answer WRONG rather than merely
-       incomplete. §7.5.1 gives a Document an `opener policy`, §7.1.3.2's obtain-a-browsing-context-to-use-for-
-       a-navigation-response reads it to decide a browsing context group SWAP, and that swap is the ONLY step
-       in the standard that sets a group's cross-origin isolation mode to anything but `none`. With no row and
-       no swap, this agent's mode is `none` by computation (core/frame/agent_cluster.c) — which is the right
-       answer for every response that does not send this header and the WRONG one for every response that
-       does: a page served `Cross-Origin-Opener-Policy: same-origin` beside a `require-corp` IS cross-origin
-       isolated in a real browser, so `crossOriginIsolated` is true and HR-TIME §4 coarsens to 5µs instead of
-       100µs. A bundle feature-detecting `SharedArrayBuffer` off that boolean takes the other arm here, which
-       is forced execution exploring the world the page is not in. Build §7.5.1's opener policy row on the
-       Document and §7.1.3.2's group switch that reads it. */
-    DCHECK(out->opener.value == OPENER_POLICY_UNSAFE_NONE,
-           "this response carries a `Cross-Origin-Opener-Policy` that is not `unsafe-none`, and this build has "
-           "no §7.5.1 opener-policy row on the Document to put it on and no §7.1.3.2 browsing-context-group "
-           "switch to read it — so the group's cross-origin isolation mode stays `none` for a document whose "
-           "response asked for a swap, and `crossOriginIsolated` and HR-TIME's clock resolution answer for a "
-           "page this is not");
 }
 
 void navigation_params_free(NavigationParams *p)

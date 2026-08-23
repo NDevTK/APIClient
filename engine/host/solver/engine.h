@@ -8,6 +8,8 @@
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
+#include <lexbor/dom/dom.h>
+
 #include "core/fetch/fetch.h"
 #include "core/loader/script_type.h"   /* which of §8.1.4.4's two algorithms runs entry i — see `types` below */
 #include "quickjs.h"
@@ -70,7 +72,13 @@ void engine_queue_script(uint32_t doc, const char *body);
    and the as-soon-as-possible SET has no position at all (§13.2.7 waits for it only before the load event). The
    one destination that is not the tail is `immediately execute the script element`, which §4.12.1.1 reaches
    only for an inline CLASSIC script — the entry below. */
-void engine_queue_element_script(uint32_t doc, const char *body, ScriptType stype);
+/* `el` IS THAT ELEMENT, and the row carries it for the same reason it carries the type: "execute the script
+   element" is a switch on EL, and its "classic" arm sets that document's §3.1.7 `currentScript` to it for the
+   whole of the run. The run is a WORK ITEM here — it starts in one scheduler step and completes in another —
+   so nothing at the completion could re-derive which element it was, and a C save/restore bracket around the
+   compile would set the slot for whichever flow was running when the NEXT program started. See solver/flow.h's
+   `dyn_el`. */
+void engine_queue_element_script(uint32_t doc, const char *body, ScriptType stype, lxb_dom_element_t *el);
 /* …AND THE ONE THAT IS NOT. HTML §4.12.1.1 "Processing model": an inline classic script whose element a page
    INSERTED reaches the end of "prepare the script element" — "Otherwise, immediately execute the script
    element el, even if other scripts are already executing" — and "execute the script element" then runs the
@@ -82,7 +90,8 @@ void engine_queue_element_script(uint32_t doc, const char *body, ScriptType styp
    type is `classic` and el has a src attribute, or el's type is `module`", so every module — inline or not —
    has already gone to one of the three lists by then. An inline module has a graph to LOAD before its result
    exists, which is why the standard does not run it in place. */
-void engine_queue_script_immediate(uint32_t doc, const char *body);
+/* `el` IS THE ELEMENT THE PAGE INSERTED — see engine_queue_element_script. */
+void engine_queue_script_immediate(uint32_t doc, const char *body, lxb_dom_element_t *el);
 /* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
    script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
    tokenizer (§13.2.6.4.8), and the `list of scripts that will execute when the document has finished parsing`
@@ -97,7 +106,9 @@ void engine_queue_script_immediate(uint32_t doc, const char *body);
    then runs the source with the matching one of its two algorithms. The row keeps its ADDRESS across that
    replacement too — §8.1.4.2 creates the script with the RESPONSE'S URL, which is the base a nested
    `import('./chunk.js')` resolves against and, for a module, the module map KEY. */
-void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype);
+/* `el` IS THE ELEMENT WHOSE `src` THIS IS — see engine_queue_element_script. It survives the reply exactly as
+   the type and the address do: the row is the element's program whether its bytes have arrived or not. */
+void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
    never fires. A page script that does not compile still asserts.
@@ -130,12 +141,15 @@ void engine_queue_javascript_url(uint32_t doc, const char *body);
    `stype` travels with the park for the reason it travels with the row above: the reply is a PROGRAM, and
    §4.12.1.1's "execute the script element" switches on the element's type to decide which of §8.1.4.4's two
    algorithms runs it. `<script type=module src>` injected by page code is how a modern bundle loads a chunk. */
-void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype);
+/* `el` travels with the park for the same reason `stype` does, and the park is where it would OTHERWISE BE
+   LOST: the flow leaves the insertion steps with the node in hand and comes back to a URL and a reply, so the
+   element rides the register (solver/pending.h's `scriptEl`) and the drain puts it on the row. */
+void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el);
 /* Park the running flow on a document's OWN external <script src> at sequence position `script_i`: the scripts
-   §4.12.1 orders run in that order, so the flow waits there and the reply fills the slot. WHOSE slot follows from
-   the position: inside the SESSION document's static sequence it is that document's, shared by every flow parked
-   at the same index; past it, it is this flow's own DYN_SCRIPT_SRC entry, which is a child navigable's or a
-   joined document's script and is shared with nobody. */
+   §4.12.1 orders run in that order, so the flow waits there and the reply fills the slot. THE SLOT IS ALWAYS
+   THIS FLOW'S OWN DYN_SCRIPT_SRC ROW — the session document's scripts are seeded as rows of the same table as
+   every other document's, so there is no shared half left to be in. One host fetch still answers every flow
+   parked on that address: engine_provide fills every register naming it and un-marks each of those flows. */
 void engine_pending_docscript(JSContext *ctx, const char *url, int script_i);
 /* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
    per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
@@ -172,8 +186,10 @@ void engine_prepare_fork(void *dec_blob, void *pin_blob);
    that the cold tier "belongs to the host that has an IndexedDB"; that made the entire resume path unreachable
    from every host in this tree that can be run without a browser, so the language cold_resume parses had no
    producer any process could reach. */
-void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
-                const char *recipes);
+/* `els[i]` is entry i's `script` ELEMENT, which HTML §4.12.1.1's "execute the script element" needs and which
+   only the scan that built the table can supply — see engine_sched_begin, which this hands it straight to. */
+void engine_run(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
+                lxb_dom_element_t **els, int n, const char *recipes);
 
 /* …AND WHETHER THIS ENGINE SHOULD LEAVE MEMORY NOW, asked at each step boundary of the one-call driver. It is
    the Level-1 eviction seam: the HOST decides (it is the only zone that can see the other documents' engines and
@@ -260,14 +276,13 @@ void engine_set_referenced(int referenced);
    a flow that had issued a request stopped at that request, its continuation never reaching the reply. The
    provider fills what engine_pending_fetches and engine_host_requests name, and answers how many entries it
    filled; 0 at a stall ends the run, which is the honest answer to "nobody can supply this".
-   IT IS CALLED ONLY ON ENGINE_STEP_STALLED, AND THAT IS A KNOWN DEFECT rather than the design — the extension's
-   bridge pulls both registers after EVERY return (main.c folds STALLED into YIELD deliberately), so in the
-   product a blocked flow is answered at the next quantum, while here it is answered only once every OTHER flow
-   in the document has also blocked. That makes one flow's reply a function of its siblings' states, which is a
-   coupling the scheduler forbids everywhere else. Turning it into a per-slice payment is the fix and it is not
-   free: the attempt aborted the smoke fixture in the fetch delivery on a record with no §2.2.6 URL list, which
-   the drain's own assert now names at the entry rather than three frames later. run_scheduler carries the
-   sequence to follow. */
+   IT IS CALLED AT EVERY SLICE, which is the fix this paragraph used to describe as a known defect with the
+   sequence to follow written out beneath it. That instruction OUTLIVED the absence it named: run_scheduler
+   pays the provider unconditionally after every engine_sched_step and asserts at the seam that the payment
+   left nothing outstanding, so both registers are settled at the next quantum exactly as the extension's
+   bridge settles them — a blocked flow's reply is no longer a function of every sibling in the document also
+   having blocked. What the STALL still decides is only whether the driver STOPS: a stall with `filled == 0` is
+   a frontier waiting on something outside this host's tables, and nothing this provider holds will move it. */
 void engine_set_provider(int (*provide)(JSContext *ctx));
 
 /* `recipes` is the PARKED RESIDUE the host stored for this bundle (';'-joined records — see solver/cold.h), or
@@ -280,8 +295,15 @@ void engine_set_provider(int (*provide)(JSContext *ctx));
    recover the kind from the body — `await` at the top level is a SyntaxError in one and legal in the other,
    which is exactly the difference that has to arrive from the element. The array is BORROWED for the life of
    the session, like `bodies` and `srcs`. */
-void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types, int n,
-                        int forking, const char *recipes);
+/* `els[i]` is entry i's `script` ELEMENT (core/loader/document_scripts.h), BORROWED for the life of the
+   session like the three columns beside it. It is what HTML §4.12.1.1 "Processing model"'s "execute the script
+   element" is a switch ON, and what its "classic" arm sets §3.1.7's `currentScript` to for the whole of the run
+   — the one fact about a `<script>` that nothing downstream of the scan can recover, because by the time the
+   scheduler holds a body the element is behind it. NULL for a sequence no element produced (a host driving a
+   synthesized program list); the row's `currentScript` is then null, which is §3.1.7's own answer for a
+   document that is not executing a script element. */
+void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const ScriptType *types,
+                        lxb_dom_element_t **els, int n, int forking, const char *recipes);
 int  engine_sched_step(void);
 
 /* A SECOND DOCUMENT OF THIS AGENT RUNS ITS OWN SCRIPTS, ON THE FRONTIER THAT IS ALREADY RUNNING.
@@ -308,8 +330,10 @@ int  engine_sched_step(void);
  * document order, and they are COPIED rather than borrowed — unlike engine_sched_begin's, which is the
  * session's own sequence and lives as long as the session. A joined document's inventory is a fact the host
  * read once out of a tree it then hands to this agent, so it has no owner to outlive this call. */
+/* `els[i]` is entry i's `script` ELEMENT — BORROWED, like every other reader of this column, because it names
+   a node of the tree the host handed over and the rows die with the flow long before that tree does. */
 void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **srcs,
-                          const ScriptType *types, int n);
+                          const ScriptType *types, lxb_dom_element_t **els, int n);
 
 /* THE RAM→DISK FLOOR. The HOST sees the pressure (it is the only zone that knows the other documents' engines
    and the summed working set) and asks this engine to give up its residue; the ENGINE decides when, which is
@@ -345,14 +369,25 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
 void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url);
 /* THE FRONTIER'S BEST WEIGHT — what the host ranks this document's engine by against every other live one.
    Level-1 and level-2 are ONE policy (§scheduler): the host orders engines by their best flow exactly as the
-   engine orders flows, so this is flow_weight of flow_best and nothing else. -inf when the frontier is EMPTY,
-   so an engine with no work never outranks one that has some.
-   IT IS EVERY MEMBER, INCLUDING THE ONES WAITING ON THE HOST, and the line that used to say "-inf when nothing
-   is runnable" claimed otherwise. It could not be made true here: the host reads this BETWEEN slices, and a
-   flow's host-owed mark is cleared at the top of every slice precisely because the host is what answers it — so
-   at the moment this is asked, every member is askable again by construction. The Level-1 question it sounds
-   like ("is this engine merely waiting?") is answered where it is known, by the step code: a slice whose every
-   member is waiting returns ENGINE_STEP_STALLED, which is what moves the engine out of the pool's hot state. */
+   engine orders flows, so this is flow_weight of the flow the SCHEDULER WOULD PICK — flow_next_to_run with no
+   incumbent — and nothing else. -inf when the frontier holds nothing the thread can be handed to, which is an
+   EMPTY frontier and a fully host-owed one alike: neither can convert a slice into work, so neither may
+   outrank an engine that can.
+   IT IS THE RUNNABLE MEMBERS, AND THE TWO REASONS THIS FILE GAVE FOR ASKING flow_best INSTEAD ARE BOTH FALSE
+   ABOUT THIS TREE. It said a flow's host-owed mark "is cleared at the top of every slice", so every member is
+   askable again by construction at the instant the host reads this — that line is DELETED (engine.c's pick
+   loop says so where it stood, and says what it cost: a fully blocked frontier re-admitted the ~59 flows one
+   slice had time for and swapped COW deltas 1.76 million times without finishing one). Marks now live until
+   the HOST does something that could have answered them, so a blocked member is still blocked here. And it
+   said the Level-1 question is answered by the step code returning ENGINE_STEP_STALLED, "which is what moves
+   the engine out of the pool's hot state" — nothing host-side moves it: main.c FOLDS STALLED into YIELD at the
+   ABI (the bridge speaks two values), so a stall reaches the host as "call me again". With flow_best answering
+   here, a document whose every flow was waiting on the host reported the weight of a flow that cannot run,
+   burned no CPU so its weight never aged, and was therefore the one engine a weight-ordered eviction would
+   NEVER choose — it sat in the hot pool at whatever rank its last emission had bought it, forever.
+   -Infinity IS THE ANSWER AND NOT A SENTINEL BESIDE ONE: it is the value this engine already publishes for an
+   empty frontier and the value extension/mojo.js declares the Level-1 input carries, so a stalled engine sorts
+   last through the ordering that already exists rather than through a second question the host has to ask. */
 double engine_top_weight(void);
 
 /* THE VALUE YIELD's floor: the weight of the best flow in the RUNNER-UP engine. The running flow hands the
