@@ -738,7 +738,7 @@ function responseFieldLines(h) {
    does not compute the key, does not admit and does not rank — and this is the zone that owns that question,
    so the name it passes in IS the answer (SECURITY.md's `(browsing-context group, origin)`), which is also
    what makes a frame in the offscreen's DOM identifiable as the instance the pool is talking about. */
-function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold) {
+function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inherited) {
   /* THE ONE WAY TO OBTAIN AN INSTANCE, ASSERTED RATHER THAN DISCOVERED AS A TypeError. Without this the failure
      of a load-order change (renderer-host.js is a <script> before this one in ast-worker.html) arrives as
      "self.rendererLaunch is not a function" inside admit's catch, which reports it as a BOOT ABORT of the
@@ -758,6 +758,18 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold) {
          "whether this document's findings are RETURNED to a requester or MERGED to the moat, and it is a " +
          "fact about the call site (a child navigable and a resumed recipe have no requester; an admitted " +
          "document does), so it belongs on the record from the instant the pool can see it");
+  /* HTML §7.1.7 "Policy containers"' CLONE OF THE CREATOR'S, or `null` for a document with no creator. IT IS
+     STATED BY EVERY CALL SITE AND NEVER DEFAULTED HERE, because `null` and "the caller forgot" are the same
+     shape and only one of them is a fact: a create notice always carries a container (the creator has one even
+     when it holds no policies), while a reported root document, a rehydrated recipe and §7.3.2.3's swap have
+     no creator at all. A `?.` or a `|| {}` here would turn the second into the first silently, which is
+     exactly how the CHILD's own address came to answer `'self'`. */
+  DCHECK(inherited === null ||
+         (!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
+          inherited.selfOrigin !== ""),
+         "an instance was started with an inherited policy container that is neither `null` nor a whole CSP " +
+         "list — CSP §2.2 makes a list a struct of policies AND a self-origin, so a half of one is a clone " +
+         "that arrives unable to resolve `'self'` against anything but this document's own address");
   const cluster = clusterKeyOf(msg);
   /* THE POOL IS THE REGISTER OF WHO HOLDS WHAT, AND ASKING IT IS THE CALLER'S JOB — this asserts they did.
      Every site that builds an instance has already answered "does this agent cluster have one?" (admit's
@@ -792,7 +804,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold) {
   eng._readyP = (async () => {
     try {
       eng.r = await self.rendererLaunch(cluster);
-      await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl);
+      await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited);
       /* A CLEAR THAT LANDED MID-BOOT TAKES THE FRAME HERE, for the reason serviceFetch takes it there:
          hostClear cannot destroy a renderer this path has a call outstanding on, so it marks the record and
          the operation that owns the outstanding call removes the frame when it lands. */
@@ -903,7 +915,7 @@ function engineBootFailed(eng, e) {
    agent cluster has been answered by since the instant provisioning began, so building a second object here
    would leave the pool holding the reservation while every caller held the instance — one document with two
    records, which is the defect the reservation exists to close wearing a different hat. */
-async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
+async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited) {
   const rend = eng.r;
   DCHECK(rend && rend.name === eng.cluster,
          "a renderer was provisioned under a name that is not its instance's agent cluster — the frame's " +
@@ -1008,7 +1020,13 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
          "a document reached qjs_init with no address — §4.4's document address is what the engine derives " +
          "this document's ORIGIN from (§4.7's serialization, its own url.c) and what every relative URL the " +
          "bundle builds resolves against, so a document without one is analysed behind no principal at all");
-  const _init = await rend.renderer.init(_doc, msg.sourceUrl, eng.docId, _headers, _tlu);
+  /* THE INHERITED CONTAINER, AS TWO WIRE FIELDS AND NOT AS A HEADER. It stands beside `_headers` because it is
+     not part of the response: HTML §7.1.7's clone is what a Document created by a CREATOR gets, and the engine
+     is what decides which of the two lists this Document is created with. The empty pair is the positive
+     statement that there is no creator, which is what `null` means at this function's own boundary. */
+  const _init = await rend.renderer.init(_doc, msg.sourceUrl, eng.docId, _headers, _tlu,
+                                         inherited ? inherited.csp : "",
+                                         inherited ? inherited.selfOrigin : "");
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
@@ -1317,7 +1335,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
      qjs_host_requests on every single step; asking again would perform the peer's operation — a program, with
      the page's own side effects — once per step. */
   /* `r` IS THE INSTANCE. It replaces the `M` handle and the `ptrs` free list together: a pointer an ABI call
-     RETAINED (qjs_init's five arguments) lives as long as the module does, the module dies with the frame, and
+     RETAINED (five of qjs_init's arguments) lives as long as the module does, the module dies with the frame, and
      the frame is removed at finalize — so there is nothing left in this realm to free, and nothing in this
      realm that can read an untrusted instance's memory. */
   eng.lines = lines; eng.fkey = fkey; eng.prior = prior; eng.persist = persist;
@@ -1339,7 +1357,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   eng.state = "hot";
 }
 /* A SECOND DOCUMENT OF AN AGENT CLUSTER JOINS THE INSTANCE THAT IS ALREADY RUNNING THAT CLUSTER. It is the same
-   five arguments `qjs_init` takes, stated by this zone for the same reasons, and it is a DIFFERENT operation
+   arguments `qjs_init` takes, stated by this zone for the same reasons, and it is a DIFFERENT operation
    from rooting: the runtime, the class registrations, the world registry and the frontier already exist, so
    what this adds is a Lexbor tree in the agent's own arenas, a realm through main.c's engine_child_realm, and
    that document's scripts seeded on the ONE frontier. Provisioning a second instance instead is the split
@@ -1354,7 +1372,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
    the same way, which is exactly what the caller's `hostHolderOf` question decides here. Two spellings of one
    document would pass both checks and build a second tree, a second realm and a second run of that document's
    scripts inside one agent, so the name is asserted to be unheld across the WHOLE pool before it crosses. */
-async function engineJoin(eng, msg, docName, topLevelUrl) {
+async function engineJoin(eng, msg, docName, topLevelUrl, inherited) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
          "a document was joined to an instance in state `" + eng.state + "` — a join ADDS a document to a LIVE " +
          "agent, and qjs_join's own asserts name the two calls that must already have happened (qjs_init roots " +
@@ -1387,8 +1405,18 @@ async function engineJoin(eng, msg, docName, topLevelUrl) {
      "Data state" emits the character and §13.2.6.4.7 The "in body" insertion mode ignores it). The two entries
      take ONE contract — main.c's signatures are byte-identical — so a change to what a document arrives with
      reaches both, which is exactly what this pair of asserts existed to keep true. */
+  /* HTML §7.1.7's CLONE OF THE CREATOR'S CONTAINER, relayed off the same create notice that sent this
+     document here — the two entries take ONE contract, so what a document arrives with reaches both. A join
+     always has a creator (nothing else announces a document to this zone), which is why there is no `null`
+     arm here that engineRoot needs. */
+  DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
+         inherited.selfOrigin !== "",
+         "a document was joined with no inherited policy container — every join in this zone comes off a " +
+         "`navigable.create`, whose creator has a container by construction (HTML §7.1.7 gives every Document " +
+         "one), so an absent one is a relay that dropped it and a child judged under no policy at all");
   const _join = await eng.r.renderer.join(_doc, msg.sourceUrl, docName,
-                                          responseFieldLines(msg.responseHeaders), topLevelUrl);
+                                          responseFieldLines(msg.responseHeaders), topLevelUrl,
+                                          inherited.csp, inherited.selfOrigin);
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
@@ -1627,7 +1655,8 @@ let _nextSwapGroup = 1;
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
-   `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <csp>` — the engine has already named the document and
+   `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <csp>` — the engine has
+   already named the document and
    already handed the page a WindowProxy for it; what is missing is an INSTANCE. This provisions one under that
    name, loading the child's own document through the one safeFetch chokepoint.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed VERBATIM to the instance holding
@@ -1636,13 +1665,13 @@ let _nextSwapGroup = 1;
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    /* SEVEN FIELDS, because the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are both read below. The
-       count said five once, so a record that stopped at the origin passed the assert and then took `undefined`
-       for the creator's policy clone — a child document judged under NO policy, which is §7.4's inheritance
-       silently deleted, and the one field a CSP-blocked sink verdict is decided against. An assert that
-       permits the record it is about to misread is the shape of check that reports green while the value is
-       missing, so it counts every field the reader below indexes. */
-    DCHECK(f.length >= 7, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL and policy");
+    /* EIGHT FIELDS, because CSP §2.2's SELF-ORIGIN, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are
+       all read below. The count said five once, so a record that stopped at the origin passed the assert and
+       then took `undefined` for the creator's policy clone — a child document judged under NO policy, which is
+       §7.1.7's inheritance silently deleted, and the one field a CSP-blocked sink verdict is decided against.
+       An assert that permits the record it is about to misread is the shape of check that reports green while
+       the value is missing, so it counts every field the reader below indexes. */
+    DCHECK(f.length >= 8, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin and policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     const loaded = await eng.fetchedDocument(f[3]);
     /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
@@ -1670,34 +1699,43 @@ async function hostNotice(eng, line) {
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: f[3],
                   origin: originOf(f[3]), groupId: eng.groupId,
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
-    /* THE POLICY IS THE RESPONSE'S, AND THE CREATOR'S CLONE IS THE FALLBACK — §7.2.6/§7.4 in the order the
-       spec states them: a Document is judged against the policy container its own response carried, and a
-       response that carried none inherits the clone of its creator's, which is the field the notice carries.
-       THE CLONE IS THE REST OF THE RECORD, not one field: it is a raw CSP header value and HTTP allows
-       HTAB inside one (this engine's own CSP parser treats tab as source-list whitespace), so a policy carrying
-       one splits into more fields than the record has. That is also why it is LAST and why the top-level
-       creation URL sits before it. The C router already reads it this way — its splitter stops at the policy
-       and keeps the remainder verbatim — and two readers of one format that disagree about where a field ends
-       are two formats. */
+    /* THE RESPONSE'S OWN HEADER LIST, WHOLE. The creator's inherited container does NOT go in here — it is
+       relayed as a container of its own below, for the reason stated there. */
     DCHECK(loaded && loaded.headers && typeof loaded.headers === "object",
            "the document load answered no header list — §7.5.1 creates the child's Document from its " +
            "response's headers, and a missing list is a producer that stopped writing one rather than a " +
            "response that carried none, which is the empty object");
     for (const _n of Object.keys(loaded.headers)) msg.responseHeaders[_n] = loaded.headers[_n];
-    /* AND THE CREATOR'S CLONE IS THE FALLBACK FOR THE POLICY ALONE — §7.1.7/§7.4 in the order the spec states
-       them: a Document is judged against the policy container its own response carried, and a response that
-       carried none inherits the clone of its creator's, which is the field the notice carries. It is applied
-       only when the response carried no `Content-Security-Policy`, which is now a question about the relayed
-       list rather than about a single field this zone had extracted.
-       THE CLONE IS THE REST OF THE RECORD, not one field: it is a raw CSP header value and HTTP allows HTAB
+    /* THE CREATOR'S CLONE IS RELAYED AS A CONTAINER AND NEVER AS A RESPONSE HEADER, and that distinction is
+       the whole of what this line used to get wrong. It read
+           `if (!responseHeaders["content-security-policy"]) responseHeaders["content-security-policy"] = …`
+       — writing the CREATOR's policy into the CHILD's response header list — and the engine then did the only
+       thing it could with a response header: CSP §2.2.2 "Parse response's Content Security Policies" says
+       "Return a CSP list whose policies is policies and self-origin is response's URL's origin", so the peer
+       resolved `'self'` against the CHILD's address. CSP §2.2 "Policies" makes a CSP list "a struct consisting
+       of policies (a list of policies) and a self-origin", and its note names this exact case: the self-origin
+       exists "to facilitate the 'self' checks of local scheme documents/workers that have INHERITED their
+       policy". §6.7.2.8 "Does url match expression in origin with redirect count?" is what reads it, so the
+       consequence was one directive answered backwards in both directions — a creator's `script-src 'self'`
+       permitting the child's origin and refusing the creator's, which is a real @S sink reported as
+       CSP-blocked or a blocked one reported as live.
+       SO BOTH HALVES CROSS, SEPARATELY FROM THE HEADERS, and the engine decides which container the Document
+       is created with (main.c's document_csp_list). This zone RELAYS, it does not decide: the self-origin is
+       the CREATOR's, stated by the engine that performed HTML §7.1.7's clone, and there is nothing here for
+       this zone to compute — the one field it does own, the child's PRINCIPAL, is still derived from the URL
+       it fetched.
+       THE POLICY IS THE REST OF THE RECORD, not one field: it is a raw CSP header value and HTTP allows HTAB
        inside one (this engine's own CSP parser treats tab as source-list whitespace), so a policy carrying one
-       splits into more fields than the record has. That is also why it is LAST and why the top-level creation
-       URL sits before it. The C router already reads it this way — its splitter stops at the policy and keeps
-       the remainder verbatim — and two readers of one format that disagree about where a field ends are two
-       formats. */
-    const inheritedPolicy = f.slice(6).join("\t") || "";
-    if (!msg.responseHeaders["content-security-policy"] && inheritedPolicy)
-      msg.responseHeaders["content-security-policy"] = inheritedPolicy;
+       splits into more fields than the record has. That is why it is LAST, and why both the top-level creation
+       URL and the self-origin sit before it — an origin's serialization cannot contain a tab. The C router
+       already reads it this way — its splitter stops at the policy and keeps the remainder verbatim — and two
+       readers of one format that disagree about where a field ends are two formats. */
+    const inherited = { csp: f.slice(7).join("\t"), selfOrigin: f[6] };
+    DCHECK(typeof inherited.selfOrigin === "string" && inherited.selfOrigin !== "",
+           "a navigable.create notice carried no CSP self-origin — navigable.c writes the creator's on every " +
+           "record because HTML §7.1.7 clones the container whole and CSP §2.2 makes its list a struct of " +
+           "policies AND an origin, so an empty one is an engine that stopped writing the field and a child " +
+           "whose inherited `'self'` would resolve against its own address");
     /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, which the CREATOR decided (§7.4: the creator's own for a nested
        navigable, the navigable's own address for an auxiliary one) and this zone carries, because the new
        instance cannot see what embeds it. §8.1.3.5 reads it to decide whether the child is a SECURE CONTEXT,
@@ -1734,7 +1772,7 @@ async function hostNotice(eng, line) {
              "a document was announced for a cluster whose instance never became one — the reservation holding " +
              "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
              "and every read through its proxy would park forever");
-      await engineJoin(holder, msg, f[1], f[5]);
+      await engineJoin(holder, msg, f[1], f[5], inherited);
       return;
     }
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
@@ -1743,7 +1781,7 @@ async function hostNotice(eng, line) {
        is `cold`, stated at the reservation because it is a fact about this call site and not about how the
        boot turns out. AWAITED, because the notices of one round are acted on IN ORDER: a page opens a window
        and posts to it in the same turn, so the instance must exist before the post that names it is routed. */
-    await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true)._readyP;
+    await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true, inherited)._readyP;
     return;
   }
   /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -1796,7 +1834,9 @@ async function hostNotice(eng, line) {
            "§7.1.3.2's swap minted a browsing-context group this pool already runs an instance for — the group " +
            "id is a fresh counter, so a hit means two swaps were given one id and the second would JOIN the " +
            "heap the first built, which is exactly the boundary a group switch exists to draw");
-    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], f[2], true)._readyP;
+    /* NULL: §7.3.2.3 creates the swapped-to browsing context "with null, null, and group" — a NULL CREATOR,
+       so HTML §7.1.7 has no container to clone and this Document is judged against its own response alone. */
+    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], f[2], true, null)._readyP;
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -2704,7 +2744,8 @@ const _hostOps = {
            reservation back out of the pool. An invariant abort from the creation path (the init return code, the
            bundle id, the frontier key's address) is NOT a boot abort — it is this zone's contract with the engine
            breaking — so it travels on through `_readyP` to hostSchedule's own failure arm. */
-        const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false);
+        /* NULL: a document a content script reported is a ROOT one — no creator, so no §7.1.7 clone. */
+        const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false, null);
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
                "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
@@ -2749,7 +2790,8 @@ const _hostOps = {
          engineRoot's own assert: an entry carrying no document became a page that parses to nothing, which
          reads as an origin whose parked flows found nothing rather than one that was never rebuilt. */
       _reserveStats.rehydrated++;
-      await engineCreate(doc.code, doc.html, msg, true, null, null, true)._readyP;
+      /* NULL: a rehydrated cold recipe replays a document that had no creator in this session either. */
+      await engineCreate(doc.code, doc.html, msg, true, null, null, true, null)._readyP;
     }
   },
   finish: async (eng) => {   // fully explored, or self-parked under RAM pressure -> persist residue to the cold tier + resolve/merge

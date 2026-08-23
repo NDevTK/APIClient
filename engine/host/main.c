@@ -35,6 +35,7 @@
 #include "browser/core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "browser/core/frame/navigable.h"
 #include "browser/core/frame/navigation_params.h"
+#include "browser/core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
 #include "browser/core/frame/secure_context.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
@@ -353,9 +354,39 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
  * THE GUARD BYTE IS ASSERTED, NOT USED AS THE LENGTH: renderer.html's byte placement writes a NUL after the
  * document, so `html[html_len]` is readable and is what the two sides agree on — a placement that stopped
  * writing it, or a length that disagreed with it, is the one thing that would put this read past the buffer,
- * and it crashes HERE rather than inside lexbor. */
+ * and it crashes HERE rather than inside lexbor.
+ *
+ * `inherited_csp` AND `inherited_csp_self_origin` ARE THE CREATOR'S POLICY CONTAINER, AND THEY STAND BESIDE
+ * `headers` PRECISELY BECAUSE THEY ARE NOT PART OF IT. A Document that this instance did not root itself — a
+ * cross-origin child navigable, announced by the creating engine's `navigable.create` notice — is created with
+ * HTML §7.1.7 "Policy containers"' CLONE of its creator's container (HTML §7.3.2.1 "Creating browsing
+ * contexts": "Set document's policy container to a clone of creator's policy container"), and a clone is not a
+ * response header. The trusted zone used to relay it as one, writing the creator's text into this document's
+ * `Content-Security-Policy`, and the whole defect is in the half that could not be written: CSP §2.2 "Policies"
+ * makes a CSP list "a struct consisting of policies (a list of policies) and a self-origin (an origin which is
+ * used when matching the 'self' keyword)", §2.2.2 "Parse response's Content Security Policies" sets that
+ * self-origin to "response's URL's origin" — so a policy arriving as a response header is a policy whose
+ * `'self'` resolves against THIS document's address. For an inherited list that is the wrong origin by
+ * construction, and CSP §2.2's own note names this exact case: the self-origin is there "to facilitate the
+ * 'self' checks of local scheme documents/workers that have inherited their policy but have an opaque origin".
+ * §6.7.2.8 "Does url match expression in origin with redirect count?" is what reads it, so the consequence is
+ * one directive answered backwards — a creator's `script-src 'self'` permitting the CHILD's origin and
+ * refusing the creator's.
+ *
+ * SO THE TWO TRAVEL TOGETHER AND THE ENTRY ASSERTS THAT THEY DO. The empty string in BOTH is the positive
+ * statement that this Document has no creator to inherit from (a root document reported by a content script,
+ * a rehydrated cold recipe); a non-empty self-origin with an empty policy is a creator whose container held no
+ * policies, which is a real state and resolves nothing. A non-empty POLICY with no self-origin is the state
+ * that cannot exist, because a CSP list is the struct §2.2 says it is.
+ *
+ * WHICH OF THE TWO CONTAINERS THIS DOCUMENT IS CREATED WITH IS NOT THIS FILE'S RULE. It is HTML §7.1.7's
+ * determine-navigation-params-policy-container, which lives once beside the container it is about
+ * (core/frame/policy_container.h) and is called from here with both in hand. This entry's job is to STATE the
+ * two facts a host knows and nothing else — restating the ordering here would make the WPT runner's entry a
+ * second copy of it, and two copies of an ordering are two orderings. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
-                        const char *headers, const char *top_level_url)
+                        const char *headers, const char *top_level_url,
+                        const char *inherited_csp, const char *inherited_csp_self_origin)
 {
     char *origin;
     HeaderList response_headers;
@@ -472,12 +503,20 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
            CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
            file's remaining job is to say WHICH navigable and WHICH realm, which is a host fact. */
-        /* CSP §2.2.2's SELF-ORIGIN — "response's URL's origin" — which for this entry is the origin of the
-           address the response was fetched from, serialized above. It is stated as its own argument rather
-           than taken from `origin` beside it because the two are different facts (a Document's principal and
-           the origin its policy resolves `'self'` against), and they agree here for a reason this entry can
-           name: this document IS the response's, loaded from `url`. */
-        engine_realm_install(g_ctx, g_dom, url, origin, np.csp, origin, np.sandbox_flags,
+        /* WHICH CSP LIST THIS DOCUMENT IS CREATED WITH, AND CSP §2.2's SELF-ORIGIN OF IT — ONE answer from
+           §7.1.7's own determine-navigation-params-policy-container (core/frame/policy_container.h), because
+           WHOSE origin `'self'` names follows entirely from WHICH of the two containers this Document is
+           created with, and because the other program entry creates a Document from the same two facts: a
+           rule spelled at both is two rules. `origin` is §2.2.2's answer ("response's URL's origin"); the
+           inherited pair is §7.1.7's clone of the creator's container, relayed off the `navigable.create`
+           notice by the trusted zone. The self-origin is stated as its own argument rather than taken from
+           `origin` beside it because the two are different facts — a Document's principal, and the origin its
+           policy resolves `'self'` against — which is precisely what an inherited container makes disagree. */
+        SerializedCspList csp_list =
+            policy_container_determine_navigation_params(url, np.csp, origin,
+                                                         inherited_csp, inherited_csp_self_origin);
+
+        engine_realm_install(g_ctx, g_dom, url, origin, csp_list.csp, csp_list.self_origin, np.sandbox_flags,
                              world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
@@ -537,9 +576,16 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  * same-named argument of `qjs_init` is, stated by the same zone for the same reason, and read here ONCE into
  * the decisions §7.5.1 creates a Document from. The length is that entry's for that entry's reason: a document
  * may contain a 0x00 and the tokenizer has a rule for it per state, none of which is reachable if the bytes
- * stop there. */
+ * stop there.
+ *
+ * `inherited_csp` AND `inherited_csp_self_origin` ARE qjs_init's, FOR THE SAME REASON AND WITH MORE FORCE: a
+ * document reaching THIS entry is by definition one this agent did not root, which for a child navigable means
+ * one a peer's `navigable.create` announced — the case HTML §7.1.7's clone exists for. The same two-sided
+ * assert applies, and it applies through §7.1.7's own algorithm (core/frame/policy_container.h) so this entry,
+ * the root's, and the WPT runner's cannot come to answer it differently. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
-                        const char *headers, const char *top_level_url)
+                        const char *headers, const char *top_level_url,
+                        const char *inherited_csp, const char *inherited_csp_self_origin)
 {
     HeaderList response_headers;
     NavigationParams np;
@@ -632,13 +678,18 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
         JSValue proxy = window_proxy_new_self(cctx, doc, NULL, np.opener.value);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
-        /* THE PRINCIPAL AND CSP §2.2.2's SELF-ORIGIN ARE BOTH THE AGENT'S OWN RECORD, serialized — not a
-           second derivation from `url`. They are two different facts (a Document's principal and the origin
-           its policy resolves `'self'` against) and they agree here for the reason qjs_init can name for the
-           root: this Document IS the response's, loaded from `url` — and the CHECK above is what makes the
-           agent's record the right answer to both rather than a substitution that happens to match. */
-        engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), np.csp,
-                             origin_serialized(origin_agent()), np.sandbox_flags, doc, proxy);
+        /* THE PRINCIPAL IS THE AGENT'S OWN RECORD, serialized — not a second derivation from `url`; the CHECK
+           above is what makes it the right answer rather than a substitution that happens to match.
+           CSP §2.2's SELF-ORIGIN IS A DIFFERENT FACT AND IS RESOLVED WITH THE LIST IT BELONGS TO. This line
+           passed the agent's record for both, which is §2.2.2's answer and is right exactly when the list came
+           off this document's own response — and a document that reaches THIS entry is one another instance
+           announced, so an inherited container is the case the entry exists for rather than an exotic one. */
+        SerializedCspList csp_list =
+            policy_container_determine_navigation_params(url, np.csp, origin_serialized(origin_agent()),
+                                                         inherited_csp, inherited_csp_self_origin);
+
+        engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), csp_list.csp,
+                             csp_list.self_origin, np.sandbox_flags, doc, proxy);
         JS_FreeValue(cctx, proxy);
     }
 

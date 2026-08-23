@@ -94,8 +94,10 @@
 
   /* A RETAINED STRING: a NUL-terminated pointer that lives for the renderer's lifetime, which is this frame's —
      the module is destroyed wholesale with the document, so a free list here would be a list nothing could ever
-     read. `qjs_init`/`qjs_join` KEEP the five pointers they are handed (the document, the address, the name,
-     the header field lines, the top-level URL), so an emscripten transient copy there is a use-after-free. */
+     read. `qjs_init`/`qjs_join` KEEP five of the pointers they are handed (the document, the address, the name,
+     the header field lines, the top-level URL), so an emscripten transient copy there is a use-after-free. The
+     inherited policy container's two are NOT among them and are placed as plain transients — see the note on
+     the table's `init` row, which reads that off the C entry rather than off this count. */
   function retainString(s) {
     var n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n);
     CHECK(p !== 0, "OOM placing an ABI string argument in the renderer's linear memory");
@@ -153,12 +155,16 @@
      becomes TWO C operands, which is the whole reason a placement is per-parameter rather than per-type. The
      two pairs differ only in LIFETIME, which is a fact about the C entry and not about the bytes. */
   var ABI = {
+    /* THE LAST TWO ARE `string` AND NOT `string-retained`, AND THAT IS READ OFF THE C ENTRY LIKE EVERY OTHER
+       PLACEMENT: the inherited policy container is consumed DURING the call — document_install runs
+       `origin_parse` over the self-origin and policy_container_new COPIES the policy text — so neither pointer
+       outlives it, and retaining them would be this table asserting an ownership main.c does not take. */
     init:             { fn: "qjs_init",               ret: "number", out: "rc",
                         place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
-                                "string-retained"] },
+                                "string-retained", "string", "string"] },
     join:             { fn: "qjs_join",               ret: "number", out: "rc",
                         place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
-                                "string-retained"] },
+                                "string-retained", "string", "string"] },
     getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId", place: [] },
     begin:            { fn: "qjs_begin",              ret: null,     out: null,       place: ["string"] },
     step:             { fn: "qjs_step",               ret: "number", out: "code",     place: [] },

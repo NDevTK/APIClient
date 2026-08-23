@@ -1,8 +1,9 @@
-/* THE POLICY CONTAINER — HTML §7.2.6. See policy_container.c.
+/* THE POLICY CONTAINER — HTML §7.1.7 "Policy containers". See policy_container.c.
  *
  * IT CROSSES INSTANCES, and the initial about:blank is what forces that. A child created with no URL —
  * `window.open()`, an `<iframe>` with no src — gets its Document synchronously and has no response to take a
- * policy from; §7.4 says its container is a CLONE OF THE CREATOR'S. When the child is CROSS-ORIGIN it lives in
+ * policy from; §7.3.2.1 "Creating browsing contexts" says its container is "a clone of creator's policy
+ * container". When the child is CROSS-ORIGIN it lives in
  * another instance, so that clone is a CROSS-INSTANCE operation: the creator's container is serialized to the
  * child's instance, and the requesting flow SUSPENDS across the boundary the same way it suspends at an await.
  * WHICH SIDE OF THAT A CHILD FALLS ON IS ITS ORIGIN'S ANSWER, NOT A COST DECISION. This said "one WASM instance
@@ -36,14 +37,21 @@ typedef struct PolicyContainer PolicyContainer;
    policies AND a self-origin, and §2.2.2 states that origin from OUTSIDE the bytes — "self-origin is
    response's URL's origin" — so it cannot be recovered from `csp_text` at either end of a clone and has to be
    handed over with it. Every caller states it, because WHOSE origin it is belongs to the operation: a Document
-   built from a response takes its own, and §7.4's clone takes the CREATOR's along with the text. BORROWED —
+   built from a response takes its own, and §7.3.2.1's clone takes the CREATOR's along with the text. BORROWED —
    an origin lives for the agent. */
 PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
                                       const char *referrer_policy);
 
-/* §7.2.6's "clone a policy container" — §7.4 performs this for a navigable created with a creator, which is
+/* §7.1.7's "clone a policy container" — §7.3.2.1 performs this for a navigable created with a creator, which is
    how an initial about:blank inherits its CSP. A DEEP copy: the child's policy is its own from the moment it
-   exists, so a later navigation of the parent cannot reach back and change what the child may do. */
+   exists, so a later navigation of the parent cannot reach back and change what the child may do.
+   AND IT KEEPS THE SOURCE'S CSP §2.2 SELF-ORIGIN, which §7.1.7's clone algorithm does not restate: its steps
+   are "let clone be a new policy container" and "for each policy in policyContainer's CSP list, append a copy
+   of policy into clone's CSP list", which move the POLICIES and say nothing about the list's other half. That
+   is an editorial hole in the clone and not a licence to re-derive one, because CSP §2.2's note states the
+   intent directly — the self-origin exists "to facilitate the 'self' checks of local scheme documents/workers
+   that have inherited their policy but have an opaque origin", and a clone that dropped it would fail in
+   exactly the case the field was added for. */
 PolicyContainer *policy_container_clone(const PolicyContainer *src);
 void policy_container_free(PolicyContainer *p);
 
@@ -58,9 +66,56 @@ const char *policy_container_csp(const PolicyContainer *p);
    caller needs a second branch for it. */
 const CspList *policy_container_csp_list(const PolicyContainer *p);
 /* §2.2's SELF-ORIGIN of that list — for the ONE caller that has to pass a container's own along rather than
-   ask it a question: §7.4's create, which clones the CREATOR's container into a navigable it is making. NULL
-   only for a container that does not exist. */
+   ask it a question: §7.3.2.1's create, which clones the CREATOR's container into a navigable it is making.
+   NULL only for a container that does not exist. */
 const Origin *policy_container_self_origin(const PolicyContainer *p);
+
+/* ---- HTML §7.1.7 "Policy containers" — DETERMINE NAVIGATION PARAMS POLICY CONTAINER ------------------------
+ *
+ * A CSP LIST IN THE FORM IT CROSSES A BOUNDARY IN, which is the two halves CSP §2.2 "Policies" makes a list out
+ * of: "A CSP list is a struct consisting of policies (a list of policies) and a self-origin (an origin which is
+ * used when matching the 'self' keyword)". The policies travel as their §2.2 serialization and the self-origin
+ * as §7.1.1's; both are BORROWED from whoever stated them and neither outlives the call. This is the whole of
+ * what a policy container is at an ABI entry today — the day it grows the embedder policy item §7.1.7 also
+ * gives it, this struct grows with it, which is why it is a struct and not two returns. */
+typedef struct {
+    const char *csp;           /* NULL, or the empty string, for a list with no policies */
+    const char *self_origin;   /* never NULL: §2.2 gives every CSP list one */
+} SerializedCspList;
+
+/* HTML §7.1.7's "determine navigation params policy container", over the containers that reach an ABI ENTRY.
+ *
+ * THE ALGORITHM IS THE SPEC'S AND ITS PREDICATE IS `responseURL is local` — NOT "the response carried no
+ * policy". The standard's steps, in order, are: a history container when the URL requires storing one; the
+ * PARENT's for `about:srcdoc`; "if responseURL is local and initiatorPolicyContainer is not null, then return a
+ * clone of initiatorPolicyContainer"; then "if responsePolicyContainer is not null, then return
+ * responsePolicyContainer"; then a new one. So a document FETCHED from a non-local URL is judged under its own
+ * response's container even when that response carried no policy at all — an empty list is a container, and
+ * inheriting instead would put a cross-origin child under its EMBEDDER's policy, which is the common shape on
+ * any CSP-bearing page that frames a third party. Reading the ordering off the presence of a policy is the
+ * approximation that produces exactly that, silently, for every such frame.
+ *
+ * WHICH CONTAINER IS "INHERITED" IS THE OPERATION'S ANSWER AND NOT THIS FUNCTION'S. The initiator's and the
+ * parent's are one parameter here because the operation that reaches this seam — §7.3.2.1's create, announced
+ * as a `navigable.create` — has one creator that is both. A caller with a different operation states a
+ * different pair; it does not get a different rule.
+ *
+ * `response_url` IS THE ADDRESS THE DOCUMENT IS BEING CREATED AT, and it is parsed here rather than tested with
+ * a `strncmp` because Fetch §2.1's local set is `about`, `blob` and `data` — the two beyond `about` being
+ * precisely the schemes whose Document has an OPAQUE origin, which is the case CSP §2.2's own note says the
+ * self-origin exists for.
+ * `response_csp` and `response_url_origin` are §2.2.2's pair for this document's own response — "Return a CSP
+ * list whose policies is policies and self-origin is response's URL's origin".
+ * `inherited_csp` and `inherited_self_origin` are §7.1.7's CLONE of the creator's container. THE SELF-ORIGIN IS
+ * WHAT SAYS THERE IS ONE: §2.2 gives every CSP list a self-origin, so an empty one means no creator, while an
+ * empty POLICY with a self-origin beside it is a real creator that holds no policies — and those two are not
+ * interchangeable, because this build merges CSP §3.3's `<meta>` policies into the SAME list (core/dom/
+ * document.c's document_policy_new) and that list has ONE self-origin for all of them. */
+SerializedCspList policy_container_determine_navigation_params(const char *response_url,
+                                                               const char *response_csp,
+                                                               const char *response_url_origin,
+                                                               const char *inherited_csp,
+                                                               const char *inherited_self_origin);
 
 /* WOULD THIS RUN? TWO QUESTIONS, AND THEY ARE TWO FUNCTIONS BECAUSE THEY ARE TWO ALGORITHMS.
  *

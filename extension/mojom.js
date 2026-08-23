@@ -114,10 +114,10 @@
          "offscreen's realm any more, which is the whole point of the boundary. An absent one would read as " +
          "\"this instance occupies no memory\", which admits another engine against RAM already spent" };
 
-  /* THE FIVE ARGUMENTS THAT ROOT OR JOIN A DOCUMENT. `Init` and `Join` take the identical list because main.c's
-     two entries have byte-identical C signatures, and they are a shared record for that reason rather than for
-     brevity: it is ONE contract taken by two operations (root this agent at a document / add a document to the
-     agent already running), so a change to what a document arrives with must reach both. */
+  /* THE SEVEN ARGUMENTS THAT ROOT OR JOIN A DOCUMENT. `Init` and `Join` take the identical list because
+     main.c's two entries have byte-identical C signatures, and they are a shared record for that reason rather
+     than for brevity: it is ONE contract taken by two operations (root this agent at a document / add a
+     document to the agent already running), so a change to what a document arrives with must reach both. */
   var DOCUMENT = { name: "document", type: "array<uint8>",
     why: "the document's BYTES, which is what qjs_init/qjs_join take (a pointer and a LENGTH — a document " +
          "may contain a 0x00 and the tokenizer has a rule for it per state) and what HTML §13.2.3.2's " +
@@ -132,9 +132,35 @@
          "target document with. It is minted by the trusted zone for a root and by the ENGINE for a child it " +
          "creates (`<parent>.<n>`), which SECURITY.md permits precisely because it is only a name" };
   var DOCUMENT_HEADERS = { name: "headers", type: "string",
-    why: "the response's HEADER FIELD LINES verbatim, which is what §7.2.6's policy container is parsed from. " +
-         "The empty string is the positive statement that this document had no response at all (an " +
-         "about:blank, a serialized DOM off content.js), which differs from a response carrying no headers" };
+    why: "the response's HEADER FIELD LINES verbatim, which is what HTML §7.1.7 \"Policy containers\"' " +
+         "create-a-policy-container-from-a-fetch-response is run over. The empty string is the positive " +
+         "statement that this document had no response at all (an about:blank, a serialized DOM off " +
+         "content.js), which differs from a response carrying no headers" };
+  /* THE CREATOR'S POLICY CONTAINER, WHICH IS TWO PARAMETERS BECAUSE CSP §2.2 MAKES IT TWO THINGS. It is
+     declared beside `headers` and never inside it: HTML §7.3.2.1 "Creating browsing contexts" sets a
+     created Document's policy container to "a clone of creator's policy container", and a clone is not a
+     response header. Relaying it as one is what this pair replaces, and the half that could not be relayed is
+     the whole defect — CSP §2.2 "Policies" makes a CSP list "a struct consisting of policies (a list of
+     policies) and a self-origin (an origin which is used when matching the 'self' keyword)", and §2.2.2
+     "Parse response's Content Security Policies" fixes that self-origin to "response's URL's origin". So a
+     policy delivered as a header is a policy whose `'self'` names the RECEIVING document, which for an
+     inherited list is wrong in both directions at once. */
+  var INHERITED_CSP = { name: "inheritedCsp", type: "string",
+    why: "the serialized CSP list of HTML §7.1.7's CLONE of the creator's policy container, for a document " +
+         "another instance's `navigable.create` announced. The empty string is a list with no policies, which " +
+         "is NOT the same statement as 'no creator' — that one is made by the self-origin beside it" };
+  var INHERITED_CSP_SELF_ORIGIN = { name: "inheritedCspSelfOrigin", type: "string",
+    why: "CSP §2.2's SELF-ORIGIN of that inherited list — the CREATOR's origin, serialized, which §6.7.2.8 " +
+         "\"Does url match expression in origin with redirect count?\" is what reads. It cannot be recovered " +
+         "from the policy bytes (§2.2.2 states it from outside them) and the receiving instance cannot derive " +
+         "it (its own address is the wrong answer by construction), so it crosses or `script-src 'self'` on " +
+         "the creator permits the child's origin and refuses the creator's. AND IT IS THE FIELD THAT SAYS " +
+         "WHETHER THERE IS A CREATOR AT ALL: §2.2 gives every CSP list a self-origin, so an empty one is a " +
+         "Document with no creator (a root document, a rehydrated recipe, §7.3.2.3's swapped-to context) " +
+         "while a non-empty one beside an empty policy is a real creator holding no policies. The engine " +
+         "distinguishes them because a Document merges CSP §3.3's `<meta>` policies into that SAME list under " +
+         "that SAME self-origin, so a `data:` child's `<meta>` policy resolves `'self'` differently in the " +
+         "two cases" };
   var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string",
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
@@ -153,7 +179,8 @@
     name: "content.mojom.Renderer",
     methods: [
       { ordinal: 0, name: "Init",
-        params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL],
+        params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
+                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -162,7 +189,8 @@
           WORKING_SET] },
 
       { ordinal: 1, name: "Join",
-        params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL],
+        params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
+                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

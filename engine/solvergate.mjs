@@ -203,8 +203,13 @@ async function child(docPath, schedName) {
       const hp = e.M._malloc(u8.length + 1);
       e.M.HEAPU8.set(u8, hp);
       e.M.HEAPU8[hp + u8.length] = 0;
-      e.M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
-                [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url)]);
+      /* THE LAST TWO ARE HTML §7.1.7's INHERITED POLICY CONTAINER, BOTH EMPTY: this gate roots each instance at
+         a fixture document with no creator, so there is no container to clone and CSP §2.2.2's self-origin
+         (this address's origin, which the entry derives) is the right one. The empty pair says that, rather
+         than being an argument this driver forgot when the entry grew one. */
+      e.M.ccall("qjs_init", "number",
+                ["number", "number", "number", "number", "number", "number", "number", "number"],
+                [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url), e.cs(""), e.cs("")]);
       e.M._free(hp);
     }
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);

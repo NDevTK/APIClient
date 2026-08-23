@@ -134,6 +134,21 @@ bool url_scheme_is_special(const char *scheme)
     return false;
 }
 
+/* FETCH §2.1 "URL": "A local scheme is `about`, `blob`, or `data`." The list IS the definition here for the
+   same reason SPECIAL's is — there is no property of a scheme that makes it local — and it is a SEPARATE table
+   rather than a column of SPECIAL because the two sets are disjoint and a shared row would invite a reader to
+   look for a relation between them that the two standards do not state. */
+static const char *const LOCAL[] = { "about", "blob", "data" };
+
+bool url_scheme_is_local(const char *scheme)
+{
+    size_t i;
+    if (!scheme) return false;
+    for (i = 0; i < sizeof(LOCAL) / sizeof(LOCAL[0]); i++)
+        if (!strcmp(scheme, LOCAL[i])) return true;
+    return false;
+}
+
 int url_default_port(const char *scheme)
 {
     size_t i;

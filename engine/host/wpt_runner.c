@@ -47,6 +47,7 @@
 #include "core/url/url.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/frame/navigation_params.h"
+#include "core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
 #include "core/frame/secure_context.h"
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
@@ -648,9 +649,16 @@ static ChildDoc *wpt_child_for(const char *name)
 }
 
 /* §7.4/§4.8.5's create, from the host's side: provision an instance for a document the engine has already
-   named and already handed the page a WindowProxy for. */
+   named and already handed the page a WindowProxy for.
+   `csp` AND `csp_self_origin` ARE ONE ARGUMENT IN TWO SLOTS — HTML §7.1.7 "Policy containers"' clone of the
+   creator's container, whose CSP list CSP §2.2 "Policies" makes "a struct consisting of policies (a list of
+   policies) and a self-origin". The child process is handed both because neither half is derivable there:
+   §2.2.2 "Parse response's Content Security Policies" states a self-origin from OUTSIDE the policy bytes, and
+   the only origin a child could state for itself is its own address's — which is the wrong one for an
+   inherited list by construction (CSP §2.2's note: the self-origin exists for documents "that have inherited
+   their policy"). */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
-                            const char *top_level_url)
+                            const char *csp_self_origin, const char *top_level_url)
 {
     int down[2], up[2];
     pid_t pid;
@@ -674,7 +682,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         dup2(up[1], 1);
         close(down[0]); close(down[1]); close(up[0]); close(up[1]);
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
-              top_level_url ? top_level_url : "", (char *)NULL);
+              top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "", (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -816,7 +824,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[7]; int nf = 0; char *q;
+    char *f[8]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -825,13 +833,16 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 7; q++)
+    for (q = line, f[nf++] = q; *q && nf < 8; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 7 && !strcmp(f[0], "navigable.create")) {
-        /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, which crosses for the same reason field 6's
-           policy container does: the child's environment is decided by the operation that created it, and the
-           instance that will host the child has no way to derive it. */
-        wpt_spawn_child(f[1], f[3], f[4], f[6], f[5]);
+    if (nf == 8 && !strcmp(f[0], "navigable.create")) {
+        /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL and FIELD 6 IS CSP §2.2's SELF-ORIGIN of the
+           policy in field 7, which cross for the same reason: the child's environment and the origin its
+           INHERITED policy resolves `'self'` against are both decided by the operation that created it, and
+           the instance that will host the child can derive neither. The self-origin comes BEFORE the policy
+           because the policy is the record's remainder — an origin's serialization cannot contain a tab and a
+           raw CSP header can. */
+        wpt_spawn_child(f[1], f[3], f[4], f[7], f[6], f[5]);
         free(whole);
         return;
     }
@@ -845,7 +856,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        A NEW GROUP IS A NEW PROCESS HERE FOR THE SAME REASON A CROSS-ORIGIN CHILD IS: SECURITY.md keys an
        instance on `(browsing context group, origin)`, and a swap changes the first half. */
     if (nf == 4 && !strcmp(f[0], "navigable.swap")) {
-        wpt_spawn_child(f[1], f[2], f[3], "", f[2]);
+        /* NO CREATOR MEANS NO CONTAINER TO CLONE, so both halves of the CSP list are empty rather than one of
+           them being guessed at — an empty policy resolves no `'self'`, so there is no self-origin to state. */
+        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2]);
         free(whole);
         return;
     }
@@ -1457,8 +1470,15 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
 /* THE FIRST DOCUMENT, which is also what brings the agent up. A REAL LEXBOR PARSE — the same one the engine
    runs — of the test's own bytes when the test is an HTML file, and otherwise of the minimal document WPT's
    server wraps a `.window.js` in. One parse either way; the only difference is whose bytes. */
+/* `inherited_csp` AND `inherited_csp_self_origin` ARE HTML §7.1.7 "Policy containers"' CLONE OF THE CREATOR'S
+   CONTAINER, for a document this process did not root itself — which for this runner means a `--document`
+   child, provisioned from another process's `navigable.create`. Both halves are empty for the top-level
+   document, which has no creator. THEY WERE `(void)csp;` in wpt_child_main, which is the shape CLAUDE.md
+   makes greppable: a field a producer writes, a consumer casts away, and nothing anywhere to say the child's
+   inherited policy was never applied — every CSP question in a child instance answered "no policy". */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
-                                     const char *html, size_t html_n)
+                                     const char *html, size_t html_n, const char *inherited_csp,
+                                     const char *inherited_csp_self_origin)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
@@ -1525,12 +1545,21 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            set and §7.1.7 step 3's CSP list both come out of the one place a response is read
            (core/frame/navigation_params.c), so this runner and the product host create a Document from the
            identical computation over the identical input. */
-        /* CSP §2.2.2's SELF-ORIGIN — "response's URL's origin" — which for this root is the origin of the
-           address this runner fetched the document from. Stated separately from `origin` because they are two
-           facts that a sandboxed response makes disagree; they agree here because this document IS its own
-           response's. */
-        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, np.csp, origin, np.sandbox_flags,
-                          world_local_doc(), root_proxy);
+        /* WHICH CSP LIST THIS DOCUMENT IS CREATED WITH, AND CSP §2.2's SELF-ORIGIN OF IT — HTML §7.1.7's own
+           determine-navigation-params-policy-container, called rather than restated. §2.2.2 "Parse response's
+           Content Security Policies" gives a response-delivered list "response's URL's origin", which for a
+           document this runner FETCHED is `origin`; §7.1.7's CLONE keeps the origin it was cloned from, which
+           for a `--document` child is its creator's and arrives on the command line. The self-origin is stated
+           separately from `origin` beside it because they are two facts (a Document's principal, and the origin
+           its policy resolves `'self'` against), and an inherited container is exactly what makes them
+           disagree. THE ORDERING IS NOT THIS RUNNER'S TO HOLD: a copy of it here and another in main.c is two
+           orderings, and the gate whose whole job is to measure the product host would be measuring its own. */
+        SerializedCspList csp_list =
+            policy_container_determine_navigation_params(g_base_url, np.csp, origin,
+                                                         inherited_csp, inherited_csp_self_origin);
+
+        wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, csp_list.csp, csp_list.self_origin,
+                          np.sandbox_flags, world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }
     navigation_params_free(&np);   /* document_install built its container from it and keeps no pointer */
@@ -1645,6 +1674,13 @@ static int wpt_child_main(int argc, char **argv)
        ancestral hole Secure Contexts §4.2 exists to close, so a missing one is a parent that has not decided
        what it created rather than a value to guess. */
     const char *top_level_url = argc > 6 ? argv[6] : NULL;
+    /* CSP §2.2's SELF-ORIGIN of the INHERITED list in `csp`, from the same parent for the same reason: §2.2.2
+       states a self-origin from OUTSIDE the policy bytes ("response's URL's origin"), and the only origin this
+       process could state for itself is its own address's — which for a clone of the CREATOR's container is
+       the wrong one by construction (CSP §2.2's note names documents "that have inherited their policy"). It
+       is LAST on the command line rather than beside `csp`, because appending is what keeps every position
+       above it a fact this file already reads. */
+    const char *csp_self_origin = argc > 7 ? argv[7] : "";
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -1654,7 +1690,6 @@ static int wpt_child_main(int argc, char **argv)
        block-scoped temporary the way they were when this host ran them itself. */
     DocScripts ds;
 
-    (void)csp;
     /* THE ANSWER PIPE IS STDOUT HERE, so nothing else may write to it — see report_out. */
     g_report = stderr;
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -1681,7 +1716,7 @@ static int wpt_child_main(int argc, char **argv)
        created it knows which. A cross-origin child that answered from its OWN address would report itself a
        secure context inside an insecurely-delivered page, which is exactly the ancestral hole Secure
        Contexts §4.2 exists to close. */
-    ctx = wpt_build_document(name, origin, top_level_url, html, html_n);
+    ctx = wpt_build_document(name, origin, top_level_url, html, html_n, csp, csp_self_origin);
     free(html);
 
     /* THIS INSTANCE EXISTS BECAUSE A PEER CREATED ITS NAVIGABLE and still holds a WindowProxy for it, so its
@@ -1839,7 +1874,10 @@ int main(int argc, char **argv)
     /* THE TEST DOCUMENT. One call, because a child document is built by the same one — see above. */
     /* THE TEST DOCUMENT IS THIS PROCESS'S TOP-LEVEL TRAVERSABLE, so its environment's top-level creation
        URL is its own address — the runner navigated to it and nothing embeds it. */
-    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0);
+    /* NO CREATOR: this process rooted its own top-level document from a response it fetched, so
+       §7.1.7 has no container to clone and CSP §2.2.2's self-origin (this address's origin) is the
+       right one. The empty pair is that statement rather than an absent argument. */
+    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, "", "");
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */

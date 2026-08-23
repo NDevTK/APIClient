@@ -626,10 +626,13 @@
       await Promise.all(PEERS.map(async function (p, idx) {
         var r = p.r;
         /* THE DOCUMENT CROSSES AS BYTES — `Init`'s `array<uint8>`, which is what `qjs_init` takes (a pointer
-           and a LENGTH: a document may contain a 0x00). The four strings beside it are §4.4's address, the name this
+           and a LENGTH: a document may contain a 0x00). The six strings beside it are §4.4's address, the name this
            agent's root document is known by, the response's header field lines (empty: this document had no
-           response) and §8.1.3.1's top-level creation URL, which for a root document is its own. */
-        var v = await r.renderer.init(new TextEncoder().encode(p.doc), p.addr, "probe", "", p.addr);
+           response), §8.1.3.1's top-level creation URL, which for a root document is its own, and the two
+           halves of HTML §7.1.7's inherited policy container — BOTH EMPTY, because this probe roots each
+           instance at a document it invented rather than at one a creator announced, and an empty pair is the
+           positive statement that there is no creator rather than an argument nobody filled in. */
+        var v = await r.renderer.init(new TextEncoder().encode(p.doc), p.addr, "probe", "", p.addr, "", "");
         var b = await r.renderer.getBundleId();
         var child = await r.childProcess.getMojoStats();
         rec.peers[idx] = { origin: p.origin, routingId: r.routingId, name: r.name, addr: p.addr,

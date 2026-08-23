@@ -502,10 +502,11 @@ try {
   /* THE ARGUMENTS ARE `qjs_init`'s, and they are the same ones the probe passes: the document as BYTES (a
      pointer and a LENGTH, which the mojom layer places from the array below),
      §4.4's address, the name this agent's root document is known by, the response's header field lines (empty
-     — this document had no response) and §8.1.3.1's top-level creation URL, which for a root document is its
-     own address. */
+     — this document had no response), §8.1.3.1's top-level creation URL, which for a root document is its
+     own address, and the two halves of HTML §7.1.7's inherited policy container — both empty, because this
+     document has no creator and an empty pair is the positive statement of that. */
   const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
-                                               OPENER_ADDR);
+                                               OPENER_ADDR, '', '');
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
@@ -550,12 +551,14 @@ try {
          'boundary or a notice that did not survive the typed wire, and until this phase existed neither ' +
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
-     origin<TAB>topLevelCreationURL<TAB>policy`, built by core/frame/navigable.c. The policy is LAST because it
-     is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle field.
+     origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>policy`, built by core/frame/navigable.c. The policy
+     is LAST because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a
+     middle field. CSP §2.2's self-origin sits immediately before it because an origin's serialization cannot
+     contain one.
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 7)
-    fail(`the create notice carries ${create.length} field(s) where the record has seven — ` +
+  if (create.length < 8)
+    fail(`the create notice carries ${create.length} field(s) where the record has eight — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -577,16 +580,31 @@ try {
     fail('the create notice carries no top-level creation URL — HTML §8.1.3.1 makes it the creator\'s to ' +
          'state and the peer cannot derive it, so an empty one is a document the peer would build with no ' +
          'answer for a fact it is required to have');
-  /* THE POLICY IS EMPTY AND THAT IS AN ENGINE INVARIANT, NOT THIS GATE'S PREFERENCE. navigable.c DCHECKs that
-     a CROSS-INSTANCE child inherits no CSP, because the notice carries the policy TEXT without CSP §2.2's
-     self-origin for that list — so a non-empty one here is that capability gap arriving, and it is worth a
-     line of its own rather than being read past. */
-  if (create[6] !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(6).join('\t')}\`) — navigable.c ` +
-         'states that a cross-instance clone carries the policy text WITHOUT its self-origin, so the peer ' +
-         'would resolve `self` against the CHILD\'s address instead of the creator\'s origin');
+  /* CSP §2.2's SELF-ORIGIN OF THE INHERITED LIST, AND IT IS THE CREATOR'S — which is the whole of what this
+     field exists to carry and the one thing the peer could never derive. §2.2 "Policies" makes a CSP list "a
+     struct consisting of policies (a list of policies) and a self-origin (an origin which is used when
+     matching the 'self' keyword)"; §2.2.2 "Parse response's Content Security Policies" would answer it with
+     the RECEIVING document's URL's origin, which is the child's. So the check is not "is it non-empty" but "is
+     it the OPENER's": a record that carried the child's origin here would be the defect wearing the fix's
+     shape, and it is the one comparison that tells them apart.
+     THIS REPLACED A CHECK THAT DEMANDED THE POLICY BE EMPTY. That check existed because navigable.c DCHECKed a
+     cross-instance child could not inherit at all — the crash that named this capability — and it goes with
+     the crash rather than being kept beside it. This document sends no CSP, so the policy IS empty here; what
+     is asserted is the self-origin, which is present either way because §7.1.7 clones the container whole. */
+  if (create[6] !== new URL(OPENER_ADDR).origin)
+    fail(`the create notice's CSP self-origin is \`${create[6]}\` and the CREATOR's origin is ` +
+         `\`${new URL(OPENER_ADDR).origin}\` — CSP §2.2 makes a CSP list a struct of policies AND a ` +
+         'self-origin, and §7.1.7\'s clone keeps the origin it was cloned FROM. A self-origin that is the ' +
+         'child\'s address means `script-src \'self\'` on the creator would permit the child\'s origin and ' +
+         'refuse the creator\'s — the finding reported live where a browser blocks it, and blocked where a ' +
+         'browser runs it');
+  if (create.slice(7).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(7).join('\t')}\`) and this ` +
+         'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
+         'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +
-              `announced at ${create[3]} (origin ${create[4]}, tlu ${create[5]}) by creator \`${create[2]}\``);
+              `announced at ${create[3]} (origin ${create[4]}, tlu ${create[5]}, csp self-origin ` +
+              `${create[6]}) by creator \`${create[2]}\``);
   /* NO `teardown()` HERE, AND THAT IS DELIBERATE RATHER THAN AN OMISSION. `Teardown` is the call that makes the
      runtime walk gc_obj_list and report a leaked GC object; this frontier is mid-flight ON PURPOSE — the drive
      stopped at the notice — so its live flow state is reachable and a walk would report it as a leak. The

@@ -101,6 +101,16 @@ char *url_serialize_path(const UrlRecord *u);
 bool url_scheme_is_special(const char *scheme);
 int  url_default_port(const char *scheme);
 
+/* FETCH §2.1 "URL", verbatim: "A local scheme is `about`, `blob`, or `data`. A URL is local if its scheme is a
+   local scheme." It sits beside §4.2's `special` because it is the same KIND of question — a membership test
+   the parser's lowercased scheme is the only legitimate input to — and it is exported because its callers are
+   not fetches at all: HTML §7.1.7's determine-navigation-params-policy-container is written over "responseURL
+   is local", and that predicate is what decides whether a Document is judged under its own response's policy
+   or under the CLONE of its creator's. Asking it of the raw address instead (a `strncmp(url, "about:", 6)`)
+   answers `about` and misses `data:` and `blob:` — which are exactly the two schemes whose Document has an
+   OPAQUE origin, and therefore exactly the case CSP §2.2's self-origin note is written about. */
+bool url_scheme_is_local(const char *scheme);
+
 /* §5.1's URLENCODED SERIALIZER's encode set, exported because URLSearchParams is the other user of it. */
 char *url_percent_encode(const char *s, size_t len, int set);
 /* §1.3 "percent-decode". IT ANSWERS A BYTE SEQUENCE, NOT A STRING — "let output be an empty byte sequence …

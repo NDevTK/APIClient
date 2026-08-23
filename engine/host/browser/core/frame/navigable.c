@@ -1194,7 +1194,7 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
 {
     const PolicyContainer *creator_policy = document_policy(ctx);
     const char *csp = policy_container_csp(creator_policy);
-    /* CSP §2.2's SELF-ORIGIN of the list §7.4 is about to clone, SERIALIZED. It is a SECOND field beside the
+    /* CSP §2.2's SELF-ORIGIN of the list §7.3.2.1 is about to clone, SERIALIZED. It is a SECOND field beside the
        text everywhere the text goes, because §2.2 makes a CSP list a struct of policies AND an origin and the
        bytes contain only the first half — and it is the CREATOR's, which is the whole content of §2.2's note:
        a document that INHERITED its policy resolves `'self'` against the origin the policy came FROM. */
@@ -1240,7 +1240,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     OpenerPolicyValue inherited_coop;
 
     DCHECK(creator_policy != NULL,
-           "§7.4 was asked to clone a policy container from a document that has none — document_install builds "
+           "§7.3.2.1 \"Creating browsing contexts\" was asked to clone a policy container from a document that "
+           "has none — document_install builds "
            "one for every Document, including the initial about:blank, which is why the clone is an ordinary "
            "rule rather than an inheritance rule written for CSP");
     csp_self = origin_serialized(policy_container_self_origin(creator_policy));
@@ -1418,9 +1419,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
-           child's; the POLICY is §7.4's CLONE OF THE CREATOR'S, serialized — which the policy container can do
-           precisely because it is a flat parse over one owned string, so the clone that crosses an instance and
-           the clone that crosses a session are the same operation. */
+           child's; the SELF-ORIGIN and the POLICY are the two halves of HTML §7.3.2.1's CLONE OF THE CREATOR'S
+           policy container ("Creating browsing contexts": "Set document's policy container to a clone of
+           creator's policy container"), serialized — which the container can do precisely because it is a flat
+           parse over one owned string plus the origin beside it, so the clone that crosses an instance and the
+           clone that crosses a session are the same operation. */
         /* AND §8.1.3.1's TOP-LEVEL CREATION URL, which crosses for exactly the reason the policy container
            does: the child's ENVIRONMENT is decided by the operation that created it, the instance that will
            host the child cannot derive it, and a peer that answered from the child's own address would report
@@ -1440,20 +1443,37 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            then create that Document with an EMPTY active sandboxing flag set and run scripts, submit forms and
            relax document.domain that the `sandbox` attribute forbids — a sandbox that exists in the markup and
            nowhere in the model. */
-        /* THE CLONE THAT CROSSES AN INSTANCE CARRIES ONLY HALF OF ITS CSP LIST, and that is a capability gap
-           rather than a field to add here alone: the peer is handed the creator's policy TEXT as though the
-           child's own response had carried it, so §2.2.2 makes the peer resolve `'self'` against the CHILD's
-           address instead of the creator's origin. Both halves of that are the same missing piece — an
-           inherited container is not a response header — and it is stated where it is reachable rather than
-           where it would be read. */
-        DCHECK(csp == NULL || !*csp,
-               "a CROSS-INSTANCE child navigable is inheriting its creator's CSP, and the `navigable.create` "
-               "notice carries the policy TEXT without CSP §2.2's SELF-ORIGIN of that list — the peer will "
-               "read the clone as its OWN response's policy (§2.2.2) and resolve `'self'` against the child's "
-               "address, so `script-src 'self'` on the creator would permit the child's origin and refuse the "
-               "creator's. Carry the inherited container as a container: a self-origin field on this notice "
-               "before the policy (the policy is the record's remainder), and an argument beside qjs_init's "
-               "`headers` that says this policy was INHERITED rather than delivered by a response");
+        /* THE CLONE CROSSES AS A WHOLE CSP LIST, WHICH IS TWO FIELDS AND NOT ONE. CSP §2.2 "Policies" makes a
+           CSP list "a struct consisting of policies (a list of policies) and a self-origin (an origin which is
+           used when matching the 'self' keyword)", and the bytes of a serialized policy contain only the first
+           half — §2.2.2 "Parse response's Content Security Policies" states the second from OUTSIDE them
+           ("self-origin is response's URL's origin"). So a peer handed the text alone had exactly one place
+           left to get it: its own address. That is the wrong origin by construction for an INHERITED list, and
+           CSP §2.2's own note says so — the self-origin exists "to facilitate the 'self' checks of local scheme
+           documents/workers that have INHERITED their policy but have an opaque origin". §6.7.2.8 "Does url
+           match expression in origin with redirect count?" is the sole reader, and it answers `'self'` by
+           comparing the request's URL against THAT origin, so a creator's `script-src 'self'` read against the
+           child's address permits the child's origin and refuses the creator's — a sink this engine would
+           report as CSP-blocked when it fires, or as live when it does not.
+           IT SITS BEFORE THE POLICY for the reason §8.1.3.1's URL does: the policy is the record's REMAINDER.
+           An origin's serialization cannot contain a tab (it is scheme, "://", host and an optional port, and
+           the opaque one is the three bytes `null`), so it is safe in a split field.
+           IT IS ALWAYS PRESENT, EVEN WHEN THE POLICY IS EMPTY, AND THAT IS WHAT SAYS THERE IS A CONTAINER AT
+           ALL. §2.2 gives every CSP list a self-origin whether or not it holds policies, so a creator that
+           sends no CSP still states one here — and the receiving side reads the PRESENCE of this field, not of
+           the policy, to decide whether §7.1.7's clone happened, because a Document merges CSP §3.3's `<meta>`
+           policies into that same list under that same self-origin. An empty policy with a self-origin beside
+           it and an empty pair are two different facts and the record can say both.
+           HTML §7.1.7's OWN "clone a policy container" DOES NOT RESTATE IT — its steps are "let clone be a new
+           policy container" and "for each policy in policyContainer's CSP list, append a copy of policy into
+           clone's CSP list", which move the POLICIES and are silent about the list's other half. That is an
+           editorial hole rather than a licence to re-derive one at the far end: CSP §2.2's note states the
+           intent directly, and this notice carries what the note requires. */
+        DCHECK(csp_self != NULL && *csp_self,
+               "§7.3.2.1's clone of the creator's policy container was about to cross to a peer instance with "
+               "no CSP §2.2 SELF-ORIGIN — every container this engine builds has one (policy_container_new "
+               "requires it), so an absent one is a creator whose container was built somewhere that did not "
+               "state it, and the peer would resolve `'self'` against its own address instead");
         DCHECK(creation_flags == 0,
                "a CROSS-INSTANCE child navigable was created with a non-empty §7.1.5 CREATION SANDBOXING FLAG "
                "SET, and the `navigable.create` notice carries the creator's policy but not the flag set — so "
@@ -1461,11 +1481,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                "policy (it is one word, and it crosses as text like everything else on this record), and hand "
                "it to that instance's document_install as its active sandboxing flag set");
         n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
-            strlen(addr) + strlen(origin_serialized(origin)) + strlen(csp ? csp : "") + strlen(tlu) + 32;
+            strlen(addr) + strlen(origin_serialized(origin)) + strlen(csp ? csp : "") + strlen(tlu) +
+            strlen(csp_self) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
-                 world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu, csp ? csp : "");
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
+                 world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu, csp_self,
+                 csp ? csp : "");
         engine_host_notify(ctx, op);
         free(op);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just

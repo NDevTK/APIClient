@@ -59,14 +59,15 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
     embedder_policy_obtain(&out->embedder, headers, secure_context);
     /* AND HERE IS WHERE IT STOPS, NAMED AT THE RESPONSE THAT NEEDS IT. §7.1.7 puts this on the POLICY
        CONTAINER, and this build's container carries a CSP list and nothing else — not because the item is
-       hard, but because of how a container TRAVELS. §7.4 clones the creator's container for a lazily-
-       materialized `about:blank` child, and that clone crosses two seams that both carry CSP TEXT and not a
-       container: `ProxyData`'s creator_csp (core/frame/window_proxy.c) and the `navigable.create` notice a
-       peer instance is provisioned from (core/frame/navigable.c). An embedder policy added to the container
-       today would be silently dropped at both — a field written in one place and absent in the next, which is
-       the defect CLAUDE.md makes greppable. So the ordered step is: make the container travel as a CONTAINER
-       (a serialization those two seams carry, in place of the CSP text), then hold this item on it, then
-       §7.1.4.2's check-a-navigation-response's-adherence-to-its-embedder-policy has something to read. */
+       hard, but because of how a container TRAVELS. HTML §7.3.2.1 "Creating browsing contexts" clones the
+       creator's container for a lazily-materialized `about:blank` child, and that clone crosses two seams that
+       carry the CSP LIST — its text AND CSP §2.2's self-origin — and nothing else: `ProxyData`'s creator_csp
+       (core/frame/window_proxy.c) and the `navigable.create` notice a peer instance is provisioned from
+       (core/frame/navigable.c). An embedder policy added to the container today would be silently dropped at
+       both — a field written in one place and absent in the next, which is the defect CLAUDE.md makes
+       greppable. So the ordered step is: make the container travel as a CONTAINER (a serialization those two
+       seams carry, in place of the two CSP fields), then hold this item on it, then §7.1.4.2's
+       check-a-navigation-response's-adherence-to-its-embedder-policy has something to read. */
     DCHECK(!embedder_policy_compatible_with_cross_origin_isolation(out->embedder.value),
            "this response's `Cross-Origin-Embedder-Policy` is compatible with cross-origin isolation, and "
            "§7.1.7's policy container has no embedder policy item in this build to carry it — so the Document "

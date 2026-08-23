@@ -118,7 +118,15 @@ const HTML_B = `<!doctype html><script>
    request 1 and the driver answers a question nobody asked. */
 let instanceSerial = 0;
 
-async function makeEngine(html, url, docId, csp, topLevelUrl, recipes) {
+/* `inheritedCsp` and `inheritedCspSelfOrigin` are HTML §7.1.7 "Policy containers"' clone of the CREATOR's,
+   for an instance provisioned from a `navigable.create`. They are TWO because CSP §2.2 "Policies" makes a CSP
+   list "a struct consisting of policies (a list of policies) and a self-origin", and the second cannot be
+   recovered from the first — §2.2.2 states it from outside the bytes. `csp` USED TO BE PASSED IN THE
+   `headers` SLOT, which is a raw policy value where the entry parses HTTP field lines: it carried no colon,
+   so header_list_parse_field_lines had nothing to make of it and every child this driver provisioned ran
+   under NO policy while the record that named one crossed intact. Both halves are the empty string for a root
+   document, which has no creator. */
+async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf) {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -156,8 +164,10 @@ async function makeEngine(html, url, docId, csp, topLevelUrl, recipes) {
      end the parse at the first one. `bs` is the same helper the reply bodies use, for the same reason. */
   {
     const [hp, hn] = bs(html);
-    M.ccall('qjs_init', 'number', ['number','number','number','number','number','number'],
-      [hp, hn, cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
+    M.ccall('qjs_init', 'number',
+      ['number','number','number','number','number','number','number','number'],
+      [hp, hn, cs(url), cs(docId), cs(headers || ''), cs(topLevelUrl),
+       cs(inheritedCsp || ''), cs(inheritedCspSelf || '')]);
     M._free(hp);
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
@@ -394,8 +404,10 @@ async function drainNotices(e) {
     const f = n.split('\t');
     console.log(`  [${e.docId}] notice: ${f[0]} ${f.slice(1, 3).join(' ')}`);
     /* FIELD 5 IS THE CHILD'S TOP-LEVEL CREATION URL, decided by the creator's §7.4 and carried on the
-       notice for the same reason field 6's policy container is: the new instance cannot derive it. The policy
-       is LAST because it is the record's remainder — a raw CSP header may contain HTAB. */
+       notice for the same reason fields 6 and 7 — the two halves of §7.1.7's policy container clone — are:
+       the new instance cannot derive any of them. The policy is LAST because it is the record's remainder — a
+       raw CSP header may contain HTAB — and CSP §2.2's self-origin sits before it because an origin's
+       serialization cannot. */
     /* A DOCUMENT THIS ZONE ALREADY HOLDS AN INSTANCE FOR IS NOT PROVISIONED TWICE, and that is not a guard
        against a duplicate notice — it is what a resumed document does. `a`'s replay re-runs its scripts, so it
        re-creates the child navigable and re-announces it under the same name, while the instance that holds
@@ -404,7 +416,10 @@ async function drainNotices(e) {
        and which nothing downstream could tell from the routing. */
     if (f[0] === 'navigable.create') {
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], f.slice(6).join('\t'), f[5]));
+      /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list and FIELD 7 IS THE LIST — the policy is the
+         record's REMAINDER (a raw CSP header may contain HTAB), which is why the self-origin sits before it.
+         The child has no response headers of its own in this fixture, so that slot is empty. */
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(7).join('\t'), f[6]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
@@ -420,7 +435,9 @@ async function drainNotices(e) {
     else if (f[0] === 'navigable.swap') {
       if (f.length < 4 || !f[1] || !f[2]) fail(`a navigable.swap notice was short of its fields: ${n}`);
       if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
-      engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2]));
+      /* NO CREATOR (§7.3.2.3 makes the new browsing context "with null, null, and group"), so no container to
+         clone and no self-origin to state. */
+      engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2], undefined, '', ''));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
@@ -483,7 +500,7 @@ async function drainNotices(e) {
 
 /* THE ROOT DOCUMENT IS ITS OWN TOP-LEVEL TRAVERSABLE, so its environment's top-level creation URL is its
    own address. */
-engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/'));
+engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', undefined, '', ''));
 
 /* PHASE 1 — run `a` out, collecting its posts. Nothing is routed yet, so `b` holds no record and each one below
    can be delivered on its own; two records on one flow is a merge of possibly-contradictory senders, which the
@@ -587,7 +604,7 @@ parked.M.ccall('qjs_teardown', 'void', [], []);
    a register or an instance for it to land in. */
 const orphanCompletions = [...answers.keys()];
 withholdReads = false;
-engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue);
+engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue, '', '');
 console.log(`phase 4: resumed as [${engines[0].tag}] from the residue; [${engines[1].tag}] never left memory`);
 /* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the
    posts the replayed flows emit have to be routed to `b` between rounds, and pumpUntil steps one engine. The
