@@ -52,7 +52,17 @@ static JSValue make_event(JSContext *ctx)
 
 static JSValue make_message_event(JSContext *ctx)
 {
-    return message_event_new(ctx, "", JS_NULL, "", JS_NULL, JS_UNDEFINED);
+    /* §9.1's `origin` is a USVString and this row's default instance carries the empty one. It is spelled as a
+       VALUE because that is what the mint takes: a message from outside this agent carries an origin the
+       engine may not decide, so the slot holds a value rather than a C string, and the three callers that DO
+       have a serialization say so here rather than through a second entry point. */
+    JSValue origin = JS_NewString(ctx, "");
+    JSValue ev;
+
+    CHECK(!JS_IsException(origin), "§4.5 createEvent: the default MessageEvent's origin could not be allocated");
+    ev = message_event_new(ctx, "", JS_NULL, origin, JS_NULL, JS_UNDEFINED);
+    JS_FreeValue(ctx, origin);
+    return ev;
 }
 
 /* HTML §7.2.7.7 declares NO constructor for BeforeUnloadEvent, so this row is the ONLY way a page makes one —

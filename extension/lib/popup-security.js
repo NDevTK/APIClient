@@ -33,6 +33,13 @@ var _DELIVERY = {
   "plant":             function ()  { return "TWO-STAGE (stored): the attacker plants the value on the victim's origin first, and the victim's later load is what fires it"; },
   "referring-address": function ()  { return "the payload rides the address the victim ARRIVES FROM — the attacker's URL, not the victim's"; },
   "user-file":         function ()  { return "the user must hand the document an attacker-supplied file — no navigation delivers it"; },
+  // HTML §9.3.3 "Posting messages". No navigation and no plant: the attacker holds a SECOND DOCUMENT open
+  // beside the victim — the victim in an iframe on the attacker's page, or opened as a popup — and posts to it
+  // while it runs. The bytes are not transformed on the way in (§9.3.3 step 7's StructuredSerializeWithTransfer
+  // and step 8.4's deserialize round-trip a string unchanged), which is why these reproduce where the same
+  // candidate through a fragment does not.
+  "cross-document-message":
+                       function ()  { return "the attacker keeps the victim open in a document of their own (an iframe, or a popup) and postMessage()s the payload to it while it runs — no navigation, and nothing transforms the bytes on the way in"; },
 };
 
 // The delivery clause for either entry shape. An ABSENT `delivery` is a statement (the source declared none);

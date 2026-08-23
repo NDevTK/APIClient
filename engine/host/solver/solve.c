@@ -727,6 +727,20 @@ static void detect_sink(JSValueConst arg, int cls) {
     DCHECK(root != NULL,
            "an attacker value reached a sink carrying no delivery ROOT — the reproduction envelope is built "
            "from it, and without one this finding would state that nothing carries these bytes to the victim");
+    /* AND WHETHER AN ATTACKER CAN BE THE ONE STANDING HERE — §Attacker-sources' unforgeable-origin rule, asked
+     * at the ONE point all three sink classes converge and at the last moment the flow that arrived still
+     * exists.
+     * WHAT IS SUPPRESSED IS THE SEARCH, NOT THE ARM. This flow is a real code path and goes on running: the
+     * page's handler really does reach `eval` when a message from the origin it pinned arrives, and pruning
+     * the arm would delete every endpoint and every value behind it. What it may not do is OPEN A SEARCH,
+     * because a search here ends in a fire-verified PoC whose delivery no cross-document attacker can perform
+     * — §S's PoC is "the strongest working input per sink", and a PoC that cannot be delivered is a false one.
+     * IT IS NOT A "SAFE" VERDICT AND EMITS NO ENTRY, which is the distinction §@S draws: the parked shape says
+     * "searched this far and not solved", and saying that here would report a sink an attacker cannot reach as
+     * one whose search is merely unfinished. The sink stays reportable through any OTHER flow that reaches it
+     * without the demand — the false arm of the equality, or a sibling whose gate was a prefix check, which
+     * pins nothing and is exactly the forgeable case the rule SOLVES. */
+    if (concolic_principal_pinned()) return;
     add_pending(src ? src : (shape ? shape : "?"), root, cls);
 }
 

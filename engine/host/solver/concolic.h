@@ -174,7 +174,7 @@ void        concolic_set_candidate(const char *src, const char *payload);
    hypothetical: the offscreen matched `/\{(hash|search|pm|reply)\}/` against a display shape the engine has
    never emitted, so live verify could not build a PoC for any finding this engine produces, and the taxonomy
    it invented had a `pm` entry for a source no component declares.
-   FOUR MECHANISMS, not one row per source: what differs between two sources carried in the victim's own
+   FIVE MECHANISMS, not one row per source: what differs between two sources carried in the victim's own
    address is only the component `prefix` already names. */
 /* The two address mechanisms are named as the PAIR they are — whose address carries the payload — because that
    is the whole difference between them and because `navigation` is already a word the FIRING vocabulary uses
@@ -185,6 +185,17 @@ typedef enum {
     SRC_DELIVER_PLANT,                /* placed BEFORE the victim's load, read back on it — §S(b) two-stage */
     SRC_DELIVER_REFERRING_ADDRESS,    /* the payload rides the address the victim ARRIVES FROM */
     SRC_DELIVER_USER_FILE,            /* the user hands the document a file whose bytes the attacker chose */
+    /* THE ATTACKER POSTS IT — HTML §9.3.3 "Posting messages", the window post message steps. It is its own
+       mechanism and not a plant, because the two differ in exactly the way §S(b) cares about: a plant is
+       written BEFORE the victim's load and read back on it, while this is delivered to a document that is
+       ALREADY RUNNING, by a document the attacker holds open beside it (the victim in the attacker's iframe,
+       or opened as a popup). The reproduction is therefore neither a URL nor a two-stage load: it is a second
+       document, live at the same time, and the envelope has to say so.
+       IT CARRIES NO PERCENT-ENCODE SET, and that is a measured property of the mechanism rather than an
+       unfilled column: §9.3.3 step 7 hands the message to StructuredSerializeWithTransfer and step 8.4
+       deserializes it, and neither transforms a string — so the bytes the attacker writes are the bytes the
+       handler reads. That is precisely why postMessage breakouts reproduce where a raw-fragment one does not. */
+    SRC_DELIVER_CROSS_DOCUMENT_MESSAGE,
 } SourceDeliverKind;
 /* AND EVERY ROW NAMES ITS CLAIMANT — the declare, the give-back and the ask-first below are one mechanism
    around that one field. A declaration here is core/platform.h's FOURTH paragraph exactly: the STORAGE is this component's array and
@@ -200,6 +211,43 @@ typedef enum {
    NAME the component that did not finish instead of reciting a list of files that goes stale. */
 void        concolic_declare_source(const char *component, const char *src, const char *encode, char prefix,
                                     SourceDeliverKind deliver);
+/* A SOURCE WHOSE VALUE IS THE ATTACKER'S OWN PRINCIPAL — the second half of a row, declared by the component
+ * that owns it, and the reason `event.origin` is a different KIND of attacker input from `event.data`.
+ *
+ * WHAT IT MEANS. Every other declared source is a value the attacker WRITES: any byte string the search solves
+ * for is one the attacker can put there, so an equality gate on it (`hash === "admin"`) is SOLVED and the pin
+ * is the answer. A principal is a value the attacker NAMES BY OWNING: HTML §9.3.2.2 "User agents" states the
+ * whole basis of this API — "the integrity of this API is based on the inability for scripts of one origin to
+ * post arbitrary events … to objects in other origins" — so the browser stamps `event.origin` and the attacker
+ * chooses it only by registering the domain it names. §9.3.2.1 "Authors" is the other side of the same fact:
+ * checking `origin` is what the standard tells a page to do, and it works precisely because the value cannot
+ * be written.
+ *
+ * WHAT IT DECIDES. An equality against a concrete token PINS the source (decide.c's concretize-on-pin), and a
+ * pin on a principal is a demand the attacker cannot meet from a document of their own — so a flow that
+ * reached a sink through one is a REAL code path that no cross-document attacker can drive, and an @S finding
+ * taken off it would be a PoC that does not reproduce. §Attacker-sources states the pair exactly: a forgeable
+ * check (endsWith/includes/startsWith) is SOLVED, an unforgeable one (=== exact) is unsatisfiable cross-origin
+ * and SUPPRESSES the finding. The forgeable half needs nothing here, and that is the point of splitting them:
+ * a prefix or substring predicate PINS NOTHING (concolic_cmp answers OPCMP_NONE for it), so it never reaches
+ * this rule and the search proceeds — which is the correct verdict for it and is reached by the pin's own
+ * semantics rather than by a second test that would have to enumerate the string builtins.
+ *
+ * IT IS A PROPERTY OF THE SOURCE AND NOT OF THE SINK, which is why it is declared beside the delivery and not
+ * asked at the emission: the same fact decides every finding rooted there, and a consumer that re-derived it
+ * from the source's NAME would be the `{hash}|{search}|{pm}` taxonomy solver/concolic.h already records as a
+ * table matching shapes this engine never emitted.
+ * The component must already own `src`; a principal declared for a row nobody holds is a claim with no
+ * claimant, which is the one thing the registry's give-back cannot express. */
+void        concolic_declare_source_principal(const char *component, const char *src);
+/* HAS THIS FLOW PINNED A PRINCIPAL SOURCE? — asked where an attacker value ARRIVES AT A SINK, because that is
+   the last point at which the flow that reached it still exists. It reads the running flow's own path
+   constraint, so it parks and forks with the flow exactly as every other narrowing does, and it answers 0 for
+   a flow that merely tested a principal without pinning it (a prefix check, or the FALSE arm of an equality).
+   A DERIVED spelling counts: `event.origin.toLowerCase() === X` pins the derived value and not the source, and
+   the demand on the attacker's principal is the same either way — which is why the pin is recorded under the
+   pinned value's ROOT as well as its own identity (concolic_pin), and why this question is asked of the root. */
+int         concolic_principal_pinned(void);
 /* THE CLAIM, GIVEN BACK — called from the claimant's own `_free`, once, whatever number of rows it declared,
    and concolic_free asserts the registry is empty afterwards. It removes THIS component's rows and no others,
    which is what keeps that assert falsifiable: a claimant that forgot leaves its rows behind and is named. A
@@ -275,7 +323,15 @@ JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op
    token, an id. An unknown denotes its SHAPE (a real string, stable per source, the key_name rule); anything
    else converts normally. OWNED either way: free with JS_FreeCString. */
 const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
-void        concolic_pin(const char *src, const char *val);   /* EQ true-arm: this source now reads `val` (real @H value) */
+/* EQ true-arm: `src` now reads `val` (a real @H value) FOR THIS FLOW.
+   `root` IS RECORDED BESIDE IT AND IS A DIFFERENT FACT — where the pinned bytes ENTERED the program, which a
+   derivation never changes (solver/concolic.h's `concolic_root_c`). The pin itself is keyed by the value's own
+   identity, because that is what a later read of THAT value concretizes through; the root is written as a
+   separate mark under the root's own key so a question about the SOURCE — has this flow demanded a particular
+   value of it — is answerable without walking the chain and without a second reading of the pin. The two must
+   not be one entry: `event.origin.toLowerCase() === X` pins the DERIVED value, and writing `X` under
+   `message.origin` would make a later read of `event.origin` itself answer the lowercased token. */
+void        concolic_pin(const char *src, const char *root, const char *val);
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
    branch records its outcome under `key` — which decide.c composes from the IDENTITY of the value the branch

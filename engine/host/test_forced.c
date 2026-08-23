@@ -14,6 +14,7 @@
 #include "core/timing/timer.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/window_message.h"   /* §9.3.3's two attacker sources, spelled once by their owner */
 #include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
@@ -3990,7 +3991,10 @@ static void idb_extract_selftest(JSContext *ctx)
        source reads the pinned string, and asserting the pin is what proves the field path was composed rather
        than the read having gone somewhere else. The pin map is the running flow's constraint and this fixture
        runs at the pre-boot baseline where no flow has narrowed anything, so it is cleared after. */
-    concolic_pin("{reply}.id", "u-7");
+    /* THE ROOT IS THE SECOND ARGUMENT AND IT IS `{reply}`, NOT the field path: a derivation mints a new
+       injection identity and never a new delivery root, so the bytes this pin is about entered through the
+       reply that carried the object. */
+    concolic_pin("{reply}.id", "{reply}", "u-7");
     idb_extract_string(ctx, idb_extract_value(ctx, concolic_new(ctx, "{reply}", "{reply}", JS_UNDEFINED),
                                               JS_NewString(ctx, "id"),
                                               "§7.1 answered `failure` for an unknown VALUE — that forces a "
@@ -6066,6 +6070,83 @@ static void file_reader_package_selftest(JSContext *ctx)
     }
 }
 
+/* §9.3.3's TWO ATTACKER SOURCES AND §Attacker-sources' FORGEABLE/UNFORGEABLE RULE, exercised where the rule is
+ * DECIDED rather than through a page. The rule is one sentence with two verdicts and they are reached by two
+ * different mechanisms, so a fixture that only drove a bundle would prove whichever of them that bundle wrote.
+ *
+ * THE UNFORGEABLE HALF IS A PIN. `e.origin === "https://trusted.test"` pins the value on its true arm
+ * (decide.c's concretize-on-pin), and a pin on a source whose value the browser STAMPS is a demand no
+ * cross-document attacker can meet — HTML §9.3.2.2 "User agents": "the integrity of this API is based on the
+ * inability for scripts of one origin to post arbitrary events … to objects in other origins".
+ * THE FORGEABLE HALF NEEDS NOTHING HERE, and that is the point of splitting them rather than testing a list of
+ * string builtins: `e.origin.startsWith("https://trusted")` composes a predicate that pins NOTHING
+ * (concolic_cmp answers OPCMP_NONE), so it never reaches the rule and the search proceeds — which is the
+ * correct verdict, arrived at by the pin's own semantics.
+ * BOTH SPELLINGS OF THE DEMAND ARE ONE DEMAND, which is the half a src-keyed rule would have missed:
+ * `String(e.origin) === X` pins a DERIVED identity, and the attacker's principal is what both are about. */
+static void message_source_selftest(void)
+{
+    const char *kind = NULL, *enc;
+    char prefix = 1;
+
+    /* THE DECLARATION, BOTH HALVES. A mechanism and an address component that disagree is a reproduction
+       nobody can build from, and `cross-document-message` is the one mechanism whose payload rides no address
+       at all: the attacker holds a second document open beside the victim rather than writing its URL. */
+    CHECK(concolic_source_delivery(MESSAGE_ORIGIN_SRC, &kind, &prefix) && kind
+          && !strcmp(kind, "cross-document-message") && prefix == 0,
+          "§9.3.3's `message.origin` does not declare the cross-document-message delivery — every @S finding "
+          "rooted there would report as an exploit no navigation reaches, which is the silence §S(d)'s "
+          "reproduction envelope reserves for a source no component carries");
+    kind = NULL; prefix = 1;
+    CHECK(concolic_source_delivery(MESSAGE_DATA_SRC, &kind, &prefix) && kind
+          && !strcmp(kind, "cross-document-message") && prefix == 0,
+          "§9.3.3's `message.data` does not declare the cross-document-message delivery — the two members a "
+          "handler reads are one mechanism, and a `data` finding that could not state it would be the exact "
+          "envelope-less PoC an orphan drive of the same handler already produced");
+    /* AN EMPTY ENCODE SET IS A MEASUREMENT, AND ONLY THE DECLARED/UNDECLARED PAIR TELLS IT FROM AN ABSENT ROW
+       — `concolic_source_encodes` answers NULL for a source that declared no delivery at all, and "" for one
+       that declared a delivery which transforms nothing. §9.3.3 step 7's StructuredSerializeWithTransfer and
+       step 8.4's StructuredDeserializeWithTransfer round-trip a string unchanged, which is why a postMessage
+       breakout reproduces where the same candidate through a fragment dies on `<`. */
+    enc = concolic_source_encodes(MESSAGE_DATA_SRC);
+    CHECK(enc != NULL && *enc == 0,
+          "§9.3.3's structured clone was declared to percent-encode the attacker's bytes, or to declare "
+          "nothing at all — the first is false of steps 7 and 8.4 and the second is the shape a report reads "
+          "as `no component carries these bytes`");
+
+    /* A FLOW THAT HAS NARROWED NOTHING HAS DEMANDED NOTHING. Asserted first because every check below is a
+       transition from this state, and a rule that answered 1 here would suppress every @S finding there is. */
+    CHECK(!concolic_principal_pinned(),
+          "the principal rule answered `pinned` for a constraint that holds nothing — every @S search would "
+          "be suppressed at detection and the tool would emit no PoC at all");
+    /* A PIN ON A SOURCE THE ATTACKER WRITES IS NOT A DEMAND ON A PRINCIPAL. This is the direction that must
+       never move: `location.hash === "admin"` is the ordinary solved case, and a rule that caught it would
+       silently delete the findings this half of the tool exists for. */
+    concolic_pin("{location.hash}", "location.hash", "admin");
+    CHECK(!concolic_principal_pinned(),
+          "the principal rule read an ordinary equality pin as a demand on an attacker's own principal — a "
+          "value the attacker WRITES is solved, and suppressing it drops a real PoC");
+    /* …AND A PIN ROOTED AT THE PRINCIPAL IS ONE, in the spelling every bundle writes. */
+    concolic_pin(MESSAGE_ORIGIN_SRC, MESSAGE_ORIGIN_SRC, "https://trusted.test");
+    CHECK(concolic_principal_pinned(),
+          "an exact equality against `event.origin` did not register as a demand on the attacker's principal "
+          "— §Attacker-sources makes that check unsatisfiable cross-origin, so a PoC taken off this flow is "
+          "one that cannot be delivered");
+    concolic_clear_pins();
+    CHECK(!concolic_principal_pinned(),
+          "a demand survived the constraint being cleared — the rule reads the RUNNING flow's own narrowing, "
+          "so one flow's origin check would suppress every other flow's findings");
+    /* THE DERIVED SPELLING IS THE SAME DEMAND. `String(e.origin) === X` pins the derived identity and not the
+       source, and a rule keyed by the pinned value's own name would answer `unpinned` for it — which is a
+       false PoC for one of the two most common ways a real handler writes this check. */
+    concolic_pin("String(" MESSAGE_ORIGIN_SHAPE ")", MESSAGE_ORIGIN_SRC, "https://trusted.test");
+    CHECK(concolic_principal_pinned(),
+          "an equality against a DERIVATION of `event.origin` did not register as a demand on the principal — "
+          "the demand is about whose bytes these are, which no derivation changes, and that is why the pin "
+          "records its ROOT beside its identity");
+    concolic_clear_pins();
+}
+
 int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
@@ -6156,6 +6237,8 @@ int main(int argc, char **argv) {
     /* FILE API §6.3's four arms, over known bytes. It needs only a realm — see the function for why this
        half of the FileReader is the half a C fixture can hold to an answer at all. */
     file_reader_package_selftest(ctx);
+    /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
+    message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */

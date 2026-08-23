@@ -850,8 +850,13 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable) {
     free(key);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
+    /* THE ROOT TRAVELS WITH THE PIN, and it is read off the COMPARISON RESULT rather than re-derived: pred_new
+       gives the result the tested operand's own root, so this is the same value's root by construction and not
+       a second lookup that could name a different one. It is what says WHOSE bytes this arm demanded — the
+       fact §Attacker-sources' unforgeable-origin rule is decided by, and the one thing no later reader can
+       recover, because by the time the value reaches a sink the identity that was pinned is gone. */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
-        concolic_pin(src, tok);
+        concolic_pin(src, concolic_root_c(cond), tok);
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 

@@ -134,7 +134,7 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
     {
         JSValueConst buf = step_arg(&s->hdr, 1);
         StructuredData sd;
-        JSValue data;
+        JSValue data, org;
         size_t blen = 0;
         int k;
 
@@ -155,20 +155,26 @@ static int js_chan_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         rctx = c->realm;
         DCHECK(rctx != NULL, "a broadcast reached a channel without the realm it was constructed in");
         data = structured_deserialize(rctx, &sd);
+        /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is named, not
+           addressed, so there is nothing to reply to. */
+        /* §9.1 "The MessageEvent interface" declares `origin` a USVString — the serialization of the SENDER's
+           origin, which within one origin-keyed agent is this agent's. One record, in core/url/origin.c, not a
+           copy here.
+           IT IS A VALUE AND NOT A C STRING because that is what the mint takes: a message from OUTSIDE this
+           agent carries an origin the engine may not decide (§9.3.2.2 "User agents"), so §9.1's slot holds a
+           value. A broadcast is not one of those — an agent is origin-keyed, so every channel on this bus is
+           this principal's — and saying so is one JS_NewString, minted once for both arms below because the
+           origin is the same fact whichever of them runs. */
+        org = JS_NewString(rctx, origin_serialized(origin_agent()));
+        CHECK(!JS_IsException(org), "§9.5: a broadcast event's origin string could not be allocated");
         if (JS_IsException(data)) {
             JS_FreeValue(rctx, JS_GetException(rctx));
-            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, origin_serialized(origin_agent()),
-                                      JS_UNDEFINED, JS_UNDEFINED);
+            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, org, JS_UNDEFINED, JS_UNDEFINED);
         } else {
-            /* §9.5: the origin is the SENDER'S, and a broadcast has no source and no ports — the bus is
-               named, not addressed, so there is nothing to reply to. */
-            /* §9.1 "The MessageEvent interface" declares `origin` a USVString — the serialization of the
-               SENDER's origin, which within one origin-keyed agent is this agent's. One record, in
-               core/url/origin.c, not a copy here. */
-            s->ev = message_event_new(rctx, "message", data, origin_serialized(origin_agent()), JS_UNDEFINED,
-                                      JS_UNDEFINED);
+            s->ev = message_event_new(rctx, "message", data, org, JS_UNDEFINED, JS_UNDEFINED);
             JS_FreeValue(rctx, data);
         }
+        JS_FreeValue(rctx, org);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
         STEP_GOTO(s->hdr.stage, BD_FIRE, &s->fphase, NULL);
         return JS_STEP_YIELD;

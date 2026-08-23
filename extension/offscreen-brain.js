@@ -1244,9 +1244,38 @@ function buildLiveDelivery(sinkName, poc, source, delivery, deliveryPrefix, page
             + "opening the page and selecting the attacker's file by hand.";
     return out;
   }
+  if (delivery === "cross-document-message") {
+    // HTML §9.3.3 "Posting messages". The POST itself is the one delivery this layer is best placed to make —
+    // open the victim, hold the handle, post the payload — and it is deliberately NOT made, because the thing
+    // the sandbox cannot choose is the one thing the victim's handler reads first.
+    //
+    // §9.3.2.2 "User agents" states the whole basis of the API: "the integrity of this API is based on the
+    // inability for scripts of one origin to post arbitrary events … to objects in other origins". The
+    // attacker page here is `<iframe sandbox="allow-scripts">`, whose origin is OPAQUE, so every message it
+    // sends arrives with `event.origin === "null"` — an origin no real handler's check accepts. A handler that
+    // checks nothing would fire, and a handler with any origin gate would not; both would come back as NO HIT
+    // through the same channel, and §LIVE-VERIFY reads no-hit as an ENGINE-FIDELITY DIVERGENCE. Emitting a
+    // probe that can answer "no" for a reason that is not a divergence poisons the one signal this whole path
+    // exists to produce, so the mechanism is NAMED instead of half-performed.
+    //
+    // WHAT IT NEEDS is one thing and it is not this file's: an attacker document at an origin the harness
+    // CHOOSES — a registrable one, served rather than sandboxed — so the post carries an origin a gate can be
+    // tested against. The engine's own half of that pair is the required-origin the gate demands, which it
+    // does not yet surface for a forgeable check (a startsWith/endsWith/includes token is not recorded by any
+    // derivation today), so neither side of the delivery can be built without the other.
+    out.delivery = "the attacker keeps the victim open in a document of their own and posts the payload to it";
+    out.why = "this source arrives by CROSS-DOCUMENT MESSAGE (HTML §9.3.3): the attacker holds the victim open "
+            + "in a document of their own and postMessage()s the payload to it. The post itself is performable "
+            + "here — what is not is the ORIGIN it comes from: the attacker page is a sandboxed frame with an "
+            + "OPAQUE origin, so the victim would see `event.origin === \"null\"`, and a handler with any "
+            + "origin check would report NO HIT for a reason that is not an engine divergence. Reproducing it "
+            + "needs an attacker document at a chosen, registrable origin. The sink and its breakout are still "
+            + "fire-verified.";
+    return out;
+  }
   DFAIL("the engine declared a delivery mechanism this layer has no arm for: " + JSON.stringify(delivery)
         + " — the token vocabulary is solve.h's `delivery` field (address / plant / referring-address / "
-        + "user-file), so "
+        + "user-file / cross-document-message), so "
         + "either a mechanism was added in C without its delivery arm here, or this record did not come from "
         + "solve_json_array");
   // Release only (the DFAIL above is the dev answer): `why` is stated here too, so the record's shape holds

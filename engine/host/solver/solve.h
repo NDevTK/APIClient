@@ -102,7 +102,18 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
    own declaration. There is deliberately no "verified":false — the entry states what was searched, never that
-   the sink is safe. An array for the same reason the @H surface is one — result.h owns the document.
+   the sink is safe.
+
+   AND THERE IS ONE ARRIVAL THAT PRODUCES NEITHER SHAPE, which is the only kind of silence this surface has.
+   §Attacker-sources: a check on an attacker's own PRINCIPAL that cannot be forged — an exact equality against
+   `event.origin` — is unsatisfiable cross-origin and SUPPRESSES the finding. A flow that pinned one really did
+   reach the sink, and its arm keeps running and keeps emitting endpoints; what it may not do is open a search,
+   because the PoC that search would fire-verify is one no cross-document attacker can deliver, and §S(d) makes
+   a PoC's envelope part of the PoC. It is not a "safe" verdict and is deliberately not reported as one: the
+   parked shape means "searched this far and not solved", which is a different fact, and stating it here would
+   describe a sink nobody can reach as one whose search is merely unfinished. The same sink stays reportable
+   through any other flow that arrives without the demand — the equality's false arm, or a sibling gated by a
+   prefix/substring check, which pins nothing and is exactly the forgeable case the rule SOLVES. An array for the same reason the @H surface is one — result.h owns the document.
 
    "HOW FAR THE SEARCH GOT" IS TWO NUMBERS AND USED TO BE ONE THAT COULD NOT SAY IT. `tried` is raised where a
    candidate is SEEDED, so it is fixed the instant the flow is created; `reached` is raised where a BREAKOUT's
@@ -209,7 +220,10 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     component that owns it: "address" (the victim's own URL, at `deliveryPrefix`), "plant"
                     (§S(b)'s TWO-STAGE plant-then-load — there is no separate `stored` flag because being
                     stored is not a fact beside the mechanism, it IS the mechanism), "referring-address" (the
-                    payload rides the address the victim arrives FROM), "user-file". ABSENT = the source declared
+                    payload rides the address the victim arrives FROM), "user-file",
+                    "cross-document-message" (HTML §9.3.3 "Posting messages": the attacker holds the victim
+                    open in a document of their own and posts to it while it runs — no navigation and no
+                    plant, and nothing transforms the bytes on the way in). ABSENT = the source declared
                     none, which is what server-injected page state is: the attacker writes it directly and no
                     component carries or transforms it. A consumer states that; it never guesses a vector.
    The engine owns this whole vocabulary. A delivery layer switches on these tokens and may say it cannot

@@ -10,6 +10,27 @@
 
 #include "quickjs.h"
 
+/* THIS COMPONENT'S NAME, spelled once and used for both things a name is used for here: the slots it declares
+   to core/agent_state.h and the two rows it claims in solver/concolic.c's source registry. The registry's
+   give-back is keyed by it, so a declaration and a release naming two different owners is the one way that can
+   go wrong — and a literal typed out five times is how it would. */
+#define WM_COMPONENT "window_message"
+
+/* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS, SPELLED ONCE. A source is TWO strings that must agree — the
+   PROVENANCE `message.data` that concolic_declare_source registers and every @S record names, and the DISPLAY
+   SHAPE `{message.data}` the @H surface prints a value as — and the shape is COMPOSED from the provenance here
+   so the pair cannot drift; solver/concolic.c asserts that composition at the mint for every declared source.
+   A consumer of either half uses these and never a literal of its own, which is the rule the deleted
+   `{hash}|{search}|{pm}|{reply}` taxonomy broke: the offscreen matched a `{pm}` shape that no component has
+   ever emitted, so live verify could build a PoC for none of these findings.
+   THEY ARE `message.*` AND NOT `postMessage.*` BECAUSE THE RECEIVER IS WHO READS THEM. What a page's handler
+   holds is a §9.1 MessageEvent, and `event.data` / `event.origin` are the two members it branches on; naming
+   them for the SENDER's method would name the one side of this that the victim's code never sees. */
+#define MESSAGE_DATA_SRC     "message.data"
+#define MESSAGE_DATA_SHAPE   "{" MESSAGE_DATA_SRC "}"
+#define MESSAGE_ORIGIN_SRC   "message.origin"
+#define MESSAGE_ORIGIN_SHAPE "{" MESSAGE_ORIGIN_SRC "}"
+
 /* Installs `postMessage` on the global and mints this navigable's one WindowProxy. `origin` is this document's
    serialized origin — the value every message this window sends carries as `event.origin`, and the one a
    page's handler checks before trusting `event.data`. */

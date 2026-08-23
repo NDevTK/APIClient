@@ -1,4 +1,4 @@
-/* THE MessageEvent INTERFACE — HTML §9.4.1.
+/* THE MessageEvent INTERFACE — HTML §9.1 "The MessageEvent interface".
  *
  * WHY IT IS FIRST. Everything in HTML 9.4 dispatches one of these: a MessagePort delivers its message as a
  * MessageEvent, `window.postMessage` queues a task that fires one, a BroadcastChannel fans one out, a
@@ -20,7 +20,7 @@
  * first two exist and the third is the arm a value can still match nothing of — and `ports` is a
  * `sequence<MessagePort>`, a per-element brand test whose failure is Web IDL's own TypeError.
  *
- * WHAT THE PLATFORM DELIVERS IS NOT THAT SEQUENCE, AND CONFLATING THE TWO IS A BUG. §9.4.2's delivery builds
+ * WHAT THE PLATFORM DELIVERS IS NOT THAT SEQUENCE, AND CONFLATING THE TWO IS A BUG. §9.4.4 "Message ports"'s delivery builds
  * `newPorts` from "all MessagePort objects in deserializeRecord.[[TransferredValues]]" — a FILTER over a list
  * that also holds transferred ArrayBuffers — while the constructor's `ports` member is a CONVERSION, where a
  * non-port is a TypeError. message_event_ports_of is the filter; ports_from_sequence is the conversion; running
@@ -37,8 +37,9 @@
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
 #include "core/frame/window_proxy.h"
+#include "solver/concolic.h"
 
-static JSValue g_key;        /* the private Symbol §9.4.1's own slots hang off */
+static JSValue g_key;        /* the private Symbol §9.1's own slots hang off */
 /* PER REALM, for the reason event.c states: a C member runs in the realm that DEFINED it, so one shared
    prototype answers every document out of whichever realm built it first. Held in quickjs's own per-context
    class-proto slot. */
@@ -48,7 +49,7 @@ static int     g_ready;
 static int g_init_me_id = -1;
 static int     g_ctor_stepid = -1;
 
-/* §9.4.1's own slots — the five attributes Event does not have. One record, read as an OWN slot for the reason
+/* §9.1's own slots — the five attributes Event does not have. One record, read as an OWN slot for the reason
    event.c states: a property LOOKUP walks the prototype chain into the solver's absent-state seam. */
 static JSValue me_slots(JSContext *ctx, JSValueConst ev)
 {
@@ -93,7 +94,7 @@ static int message_source_ok(JSContext *ctx, JSValueConst v)
     return 0;
 }
 
-/* `sequence<MessagePort>` → the FrozenArray the attribute answers. §9.4.1's `ports` is frozen because a page
+/* `sequence<MessagePort>` → the FrozenArray the attribute answers. §9.1's `ports` is frozen because a page
    must not be able to add a port to an event it received, and Web IDL's FrozenArray is how the standard says
    so — an ordinary array here would be a different type that happens to look the same until a page writes to
    it. An empty sequence is the only one that converts today; see the file comment. Returns JS_EXCEPTION. */
@@ -140,7 +141,7 @@ static JSValue ports_from_sequence(JSContext *ctx, JSValueConst v)
     return arr;
 }
 
-/* §9.4.2's and §9.4.4's `newPorts`: "all MessagePort objects in deserializeRecord.[[TransferredValues]],
+/* §9.3.3's and §9.4.4's `newPorts`: "all MessagePort objects in deserializeRecord.[[TransferredValues]],
    maintaining their relative order". A transfer list may hold an ArrayBuffer as readily as a port, and those
    are transferred and delivered — they are simply not in `ports`, because `ports` is typed. The answer is a
    plain Array; message_event_new freezes it, so there is one place that knows FrozenArray. */
@@ -169,7 +170,7 @@ JSValue message_event_ports_of(JSContext *ctx, JSValueConst transferred)
 
 /* ---- initialise ------------------------------------------------------------------------------------------- */
 
-/* §9.4.1's own initialisation, over an object Event's steps have already built. `ports` is already the frozen
+/* §9.1's own initialisation, over an object Event's steps have already built. `ports` is already the frozen
    array; every other value is stored as it arrived. */
 static int me_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst data, JSValueConst origin,
                          JSValueConst last_id, JSValueConst source, JSValue ports)
@@ -192,15 +193,24 @@ static int me_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst data, JSV
     return 0;
 }
 
-JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, const char *origin,
+JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, JSValueConst origin,
                           JSValueConst source, JSValueConst ports_in)
 {
     JSValue t, ev, ports, empty;
 
     DCHECK(g_ready, "a MessageEvent was minted before message_event_init ran");
+    /* §9.1 declares `origin` a USVString, and the two inhabitants this engine produces are a real string and
+       an UNKNOWN one — a cross-origin sender's origin, which §9.3.2.2 "User agents" makes the attacker's to
+       choose and this engine's never to invent. Anything else is a caller that lost the value: there is no
+       coercion to fall back on here, because coercing an unknown is what the concolic boundary refuses, and a
+       silent `undefined` in this slot is the one field every real bundle's security check is written against. */
+    DCHECK(JS_IsString(origin) || concolic_is(origin),
+           "a MessageEvent was minted with an `origin` that is neither a serialization nor unknown external "
+           "input — §9.1 declares it a USVString, and a page distinguishes an absent origin from every value "
+           "it could have had");
     t = JS_NewString(ctx, type);
     if (JS_IsException(t)) return t;
-    /* §9.4.1's events do not bubble and are not cancelable — the standard fires them with neither flag, and a
+    /* §9.1's events do not bubble and are not cancelable — the standard fires them with neither flag, and a
        page's `stopPropagation` on one has nothing to stop. isTrusted is TRUE: the engine fired it. */
     ev = event_new_derived(ctx, message_event_proto(ctx), t, false, false, false, /*trusted*/ true);
     JS_FreeValue(ctx, t);
@@ -209,9 +219,7 @@ JSValue message_event_new(JSContext *ctx, const char *type, JSValueConst data, c
     if (JS_IsException(ports)) { JS_FreeValue(ctx, ev); return JS_EXCEPTION; }
     empty = JS_NewString(ctx, "");
     {
-        JSValue o = JS_NewString(ctx, origin ? origin : "");
-        int r = me_init_slots(ctx, ev, data, o, empty, source, ports);
-        JS_FreeValue(ctx, o);
+        int r = me_init_slots(ctx, ev, data, origin, empty, source, ports);
         JS_FreeValue(ctx, empty);
         if (r < 0) { JS_FreeValue(ctx, ev); return JS_EXCEPTION; }
     }
@@ -238,7 +246,7 @@ static JSValue js_me_get(JSContext *ctx, JSValueConst this_val, int magic)
     return v;
 }
 
-/* §9.4.1's `initMessageEvent`, the legacy initialiser every Event subclass with a history has. It is not a
+/* §9.1's `initMessageEvent`, the legacy initialiser every Event subclass with a history has. It is not a
    second constructor: it RE-INITIALISES an event that already exists, base half and own half, which is why it
    reaches initEvent's own steps through the base slots rather than rebuilding the object. */
 static JSValue js_me_init(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -375,7 +383,7 @@ void message_event_init(JSContext *ctx)
     idl_optional_from(1);
     g_ctor_stepid = idl_method_id_dict(ctx, ME_CTOR_ARGS, 2, ME_INIT,
                                        (int)(sizeof(ME_INIT) / sizeof(ME_INIT[0])), js_me_ctor, 0);
-    idl_optional_from(1);   /* §9.4.1: `constructor(DOMString type, optional MessageEventInit init = {})` */
+    idl_optional_from(1);   /* §9.1: `constructor(DOMString type, optional MessageEventInit init = {})` */
     g_ready = 1;
     realm_declare_intrinsic(message_event_install_proto);
 }

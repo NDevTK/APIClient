@@ -6,12 +6,33 @@
  * current task, and a bundle that does it and never receives its message has stopped running. That case is
  * complete below.
  *
- * The second is that `message` is one of the platform's richest ATTACKER SOURCES. A handler reads
- * `event.data` and reaches a sink with it, and whether that is exploitable turns on `event.origin` — which
- * §attacker-sources describes exactly: an origin the attacker controls by registering a domain, so a forgeable
- * check (endsWith, includes, startsWith) is SOLVED while an unforgeable one (=== against a fixed origin) is
- * unsatisfiable cross-origin and suppresses the finding. None of that can be reached until the event exists
- * with a real origin on it, which is what this file puts there.
+ * The second is that `message` is one of the platform's richest ATTACKER SOURCES, and this file declares both
+ * halves of it: `message.data` and `message.origin`, with the delivery mechanism a reproduction is built from
+ * (SRC_DELIVER_CROSS_DOCUMENT_MESSAGE — the attacker holds the victim open in a document of their own and
+ * posts to it, which is neither a navigation nor a §S(b) plant).
+ *
+ * THE TWO ARE DIFFERENT KINDS OF ATTACKER INPUT AND THE WHOLE VERDICT TURNS ON THAT. The attacker WRITES
+ * `data`; the attacker only OWNS `origin`, because §9.3.2.2 "User agents" makes the browser stamp it — "the
+ * integrity of this API is based on the inability for scripts of one origin to post arbitrary events … to
+ * objects in other origins" — and §9.3.2.1 "Authors" is why every real bundle checks it. So `origin` is
+ * declared a PRINCIPAL (solver/concolic.h): a forgeable check (endsWith, includes, startsWith) pins nothing
+ * and is SOLVED, while an exact `===` PINS the principal and is a demand no cross-document attacker can meet,
+ * which suppresses the finding rather than emitting a PoC that cannot be delivered.
+ *
+ * WHICH MESSAGES ARE ATTACKER INPUT IS DECIDED AT ONE PLACE — window_message_deliver_remote, against this
+ * agent's own origin. An agent is origin-keyed, so a post from inside it is the app posting to itself and its
+ * data is the app's own value; a routed post from a CROSS-ORIGIN document is, from the receiver's side, exactly
+ * what an attacker's post would be, so its `origin` and its `data` are both unknown external input carrying
+ * what arrived as their example.
+ *
+ * WHAT IS STILL MISSING IS THE ATTACKER'S OWN POST, AND IT IS THE TRUSTED ZONE'S TO MAKE. This file's inbound
+ * half is complete — window_message_route takes a routed record and window_message_deliver_remote turns it
+ * into §9.3.3's step 8 task — but nothing ever ROUTES one from a document the attacker controls, so on a real
+ * page the two sources above are minted only when a cross-origin peer instance posts. The engine may not
+ * manufacture one: SECURITY.md keys the sending origin on the trusted zone precisely because an origin the
+ * untrusted engine chose would defeat every `event.origin` check in every bundle. What is owed is a routed
+ * delivery whose sender is an attacker document at an origin the trusted zone stamps; nothing in this file
+ * changes when it arrives.
  *
  * THE TARGET IS A NAVIGABLE'S ACTIVE WINDOW, WHICH IS WHY IT TAKES A WindowProxy. §9.3.3's steps are given a
  * targetWindow and the member runs them on `this`; with a cross-document target that Window is in
@@ -135,7 +156,7 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
         JSValueConst entry = step_arg(&s->hdr, 1);
         StructuredWithTransfer swt;
         JSValue buf, want, data, source, sender_origin, ports = JS_UNDEFINED;
-        const char *want_s = NULL, *from = NULL;
+        const char *want_s = NULL;
         size_t blen = 0;
         int k;
 
@@ -166,10 +187,16 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
         tctx = window_proxy_realm(ctx, target);
         DCHECK(tctx != NULL, "a window message was delivered to a navigable this agent holds no realm for");
         source = JS_GetPropertyUint32(ctx, entry, PQ_SOURCE);   /* the sender's proxy, taken at the post */
+        /* §9.3.3 STEP 8.2's `origin`, HANDED ON AS THE VALUE IT IS. It used to be taken through JS_ToCString
+           and re-minted inside the event, which was a round trip with nothing to gain from it — and which
+           stopped being merely wasteful the moment the queue could hold an UNKNOWN one: a message from a
+           CROSS-ORIGIN document carries an origin this engine may not decide (§9.3.2.2 "User agents"), so the
+           slot holds a concolic, and coercing one is exactly what the unknown boundary refuses. */
         sender_origin = JS_GetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN);
-        from = JS_ToCString(ctx, sender_origin);
-        DCHECK(from != NULL, "a queued window message carried no sender origin — §9.3.3's `origin` is the one "
-                             "field a page's check is written against");
+        DCHECK(JS_IsString(sender_origin) || concolic_is(sender_origin),
+               "a queued window message carried no sender origin — §9.3.3 step 8.2's `origin` is the one field "
+               "a page's check is written against, and it is either this agent's serialization or the unknown "
+               "principal of a document outside it");
         buf = JS_GetPropertyUint32(ctx, entry, PQ_DATA);
         swt.holders = JS_GetPropertyUint32(ctx, entry, PQ_HOLDERS);
         swt.data.buf = JS_GetArrayBuffer(ctx, &blen, buf);
@@ -179,10 +206,23 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
         JS_FreeValue(ctx, buf);
         JS_FreeValue(ctx, swt.holders);
 
+        /* §9.3.3 STEP 8.5's `messageClone`, AS AN ATTACKER SOURCE — the reason this file's header calls
+           `message` one of the platform's richest.
+           WHICH MESSAGES: exactly those whose ORIGIN IS UNKNOWN, which is the same fact read once rather than
+           a second flag beside it. window_message_deliver_remote decides it, where the trusted zone's stamp is
+           in hand and this agent's own origin can be compared against it; a post from THIS agent (an
+           origin-keyed cluster — every document in it is this principal's) carries a serialization and its
+           data is the app's own value, which must stay concrete or every same-origin frame's protocol would
+           lose its example values for nothing.
+           THE ARRIVED VALUE IS THE EXAMPLE, so §Attacker-sources' one-value rule holds here as everywhere: the
+           handler's `if (e.data.type === "resize")` forks BOTH arms — which is what reaches the gated code —
+           while the arm the real message took keeps the bytes that peer actually sent. */
+        if (concolic_is(sender_origin) && !JS_IsException(data))
+            data = concolic_source_wrap(tctx, MESSAGE_DATA_SHAPE, MESSAGE_DATA_SRC, data);
         if (JS_IsException(data)) {
             JS_FreeValue(tctx, JS_GetException(tctx));
             JS_FreeValue(tctx, ports);
-            s->ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, from, source, JS_UNDEFINED);
+            s->ev = message_event_new(tctx, "messageerror", JS_UNDEFINED, sender_origin, source, JS_UNDEFINED);
         } else {
             /* §9.3.3 steps 8.2 and 8.3: the origin is the SENDER'S and the source is the sender's WindowProxy
                — which is what a handler's `event.origin` check is about, and the whole reason this event is
@@ -192,16 +232,14 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
             JS_FreeValue(tctx, ports);
             if (JS_IsException(new_ports)) {
                 JS_FreeValue(tctx, data);
-                JS_FreeCString(ctx, from);
                 JS_FreeValue(ctx, sender_origin);
                 JS_FreeValue(ctx, source);
                 return JS_STEP_ABRUPT;
             }
-            s->ev = message_event_new(tctx, "message", data, from, source, new_ports);
+            s->ev = message_event_new(tctx, "message", data, sender_origin, source, new_ports);
             JS_FreeValue(tctx, data);
             JS_FreeValue(tctx, new_ports);
         }
-        JS_FreeCString(ctx, from);
         JS_FreeValue(ctx, sender_origin);
         JS_FreeValue(ctx, source);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
@@ -384,7 +422,39 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
                          (target_origin && strcmp(target_origin, "*")) ? JS_NewString(ctx, target_origin)
                                                                        : JS_NULL);
     JS_SetPropertyUint32(ctx, entry, PQ_SOURCE, source);
-    JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, sender_origin));
+    /* §9.3.3 STEP 8.2's `origin` — AND THE ONE PLACE THIS ENGINE DECIDES WHETHER A MESSAGE IS ATTACKER INPUT.
+     *
+     * THE TEST IS THE PRINCIPAL, AND IT IS THE SPEC'S OWN. §9.3.2.2 "User agents" states the basis of the
+     * whole API: "the integrity of this API is based on the inability for scripts of one origin to post
+     * arbitrary events … to objects in other origins". So a message from a document that is NOT same origin
+     * with this agent is, from the receiver's side, indistinguishable from one an attacker sent — the attacker
+     * registers a domain and posts from it, which is a capability every cross-origin sender already has — and
+     * its `data` and its `origin` are both unknown external input. A SAME-ORIGIN sender is this app: an agent
+     * is origin-keyed, so its bytes are the app's own values and concretising them is right.
+     *
+     * THE STAMPED ORIGIN IS THE EXAMPLE AND NOT THE ANSWER. It is a real measurement — the trusted zone made
+     * it, and SECURITY.md is why this engine may not — so the concolic carries it and a branch marks the arm
+     * that origin really takes as the primary one; what it must not do is DECIDE the branch, because the
+     * attacker chooses which origin posts. Handing the serialization over concrete would let
+     * `if (e.origin !== TRUSTED) return;` prune the arm every real postMessage XSS lives on.
+     *
+     * `origin_is_serialized_tuple` IS THE COMPARISON AND NOT A strcmp, for the reason origin_matches states one
+     * screen up: §7.1.1's opaque origin "has no serialization it can be recreated from", so an opaque agent is
+     * same origin with nothing — including another "null" — and the tuple test is the only side of this that
+     * can be asked with one operand still in bytes. */
+    if (origin_is_serialized_tuple(origin_agent(), sender_origin)) {
+        JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, sender_origin));
+    } else {
+        JSValue org = concolic_source_wrap(ctx, MESSAGE_ORIGIN_SHAPE, MESSAGE_ORIGIN_SRC,
+                                           JS_NewString(ctx, sender_origin));
+        /* A CONFORMANCE HOST HAS NO SOURCE OVERLAY and gets the string back unchanged (solver/concolic.h), so
+           this line is not a fork in behaviour — it is the same delivery with the solver's half added where
+           the solver is installed. What it must never be is UNDEFINED: that would be the one field every
+           bundle's security check reads, arriving absent. */
+        CHECK(!JS_IsException(org),
+              "window message: the sending origin of a routed cross-origin message could not be allocated");
+        JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, org);
+    }
     {
         JSValueConst args[2];
         args[0] = target;
@@ -657,6 +727,22 @@ void window_message_init(JSContext *ctx)
        declaration would have overwritten the callee below with nothing left holding the first — the exact leak
        the paragraph under this one records, arriving by the other door. */
     DCHECK(g_id_post < 0, "window_message_init ran twice — §9.3.3's declaration is made once per AGENT");
+    /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS. A source's browser delivery is a fact about the COMPONENT
+       and not about a document, so it is declared here with the member and not in the per-realm install — the
+       same placement core/frame/location.c states for its own two, and the reason a second same-origin
+       document does not re-declare.
+       THE ENCODE SET IS EMPTY, AND THAT IS A MEASURED FACT RATHER THAN AN UNFILLED COLUMN. §9.3.3 step 7 hands
+       the message to StructuredSerializeWithTransfer and step 8.4 takes it back through
+       StructuredDeserializeWithTransfer; neither transforms a string, so the bytes the attacker writes are the
+       bytes the handler reads. That is the whole reason a postMessage breakout reproduces where the same
+       candidate through `location.hash` dies on the fragment set encoding `<`.
+       AND THE ORIGIN IS A PRINCIPAL, WHICH THE DATA IS NOT — the difference §9.3.2.1 "Authors" tells a page to
+       rely on and §9.3.2.2 "User agents" says the API's integrity rests on. The attacker WRITES `data` and
+       merely OWNS `origin`, so an equality gate on the first is solved and one on the second is a demand no
+       cross-document attacker can meet (solver/concolic.h, concolic_declare_source_principal). */
+    concolic_declare_source(WM_COMPONENT, MESSAGE_DATA_SRC, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
+    concolic_declare_source(WM_COMPONENT, MESSAGE_ORIGIN_SRC, "", 0, SRC_DELIVER_CROSS_DOCUMENT_MESSAGE);
+    concolic_declare_source_principal(WM_COMPONENT, MESSAGE_ORIGIN_SRC);
     g_deliver_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_window_deliver_def);
     DCHECK(g_deliver_stepid >= 0, "§9.3.3's delivery machine could not be declared against this runtime");
     g_deliver_fn = JS_NewCFunction2(ctx, NULL, "", 2, JS_CFUNC_step, g_deliver_stepid);
@@ -664,9 +750,9 @@ void window_message_init(JSContext *ctx)
     g_id_post = idl_method_id_dict(ctx, POST_ARGS, 3, POST_OPTS,
                                    (int)(sizeof POST_OPTS / sizeof POST_OPTS[0]), js_window_post, 0);
     idl_optional_from(1);
-    agent_state_id("window_message", &g_id_post, "§9.3.3's postMessage declaration, and the declaration latch");
-    agent_state_value("window_message", &g_deliver_fn, "§9.3.3's delivery-task callee, one per agent");
-    agent_state_id("window_message", &g_deliver_stepid, "§9.3.3's delivery task machine");
+    agent_state_id(WM_COMPONENT, &g_id_post, "§9.3.3's postMessage declaration, and the declaration latch");
+    agent_state_value(WM_COMPONENT, &g_deliver_fn, "§9.3.3's delivery-task callee, one per agent");
+    agent_state_id(WM_COMPONENT, &g_deliver_stepid, "§9.3.3's delivery task machine");
     realm_declare_intrinsic(window_message_install_proto);
 }
 
@@ -692,6 +778,11 @@ void window_message_install(JSContext *ctx, JSValueConst global, const char *ori
    which is also what puts it on core/platform.h's release column instead of in each host's own teardown. */
 void window_message_free(JSRuntime *rt)
 {
+    /* THE TWO SOURCE CLAIMS, GIVEN BACK. They are rows in solver/concolic.c's registry whose STORAGE is that
+       component's array and whose CLAIM is this one's, so this release removes exactly this component's rows
+       and concolic_free asserts, at the solver's own release, that nothing is left — which is what makes that
+       assert a statement about the claimants rather than a wipe that covers for one. */
+    concolic_undeclare_sources(WM_COMPONENT);
     JS_FreeValueRT(rt, g_deliver_fn);
     g_deliver_fn = JS_UNDEFINED;
     g_deliver_stepid = -1;

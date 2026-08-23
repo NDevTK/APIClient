@@ -315,7 +315,7 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
 
     STEP_ARM(PD_TAKE);
     {
-        JSValue data, entry, buf, ports = JS_UNDEFINED;
+        JSValue data, entry, buf, org, ports = JS_UNDEFINED;
         StructuredWithTransfer swt;
         uint32_t n = 0;
         size_t blen = 0;
@@ -349,23 +349,32 @@ static int js_port_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         data = structured_deserialize_transfer(rctx, &swt, &ports);
         JS_FreeValue(ctx, buf);
         JS_FreeValue(ctx, swt.holders);
+        /* §9.4.4 fires the event with NO `origin` — the port message queue's steps name `data` and `ports` and
+           nothing else, so §9.1's member keeps the empty string its IDL gives it. It is spelled as a VALUE
+           because that is what the mint takes, and it is minted ONCE for both arms below: the empty origin is
+           the same fact whether the deserialize succeeded or not, and two mints would be two places to get it
+           wrong. Not a default filling a hole — a positive statement that a port has no sending origin, which
+           is the whole difference between §9.4.4's delivery and §9.3.3's. */
+        org = JS_NewString(rctx, "");
+        CHECK(!JS_IsException(org), "§9.4.4: a port delivery's empty origin could not be allocated");
         if (JS_IsException(data)) {
             /* §9.4.4: a message that cannot be deserialized fires `messageerror` rather than `message`. This
                engine's deserializer only fails where its own writer and reader disagree, which crashes instead
                — so reaching here means the exception came from somewhere else and is the page's to see. */
             JS_FreeValue(rctx, JS_GetException(rctx));
             JS_FreeValue(rctx, ports);
-            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, "", JS_UNDEFINED, JS_UNDEFINED);
+            s->ev = message_event_new(rctx, "messageerror", JS_UNDEFINED, org, JS_UNDEFINED, JS_UNDEFINED);
         } else {
             /* §9.4.4: `ports` is `newPorts` — the MessagePorts among the [[TransferredValues]] that ARRIVED
                with this message, in order. A transferred ArrayBuffer is in the same list and is not one. */
             JSValue new_ports = message_event_ports_of(rctx, ports);
             JS_FreeValue(rctx, ports);
-            if (JS_IsException(new_ports)) { JS_FreeValue(rctx, data); return JS_STEP_ABRUPT; }
-            s->ev = message_event_new(rctx, "message", data, "", JS_UNDEFINED, new_ports);
+            if (JS_IsException(new_ports)) { JS_FreeValue(rctx, org); JS_FreeValue(rctx, data); return JS_STEP_ABRUPT; }
+            s->ev = message_event_new(rctx, "message", data, org, JS_UNDEFINED, new_ports);
             JS_FreeValue(rctx, data);
             JS_FreeValue(rctx, new_ports);
         }
+        JS_FreeValue(rctx, org);
         if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
         STEP_GOTO(s->hdr.stage, PD_FIRE, &s->fphase, NULL);
         return JS_STEP_YIELD;

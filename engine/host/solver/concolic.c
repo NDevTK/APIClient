@@ -231,9 +231,15 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               drags a COW delta. Deciding them is feasible-refinement, the thing that makes forced multi-path
               execution tractable, and it is sound-only — it prunes a branch on the SAME predicate the flow has
               already fixed, never one whose domain still permits both outcomes.
-   Both are per-flow and travel together, which is why they are ONE entry rather than two maps that a fork,
-   a suspend and a resume would each have to remember to carry. */
-typedef struct { char *key; char *val; signed char truth; } Cons;
+     pinned_root — SOME value ROOTED at this key was pinned by this flow, which is a fact about the SOURCE and
+              not about the value. `event.origin`, `event.origin.toLowerCase()` and `String(event.origin)` are
+              three identities with one root, and a demand made of any of them is one demand on the attacker's
+              principal. It is a separate field and not `val` because it is a different claim: writing the
+              lowercased token under `message.origin` would make a later read of `event.origin` ITSELF answer
+              it, which is a fabricated value in exactly the direction §Solver-half forbids.
+   All three are per-flow and travel together, which is why they are ONE entry rather than three maps that a
+   fork, a suspend and a resume would each have to remember to carry. */
+typedef struct { char *key; char *val; signed char truth; signed char pinned_root; } Cons;
 
 /* THE CONSTRAINT IS A MUTABLE HEAD OVER IMMUTABLE, REFCOUNTED, STRUCTURALLY-SHARED SEGMENTS — the third
    instance of the one primitive cow.c's `CowSeg` and dom_cow.c's `DomSeg` already are, and it is here for the
@@ -334,6 +340,10 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].val = (below && below->val) ? strdup(below->val) : NULL;
     CHECK(!(below && below->val) || g_pins[g_pins_n].val, "concolic: OOM copying an inherited pin value");
     g_pins[g_pins_n].truth = below ? below->truth : -1;
+    /* INHERITED WITH THE REST OF THE ENTRY. A principal demand this flow made before its last freeze is still
+       this flow's demand, and a copy-up that dropped it would make the very same path answer "unpinned" the
+       moment a context switch happened to fall between the pin and the sink. */
+    g_pins[g_pins_n].pinned_root = below ? below->pinned_root : 0;
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -342,9 +352,26 @@ static Cons *cons_entry(const char *key) {
            "same fact would fork a branch this flow has already decided");
     return &g_pins[g_pins_n - 1];
 }
-void concolic_pin(const char *src, const char *val) {
+/* THE PIN, AND THE MARK BESIDE IT — see concolic.h. The two writes are one act and are made together here
+   because nothing downstream can recover the second: by the time a value reaches a sink the identity that was
+   pinned is long gone, and only the ROOT survives every derivation.
+   THE ROOT IS WRITTEN EVEN WHEN IT EQUALS THE IDENTITY, which is the common case (`event.origin === X`). Two
+   entries then hold one key and the second write is a no-op on the first, which is what `cons_entry` already
+   does for every repeated narrowing — writing the mark only for a DERIVED pin would make the direct spelling
+   the one case the principal rule missed, and it is the spelling every real bundle writes. */
+void concolic_pin(const char *src, const char *root, const char *val) {
     Cons *c = cons_entry(src);
     free(c->val); c->val = strdup(val); CHECK(c->val, "concolic: OOM pin value");
+    /* A CONCOLIC CARRIES A PROVENANCE AND A ROOT TOGETHER (concolic_alloc asserts it), so a pin taken off one
+       and missing the other is a value minted somewhere that does not go through that mint — and what it costs
+       is silent: the principal rule below would answer "unpinned" for a flow that demanded an origin, and the
+       PoC it then emits is one no cross-document attacker can deliver. */
+    DCHECK(root != NULL, "an equality pinned an attacker value that carries no delivery ROOT — the root is "
+                         "what says WHOSE bytes were demanded, and §Attacker-sources' unforgeable-origin rule "
+                         "is decided by exactly that");
+    /* `c` IS DEAD FROM HERE. cons_entry may grow the head, and the growth is a realloc — so the second entry
+       is taken only after the first has been written, and nothing below may reach back through `c`. */
+    if (root) cons_entry(root)->pinned_root = 1;
 }
 void concolic_constrain_branch(const char *key, int truth) {
     cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
@@ -478,7 +505,12 @@ static char *g_cand_src = NULL, *g_cand_payload = NULL;
    `concolic_undeclare_sources` is keyed by, what the duplicate assert reports the existing owner from, and
    what concolic_free names when a release did not finish. The pointer is the caller's static component name,
    held the way core/agent_state.h holds one and for the same reason: it outlives the agent it names. */
-typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver; }
+/* `principal` IS A SECOND COLUMN AND NOT A SECOND REGISTRY, because it is a fact about the SAME row: whether
+   the attacker WRITES this value or merely OWNS it (concolic.h states the pair, and HTML §9.3.2.2 "User
+   agents" states why one exists at all). Keeping it here is also what makes the give-back complete without a
+   second give-back — the claimant releases its rows and the property goes with them. */
+typedef struct { const char *component; char *src; char *encode; char prefix; SourceDeliverKind deliver;
+                 int principal; }
         SourceDelivery;
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
@@ -493,6 +525,7 @@ static const char *deliver_token(SourceDeliverKind k)
     case SRC_DELIVER_PLANT:             return "plant";
     case SRC_DELIVER_REFERRING_ADDRESS: return "referring-address";
     case SRC_DELIVER_USER_FILE:         return "user-file";
+    case SRC_DELIVER_CROSS_DOCUMENT_MESSAGE: return "cross-document-message";
     }
     DFAIL("a source declared a delivery mechanism with no report token — the token is what the reproduction "
           "envelope states and what the delivery layer switches on, so the mechanism would cross as nothing");
@@ -544,6 +577,11 @@ void concolic_declare_source(const char *component, const char *src, const char 
     g_srcs[g_srcs_n].encode = strdup(encode ? encode : "");
     g_srcs[g_srcs_n].prefix = prefix;
     g_srcs[g_srcs_n].deliver = deliver;
+    /* A SOURCE THE ATTACKER WRITES, WHICH IS WHAT NEARLY EVERY SOURCE IS. The exception says so with its own
+       call (concolic_declare_source_principal) rather than a sixth argument every declaration would have to
+       spell — and it is written here, at the mint, so the column can never be the uninitialized garbage a
+       later reader would read as "principal". */
+    g_srcs[g_srcs_n].principal = 0;
     CHECK(g_srcs[g_srcs_n].src && g_srcs[g_srcs_n].encode, "concolic: OOM declaring a source's delivery");
     g_srcs_n++;
 }
@@ -611,6 +649,54 @@ int concolic_source_declared_by(const char *component, const char *src)
                    "identity two components spell the same way or a claimant reaching into another's rows");
             return 1;
         }
+    return 0;
+}
+
+/* THE SECOND HALF OF A ROW — see concolic.h for what a principal IS and what it decides.
+ * IT IS A SEPARATE CALL AND NOT A SIXTH ARGUMENT, for the reason core/platform.h gives about every other
+ * optional property of a claim: a parameter every declaration must spell is a parameter five components would
+ * spell `0` for, and a `0` written five times to describe a property four of them have never heard of is the
+ * shape a reader has to decode rather than read. The call names the exception.
+ * IT REFUSES A ROW THIS COMPONENT DOES NOT OWN, both directions, because the row is a CLAIM: marking somebody
+ * else's would put a property on a source this component does not answer for, and marking one that does not
+ * exist would be a claim whose claimant the give-back can never find. */
+void concolic_declare_source_principal(const char *component, const char *src)
+{
+    int i;
+
+    DCHECK(component != NULL && *component && src != NULL,
+           "a source was declared a PRINCIPAL by no component, or with no identity — the property rides the "
+           "row, and the row is a claim whose claimant releases it");
+    for (i = 0; i < g_srcs_n; i++)
+        if (!strcmp(g_srcs[i].src, src)) {
+            DCHECK(strcmp(g_srcs[i].component, component) == 0,
+                   "a component declared an attacker source a PRINCIPAL that a DIFFERENT component owns — one "
+                   "source is owned by one component in both directions, and a property written onto another "
+                   "claimant's row outlives every release this component makes");
+            g_srcs[i].principal = 1;
+            return;
+        }
+    DFAIL("a source was declared a PRINCIPAL before its delivery was declared. The property is a COLUMN of the "
+          "delivery row, so there is nothing here to write it onto — and a registry that grew a row for it "
+          "would hold a source whose browser delivery nothing states, which the reproduction envelope reads as "
+          "\"no component carries these bytes to the victim\". Call concolic_declare_source first");
+}
+
+/* HAS THIS FLOW DEMANDED A PARTICULAR VALUE OF AN ATTACKER'S PRINCIPAL? — see concolic.h.
+ * A WALK OF THE REGISTRY RATHER THAN A LOOKUP BY KEY, because the question is asked of the DECLARATIONS: the
+ * flow does not know which sources are principals and must not be taught a name for one, and this array is the
+ * one place that does know. It is O(declared principals) — the number of sources whose value the browser
+ * stamps rather than the attacker writes — and each row costs one indexed probe of the constraint chain. */
+int concolic_principal_pinned(void)
+{
+    int i;
+
+    for (i = 0; i < g_srcs_n; i++) {
+        const Cons *c;
+        if (!g_srcs[i].principal) continue;
+        c = cons_lookup(g_srcs[i].src);
+        if (c && c->pinned_root) return 1;
+    }
     return 0;
 }
 
