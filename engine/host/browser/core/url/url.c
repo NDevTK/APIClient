@@ -31,7 +31,7 @@
 #include "core/url/url.h"
 #include "core/url/origin.h"   /* §4.7's origin is a RECORD; this file only ever serializes one */
 #include "core/encoding/encoding.h"   /* §6's "UTF-8 decode without BOM", which §5.1 runs on a percent-decoding */
-#include "solver/concolic.h"   /* §4.1 over unknown input answers at the operator, not at the coercion */
+#include "solver/concolic.h"   /* §6.1 over unknown input answers at the operator, not at the coercion */
 #include "core/file/blob.h"
 #include "core/url/idna.h"
 #include "core/idl_args.h"
@@ -1617,14 +1617,67 @@ static JSValue js_url_get(JSContext *ctx, JSValueConst this_val, int magic)
     return r;
 }
 
-/* §5.1's `toJSON()` and the stringifier are both `href`. */
+/* URL Standard §6.1 URL class — `toJSON()` and the stringifier are both `href`. */
 static JSValue js_url_tojson(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)argc; (void)argv;
     return js_url_get(ctx, this_val, URL_HREF);
 }
 
-/* §5.1's static `parse` and `canParse` — the constructor's parse without the throw. */
+/* THE REAL PARSE, RUN ON THE OPERAND'S OWN EXAMPLE — the concrete half of the concolic triple, shared by every
+ * §6.1 URL class entry point that takes an address the page did not determine. §Solver allows exactly one way
+ * for an example to propagate: the engine RUNS the real algorithm (§6.1's API URL parser) on the concrete it
+ * already holds. Nothing here predicts what running it would have produced, and with no example there is
+ * nothing to parse — which is an absent answer, not a guessed one.
+ *
+ * THREE OUTCOMES, NOT TWO, because canParse's example depends on telling them apart: an example that PARSED
+ * (1, `*out` is the record and the caller frees it), an example that DID NOT parse (0 — `canParse` really is
+ * false for that concrete), and NO EXAMPLE AT ALL (-1 — this engine knows nothing and must not say false).
+ * A `||`-style collapse of the last two into "false" is the defaulted field §Offensive-programming names: a
+ * plausible datum indistinguishable from a measurement.
+ *
+ * `*out` IS OWNED BY THIS FUNCTION UNLESS IT RETURNS 1. url_parse fills the record whether or not it succeeds
+ * — which is why every other caller in this file frees it on the failure path too — so the failure is released
+ * here and the caller is left with exactly one rule: free on 1, touch nothing otherwise. Splitting that rule
+ * across the callers is how the version this replaced leaked a record on every address that did not parse.
+ *
+ * The BASE is used only when the page determined it. An unknown base has no bytes to parse either, and taking
+ * the example's parse against a base this engine invented would report a resolution the page never performs. */
+static int url_example_parse(JSContext *ctx, JSValueConst v, int argc, JSValueConst *argv, UrlRecord *out)
+{
+    JSValue ex = concolic_example(ctx, v);
+    UrlRecord b2;
+    bool have_base = false;
+    const char *a;
+    int r = -1;
+
+    DCHECK(concolic_is(v),
+           "the example parse was handed an address the page DID determine — this runs only on the arm that "
+           "answers over unknown input, and on a known address it would parse the value twice and hand the "
+           "result back as an example OF ITSELF");
+    /* An example is a PRIMITIVE and an address is text, so anything else is a producer that attached a value
+       it never computed — and the JS_ToCString below would be a coercion over it. */
+    DCHECK(JS_IsString(ex) || JS_IsUndefined(ex),
+           "a concolic address carries an example that is not a string — an example is what the engine "
+           "COMPUTED for this source, and no source in this engine mints a non-string address");
+    if (!JS_IsString(ex)) { JS_FreeValue(ctx, ex); return -1; }
+    a = JS_ToCString(ctx, ex);
+    JS_FreeValue(ctx, ex);
+    if (!a) return -1;
+    url_record_init(&b2);
+    if (argc > 1 && !JS_IsUndefined(argv[1]) && !concolic_is(argv[1])) {
+        const char *bs2 = JS_ToCString(ctx, argv[1]);
+        if (bs2) { have_base = url_parse(&b2, bs2, strlen(bs2), NULL); JS_FreeCString(ctx, bs2); }
+    }
+    r = url_parse(out, a, strlen(a), have_base ? &b2 : NULL) ? 1 : 0;
+    if (r == 0)
+        url_record_free(out);   /* url_parse fills the record either way; only a SUCCESS is handed on */
+    url_record_free(&b2);
+    JS_FreeCString(ctx, a);
+    return r;
+}
+
+/* §6.1 URL class's static `parse` and `canParse` — the constructor's parse without the throw. */
 enum { URL_STATIC_PARSE = 0, URL_STATIC_CANPARSE };
 
 static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -1636,6 +1689,38 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
     JSValue r;
 
     (void)this_val;
+    /* §6.1's `static URL? parse(USVString url, ...)` and `static boolean canParse(USVString url, ...)` OVER
+       UNKNOWN INPUT. They are the constructor's own algorithm without the throw, so they answer the way the
+       constructor answers: a derived unknown that keeps the source's identity, so a later branch still forks
+       and a later sink still solves for the original source. The parser underneath owes C real bytes and can
+       only abort on a concolic — and `if (URL.canParse(x))` is how a real bundle spells a validity gate, so
+       aborting there ends the document at the exact branch the solver exists to fork. */
+    if (argc > 0 && concolic_is(argv[0])) {
+        UrlRecord ex_rec;
+        int got = url_example_parse(ctx, argv[0], argc, argv, &ex_rec);
+        JSValue real = JS_UNDEFINED;
+
+        DCHECK(got >= -1 && got <= 1,
+               "the example parse answered with an outcome §6.1 does not have — parsed, did not parse and no "
+               "example are the whole space, and a fourth would be read here as one of them");
+        DCHECK(magic == URL_STATIC_PARSE || magic == URL_STATIC_CANPARSE,
+               "a URL static was installed with a magic this function does not implement — the derived "
+               "value's name is composed from it, so an unknown one would label the result as canParse");
+        if (magic == URL_STATIC_CANPARSE) {
+            /* A BOOLEAN IS THE ANSWER'S TYPE, so the example is the real parse's own verdict — computed, never
+               invented. `got < 0` means no example: absent, which is what @H reports rather than a fabricated
+               `false`. */
+            if (got >= 0) real = JS_NewBool(ctx, got == 1);
+        } else if (got == 1) {
+            real = url_wrap(ctx, &ex_rec);
+            if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
+        } else if (got == 0) {
+            real = JS_NULL;   /* §6.1: parse returns null for an address that does not parse */
+        }
+        if (got == 1) url_record_free(&ex_rec);
+        return concolic_builtin_hook(ctx, argv[0],
+                                     magic == URL_STATIC_CANPARSE ? "URL.canParse" : "URL.parse", real);
+    }
     in = JS_ToCStringLen(ctx, &in_len, argc > 0 ? argv[0] : JS_UNDEFINED);
     if (!in) return JS_EXCEPTION;
     url_record_init(&base);
@@ -1700,34 +1785,21 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_ThrowTypeError(ctx, "URL requires at least 1 argument");
         return -1;
     }
-    /* §4.1's URL(url, base) OVER UNKNOWN INPUT. The parser needs real bytes and the coercion below owes C
-       them, so a concolic address can only crash there; the constructor answers instead with an unknown
-       derived from the source. Reading `.href`/`.pathname` off the result then yields further unknowns tied to
-       the same source, which is what a later branch forks on and a later sink solves for. */
+    /* §6.1 URL class's `constructor(USVString url, optional USVString base)` OVER UNKNOWN INPUT. The parser
+       needs real bytes and the coercion below owes C them, so a concolic address can only crash there; the
+       constructor answers instead with an unknown derived from the source. Reading `.href`/`.pathname` off the
+       result then yields further unknowns tied to the same source, which is what a later branch forks on and a
+       later sink solves for.
+       The example is the real parse over this source's own concrete, through the SAME helper §6.1's statics
+       use — one algorithm, one answer, and no second copy of it to drift. */
     if (concolic_is(argv[0])) {
-        /* THE PARSE RUNS, on the address this source concretely is: §4.1's real algorithm over the example, and
-           the URL it really produces becomes the derived value's example. Nothing is predicted here — with no
-           example there is nothing to parse and the answer is honestly unknown, which is a non-answer rather
-           than a guess. */
-        JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
-        if (JS_IsString(ex)) {
-            UrlRecord r2, b2;
-            const char *a = JS_ToCString(ctx, ex);
-            bool hb = false;
-            url_record_init(&b2);
-            if (a && argc > 1 && !JS_IsUndefined(argv[1]) && !concolic_is(argv[1])) {
-                const char *bs2 = JS_ToCString(ctx, argv[1]);
-                if (bs2) { hb = url_parse(&b2, bs2, strlen(bs2), NULL); JS_FreeCString(ctx, bs2); }
-            }
-            if (a && url_parse(&r2, a, strlen(a), hb ? &b2 : NULL)) {
-                real = url_wrap(ctx, &r2);
-                url_record_free(&r2);
-                if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
-            }
-            url_record_free(&b2);
-            if (a) JS_FreeCString(ctx, a);
+        UrlRecord ex_rec;
+        JSValue real = JS_UNDEFINED;
+        if (url_example_parse(ctx, argv[0], argc, argv, &ex_rec) == 1) {
+            real = url_wrap(ctx, &ex_rec);
+            url_record_free(&ex_rec);
+            if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
         }
-        JS_FreeValue(ctx, ex);
         *presult = concolic_builtin_hook(ctx, argv[0], "URL", real);
         return 0;
     }
