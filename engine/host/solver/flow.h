@@ -350,18 +350,21 @@ typedef struct Flow {
        words: it must park to the cold tier, resume byte-identically and fork per-flow, and a `char *` does
        none of the three. JS_UNDEFINED for a flow that has never parked on anything, which is most of them. */
     JSValue pending;
-    /* THE PARKED CONTINUATION, swapped with everything else on a context switch. A forced preempt inside
-       job-driven code parks an async activation in the RUNTIME's one slot; that activation belongs to THIS
-       flow's timeline and resumes under THIS flow's delta, so leaving it in the runtime while a sibling runs
-       would either resume it against the wrong heap or drop it outright. Empty (park_fn NULL) for a flow with
-       nothing parked, which is every flow that has not preempted inside a reaction. */
-    /* …AND THE DISPOSER THAT RELEASES IT WITHOUT RUNNING IT (quickjs.h's JSFlowParkFreeFn), which is the field
-       that makes this a reference the flow OWNS rather than one it merely remembers. The slot's continuation is
-       kept alive by a reference the park took and only the resume gives back, so a flow that is torn down or
-       PAGED OUT — where a recipe replays the work and frees none of the memory — has to give it back itself.
-       Carried beside the other three because they are one park: taken together at the switch out, put back
-       together at the switch in, and released together at flow_release. */
-    void *park_ctx; void *park_fn; void *park_free; void *park_opaque;
+    /* THE PARKED CONTINUATIONS, swapped with everything else on a context switch. A forced preempt inside
+       job-driven code parks a suspended async activation on the runtime's pump queue; those activations belong
+       to THIS flow's timeline and resume under THIS flow's delta, so leaving them in the runtime while a
+       sibling runs would either resume them against the wrong heap or drop them outright. NULL for a flow with
+       nothing parked, which is every flow that has not preempted inside a reaction.
+       IT IS THE WHOLE SET AND ONE OPAQUE HANDLE, not four fields naming one park. A step reaches as many bases
+       as it reaches — a host drain settling two fetch replies in a row parks two, a settle nested inside a
+       reaction parks two — and each park's record lives on the base it suspends (quickjs's
+       JSAsyncFunctionState), so what crosses the switch is their ORDER. Four fields could only ever carry one,
+       which is why they are gone rather than multiplied.
+       IT IS A REFERENCE THE FLOW OWNS, not one it merely remembers: each continuation is kept alive by a
+       reference its park took and only its resume gives back, so a flow that is torn down or PAGED OUT — where
+       a recipe replays the work and frees none of the memory — gives them back itself, through
+       JS_FreeParkedFlows at flow_release. */
+    void *parked;
     /* THE ROUTED CROSS-DOCUMENT DELIVERIES THIS TIMELINE HAS BEEN HANDED AND NOT YET MADE — each the record
        the trusted zone routed here, paired with the SENDER's origin, which only that zone may stamp
        (SECURITY.md: an origin the untrusted engine computed for a foreign message is a forgery every
@@ -881,7 +884,7 @@ void  flow_fork_inherit(Flow *sib, const Flow *parent);
  *
  * WHY IT IS THE ONLY TEARDOWN. The same fourteen fields were released in two other places — the frontier's own
  * teardown and the scheduler's finish path — and a list restated is a list that drifts: the finish path grew a
- * `park_fn` claim the teardown did not make, and the teardown freed a delta the finish path had already
+ * park claim the teardown did not make, and the teardown freed a delta the finish path had already
  * unapplied differently. A field added to `Flow` now has exactly one place that must learn about it, and
  * `flow_remove` asserts from the other side that it did. */
 void  flow_release(JSContext *ctx, Flow *f);

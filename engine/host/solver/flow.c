@@ -391,34 +391,30 @@ void flow_release(JSContext *ctx, Flow *f) {
        the precise shape §Offensive-programming calls the concealment rather than the symptom. It belongs behind
        `paged` like the rest: the cold tier writes the queue as 'm' records, so a WRITTEN flow's deliveries are
        in its recipe and an unwritten one's are being dropped. */
-    DCHECK(f->paged || (f->park_fn == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
+    DCHECK(f->paged || (f->parked == NULL && f->frame == NULL && flow_job_pending(f) == 0 &&
                         pending_count(f->pending) == 0 && flow_deliver_pending(f) == 0),
            "a flow was released holding WORK — a parked continuation, a suspended frame, queued reactions, "
            "replies the host still owed it, or a peer's routed message — and it was never written to the cold "
            "tier, so nothing replays it and every one of those is a work item the ONE frontier just dropped");
-    /* AND THE PARK IS RELEASED HERE, BECAUSE THE SLOT OWNS IT. Three lines used to null these fields under
-       the claim that "`opaque` is an activation reachable from the frame chain released just below, so what
-       goes is the intention to resume it and not the memory." That was false at every one of the three sites
-       that park — each takes a reference and only the resume gives it back — and false by construction for the
-       flow this leak was found through, whose `frame` was NULL, so there was no chain below it to be reachable
-       from. The disposer now rides the park (quickjs.h's JSFlowParkFreeFn) and each site states its own
-       release next to where it takes it, so this line calls a function rather than knowing three shapes.
+    /* AND THE PARKED CONTINUATIONS ARE RELEASED HERE, BECAUSE THE FLOW OWNS THEM. Three lines used to null a
+       set of raw fields under the claim that "`opaque` is an activation reachable from the frame chain
+       released just below, so what goes is the intention to resume it and not the memory." That was false at
+       every one of the sites that park — each takes a reference and only the resume gives it back — and false
+       by construction for the flow this leak was found through, whose `frame` was NULL, so there was no chain
+       below it to be reachable from. Each park's disposer rides the park (quickjs.h's JSFlowParkFreeFn) and
+       each site states its own release next to where it takes it, so this line calls one function over the
+       whole set rather than knowing three shapes and one park.
        `paged` DOES NOT EXCUSE IT, and conflating the two debts is how this survived. The assert above is about
        a dropped WORK ITEM, and the recipe genuinely does replay a paged flow's continuation — that argument is
-       sound and unchanged. It says nothing about the MEMORY the old continuation still holds here, which no
-       recipe frees and no gc_obj_list walk can see, because neither the activation nor its TrampFrames are GC
-       objects. That was 4 surviving frames at flow_registry_free's census with nothing naming the owner. */
-    DCHECK(!f->park_fn == !f->park_free,
-           "a flow holds a parked continuation with no disposer, or a disposer with nothing parked — the pair "
-           "is stored together at the switch out and required at the park itself, so one without the other is "
-           "a park assembled outside JS_TakeParkedFlow");
-    if (f->park_fn) {
-        ((JSFlowParkFreeFn *)f->park_free)((JSContext *)f->park_ctx, f->park_opaque);
-        f->park_ctx = NULL; f->park_fn = NULL; f->park_free = NULL; f->park_opaque = NULL;
-    }
-    DCHECK(f->park_ctx == NULL && f->park_opaque == NULL,
-           "a flow holds half a park — the fields are written and taken together (JS_TakeParkedFlow), so one "
-           "set without the others means a park was assembled outside that pair");
+       sound and unchanged. It says nothing about the MEMORY the old continuations still hold here, which no
+       recipe frees and no gc_obj_list walk can see, because neither the activations nor their TrampFrames are
+       GC objects. That was 4 surviving frames at flow_registry_free's census with nothing naming the owner.
+       The half-a-park assert that stood here is GONE with the fields it read: a set is one pointer, so there
+       are no halves to disagree, and what it was really guarding — that every member carries a resume, a
+       disposer and a realm — is asserted over the whole ring, at the two lines that can walk it
+       (JS_PutParkedFlows and JS_FreeParkedFlows). */
+    JS_FreeParkedFlows(f->parked);
+    f->parked = NULL;
     /* `frame` is the JS_FlowNew handle holding this flow's whole heap-frame chain — every activation, closure
        and local it is suspended across — so one left behind retains the entire realm, and the runtime's leak
        walk reports it as a Window, a context and seventeen hundred anonymous Functions with nothing naming the
@@ -510,7 +506,7 @@ void flow_registry_free(JSContext *ctx) {
     while (g_flows_n) {
 #if APICLIENT_DEV
         Flow *rf = g_flows[0];
-        int had_frame = rf->frame != NULL, had_park = rf->park_fn != NULL;
+        int had_frame = rf->frame != NULL, had_park = rf->parked != NULL;
         int paged = rf->paged, started = rf->started;
         int before = JS_TrampFrameCount(rrt);
 
@@ -1804,8 +1800,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "a flow was removed with its COW state still attached — the heap delta and the DOM head must be "
            "UNAPPLIED from the live heap and document before they can be freed, which is why flow_finish owns "
            "that and this does not: removing it here drops both");
-    DCHECK(f->frame == NULL && f->park_fn == NULL,
-           "a flow was removed holding a live frame or a parked continuation — its whole activation chain, and "
+    DCHECK(f->frame == NULL && f->parked == NULL,
+           "a flow was removed holding a live frame or parked continuations — its whole activation chain, and "
            "everything those frames close over, would be retained by a handle nothing will ever free");
     DCHECK(JS_IsUndefined(f->jobs) && JS_IsUndefined(f->pending) && JS_IsUndefined(f->perform_q) &&
            JS_IsUndefined(f->deliver_q),

@@ -3027,18 +3027,18 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "call site that asked, and a flow with no frame has already left it, so the answer belongs to a "
                "timeline that cannot be re-entered");
         /* THE PARK HAS TWO HOMES AND THIS ASKED THE ONE THAT IS ALWAYS EMPTY HERE. A parked continuation rides
-           the Flow while the flow is switched OUT (flow_switch_out's JS_TakeParkedFlow) and sits in the RUNTIME
-           slot while it is switched IN (flow_switch_in's JS_PutParkedFlow, which clears `f->park_fn` as it
-           hands the pair over) — and this runs with the flow switched in, on every iteration of flow_step's
-           loop, so `f->park_fn` is NULL at this line whatever the flow is holding. An assert that cannot fire
-           is not a weaker assert, it is the read-side of the same defect a defaulted field is: it reads as a
-           guarantee and states nothing. Both halves of the pair are asked, which is the form the two other
+           the Flow while the flow is switched OUT (flow_switch_out's JS_TakeParkedFlows) and sits in the
+           RUNTIME's pump queue while it is switched IN (flow_switch_in's JS_PutParkedFlows, which clears
+           `f->parked` as it hands the set over) — and this runs with the flow switched in, on every iteration
+           of flow_step's loop, so `f->parked` is NULL at this line whatever the flow is holding. An assert that
+           cannot fire is not a weaker assert, it is the read-side of the same defect a defaulted field is: it
+           reads as a guarantee and states nothing. Both homes are asked, which is the form the two other
            readers of this fact in this file already use (flow_finish's, and the checkpoint guard's). */
-        DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->park_fn == NULL,
-               "a flow whose blocked machine is in the runtime's PARK slot got a peer's second answer — the "
+        DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
+               "a flow whose blocked machine holds a parked continuation got a peer's second answer — the "
                "frame clone below copies the flow's own chain and not that continuation, so the arm would "
-               "resume without the activation that asked the question. Carry the parked continuation into the "
-               "clone (JS_TakeParkedFlow's pair is what the context switch already does with it)");
+               "resume without the activation that asked the question. Carry the parked continuations into the "
+               "clone (JS_TakeParkedFlows is what the context switch already does with them)");
         /* A ROUTED DELIVERY IS NOT REFUSED HERE ANY MORE, because the thing the refusal asked for is built:
            it said "the arm is that timeline continued, so the message that arrived in it arrived in the arm
            too, and the assembly does not carry the record. Give the arm its own copy" — engine_sibling_assemble
@@ -4650,7 +4650,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                may run in front of it. Everything below this line is a task.
                A JOB CAN PARK, and until this was reported the park was invisible to the scheduler. A queued
                step machine that suspends on a synchronous host request is parked by reaction_flow_step
-               (JS_ParkFlow) and this returned PROGRESS — so the flow was resumed, parked again, resumed again,
+               and this returned PROGRESS — so the flow was resumed, parked again, resumed again,
                forever, and never reported host-owed. The host was therefore never asked, and the answer that
                would have let it finish could not arrive: a livelock that looks exactly like slowness, because
                every turn is "progress". It is the same rule the mid-frame yield already keeps: a blocked flow
@@ -5133,14 +5133,14 @@ long engine_work_done(void) {
 }
 
 static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot its solver state, restore baseline */
-    /* the PARKED CONTINUATION travels with the flow, for the reason the delta does: it resumes a suspended
-       async activation of THIS flow, under THIS flow's heap. Left in the runtime it would be resumed by
-       whichever flow the scheduler picked next — against the wrong delta — or, if that flow parked too, hit
-       JS_ParkFlow's one-slot assertion, which is exactly what the smoke test was aborting on. */
-    { JSContext *pc; JSFlowParkFn *pf; JSFlowParkFreeFn *pd; void *po;
-      if (JS_TakeParkedFlow(JS_GetRuntime(ctx), &pc, &pf, &pd, &po)) {
-          f->park_ctx = pc; f->park_fn = (void *)pf; f->park_free = (void *)pd; f->park_opaque = po;
-      } }
+    /* the PARKED CONTINUATIONS travel with the flow, for the reason the delta does: each resumes a suspended
+       async activation of THIS flow, under THIS flow's heap. Left in the runtime they would be resumed by
+       whichever flow the scheduler picked next — against the wrong delta — or left behind entirely.
+       IT IS THE WHOLE SET, and it always should have been: a step reaches as many bases as it reaches, and a
+       take that moved one park would leave the others in the runtime for the next flow. It could not be
+       written that way while the runtime held a single slot, and this line's own comment used to say the
+       second park hit that slot's assertion — which is the defect the record moving onto the base ended. */
+    f->parked = JS_TakeParkedFlows(JS_GetRuntime(ctx));
     f->dec_blob = decide_suspend();
     f->pin_blob = concolic_pins_suspend();
     cow_unapply(ctx, (CowDelta *)f->delta);
@@ -5152,9 +5152,8 @@ static void flow_switch_out(JSContext *ctx, Flow *f) {   /* pause f: snapshot it
 }
 
 static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply its delta + solver state */
-    JS_PutParkedFlow(JS_GetRuntime(ctx), (JSContext *)f->park_ctx, (JSFlowParkFn *)f->park_fn,
-                     (JSFlowParkFreeFn *)f->park_free, f->park_opaque);
-    f->park_ctx = NULL; f->park_fn = NULL; f->park_free = NULL; f->park_opaque = NULL;
+    JS_PutParkedFlows(JS_GetRuntime(ctx), f->parked);
+    f->parked = NULL;
     if (!f->delta) f->delta = cow_delta_new();
     cow_set_current((CowDelta *)f->delta);
     cow_apply(ctx, (CowDelta *)f->delta);
@@ -5193,7 +5192,7 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
     /* "all scripts, chunks, jobs and fetches are done" cannot be true with a continuation still parked — the
        loop above resumes one before it can answer that. Asserting it here is what keeps the park inside the
        no-work-item-is-ever-dropped rule rather than merely intending to. */
-    DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->park_fn == NULL,
+    DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
            "a flow finished with a continuation still parked — that flow's async activation is dropped");
     /* A FINISHED FLOW HAS NO LIVE FRAME. `frame` is the JS_FlowNew handle holding this flow's heap frame chain
        — every activation, closure and local it is suspended across — so one left behind at finish retains the
@@ -6104,15 +6103,15 @@ static int engine_sched_slice(void) {
                THAT STACK HAS TWO REPRESENTATIONS HERE AND `frame` IS ONLY ONE OF THEM — which is why this
                guard was necessary and NOT sufficient, and the assert above went on firing after it landed.
                `Flow::frame` is a page SCRIPT's suspended frame chain; a flow that preempts inside JOB-DRIVEN
-               code parks instead (quickjs.h's JS_ParkFlow: "a flow that preempts inside job-driven code parks
-               here"), and `frame` is NULL for the whole of that. Every Indexed Database member that matters
+               code parks instead (quickjs.h's pump: "a flow that preempts inside job-driven code parks"
+               there), and `frame` is NULL for the whole of that. Every Indexed Database member that matters
                runs inside a job — `upgradeneeded`, `success`, `abort` are all event handlers — so the script
                half of this test never covered them. And the return above is what exposes it: resuming a parked
                continuation returns from here immediately, and its own comment says the continuation may park
                AGAIN straight away, so this line was reached with a member suspended between §4.5's "is the
                transaction active" check and the step that places its request. `JS_HasParkedFlow` is the other
                half of the same sentence, asked of the runtime because the flow is switched IN here and the
-               slot is its own (JS_TakeParkedFlow/JS_PutParkedFlow carry it across a switch). */
+               queue is its own (JS_TakeParkedFlows/JS_PutParkedFlows carry it across a switch). */
             if (g_checkpoint_hook && r != FLOW_STEP_DONE && !cur->frame &&
                 !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur))
                 g_checkpoint_hook(ctx);
