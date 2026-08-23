@@ -563,7 +563,31 @@ long pending_bytes(JSValueConst reg)
             total += pend_str_bytes(v);
             if (f == PEND_BODY) {
                 size_t bl = 0;
-                if (JS_GetArrayBuffer(pend_ctx(), &bl, v)) total += (long)bl;
+                /* NO BODY IS A POSITIVE STATEMENT AND IS READ AS ONE — never as a hole a NULL return fills.
+                 * A record is BORN with `PEND_BODY` = JS_NULL (pending_new above) and only a request that
+                 * actually carries bytes ever replaces it (engine.c's pending_set_bytes), so on a frontier of
+                 * fetch replies almost every record's body field is JS_NULL by design.
+                 * `JS_GetArrayBuffer` THROWS on anything that is not an ArrayBuffer — "ArrayBuffer object
+                 * expected", from the class check every ArrayBuffer accessor shares — and answers NULL. Asking
+                 * it unconditionally therefore raised a TypeError per bodiless record, and `if (ptr)` read the
+                 * NULL as "add nothing" and walked on: the count was right and the COMPLETION was left standing
+                 * in the runtime. That is §Architecture's default-conceals-a-hole exactly, and the concealment
+                 * is the `if`, not the throw.
+                 * WHERE IT LANDED IS WHY IT MATTERED. `rt->current_exception` is per-RUNTIME while a completion
+                 * is per-EVALUATION (ECMA-262 §6.2.4 "The Completion Record Specification Type"; §5.2.4.3
+                 * "Shorthands for Unwrapping Completion Records" — "?" propagates an abrupt completion TO THE
+                 * CALLER), and this walk is a CENSUS: it runs in the host's own time between two scheduler
+                 * slices (cold_census, the @COLD line), where no flow is running and nothing owns a throw. The
+                 * next flow the scheduler resumed found it and read it as its own.
+                 * A CENSUS MEASURES; IT MAY NOT THROW. `pend_str_bytes` three lines above already states that
+                 * shape — it asks `JS_IsString` and answers 0 — and this is the same sentence for the same
+                 * reason. The third case, a body field that is neither absent nor a buffer, is a PRODUCER bug
+                 * and says so rather than being measured as zero. */
+                DCHECK(JS_IsNull(v) || JS_IsArrayBuffer(v),
+                       "a pending record's body field is neither absent nor a byte sequence — it is born "
+                       "JS_NULL and only pending_set_bytes ever writes one, so a third shape here is a "
+                       "producer writing something that is not a request body into the slot a park serializes");
+                if (JS_IsArrayBuffer(v) && JS_GetArrayBuffer(pend_ctx(), &bl, v)) total += (long)bl;
             /* THE TWO PAIR LISTS, counted by one arm of this walk because they are one shape — the request's
                headers, and the answers beyond the first that a peer's other timelines gave. A field a census
                does not walk is a field a pager is surprised by. */
