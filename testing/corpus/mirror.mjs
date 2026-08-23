@@ -64,14 +64,37 @@ for (const [id, url, stack] of rows) {
     contentType: doc.ct, bytes: doc.buf.length, sha256: sha(doc.buf), fetchedAt: now(),
     resources: [],
   };
+  /* AN ATTRIBUTE VALUE IS HTML-ESCAPED AND THE URL IS WHAT IT DECODES TO. Read raw, twitch's preload href
+     came out holding `&#x3D;` and `&amp;` literally, so curl requested a URL the origin had never issued and
+     saved its 43-byte ERROR body as the resource -- which the engine then compiled as a program and aborted
+     on. A fixture that stores an error page under a real URL's name manufactures an engine defect, the same
+     way serve-faithful's 404 prose did. Only the five predefined references can appear in an attribute value
+     plus numeric character references, so this decodes exactly those rather than pulling in a parser. */
+  const unent = (s) => s.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&(lt|gt|quot|apos|amp);/g, (_, n) => ({ lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' }[n]));
   const srcs = new Set();
-  for (const m of html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)) srcs.add(m[1]);
-  for (const m of html.matchAll(/<link[^>]+rel=["'](?:modulepreload|preload)["'][^>]*href=["']([^"']+)["']/gi)) srcs.add(m[1]);
-  for (const m of html.matchAll(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["'](?:modulepreload)["']/gi)) srcs.add(m[1]);
+  for (const m of html.matchAll(/<script[^>]+src=["']([^"']+)["']/gi)) srcs.add(unent(m[1]));
+  for (const m of html.matchAll(/<link[^>]+rel=["'](?:modulepreload|preload)["'][^>]*href=["']([^"']+)["']/gi)) srcs.add(unent(m[1]));
+  for (const m of html.matchAll(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["'](?:modulepreload)["']/gi)) srcs.add(unent(m[1]));
+  /* RESOLVE AGAINST THE DOCUMENT BASE URL, WHICH IS NOT ALWAYS THE DOCUMENT'S ADDRESS. HTML §2.4.3 "Document
+     base URLs": if the document has a descendant `base` element with an `href` (§4.2.3 "The base element"),
+     that is the base; only otherwise is it the document's own address.
+     THREE OF THE THIRTY CORPUS SITES DECLARE ONE and this resolved against `doc.final` instead, so it fetched
+     addresses those origins had never published: material.angular.dev ships `<base href="/">` with
+     `src="polyfills-TKX23P4F.js"`, which is `/polyfills-TKX23P4F.js` and was fetched as
+     `/components/button/polyfills-TKX23P4F.js`. Every one came back 404 -- and a 404 has a BODY, so 21376
+     bytes of `<!doctype html><title>Page Not Found</title>` were saved under a `.js` name and served to the
+     engine as a classic script. The engine did the only correct thing with it and aborted ("unexpected token
+     in expression: '<'"), and that abort was about this builder. */
+  const baseEl = html.match(/<base\b[^>]*\bhref\s*=\s*["']([^"']+)["']/i);
+  let baseUrl = doc.final;
+  if (baseEl) { try { baseUrl = new URL(unent(baseEl[1]), doc.final).href; } catch { } }
+  rec.baseUrl = baseUrl;
   let n = 0;
   for (const src of srcs) {
     if (/^data:/i.test(src)) continue;
-    let abs; try { abs = new URL(src, doc.final).href; } catch { continue; }
+    let abs; try { abs = new URL(src, baseUrl).href; } catch { continue; }
     const r = get(abs);
     if (r.err || !r.buf) { rec.resources.push({ url: abs, error: r.err || 'no body' }); continue; }
     const u = new URL(abs);

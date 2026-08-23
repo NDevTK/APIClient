@@ -1,0 +1,9 @@
+<!doctype html><html><head><title>instrument control</title></head><body>
+<script>
+  // INLINE, top level: the simplest thing that must produce a fetchCallSite.
+  fetch('/api/inline-top?k=1');
+  function neverCalled(){ fetch('/api/orphan-only'); }
+  if (window.__FLAGS && window.__FLAGS.admin) fetch('/api/admin-gated');
+</script>
+<script src="/ext.js"></script>
+</body></html>

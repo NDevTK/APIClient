@@ -15,6 +15,7 @@
 import puppeteer from 'puppeteer';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { loadavg, cpus } from 'node:os';
 
 const id = process.argv[2], url = process.argv[3];
 const DWELL = Number(process.env.DWELL || 40000);
@@ -81,7 +82,16 @@ try {
   if (!r) nav = 'NO-RESPONSE';
 } catch (e) { nav = 'goto:' + String(e && e.message || e).slice(0, 120); }
 
+/* THE DWELL IS WALL-CLOCK, SO THE LOAD IS PART OF THE MEASUREMENT AND THE ROW CARRIES IT.
+   A busy machine gives the engine less CPU inside the same 40 seconds, so a row's counters fall without
+   anything about the engine changing -- which is how a run at load 92 on four cores was published as a
+   regression. That is the elapsed-time defect CLAUDE.md names, and the honest fix here is not to switch
+   this probe to a CPU clock (the engine is in another process, and the number wanted is "what does a user
+   get in 40 seconds") but to REPORT the conditions beside the number, sampled at both ends of the dwell so
+   a build that started mid-row is visible rather than averaged away. */
+const loadBefore = loadavg();
 await new Promise(r => setTimeout(r, DWELL));
+const loadAfter = loadavg();
 
 const cur = await off.evaluate(new Function('return (' + PROBE + ');'))
   .catch(e => ({ probeError: String(e && e.message || e), runs: [], docs: [], global: [] }));
@@ -107,11 +117,27 @@ try { artifact.wasmSha256 = createHash('sha256').update(readFileSync(EXT + '/lib
 try {
   const b = JSON.parse(readFileSync(EXT + '/lib/qjs/qjs.mjs.build.json', 'utf8'));
   artifact.builtFromHeadClaim = b.head; artifact.builtFromQjsHeadClaim = b.qjsHead; artifact.builtAt = b.at;
+  /* THE STAMP ANSWERS A THREE-STATE QUESTION AND THIS ROW RECORDS ALL THREE. `dirty` alone used to carry both
+     "asked git, nothing differs" and "could not ask git at all" -- and the second is the state in which the
+     stamp knows NOTHING, so folding it into an empty `dirty` published the STRONGEST claim available (built
+     from a clean revision) out of the weakest evidence. `unasked` is the paths whose state could not be read.
+     ITS ABSENCE IS AGE, NOT A NEGATIVE ANSWER: an artifact stamped before that field existed has no opinion,
+     which is a third thing again and is recorded as such rather than defaulted to `[]`. */
   if (b.dirty !== undefined) artifact.builtFromDirtyTree = b.dirty;
+  if (b.unasked !== undefined) artifact.builtFromUnaskedPaths = b.unasked;
+  /* A NON-EMPTY `dirty` IS A POSITIVE FACT and is reported as one whatever else the stamp does or does not
+     carry -- paths that DIFFER were, necessarily, successfully asked about. Only an EMPTY list is ambiguous,
+     and only then does `unasked` decide between "clean" and "nobody could tell". */
+  artifact.cleanTreeClaimIs = b.dirty === undefined ? 'no-dirty-field(stamp predates it)'
+    : b.dirty.length ? 'dirty(' + b.dirty.length + ' path(s) differ)'
+      : b.unasked === undefined ? 'unprovable(stamp predates the unasked field — an empty dirty list here is NOT proof of a clean tree)'
+        : b.unasked.length ? 'unprovable(' + b.unasked.length + ' path(s) git could not be asked about)'
+          : 'clean(asked, nothing differs)';
 } catch (e) { artifact.buildJsonErr = String(e.message); }
 
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
+  dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
   runsTotal: runs.length,
   runsMine: myRuns.length,
   crashedRuns: runs.filter(r => r.crashed).length,
@@ -148,9 +174,14 @@ const row = {
                    .filter(x => typeof x === 'string' && x.includes('@WHY')))],
   atE: [...new Set(j.match(/@E [^\n]*/g) || [])].slice(0, 10),
   /* THE TWO HALVES OF ONE FACT, READ TOGETHER. A crashed run with no reason, or a reason with no crashed run,
-     means one of the two producers is not being read -- which is the defect this row already suffered once. */
+     means one of the two producers is not being read -- which is the defect this row already suffered once.
+     `@E` COUNTS AS A REASON. It was left out, so a run killed by a CHECK -- always-fatal in dev AND release,
+     the loudest thing the engine can say -- was reported as a crash nobody could explain, while the row's own
+     `atE` field held the cond and the file:line. Every abort on this corpus that fires a CHECK rather than a
+     DCHECK read that way, which is a flag that raises itself precisely where it is least true. */
   crashWithoutReason: runs.filter(r => r.crashed).length > 0 &&
-                      [...mine.flatMap(d => d.errs || []), ...(j.match(/@WHY[^\n]*/g) || [])].length === 0,
+                      [...mine.flatMap(d => d.errs || []), ...(j.match(/@WHY[^\n]*/g) || []),
+                       ...(j.match(/@E [^\n]*/g) || [])].length === 0,
   crashesFlag: cur.crashes,
   consoleLines: sink.length,
   probeError: cur.probeError,
