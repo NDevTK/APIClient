@@ -254,6 +254,72 @@ static DecSeg *dec_seg_alloc(int n) {
     return s;
 }
 
+/* THIS FLOW HAS LEFT THE PATH ITS VECTOR DESCRIBES — so the vector ENDS at the cursor, and everything above it
+ * belongs to a run this flow is no longer on.
+ *
+ * IT IS THE MECHANISM decide_arm's key assert used to ask the next reader to build, and the assert's own words
+ * are why it is a truncation rather than a widening: "the arm it would let through is another flow's". A replay
+ * against TODAY's code and TODAY's replies is ALLOWED to diverge — §Time-travel-resume requires the
+ * re-derivation that causes it, and §@S's re-injection point hands a candidate a path recorded by a flow whose
+ * source was concolic where the candidate's is concrete, so the candidate legitimately asks FEWER questions.
+ * What was missing was not permission to diverge, it was the ability to NOTICE and stop consuming.
+ *
+ * NOTHING IS DROPPED AND NOTHING IS PRUNED, which is what keeps this out of §NO BOUNDS. The caller forks at
+ * this very branch on the line after, so both arms run from here exactly as they would at any new decision;
+ * what is abandoned is a RECORD of answers to questions this run did not ask, which no flow can use.
+ *
+ * IT IS A NEW SEGMENT AND NOT A LOWERED ORIGIN, and that is forced by two sites rather than chosen. `g_dec_below`
+ * alone does not describe a flow's vector: decide_resume RE-DERIVES it as `base->below + base->n`, so a
+ * truncation held only in the global is undone by the first park; and dec_seg_arm places a sibling's slot at
+ * that same `base->below + base->n`, so a fork taken straight after would put the sibling's arm above the tail
+ * this flow had just left behind. Freezing the surviving prefix as its own segment makes both of those read
+ * the cursor, because the chain is contiguous again — and it is what a fork already does at every other
+ * branch, so this is the existing shape rather than a second one.
+ * IT COSTS ONE SEGMENT, NEVER THE PREFIX. Only the segment the cursor falls INSIDE is copied — the chain below
+ * it is shared by pointer exactly as every fork shares it — so this is O(that segment), which for a
+ * fork-per-branch chain is one slot. Copying `[0, g_c)` would be the per-flow `malloc + memcpy` this file's
+ * header measures as the quadratic it deleted.
+ * THE TAIL IS RELEASED, NEVER TORN OUT. The segments above the cursor stay alive for every sibling standing on
+ * them; what is dropped is THIS flow's reference, which is the same bookkeeping a flow finishing performs.
+ * THE HEAD IS EMPTY HERE BY CONSTRUCTION: a slot is appended only by the forking branch, which leaves the
+ * cursor at the end, so a flow that is still replaying has taken none of its own. Asserted rather than zeroed,
+ * because zeroing it would silently discard decisions this flow really did make. */
+static void dec_leave_path(void) {
+    DecSeg *old = g_dec_base, *s, *ns;
+    int n;
+
+    DCHECK(g_c < dec_total(),
+           "a flow was taken off its recorded path while the cursor was already at the end of it — there is "
+           "nothing above the cursor to leave behind, so this call is about a divergence that did not happen");
+    DCHECK(g_dec_n == 0 && g_c < g_dec_below,
+           "a flow diverged from its recorded path at a cursor inside its OWN head — the head holds only "
+           "decisions this run took and appended, each of which it asked for itself, so a slot there cannot "
+           "answer a different question than the branch consuming it");
+    if (g_c == 0) {                      /* the very first branch disagreed: this flow stands on nothing */
+        g_dec_base = NULL; g_dec_below = 0;
+        dec_seg_unref(old);
+        return;
+    }
+    for (s = old; s; s = s->base)
+        if (g_c - 1 >= s->below) break;
+    DCHECK(s != NULL,
+           "the slot below the divergence is in no frozen segment — the chain's `below` offsets and the head's "
+           "origin disagree, so the vector this flow is being truncated to has a hole in it");
+    n = g_c - s->below;                  /* s's own surviving slots; everything under s survives by pointer */
+    ns = dec_seg_alloc(n);
+    memcpy(ns->e, s->e, (size_t)n);
+    memcpy(ns->k, s->k, (size_t)n * sizeof *ns->k);
+    ns->below = s->below;
+    ns->base = s->base;
+    ns->refcount = 1;                    /* the running flow's, and nobody else's: this prefix is new */
+    /* TAKEN BEFORE THE RELEASE, because the release may free `s` and cascade into the very segment this one is
+       about to be based on. */
+    if (ns->base) ns->base->refcount++;
+    g_dec_base = ns;
+    g_dec_below = g_c;
+    dec_seg_unref(old);
+}
+
 /* FREEZE the head into a shared immutable segment and hand the caller ONE reference on it, on top of the
    running flow's own. An empty head freezes to nothing: the caller takes another reference on the chain the
    flow already stands on, which is what keeps a park/resume pair with no decisions between them from pushing an
@@ -646,6 +712,51 @@ int decide_value_arm(JSValueConst cond)
     return arm;
 }
 
+/* THE RECORDED ARM AT THE CURSOR, or -1 WHEN THE SLOT THERE ANSWERS A DIFFERENT QUESTION — the whole of what
+   tells a replay whether it is still on its recorded path, in ONE descent of the chain. The cursor moves only
+   on a match, so a caller that gets -1 is standing exactly where the divergence is and dec_leave_path can end
+   the vector at it. Asking the question and taking the arm in two calls would be two walks of a chain this
+   file's own note already measures as the resume's fastest-growing cost. */
+static int dec_replay(uint32_t asked) {
+    uint32_t recorded;
+    int arm;
+
+    DCHECK(g_c < dec_total(), "the recorded arm was asked for from past the end of the vector — there is no "
+                              "slot there to answer with");
+    arm = dec_at(g_c, &recorded) ? 1 : 0;
+    if (recorded != asked) return -1;
+    g_c++;
+    return arm;
+}
+
+/* THE FORK — reached by a branch this flow has never decided, and by one whose recorded answer belongs to
+   another question (dec_leave_path having just ended the vector at the cursor, which makes the two the same
+   state). FRAME-SNAPSHOT: prepare the FALSE sibling's hot state (its decision vector + the current
+   constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The sibling resumes
+   AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes TRUE. No re-run vector,
+   no fallback.
+   THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order in decide_arm
+   one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then overwrite with
+   TRUE — so the sibling was born already knowing the answer to the branch it was about to re-execute, its
+   constraint was AHEAD of its cursor, and the vector had to be consulted before the constraint or the
+   sibling's one recorded slot would be read by the NEXT branch. It buys nothing: the sibling resumes AT this
+   branch, re-asks it, takes FALSE out of its recorded slot and records FALSE itself on the line below — the
+   same constraint, one branch later, derived rather than planted. What the sibling DOES inherit is everything
+   this flow knew BEFORE the branch, which is what the snapshot is. */
+static int dec_fork_here(const char *key, uint32_t asked, int *forked) {
+    void *dblob = decide_fork_blob(g_c, 0, asked);
+    void *pblob;
+
+    fork_key_count(key ? key : "(no source identity)");
+    pblob = concolic_pins_suspend();
+    if (key) concolic_constrain_branch(key, 1);   /* THIS flow's arm, into the head above the shared freeze */
+    engine_prepare_fork(dblob, pblob);
+    dec_append(1, asked);            /* this flow: TRUE arm, onto the head the freeze above just emptied */
+    g_c++;
+    *forked = 1;
+    return 1;
+}
+
 /* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the value tested has no identity this
    engine can spell — uncertainty, which keeps both arms). Every caller of this is a place the program's
    control flow turns on unknown input, and there are two of them because a decision is not an OP_if: a
@@ -681,48 +792,20 @@ static int decide_arm(const char *key, int *forked) {
            run recorded. Asking the vector first would have that flow consume a slot at every REPEAT test of a
            flag the original decided for free, and every decision after the first repeat would be some other
            predicate's answer. */
-    } else if (g_c < dec_total()) {      /* REPLAY: this run is re-reaching a recorded decision — take that arm */
-        uint32_t recorded;
-        arm = dec_at(g_c, &recorded) ? 1 : 0;
-        /* THE SLOT MUST ANSWER THE QUESTION NOW BEING ASKED. Until this line the replay was POSITIONAL: it
-           took slot g_c whatever the branch was, so a re-run that asked one question more, one fewer, or the
-           same ones in another order consumed the next predicate's arm here and every predicate's arm after
-           it — a real arm, in range, past every assert on this path, all of which are RANGE asserts. A clean
-           resume and a scrambled one emitted byte-identical findings, which is why nothing has ever reported
-           this. */
-        DCHECK(recorded == asked,
-               "a replayed decision slot was recorded for a DIFFERENT question than the branch now consuming "
-               "it. This flow has left the path its decision vector describes, so this branch is taking an arm "
-               "another predicate decided and every branch after it will read the next one's. A replay against "
-               "TODAY's code and TODAY's replies is allowed to diverge — Time-travel-resume requires the "
-               "re-derivation that causes it — so this is not corruption; what does not exist yet is the "
-               "mechanism that lets a replay NOTICE it has left the recorded path and stop consuming it. "
-               "Build that at this seam. Do not widen this check: the arm it would let through is another "
-               "flow's, and the divergence it would hide is the one cross-session resume is judged by");
-        g_c++;
+    } else if (g_c < dec_total() && (arm = dec_replay(asked)) >= 0) {   /* REPLAY: a recorded decision */
+        /* the cursor moved inside dec_replay, and only because the slot answered THIS question */
     } else {
-        /* NEW decision -> FRAME-SNAPSHOT FORK: prepare the FALSE sibling's hot state (its decision vector +
-           the current constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The
-           sibling resumes AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes
-           TRUE. No re-run vector, no fallback. */
-        void *dblob = decide_fork_blob(g_c, 0, asked);
-        fork_key_count(key ? key : "(no source identity)");
-        /* THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order above
-           one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then
-           overwrite with TRUE — so the sibling was born already knowing the answer to the branch it was about
-           to re-execute, its constraint was AHEAD of its cursor, and the vector had to be consulted before the
-           constraint or the sibling's one recorded slot would be read by the NEXT branch. It buys nothing: the
-           sibling resumes AT this branch, re-asks it, takes FALSE out of its recorded slot and records FALSE
-           itself on the line below — the same constraint, one branch later, derived rather than planted. What
-           the sibling DOES inherit is everything this flow knew BEFORE the branch, which is what the snapshot
-           is. */
-        void *pblob = concolic_pins_suspend();
-        if (key) concolic_constrain_branch(key, 1);   /* THIS flow's arm, into the head above the shared freeze */
-        engine_prepare_fork(dblob, pblob);
-        dec_append(1, asked);            /* this flow: TRUE arm, onto the head the freeze above just emptied */
-        g_c++;
-        arm = 1;
-        *forked = 1;
+        /* A NEW DECISION, OR ONE THIS FLOW'S VECTOR NO LONGER DESCRIBES — and after dec_leave_path those are
+           the same state, which is why there is one fork and not two.
+           THE SLOT MUST ANSWER THE QUESTION NOW BEING ASKED, and until dec_replay could say otherwise the
+           replay was POSITIONAL: it took slot g_c whatever the branch was, so a re-run that asked one more, one
+           fewer, or the same ones in another order consumed the next predicate's arm here and every
+           predicate's arm after it — a real arm, in range, past every assert on this path, all of which are
+           RANGE asserts. A clean resume and a scrambled one emitted byte-identical findings, which is why
+           nothing ever reported it. The mismatch is now a DIVERGENCE rather than an abort: the recorded tail
+           is left behind and this branch forks like any other. */
+        if (g_c < dec_total()) dec_leave_path();
+        arm = dec_fork_here(key, asked, forked);
     }
     if (key && !*forked) concolic_constrain_branch(key, arm);   /* a REPLAYED arm narrows this flow just the same */
     DCHECK(g_c <= dec_total(), "the decision cursor ran past the vector — a branch answered without consuming "
