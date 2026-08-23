@@ -163,9 +163,9 @@ int pending_ready(JSValueConst reg)
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(reg, i);
         /* THE KIND IS HALF THE QUESTION — see pending.h. A HOSTREQ's answer belongs to the machine that is
-           parked at the call site which asked for it; the drain never delivers one, so a register holding
-           nothing else is not ready and its flow must go on waiting for its own resume rather than be sent to
-           a drain that would take the answer away from it. */
+           parked at the call site which asked for it; flow_deliver_one_reply never delivers one, so a
+           register holding nothing else is not ready and its flow must go on waiting for its own resume rather
+           than be sent to a delivery that would take the answer away from it. */
         int hit = pending_get_int(e, PEND_HAVE_VALUE) != 0 &&
                   pending_get_int(e, PEND_KIND) != FLOW_PENDING_HOSTREQ;
         JS_FreeValue(pend_ctx(), e);

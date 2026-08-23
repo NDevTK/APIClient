@@ -125,7 +125,7 @@
  * reason one field down: HTML §4.12.1.1 "Processing model"'s "execute the script element" is a switch on EL,
  * and its "classic" arm sets that document's §3.1.7 `currentScript` to it for the whole of the run. A park is
  * where the element would otherwise be lost — the flow leaves html_script_prepare with the node in hand and
- * comes back to a URL and a reply — so the element rides the record to the drain, which puts it on the row.
+ * comes back to a URL and a reply — so the element rides the record to the delivery, which puts it on the row.
  * IT IS THE ELEMENT'S WRAPPER AND NOT A POINTER, which is what makes it storable at all: this record is a JS
  * value, so a raw `lxb_dom_element_t *` in it would be a pointer inside a structure the runtime walks and the
  * cold tier measures. The wrapper is the node's ONE identity object (core/dom/node.h), so naming the node
@@ -162,7 +162,7 @@
     X(HAVE_VALUE, "haveValue", PEND_SHARE,  JS_FALSE)                                  \
     X(KIND,       "kind",      PEND_SHARE,  JS_NewInt32(pend_ctx(), kind))             \
     X(SCRIPT_I,   "scriptI",   PEND_SHARE,  JS_NewInt32(pend_ctx(), -1))               \
-    /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the drain */ \
+    /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the delivery */ \
     X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \
     X(REQ,        "req",       PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
     X(OP,         "op",        PEND_SHARE,  JS_NULL)                                   \
@@ -238,8 +238,8 @@ int  pending_blocked(JSValueConst reg);
 /* IS ANY ENTRY DELIVERABLE — and DELIVERABLE ASKS THE KIND, exactly as pending_blocked one line above does.
    The two predicates read the same register and only one of them was asking what an entry IS, and that
    asymmetry is the defect rather than an omission: a SYNCHRONOUS request's answer is TAKEN by the machine that
-   asked (engine_host_take), never drained, so an answered HOSTREQ is not a reply anybody can deliver. Read
-   without the kind it made the register "ready", flow_step called the fetch drain, and the drain swap-removed
+   asked (engine_host_take), never delivered, so an answered HOSTREQ is not a reply anybody can deliver. Read
+   without the kind it made the register "ready", flow_step called the reply delivery, and it swap-removed
    the answer and pushed it through a `resolve` capability the record does not have — the asking flow then
    parked at the call site that asked, forever, with its answer converted into somebody's fetch reply.
    THAT IS WHY THE SMOKE HOST PAYS ONLY AT A STALL. The shape is unreachable while the host is asked only when

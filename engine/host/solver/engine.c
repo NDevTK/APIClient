@@ -56,9 +56,9 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
 
 
 /* FETCH-AWAIT parking: a host fetch registers its resolve capability on THE RUNNING FLOW. A flow that awaits it
-   suspends its async body; the flow's own pending register is drained when the reply arrives — each awaiting
+   suspends its async body; the flow's own pending register is delivered from when the reply arrives — each awaiting
    async body's reaction enqueues as a job in that flow's queue — and it resumes. Per-flow (not global) so one
-   flow's drain never resolves another flow's fetch (which would route the reaction to the wrong flow's COW — a
+   flow's delivery never resolves another flow's fetch (which would route the reaction to the wrong flow's COW — a
    leak + contamination).
    THERE IS ONE FORM, and it names a URL. A second form used to take the value UP FRONT, for an edge that
    already had the bytes; nothing in the engine ever did — the Fetch component and the module loader both owe
@@ -104,7 +104,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
 }
 
 /* PARK ON A DYNAMIC `import()`. The same register and the same URL, and a DIFFERENT delivery: a module load is
-   owed SOURCE TEXT, so the drain settles `resolve` with the reply's body rather than with the reply record a
+   owed SOURCE TEXT, so the delivery settles `resolve` with the reply's body rather than with the reply record a
    `fetch()` becomes a Response from. */
 void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char *url) {
     Flow *f = flow_running();
@@ -144,15 +144,15 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
 
 /* PARK ON AN INJECTED SCRIPT. `document.body.appendChild(s)` with `s.src` set is the other way a page loads code
    conditionally, and it has no promise for the reply to settle — the reply IS more program. The flow parks on
-   the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the drain queues the
+   the URL exactly as a fetch does (same register, same dedup, same stall accounting) and the delivery queues the
    body as this flow's next script, so the loaded code runs in the world that injected it: its COW delta, its
    pins, its position in the BFS. A sibling that never took that branch never sees the script. */
 /* …AND THE `set of scripts that will execute as soon as possible` PARKS THE SAME WAY, which is why this is one
    entry and no longer takes the flow as a parameter. A member of that set has no POSITION to hold — §13.2.7
-   waits for the set only before the load event — so its reply becomes a program whenever it drains, exactly as
-   an injected script's does. A script whose position IS fixed takes a slot instead (engine_queue_docscript_url),
-   and the second caller this used to have, which registered a joined document's own <script src> against a flow
-   that was not running, went with that. */
+   waits for the set only before the load event — so its reply becomes a program whenever it is delivered,
+   exactly as an injected script's does. A script whose position IS fixed takes a slot instead
+   (engine_queue_docscript_url), and the second caller this used to have, which registered a joined document's
+   own <script src> against a flow that was not running, went with that. */
 /* …AND IT CARRIES THE ELEMENT'S TYPE, because the reply is a PROGRAM and §4.12.1.1's "execute the script
    element" switches on that type. It used to be decoded and evaluated as CLASSIC unconditionally, which was a
    restatement of the gap this park sat behind rather than a fact about these entries: `<script type=module src>`
@@ -2041,14 +2041,14 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
             JS_FreeValue(ctx, uv);
             if (fill) {
                 /* THE PRODUCER'S HALF OF THE CONTRACT THE DRAIN CHECKS, asked HERE so the two together say
-                   WHICH of two very different things went wrong. The drain asserts that a fetch entry carries a
+                   WHICH of two very different things went wrong. The delivery asserts that a fetch entry carries a
                    §2.2.6 URL list at the moment it is delivered; this asserts that it carried one at the moment
                    it was WRITTEN. One assert alone cannot separate "the host built a bad record" from "a good
                    record was changed after it landed" — and the second is a COW/lifetime bug in this file
                    rather than a host bug, with a different fix and a different blast radius. Two asserts, one
                    contract, and whichever fires names the half.
                    Only for the FETCH kind: a docscript, an injected <script src> and a module load are owed
-                   BYTES, and their drains read `body` off the same record without ever asking for a list. */
+                   BYTES, and their deliveries read `body` off the same record without ever asking for a list. */
 #if APICLIENT_DEV
                 if ((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(value)) {
                     JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
@@ -2072,7 +2072,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
                all N observe it.
                A CLEAR THAT IS EARLY BY ONE STEP IS THE ONLY WAY THIS CAN BE WRONG, and it is the trade this
                file already takes twice — engine_set_referenced clears the WHOLE frontier's marks on a fact that
-               names no flow, and the shared document-script slot inside flow_drain_pending does the same. A
+               names no flow, and the shared document-script slot inside flow_deliver_one_reply does the same. A
                flow re-marked for some other unanswered entry between two deliveries of this address is picked
                once, reports host-owed again and is re-marked; nothing is dropped, skipped or reordered. A mark
                kept after the fact it rested on has gone costs the flow its entire timeline, which is the
@@ -2083,7 +2083,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
     }
     /* LEARNING FROM REPLIES IS THE POINT (CLAUDE.md §Solver), and this is the one point every fetched reply
        crosses exactly once — a URL two flows parked on is answered here once — so the learning happens here
-       rather than in the per-flow drain, where it would run once per waiter. What the body says about the
+       rather than in the per-flow delivery, where it would run once per waiter. What the body says about the
        addresses the page will go on to fetch (solver/reply_decode.h) is a fact about the SERVER, not about a
        flow's world, so it is not per-flow state and takes no COW capture, exactly as the endpoint surface
        does not.
@@ -2121,7 +2121,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
    completion is not merely read, it is the ANSWER a peer's flow is parked on. */
 /* AN EXTERNAL SCRIPT'S ADDRESS, HOLDING THE POSITION ITS PROGRAM WILL RUN AT — the fifth kind, and the only one
    whose payload is not a program yet. The entry carries the URL, the flow WAITS at it (flow_step below), and the
-   reply REPLACES the address with the source text and this kind with DYN_PAGE_SCRIPT (flow_drain_pending), after
+   reply REPLACES the address with the source text and this kind with DYN_PAGE_SCRIPT (flow_deliver_one_reply), after
    which it is an ordinary program of the sequence.
    IT IS WHAT GIVES EVERY DOCUMENT OF THIS AGENT §4.12.1's ORDER. The SESSION's document already had it — a slot
    per script INDEX that the flow stops at — and no other document did: a child navigable's (core/frame/
@@ -2134,9 +2134,9 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
 typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP,
                DYN_SCRIPT_SRC } DynKind;
 
-/* Resolve every pending fetch this flow issued (the network completed). Returns how many were drained. */
+/* Deliver ONE of this flow's answered pending entries (the network completed) — see flow_deliver_one_reply. */
 /* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
-   rather than spinning on a drain that would resolve nothing. */
+   rather than spinning on a delivery that would resolve nothing. */
 static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending); }
 
 /* HTML §8.1.4.2'S processResponseConsumeBody STEP THAT MAKES SOURCE TEXT — the point at which a fetched BYTE
@@ -2192,21 +2192,60 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
    carries one is not a broken page (ECMAScript §11.1 "Source Text"), and running it to the first NUL is a
    silently shorter program with every endpoint and sink past that byte unreachable. */
 
-/* A REPLY THAT IS A PROGRAM JOINS THE SEQUENCE, which is why the drain below reaches the queue that is
+/* A REPLY THAT IS A PROGRAM JOINS THE SEQUENCE, which is why the delivery below reaches the queue that is
    defined past it. Declared rather than moved: the queue belongs beside the other queue entry points and
-   the drain belongs beside the register it walks. */
+   the delivery belongs beside the register it scans. */
 static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                          const char *url, DynPos pos);
 /* …and the same entry for a row an ELEMENT put there — see engine_queue_el below. */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                             const char *url, DynPos pos, lxb_dom_element_t *el);
 /* …and the one a caller reaches when it ALREADY holds the decoded text as a shared body, which is every reply
-   that arrives as a program: the drain below adopts the decode and hands it over without a second copy. */
+   that arrives as a program: the delivery below adopts the decode and hands it over without a second copy. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
                                  DynPos pos, lxb_dom_element_t *el);
 
-static int flow_drain_pending(JSContext *ctx, Flow *f) {
-    int n = 0, i = 0;
+/* ONE ANSWERED ENTRY, THEN RETURN — and the loop below is the SEARCH for it, not a drain.
+ *
+ * IT WAS A DRAIN, and the drain settled every answered entry in one pass. That is the shape §Every runtime job
+ * is a scheduler flow forbids in as many words — "There is NO `while(JS_ExecutePendingJob)` loop — the
+ * scheduler IS the job pump" — and flow_step's own header says the same thing about itself ("flow_step is a
+ * step, and it used to be a drain"). This was the last drain left inside it.
+ *
+ * AND IT REORDERED THE PAGE'S MICROTASKS, which is the reason it could not merely be tidied. Every delivery
+ * below runs through JS_CallAsFlow, which builds a CALL-ROOT FLOW: the native resolving function is a step
+ * machine and offers a park at every re-entry, and 27.2.1.3.2 "Promise Resolve Functions" step 9's
+ * `Get(resolution, "then")` is a read on an object whose prototype the page owns, so the settle of reply A can
+ * PARK part-way. The drain did not stop for that. It went on and delivered reply B, whose settle ran to
+ * completion — so B's promise reached 27.2.1.4 "FulfillPromise" step 7's TriggerPromiseReactions FIRST, and
+ * 27.2.1.8 "TriggerPromiseReactions ( reactions, argument )" step 1.b enqueued B's reaction jobs ahead of A's.
+ * §9.5.5 "HostEnqueuePromiseJob ( job, realm )" then requires that "Jobs must run in the same order as the
+ * HostEnqueuePromiseJob invocations that scheduled them", and the queue honours that faithfully — so the
+ * page's `.then` handlers ran B before A, in an order the forced preempt alone decided. A park is only ever
+ * legal because it is TRANSPARENT (flow_park says so, and JS_CallInternal, JS_ExecutePendingJob and
+ * JS_FlowFree each assert it); here the transparency was broken not by the park but by the walk continuing
+ * across it.
+ *
+ * IT WAS UNREACHABLE UNTIL THE PARK RECORD MOVED ONTO THE BASE. While the runtime held ONE park slot, the
+ * second park aborted at flow_park before the ordering question could be asked at all. The runtime owns a FIFO
+ * of them now, so the walk ran to the end and the reordering became reachable — which is what makes this the
+ * moment for the fix rather than a defect that was always live.
+ *
+ * ONE PER STEP IS ALSO WHAT THE EVENT LOOP DOES. A completed fetch is delivered by a TASK, and HTML §8.1.7.3
+ * "Processing model" performs a microtask checkpoint at the end of each one — so two replies are two tasks
+ * with a checkpoint between them, never one pass that settles both. flow_step's arms are that model: the
+ * parked continuation is resumed by the arm at the top of the loop before anything else this flow could do,
+ * and flow_checkpoint_due runs the microtasks the completed settle enqueued, both of them BEFORE control
+ * reaches this function again for the next reply. Nothing is dropped, starved, skipped or forgotten: the entry
+ * stays on the register until the step that delivers it, and the flow reports progress, so it is re-ranked and
+ * comes back for the rest exactly as it comes back for its programs and its jobs.
+ *
+ * THE FIRST ANSWERED ENTRY IN REGISTER ORDER, which is a property worth having on purpose: delivery order is
+ * then a function of the order the flow ISSUED its requests and not of the order the host happened to answer
+ * them, which is the invariance §Testing's solver differential asks for ("replies answered tail-first must
+ * emit the same findings"). */
+static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
+    int i = 0;
     while (i < pending_count(f->pending)) {
         JSValue p = pending_entry(f->pending, i);
         JSValue pv;
@@ -2219,24 +2258,48 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
         /* AND A SYNCHRONOUS REQUEST'S ANSWER IS NOT THIS WALK'S TO TAKE, which is the same sentence the `else`
            branch below states as an assertion — said HERE, where the entry is still on the register, because
            there is no way to state it below without the answer having already been removed. `pending_ready`
-           decides WHETHER this drain runs and now asks the kind (solver/pending.h); this decides what it TOUCHES
-           once it is running, and both are needed: a register can hold a fetch reply and an answered HOSTREQ at
-           the same instant, and it is the fetch reply that brought the walk here. The answer stays where the
-           machine parked at the call site will take it (engine_host_take), so it is skipped exactly as an
-           unanswered entry is — never swap-removed, or the flow that asked resumes into a rendezvous whose
-           record is gone and waits at that line for the rest of the session. */
+           decides WHETHER this runs and asks the same two questions this scan asks (solver/pending.h); this
+           decides which entry it TOUCHES once it is running, and both are needed: a register can hold a fetch
+           reply and an answered HOSTREQ at the same instant, and it is the fetch reply that brought the scan
+           here. The answer stays where the machine parked at the call site will take it (engine_host_take), so
+           it is skipped exactly as an unanswered entry is — never swap-removed, or the flow that asked resumes
+           into a rendezvous whose record is gone and waits at that line for the rest of the session. */
         if (pending_get_int(p, PEND_KIND) == FLOW_PENDING_HOSTREQ) {
             JS_FreeValue(ctx, p);
             i++;
             continue;
         }
+        /* NO ENTRY IS DELIVERED WHILE A SETTLE OF THIS REGISTER IS STILL PARKED — the invariant this function
+           was rewritten around, asserted where the next delivery would begin rather than left as a property
+           somebody maintains. A settle that parked has not reached 27.2.1.4 "FulfillPromise" step 7 yet, so its
+           reactions are not on the queue; anything delivered in front of it enqueues first and §9.5.5
+           "HostEnqueuePromiseJob ( job, realm )" then runs them in that order — the page observes an order the
+           preempt chose. Both homes of the park are asked, because a park rides the Flow while it is switched
+           OUT and sits in the runtime's FIFO while it is switched IN, and an assert that can only be true is
+           the read-side of the defect a defaulted field is (this is the form flow_answer_fork and flow_finish
+           already use). It cannot fire from THIS function's own structure — the delivery below is the last
+           thing it does — so what it catches is a caller that reached here with a continuation outstanding,
+           which is exactly the state flow_step's resume arm exists to make impossible. */
+        DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
+               "a reply is about to be delivered while a settle from this flow's register is still PARKED — "
+               "the parked settle has not triggered its promise's reactions yet, so this delivery's reactions "
+               "would be enqueued in front of them and the page would observe an order the forced preempt "
+               "chose. Resume the parked continuations first (flow_step's resume arm)");
+        /* AND UNDER THIS FLOW'S OWN DELTA, because the delivery below runs the PAGE's code: the settle would
+           otherwise read and write whichever world happened to be applied, and the reaction jobs it enqueues
+           would land on that flow's queue. flow_deliver asserts the same thing about a routed message for the
+           same reason. */
+        DCHECK(flow_running() == f,
+               "a reply was delivered while another flow was switched in — the page's resolving function would "
+               "run against that flow's delta and the reactions it triggers would be queued on that flow");
         /* TAKEN OFF THE REGISTER BEFORE IT IS DELIVERED, and that ordering is the record's own lifetime. The
-           delivery below runs the PAGE's code — 27.2.1.3.2 step 8 reads `Get(resolution,"then")` off an object
-           whose prototype the page owns — and that code can issue another fetch, which appends to this very
-           register. As a C array the walk held a `FlowPending *` into storage the append could realloc out
-           from under it; as a JS record the reference here is what keeps it alive, so an append cannot move it
-           and the slot it occupied cannot be walked twice. The removal is a swap-remove, so `i` is deliberately
-           NOT advanced: the entry swapped into this slot has not been looked at yet. */
+           delivery below runs the PAGE's code — 27.2.1.3.2 "Promise Resolve Functions" step 9 reads
+           `Get(resolution, "then")` off an object whose prototype the page owns — and that code can issue
+           another fetch, which appends to this very register. As a C array the walk held a `FlowPending *` into
+           storage the append could realloc out from under it; as a JS record the reference here is what keeps
+           it alive, so an append cannot move it and the slot it occupied cannot be read twice. The removal is a
+           swap-remove and the scan does not resume past it: this call ends at the delivery, and the next step
+           scans from the front again over a register the delivery may have changed. */
         pending_remove(&f->pending, i);
         kind = (int)pending_get_int(p, PEND_KIND);
         pv = pending_get(p, PEND_VALUE);
@@ -2253,7 +2316,7 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             char *src;
             DCHECK(di >= 0 && di < f->dyn_n,
                    "an external document script replied for a sequence position this flow does not have — the "
-                   "entry was queued on one flow and the reply is being drained into another");
+                   "entry was queued on one flow and the reply is being delivered into another");
             DCHECK(f->dyn_cand[di] == DYN_SCRIPT_SRC,
                    "an external document script replied for a sequence position that is not awaiting one — the "
                    "slot holds a program already, so this reply is a second answer to one request and the "
@@ -2281,13 +2344,13 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                record and evaluated nothing.
                IT IS COPIED, WHERE IT USED TO BE A POINTER MOVE. The move was right while the body column was
                this flow's own `char *`; the text is SHARED now (solver/dyn_body.h), so a fork of a flow parked
-               on this row leaves both arms naming the same address buffer and each drains its own row — what
+               on this row leaves both arms naming the same address buffer and each takes its own row — what
                this row keeps has to be its own. An address is tens of bytes; the megabyte is on the line
                after it, and that one is ADOPTED rather than copied. */
             DCHECK(f->dyn_url[di] == NULL,
                    "an external document script's row already held an address before its reply arrived — the "
-                   "row's body is its URL until this drain takes it, so a second one means the row was queued "
-                   "with an address column it may not have or a reply was drained into it twice");
+                   "row's body is its URL until this delivery takes it, so a second one means the row was queued "
+                   "with an address column it may not have or a reply was delivered into it twice");
             {
                 /* THE ROW NAMES A LIVE BODY AT EVERY POINT OF THIS SWAP, which is why the replacement is built
                    BEFORE the old one is released rather than after: between an unref and the store the column
@@ -2305,7 +2368,7 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                    prefix of it. */
                 DCHECK(strlen(dyn_body_text(f->dyn[di])) == dyn_body_len(f->dyn[di]),
                        "an external document script's row holds an address with a U+0000 in it — the row's "
-                       "body is its URL until this drain takes it across, and a URL is the one body in this "
+                       "body is its URL until this delivery takes it across, and a URL is the one body in this "
                        "column that is read as a NUL-terminated string, so this row was filled by something "
                        "that is not engine_queue_docscript_url or the seed");
                 f->dyn_url[di] = strdup(dyn_body_text(f->dyn[di]));
@@ -2383,24 +2446,28 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             free(src);
             if (JS_CallAsFlow(ctx, resolve, sv) < 0) {
                 JSValue exc = JS_GetException(ctx);
-                JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this drain's */
+                JS_FreeValue(ctx, exc);   /* a rejected load is the page's to observe, not this step's */
             }
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, sv);
         } else {
             /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
                where it would land if it were not. The machine that asked resumes through its park and consumes
-               the answer with engine_host_take; the entry is gone before any drain sees it. A HOSTREQ that
+               the answer with engine_host_take; the entry is gone before any delivery sees it. A HOSTREQ that
                reached this line would be settled as if it were a fetch — through a `resolve` capability it does
                not have, since nothing on that path ever made a promise. */
             DCHECK(kind == FLOW_PENDING_RESOLVE,
-                   "a synchronous host request's answer reached the fetch drain — its asking machine never "
+                   "a synchronous host request's answer reached the reply delivery — its asking machine never "
                    "resumed to take it, so its parked continuation is the thing to look for");
-            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.2.1.3.2 step 8 reads
-               `Get(resolution, "then")` off the Response — an ordinary object whose prototype the page owns, so
-               `Object.prototype.then = { get(){…} }` makes that read the page's code. Out of this drain it ran
-               in a C activation with no flow base, which is the drive-to-completion this engine aborts on;
-               prototype pollution is a gadget class the solver exists to RUN rather than assume away. */
+            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.2.1.3.2 "Promise
+               Resolve Functions" step 9 reads `Get(resolution, "then")` off the Response — an ordinary object
+               whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
+               page's code. Out of a plain call it ran in a C activation with no flow base, which is the
+               drive-to-completion this engine aborts on; prototype pollution is a gadget class the solver
+               exists to RUN rather than assume away.
+               IT IS ALSO WHERE THE SETTLE CAN PARK, which is why this function delivers exactly one entry: the
+               resolving function is a step machine that RESTS at that read (js_promise_resolvefn_step's
+               PRF_THEN), so a forced preempt suspends the settle there with the promise still pending. */
             /* THE REPLY THE TRUSTED ZONE ANSWERED, DELIVERED AS IT ARRIVED. It used to be re-wrapped here —
                `fetch_reply_new(ctx, 200, "OK", NULL, body, len)` — which threw away everything safeFetch had
                seen and invented the rest: every reply this host delivered reported status 200, status message
@@ -2481,15 +2548,27 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
 #endif
             if (JS_CallAsFlow(ctx, resolve, pv) < 0) {
                 JSValue exc = JS_GetException(ctx);
-                JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this drain's */
+                JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this step's */
             }
             JS_FreeValue(ctx, resolve);
         }
         JS_FreeValue(ctx, pv);
         JS_FreeValue(ctx, p);
-        n++;
+        /* ONE, AND THE STEP IS OVER. The settle above may have PARKED (the resolving function is a step
+           machine, and the `then` read is the page's code), and that is precisely the state in which nothing
+           else may run: flow_step's next pass resumes the continuation before anything else this flow could
+           do. It may equally have completed and enqueued reactions, and then the checkpoint arm runs them
+           first — which is what §8.1.7.3 "Processing model" does at the end of the task that delivered it. */
+        return;
     }
-    return n;
+    /* AND THE TWO QUESTIONS AGREE, asserted at the one point they can disagree. `pending_ready` is what both
+       call sites consult to decide that this function has something to do, and the scan above is what finds
+       it; they ask the same pair of things about the same register with nothing running in between, so
+       reaching here means one of them has been changed and the other has not — and the symptom of that would
+       be a flow reporting progress every step while delivering nothing, which is a livelock that looks exactly
+       like slowness. */
+    DFAIL("a reply delivery found nothing to deliver — pending_ready answered that this flow had an answered "
+          "non-HOSTREQ entry and the scan over the same register did not find one");
 }
 
 /* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision + pins here at a forking branch;
@@ -3538,8 +3617,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        an address and not yet a program, so its address is its own body until the reply arrives. */
     DCHECK(kind != DYN_SCRIPT_SRC || url == NULL,
            "an entry holding a script's ADDRESS was queued with a second address beside it — the row IS the "
-           "URL until flow_drain_pending replaces it with the source text, and that drain is what moves it "
-           "into the address column, so a caller writing both is naming one script two ways");
+           "URL until flow_deliver_one_reply replaces it with the source text, and that delivery is what moves "
+           "it into the address column, so a caller writing both is naming one script two ways");
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
         f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(DynBody *));
@@ -3583,7 +3662,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
               "the flow is at, so the slot after it is at most one past the last row, and a larger index "
               "means the cursor and the queue disagree about how many programs this flow has");
         /* A ROW THAT SHIFTS IS A ROW SOMEBODY MAY BE HOLDING THE INDEX OF. engine_pending_docscript records an
-           ABSOLUTE sequence position on the register and flow_drain_pending writes the fetched source into
+           ABSOLUTE sequence position on the register and flow_deliver_one_reply writes the fetched source into
            `f->dyn[scriptI]`, so an interposition below an outstanding one would deliver a document's
            script text into the wrong row — a program silently replaced by another document's bytes. It cannot
            happen (a flow parks on one of those with NO frame and cannot leave that slot until the reply fills
@@ -3723,7 +3802,7 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            every pre-fetched external script compile under its document's name, which for a module is the
            module map key: §8.1.4.2's own note, "the base URL for the module script is set to the response
            URL … used for URL resolution". A row with only an address is still the DYN_SCRIPT_SRC shape, whose
-           body IS its URL until flow_drain_pending takes it across. */
+           body IS its URL until flow_deliver_one_reply takes it across. */
         /* THE PROGRAM ROW REFERENCES THE TABLE'S OWN BODY — this is the seeding that used to copy a document's
            whole bundle into every flow it created. The ADDRESS row still makes a body, because its body IS the
            address until the reply replaces it and that string is the table's, not this row's; it is tens of
@@ -3738,7 +3817,7 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                U+0000: URL §1.3 "Percent-encoded bytes" defines the C0 control percent-encode set as "C0
                controls and all code points greater than U+007E", and every other set in that section is
                defined as containing it. So a serialized URL holds `%00` where a NUL was, never the byte, and
-               the two agree by construction here — flow_drain_pending ASSERTS they still do at the one read
+               the two agree by construction here — flow_deliver_one_reply ASSERTS they still do at the one read
                that depends on it. */
             DynBody *addr = dyn_body_new(rows[i].url, strlen(rows[i].url));
             CHECK(addr, "engine: OOM seeding an external script's address as its row's body");
@@ -3878,7 +3957,7 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    goes behind the ones already there. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el) {
     /* THE ADDRESS IS THE ROW'S BODY, NOT ITS ADDRESS COLUMN — the row IS the URL until the reply replaces it
-       with the source text, and flow_drain_pending is what MOVES it into the address column at that moment.
+       with the source text, and flow_deliver_one_reply is what MOVES it into the address column at that moment.
        Writing both here would name one script two ways and engine_queue_into asserts against it. */
     DCHECK(el != NULL, "an external document script took its slot with no element — the row is that element's "
                        "program from the moment it takes the position, not from the moment its bytes arrive, "
@@ -3886,7 +3965,7 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
     /* AND ITS LENGTH IS ITS `strlen`, WHICH IS A FACT ABOUT AN ADDRESS AND NOT A DEFAULT. The caller resolved
        this with script_src_absolute, so it is a serialized URL (URL §4.5 "URL serializing") and every one of
        its components went through a percent-encode set built on URL §1.3's C0 control percent-encode set —
-       "C0 controls and all code points greater than U+007E" — which contains U+0000. flow_drain_pending
+       "C0 controls and all code points greater than U+007E" — which contains U+0000. flow_deliver_one_reply
        asserts the pair again at the read that turns this body back into a C string. */
     engine_queue_el(doc, url, strlen(url), DYN_SCRIPT_SRC, stype, NULL, DYN_POS_APPEND, el);
 }
@@ -4198,7 +4277,7 @@ static int preempt_hook(int kind) {
        the cost of one iteration. A mark can never make a flow wrongly ELIGIBLE, which is the direction that
        would cost a yield that mattered." Both halves were false. Its premise — that clears happen only at the
        top of a slice — describes a line that had already been DELETED; marks are now cleared by whatever host
-       event answers them, including during a step (flow_drain_pending settles the shared document-script slot
+       event answers them, including during a step (flow_deliver_one_reply settles the shared document-script slot
        for every flow waiting on one address). And its conclusion reasoned about marks being LAID DOWN and
        never about them being CLEARED, which is precisely the direction it declared impossible: a clear makes a
        flow ELIGIBLE that the loop's pick could not consider, so the hook's next rescan returns a rival the pick
@@ -4685,8 +4764,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        written around it, and running what comes after a bundle before the bundle is a different
                        program. The reply REPLACES this entry and the next pass compiles it.
                        A reply that has ALREADY arrived is delivered first — parking without checking leaves the
-                       flow owed forever on a URL the host has answered. */
-                    if (flow_pending_ready(f)) { flow_drain_pending(ctx, f); return 0; }
+                       flow owed forever on a URL the host has answered. ONE of them, like every other unit of
+                       work in this function: if several are answered the flow comes back here for the next,
+                       and the row this arm is waiting on is filled by whichever delivery names it. */
+                    if (flow_pending_ready(f)) {
+                        g_step_unit = "deliver-one-reply";
+                        flow_deliver_one_reply(ctx, f);
+                        return 0;
+                    }
                     engine_pending_docscript(ctx, body, f->script_i);
                     return FLOW_STEP_OWED;
                 }
@@ -4716,12 +4801,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
             else if (pending_count(f->pending) > 0 && !flow_pending_ready(f))
                 return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
             else if (flow_pending_ready(f)) {
-                /* FETCH-AWAIT: scripts + microtasks are drained, but a suspended async body is awaiting a LIVE
-                   fetch (a pending promise). The network completes now: resolve THIS flow's pending fetches — each
-                   awaiting async body's reaction is enqueued as a job in this flow's queue (we are switched in,
-                   flow_running == f) — then loop to run those jobs and resume the continuations. */
-                g_step_unit = "drain-pending-fetch";
-                flow_drain_pending(ctx, f);
+                /* FETCH-AWAIT: this flow's programs are done and its microtasks are run, and a suspended async
+                   body is awaiting a LIVE fetch (a pending promise). The network has completed, so ONE answered
+                   entry is delivered — the awaiting body's reaction is enqueued as a job in this flow's queue
+                   (we are switched in, flow_running == f) — and the step ends there. The checkpoint arm above
+                   runs that reaction on the next pass and this arm delivers the next reply after it, which is
+                   §8.1.7.3 "Processing model"'s task-then-checkpoint and not a pass that settles them all. */
+                g_step_unit = "deliver-one-reply";
+                flow_deliver_one_reply(ctx, f);
                 return 0;
             }
             /* NOTHING QUEUED, NOTHING OWED. What follows is what becomes due when the flow has nothing else,
@@ -4845,7 +4932,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                THE COMPANION ASSERT MOVED WITH THE SEQUENCE. It used to ask "was this row external?" of a
                parallel array that only the session document's half of the old sequence had; the row itself is
                what answers now, and it is asserted where the answer is WRITTEN —
-               flow_drain_pending moves the address out of the body column at the one moment it can, and
+               flow_deliver_one_reply moves the address out of the body column at the one moment it can, and
                asserts the column was empty before it did. */
             {
                 const char *ext = flow_dyn_url(f);
@@ -5963,7 +6050,7 @@ static int engine_sched_slice(void) {
        finishing, not one candidate found and the heap unchanged. The marks now live until the HOST does
        something that could have answered them, and each of those events clears the flow it reached
        (engine_provide, engine_host_answer, engine_deliver, engine_perform, and the shared document-script slot
-       inside flow_drain_pending). */
+       inside flow_deliver_one_reply). */
     for (;;) {
         /* THE SEARCH'S OWN WORK ITEMS, CREATED WHERE THEY COME INTO EXISTENCE. §@S: an @S candidate re-fire is a
            FLOW on this ONE frontier, so a detected sink becomes members of the frontier the way a fork does —
@@ -6641,12 +6728,13 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
            hosts should be a difference in the ENGINE, and a payment schedule is not one.
            WHY IT ABORTED WHEN IT WAS TRIED, and it was neither the provider nor the reply record. `pending_ready`
            answered YES for an ANSWERED HOSTREQ, so a synchronous answer arriving between two slices made the
-           register look deliverable, flow_step called the fetch drain, and the drain swap-removed the rendezvous
+           register look deliverable, flow_step called the reply delivery, and it swap-removed the rendezvous
            record and pushed it through a `resolve` capability it does not have. At a stall that state cannot
            exist, because the asking machine consumes its answer on the very next step; at a quantum boundary
            nothing guarantees the asking machine runs next. Both halves are fixed at the root — the predicate
-           asks the KIND (solver/pending.h) and the drain LEAVES a synchronous answer where its machine will take
-           it (flow_drain_pending) — so the shape this branch was avoiding no longer exists to be avoided. */
+           asks the KIND (solver/pending.h) and the delivery LEAVES a synchronous answer where its machine will
+           take it (flow_deliver_one_reply) — so the shape this branch was avoiding no longer exists to be
+           avoided. */
         {
             /* THE HOST'S OWN TIME, ASSERTED WHERE IT BEGINS — the same claim qjs_step makes at the ABI boundary,
                made here because this driver has no ABI and pays the provider directly. A provider BUILDS

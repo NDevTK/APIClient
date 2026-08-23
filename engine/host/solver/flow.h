@@ -280,7 +280,7 @@ typedef struct Flow {
        url". NULL for an INLINE row, whose base URL §4.12.1.1 states as "el's node document's document base
        URL" and which the compile therefore reads from the document instead.
        IT CANNOT BE THE BODY COLUMN, because that column is where the address LIVED and the reply DESTROYS it: a
-       DYN_SCRIPT_SRC row holds its URL in `dyn` only until flow_drain_pending replaces it with the source text.
+       DYN_SCRIPT_SRC row holds its URL in `dyn` only until flow_deliver_one_reply replaces it with the source text.
        Everything the address decides is needed after that moment — a nested `import('./chunk.js')` inside a
        bundle served from `/assets/app.js` resolves to `/assets/chunk.js`, and for a MODULE the address is
        additionally the module map KEY, so two `<script type=module src>` of one document named by their
@@ -356,10 +356,15 @@ typedef struct Flow {
        sibling runs would either resume them against the wrong heap or drop them outright. NULL for a flow with
        nothing parked, which is every flow that has not preempted inside a reaction.
        IT IS THE WHOLE SET AND ONE OPAQUE HANDLE, not four fields naming one park. A step reaches as many bases
-       as it reaches — a host drain settling two fetch replies in a row parks two, a settle nested inside a
-       reaction parks two — and each park's record lives on the base it suspends (quickjs's
-       JSAsyncFunctionState), so what crosses the switch is their ORDER. Four fields could only ever carry one,
-       which is why they are gone rather than multiplied.
+       as it reaches — a settle nested inside a reaction parks two, and an async body completing while the
+       reaction that resumed it is still on the C stack parks two — and each park's record lives on the base it
+       suspends (quickjs's JSAsyncFunctionState), so what crosses the switch is their ORDER. Four fields could
+       only ever carry one, which is why they are gone rather than multiplied.
+       THE EXAMPLE THAT USED TO STAND HERE — "a host drain settling two fetch replies in a row parks two" — IS
+       GONE BECAUSE THE DRAIN IS. flow_deliver_one_reply delivers ONE answered entry and the step ends, so two
+       replies can no longer be settled inside one step and the second can no longer park behind the first;
+       that walk was reordering the page's microtasks, and one-per-step is the fix. The FIFO is unaffected: it
+       is required by the NESTED cases above, which a cadence cannot remove.
        IT IS A REFERENCE THE FLOW OWNS, not one it merely remembers: each continuation is kept alive by a
        reference its park took and only its resume gives back, so a flow that is torn down or PAGED OUT — where
        a recipe replays the work and frees none of the memory — gives them back itself, through
@@ -838,7 +843,7 @@ int   flow_host_owed_count(void);
 void  flow_clear_host_owed(Flow *f);
 
 /* …AND THE ONE EVENT THAT NAMES NO FLOW: an external document script's text is the DOCUMENT's, so the flow
-   that drains that reply fills a slot every other flow parked on the same script index was waiting for. It is
+   that delivers that reply fills a slot every other flow parked on the same script index was waiting for. It is
    the only unblocking that happens inside a slice, which is why it is the only clear that is not per flow. */
 void  flow_clear_host_owed_all(void);
 

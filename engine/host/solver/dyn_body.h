@@ -3,7 +3,7 @@
  * WHAT IT IS FOR. A flow's program sequence (solver/flow.h's `dyn` table) is per-flow, and its ROWS are: which
  * programs this timeline holds, in what order, and where its cursor is. The BYTES of a program are not. A
  * script's source text is fixed the moment it is decoded — the only write to the body column is
- * flow_drain_pending replacing one row's POINTER when an external script's reply arrives, never a write
+ * flow_deliver_one_reply replacing one row's POINTER when an external script's reply arrives, never a write
  * THROUGH one — so the text is shared baseline state in exactly CLAUDE.md §State-isolation's sense, and a
  * per-flow copy of it is the defect that section names one layer out of the delta.
  *

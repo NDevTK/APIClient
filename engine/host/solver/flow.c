@@ -1556,7 +1556,7 @@ void flow_clear_host_owed(Flow *f) {
        ranking change" at the site above and leave this one implicit. A clear makes a flow ELIGIBLE that the
        scheduler's last pick could not consider, and the pick and the preempt hook do not run at the same
        instant: the loop picks the best of the unmarked members, and a clear that lands during that flow's very
-       first step — flow_drain_pending settles the shared document-script slot for every flow waiting on one
+       first step — flow_deliver_one_reply settles the shared document-script slot for every flow waiting on one
        address — hands the hook a rival the pick was never shown. The hook then yields against a flow the
        scheduler chose one step earlier, with the frontier generation, the service notch, the family notch and
        the reward all exactly as they were. That is the pick and the hook answering one state two different
