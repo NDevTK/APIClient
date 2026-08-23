@@ -148,7 +148,12 @@ async function child(docPath, schedName) {
      segment, and would abort inside the `park` schedule), and an unanswered request parks a flow that the
      stall hook cannot see — the frontier would then reach DONE with that flow still blocked, which is a
      dropped flow this gate would report as a solver bug when it is a corpus one. Named as a corpus defect. */
+  /* IT ANSWERS HOW MANY ENTRIES IT FILLED, which is the half the step loop below cannot get from the code
+     alone: an engine that reports a STALL is owed something, and whether THIS round supplied it is what
+     separates "the frontier has work again" from "nobody can supply this" (engine.h says so at the provider
+     seam; engine_run's own driver makes the identical `filled == 0` test). */
   function service(e, sched) {
+    let paid = 0;
     for (const n of e.str("qjs_host_notices").split("\n").filter(Boolean))
       gateFail(`the document emitted the host notice \`${n.split("\t")[0]}\` — a corpus document for this gate ` +
                "is ONE origin-keyed instance with no peer, because cold_park refuses to write a frontier " +
@@ -180,7 +185,9 @@ async function child(docPath, schedName) {
                       headers: [["content-type", "application/json"]],
                       urlList: [new URL(u, url).href], computedType: "application/json" };
       e.provide(method, u, reply, MOCK_BODY);
+      paid++;
     }
+    return paid;
   }
 
   /* ONE SESSION: seed (fresh, or from a residue), step to DONE, read the ONE result document, tear down. The
@@ -210,10 +217,29 @@ async function child(docPath, schedName) {
          spelling that merge here would be a second copy of endpoint.c's rule, which is the defect CLAUDE.md
          names about every second speller. The fold belongs in ONE place and that place is not this file. */
       e.M.ccall("qjs_request_park", "void", [], []);
+    /* THE THREE CODES, ENUMERATED. The ABI carries ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) and
+       ENGINE_STEP_STALLED (3) — it used to fold the stall into the yield, and this loop inherited that: it
+       read every non-zero code as "call me again" and so had no exit for a frontier that says it cannot
+       progress. Against a document this gate cannot pay, that is not a slow run, it is a loop with no
+       terminator at all. */
     for (;;) {
       const r = e.M.ccall("qjs_step", "number", [], []);
       if (r === 0) break;   /* ENGINE_STEP_DONE — the frontier is empty (or was written out) */
-      service(e, sched);
+      if (r !== 2 && r !== 3)
+        gateFail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three ` +
+                 "codes and this gate branches on all three, so a fourth is a contract that moved under it");
+      const paid = service(e, sched);
+      /* A STALL THIS ROUND DID NOT MOVE IS A DOCUMENT THAT CANNOT DRAIN, and draining is this gate's whole
+         precondition: the differential compares the finding sets of a document whose frontier drains under
+         several schedules, so a frontier parked on something no schedule will ever supply has no comparable
+         answer to give. It is named as a CORPUS defect for the same reason the two above it are — this gate
+         answers replies and nothing else, so the register it is stuck on says which capability the document
+         wants and this gate does not have. */
+      if (r === 3 && paid === 0)
+        gateFail("the frontier STALLED and this gate could fill nothing — every member is parked on something " +
+                 "only a host can supply and the only thing this one supplies is a reply, so the document " +
+                 "cannot drain under any schedule and its finding set is not a function of the document " +
+                 `alone. Owed: ${e.str("qjs_pending").split("\n").filter(Boolean).join(" ; ") || "(no fetch)"}`);
     }
     const json = e.str("qjs_result");
     if (!json) gateFail("qjs_result answered nothing — the result document did not serialize");

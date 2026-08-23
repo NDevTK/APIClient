@@ -237,14 +237,24 @@ long engine_work_done(void);
    cooperative-quantum yield says the scheduler RETURNS for exactly that and then resumes the byte-identical
    frontier. engine_run is a host with nothing else to do, so it is these two in a loop — one scheduler either
    way. ENGINE_STEP_YIELD leaves the session live and every flow where it was; ENGINE_STEP_DONE means the
-   frontier is empty and the session's hooks are uninstalled. */
+   frontier is empty and the session's hooks are uninstalled.
+   THERE ARE THREE AND EVERY HOST CARRIES THREE. The shipped ABI (main.c's qjs_step) used to FOLD the stall
+   into the yield, and this file said elsewhere that it did; that fold is deleted, because it is the one a
+   host cannot undo. A YIELD and a STALL ask for opposite things and only the engine knows which it meant. */
 #define ENGINE_STEP_DONE   0
 #define ENGINE_STEP_YIELD  2   /* the value the extension bridge's qjs_step already speaks */
 /* STALLED: every flow has run as far as it can, but the frontier is not exhausted — one or more are parked on
    something only the HOST can supply (a reply the sandbox cannot fetch). The session stays LIVE and every
    parked flow keeps its snapshot; the host supplies what is owed and steps again. Without this the scheduler
    closes the session on an empty run-queue and those flows are never resumed, which is how a page whose config
-   gates its later endpoints loses everything after the first request. */
+   gates its later endpoints loses everything after the first request.
+   IT IS A BILL, WHICH IS WHY IT MAY NOT BE ANSWERED BY STEPPING AGAIN. A yield asks to be OUTRANKED and costs
+   nothing to ignore — step back in and the same top flow runs on. A stall asks to be PAID, and a host that
+   answers it with another step converts nothing into work: measured on the two-instance drive, 10.8 million
+   steps against a peer owed one reply, with zero context switches, zero jobs and no emission, draining on the
+   very next step once the reply was supplied. So a driver's loop needs this as a TERMINATOR (a peer that
+   stalls on a payment the driver will not make has said all it is going to say) and never a step count — the
+   engine states the condition, so nothing has to count rounds to guess at it. */
 #define ENGINE_STEP_STALLED 3
 #define ENGINE_QUANTUM_MS  12  /* a thread-sharing floor, not a cap: nothing is dropped across it. It is a budget
                                   of CPU actually consumed — solver/quantum.h owns the edge that expires it and
@@ -402,10 +412,13 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, const char 
    slice had time for and swapped COW deltas 1.76 million times without finishing one). Marks now live until
    the HOST does something that could have answered them, so a blocked member is still blocked here. And it
    said the Level-1 question is answered by the step code returning ENGINE_STEP_STALLED, "which is what moves
-   the engine out of the pool's hot state" — nothing host-side moves it: main.c FOLDS STALLED into YIELD at the
-   ABI (the bridge speaks two values), so a stall reaches the host as "call me again". With flow_best answering
-   here, a document whose every flow was waiting on the host reported the weight of a flow that cannot run,
-   burned no CPU so its weight never aged, and was therefore the one engine a weight-ordered eviction would
+   the engine out of the pool's hot state" — and it is not, even now that main.c carries the code rather than
+   folding it into a yield. The code says PAY ME; it does not say what this engine is worth against another
+   one, and the pool's order is a comparison of weights and nothing else. Reading a rank out of a step code
+   would be two answers to one question, which is the defect this whole paragraph is about. With flow_best
+   answering here, a document whose every flow was waiting on the host reported the weight of a flow that
+   cannot run, burned no CPU so its weight never aged, and was therefore the one engine a weight-ordered
+   eviction would
    NEVER choose — it sat in the hot pool at whatever rank its last emission had bought it, forever.
    -Infinity IS THE ANSWER AND NOT A SENTINEL BESIDE ONE: it is the value this engine already publishes for an
    empty frontier and the value extension/mojo.js declares the Level-1 input carries, so a stalled engine sorts

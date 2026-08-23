@@ -213,9 +213,29 @@ const unheldReads = new Map();
    stop there rather than carry a half-built precondition into an assertion about something else. */
 const fail = (why) => { console.error('[route] FAILED: ' + why); process.exit(1); };
 
-/* ONE STEP of `e`, then everything the host owes it. Returns false once the engine reports its frontier done. */
+/* THE SCHEDULER'S THREE CODES (solver/engine.h), NAMED HERE BECAUSE THIS ZONE ACTS DIFFERENTLY ON EACH. The
+   shipped ABI used to answer two of them — main.c folded STALLED into YIELD, "the bridge speaks two values" —
+   and that fold is what hung this drive on every build. A yield asks to be OUTRANKED and costs nothing to
+   ignore; a stall asks to be PAID, and stepping a stalled engine converts nothing into work. Measured here
+   before the fold was deleted: 10,839,500 steps of the peer with `_switches:0`, `_flows:1`, no emission, and
+   `_jobsRun` frozen at 10 — and DONE on the very next step once the reply it was owed was supplied. */
+const STEP_DONE = 0, STEP_YIELD = 2, STEP_STALLED = 3;
+
+/* ONE STEP of `e`, then everything the host owes it. Answers the engine's own code and how much this zone PAID
+   into that engine in the same round, because the two together are what the pump's terminators are made of: a
+   stall the payment MOVED is not a stall the driver may stop at (the frontier has work again — the same test
+   engine_run makes with `r == ENGINE_STEP_STALLED && filled == 0`, and wpt_runner.c with `did`). */
 async function service(e) {
   const r = e.M.ccall('qjs_step', 'number', [], []);
+  /* THE CODE IS CHECKED FOR MEMBERSHIP AND NEVER DEFAULTED. A value outside the three is an ABI that moved
+     under a driver still speaking the old one, which is exactly what this file was the casualty of. */
+  if (r !== STEP_DONE && r !== STEP_YIELD && r !== STEP_STALLED)
+    fail(`qjs_step answered ${r}, which is none of DONE(0)/YIELD(2)/STALLED(3) — the ABI carries three codes ` +
+         'and this zone branches on all three, so a fourth is a contract that moved under this driver');
+  /* WHAT THIS ZONE PUT INTO `e` THIS ROUND — replies delivered, operations answered, completions relayed back,
+     records handed over. Counted rather than assumed, because "the engine is owed something" and "this zone
+     supplied it" are two facts and the pump's stall terminator is precisely their disagreement. */
+  let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const tab = line.indexOf('\t');
     if (tab <= 0) fail(`a pending line carries no METHOD: ${line}`);
@@ -240,6 +260,7 @@ async function service(e) {
        SEQUENCE, and the only ways to put one in JSON are to encode it or to DECODE it — and a decode run by
        the zone that FETCHED is exactly what left HTML §8.1.4.2's classic-script decode nothing to decode. */
     e.provide(method, u, reply, '{}');
+    paid++;
   }
   /* ONE OP IS ANSWERED, exactly as the offscreen answers exactly one: a `document.fetch` is a network fetch this
      zone can genuinely perform. Every other request is left UNANSWERED — the asking flow stays parked with its
@@ -275,15 +296,22 @@ async function service(e) {
          later step of that instance and comes out through its notices like every other emission. Pumping it
          here is this zone's job precisely because the answer is not a return value. */
       holder.M.ccall('qjs_perform', 'void', ['number','number'], [holder.cs(key), holder.cs(op)]);
+      /* A RECORD HANDED TO AN INSTANCE IS A PAYMENT TO THAT INSTANCE, and only where it IS this one: the peer
+         is pumped on its own below, with its own count. A self-read (an agent asked about a document it holds)
+         goes down this same branch, which is why the test is on identity rather than on the shape of the op. */
+      if (holder === e) paid++;
       /* WITHHELD: the peer has been asked and its answer is left where it lands. The asking flow stays parked
          on the read — which is the correct behaviour for an unanswered request and is exactly the state a
          Level-1 eviction finds a flow in. */
       if (withholdReads) { console.log(`  [${e.tag}] WITHHELD — the asking flow stays suspended at the read`); continue; }
-      await pumpUntil(holder, () => answers.has(key));
-      if (!answers.has(key)) { console.log(`  NOT ANSWERED: ${key}`); continue; }
+      /* THE PEER'S TURN, AND ITS OWN THREE ANSWERS. A peer that STALLS with nothing this zone will supply has
+         said everything it is going to say about this question, which is a terminator and not a timeout. */
+      const turn = await pumpUntil(holder, () => answers.has(key));
+      if (turn !== PUMP_EMITTED) { console.log(`  NOT ANSWERED (${turn}): ${key}`); continue; }
       /* RELAYED VERBATIM. The completion is in the engines' own grammar and this zone does not read it: a value
          that is an OBJECT is a NAME in the answering agent's namespace, which means nothing out here. */
       e.M.ccall('qjs_host_answer_remote', 'void', ['number','number'], [id, e.cs(answers.get(key))]);
+      paid++;
       answers.delete(key);
       reads.get(key).answered = true;
       continue;
@@ -299,9 +327,10 @@ async function service(e) {
        extracted policy (`{csp: null}`), which is the shape that kept §7.1.3's opener policy out of every
        navigated Document. */
     e.answer(id, { headers: "" }, HTML_B);
+    paid++;
   }
   await drainNotices(e);
-  return r !== 0;
+  return { step: r, paid };
 }
 
 /* PUMP UNTIL THE THING HAPPENS OR THE PEER SAYS IT IS DONE — and NOT for a count of steps. Four loops here
@@ -311,15 +340,37 @@ async function service(e) {
    own execution it is willing to watch, silently, and then reporting `NOT ANSWERED` — a truncation wearing a
    measurement's clothes. A peer whose answer legitimately needs one more step than the count was a FALSE
    NEGATIVE, and the number 400 was never derived from anything.
-   Both real terminators were already here and neither needed a counter: the emitted output arriving, and
-   `service` returning false, which is the peer's own statement (ENGINE_STEP_DONE) that its frontier drained.
-   §@S's rule that only EMITTED OUTPUT proves a flow is done is the same rule. A peer that neither emits nor
-   drains is a HANG, and a hang is the harness's `RUN_BACKSTOP_MS` to report through its own signal — which is
-   exactly where a driver's patience belongs, and the shape the browser-process gate's phase 4 chose
+   Both real terminators were already here and neither needed a counter: the emitted output arriving, and the
+   peer's own statement that its frontier drained (ENGINE_STEP_DONE).
+   §@S's rule that only EMITTED OUTPUT proves a flow is done is the same rule.
+   THE THIRD TERMINATOR IS THE PEER'S OTHER STATEMENT, AND ITS ABSENCE WAS THE HANG. A frontier can also be
+   neither draining nor progressing: every member parked on something only the host can supply
+   (ENGINE_STEP_STALLED). That is a positive statement — "I am owed X" — and it was invisible here because the
+   ABI folded it into the yield, so a peer this zone deliberately never pays (`/hold`, which is what keeps `b`'s
+   boot flow alive to receive) answered "call me again" for ever and this loop believed it. It is not a step
+   cap and it truncates nothing: the flows keep their snapshots, the session stays live, and the very next
+   payment resumes them — measured, DONE one step after the owed reply was supplied.
+   THE STALL IS ONLY A TERMINATOR WHERE THE PAYMENT DID NOT MOVE IT, which is the same test engine_run makes
+   (`r == ENGINE_STEP_STALLED && filled == 0`, engine.h: "0 at a stall ends the run, which is the honest answer
+   to 'nobody can supply this'"). A stall this zone answered is a frontier with work again, and the loop
+   carries on — so what stops the pump is never a round count, it is the two answers about one question
+   agreeing that nothing more is coming.
+   The three exits are the peer's own statements and this zone's, kept apart: DONE is the frontier drained,
+   STALLED is a bill this zone will not pay, EMITTED is the thing the caller was waiting for. A peer that does
+   none of the three is a HANG, and a hang is the harness's `RUN_BACKSTOP_MS` to report through its own signal —
+   which is exactly where a driver's patience belongs, and the shape the browser-process gate's phase 4 chose
    independently ("termination is an emitted output, not a step cap ... deliberately no third exit"). */
+const PUMP_EMITTED = 'emitted', PUMP_DRAINED = 'drained', PUMP_STALLED = 'stalled';
 async function pumpUntil(target, done) {
-  while (!done()) if (!(await service(target))) return false;
-  return true;
+  for (;;) {
+    /* THE PREDICATE IS ASKED FIRST AND AGAIN AFTER EVERY ROUND, so a round that BOTH emitted the thing and
+       ended the session answers EMITTED. The caller asked about the output, not about the frontier. */
+    if (done()) return PUMP_EMITTED;
+    const { step, paid } = await service(target);
+    if (done()) return PUMP_EMITTED;
+    if (step === STEP_DONE) return PUMP_DRAINED;
+    if (step === STEP_STALLED && paid === 0) return PUMP_STALLED;
+  }
 }
 
 /* THE ONE-WAY NOTICES, DRAINED — factored out of the step because the PARK takes its last one outside a step.
@@ -425,8 +476,17 @@ engines.push(await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.te
 
 /* PHASE 1 — run `a` out, collecting its posts. Nothing is routed yet, so `b` holds no record and each one below
    can be delivered on its own; two records on one flow is a merge of possibly-contradictory senders, which the
-   engine crashes on rather than performing. */
-for (let i = 0; i < 2000; i++) if (!(await service(engines[0]))) break;
+   engine crashes on rather than performing.
+   "RUN OUT" IS THE ENGINE'S OWN STATEMENT AND NOT A COUNT. This line was `for (let i = 0; i < 2000; i++)`,
+   which is the step cap pumpUntil's own comment says §NO BOUNDS forbids, surviving in the phases because the
+   pump had no third exit to offer them. It has one now: there is no output to wait for here, so the only
+   terminators are `a`'s two — its frontier drained, or it stalled on the `/resume` this zone deliberately
+   withholds until phase 3. */
+const phase1 = await pumpUntil(engines[0], () => false);
+if (phase1 === PUMP_DRAINED)
+  fail("`a`'s frontier reported DONE in phase 1 while every one of its arms is parked on the `/resume` this " +
+       'zone has not answered — a frontier with a flow suspended on an owed reply is STALLED (engine.h), so ' +
+       'DONE here is those flows dropped with their continuations and phase 3 has nothing to resume');
 console.log(`a emitted ${posts.length} posts, worlds: ${posts.map((p) => p.world).join('  ')}`);
 
 /* PHASE 2 — one at a time, each delivered before the next is routed. Written as a routine because phase 4
@@ -441,8 +501,12 @@ async function routePending() {
     console.log(`routing world ${p.world} -> [${target.tag}] as origin ${p.origin}`);
     target.M.ccall('qjs_route', 'void', ['number','number'], [target.cs(p.record), target.cs(p.origin)]);
     const before = got.length;
-    await pumpUntil(target, () => got.length !== before);
-    if (got.length === before) console.log(`  NOT DELIVERED: ${p.world}`);
+    /* THE STALL IS WHAT ENDS THIS WAIT WHEN THE RECORD DOES NOT ARRIVE, and it names the difference from a
+       drain: `b` is owed a `/hold` this zone never answers (that is what keeps its boot flow alive to receive
+       at all), so a `b` with no runnable member says STALLED for ever and never DONE. Without the third exit
+       this line was the hang — the whole drive stopped at the FIFTH post on every build. */
+    const why = await pumpUntil(target, () => got.length !== before);
+    if (why !== PUMP_EMITTED) console.log(`  NOT DELIVERED (${why}): ${p.world}`);
   }
 }
 await routePending();
@@ -459,15 +523,22 @@ const preParkWorlds = new Set([...posts.map((p) => p.world), ...[...reads.values
                               .map((v) => v.split(',')[0]));
 const preParkReads = reads.size;
 console.log(`\nphase 3: /resume answered — a's parked flow reads w.closed, and the answer is WITHHELD`);
-let aLive = true;
-for (let i = 0; i < 2000 && reads.size === preParkReads; i++) { aLive = await service(engines[0]); if (!aLive) break; }
+/* THE READ BEING ASKED IS THE EMITTED OUTPUT THIS PHASE WAITS FOR — the other two exits are `a` saying it
+   cannot produce it, and each of them is a DIFFERENT defect, which is why they are reported apart. This loop
+   also carried `i < 2000`, and the count was doing the third exit's job badly: it turned "the engine says it
+   is blocked" into "I got bored", with no way to tell either from "the read was asked on step 1999". */
+const phase3 = await pumpUntil(engines[0], () => reads.size !== preParkReads);
+if (phase3 === PUMP_DRAINED)
+  fail("`a`'s frontier reported DONE while one of its flows was suspended at a cross-instance read — a blocked " +
+       'frontier is STALLED (engine.h), which is a bill, and DONE over a suspended flow is that flow dropped');
+if (phase3 === PUMP_STALLED)
+  fail("`a` STALLED before asking the withheld read, owed something this zone did not supply — the /resume " +
+       'reply was answered above, so whatever the frontier is parked on now is a register entry this driver ' +
+       `does not fill: ${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'}` +
+       ` / ${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'}`);
 if (reads.size === preParkReads)
   fail('the withheld read was never asked, so phase 4 has nothing to park a flow ON — either the /resume reply ' +
        'did not resume the flow that awaited it, or `w.closed` was answered without reaching the peer');
-if (!aLive)
-  fail("`a`'s frontier reported DONE while one of its flows was suspended at a cross-instance read — a blocked " +
-       'frontier is STALLED (engine.h), which is "call me again", and DONE over a suspended flow is that flow ' +
-       'dropped');
 
 /* PHASE 4 — THE PARK. `a` is paged out ON that suspended read, torn down, and resumed from its own residue
    into a NEW instance, while `b` — which holds the answer, the export table and a segment for every world `a`
@@ -480,7 +551,12 @@ if (!aLive)
    completion an ORPHAN rather than a question nobody started: `b` installs the asking world's segment, runs
    the IDL getter as a flow on its own frontier and emits `remoteop.answer` — and by the time it does, the
    instance that asked has been parked and torn down. */
-await pumpUntil(engines[1], () => answers.size > 0);
+const peerTurn = await pumpUntil(engines[1], () => answers.size > 0);
+if (peerTurn !== PUMP_EMITTED)
+  fail(`the peer ${peerTurn === PUMP_DRAINED ? 'drained its frontier' : 'STALLED on work this zone will not ' +
+       'supply'} without producing a completion for the withheld read — the record was handed to it ` +
+       '(qjs_perform, above), so the program its answer is either never became a flow or never reached its ' +
+       'end, and phase 4 would then park a flow whose orphan nothing produced');
 
 const parked = engines[0];
 const postsAtPark = posts.length;
@@ -502,8 +578,22 @@ const orphanCompletions = [...answers.keys()];
 withholdReads = false;
 engines[0] = await makeEngine(HTML_A, 'https://a.test/', 'd1', '', 'https://a.test/', residue);
 console.log(`phase 4: resumed as [${engines[0].tag}] from the residue; [${engines[1].tag}] never left memory`);
-while (!closedReports.length) {
-  if (!(await service(engines[0]))) break;
+/* THE RESUMED SESSION, PUMPED WITH ITS OWN ROUTING INTERLEAVED — which is why this is not a `pumpUntil`: the
+   posts the replayed flows emit have to be routed to `b` between rounds, and pumpUntil steps one engine. The
+   three exits are the same three, spelled out because each is a different thing to say about the resume. */
+for (;;) {
+  if (closedReports.length) break;
+  const { step, paid } = await service(engines[0]);
+  if (closedReports.length) break;
+  if (step === STEP_DONE)
+    fail('the RESUMED instance drained its frontier without the replayed flow ever reading `w.closed` back — ' +
+         'a recipe is a replay (solver/cold.h), so a session that finishes without re-issuing the read did ' +
+         'not replay to the point the parked flow was suspended at');
+  if (step === STEP_STALLED && paid === 0)
+    fail('the RESUMED instance STALLED owed something this zone did not supply, before `w.closed` came back: ' +
+         `${engines[0].str('qjs_pending').split('\n').filter(Boolean).join(' ; ') || '(no fetch)'} / ` +
+         `${engines[0].str('qjs_host_requests').split('\n').filter(Boolean).join(' ; ') || '(no request)'} — ` +
+         'the read is answered by relaying the peer\'s completion, so a stall here is that relay not happening');
   await routePending();
 }
 const resumedReads = [...reads.values()].filter((r) => r.asker === engines[0].tag);

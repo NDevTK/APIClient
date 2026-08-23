@@ -647,8 +647,19 @@ QJS_EXPORT void qjs_begin(const char *recipes)
     g_begun = 1;
 }
 
-/* One cooperative quantum of the ONE dispatch loop. ENGINE_STEP_YIELD leaves every flow where it was;
- * ENGINE_STEP_DONE means the frontier is empty. */
+/* One cooperative quantum of the ONE dispatch loop, and it answers the scheduler's THREE codes because they
+ * are three different things to do next. ENGINE_STEP_YIELD leaves every flow where it was and the frontier
+ * RUNNABLE — the thread is asked for, not a payment, so a host with nothing else to do steps straight back in.
+ * ENGINE_STEP_DONE means the frontier is empty and the session's hooks are uninstalled. ENGINE_STEP_STALLED
+ * means every member is parked on something only this host can supply: the session is live, every snapshot is
+ * intact, and stepping again before paying converts nothing into work.
+ * THIS ENTRY USED TO FOLD THE STALL INTO THE YIELD, "the bridge speaks two values", and the fold is what a
+ * host cannot undo: a yield asks to be OUTRANKED and a stall asks to be PAID (solver/engine.c says so at the
+ * one guard that keeps the two verdicts apart), so a host handed one value for both has to guess which. Every
+ * driver that guessed "call me again" spun: engine/route.mjs's pump has exactly two terminators, emitted
+ * output and DONE, so against a peer stalled on a reply this zone deliberately never answers it stepped
+ * 10.8 million times with zero switches, zero jobs and no emission, and drained on the very next step once the
+ * owed reply was paid. A folded value is a fact the producer stated and no consumer can read. */
 QJS_EXPORT int qjs_step(void)
 {
     int r;
@@ -663,9 +674,9 @@ QJS_EXPORT int qjs_step(void)
        other entry below (provide, route, perform, answer, result, teardown) host-time BY CONSTRUCTION rather
        than by inspection: a slice cannot survive this line, so anything one of them reaches that consults the
        scheduler's policy crashes at the consultation instead of being answered against a slice belonging to
-       nothing. Asserted before the STALLED fold, so the stall path is covered too — it is the exit the reply
-       entries are called on. engine_sched_step brackets exactly one slice around exactly one call, so a hit
-       here means something opened a slice OUTSIDE that bracket. */
+       nothing. Asserted on every exit including the STALL, which is the one the reply entries are called on.
+       engine_sched_step brackets exactly one slice around exactly one call, so a hit here means something
+       opened a slice OUTSIDE that bracket. */
     DCHECK(!quantum_slice_open(),
            "qjs_step is returning to the host with the cooperative quantum's slice still OPEN — the host now "
            "pumps its port, streams findings and delivers replies on time the scheduler believes a flow is "
@@ -695,16 +706,32 @@ QJS_EXPORT int qjs_step(void)
            "qjs_step is returning to the host with the last flow's CAPTURE ROUTE still up — every field the "
            "host writes on a record it builds is recorded as a creation in that flow's COW head, and its next "
            "context switch deletes them, so the reply arrives at its delivery stripped to an empty object");
-    if (r == ENGINE_STEP_STALLED)
-        return ENGINE_STEP_YIELD;   /* the bridge speaks two values; a stall is "call me again", same as a slice */
-    /* TWO VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and the fold above is
-       what makes them two, so a fourth code added there would arrive at a host whose branches are written
-       against this ABI — and the bridge's own third branch (a NEED_FETCH that no version of the scheduler has
-       ever returned) is what a host does with a value it was never given: it writes a plausible one and the
-       path behind it is never taken. */
-    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD,
-           "the scheduler answered a step with a code this ABI does not carry — the host branches on DONE and "
-           "YIELD alone, so a third value reaches it as whichever branch happens to be the fallback");
+    /* THREE VALUES, AND THIS ENTRY IS WHERE THAT IS TRUE. The scheduler has three codes and this ABI now
+       carries all three, so the membership check is what stops a FOURTH from arriving at a host whose branches
+       are written against this one — the shape the bridge's own third branch had (a NEED_FETCH that no version
+       of the scheduler has ever returned), which is what a host does with a value it was never given: it writes
+       a plausible one and the path behind it is never taken. */
+    DCHECK(r == ENGINE_STEP_DONE || r == ENGINE_STEP_YIELD || r == ENGINE_STEP_STALLED,
+           "the scheduler answered a step with a code this ABI does not carry — the host branches on DONE, "
+           "YIELD and STALLED, so a fourth value reaches it as whichever branch happens to be the fallback");
+    /* A STALL IS A BILL, SO IT HAS TO NAME WHAT IS OWED. The code alone says "pay me"; the only things a host
+       of THIS ABI can pay are the two registers it can read, so a stall that leaves both of them empty is a
+       host told to act with nothing to act on — the frontier then waits for the rest of the session on a
+       payment nobody can identify, which reads from outside exactly like a document that is merely slow.
+       IT IS ALSO WHERE THE ONE OTHER STALL CAUSE WOULD ANNOUNCE ITSELF. engine_sched_step stalls for two
+       reasons: engine_host_owes (both registers' union, and its own dev walk asserts every outstanding entry
+       is tellable through one of them) and engine_set_referenced — a document a peer holds a reference into,
+       whose last timeline reports host-owed instead of finishing and which owes NO register entry at all.
+       This ABI has no entry that sets referenced (wpt_runner.c's child host does; this one has never had one),
+       so today the second cause cannot arise here and the assert is exact. The day a Referenced entry is added
+       to this ABI, this is the line that fires, and what it names is the work: a stall the host answers by
+       ROUTING an operation rather than by filling a register is a third thing to pay, and the host's step
+       branch has to be able to tell it from the other two. */
+    DCHECK(r != ENGINE_STEP_STALLED ||
+           *engine_pending_fetches() != '\0' || *engine_host_requests() != '\0',
+           "the scheduler asked this host to PAY and named nothing owed — a stall reaches the host as a bill "
+           "over qjs_pending and qjs_host_requests, and with both empty there is no record to answer, so every "
+           "flow parked here waits for the rest of the session on a payment nothing identifies");
     g_done = (r == ENGINE_STEP_DONE);
     return r;
 }

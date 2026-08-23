@@ -188,9 +188,15 @@
         params: [],
         reply: [
           { name: "code", type: "int32",
-            why: "ENGINE_STEP_DONE (0) or ENGINE_STEP_YIELD (2) and nothing else — the engine folds STALLED " +
-                 "into YIELD itself. A host that branched on a third value left the whole " +
-                 "qjs_pending->safeFetch->qjs_provide reply path unreachable in the shipped extension" },
+            why: "ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) or ENGINE_STEP_STALLED (3), and nothing else. " +
+                 "The three are three different things to do next and the engine is the only zone that knows " +
+                 "which: a yield asks to be OUTRANKED, a stall asks to be PAID, DONE ends the session. This " +
+                 "declared two while the scheduler produced three, because the ABI folded the stall into the " +
+                 "yield — a fold no host can undo, which cost the two-instance driver 10.8 million no-op " +
+                 "steps against a peer that had already said what it was owed. The mirror defect is on the " +
+                 "same field: a host that branched on a value the engine never produces (1, NEED_FETCH) left " +
+                 "the whole qjs_pending->safeFetch->qjs_provide reply path unreachable in the shipped " +
+                 "extension. Enumerate the codes; never default one" },
           WORKING_SET] },
 
       { ordinal: 5, name: "GetResult",
