@@ -2662,10 +2662,29 @@ JSValue idl_dict_get(JSContext *ctx, JSValueConst dict, const char *name)
     return JS_GetPropertyStr(ctx, dict, name);
 }
 
+/* …AND A BOOLEAN ONE IS A COERCION, WHICH IS WHY IT ASSERTS WHAT THE READ ABOVE DOES NOT.
+   Web IDL §3.2.17 Dictionary types step 4.1.4 converts a `boolean` member with ToBoolean, and this engine
+   deliberately does NOT run that conversion over unknown external input: idl_args.h's IDL_CONCOLIC_CROSSES
+   crosses the value as ITSELF so opacity survives the boundary and reaches the member's own algorithm. This
+   function is where that care is spent, because a concolic wears an Object — solver/concolic.c gives it one so
+   a method on an unknown yields another unknown — and EVERY Object is truthy. ToBoolean here therefore does
+   not read the member: it PINS it to `true` for every unknown there has ever been and deletes the world in
+   which it is false, one level below the union arm that has the same shape.
+   A MEMBER THAT NEEDS A C bool OUT OF AN UNKNOWN ASKS FOR AN ARM, and an ask is a request, so the member is a
+   step machine (idl_method_id_step) whose stage calls step_fork_run — decide.h states why a plain C body
+   cannot: it is already inside its activation and has no state for the other arm to be snapshotted at. This
+   assert is what names that conversion at the site that needs it, rather than letting a member go on answering
+   one world confidently. */
 bool idl_dict_bool(JSContext *ctx, JSValueConst dict, const char *name)
 {
     JSValue v = idl_dict_get(ctx, dict, name);
-    bool b = JS_ToBool(ctx, v);
+    bool b;
+
+    DCHECK(!concolic_is(v),
+           "a boolean dictionary member was read out of UNKNOWN EXTERNAL INPUT through the plain C reader — "
+           "ToBoolean pins it to `true` for every unknown and deletes the false world. Declare this member a "
+           "step machine (idl_method_id_step) and ask step_fork_run for the flag at its own stage");
+    b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
 }

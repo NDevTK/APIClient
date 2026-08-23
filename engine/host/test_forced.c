@@ -1183,6 +1183,18 @@ static const char *HTML =
     "bkid.addEventListener('cap', function(e){ btrace += 'K' + e.eventPhase; });"
     "bkid.dispatchEvent(new Event('cap', { bubbles: true }));"
     "fetch('/api/capture?v=' + (btrace === 'Pc1K2Pb3' ? 'iscap' : 'wrong'));"
+    /* …AND THE SAME LEG DECIDED OUT OF UNKNOWN EXTERNAL INPUT, which is the options bag a real bundle passes:
+       `el.addEventListener(t, f, cfg.listen)` where `cfg` came from somewhere this engine cannot see. Web IDL
+       §3.2.25 Union types picks the arm and DOM §2.7 Interface EventTarget's flatten options step 2 then reads
+       `capture` off it — and on either arm that value is another unknown, so ONE registration is TWO: a
+       capturing listener and a bubbling one, which the dispatch tells apart by the phase it runs at. A
+       ToBoolean at the boundary answered `true` for every unknown there has ever been (a concolic wears an
+       Object and every Object is truthy), so only the capturing world existed and the bubbling one — the
+       DEFAULT the IDL writes, `boolean capture = false` — was the arm that never ran. Both phases must appear;
+       one of them alone is the collapse. */
+    "bpar.addEventListener('unkcap', function(e){ fetch('/api/aelunk?v='"
+    " + (e.eventPhase === 1 ? 'aelcapturing' : 'aelbubbling')); }, state.listen);"
+    "bkid.dispatchEvent(new Event('unkcap', { bubbles: true }));"
     /* §2.7's dedup key is (type, callback, CAPTURE), so ONE function registered both ways is TWO listeners —
        and removing it with the wrong flag removes neither. */
     "var dupn = 0; var dupf = function(){ dupn++; };"
@@ -4867,6 +4879,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int uafork_tt = (strstr(js, "\"/api/uafork\"") && strstr(js, "chrome") && strstr(js, "other"));
     int touchfork_tt = (strstr(js, "\"/api/touch\"") && strstr(js, "touch") && strstr(js, "mouse"));
     int layoutfork_tt = (strstr(js, "\"/api/layout\"") && strstr(js, "mobile") && strstr(js, "desktop"));
+    /* §2.7's FLATTENING OVER AN UNKNOWN OPTIONS BAG, and it is the SAME claim one level below the union arm:
+       Web IDL §3.2.25 picks the arm, DOM §2.7's flatten options step 2 reads `capture` off it, and the value
+       it reads is another unknown — so ONE registration is a capturing listener AND a bubbling one, which the
+       dispatch distinguishes by the phase each runs at. Both phases present is the whole claim; either alone
+       is a ToBoolean pinning the flag at the boundary, which is what the plain reader did and which made the
+       arm fork above it half-useless. */
+    int aelunk_tt = (strstr(js, "\"/api/aelunk\"")
+                     && strstr(js, "aelcapturing") && strstr(js, "aelbubbling"));
     /* THE BITWISE/SHIFT FAMILY OVER UNKNOWN INPUT. Both arms present is the whole claim: a `&` whose result
        collapsed to a bare number (or to NaN) decides the branch and the sibling is never reached, which is
        precisely the coverage §Re-execution means by "opacity SURVIVES numeric coercion". `bwhash` asserts only
@@ -5338,6 +5358,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
         { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
         { "layout", layoutfork_tt, "/api/layout", SESS_EXPLORE },
+        { "listener-options", aelunk_tt, "/api/aelunk", SESS_EXPLORE },
         { "bitwise", bwfork_tt, "/api/bwfork", SESS_EXPLORE },
         { "bitwise-chain", bwhash_tt, "/api/bwhash", SESS_EXPLORE },
         { "bitwise-tramp", bwtramp_tt, "/api/bwtramp", SESS_EXPLORE },

@@ -25,6 +25,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "solver/concolic.h"   /* §2.7's flattening decides C booleans out of values the page may not know */
 #include "core/dom/abort.h"
 #include "core/events/event.h"
 #include "core/events/event_path.h"
@@ -87,7 +88,12 @@ static int g_click_stepid = -1;
    shared prototype registered every iframe's listeners on the ROOT window. A class id is what gives the slot a
    key; the class also brands `new EventTarget()`. */
 static JSClassID g_et_class;
-static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
+/* §2.7's TWO REGISTRATION MEMBERS ARE ONE STEP MACHINE, written beside the algorithm it is, far below. What is
+   named here is the DECLARATION OBJECT itself rather than a body function: a step machine's rest points hang
+   off the declaration, so the runtime is handed the one object and there is no second copy of it to disagree
+   with the first. A tentative definition is what lets the declaration sit with its stages and still be the
+   thing this function passes to the pool. */
+static const IdlStepDecl AEL_DECL;
 static void event_target_install(JSContext *ctx);
 
 /* §8.1.8.2's handler list is AGENT state, so its two hand-written columns are checked where it is declared. */
@@ -128,13 +134,13 @@ void event_target_init(JSContext *ctx)
             { "signal", IDL_ANY },
         };
         static const IdlDictMember REMOVE_OPTS[] = { { "capture", IDL_BOOLEAN } };
-        g_add_stepid    = idl_method_id_dict(ctx, ADD_ARGS, 3, ADD_OPTS,
+        g_add_stepid    = idl_method_id_step(ctx, ADD_ARGS, 3, ADD_OPTS,
                                              (int)(sizeof(ADD_OPTS) / sizeof(ADD_OPTS[0])),
-                                             idl_add_or_remove, 0);
+                                             &AEL_DECL, 0);
         idl_optional_from(2);   /* §2.7: `addEventListener(type, callback, optional options)` */
-        g_remove_stepid = idl_method_id_dict(ctx, ADD_ARGS, 3, REMOVE_OPTS,
+        g_remove_stepid = idl_method_id_step(ctx, ADD_ARGS, 3, REMOVE_OPTS,
                                              (int)(sizeof(REMOVE_OPTS) / sizeof(REMOVE_OPTS[0])),
-                                             idl_add_or_remove, 1);
+                                             &AEL_DECL, 1);
         idl_optional_from(2);   /* §2.7: `removeEventListener(type, callback, optional options)` */
     }
     JS_NewClassID(JS_GetRuntime(ctx), &g_et_class);
@@ -400,10 +406,20 @@ static void listener_mark_removed(JSContext *ctx, JSValueConst rec)
     JS_SetPropertyStr(ctx, (JSValue)rec, "removed", JS_TRUE);
 }
 
+/* …AND READING ONE BACK ASSERTS WHAT WRITING IT PROMISED. Every flag on this record was written by
+   listener_record out of a decided arm, so a value here that is not a BOOLEAN is a registration that carried an
+   undecided one past §2.7's flattening — and ToBoolean would answer `true` for it and say nothing, which is the
+   collapse the flattening stages exist to prevent. Asserting at the read is what makes the write's promise
+   checkable from the other side. */
 static bool rec_flag(JSContext *ctx, JSValueConst rec, const char *name)
 {
     JSValue v = JS_GetPropertyStr(ctx, rec, name);
-    bool b = JS_ToBool(ctx, v);
+    bool b;
+
+    DCHECK(JS_IsBool(v),
+           "an event listener's flag is not a boolean — §2.7's listener record holds capture, once, passive and "
+           "removed as booleans, and every one of them is written from an arm this engine has already decided");
+    b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
 }
@@ -609,69 +625,268 @@ bool event_target_has_any_listener(JSContext *ctx, JSValueConst target)
    BEFORE the coercion, to avoid running a toString for a call that does nothing. That is backwards: Web IDL
    converts arguments in ORDER at call time, so `type` is converted first and the null-callback step is part of
    the algorithm that runs after. `addEventListener({toString(){ … }}, null)` DOES run that toString in a real
-   browser, and now here. */
-static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    JSValueConst opts = argc > 2 ? argv[2] : JS_UNDEFINED;
-    JSValue signal = JS_UNDEFINED, passive_v = JS_UNDEFINED;
-    const char *type;
-    bool capture, once;
-    int passive;
-    JSValue r;
+   browser, and now here.
+ *
+ * AND THE FLATTENING TURNS UNKNOWN EXTERNAL INPUT INTO C BOOLEANS, WHICH IS WHERE THE WORLDS ARE DECIDED.
+ * DOM §2.7 Interface EventTarget's flatten options step 2 reads `capture` and its flatten more options steps
+ * 4.1-4.3 read `once`, `passive` and `signal`; every one of them becomes a C `bool` (or a brand test) that this
+ * algorithm then branches on. A page's options bag comes from wherever the page got it — a fetched config, a
+ * bag parsed out of `location.hash` — so any of those members can be unknown external input, and Web IDL
+ * §3.2.17 Dictionary types step 4.1.4's conversion deliberately CROSSES it as itself (idl_args.h's
+ * IDL_CONCOLIC_CROSSES) so the taint survives the boundary and arrives HERE with its domain intact.
+ * ToBoolean AT THIS BOUNDARY IS THE COLLAPSE THAT CROSSING EXISTS TO PREVENT. A concolic wears an Object —
+ * solver/concolic.c gives it one so a method on an unknown yields another unknown instead of throwing — and
+ * every Object is TRUTHY, so the plain reader answered `capture:true`, `once:true` and `passive:true` for every
+ * unknown there has ever been, pinning three flags to one world apiece. That is the same defect §3.2.25 Union
+ * types' arm had one level up, and while it stood it made the arm fork half-useless: both arms of the union ran
+ * and then each arm collapsed its members anyway.
+ * SO EACH MEMBER IS A FORK, AND A FORK IS WHY THIS IS A MACHINE. decide.h states the reason in its own words —
+ * a plain C body is already inside its activation when it asks and has no state for the other arm to be
+ * snapshotted at, and the declaration to build is the step machine. Each question is its own STAGE, because a
+ * machine may have exactly one request outstanding and a stage that asked twice would re-ask the first on every
+ * re-entry and never converge; the sibling resumes AT the stage that asked and re-derives its arm there.
+ * OUTCOME 0 IS `false` FOR EVERY BOOLEAN MEMBER, AND THE IDL SAYS SO RATHER THAN THIS ENGINE'S OLD ANSWER.
+ * §2.7 declares `boolean capture = false` on EventListenerOptions and `boolean once = false` on
+ * AddEventListenerOptions, so false is what the conversion produces when the page writes nothing and is the
+ * registration this member performs by default; `passive` declares no default, and false is the arm on which a
+ * listener may still call preventDefault, which is the listener the platform had before the flag existed. The
+ * mapping is FIXED and is deliberately not the concolic's example: a decision vector records ARMS, and a
+ * resumed flow re-derives its example values from CURRENT sources, so an example-keyed arm would name a
+ * different boolean in the next session than in this one — the cross-session divergence a recorded path must
+ * not have. */
+#define AEL_OP_CAPTURE "DOM §2.7 flatten options `capture`"
+#define AEL_OP_ONCE    "DOM §2.7 flatten more options `once`"
+#define AEL_OP_PASSIVE "DOM §2.7 flatten more options `passive`"
+#define AEL_OP_SIGNAL  "DOM §2.7 flatten more options `signal`"
 
-    /* WEB IDL CONVERTS EVERY ARGUMENT, IN ORDER, BEFORE THE ALGORITHM RUNS — so the shape of this body is
-       "finish the conversions, THEN run §2.7", and the two halves are not interleavable. §2.8's `callback` is an
-       `EventListener?`, which is a CALLBACK INTERFACE and not a function type: ANY object implements it, because
-       its one operation is looked up BY NAME on the object each time it is invoked, so
-       `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration and used to be silently
-       dropped here. A PRIMITIVE is the type's TypeError, and it is raised before the options are read because
-       the callback is the earlier argument. */
-    if (argc > 1 && !JS_IsObject(argv[1]) && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1]))
-        return JS_ThrowTypeError(ctx, "the event listener is not an object");
-    /* The engine-built dictionary, whatever the page wrote: `{capture:true}`, a bare `true`, or nothing. The
-       union's flattening happened in the declaration, so there is one shape to read here. */
-    capture = idl_dict_bool(ctx, opts, "capture");
-    once = idl_dict_bool(ctx, opts, "once");
-    /* §2.7 "flatten more options" step 3.2: `passive` is null unless the member EXISTS, which is why this is a
-       tristate and not a bool — a wheel listener registered with `{}` on the window is passive by default and
-       one registered with `{passive:false}` is not. */
-    passive_v = idl_dict_get(ctx, opts, "passive");
-    passive = JS_IsUndefined(passive_v) ? -1 : (JS_ToBool(ctx, passive_v) ? 1 : 0);
-    JS_FreeValue(ctx, passive_v);
-    signal = idl_dict_get(ctx, opts, "signal");
-    /* `AbortSignal signal` is an INTERFACE-typed member, so a value that is not one is a TypeError before the
-       algorithm's step 1. The brand test is not the declaration's here for the reason the paragraph below
-       gives and NOT because the type is undeclarable: an AbortSignal now wears core/dom/abort.c's class, so
-       IDL_INTERFACE could brand it — what IDL_INTERFACE cannot express is this member's treatment of NULL,
-       which §2.7 makes a TypeError while the declaration surface has no non-nullable-with-explicit-null arm.
-       The rule performed here is that whole rule. */
-    /* NULL IS NOT AN ABSENT MEMBER HERE. `AbortSignal signal` is NOT nullable, so `{signal: null}` is a
-       TypeError and not "no signal" — the corpus asks for exactly that, twice, and it asks for it even when the
-       CALLBACK is null, which is why the conversion has to happen before §2.7's "if callback is null, return".
-       Only an ABSENT member (undefined) is the null the algorithm means. */
-    if (!JS_IsUndefined(signal) && !abort_signal_is(ctx, signal)) {
-        JS_FreeValue(ctx, signal);
-        return JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
+/* WHERE THIS MACHINE RESTS, AS THE TWO STANDARDS NUMBER THEM. One member serves addEventListener and
+   removeEventListener — they are one algorithm with one of them stopping earlier, which is what the magic
+   selects — so removeEventListener enters AEL_CAPTURE and leaves for AEL_RUN, and the three stages between
+   them belong to steps its own algorithm does not have. */
+#define AEL_STAGES(X)                                                                                            \
+    X(AEL_ENTER,   "Web IDL §3.2.16 Callback interface types step 1 (argument 1's TypeError, which precedes "     \
+                   "every read of the options because Web IDL converts arguments in order)")                     \
+    X(AEL_CAPTURE, "DOM §2.7 Interface EventTarget, flatten options step 2 (`capture`)")                          \
+    X(AEL_ONCE,    "DOM §2.7 Interface EventTarget, flatten more options step 4.1 (`once`)")                      \
+    X(AEL_PASSIVE, "DOM §2.7 Interface EventTarget, flatten more options step 4.2 (`passive`)")                   \
+    X(AEL_SIGNAL,  "DOM §2.7 Interface EventTarget, flatten more options step 4.3 (`signal`), whose Web IDL "     \
+                   "§3.2.15 Interface types conversion and whose add an event listener step 2 aborted test are "  \
+                   "the feasible completions of one unknown")                                                    \
+    X(AEL_RUN,     "DOM §2.7 Interface EventTarget, add an event listener steps 3-6 / remove an event listener "  \
+                   "step 2 (the listener-list work, once every conversion has an answer)")
+enum { IDL_STEP_STAGE_BASE(AEL_STAGES) AEL_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const AEL_STEPS[] = { AEL_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* §2.7's flattening, as the four answers it produces. The three flags are PLAIN BYTES and not JSValues on
+   purpose: the standard's own listener record holds booleans, and a byte crosses the fork's clone and the cold
+   tier without owning anything. `passive` is a TRISTATE because flatten more options step 4.2 makes it one —
+   -1 is "the member does not exist", which add an event listener step 4 then fills from the default passive
+   value, and collapsing it to false at the read would make `{passive:false}` and `{}` the same registration,
+   which for a wheel listener on a Window is exactly the difference the flag exists to express. */
+typedef struct {
+    uint8_t capture;
+    uint8_t once;
+    int8_t  passive;
+    /* Step 4.3's signal once §3.2.15 has answered for it (owned): the page's own AbortSignal, or the one this
+       machine builds for the arm on which the unknown IS a live signal. JS_UNDEFINED means the member is
+       absent, which is the null the algorithm means. */
+    JSValue signal;
+} AelState;
+
+static void ael_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    AelState *s = st;
+
+    v->val(ctx, &s->signal);
+}
+
+/* ONE BOOLEAN MEMBER OF THE FLATTENING, ANSWERED WHERE IT BECOMES A C bool.
+   `v` IS BORROWED AND IS DELIBERATELY NOT HELD ACROSS THE RETURN, AND WHOSE REFERENCE KEEPS IT ALIVE IS THE
+   POINT. step_fork_run leaves a borrowed pointer to it on the header, which the driver reads after this
+   machine has returned — and what it must NOT be borrowed from is the `argv` this body was handed, because
+   that vector is a transient copy the conversion machine frees the instant the body returns. It is borrowed
+   from the CONVERTED DICTIONARY instead: the dictionary is the declared position's own converted value, which
+   js_idl_args_visit names twice over (`conv` and the per-position vector), so it outlives the return, the
+   fork's clone carries it, and the sibling reads the same member off the same object when it resumes here. */
+static int ael_flag_run(JSContext *ctx, JSStepHdr *hdr, JSValueConst v, const char *op, uint8_t *out)
+{
+    int arm = 0, rc;
+
+    if (!concolic_is(v)) {
+        *out = JS_ToBool(ctx, v) ? 1 : 0;
+        return 0;
     }
+    rc = step_fork_run(ctx, hdr, v, op, 2, &arm);
+    if (rc) return rc;
+    DCHECK(arm == 0 || arm == 1,
+           "§2.7's flattening of one boolean member came back on an arm that is neither of the two a boolean "
+           "has — the two worlds a flag names are all there are, and a third is a world nothing can be in");
+    *out = (uint8_t)arm;
+    return 0;
+}
+
+static int ael_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                    JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    AelState *s = st;
+    const int magic = idl_step_magic(hdr);
+    JSValueConst opts = argc > 2 ? argv[2] : JS_UNDEFINED;
+    JSValue v, r;
+    const char *type;
+    int rc;
+
+    (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+
+    if (hdr->stage == AEL_ENTER) {
+        /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the throw below tears this state
+           down through ael_visit, which names exactly what the state owns and nothing else, so a field handed
+           over after it would be freed by nobody. */
+        s->signal = JS_UNDEFINED;
+        s->capture = 0;
+        s->once = 0;
+        s->passive = -1;
+        /* WEB IDL CONVERTS EVERY ARGUMENT, IN ORDER, BEFORE THE ALGORITHM RUNS — so the shape of this machine
+           is "finish the conversions, THEN run §2.7", and the two halves are not interleavable. §2.8's
+           `callback` is an `EventListener?`, which is a CALLBACK INTERFACE and not a function type: ANY object
+           implements it, because its one operation is looked up BY NAME on the object each time it is invoked,
+           so `el.addEventListener("x", {handleEvent(e){…}})` is an ordinary registration and used to be
+           silently dropped here. A PRIMITIVE is Web IDL §3.2.16 Callback interface types step 1's TypeError,
+           and it is raised before the options are read because the callback is the earlier argument. */
+        if (argc > 1 && !JS_IsObject(argv[1]) && !JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
+            JS_ThrowTypeError(ctx, "the event listener is not an object");
+            return -1;
+        }
+        STEP_GOTO(hdr->stage, AEL_CAPTURE, NULL);
+    }
+
+    if (hdr->stage == AEL_CAPTURE) {
+        /* The engine-built dictionary, whatever the page wrote: `{capture:true}`, a bare `true`, or nothing.
+           §3.2.25's arm was resolved in the declaration — including its fork over an unknown — so there is one
+           shape to read here and the bare boolean is already this member. */
+        v = idl_dict_get(ctx, opts, "capture");
+        rc = ael_flag_run(ctx, hdr, v, AEL_OP_CAPTURE, &s->capture);
+        JS_FreeValue(ctx, v);
+        if (rc) return rc;
+        /* removeEventListener's algorithm is "let capture be the result of flattening options" and then the
+           list work: the three members below are declared on AddEventListenerOptions and its own IDL does not
+           carry them. */
+        STEP_GOTO(hdr->stage, magic == 0 ? AEL_ONCE : AEL_RUN, NULL);
+    }
+
+    if (hdr->stage == AEL_ONCE) {
+        v = idl_dict_get(ctx, opts, "once");
+        rc = ael_flag_run(ctx, hdr, v, AEL_OP_ONCE, &s->once);
+        JS_FreeValue(ctx, v);
+        if (rc) return rc;
+        STEP_GOTO(hdr->stage, AEL_PASSIVE, NULL);
+    }
+
+    if (hdr->stage == AEL_PASSIVE) {
+        /* STEP 4.2 IS AN `exists` TEST AND NOT A TRUTH TEST, and an unknown EXISTS — a concolic is a value the
+           page's object really carries, so the member is written and the tristate's -1 is not one of this
+           position's feasible answers. What is unknown is only which of the two booleans it is, which is the
+           fork below and not this test. */
+        v = idl_dict_get(ctx, opts, "passive");
+        if (JS_IsUndefined(v)) {
+            s->passive = -1;
+            JS_FreeValue(ctx, v);
+        } else {
+            uint8_t b = 0;
+
+            rc = ael_flag_run(ctx, hdr, v, AEL_OP_PASSIVE, &b);
+            JS_FreeValue(ctx, v);
+            if (rc) return rc;
+            s->passive = (int8_t)b;
+        }
+        STEP_GOTO(hdr->stage, AEL_SIGNAL, NULL);
+    }
+
+    if (hdr->stage == AEL_SIGNAL) {
+        /* `AbortSignal signal` is an INTERFACE-typed member, so a value that is not one is a TypeError before
+           the algorithm's step 1. The brand test is not the declaration's here for the reason the paragraph
+           below gives and NOT because the type is undeclarable: an AbortSignal wears core/dom/abort.c's class,
+           so IDL_INTERFACE could brand it — what IDL_INTERFACE cannot express is this member's treatment of
+           NULL, which §2.7 makes a TypeError while the declaration surface has no
+           non-nullable-with-explicit-null arm. The rule performed here is that whole rule.
+           NULL IS NOT AN ABSENT MEMBER HERE. `AbortSignal signal` is NOT nullable, so `{signal: null}` is a
+           TypeError and not "no signal" — the corpus asks for exactly that, twice, and it asks for it even
+           when the CALLBACK is null, which is why the conversion has to happen before §2.7's "if callback is
+           null, return". Only an ABSENT member (undefined) is the null the algorithm means. */
+        DCHECK(JS_IsUndefined(s->signal),
+               "§2.7's `signal` stage was entered holding a signal it had already decided — this stage assigns "
+               "the field and the assignment would drop the earlier one without releasing it, so a second entry "
+               "with one in place is a stage that leaks whatever the first entry converted");
+        v = idl_dict_get(ctx, opts, "signal");
+        if (JS_IsUndefined(v)) {
+            JS_FreeValue(ctx, v);
+        } else if (abort_signal_is(ctx, v)) {
+            s->signal = v;                       /* a real §3.2 signal: there is nothing to decide about it */
+        } else if (concolic_is(v)) {
+            /* AN UNKNOWN AT THIS POSITION HAS THREE FEASIBLE COMPLETIONS AND USED TO HAVE ONE — a TypeError,
+               because a concolic is not a platform object, so `addEventListener('x', f, cfg.opts)` over a bag
+               nothing is known about took the whole registration down and every listener behind it. The three
+               are what §3.2.15 Interface types and add an event listener step 2 compose to over ONE value, so
+               they are asked as ONE question rather than as a brand fork followed by an aborted fork over a
+               value the first arm would have had to invent anyway.
+               THE NUMBERING IS step_fork_run's ONE RULE. Outcome 0 is the ORDINARY completion — a live signal,
+               the listener registers — because a candidate re-fire runs one concrete path and must not be
+               diverted on its way to a sink; the two arms that register nothing follow, with the throwing one
+               last. */
+            int arm = 0;
+
+            rc = step_fork_run(ctx, hdr, v, AEL_OP_SIGNAL, 3, &arm);
+            JS_FreeValue(ctx, v);
+            if (rc) return rc;
+            if (arm == 2) {
+                JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
+                return -1;
+            }
+            if (arm == 1)
+                return JS_STEP_DONE;   /* add an event listener step 2: an aborted signal registers nothing */
+            DCHECK(arm == 0, "§2.7's `signal` question came back on a fourth arm — three completions were "
+                             "declared and a fourth is one this member has no algorithm for");
+            /* THE ARM IS A WORLD THIS ENGINE BUILDS RATHER THAN SHRUGS AT. On it the value IS a live
+               AbortSignal, so step 6 has a signal to add its abort steps to and abort.c's own constructor is
+               what makes one — a bare unknown has no §3.2 slot record, and registering an algorithm on it
+               would be a step silently skipped. */
+            s->signal = abort_signal_new(ctx);
+            CHECK(!JS_IsException(s->signal),
+                  "the AbortSignal standing for an unknown `options.signal` could not be allocated — a dropped "
+                  "one is a listener registered outside the lifetime the page gave it");
+        } else {
+            JS_FreeValue(ctx, v);
+            JS_ThrowTypeError(ctx, "options.signal does not implement AbortSignal");
+            return -1;
+        }
+        STEP_GOTO(hdr->stage, AEL_RUN, NULL);
+    }
+
+    DCHECK(hdr->stage == AEL_RUN, "add/removeEventListener resumed into a stage §2.7 does not have");
     /* §2.7 "add an event listener" step 3 / "remove an event listener"'s equivalent: a NULL callback registers
        nothing. It is HERE, after every conversion, because that is where the spec puts it — which is what makes
        `addEventListener("x", null, {signal: null})` a TypeError about the signal rather than a silent no-op. */
-    if (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
-        JS_FreeValue(ctx, signal);
-        return JS_UNDEFINED;
-    }
+    if (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1]))
+        return JS_STEP_DONE;
     type = JS_ToCString(ctx, argv[0]);   /* a real string by now: this cannot reach the page */
-    if (!type) {
-        JS_FreeValue(ctx, signal);
-        return JS_EXCEPTION;
-    }
-    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type,
-                                              capture, once, passive, signal)
-                     : remove_listener_with_type(ctx, event_target_receiver(ctx, this_val), argv[1], type, capture);
+    if (!type) return -1;
+    r = (magic == 0) ? add_listener_with_type(ctx, event_target_receiver(ctx, hdr->this_val), argv[1], type,
+                                              s->capture != 0, s->once != 0, s->passive, s->signal)
+                     : remove_listener_with_type(ctx, event_target_receiver(ctx, hdr->this_val), argv[1], type,
+                                                 s->capture != 0);
     JS_FreeCString(ctx, type);
-    JS_FreeValue(ctx, signal);
-    return r;
+    DCHECK(JS_IsUndefined(r),
+           "§2.7's listener-list work answered with a value — both members return `undefined` and neither of "
+           "these two functions has a path that produces anything else, so a value here is a completion this "
+           "machine would have dropped on the floor");
+    JS_FreeValue(ctx, r);
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NULL,
+                                      "DOM §2.7 Interface EventTarget, addEventListener() and "
+                                      "removeEventListener()", AEL_STEPS };
 
 /* ---- EVENT HANDLER IDL ATTRIBUTES — HTML §8.1.7.2 --------------------------------------------------------
  *
