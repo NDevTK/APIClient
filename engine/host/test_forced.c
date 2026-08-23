@@ -2881,6 +2881,106 @@ static void tf_job_run_all(JSContext *ctx, Flow *f)
     }
 }
 
+/* ===== A SORT THE SCHEDULER CAN BE ASKED INSIDE, and the same answer under both schedules =====
+ *
+ * 23.1.3.30 Array.prototype.sort ( comparator ) with NO comparator is the arm that reaches no page code at
+ * all: 23.1.3.30.2 CompareArrayElements steps 5-6 are ToString over numbers, which resolve in place, so the
+ * whole of 23.1.3.30.1 SortIndexedProperties step 4 — the implementation-defined sequence of calls, O(n log n)
+ * of them over an array the page grew — ran inside ONE def->step() and no schedule could get in. Running no
+ * user code is not what makes a C body safe to leave un-parkable; being O(1) is.
+ *
+ * THE TWO SCHEDULES ARE THE ASSERTION, which is the differential §Testing describes reduced to one machine:
+ * the same program, once with the policy declining every offer (nothing parks) and once with it taking every
+ * one (every element placement parks the flow and rebuilds it), must produce the SAME completion value. A
+ * resume that dropped, duplicated or reordered ONE placement lands on a different number.
+ * AND THAT A PARK HAPPENED INSIDE THE MACHINE, which the answer alone cannot say — a sort driven to completion
+ * also answers correctly. The runtime's step census is what says it: a flow suspended inside a
+ * continuation-holding builtin leaves that builtin's state allocated, so a non-zero JS_StepMachineCount at a
+ * suspension of a program whose ONLY builtin is this sort is the merge having rested mid-walk. */
+static int tf_sort_preempt_always(int kind) { (void)kind; return 1; }
+static int tf_sort_preempt_never(int kind)  { (void)kind; return 0; }
+static const JSFlowControlHooks TF_SORT_FORCE   = { .preempt = tf_sort_preempt_always };
+static const JSFlowControlHooks TF_SORT_DECLINE = { .preempt = tf_sort_preempt_never };
+/* what this fixture puts back: no policy at all, which is what the runtime held before it ran. A hook that
+   merely answers "no" is not the same state — it is a policy, and the next thing to install one would be
+   replacing a decision rather than making the first. */
+static const JSFlowControlHooks TF_SORT_NONE    = { 0 };
+
+/* The values are a permutation of 0..n-1 (337 is prime, so it is coprime with 300), so every element has a
+   DISTINCT decimal string and the order 23.1.3.30.2 steps 5-10 put them in is unique — the answer does not
+   rest on stability, and n = 300 is not a power of two, so the last block of a width pass is the ragged lone
+   run whose drain has no comparison in it at all. The program checks its own answer rather than being compared
+   against a constant: strict sortedness is decided by page code that never touches the merge, and the
+   POSITIONAL checksum pins the exact permutation. -1 is "the sort's answer was wrong", which is a different
+   failure from "the two schedules disagree" and must not be able to look like one. */
+static const char *TF_SORT_SRC =
+    "(function(){ var n = 300, a = [], i, h = 0, ok = 1;"
+    " for (i = 0; i < n; i++) a[i] = (i * 337) % n;"
+    " a.sort();"
+    " if (a.length !== n) ok = 0;"
+    " for (i = 0; i < n; i++) {"
+    "   if (i > 0 && !(String(a[i - 1]) < String(a[i]))) ok = 0;"
+    "   h = (h * 31 + a[i]) % 1000003; }"
+    " return ok ? h : -1; })()";
+
+/* Run TF_SORT_SRC to completion under `hooks`, reporting how many times it suspended and the largest step
+   census seen at a suspension. */
+static int32_t tf_sort_run(JSContext *ctx, const JSFlowControlHooks *hooks, int *psusp, int *pmach)
+{
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JSValue *flow;
+    JSValue res = JS_UNDEFINED;
+    int32_t got = -2;
+    int susp = 0, mach = 0, r;
+
+    JS_SetFlowControlHooks(hooks);
+    flow = JS_FlowNew(ctx, TF_SORT_SRC, strlen(TF_SORT_SRC), "sort-merge", 0);
+    CHECK(flow != NULL, "the sort fixture could not create a flow");
+    for (;;) {
+        r = JS_FlowResume(ctx, flow, &res);
+        CHECK(r != JS_FLOW_DETACHED, "the sort fixture's flow detached — it holds no top-level await");
+        if (r == 0)
+            break;
+        susp++;
+        if (JS_StepMachineCount(rt) > mach) mach = JS_StepMachineCount(rt);
+    }
+    CHECK(!JS_IsException(res), "the sort fixture's program threw");
+    JS_ToInt32(ctx, &got, res);
+    JS_FreeValue(ctx, res);
+    JS_FlowFree(ctx, flow);
+    *psusp = susp; *pmach = mach;
+    return got;
+}
+
+static void sort_merge_selftest(JSContext *ctx)
+{
+    int susp_off = 0, mach_off = 0, susp_on = 0, mach_on = 0;
+    int32_t h_off, h_on;
+
+    h_off = tf_sort_run(ctx, &TF_SORT_DECLINE, &susp_off, &mach_off);
+    CHECK(h_off >= 0,
+          "23.1.3.30 with no comparator sorted 300 distinct values into an order that is not strictly "
+          "ascending by 23.1.3.30.2 steps 5-10, or lost one — the merge is wrong before any schedule is "
+          "involved, so nothing below this line would mean anything");
+    CHECK(susp_off == 0,
+          "the flow parked with the policy DECLINING every offer — a yield the policy refuses must re-enter "
+          "the machine, not park it, or the offer is a bound wearing a question mark");
+
+    h_on = tf_sort_run(ctx, &TF_SORT_FORCE, &susp_on, &mach_on);
+    CHECK(h_on == h_off,
+          "the SAME sort of the SAME array answered differently under two schedules — a resume dropped, "
+          "duplicated or reordered a merge placement, which is the cap §scheduler's razor names: a yield you "
+          "cannot prove is lossless is a cap");
+    CHECK(mach_on > 0,
+          "the flow never suspended INSIDE a step machine, and the only builtin this program runs is the sort "
+          "— so 23.1.3.30.1 step 4's whole sequence of comparisons still runs inside one def->step(): a stretch "
+          "of algorithm the size of the page's array that RAM pressure cannot page, a higher-value flow cannot "
+          "overtake and the cooperative quantum cannot expire inside");
+    CHECK(susp_on > susp_off,
+          "forcing every yield produced no more suspensions than declining every one");
+    JS_SetFlowControlHooks(&TF_SORT_NONE);
+}
+
 static void flow_job_selftest(JSContext *ctx)
 {
     Flow a, b;
@@ -5327,6 +5427,7 @@ int main(int argc, char **argv) {
     flow_registry_init("fixture");   /* one document in this fixture; the world namespace is named by it */
     world_registry_selftest(ctx);   /* the peer half: worlds minted as if by another document */
     flow_job_selftest(ctx);         /* §8.1.7's two queues, §7.5.10 step 7, and the fork's copy-on-nothing */
+    sort_merge_selftest(ctx);       /* 23.1.3.30.1 step 4 rests per element, and both schedules agree */
     endpoint_init();
     solve_init(ctx);
 
