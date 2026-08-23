@@ -30,6 +30,7 @@
 #include "core/css/media_query_list.h"
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_property_syntax.h"
+#include "core/css/css_syntax_match.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
