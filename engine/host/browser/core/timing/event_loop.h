@@ -23,7 +23,39 @@
  * IT IS PER-AGENT AND NOT PER-REALM, which is the other half of the answer. §8.1.7 gives one event loop to a
  * similar-origin window agent, and a document and its same-origin iframe are ordered by that ONE loop: a
  * per-realm clock would order the parent's timers against the child's by nothing at all. §8.7 Timers's map of active
- * timers is the opposite — HTML puts one on every global — so the two live in different places on purpose. */
+ * timers is the opposite — HTML puts one on every global — so the two live in different places on purpose.
+ *
+ * A MOMENT IS A VALUE, NOT A `double`, AND THAT IS THE WHOLE OF THE CONCOLIC CLOCK.
+ *
+ * §8.7 Timers's `run steps after a timeout` step 3 sets the map of active timers to "startTime plus
+ * milliseconds", and `milliseconds` reaches this engine from a page that may have written
+ * `setTimeout(f, someUnknown)`. The sum is then unknown, the entry is ordered against every other by a FORK
+ * (both orders are real programs), and firing it moves this clock to a moment nothing computed. A `double`
+ * cannot hold that, so every attempt to fire such a timer aborted here — which meant the sibling arm that
+ * KEEPS the unknown, the one arm the whole §8.7 step-4 fork exists to produce, could never run a single
+ * callback. Every `setTimeout` over attacker- or config-derived input died at that line.
+ *
+ * So `eventLoopNow` and §8.1.7.1's last render opportunity time are VALUES: a number, or unknown external
+ * input carrying its provenance, its domain and — when the code computed one — its concrete example. Nothing
+ * is picked, clamped or read off an example: §Solver-half's rule is that a moment no arm decided is not a
+ * number to guess but a question, and the question is asked below.
+ *
+ * WHICH MAKES ORDERING THIS COMPONENT'S JOB, AND IT IS THE ONE SPELLER OF IT. Two moments are compared in
+ * three places — the timer source orders one expiry against another (§8.7 `run steps after a timeout`
+ * step 4.2), the in-parallel rendering loop orders the next frame against the clock (§8.1.7.3 step 2.1's
+ * choice of task queue), and this file's own invariants order a move against the moment already reached. If
+ * each spelled its own relation, one flow could answer the SAME question two ways: decide `A < B` true under
+ * §8.7's name and false under §8.1.7's, and stand in a world neither arm is in — the path constraint is keyed
+ * by the identity of the value a branch tests, and two names are two keys. They are one relation on one clock,
+ * so there is one spelling of it, here.
+ *
+ * AND THE MONOTONICITY ASSERT IS READ FROM THAT DECISION RATHER THAN RE-EVALUATED. `when >= now` is a
+ * comparison, and over an unknown a comparison is not a fact to test but an arm to take — asking it inside an
+ * assertion would FORK, minting a sibling flow whose only content is a violated invariant. The proof already
+ * exists: the caller reached the move by ASKING the ordering (event_loop_before), so the arm it took is in
+ * this flow's own constraint, and the assert READS it (event_loop_before_decided, which never forks). It fires
+ * on a DECIDED CONTRADICTION and stays silent on uncertainty, which is the one direction §Solver-half allows
+ * anywhere else in this engine: a contradicted branch is pruned, an undecided one keeps both arms. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_EVENT_LOOP_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_EVENT_LOOP_H
 
@@ -34,19 +66,63 @@ void event_loop_init(JSContext *ctx);
 void event_loop_free(JSContext *ctx);
 
 /* The VIRTUAL clock, in ms since the agent started — the one clock every task source is ordered by, and the
-   one an Event's `timeStamp` and a file's modification time are stamped from. */
-double event_loop_now(JSContext *ctx);
+   one an Event's `timeStamp` and a file's modification time are stamped from. A moment: a number, or unknown
+   external input. OWNED. */
+JSValue event_loop_now(JSContext *ctx);
 
 /* MOVE THE CLOCK to the moment a task source becomes due. `due` is the earliest moment ANOTHER source is
-   already due at, or -1 when none is — the caller has it, because it is what decided this move, and passing it
-   is what keeps the assertion side-effect-free (asking the timer source costs an allocation, which a DCHECK
-   condition may not do). Both invariants are asserted here rather than trusted to the caller: time may not run
-   backwards, and the loop may not step OVER a source that becomes due first. */
-void event_loop_advance_to(JSContext *ctx, double when, double due);
+   already due at, or JS_UNDEFINED when none is — the caller has it, because it is what decided this move.
+   Both invariants are asserted here rather than trusted to the caller: time may not run backwards, and the
+   loop may not step OVER a source that becomes due first. Both are read from what the caller's own ask
+   decided (see the header note); neither is re-evaluated, because over an unknown that is a fork. */
+void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due);
 
-/* §8.1.7.1's LAST RENDER OPPORTUNITY TIME — the moment the rendering task source last became due. */
-double event_loop_last_render(JSContext *ctx);
-void   event_loop_set_last_render(JSContext *ctx, double when);
+/* §8.1.7.1's LAST RENDER OPPORTUNITY TIME — the moment the rendering task source last became due. OWNED. */
+JSValue event_loop_last_render(JSContext *ctx);
+/* The setter asserts the moment IS the one the clock now stands at, which is stronger than the `when <= now`
+   that stood here and — unlike it — is decidable over an unknown. It is also what §8.1.7.3 Processing model
+   says in its own words: the in-parallel loop's step 2 is "Set eventLoop's last render opportunity time to
+   the unsafe shared current time", and the unsafe shared current time in this engine IS this clock. So
+   equality is the truth and `<=` was admitting a state no caller can produce; an inequality over two unknowns
+   can only be answered by forking, and an invariant that forks is an invariant that manufactures the world in
+   which it holds. */
+void event_loop_set_last_render(JSContext *ctx, JSValueConst when);
+
+/* IS MOMENT `a` BEFORE MOMENT `b` ON THIS CLOCK? — the one comparison of two moments this engine has, and a
+ * FORK wherever either is unknown: both orders are real programs (the page's other timer runs second in one
+ * of them), and picking one deletes the other.
+ *
+ * ASKED AS A RESTARTABLE BRANCH, which every caller of it can promise and most sites cannot. §8.1.7.3
+ * "Processing model" step 2.1 chooses the next task queue "in an implementation-defined manner", so this walk
+ * runs BETWEEN a flow's tasks: the flow is switched in and nothing of it is on any stack, so the sibling is
+ * assembled with no frame and re-entering its scheduler step re-runs the same walk and replays the arm
+ * recorded for it. A caller that cannot make that promise must not call this.
+ *
+ * REFLEXIVITY IS DECIDED AND NOT ASKED: a moment is not before ITSELF, whatever it is, so an ask over two
+ * copies of one moment answers 0 without minting a predicate. Without that, `advance_to(now)` — which the
+ * rendering loop performs whenever the clock has already moved past the frame it was about to take — would
+ * ask a question with one feasible answer and park a sibling exploring a world that cannot happen. */
+int event_loop_before(JSContext *ctx, JSValueConst a, JSValueConst b);
+
+/* THE SAME QUESTION, READ RATHER THAN ASKED — 1 decided `a < b`, 0 decided otherwise, -1 not decided by this
+   flow. It NEVER forks and never records, which is what makes it usable inside an invariant. -1 is the honest
+   answer for a pair this flow never ordered, and an assert built on it fires only on a contradiction. */
+int event_loop_before_decided(JSContext *ctx, JSValueConst a, JSValueConst b);
+
+/* DO TWO MOMENTS COINCIDE? — the second half of the timer source's key, and a fork over an unknown for the
+   same reason `before` is. §8.7 `run steps after a timeout` step 4.2 orders by `milliseconds` and the event
+   loop's INSERTION ORDER is what breaks an exact tie, so the two questions are distinct and are asked
+   separately: folding them into one `<=` would put "equal, and set first" into whichever arm the fold picked,
+   and that is the case the tie-break exists for. */
+int event_loop_coincident(JSContext *ctx, JSValueConst a, JSValueConst b);
+
+/* A MOMENT PLUS A DURATION — ECMAScript §13.15.3's `+`, run by the ENGINE over operands either of which may be
+   unknown. §8.7 step 3's "startTime plus milliseconds" and §8.1.7.3's next rendering opportunity are the same
+   arithmetic on the same clock, so there is one of it. Where an operand is unknown the result carries that
+   operand's provenance AND — when it has one — the real arithmetic run on its example; composing a number
+   instead would be the invention §Solver forbids, and carrying a derived label instead of running the operator
+   would be the recorded transform-expression §Re-execution forbids. OWNED. */
+JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst delta);
 
 /* THE INSERTION ORDER OF A TASK, allocated by the loop rather than by a source, because it is what orders two
    sources' tasks that become due at the SAME moment — and because a per-source counter cannot: §8.7 Timers's map of

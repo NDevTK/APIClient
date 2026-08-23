@@ -30,11 +30,26 @@
  * builds the realm, and read forever. Two flows exploring one document therefore agree about it, which is
  * correct — they are the same environment.
  *
- * WHY IT IS NOT CONCOLIC. viewport.h's test is whether the model PICKED a point out of a range the environment
+ * WHY IT IS NOT A SOURCE. viewport.h's test is whether the model PICKED a point out of a range the environment
  * leaves free (a source, carrying its computed answer as an example) or DERIVED the only value the rest of the
- * model permits (concrete). A time origin is the second: it is the moment on the ONE virtual clock at which
- * this realm was built, and the clock is a function of which tasks this flow has run. Forking it would run a
- * page in a world where its own document was created at a moment the event loop never reached.
+ * model permits. A time origin is the second: it is the moment on the ONE virtual clock at which this realm
+ * was built, and the clock is a function of which tasks this flow has run. Forking it would run a page in a
+ * world where its own document was created at a moment the event loop never reached.
+ *
+ * WHICH IS NOT THE SAME AS SAYING IT IS A NUMBER, and this used to say it was. The clock itself is a MOMENT
+ * and a moment can be unknown external input (core/timing/event_loop.h: §8.7's `timeout` reaches the map of
+ * active timers, so firing that timer moves the clock to a moment nothing computed). A realm created after
+ * such a task has fired therefore has a time origin DERIVED from an unknown, which is still a derivation and
+ * still not a source — nothing picked it, and it carries the arithmetic run on whatever example the clock
+ * had. Every operation below answers a moment or a duration as the VALUE it is, for the same reason.
+ *
+ * AND THE COARSENING IS A DERIVATION RATHER THAN A SECOND STORED FACT. §4's coarsen time is an operation over
+ * the moment, so it is COMPUTED at every read from the moment itself — never floored once and kept beside it.
+ * Two stored copies of one fact is the defect this tree keeps finding, and here the second copy would go
+ * stale the instant the clock moved. Over an unknown the operation is the SAME operation: the result carries
+ * the moment's provenance, names §4's algorithm as what produced it, and takes as its example the real floor
+ * run on the moment's own example. It is one hop and not a recorded expression — §Re-execution forbids the
+ * second — and it is why `hr_time_coarsen` may never be asked to answer a `double`.
  *
  * COARSENING IS MODELLED AND NOT SKIPPED, and it is deliberately NOT jittered. §4's coarsen time floors the
  * moment onto a resolution grid and step 3 permits an implementation to JITTER it as well. This engine takes
@@ -72,24 +87,25 @@ void hr_time_free(void);
 
 /* §4's TIME ORIGIN of THIS realm's environment settings object, as a moment on the one virtual clock. Exported
    because the day this engine has a `performance` object, `get time origin timestamp` is its second reader. */
-double hr_time_origin(JSContext *ctx);
+JSValue hr_time_origin(JSContext *ctx);   /* OWNED */
 
 /* §4's COARSEN TIME, given an unsafe moment on the monotonic clock. §4's second argument is the environment's
    cross-origin isolated capability, and `ctx` IS that environment — a caller passes the realm whose settings
    object the moment is FOR, never the realm the algorithm happens to be driven from. Answers a moment, never a
    duration — the spec coarsens the ABSOLUTE moment and subtracts the origin afterwards, and doing it the other
-   way round would round a duration whose two ends are on the grid. */
-double hr_time_coarsen(JSContext *ctx, double unsafe_moment);
+   way round would round a duration whose two ends are on the grid. OWNED, and the argument is a MOMENT and
+   not a `double` — see the header note on why the coarsening is a derivation. */
+JSValue hr_time_coarsen(JSContext *ctx, JSValueConst unsafe_moment);
 
 /* §4's RELATIVE HIGH RESOLUTION TIME given an unsafe moment and a global object — coarsen the moment with this
    environment's capability, then take the duration from this environment's time origin to it. This is the
    operation HTML §8.1.7.3 steps 11, 14, 19 and 20 name in their own argument lists, and DOM §2.5 names for
    `timeStamp`; `ctx` IS the relevant global object those steps mean, so a per-document step must pass the
-   DOCUMENT's realm and never the realm the algorithm happens to be driven from. */
-double hr_time_relative(JSContext *ctx, double unsafe_moment);
+   DOCUMENT's realm and never the realm the algorithm happens to be driven from. OWNED. */
+JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment);
 
 /* §4's CURRENT HIGH RESOLUTION TIME given a global object — the relative high resolution time of the unsafe
    shared current time, which in this engine is the event loop's virtual clock (core/timing/event_loop.h). */
-double hr_time_current(JSContext *ctx);
+JSValue hr_time_current(JSContext *ctx);   /* OWNED */
 
 #endif

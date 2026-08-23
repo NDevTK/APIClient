@@ -470,7 +470,7 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             had = JS_HasProperty(ctx, table, key);
             CHECK(had >= 0, "console: §1.4.1's timer table could not be read");
             if (!had)
-                CHECK(JS_SetProperty(ctx, table, key, JS_NewFloat64(ctx, hr_time_current(ctx))) >= 0,
+                CHECK(JS_SetProperty(ctx, table, key, hr_time_current(ctx)) >= 0,
                       "console: §1.4.1's timer could not be started");
             JS_FreeAtom(ctx, key);
             JS_FreeValue(ctx, table);
@@ -488,9 +488,9 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             JSValue table = console_field(ctx, CON_TIMERS);
             JSAtom key = JS_ValueToAtom(ctx, argv[0]);
             double start = 0;
-            JSValue startv, concat, list;
-            const char *lab;
-            char tail[64];
+            JSValue startv, nowv, concat, list;
+            const char *lab, *shape = NULL;
+            char tail[192];
             JsonBuf b = { 0 };
             char *whole;
 
@@ -500,13 +500,41 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
                issue it links is the open question of what to report when it does not. An absent entry is
                undefined, whose ToNumber is NaN, so the duration is NaN — which is what the algorithm as written
                produces and what this prints, rather than a value invented in its place. */
+            nowv = hr_time_current(ctx);
             if (JS_IsUndefined(startv)) {
                 start = 0.0 / 0.0;
+            } else if (concolic_is(startv) || concolic_is(nowv)) {
+                /* §1.4.2/.3 print "a string representing the difference … in an IMPLEMENTATION-DEFINED
+                   FORMAT", and where either end of the duration is unknown external input the difference is
+                   an unknown too — the event loop's clock is a moment and a timer set with an unknown
+                   `timeout` moves it to one nothing computed (core/timing/event_loop.h). The honest string is
+                   then the DERIVATION's own display shape rather than a number: `%.3f` over an unknown would
+                   print a moment this engine never computed, which is the invention §Solver forbids, and
+                   NaN would say the timer was never started. The subtraction is ECMAScript §13.8.2 The
+                   Subtraction Operator ( - ),
+                   RUN — the same operator hr_time_relative discharges its duration through — so the shape
+                   reads as the expression the page's own timing produced. */
+                /* The hook's stack effect is the interpreter's: both operands freed, the result placed in
+                   sp[-2]. `nowv`'s reference is handed over and comes back as the difference. */
+                JSValue sp[2];
+
+                sp[0] = nowv;
+                sp[1] = JS_DupValue(ctx, startv);
+                if (!concolic_arith_hook(ctx, sp + 2, JS_CARITH_SUB, 2))
+                    DFAIL("§13.8.2 The Subtraction Operator ( - ) declined an operand this component has "
+                          "already established is "
+                          "UNKNOWN — the concolic value semantics are not installed in this host "
+                          "(solver/concolic.h: concolic_install_hooks)");
+                nowv = sp[0];
+                shape = concolic_shape_c(nowv);
+                DCHECK(shape != NULL,
+                       "§1.4's duration over an unknown moment has no display shape — every derivation this "
+                       "engine mints carries one, so a value without it was not minted by an operator");
             } else {
                 DCHECK(JS_IsNumber(startv),
-                       "§1.4's timer table held something that is not a number — §1.4.1 is the only writer and "
-                       "it stores HR-Time §4's current high resolution time, so a non-number here is a second "
-                       "writer this component does not know about");
+                       "§1.4's timer table held something that is neither a number nor unknown external input "
+                       "— §1.4.1 is the only writer and it stores HR-Time §4's current high resolution time, "
+                       "so anything else here is a second writer this component does not know about");
                 CHECK(JS_ToFloat64(ctx, &start, startv) == 0, "console: §1.4's start time could not be read");
             }
             JS_FreeValue(ctx, startv);
@@ -519,7 +547,16 @@ static int console_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVa
             CHECK(lab != NULL, "console: §1.4's label could not be read");
             /* "a string representing the difference … in an implementation-defined format". Milliseconds, which
                is the unit hr_time's DOMHighResTimeStamp already is, so no conversion invents precision. */
-            snprintf(tail, sizeof tail, ": %.3f ms", hr_time_current(ctx) - start);
+            if (shape) {
+                snprintf(tail, sizeof tail, ": %s ms", shape);
+            } else {
+                double now = 0;
+
+                if (!JS_IsUndefined(nowv))
+                    CHECK(JS_ToFloat64(ctx, &now, nowv) == 0, "console: §1.4's current time could not be read");
+                snprintf(tail, sizeof tail, ": %.3f ms", now - start);
+            }
+            JS_FreeValue(ctx, nowv);
             json_buf_puts(&b, lab);
             json_buf_puts(&b, tail);
             JS_FreeCString(ctx, lab);

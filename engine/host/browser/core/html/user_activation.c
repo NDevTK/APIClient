@@ -148,7 +148,12 @@ static int ua_ask(JSContext *ctx, JSStepHdr *h, JSValue last, const char *op, bo
    so the two agree only while every environment's origin is zero. `ctx` IS the W the standard names — the
    three questions below are asked of a Window and answered against a timestamp stored in that same Window's
    record, so both ends of every comparison are measured from one origin. */
-static double ua_now(JSContext *ctx)
+/* AND IT IS A MOMENT AND NOT A `double`, for the same reason `last` is a value: the event loop's clock is a
+   moment, and once a timer set with an unknown `timeout` has fired the clock — and every duration measured
+   from it — is unknown external input (core/timing/event_loop.h). Which makes the three questions below
+   questions over TWO possibly-unknown operands rather than one, and each arm of each of them is a real
+   program: a page that believes it has a transient activation and one that does not. OWNED. */
+static JSValue ua_now(JSContext *ctx)
 {
     return hr_time_current(ctx);
 }
@@ -164,9 +169,19 @@ int user_activation_sticky_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, boo
            "— the two questions would then answer each other, since the second is only ever asked inside the "
            "first's true arm");
     if (!concolic_is(last)) {
-        *out = ua_now(ctx) >= ua_number(ctx, last);
+        JSValue now = ua_now(ctx);
+
+        if (!concolic_is(now)) {
+            *out = ua_number(ctx, now) >= ua_number(ctx, last);
+            JS_FreeValue(ctx, now);
+            JS_FreeValue(ctx, last);
+            return 0;
+        }
+        /* THE UNKNOWN OPERAND IS THE CURRENT TIME rather than the stored timestamp, and the fork is the same
+           fork: `ua_ask` keys it by (this value's identity, this clause), so the question a replay re-asks is
+           "is the clock past this Window's last activation" and not "which of the two operands was unknown". */
         JS_FreeValue(ctx, last);
-        return 0;
+        return ua_ask(ctx, h, now, UA_OP_STICKY, out);
     }
     return ua_ask(ctx, h, last, UA_OP_STICKY, out);
 }
@@ -181,14 +196,40 @@ int user_activation_transient_run(JSContext *ctx, JSStepHdr *h, uint8_t *phase, 
     int rc;
 
     if (!concolic_is(last)) {
-        double l = ua_number(ctx, last), now = ua_now(ctx);
+        JSValue nowv = ua_now(ctx);
 
+        if (!concolic_is(nowv)) {
+            double l = ua_number(ctx, last), now = ua_number(ctx, nowv);
+
+            JS_FreeValue(ctx, nowv);
+            JS_FreeValue(ctx, last);
+            DCHECK(*phase == UA_PH_STICKY,
+                   "§6.4.1's transient-activation question resumed mid-chain over a timestamp that is no "
+                   "longer unknown — the second conjunct's answer is owed to a flow that is standing inside "
+                   "the first's true arm, and arithmetic cannot deliver it");
+            *out = now >= l && now < l + UA_TRANSIENT_ACTIVATION_DURATION_MS;
+            return 0;
+        }
+        /* THE CONJUNCTION, WITH THE CLOCK AS THE UNKNOWN OPERAND — the same two ordered questions as below,
+           over the same phase byte, so a flow parked between them resumes into the same place. Left to
+           right, and the second is asked only inside the first's true arm, so no flow ever holds "recently
+           but never". */
         JS_FreeValue(ctx, last);
-        DCHECK(*phase == UA_PH_STICKY,
-               "§6.4.1's transient-activation question resumed mid-chain over a timestamp that is no longer "
-               "unknown — the second conjunct's answer is owed to a flow that is standing inside the first's "
-               "true arm, and arithmetic cannot deliver it");
-        *out = now >= l && now < l + UA_TRANSIENT_ACTIVATION_DURATION_MS;
+        if (*phase == UA_PH_STICKY) {
+            bool sticky = false;
+
+            rc = ua_ask(ctx, h, JS_DupValue(ctx, nowv), UA_OP_STICKY, &sticky);
+            if (rc) { JS_FreeValue(ctx, nowv); return rc; }
+            if (!sticky) {
+                JS_FreeValue(ctx, nowv);
+                *out = false;
+                return 0;
+            }
+            *phase = UA_PH_RECENT;
+        }
+        rc = ua_ask(ctx, h, nowv, UA_OP_TRANSIENT, out);
+        if (rc) return rc;
+        *phase = UA_PH_STICKY;
         return 0;
     }
     if (*phase == UA_PH_STICKY) {
@@ -282,8 +323,15 @@ static void ua_activate(JSContext *rctx)
        Window in this walk has its own environment and therefore its own TIME ORIGIN, so one number computed in
        the initiating document and written into every frame of the page would be a duration measured from one
        origin and compared against another: an ancestor created before this document would report an activation
-       in its own future, and §6.4.1's transient-activation window would be shifted by the difference. */
-    ua_set(rctx, UA_LAST, JS_NewFloat64(rctx, ua_now(rctx)));
+       in its own future, and §6.4.1's transient-activation window would be shifted by the difference.
+       "AN ORDINARY NUMBER" IS NOW CONDITIONAL, AND THE FIRST PARAGRAPH SAID IT WAS NOT. The moment this
+       stores is the current high resolution time, which is a MOMENT — unknown external input once a timer set
+       with an unknown `timeout` has moved the event loop's clock there (core/timing/event_loop.h). So the
+       observation is still real (a trusted input event DID reach this Window) while WHEN it happened may not
+       be, and §6.4.1's three questions go on forking over the stored value exactly as they fork over the
+       clock. Storing the value is what keeps those two facts apart; flattening it here would report an
+       activation at a moment nothing computed. */
+    ua_set(rctx, UA_LAST, ua_now(rctx));
 }
 
 /* THE ACTIVE DOCUMENT'S REALM OF A NAVIGABLE IN THE SET — with the two states that are not realms named at the

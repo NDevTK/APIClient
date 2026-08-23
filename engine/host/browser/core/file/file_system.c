@@ -256,7 +256,7 @@ static JSValue fs_entry_new(JSContext *ctx, const char *kind, const char *name)
         /* §2.4.2's create branch: "set child's binary data to an empty byte sequence", "set child's
            modification timestamp to the current time", and §2.1's lock, "initially open". */
         JS_SetPropertyStr(ctx, e, FS_DATA, JS_NewStringLen(ctx, "", 0));
-        JS_SetPropertyStr(ctx, e, FS_MODIFIED, JS_NewFloat64(ctx, event_loop_now(ctx)));
+        JS_SetPropertyStr(ctx, e, FS_MODIFIED, event_loop_now(ctx));
         JS_SetPropertyStr(ctx, e, FS_LOCK, JS_NewString(ctx, FS_LOCK_OPEN));
         JS_SetPropertyStr(ctx, e, FS_SHARED, JS_NewInt32(ctx, 0));
         JS_SetPropertyStr(ctx, e, FS_TYPE, JS_NewStringLen(ctx, "", 0));
@@ -389,6 +389,19 @@ double file_system_modified(JSContext *ctx, JSValueConst file)
     JSValue v = file_system_is_file(file) ? fs_get(ctx, file, FS_MODIFIED) : JS_UNDEFINED;
     double d = 0;
 
+    /* THE TIMESTAMP IS THE EVENT LOOP'S CLOCK, AND THE CLOCK IS A MOMENT. Once a timer set with an unknown
+       `timeout` has fired, the clock — and so a file stamped after it — is unknown external input
+       (core/timing/event_loop.h). §2.1 says the field is "a number representing the number of milliseconds
+       since the Unix Epoch", and what a PAGE reads it as is §2.3.1's File `lastModified`, a `long long` that
+       travels through core/file/blob.h's `file_new` as an int64. So the whole chain from this field to that
+       member has to carry a value before an unknown one can be answered, and until it does this says which
+       chain rather than flattening an unknown to a number nothing computed. */
+    if (concolic_is(v))
+        DFAIL("§2.1's MODIFICATION TIMESTAMP is an UNKNOWN moment — the event loop's clock was moved there by "
+              "a timer whose `timeout` was unknown external input, and this file was stamped from it. §2.3.1's "
+              "File carries it to the page as `lastModified`, so carry the VALUE: file_system_modified answers "
+              "a JSValue, core/file/blob.h's file_new takes one for its `lastModified`, and the member returns "
+              "it — never an int64 picked here for a moment nothing computed");
     DCHECK(JS_IsNumber(v), "§2.1's MODIFICATION TIMESTAMP is not a number — it is \"a number representing the "
                            "number of milliseconds since the Unix Epoch\" and every writer here sets one");
     JS_ToFloat64(ctx, &d, v);
@@ -399,7 +412,7 @@ double file_system_modified(JSContext *ctx, JSValueConst file)
 void file_system_touch(JSContext *ctx, JSValueConst file)
 {
     DCHECK(file_system_is_file(file), "a modification timestamp was written to an entry that is not a file");
-    JS_SetPropertyStr(ctx, file, FS_MODIFIED, JS_NewFloat64(ctx, event_loop_now(ctx)));
+    JS_SetPropertyStr(ctx, file, FS_MODIFIED, event_loop_now(ctx));
 }
 
 /* ---- §2.1's locks ---------------------------------------------------------------------------------------- */

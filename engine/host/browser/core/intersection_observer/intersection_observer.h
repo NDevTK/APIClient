@@ -87,6 +87,10 @@ bool intersection_observer_pending(JSContext *ctx);
  * HTML §8.1.7.3 step 1 bound as frameTimestamp; the entry's `time` is that moment made relative to the
  * observer's own global (§2.3), which is a question about a realm and so is asked here. */
 uint32_t intersection_observer_count(JSContext *ctx);
-void     intersection_observer_update(JSContext *ctx, uint32_t i, double frame_ts);
+/* `frame_ts` IS A MOMENT AND NOT A `double` — HTML §8.1.7.3 step 1's last render opportunity time, read off
+   the event loop's one virtual clock, which is unknown external input once a timer set with an unknown
+   `timeout` has fired (core/timing/event_loop.h). §3.2.10 step 3.2's throttle over one is a fork this walk
+   has no seam to ask at, and it says so at the line where it would ask. */
+void     intersection_observer_update(JSContext *ctx, uint32_t i, JSValueConst frame_ts);
 
 #endif

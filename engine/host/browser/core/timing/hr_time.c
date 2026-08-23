@@ -9,6 +9,7 @@
 #include "core/realm.h"
 #include "core/timing/event_loop.h"
 #include "core/timing/hr_time.h"
+#include "solver/concolic.h"   /* the clock is a MOMENT, so §4's operations run over unknown external input */
 
 /* §4's TIME RESOLUTION, in the millisecond unit DOMHighResTimeStamp is measured in. Step 1: "let time
    resolution be 100 microseconds, or a higher implementation-defined value". Step 2: "if
@@ -32,24 +33,40 @@ static int g_origin_slot = -1;
  * and keeps the duration a multiple of the resolution, which is what a browser reports. */
 static void hr_time_install(JSContext *ctx)
 {
+    JSValue now = event_loop_now(ctx);
+
     /* Running twice in one realm is asserted by realm_value_set, which is where the first moment is standing. */
-    realm_value_set(ctx, g_origin_slot, JS_NewFloat64(ctx, hr_time_coarsen(ctx, event_loop_now(ctx))));
+    realm_value_set(ctx, g_origin_slot, hr_time_coarsen(ctx, now));
+    JS_FreeValue(ctx, now);
 }
 
-double hr_time_origin(JSContext *ctx)
+JSValue hr_time_origin(JSContext *ctx)
 {
     JSValue v = realm_value_get(ctx, g_origin_slot);
-    double t = 0.0;
 
-    DCHECK(JS_IsNumber(v),
-           "an environment's TIME ORIGIN is not a number — HR-TIME §4 makes it a moment on the monotonic "
-           "clock, and the install that stamps it is the only thing that ever writes this slot");
-    JS_ToFloat64(ctx, &t, v);
-    JS_FreeValue(ctx, v);
-    return t;
+    DCHECK(JS_IsNumber(v) || concolic_is(v),
+           "an environment's TIME ORIGIN is neither a moment on the monotonic clock nor a derivation of one — "
+           "HR-TIME §4 makes it the coarsening of the clock at this realm's creation, and the install that "
+           "stamps it is the only thing that ever writes this slot");
+    return v;
 }
 
-double hr_time_coarsen(JSContext *ctx, double unsafe_moment)
+/* §4 STEP 3's FLOOR, run on a number. The one arithmetic in this file, so that the known path and the example
+   of the unknown path cannot drift apart. */
+static double hr_floor(double m, double resolution)
+{
+    return floor(m / resolution) * resolution;
+}
+
+/* THE OPERATION'S NAME, one per resolution, because §4 takes the resolution as an argument and two
+   environments coarsening the same moment on different grids produce two different values. decide.c keys a
+   predicate by the identity of the value a branch tests, and a derivation's identity is composed from its
+   operand and this name — so one name for both grids would make a narrowing decided in an isolated
+   environment decide the same branch in one that is not. */
+static const char HR_COARSEN_OP[] = "HR-TIME §4 Time Origin coarsen time (100us)";
+static const char HR_COARSEN_OP_ISOLATED[] = "HR-TIME §4 Time Origin coarsen time (5us)";
+
+JSValue hr_time_coarsen(JSContext *ctx, JSValueConst unsafe_moment)
 {
     /* §4 steps 1-2, decided from THE ENVIRONMENT'S OWN cross-origin isolated capability. §4 does not name a
        constant: it takes `crossOriginIsolatedCapability` as an argument, and every caller passes "global's
@@ -62,25 +79,55 @@ double hr_time_coarsen(JSContext *ctx, double unsafe_moment)
      * probe fire on the first coarsen of every run — the stale-assertion failure, one turn after it was
      * written. Asking the component instead also removes the ordering hazard the probe carried: the answer
      * exists before any realm intrinsic is installed, so `hr_time_install` can coarsen the time origin itself. */
-    double resolution = agent_cluster_cross_origin_isolated(ctx) ? HR_TIME_RESOLUTION_ISOLATED_MS
-                                                                 : HR_TIME_RESOLUTION_MS;
+    int isolated = agent_cluster_cross_origin_isolated(ctx);
+    double resolution = isolated ? HR_TIME_RESOLUTION_ISOLATED_MS : HR_TIME_RESOLUTION_MS;
 
-    DCHECK(unsafe_moment >= 0.0,
-           "HR-TIME §4's coarsen time was given a moment BEFORE the agent's clock started — the unsafe shared "
-           "current time in this engine is the event loop's virtual clock, which begins at zero and never runs "
-           "backwards (core/timing/event_loop.h asserts the second half at every move)");
     /* §4 step 3: "in an implementation-defined manner, coarsen AND POTENTIALLY JITTER timestamp such that its
        resolution will not exceed time resolution". This engine takes the coarsening and declines the jitter —
        see hr_time.h for why that is a design constraint and not a shortcut. Flooring onto the grid is then the
        whole of step 3, and it is MONOTONE (division, floor and multiplication all are), which is what makes
        hr_time_relative's non-negative duration an invariant rather than a hope. */
-    return floor(unsafe_moment / resolution) * resolution;
+    if (!concolic_is(unsafe_moment)) {
+        double m = 0;
+
+        DCHECK(JS_IsNumber(unsafe_moment),
+               "HR-TIME §4's coarsen time was given something that is neither a moment on the monotonic clock "
+               "nor unknown external input — its argument is the event loop's virtual clock or a moment taken "
+               "off it, and every producer of one writes one of the two");
+        JS_ToFloat64(ctx, &m, unsafe_moment);
+        DCHECK(m >= 0.0,
+               "HR-TIME §4's coarsen time was given a moment BEFORE the agent's clock started — the unsafe "
+               "shared current time in this engine is the event loop's virtual clock, which begins at zero and "
+               "never runs backwards (core/timing/event_loop.h asserts the second half at every move)");
+        return JS_NewFloat64(ctx, hr_floor(m, resolution));
+    }
+    /* §4 STEP 3 OVER AN UNKNOWN MOMENT IS THE SAME OPERATION, PERFORMED. It is a DERIVATION: the result names
+       §4's algorithm as what produced it and carries the moment's own provenance, so a page branching on a
+       coarsened moment branches on a value whose identity is (this operation, that moment) and not on a
+       number this file chose. The EXAMPLE is the REAL floor run on the moment's own example — the engine
+       running the actual operation on the concrete, which is what §Solver-half means by the example
+       propagating, and not a label a hook derived. Where the moment has no example the derivation has none
+       either: @H never invents. Nothing here is clamped and nothing reads the example to DECIDE anything. */
+    {
+        JSValue ex = concolic_example(ctx, unsafe_moment), out = JS_UNDEFINED;
+
+        if (JS_IsNumber(ex)) {
+            double m = 0;
+
+            JS_ToFloat64(ctx, &m, ex);
+            out = JS_NewFloat64(ctx, hr_floor(m, resolution));
+        }
+        JS_FreeValue(ctx, ex);
+        return concolic_builtin_hook(ctx, unsafe_moment, isolated ? HR_COARSEN_OP_ISOLATED : HR_COARSEN_OP,
+                                     out);
+    }
 }
 
-double hr_time_relative(JSContext *ctx, double unsafe_moment)
+JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
 {
-    double coarse = hr_time_coarsen(ctx, unsafe_moment);
-    double origin = hr_time_origin(ctx);
+    JSValue coarse = hr_time_coarsen(ctx, unsafe_moment);
+    JSValue origin = hr_time_origin(ctx);
+    JSValue sp[2];
 
     /* §4: "the duration from global's relevant settings object's time origin to coarseTime". A NEGATIVE
        duration would be a moment this environment can observe that precedes the environment's own creation,
@@ -88,21 +135,53 @@ double hr_time_relative(JSContext *ctx, double unsafe_moment)
        navigable's realm until something reaches it, so a Window §7.4 created at one moment gets its time
        origin at a LATER one. The day this fires, the fix is the one core/html/user_activation.c already names
        for the same deferral — carry the creation moment on the NAVIGABLE and hand it to the realm when it
-       materializes — and never a clamp here, which would report a page's own first frame as moment zero. */
-    DCHECK(coarse >= origin,
+       materializes — and never a clamp here, which would report a page's own first frame as moment zero.
+       IT IS READ FROM THE CLOCK'S OWN ORDER AND NOT RE-COMPUTED. Over two known moments this is exactly the
+       `coarse >= origin` that stood here; over an unknown one a comparison is an arm to take rather than a
+       fact to test, so the invariant asks what this flow ALREADY DECIDED (event_loop_before_decided never
+       forks) and fires on a decided contradiction. Re-evaluating it would mint a sibling flow whose only
+       content is the violated invariant, which is the assertion manufacturing the world in which it holds. */
+    DCHECK(event_loop_before_decided(ctx, coarse, origin) != 1,
            "HR-TIME §4's relative high resolution time is NEGATIVE — this environment was asked about a moment "
            "earlier than its own TIME ORIGIN, which means the origin was stamped when the realm materialized "
            "rather than when HTML §7.4 created the Window");
-    return coarse - origin;
+    if (!concolic_is(coarse) && !concolic_is(origin)) {
+        double c = 0, o = 0;
+
+        JS_ToFloat64(ctx, &c, coarse);
+        JS_ToFloat64(ctx, &o, origin);
+        JS_FreeValue(ctx, coarse);
+        JS_FreeValue(ctx, origin);
+        return JS_NewFloat64(ctx, c - o);
+    }
+    /* THE SUBTRACTION IS ECMAScript §13.8.2 The Subtraction Operator ( - ), RUN — which §13.15.3
+       ApplyStringOrNumericBinaryOperator performs, the same abstract operation `+` reaches. Its result's
+       identity is composed from the operator
+       and BOTH operands, which is why it goes through the operator rather than through a second derivation
+       named for this clause: two environments subtracting two different origins from one coarsened moment
+       must not compose one key. The hook's stack effect is the interpreter's — both operands freed, the
+       result placed in sp[-2] — so both are handed over here. */
+    sp[0] = coarse;
+    sp[1] = origin;
+    if (!concolic_arith_hook(ctx, sp + 2, JS_CARITH_SUB, 2))
+        DFAIL("§13.8.2 The Subtraction Operator ( - ) declined an operand this component has already "
+              "established is UNKNOWN — the "
+              "concolic value semantics are not installed in this host, so every operator over an unknown "
+              "falls through to the ordinary-object path and the next coercion throws out of an expression "
+              "the page never wrote (solver/concolic.h: concolic_install_hooks)");
+    return sp[0];
 }
 
-double hr_time_current(JSContext *ctx)
+JSValue hr_time_current(JSContext *ctx)
 {
     /* §4: "the result of relative high resolution time given UNSAFE SHARED CURRENT TIME and current global".
        There is no wall clock in a headless run and a second time source would order a timestamp against the
        queue that runs the listeners observing it differently from the queue itself, so the unsafe shared
        current time is the event loop's one virtual clock. */
-    return hr_time_relative(ctx, event_loop_now(ctx));
+    JSValue now = event_loop_now(ctx), r = hr_time_relative(ctx, now);
+
+    JS_FreeValue(ctx, now);
+    return r;
 }
 
 void hr_time_init(JSContext *ctx)

@@ -30,8 +30,11 @@ void timer_clear_map(JSContext *ctx);
    IT IS THE COMPARISON AND NOT THE MOMENT, because an expiry is not always a number. §8.7's `timeout` can be
    unknown external input (a page's `setTimeout(f, someUnknown)`), and an expiry derived from one has no double
    to hand out — while the ORDER it takes is a question with two real answers, so asked here it FORKS and both
-   orders run. Handing out a moment forced this component to pick one of them inside an accessor. */
-int timer_due_before(JSContext *ctx, double moment);
+   orders run. Handing out a moment forced this component to pick one of them inside an accessor.
+   AND `moment` IS A MOMENT AND NOT A `double` FOR THE SAME REASON READ FROM THE OTHER END: the frame the
+   rendering loop is about to take is `last render opportunity time + the frame interval`, and once the clock
+   itself can be unknown so is that sum. The comparison is core/timing/event_loop.h's one moment order. */
+int timer_due_before(JSContext *ctx, JSValueConst moment);
 
 /* HTML 8.6: a STRING handler is EVALUATED when the timer fires. Running it is the HOST's — the extension's host
    queues it onto the flow that scheduled it, which is what keeps a `setTimeout("...")` payload explorable — and

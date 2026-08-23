@@ -169,8 +169,12 @@ typedef struct JSUpdateRendering {
     JSValue   target;       /* step 10's MediaQueryList, held across its dispatch (owned) */
     JSValue   fn;           /* step 14's callback, taken from the map and held across its call (owned) */
     EventFireCb   cb;        /* the request buffer: a fire needs [this, fn, target, event], a call three */
-    double    frame_ts;     /* step 1 */
-    double    layout_start; /* step 15's unsafeStyleAndLayoutStartTime */
+    /* THE TWO MOMENTS ARE VALUES AND NOT `double`s, and they are OWNED (js_update_rendering_visit's list is
+       what discharges them). §8.7's `timeout` can be unknown external input, so firing that timer moves the
+       event loop's clock to a moment nothing computed — see core/timing/event_loop.h — and both of these are
+       read straight off that clock. A `double` here would have had to pick a number for it. */
+    JSValue   frame_ts;     /* step 1 (owned) */
+    JSValue   layout_start; /* step 15's unsafeStyleAndLayoutStartTime (owned) */
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.12 Animation frames step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
@@ -206,6 +210,8 @@ static void js_update_rendering_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->target);
     v->val(ctx, &s->fn);
     v->val(ctx, &s->exc);
+    v->val(ctx, &s->frame_ts);
+    v->val(ctx, &s->layout_start);
     report_exception_work_visit(ctx, &s->rep, v);
     STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
@@ -437,6 +443,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         /* EVERY OWNED FIELD IS ON THE STATE BEFORE ANYTHING THAT CAN FAIL — the failure path tears the machine
            down through fini, which frees exactly what the state holds. */
         s->docs = s->ev = s->target = s->fn = s->exc = JS_UNDEFINED;
+        s->frame_ts = s->layout_start = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         /* The report's own record, zeroed before anything can throw — a step state arrives with the INTEGER 0
            in every JSValue slot, and the report's teardown frees exactly what it holds. */
@@ -633,8 +640,13 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                    the moment step 17 became an algorithm that runs the page's `blur` listeners: the interval
                    step 20 reports would then have excluded the style and layout it is named after and included
                    none of it. */
+                JS_FreeValue(ctx, s->layout_start);
                 s->layout_start = event_loop_now(ctx);
-                DCHECK(s->layout_start >= s->frame_ts,
+                /* READ FROM THE CLOCK'S OWN ORDER, NOT RE-COMPUTED — over two known moments this is exactly
+                   the `>=` that stood here, and over an unknown one a comparison is an arm to take rather
+                   than a fact to test, so it asks what this flow already DECIDED and fires on a decided
+                   contradiction (core/timing/event_loop.h). */
+                DCHECK(event_loop_before_decided(ctx, s->layout_start, s->frame_ts) != 1,
                        "update the rendering step 15 recorded a style-and-layout start time BEFORE the "
                        "frameTimestamp its task was queued with — both come from the ONE virtual clock, and "
                        "step 20 records the interval between them");
@@ -677,7 +689,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                    Web IDL §3.12 invokes a callback with thisArg UNDEFINED when none is given, which is what
                    §8.12 Animation frames gives; a sloppy callback still sees the global because that substitution is the
                    language's, and a strict one must see undefined. */
-                JSValue now = JS_NewFloat64(docctx, hr_time_relative(docctx, s->frame_ts)), out;
+                JSValue now = hr_time_relative(docctx, s->frame_ts), out;
                 JSValueConst argv[1];
 
                 argv[0] = now;
@@ -810,7 +822,7 @@ static bool rendering_any_opportunity(JSContext *ctx)
 
 int rendering_run_opportunity(JSContext *ctx)
 {
-    double now, next, due;
+    JSValue now, last, ms, next;
     JSContext *topctx;
     JSValue driver;
 
@@ -819,9 +831,20 @@ int rendering_run_opportunity(JSContext *ctx)
     if (!rendering_any_opportunity(ctx))
         return 0;                                    /* step 1: nothing might have one */
     now = event_loop_now(ctx);
-    next = event_loop_last_render(ctx) + RENDERING_FRAME_MS;
-    if (next < now)
-        next = now;                                  /* the clock moved past this frame while work was due */
+    last = event_loop_last_render(ctx);
+    ms = JS_NewFloat64(ctx, RENDERING_FRAME_MS);
+    next = event_loop_moment_plus(ctx, last, ms);
+    JS_FreeValue(ctx, ms);
+    JS_FreeValue(ctx, last);
+    /* HAS THE CLOCK ALREADY MOVED PAST THIS FRAME while work was due? — a comparison of two moments on one
+       clock, and a FORK wherever either is unknown, which either can be once a timer with an unknown expiry
+       has fired. `if (next < now) next = now;` read as arithmetic and was a DECISION: taking the arm where
+       the frame is still ahead and the arm where it is behind are two different programs — in one the page's
+       animation callbacks see the frame they asked for, in the other they see the moment the timer left. */
+    if (event_loop_before(ctx, next, now)) {
+        JS_FreeValue(ctx, next);
+        next = JS_DupValue(ctx, now);
+    }
     /* ONE CLOCK, TWO SOURCES. §8.1.7.3 step 2.1 gives the scheduler exactly one freedom — which task queue to
        take a task from — and it is not a freedom to run a task before the moment it becomes due. A timer that
        expires before the next frame is ahead of it on the same clock, so this yields and the timer source
@@ -831,13 +854,18 @@ int rendering_run_opportunity(JSContext *ctx)
        between the two sources is a FORK with two real arms rather than a value to read. Asked there, this
        caller gets the answer either way; asked here, it would have had a `double` that could not represent one
        of them. */
-    due = -1;
-    if (timer_due_before(ctx, next))
+    if (timer_due_before(ctx, next)) {
+        JS_FreeValue(ctx, next);
+        JS_FreeValue(ctx, now);
         return 0;
+    }
     /* The timer source is the other thing due on this clock and it is NOT due before `next` — which is what
-       the question above established, so nothing is already due to move past and the assert is told so. */
-    event_loop_advance_to(ctx, next, due);
+       the question above established, so nothing is already due to move past and the assert is told so
+       (JS_UNDEFINED is "no other source is due", which the `-1` sentinel used to say). */
+    event_loop_advance_to(ctx, next, JS_UNDEFINED);
     event_loop_set_last_render(ctx, next);           /* step 2 */
+    JS_FreeValue(ctx, next);
+    JS_FreeValue(ctx, now);
 
     /* STEP 3: "queue a global task on the rendering task source given that navigable's active window to update
        the rendering". The task is given the TOP-LEVEL TRAVERSABLE's window, which is whose driver runs the

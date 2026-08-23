@@ -29,6 +29,7 @@
 #include "core/layout/used_value.h"
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
+#include "solver/concolic.h"   /* §8.1.7.3's frameTimestamp is a MOMENT, and a moment can be unknown */
 
 /* ---- the shapes ------------------------------------------------------------------------------------------
  *
@@ -682,16 +683,31 @@ static JSValue io_rect_value(JSContext *rctx, IoRect r)
    The entry is minted in the OBSERVER'S realm — §2.3 makes its `time` relative to that global's time origin and
    Web IDL makes a [NewObject] there — while step 3's task is queued for the DOCUMENT this walk is for, which is
    `ctx`. Those are two different realms whenever an implicit-root observer was constructed inside an iframe. */
-static void io_queue_entry(JSContext *ctx, JSValueConst observer, JSValueConst state, double frame_ts,
+static void io_queue_entry(JSContext *ctx, JSValueConst observer, JSValueConst state, JSValueConst frame_ts,
                            IoRect root, IoRect target_rect, IoRect inter, bool is_intersecting,
                            bool is_visible, CssPx ratio, JSValueConst target)
 {
     JSContext *rctx = io_realm(ctx, state);
     JSValue entries = JS_GetPropertyUint32(ctx, (JSValue)state, IO_S_ENTRIES);
     JSValue entry;
+    double entry_time = 0;
 
     (void)observer;
-    entry = intersection_observer_entry_new(rctx, hr_time_relative(rctx, frame_ts),
+    /* §2.3's `time` — the relative high resolution time of the frame's moment, in the OBSERVER's environment.
+       It is flattened to a double here because that is what the entry's own component takes, and the flatten
+       is SOUND rather than a collapse: io_update_target's step 3.2 crashes on an unknown frame timestamp
+       before this walk is reached, so the only moments that get here are ones the clock computed. The day
+       that seam is built this reads a value and so does the entry. */
+    {
+        JSValue t = hr_time_relative(rctx, frame_ts);
+
+        DCHECK(JS_IsNumber(t),
+               "§2.3's IntersectionObserverEntry time is not a number — §3.2.10 step 3.2 refuses an unknown "
+               "frame timestamp above, so nothing unknown can have reached this derivation");
+        JS_ToFloat64(rctx, &entry_time, t);
+        JS_FreeValue(rctx, t);
+    }
+    entry = intersection_observer_entry_new(rctx, entry_time,
                                             io_rect_value(rctx, root), io_rect_value(rctx, target_rect),
                                             io_rect_value(rctx, inter), is_intersecting, is_visible,
                                             viewport_env_derived(ratio, JS_NewFloat64(rctx, ratio.px)),
@@ -719,14 +735,14 @@ static bool io_in_containing_chain(lxb_dom_node_t *target, lxb_dom_node_t *root)
 
 /* §3.2.10 step 3, for ONE target of ONE observer. The step numbers are the section's own. */
 static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst state, JSValueConst target,
-                             IoRect root, double frame_ts)
+                             IoRect root, JSValueConst frame_ts)
 {
     JSValue reg = io_registration(ctx, target, observer);                 /* step 3.1 */
     JSValue thresholds;
     lxb_dom_node_t *tn = node_of(target), *rootn;
     IoRect target_rect, inter;
     CssPx target_area, inter_area, ratio;
-    double delay, last, prev_index;
+    double delay, last, prev_index, ts;
     uint32_t nth, k, threshold_index = 0;
     bool is_intersecting = false, is_visible = false, prev_intersecting, prev_visible, skipped = false;
     JSValue v;
@@ -738,8 +754,34 @@ static void io_update_target(JSContext *ctx, JSValueConst observer, JSValueConst
     JS_ToFloat64(ctx, &delay, v);
     JS_FreeValue(ctx, v);
     last = io_num_at(ctx, reg, IOR_LAST_UPDATE);
-    if (frame_ts - last < delay) { JS_FreeValue(ctx, reg); return; }      /* step 3.2 */
-    JS_SetPropertyUint32(ctx, reg, IOR_LAST_UPDATE, JS_NewFloat64(ctx, frame_ts));   /* step 3.3 */
+    /* STEP 3.2's THROTTLE IS A COMPARISON, AND OVER AN UNKNOWN MOMENT IT IS A FORK THIS COMPONENT CANNOT ASK.
+       `frameTimestamp` is HTML §8.1.7.3 step 1's last render opportunity time, a moment on the event loop's
+       one virtual clock — and that clock becomes unknown external input the moment a timer set with an
+       unknown `timeout` fires (core/timing/event_loop.h). `time - time of last update < delay` then has two
+       real answers, "the target is skipped this frame" and "it is not", and both are programs the page can
+       observe: an observer whose callback never runs and one whose does.
+       IT CANNOT BE ASKED HERE, and that is a missing SEAM rather than a missing decision. §3.2.10 runs inside
+       HTML §8.1.7.3's update-the-rendering step machine, and a fork needs a resume point the forking site
+       owns — the machine's own `step_fork_run`, reached through its JSStepHdr. This walk is a plain C
+       activation several calls below that machine and is handed no header, so there is nothing for the
+       sibling to be rebuilt from. WHAT TO BUILD is the header down this path: `intersection_observer_update`
+       and `io_update_target` take the update-the-rendering machine's JSStepHdr, this test becomes a
+       `step_fork_run` over the difference (which is ECMAScript §13.8.2 The Subtraction Operator ( - ), run —
+       event_loop_moment_plus's
+       twin), and the walk's cursors (`s->ob`, and a per-target index this component does not yet park on)
+       become stages the sibling re-enters at. Until then the honest state is a crash naming it, never a
+       number picked for `frameTimestamp` — which would decide the throttle for every observer in the
+       document from inside an accessor. */
+    if (concolic_is(frame_ts))
+        DFAIL("§3.2.10 step 3.2's throttle compares the frame timestamp against this registration's last "
+              "update, and the frame timestamp is an UNKNOWN moment — the event loop's clock has been moved "
+              "there by a timer whose `timeout` was unknown external input. Both outcomes of the comparison "
+              "are real programs, so it is a FORK, and this walk has no seam to fork at: thread HTML "
+              "§8.1.7.3's update-the-rendering JSStepHdr through intersection_observer_update and "
+              "io_update_target and ask it with step_fork_run (see the paragraph at this line)");
+    JS_ToFloat64(ctx, &ts, frame_ts);
+    if (ts - last < delay) { JS_FreeValue(ctx, reg); return; }            /* step 3.2 */
+    JS_SetPropertyUint32(ctx, reg, IOR_LAST_UPDATE, JS_NewFloat64(ctx, ts));         /* step 3.3 */
 
     /* step 3.4 */
     target_rect.x = target_rect.y = target_rect.w = target_rect.h = css_px(0.0);
@@ -814,7 +856,7 @@ uint32_t intersection_observer_count(JSContext *ctx)
     return n;
 }
 
-void intersection_observer_update(JSContext *ctx, uint32_t i, double frame_ts)
+void intersection_observer_update(JSContext *ctx, uint32_t i, JSValueConst frame_ts)
 {
     JSValue list = io_doc_list(ctx), observer, state, targets;
     IoRect root;

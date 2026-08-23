@@ -382,7 +382,7 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
        its cross-origin isolated capability decides. `ctx` IS the relevant global object — an Event is minted
        in the realm whose algorithm is firing it, which is what makes a child document's `event.timeStamp` its
        own clock's. */
-    JS_SetPropertyStr(ctx, slots, "timeStamp", JS_NewFloat64(ctx, hr_time_current(ctx)));
+    JS_SetPropertyStr(ctx, slots, "timeStamp", hr_time_current(ctx));
     JS_SetPropertyStr(ctx, slots, "canceled", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
