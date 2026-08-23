@@ -156,9 +156,17 @@ function serializeTabData(tab) {
   }
 
   // Discovery docs: global base, tab overwrites with full doc
+  /* WHAT MAKES AN ENTRY WORTH PROJECTING IS ITS `doc`, NOT ITS `status`. Both loops asked `status === "found"`
+     and sent a bare `{status}` otherwise, which was a valid proxy only while nothing produced a record with a
+     learned document and a non-"found" status. lib/discovery-probe.js's not_found branch now produces exactly
+     that (it stopped deleting the method surface a failed PUBLISHED-document fetch has nothing to say about),
+     and the TAB loop is where it bit: a tab entry overwrites the global one, so a not_found on the document
+     the popup is standing on replaced the cumulative moat's whole RestDescription with a two-word stub, and
+     the Send panel offered no method at all for a service whose endpoint the Discovery panel was listing on
+     the same screen. `status` is the published fetch's outcome and rides along as one; the doc is the fact. */
   const mergedDiscovery = {};
   for (const [k, v] of globalStore.discoveryDocs) {
-    if (v.status === "found") {
+    if (v.doc) {
       /* THE SAME LADDER serializeApiKeyEntry ABOVE DELETED, surviving one loop later on the same two names.
          Every producer of a `status:"found"` GLOBAL entry writes both as Sets — lib/merge.js's mergeToGlobal
          builds them with `new Set(...)`, _deserializeIntoGlobalStore rebuilds them from the stored arrays, and
@@ -169,7 +177,7 @@ function serializeTabData(tab) {
          virtual doc entry carrying neither field, and lib/response-decode.js adds them the first time a
          request names the service.) */
       DCHECK(v.pageUrls instanceof Set && v.frameOrigins instanceof Set,
-             "a global discoveryDocs entry with status \"found\" carries a pageUrls/frameOrigins that is not " +
+             "a global discoveryDocs entry carrying a doc has a pageUrls/frameOrigins that is not " +
              "a Set — mergeToGlobal, _deserializeIntoGlobalStore and the popup's re-fetch all build Sets, so " +
              "anything else here serializes as an empty list that reads as 'never used from any page' " +
              "(service=" + k + ")");
@@ -189,7 +197,7 @@ function serializeTabData(tab) {
     }
   }
   for (const [k, v] of tab.discoveryDocs) {
-    if (v.status === "found") {
+    if (v.doc) {
       // Merge pageUrls/frameOrigins from global base if present
       var _existingMerged = mergedDiscovery[k];
       var _allPageUrls = new Set(_existingMerged?.pageUrls || []);
@@ -207,7 +215,11 @@ function serializeTabData(tab) {
         pageUrls: [..._allPageUrls],
         frameOrigins: [..._allFrameOrigins],
       };
-    } else {
+    } else if (!mergedDiscovery[k]) {
+      /* A DOC-LESS TAB ENTRY NO LONGER DELETES THE GLOBAL ONE. This arm ran `mergedDiscovery[k] = {status}`
+         unconditionally, so a "pending" or "not_found" record for the document in front of you erased every
+         method every OTHER page of every OTHER session had learned for that service. What a doc-less tab
+         entry states is the published fetch's outcome, which is only news where the moat has nothing. */
       mergedDiscovery[k] = { status: v.status };
     }
   }
@@ -238,7 +250,7 @@ function serializeTabData(tab) {
       if (tab._resolverErrors === undefined) return [];   // the engine recorded no page error for this document
       DCHECK(Array.isArray(tab._resolverErrors),
              "a DocView's _resolverErrors is present but is not an array — offscreen-brain.js pushes " +
-             "{context, message, snippet} records into it and the popup's diagnostic view iterates them");
+             "{context, message} records into it and the popup's diagnostic view iterates them");
       return tab._resolverErrors;
     })(),
   };

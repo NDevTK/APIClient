@@ -58,7 +58,18 @@ function _discPageUrl() {
 function _discServices(pageUrl) {
   const out = new Map();   // service -> { hostname, endpointKeys: [] }
   if (!tabData) return out;
-  for (const [k, ep] of Object.entries(tabData.endpoints || {})) {
+  /* THE TWO COLLECTIONS THIS PANEL IS MADE OF, ASSERTED WHERE IT READS THEM. `tabData.endpoints || {}` and
+     `tabData.discoveryDocs || {}` stood here, and lib/serialize.js's `serializeTabData` — the ONE producer of
+     everything on this object — builds both unconditionally as the global store overlaid with the document's
+     own view. So the `|| {}` could only ever fire for a reply that projection did not make, and what it
+     produced then was this panel's "No service has been learned for this document yet — nothing to probe":
+     a claim about the page, assembled out of a missing reply. */
+  DCHECK(tabData.endpoints && typeof tabData.endpoints === "object" &&
+         tabData.discoveryDocs && typeof tabData.discoveryDocs === "object",
+         "the popup's state reply carries no endpoints/discoveryDocs map — lib/serialize.js writes both on " +
+         "every GET_STATE answer, so an absent one is that projection broken and this panel would report a " +
+         "document that learned a service as having learned nothing");
+  for (const [k, ep] of Object.entries(tabData.endpoints)) {
     DCHECK(typeof ep.service === "string" && typeof ep.method === "string" &&
            typeof ep.host === "string" && typeof ep.path === "string",
            "an endpoint record reached the discovery panel without service/method/host/path — lib/merge.js is " +
@@ -69,7 +80,7 @@ function _discServices(pageUrl) {
     if (!e) { e = { hostname: ep.host, endpointKeys: [] }; out.set(ep.service, e); }
     e.endpointKeys.push(k);
   }
-  for (const svc of Object.keys(tabData.discoveryDocs || {})) {
+  for (const svc of Object.keys(tabData.discoveryDocs)) {
     if (!out.has(svc)) out.set(svc, { hostname: null, endpointKeys: [] });
   }
   return out;
@@ -129,7 +140,7 @@ function renderDiscoveryPanel() {
   }
 
   for (const [svc, info] of [...services.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    const docEntry = (tabData.discoveryDocs || {})[svc] || null;
+    const docEntry = tabData.discoveryDocs[svc] || null;   // a service named only by a learned endpoint has no document yet — that ABSENCE is what the panel offers to fetch
     const docState = docEntry ? esc(String(docEntry.status)) : "none";
     html += '<div class="card"><div class="card-label"><code>' + esc(svc) + '</code>' +
             ' <span class="badge badge-status">discovery doc: ' + docState + '</span></div>';
@@ -216,7 +227,15 @@ function _discSvcInfoHtml(label, svcInfo) {
 // path (`/users/{id}`, what the engine learned) never equals the concrete pathname of the live request that
 // triggered the probe. Those stay unattributed until that key carries the endpoint it was probed for.
 function _discResultHtml(endpointKey, ep) {
-  const results = (tabData && tabData.probeResults) || {};
+  /* `(tabData && tabData.probeResults) || {}` stood here twice. Both callers run inside the per-service loop,
+     which `_discServices` can only fill from a non-null `tabData`, and `serializeTabData` writes
+     `probeResults` on every reply — so the guard could not fire and the default could only hide the map that
+     holds every probe's answer arriving as nothing, which renders as a probe that ran and learned no fields. */
+  DCHECK(tabData && tabData.probeResults && typeof tabData.probeResults === "object",
+         "the popup's state reply carries no probeResults map — lib/serialize.js writes it on every " +
+         "GET_STATE answer, so an absent one is that projection broken and every probe this document ran " +
+         "would render as one that learned nothing");
+  const results = tabData.probeResults;
   let html = "";
   const probe = results[endpointKey];
   if (probe) html += _discFieldProbeHtml("probe", probe);
@@ -229,7 +248,15 @@ function _discResultHtml(endpointKey, ep) {
 
 // Per SERVICE: the automatic field probes, keyed `auto:<service>::<url>` by lib/discovery-probe.js.
 function _discAutoProbesHtml(svc) {
-  const results = (tabData && tabData.probeResults) || {};
+  /* `(tabData && tabData.probeResults) || {}` stood here twice. Both callers run inside the per-service loop,
+     which `_discServices` can only fill from a non-null `tabData`, and `serializeTabData` writes
+     `probeResults` on every reply — so the guard could not fire and the default could only hide the map that
+     holds every probe's answer arriving as nothing, which renders as a probe that ran and learned no fields. */
+  DCHECK(tabData && tabData.probeResults && typeof tabData.probeResults === "object",
+         "the popup's state reply carries no probeResults map — lib/serialize.js writes it on every " +
+         "GET_STATE answer, so an absent one is that projection broken and every probe this document ran " +
+         "would render as one that learned nothing");
+  const results = tabData.probeResults;
   const prefix = "auto:" + svc + "::";
   let html = "";
   for (const k of Object.keys(results).sort()) {

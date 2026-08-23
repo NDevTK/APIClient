@@ -574,16 +574,6 @@ function stripJsonp(text) {
 // (Endpoint identity -- classifyInterface/extractInterfaceName/refineByObservedPrefix/
 // migrateToCommonPrefixBucket/calculateMethodMetadata -- extracted to lib/grouping.js, loaded first.)
 
-function _hexToBytes(hex) {
-  if (typeof hex !== "string") return new Uint8Array(0);
-  const n = hex.length >> 1;
-  const out = new Uint8Array(n);
-  for (let i = 0; i < n; i++) {
-    out[i] = parseInt(hex.substr(i * 2, 2), 16) | 0;
-  }
-  return out;
-}
-
 // (VDD passive learning -- learnFromAstCallSite/learnFromRequest/learnFromResponse + stats + templated-
 // method matching -- extracted to lib/learn.js, loaded first. One problem per file.)
 
@@ -826,15 +816,6 @@ async function _dispatchDocument(docKey) {
 }
 
 // (Engine-result -> doc merge -- mergeASTResultsIntoVDD -- extracted to lib/merge.js, loaded first.)
-
-function _formFieldToParamType(field) {
-  switch (field.type) {
-    case "number": case "range": return "number";
-    case "checkbox": return "boolean";
-    case "file": return "file";
-    default: return "string";
-  }
-}
 
 /* _handleFormMetadata removed: forms are now learned through the
    engine path. The Lexbor-parsed document inside the QuickJS worker

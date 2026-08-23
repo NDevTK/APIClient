@@ -170,8 +170,6 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       parameters: {},
       request: null,
       origin: csUrl.origin,
-      _astSourceScript: scriptUrl || null,
-      _astInferred: true,
     };
   }
   const m = probedMethod || doc.resources.learned.methods[methodName];
@@ -180,6 +178,21 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          "verb-matched probed entry or created the learned one, so an absent method here means that " +
          "get-or-create stopped covering a case and every value this call site computed has nowhere to land");
   if (!m.origin) m.origin = csUrl.origin;
+  /* THE BUNDLE-ORIGIN FACT IS STAMPED BY THE FUNCTION THAT LEARNED IT, NOT BY THE CREATE THAT HAPPENED FIRST.
+     `_astInferred` was written inside the object literal above, so it existed only when the AST path was the
+     first producer to name this method. It is READ as "the engine found this call site in the shipped
+     bundle" — lib/popup-send.js `_methodOrigin` turns it into the UNUSED / unused+fired / fired-only tag,
+     which is the tool's whole claim — and the wire producer (learnFromRequest, and the batch/chunk
+     registrations below it) creates the same record with no such field. So an endpoint whose live request
+     landed before the analysis merged was reported to the user as "fired only (no bundle origin)": the exact
+     inverse of what the forced execution had just proved, arrived at by which producer ran first.
+     MEASURED in Chrome on the one-fetch probe page (127.0.0.1:8890): the method carried `_astValidValues`
+     from this very call and no `_astInferred`, and the Send panel tagged it `[fired only]`.
+     Reaching this line IS the fact, for the record and for the script that carried it, so both are written
+     here unconditionally. `_astSourceScript` keeps the FIRST script that reached it — one method reached from
+     two chunks is one endpoint, and overwriting would make the attribution the last writer's. */
+  m._astInferred = true;
+  if (!m._astSourceScript) m._astSourceScript = scriptUrl || null;
 
   /* `_astCallSites` IS GONE, AND SO IS THE SOURCE LOCATION IT WAS MADE OF. It recorded one entry per call
      site as {script, line, column, enclosingFunction}, keyed and deduped on `line:column`, and its comment

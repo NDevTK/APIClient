@@ -11,7 +11,19 @@ function getDocMethods(doc) {
       if (r.methods) {
         for (const mName in r.methods) {
           const m = r.methods[mName];
-          const key = (m.httpMethod || "GET") + " " + m.id;
+          /* THE VERB IS THE HALF OF THE IDENTITY THAT A DEFAULT ERASES. `(m.httpMethod || "GET")` made every
+             record without one collapse onto the GET of the same id, so two endpoints would have been
+             rendered as one and the second silently dropped by `seen` — and it could never fire, because
+             every producer of a method record writes the verb: lib/learn.js's four registrations take it from
+             the call site or the request, lib/openapi-import.js from the operation, and a probed discovery
+             document declares it. A missing one is that producer broken, which is a thing to see rather than
+             a thing to guess a verb for. */
+          DCHECK(typeof m.httpMethod === "string" && m.httpMethod,
+                 "a discovery-doc method carries no httpMethod — every producer writes it (lib/learn.js from " +
+                 "the call site or the live request, lib/openapi-import.js from the operation, a probed " +
+                 "document from the service's own declaration), so an absent one would be filed under GET " +
+                 "and merged onto whatever GET shares its id (" + String(m.id) + ")");
+          const key = m.httpMethod + " " + m.id;
           if (seen.has(key)) continue;
           seen.add(key);
           methods.push(m);
@@ -786,12 +798,26 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function loadState() {
   // Fetch available frames FIRST so currentDocumentId() can resolve the selected
   // frame's documentId for the per-document GET_STATE below.
+  /* THE FRAME TREE IS THE BROWSER'S ANSWER AND IT IS NEVER EMPTY. lib/popup-handlers.js's GET_FRAMES maps
+     chrome.webNavigation.getAllFrames and, when that answered nothing, sends a one-element list describing the
+     outermost frame — so `|| []` and the `catch { availableFrames = [] }` beside it were two defaults over one
+     reply that cannot be empty. What they produced was not "no frames": `_discPageUrl` reads this list to find
+     the pinned document's ADDRESS, and with an empty list it answers null, which makes the discovery panel say
+     "no endpoint of this service was learned here" about a document that learned one. A transport failure
+     rendered as a fact about the page.
+     The catch stays because the rejection is real — the background document is not there to broadcast to —
+     and it keeps the empty list, which every reader already treats as "no document is pinned". An invariant
+     abort travels on through it (check.js RETHROW_FATAL), and a reply that ARRIVES in the wrong shape is the
+     assert's, not the catch's. */
   try {
-    availableFrames = await chrome.runtime.sendMessage({
-      type: "GET_FRAMES",
-      tabId: currentTabId,
-    }) || [];
-  } catch (_) {
+    const frames = await chrome.runtime.sendMessage({ type: "GET_FRAMES", tabId: currentTabId });
+    DCHECK(Array.isArray(frames) && frames.length > 0,
+           "GET_FRAMES answered with something that is not a non-empty array — the handler substitutes a " +
+           "one-element outermost-frame list when webNavigation reports nothing, so an empty or absent one " +
+           "is that handler broken and this view would report the pinned document as having no address");
+    availableFrames = frames;
+  } catch (e) {
+    RETHROW_FATAL(e);
     availableFrames = [];
   }
   _resolvePin();   // validate/advance the pinned send-target against the live frame tree
@@ -800,6 +826,20 @@ async function loadState() {
     tabId: currentTabId,
     documentId: currentDocumentId(),
   });
+  /* EVERY PANEL IS MADE OF THIS ONE REPLY, AND NOTHING ASKED WHETHER IT ARRIVED. lib/popup-handlers.js
+     answers GET_STATE unconditionally — a document it does not know still gets `_emptyDocView()` through
+     `serializeTabData`, so the global cumulative moat is rendered either way — which means a null here is
+     never "this tab has nothing"; it is the brain not answering at all. And the render path takes that
+     silently: `tabData?.apiKeys`/`tabData?.discoveryDocs` read past it and every panel paints its own empty
+     state, so the popup tells the user "No data captured yet" and offers an empty method list for a session
+     whose store is full. MEASURED: with the offscreen document wedged, GET_STATE resolved null and the popup
+     rendered exactly that — a clean-looking view of a page the engine had already learned an endpoint from.
+     The DCHECK below is the same contract GET_ENGINE_RUNS states one line down; asserting one reply of a pair
+     that arrive from the same document is a check on the wrong thing. */
+  DCHECK(tabData && typeof tabData === "object",
+         "GET_STATE did not answer with a state object — lib/popup-handlers.js answers it unconditionally " +
+         "(an unknown document still gets the global moat through _emptyDocView), so a null reply is the " +
+         "offscreen brain not reachable, and every panel would render its empty state as a fact about the page");
   // The engine's own run records — see renderEngineRuns for why they had never reached a human surface. No
   // try/catch and no `|| []`: the offscreen answers this command unconditionally off an array bridge.js
   // declares at load, so a failure here is that document not being there, which is the one thing an empty
@@ -936,8 +976,10 @@ function render() {
 // these are P1 and MUST be visible rather than console-only.
 //
 // EVERY FIELD ON A ROW IS WRITTEN ON EVERY ROW, so none of them is defaulted here. bridge.js builds each entry
-// as {context, message, snippet, replyExample} with two non-empty strings, and offscreen-brain copies context
-// and message across verbatim. The `|| "gap"` that stood on `context` was the worse half: "gap" is a label no
+// as {context, message} — TWO non-empty strings and nothing else — and offscreen-brain copies both across
+// verbatim. (This sentence used to name `snippet` and `replyExample` beside them; bridge.js wrote those as
+// constant nulls, they were read nowhere, and they are gone from the record. A comment that keeps naming a
+// field the producer stopped writing is the same lie as a reader that keeps reading it.) The `|| "gap"` that stood on `context` was the worse half: "gap" is a label no
 // producer has ever emitted, so a relay that stopped carrying the context would have printed a plausible
 // English word in its place on every row — a fabricated attribution, indistinguishable from a real one.
 function renderDeepStatus() {
@@ -1246,8 +1288,9 @@ function onSendEndpointSelected() {
     const discoveryId = selectedOpt.dataset.discoveryId; // Use data-discoveryId
     /* THE SERVICE THE OPTION WAS BUILT FROM, UNDEFAULTED. `tabData?.discoveryDocs?.[svc]` stood here and
        could not fire: lib/popup-send.js's renderMethodDropdown mints this option only while iterating
-       `tabData.discoveryDocs`, and only for an entry whose `status === "found"` AND whose `.doc` is truthy —
-       so reaching this line means all three were there when the dropdown was painted. lib/serialize.js
+       `tabData.discoveryDocs`, and only for an entry whose `.doc` is truthy (the published fetch's `status`
+       is a different fact and no longer gates it) — so reaching this line means both were there when the
+       dropdown was painted. lib/serialize.js
        writes `discoveryDocs` unconditionally beside endpoints/probeResults/requestLog, so an absent one is
        that projection broken, and what the optional chain produced then was `doc === undefined` feeding the
        address ladder below — a send whose target was invented rather than read. */
@@ -1256,9 +1299,9 @@ function onSendEndpointSelected() {
            "serializeTabData (lib/serialize.js) writes that map on every GET_STATE it answers, and the " +
            "option being offered at all means renderMethodDropdown just read it");
     const svcData = tabData.discoveryDocs[svc];
-    DCHECK(svcData && svcData.status === "found" && svcData.doc,
+    DCHECK(svcData && svcData.doc,
            "the send panel is offering a method of service \"" + svc + "\" whose discovery entry is gone or " +
-           "carries no doc — renderMethodDropdown builds a virtual option only from an entry that had both, " +
+           "carries no doc — renderMethodDropdown builds a virtual option only from an entry that had one, " +
            "so this is the store dropping a document between render and selection");
     const doc = svcData.doc;
 

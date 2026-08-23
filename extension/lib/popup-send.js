@@ -29,7 +29,12 @@ function renderSendPanel() {
   svcSelect.innerHTML = '<option value="">All Services</option>';
   if (tabData?.discoveryDocs) {
     for (const [svcName, svcData] of Object.entries(tabData.discoveryDocs).sort((a, b) => a[0].localeCompare(b[0]))) {
-      if (svcData.status === "found" && svcData.doc) {
+      /* THE DOC IS THE QUESTION, NOT THE STATUS. `status === "found"` was the published-discovery FETCH's
+         outcome standing in for "this service has a method surface", and lib/discovery-probe.js now records a
+         failed published fetch without deleting what the bundle taught — so a service whose learned
+         RestDescription is right here would have been left out of this list by a fact about a document nobody
+         published. What fills the dropdown is `doc`. */
+      if (svcData.doc) {
         const methodCount = getDocMethods(svcData.doc).length;
         const opt = document.createElement("option");
         opt.value = svcName;
@@ -131,7 +136,7 @@ function renderMethodDropdown() {
 
     for (const [svcName, svcData] of services) {
       if (svcFilter && svcName !== svcFilter) continue;
-      if (svcData.status === "found" && svcData.doc) {
+      if (svcData.doc) {   // the method surface is the doc — see the service selector above
         const methods = getDocMethods(svcData.doc);
         methods.sort((a, b) => a.id.localeCompare(b.id));
 

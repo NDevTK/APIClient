@@ -211,7 +211,7 @@ async function exportOpenApiSpec() {
     services.push(svcFilter);
   } else if (tabData?.discoveryDocs) {
     for (const [svcName, svcData] of Object.entries(tabData.discoveryDocs)) {
-      if (svcData.status === "found") services.push(svcName);
+      if (svcData.doc) services.push(svcName);   // a service with a learned doc is exportable whatever the published fetch answered
     }
   }
   if (!services.length) {
@@ -376,12 +376,18 @@ async function importOpenApiSpec(e) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/* THE LABEL THAT NAMES WHICH PAGE A ROW IS ABOUT — the engine-run list, the @S finding's source and page, the
+   request log. It read `parsed.hostname`, which DROPS THE PORT, and a port is part of the ORIGIN: three probe
+   documents on 8890, 8896 and 8850 are three different origins with three different frontiers, and all three
+   rendered as the single word "127.0.0.1". MEASURED in the engine-runs panel: eight rows, three pages, one
+   label — the panel exists to say which run belongs to which page and could not. `host` is the same string
+   with the port when there is a non-default one, which is what the browser's own UI shows. */
 function _shortUrl(u) {
   try {
     var parsed = new URL(u);
     var path = parsed.pathname.replace(/\/$/, "");
-    if (!path) return parsed.hostname;
-    return parsed.hostname + path;
+    if (!path) return parsed.host;
+    return parsed.host + path;
   } catch (_) {
     return u;
   }
@@ -501,12 +507,6 @@ function _renderPbNode(item, out, stack) {
   // emitted via out.push directly above).
   // To preserve original ordering: the parent's closing </div> goes
   // LAST in output, so it's pushed FIRST onto the stack.
-  function pushNested(builder) {
-    // builder receives the stack to push into. Inside builder we push
-    // items in REVERSE order so they pop correctly.
-    builder();
-  }
-
   // Helper: push a render job for child nodes inside a wrapper div.
   // Order on output: <wrapperOpen>...<child rendering>...</wrapper>
   function pushNestedTree(wrapperOpen, wrapperClose, childNodes, childSchema, childFallback) {

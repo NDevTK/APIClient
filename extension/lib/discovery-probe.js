@@ -320,6 +320,23 @@ async function fetchDiscoveryForService(
       publishedJson: _prevDiscoveryNF?.publishedJson || null,
       pageUrls: _prevDiscoveryNF?.pageUrls || new Set(),
       frameOrigins: _prevDiscoveryNF?.frameOrigins || new Set(),
+      /* AND SO DOES THE LEARNED DOCUMENT, WHICH IS THE WHOLE METHOD SURFACE. The comment above worked this
+         out for ONE field and stopped there: this `set` REPLACES the entry, so a service whose published
+         discovery document could not be found lost `doc` — the virtual RestDescription lib/learn.js fills
+         with every endpoint the forced execution learned — along with `isVirtual`, `grouping` and the
+         published fetch's own `url`/`apiKey`/`fetchedAt`. The two facts are orthogonal: "this service
+         publishes no discovery document" says nothing whatever about what the BUNDLE taught us, and deleting
+         the second because the first came back empty is the tool erasing its own product.
+         MEASURED in Chrome: on the one-fetch probe page, a not_found landing between two renders emptied the
+         Send panel's method list for a service whose endpoint the Discovery panel was listing on the same
+         screen. `status` is the PUBLISHED FETCH's outcome and the presence of `doc` is the method surface —
+         two facts, two fields, which is why every consumer now asks `.doc` for the second. */
+      doc: _prevDiscoveryNF?.doc || null,
+      isVirtual: _prevDiscoveryNF ? !!_prevDiscoveryNF.isVirtual : false,
+      grouping: _prevDiscoveryNF?.grouping || null,
+      url: _prevDiscoveryNF?.url || null,
+      apiKey: _prevDiscoveryNF?.apiKey || null,
+      fetchedAt: _prevDiscoveryNF?.fetchedAt || null,
     });
     mergeToGlobal(tab);
     notifyPopup(tabId);

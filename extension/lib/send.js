@@ -23,7 +23,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
 
   // 1. Discovery doc — global, per-service (the discovery store is not per-tab).
   const discoveryEntry = globalStore.discoveryDocs.get(targetService);
-  if (discoveryEntry?.status === "found" && discoveryEntry.doc) {
+  if (discoveryEntry?.doc) {   // the method surface is the doc, never the published fetch's status (lib/serialize.js)
     const doc = discoveryEntry.doc;
     let match = null;
 

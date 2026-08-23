@@ -269,33 +269,171 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
 
 // ── Cross-tab / global aggregation (host-level per SECURITY.md: the brain aggregates results from the
 //    per-page engines into the ONE global moat) ──
-function _mergeDocInto(existingDoc, newDoc) {
-  if (!existingDoc || !existingDoc.resources) return newDoc || existingDoc || null;
-  if (!newDoc || !newDoc.resources) return existingDoc;
-  for (const bk in newDoc.resources) {
-    const nb = newDoc.resources[bk];
-    if (!nb || !nb.methods) continue;
-    let eb = existingDoc.resources[bk];
-    if (!eb) { existingDoc.resources[bk] = nb; continue; }
-    if (!eb.methods) eb.methods = {};
-    for (const mk in nb.methods) {
-      const nm = nb.methods[mk], em = eb.methods[mk];
-      if (!em) { eb.methods[mk] = nm; continue; }   // distinct endpoint from another page -> keep both
-      if (nm.parameters) {                          // same method key: union each param's example values
-        em.parameters = em.parameters || {};
-        for (const pn in nm.parameters) {
-          const np = nm.parameters[pn], ep = em.parameters[pn];
-          if (!ep) { em.parameters[pn] = np; continue; }
-          const ev = Array.isArray(ep._astValidValues) ? ep._astValidValues : [];
-          const nv = Array.isArray(np._astValidValues) ? np._astValidValues : [];
-          for (const x of nv) if (ev.indexOf(x) < 0) ev.push(x);
-          if (ev.length) ep._astValidValues = ev;
-        }
-      }
+/* THE PER-PARAMETER UNION. Only `_astValidValues` needed naming when this merge did nothing else; now that
+   the whole record travels, the two example-bearing fields do too. A param the existing record does not have
+   is copied whole; a param both records have keeps the existing DECLARATION (type/location/description are a
+   function of the same URL and verb) and unions the OBSERVATIONS, because those are what differ per page. */
+function _mergeParamInto(ep, np) {
+  const ev = Array.isArray(ep._astValidValues) ? ep._astValidValues : [];
+  const nv = Array.isArray(np._astValidValues) ? np._astValidValues : [];
+  for (const x of nv) if (ev.indexOf(x) < 0) ev.push(x);
+  if (ev.length) ep._astValidValues = ev;
+  /* THE EXAMPLE IS A COMPUTED VALUE AND ITS ABSENCE IS A STATEMENT (§RUN, DON'T MATCH: a param known only to
+     satisfy a range gate has a SHAPE and no example). So an existing example is never overwritten and an
+     absent one is filled from the other page — and the SOURCE label travels with it, because a value whose
+     provenance came from a different record is a value nobody can judge. */
+  if (ep._exampleValue === undefined && np._exampleValue !== undefined) {
+    ep._exampleValue = np._exampleValue;
+    ep._exampleValueSource = np._exampleValueSource;
+    ep._exampleConfidence = np._exampleConfidence;
+  }
+  if (np._astInferred) ep._astInferred = true;
+}
+
+/* THE PER-METHOD STATS UNION — `lib/stats.js`'s `mergeParamStats`, WHICH HAD NO CALLER.
+   Forty lines that add two observation counts, union two value histograms under the same 50-value cap, take
+   the min/max of two numeric ranges and add two format-hint tallies: written for exactly this merge and never
+   wired to it, so every cumulative-moat method carried whichever page's traffic reached the global store
+   first. A helper with no caller is the same broken contract as a reader with no writer — the code reads as
+   if the moat accumulates, and it did not.
+
+   AND IT IS SUMMED OVER CONTRIBUTORS, NOT ADDED ON ARRIVAL, BECAUSE THIS MERGE IS NOT CALLED ONCE.
+   `mergeToGlobal(tab)` runs on every analysis, every probe outcome and every captured response, and each run
+   presents the DOCUMENT'S OWN CUMULATIVE `_stats` again — so `global += tab` counts the same requests once
+   per merge. MEASURED, in the change that first wrote it that way: two probe pages that had made ONE request
+   each reported `requestCount: 8`. An inflating counter is a fabricated measurement, which is the same defect
+   as the dropped field this function exists to fix, pointing the other way.
+   So the global keeps WHO CONTRIBUTED WHAT — `_statsByDoc`, keyed by the contributing document — and derives
+   `_stats` from it. Re-merging a document REPLACES that document's entry, so the operation is idempotent no
+   matter how many times it runs, and two different documents genuinely add. `correlations` is DERIVED
+   (detectCorrelations over the summed distribution) rather than picked from one contributor: a correlation is
+   a claim about a set of observations, and carrying one document's answer over another's data is a statement
+   about a distribution that was never observed. */
+function _sumStats(byDoc) {
+  const out = { requestCount: 0, params: {}, bodyFields: {} };
+  for (const dk in byDoc) {
+    const s = byDoc[dk];
+    DCHECK(s && typeof s.requestCount === "number" && s.params && s.bodyFields,
+           "a contributed _stats record is not the {requestCount, params, bodyFields} shape lib/learn.js " +
+           "creates — the moat's per-method totals are summed straight off these, so a malformed one would " +
+           "report an endpoint's traffic as a number nobody observed (document=" + dk + ")");
+    out.requestCount += s.requestCount;
+    for (const pn in s.params) out.params[pn] = mergeParamStats(out.params[pn], s.params[pn]);
+    for (const fn in s.bodyFields) out.bodyFields[fn] = mergeParamStats(out.bodyFields[fn], s.bodyFields[fn]);
+  }
+  out.correlations = detectCorrelations(out);
+  return out;
+}
+
+/* A METHOD RECORD IS THE UNION OF WHAT TWO PRODUCERS LEARNED ABOUT ONE ENDPOINT, AND THIS MERGE COPIED ONE
+   NESTED ARRAY OF ONE SUB-OBJECT.
+   The two producers are the BUNDLE (lib/learn.js `learnFromAstCallSite`, off the engine's @H surface) and the
+   WIRE (`learnFromRequest`, off a real response), and which of them reaches `globalStore` first is decided by
+   page timing. Everything the second one knew that the first did not was dropped here: `_astInferred`,
+   `_astSourceScript`, `_stats`, `response`, `request`, `contentTypes`, `requiredHeaders`, `_responseKind`,
+   `_chains`. MEASURED in Chrome on the one-fetch probe page: the tab's own record carried
+   `_astInferred:true` and the global record — the one the popup renders for every page you are not standing
+   on — did not, so `_methodOrigin` tagged the endpoint the forced execution had just found in the bundle as
+   "fired only (no bundle origin)". The cumulative moat is where "what the bundle CAN do but didn't" is read,
+   and it was answering the opposite.
+   THE IDENTITY FIELDS ARE KEPT, THE LEARNED ONES ARE FILLED, AND THE TWO THAT ARE NOT FIRST-WRITER-WINS SAY
+   SO: `_astInferred` is MONOTONE (a call site found in the bundle by either page is a call site in the
+   bundle), and `_stats` is SUMMED PER CONTRIBUTING DOCUMENT (see `_sumStats`). Everything else the newer record carries and the older lacks is copied
+   as-is — a real discovery document's methods carry server-authored fields (scopes, parameterOrder, flatPath)
+   that this file must not have to enumerate, so the rule is "fill what is missing", never an allowlist that
+   would silently drop what it had not heard of. */
+function _mergeMethodInto(em, nm, docKey) {
+  for (const k in nm) {
+    if (k === "parameters" || k === "_stats" || k === "_astInferred") continue;   // the three with real rules
+    if (em[k] === undefined || em[k] === null) em[k] = nm[k];
+  }
+  if (nm._astInferred) em._astInferred = true;
+  if (nm.parameters) {
+    if (!em.parameters) em.parameters = {};
+    for (const pn in nm.parameters) {
+      if (!em.parameters[pn]) { em.parameters[pn] = nm.parameters[pn]; continue; }
+      _mergeParamInto(em.parameters[pn], nm.parameters[pn]);
     }
   }
+  if (nm._statsByDoc) {
+    if (!em._statsByDoc) em._statsByDoc = {};
+    for (const dk in nm._statsByDoc) em._statsByDoc[dk] = nm._statsByDoc[dk];
+    em._stats = _sumStats(em._statsByDoc);
+  }
+}
+
+/* WHO OBSERVED THIS TRAFFIC, STAMPED BEFORE ANY ADOPTION CAN LOSE IT. Three paths adopt a record whole — a
+   service the moat has never seen (the doc), a bucket it has never seen, a method it has never seen — and each
+   would file that document's requests under nobody, so the next document's merge would report only its own.
+   Stamping the incoming doc first makes all three carry their contributor, and makes `_mergeMethodInto` a
+   union of two contributor MAPS rather than of a total and a document. Idempotent: a record already carrying
+   its map (the global doc is aliased to the first tab doc that produced it) is left alone, and the entry
+   ALIASES the DocView's live `_stats`, so a later request through that document is already counted. */
+function _seedStatsContributors(res, docKey) {
+  for (const bk in res) {
+    const b = res[bk];
+    if (!b) continue;
+    if (b.methods) {
+      for (const mk in b.methods) {
+        const m = b.methods[mk];
+        if (!m._stats || m._statsByDoc) continue;
+        DCHECK(typeof docKey === "string" && docKey,
+               "a method carrying _stats reached the global merge with no contributing document key — " +
+               "mergeToGlobal passes the DocView's own documentId, and without it the same document's " +
+               "traffic would be added again on every merge instead of replacing its own contribution");
+        m._statsByDoc = { [docKey]: m._stats };
+      }
+    }
+    if (b.resources) _seedStatsContributors(b.resources, docKey);
+  }
+}
+
+function _mergeDocInto(existingDoc, newDoc, docKey) {
+  if (newDoc && newDoc.resources) _seedStatsContributors(newDoc.resources, docKey);
+  if (!existingDoc || !existingDoc.resources) return newDoc || existingDoc || null;
+  if (!newDoc || !newDoc.resources) return existingDoc;
+  _mergeResourcesInto(existingDoc.resources, newDoc.resources, docKey);
   if (newDoc.schemas) { existingDoc.schemas = existingDoc.schemas || {}; for (const sk in newDoc.schemas) if (!existingDoc.schemas[sk]) existingDoc.schemas[sk] = newDoc.schemas[sk]; }
   return existingDoc;
+}
+
+/* AND IT RECURSES, BECAUSE A DISCOVERY DOCUMENT'S RESOURCES NEST. `getDocMethods` (popup.js) walks
+   `r.resources` at every level, so a nested bucket's methods ARE rendered; this merge read only
+   `resources[bk].methods` and stopped, so for any service whose bucket already existed globally every nested
+   resource of every later page was read past in silence. The whole-bucket copy one line up hid it: the first
+   page's nested methods arrived (the bucket was absent, so it was taken entire) and no page's ever did
+   again. */
+function _mergeResourcesInto(eres, nres, docKey) {
+  for (const bk in nres) {
+    const nb = nres[bk];
+    if (!nb) continue;
+    const eb = eres[bk];
+    if (!eb) { eres[bk] = nb; continue; }
+    if (nb.methods) {
+      if (!eb.methods) eb.methods = {};
+      for (const mk in nb.methods) {
+        const nm = nb.methods[mk];
+        /* THE SAME NAME FOR TWO VERBS IS TWO ENDPOINTS, and merging them would OR one's bundle-origin onto
+           the other's. `learnFromAstCallSite`/`learnFromRequest` resolve this INSIDE one document by moving
+           the incumbent to `<verb>_<name>`; across documents neither page ever saw the other's, so both wrote
+           the bare name and this loop was the first place the collision existed. It is resolved the same way,
+           and the id — which the Send panel keys on — is re-derived rather than left naming the bare key. */
+        let key = mk, em = eb.methods[key];
+        if (em && em.httpMethod !== nm.httpMethod) {
+          key = String(nm.httpMethod).toLowerCase() + "_" + mk;
+          if (typeof nm.id === "string" && nm.id.lastIndexOf(".") >= 0)
+            nm.id = nm.id.slice(0, nm.id.lastIndexOf(".") + 1) + key;
+          em = eb.methods[key];
+        }
+        if (!em) { eb.methods[key] = nm; continue; }   // distinct endpoint from another page -> keep both
+        _mergeMethodInto(em, nm, docKey);
+      }
+    }
+    if (nb.resources) {
+      if (!eb.resources) eb.resources = {};
+      _mergeResourcesInto(eb.resources, nb.resources, docKey);
+    }
+  }
 }
 function mergeToGlobal(tab) {
   // Central merge — EVERY analysis result (hot tab + cold frontier) funnels here, so guard the DocView contract
@@ -390,7 +528,11 @@ function mergeToGlobal(tab) {
     globalStore.endpoints.set(k, v);
   }
   for (const [k, v] of tab.discoveryDocs) {
-    if (v.status === "found") {
+    /* A TAB ENTRY REACHES THE MOAT WHEN IT CARRIES A DOC, whatever the published fetch answered — the same
+       split lib/serialize.js states. Keyed on `status === "found"`, a not_found record that had kept its
+       learned methods would have taken the arm below and been written to the global store as a bare
+       `{status}`, which is the drop this change exists to end, one layer up. */
+    if (v.doc) {
       // Merge pageUrls and frameOrigins Sets with existing global entry
       var _existingGDoc = globalStore.discoveryDocs.get(k);
       var _mergedPageUrls = new Set(_existingGDoc?.pageUrls || []);
@@ -405,7 +547,7 @@ function mergeToGlobal(tab) {
         url: v.url,
         apiKey: v.apiKey,
         fetchedAt: v.fetchedAt,
-        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc) || null,   // UNION, not replace: keep every page's methods
+        doc: _mergeDocInto(_existingGDoc && _existingGDoc.doc, v.doc, tab.documentId) || null,   // UNION, not replace: keep every page's methods
         grouping: v.grouping || null,
         pageUrls: _mergedPageUrls,
         frameOrigins: _mergedFrameOrigins,
