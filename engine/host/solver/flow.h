@@ -380,6 +380,27 @@ typedef struct Flow {
        JS_UNDEFINED on a flow with nothing to deliver, which is nearly all of them, so the common case stays a
        tag test. */
     JSValue deliver_q;
+    /* WHICH SENDING TIMELINES THIS RECEIVING TIMELINE IS IN — the other half of what a routed delivery's world
+       means, and the field that makes the queue above a QUEUE rather than a merge.
+       A cross-document message carries the SENDING FLOW'S WORLD (CLAUDE.md §Security), and a delivery seeds
+       work whose world is receiver-baseline ∧ that vector. Two arms of one sender branch carry two vectors
+       that CONTRADICT (world_vec_relate), and a timeline that received both would be one neither sender was
+       ever in. Which arm a timeline is in is therefore a fact ABOUT THE TIMELINE and has to be written down:
+       without it the very same pair is refused when both are queued at once and accepted when the first is
+       delivered before the second arrives, which is the schedule-dependent finding §Testing's differential
+       exists to catch.
+       EACH ENTRY IS AN IMMUTABLE [vector, taken] PAIR, and the flag is the whole of the mechanism:
+         - taken = 1: a world this timeline RECEIVED. Nothing that CONTRADICTS it may be received here.
+         - taken = 0: a world subtree this timeline FORECLOSED — the arm's half of a delivery-time fork. It is
+           the sibling minted where its parent took `vector`, so nothing at or under `vector` is this
+           timeline's; that message is the parent's and is delivered there.
+       A JS ARRAY OF PAIRS for the three reasons the two queues above are: the runtime's leak walk cannot see a
+       `char *`, TEXT crosses a park and an instance where a pointer does not, and a fork hands each arm its own
+       Array naming the parent's entries at one refcount each. It is NOT a work item and is never on the list a
+       release refuses to drop — it is this flow's IDENTITY as a receiver, so it is carried across the fork and
+       the cold tier ('r' records) exactly as the path is. JS_UNDEFINED until the first cross-document message
+       reaches this document, which is nearly every flow there has ever been. */
+    JSValue deliver_world_q;
     /* A CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED TO PERFORM — the record the asking instance wrote
        (core/frame/remote_op.h) and the trusted zone's rendezvous TOKEN for the flow that is waiting on it.
        IT IS THE SAME SHAPE AS THE DELIVERY ABOVE AND FOR THE SAME REASON, with one thing added: a delivery is
@@ -458,6 +479,21 @@ void    flow_deliver_push(JSContext *ctx, Flow *f, const char *record, const cha
 JSValue flow_deliver_take(JSContext *ctx, Flow *f);
 JSValue flow_deliver_entry(const Flow *f, int i);
 JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
+
+/* …AND THE SAME FOUR OVER THE COMMITMENT RECORD BESIDE IT (`deliver_world_q` above), which is a separate list
+ * because it answers a different question and outlives every entry of the queue: the queue is what this
+ * timeline still has to DO, this is what it has already BECOME.
+ * The pair is [vector, taken] — the sending world's wire vector, and whether this timeline received it (1) or
+ * foreclosed it (0). Entries are never edited after they are pushed, which is what lets a fork share them; the
+ * ARRAY is per-flow because each arm adds its own commitments from the branch onward.
+ * `flow_world_commit_at` hands back an entry the CALLER owns and frees, exactly as the delivery queue's does.
+ * WHAT A COMMITMENT MEANS is engine.c's (it is the one component that holds both a record's vector and the
+ * receiving flow); what lives here is the FIELD and the four things that happen to it, for the reason the
+ * queue's four live here: a second writer of the Array is always the one missing the shape assert. */
+int     flow_world_commits(const Flow *f);
+JSValue flow_world_commit_at(const Flow *f, int i);
+void    flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken);
+JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
 
 /* THIS FLOW'S JOB QUEUE, AND EVERYTHING THAT EVER HAPPENS TO IT — declared beside the field for the reason the
  * delivery queue's four are: the queue has MORE THAN ONE client (engine.c enqueues, picks and drops; cold.c

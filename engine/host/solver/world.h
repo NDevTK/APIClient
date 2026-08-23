@@ -216,6 +216,51 @@ int world_serialize(WorldId w, char *dst, size_t cap);
    hope. */
 int world_parse(const char *s, WorldId *out, const WorldId **ancestry);
 
+/* HOW TWO SENDING TIMELINES ARE RELATED, decided from the two wire vectors alone — the question a RECEIVER of
+ * cross-instance work has to answer about every pair that reaches one of its timelines, and the reason it
+ * lives here rather than at the receiving site: the answer is a fact about the world FOREST, and the forest is
+ * this file's.
+ *
+ * IT IS FIVE ANSWERS AND NOT TWO, and the two that a boolean merges are the ones that must never be merged.
+ * A fork RETIRES the fork point and mints a child for BOTH arms (world_mint_child), so within ONE minting
+ * instance's forest "one is a continuation of the other" is exactly "it IS it, or names it as an ancestor",
+ * and everything else in that forest is two arms of one branch — CONTRADICT, a pair no single receiving
+ * timeline may hold. But two worlds from DIFFERENT documents (which here means different minting INSTANCES —
+ * `mint` stamps `g_doc` on every world an instance makes) are in two forests that were never one, so they are
+ * merely INDEPENDENT: two peers posting to one page, which every page with two cross-origin frames in it has.
+ * A predicate that answered "do these agree?" with a bare yes/no had no way to say that, and answered NO —
+ * so an ordinary two-sender page read as a contradiction, and the receiver would have been split into two
+ * timelines each missing one sender's messages. Different SESSIONS of one document are INDEPENDENT for the
+ * same reason and one more: a resumed session's flows are re-derivations of the parked ones rather than the
+ * other arm of any branch, and §Solver-half's rule for an undecided relation is that uncertainty KEEPS the
+ * arm.
+ *
+ * IT READS ONLY WHAT THE VECTORS SAY. An ancestry is FILTERED to worlds that have themselves crossed as a
+ * head (world_ancestry), so a fork point that never sent anything is named in neither vector and two arms
+ * below it read as CONTRADICT with no fork point between them — which is the sound answer (they do
+ * contradict) and is why the fork point below is a separate question with its own "there is none" answer. */
+typedef enum {
+    WORLD_REL_SAME,          /* one world: the same sending timeline, posting again */
+    WORLD_REL_ANCESTOR,      /* `a` is an ancestor of `b`: `b` is `a` continued past a branch */
+    WORLD_REL_DESCENDANT,    /* `b` is an ancestor of `a` */
+    WORLD_REL_INDEPENDENT,   /* two forests: different documents, or different sessions of one */
+    WORLD_REL_CONTRADICT     /* one forest, neither above the other: two arms of one branch */
+} WorldRel;
+WorldRel world_vec_relate(const char *a, const char *b);
+
+/* THE NEAREST FORK POINT A VECTOR NAMES — its first ancestor, as a vector of its own (a head with no ancestry,
+   which is all the relation above needs of it). Heap; the caller frees. NULL when the vector names no ancestor.
+   NULL IS A REAL ANSWER AND NOT AN ERROR: a ROOT world is a flow its instance created from the baseline, so
+   there is no branch at which some other timeline of the sending document could have been taken instead — and
+   a receiver that must fork "the arm that did not receive this" has nowhere to fork it. The caller says what
+   that means for it; nothing here may invent a branch that was never taken.
+   ALLOCATED RATHER THAN WRITTEN INTO A CALLER'S ARRAY, for the reason neither buffer above takes a capacity: a
+   document NAME nests one component per navigable depth, so any constant a caller could pass is a cap on the
+   frame tree, and world_name_write CRASHES on a truncation rather than returning a shorter name. The size is
+   taken from the vector itself, which is always enough — the ancestor's name is one FIELD of it, written by
+   the same world_name_write that spells the head. */
+char *world_vec_fork_point(const char *vec);
+
 /* THIS INSTANCE'S SEGMENT for a world minted ELSEWHERE, materialized on first use by forking the nearest
    ancestor present in `ancestry` (nearest first, as world_ancestry writes it), or empty if none is. Borrowed:
    the registry owns it until world_release. */

@@ -99,10 +99,12 @@ int  decide_cursor(void);
    counter in the progress stream says only that it is growing: `flows` climbing while `live` stays flat says
    the shape is a CHAIN and still not where the chain is. This is where.
    IT IS EVERY FORK AND NOT EVERY PREDICATE, which is a correction rather than a widening: a sibling minted
-   when a PEER'S ANSWER ARRIVES (decide_fork_same_path) is a member of the frontier and asked no question, so
-   it was in neither the total nor the rows while the total was the number a reader subtracts to account for
-   where the frontier's members came from. It has its own row, named for what it is, because a fabricated
-   predicate key would merge with a real one.
+   over a VALUE THAT ARRIVED (decide_fork_same_path) is a member of the frontier and asked no question, so it
+   was in neither the total nor the rows while the total was the number a reader subtracts to account for where
+   the frontier's members came from. Each such mechanism has its OWN row, named for what it is — a peer's
+   answer, a message from one arm of a sender's branch, a drive of a function the page never called are three
+   different things and one row for all three describes none of them — and never a fabricated predicate key,
+   which would merge with a real one the moment a predicate spelled the same way.
    READ THE COUNTS AS ARRIVALS, NOT AS PRODUCTION. Each row is how many flows REACHED that site, and every
    fork upstream doubles what reaches everything below it, so a program with k independent gates in sequence
    produces rows in a geometric series and the LAST site in program order is always the largest. Measured on
@@ -129,8 +131,18 @@ long        decide_fork_total(void);
  * flow DECIDED, and which of a peer's timelines answered it is not one of them. A parked arm therefore resumes
  * by re-running, re-asking, and taking the first answer of whatever the peer's timelines say today — so the SET
  * of arms is regenerated while the mapping from arm to peer timeline is not. Recording that mapping is the
- * N-way outcome slot solver_outcome's own DCHECK already names. */
-void *decide_fork_same_path(void);
+ * N-way outcome slot solver_outcome's own DCHECK already names.
+ *
+ * `why` NAMES WHAT ARRIVED, AND IT IS A PARAMETER BECAUSE THE ANSWER FORK IS NOT THE ONLY CALLER. The census
+ * row this mints is the frontier's PROVENANCE (decide_fork_at), and it stood as one fixed string — "a peer's
+ * answer arrived" — while three unrelated things were counted under it: the answer fork, the ORPHAN DRIVE of a
+ * function the page never called, and the delivery-time fork over two sender arms. Two of those three had
+ * nothing to do with an answer, so the row said something false about most of what it counted, and the reader
+ * it is written for is one asking WHICH mechanism is growing the frontier. It is still not a PREDICATE key and
+ * must not be spelled like one — there is no question here for a replay to re-ask — so it is prose naming the
+ * mechanism, and every caller passes a string that says what it is rather than what it forked over. Borrowed:
+ * the row copies it. */
+void *decide_fork_same_path(const char *why);
 
 /* THE SAME FREEZE WITH NO FRONTIER MEMBER BEHIND IT — for a caller that wants the running flow's PATH and is
  * not minting a flow to stand on it.

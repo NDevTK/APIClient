@@ -1073,59 +1073,105 @@ static char *record_worlds_dup(const char *record) {
     return out;
 }
 
-/* DO TWO SENDING WORLDS BELONG TO ONE TIMELINE? A fork RETIRES the fork point and mints a child for BOTH arms
- * (engine_sibling_assemble), so one sender's world is a continuation of another's exactly when it IS it or
- * names it as an ancestor, and two arms of one branch are siblings that name each other nowhere. That is the
- * whole test, and it is decidable here because every arrival carries its own vector.
+/* MAY THIS RECEIVING TIMELINE STILL HEAR FROM THE WORLD `vec`? — the question the commitment record beside a
+ * flow's delivery queue exists to answer (flow.h's `deliver_world_q`), and the reason it is a fact about the
+ * FLOW rather than about the queue.
  *
- * THREE PARSES AND NO ALLOCATION FOR THE ANCESTRY, because world_parse publishes its ancestry into ONE buffer
- * it owns and the next call moves it — so the only thing carried across a parse is a WorldId, which is a
- * value. Head-vs-head, then b's head against a's ancestry, then a's head against b's.
+ * IT REPLACES A PAIRWISE CHECK OVER THE QUEUE, WHICH WAS THE RIGHT TEST ASKED AT THE WRONG PLACE. That one
+ * compared an arriving record against every record still QUEUED, so the identical pair was refused when both
+ * were outstanding at once and accepted when the first had already been delivered — the schedule-dependent
+ * answer §Testing's differential exists to catch, on the shortest path there is: a router that hands over one
+ * record and pumps before handing over the next. What a timeline has RECEIVED is what constrains it, and a
+ * queue forgets that the instant it is consumed.
  *
- * SIDE-EFFECT-FREE AT ITS ONE CALL SITE, which is what lets it stand inside a DCHECK: world_parse INTERNS the
- * document names it reads, and every name in both of these records was interned unconditionally by the
- * engine_route call that routed it (the world_parse below its transport asserts is a statement, not a
- * condition), so this reaches only names the local table already holds. */
-static int deliver_worlds_agree(const char *a_rec, const char *b_rec) {
-    char *a_vec = record_worlds_dup(a_rec), *b_vec = record_worlds_dup(b_rec);
-    const WorldId *anc;
-    WorldId aw, bw;
-    int n, k, agree = 0;
+ * TWO KINDS OF COMMITMENT AND THEY REFUSE DIFFERENT THINGS.
+ *   - RECEIVED (taken): this timeline heard from that world, so it may not also hear from an arm that
+ *     CONTRADICTS it — two arms of one sender branch delivered in sequence hand the page a timeline neither
+ *     sender was in, which is the state-merging §Solver-half bans, performed on the receiving side.
+ *   - FORECLOSED: this timeline is the ARM minted where its parent took that world, so nothing AT OR UNDER it
+ *     is this timeline's. That message is the parent's and is delivered there, which is why refusing it here
+ *     drops nothing.
+ * INDEPENDENT IS NOT A REFUSAL and that is the half a boolean could not state: two peers posting to one page
+ * are in two forests that were never one (world.h), and a receiver split over that pair would be two timelines
+ * each missing one sender's messages. */
+static int deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
+{
+    int n = flow_world_commits(f), i, admits = 1;
 
-    world_parse(b_vec, &bw, &anc);
-    n = world_parse(a_vec, &aw, &anc);
-    if (world_eq(aw, bw)) agree = 1;
-    for (k = 0; !agree && k < n; k++) if (world_eq(anc[k], bw)) agree = 1;   /* b is an ancestor of a */
-    n = world_parse(b_vec, &bw, &anc);
-    for (k = 0; !agree && k < n; k++) if (world_eq(anc[k], aw)) agree = 1;   /* a is an ancestor of b */
-    free(a_vec);
-    free(b_vec);
-    return agree;
-}
+    for (i = 0; admits && i < n; i++) {
+        JSValue e = flow_world_commit_at(f, i);
+        JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
+        JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
+        const char *c = JS_ToCString(ctx, cv);
+        WorldRel rel;
 
-/* …ASKED OF A WHOLE QUEUE, which is the form engine_route needs and the reason it is a function rather than a
-   loop written there: everything below this line runs ONLY in a dev build, because the whole call sits inside
-   a DCHECK condition and check.h compiles that to `sizeof`. Written as a loop at the call site it would have
-   read every entry out of the Array in release too, to hand the strings to a check that is not there. (Same
-   reason method_is_token is a function and not `#if APICLIENT_DEV` — the condition must still TYPE-CHECK in
-   release, so the helper has to exist; what must not survive is the work.)
-   AGAINST EVERY OUTSTANDING ENTRY, not just the newest: a queue whose members are pairwise compatible is a
-   chain, and an arrival that contradicts any link of it contradicts the timeline the whole queue describes. */
-static int deliver_queue_agrees(JSContext *ctx, const Flow *f, const char *record) {
-    int q = flow_deliver_pending(f), k, agree = 1;
-
-    for (k = 0; agree && k < q; k++) {
-        JSValue e = flow_deliver_entry(f, k);
-        JSValue rv = JS_GetPropertyUint32(ctx, e, 0);
-        const char *queued = JS_ToCString(ctx, rv);
-
-        CHECK(queued != NULL, "engine: OOM reading a queued delivery's record");
-        agree = deliver_worlds_agree(record, queued);
-        JS_FreeCString(ctx, queued);
-        JS_FreeValue(ctx, rv);
+        CHECK(c != NULL, "engine: OOM reading which sending timeline a receiving flow is in — a commitment "
+                         "that cannot be read is a timeline about to accept the arm it did not take");
+        DCHECK(JS_VALUE_GET_TAG(tv) == JS_TAG_INT,
+               "a delivery-world commitment carried no small-integer RECEIVED/FORECLOSED flag — the two kinds "
+               "refuse different things, so a missing one would be read as whichever the first test asked");
+        rel = world_vec_relate(vec, c);
+        if (JS_VALUE_GET_INT(tv)) {
+            if (rel == WORLD_REL_CONTRADICT) {
+                /* AND THE ARM THAT SHOULD TAKE IT EXISTS — asserted HERE because this is the one line that
+                   knows the record is being refused, and a refusal with no arm is a peer's message that no
+                   timeline of this document ever receives. That arm was minted at the delivery of `c` itself,
+                   or at the delivery of an earlier world on the same branch when this timeline had already
+                   taken its side there (deliver_committed_at). Either way it exists exactly when `c` came
+                   through a BRANCH, so `c` naming a fork point is the necessary condition and the vector's own
+                   shape is the whole of the test.
+                   A vector that names none is a ROOT world — a flow its instance created from the baseline —
+                   and the sending document has two of those the moment the cold tier rebuilds one beside the
+                   boot flow: park_flow_add passes WORLD_NONE, so a resumed timeline is a fresh root rather
+                   than a child of the world its recipe was parked under. Those two roots contradict and name
+                   each other nowhere, so there is no branch at which this receiver could have taken the other
+                   side. Give a rebuilt flow the world its recipe was written under, so every timeline of one
+                   document meets every other at a fork point. */
+                DCHECK(strchr(c, ',') != NULL,
+                       "a routed delivery CONTRADICTS a world this timeline already received whose vector "
+                       "names no fork point, so the arm that should receive it was never minted and no "
+                       "timeline of this document will: the two sending worlds are ROOTS of one document "
+                       "(its boot flow beside a cold-resumed one — park_flow_add mints WORLD_NONE) and roots "
+                       "name each other nowhere. Rebuild a parked flow as a CHILD of the world its recipe was "
+                       "written under, so that pair has a branch between them to fork at");
+                admits = 0;
+            }
+        } else if (rel == WORLD_REL_SAME || rel == WORLD_REL_DESCENDANT) {
+            admits = 0;   /* at or under a subtree this arm foreclosed: the parent that took it delivers it */
+        }
+        JS_FreeCString(ctx, c);
+        JS_FreeValue(ctx, cv);
+        JS_FreeValue(ctx, tv);
         JS_FreeValue(ctx, e);
     }
-    return agree;
+    return admits;
+}
+
+/* HAS THIS TIMELINE ALREADY TAKEN A SIDE AT `fork_vec`? — the one thing that stops the fork below from minting
+ * an arm that is no timeline at all.
+ *
+ * A fork mints a child for EXACTLY TWO arms and retires the point it branched at, so a receiver that has
+ * already committed at a branch has foreclosed the only other side there is; forking again there would produce
+ * an arm that rejects both, which no sender was ever in. STRICT DESCENT is the test: a commitment BELOW the
+ * fork point is a side taken at it, while a commitment ON it is the sender's own pre-branch world — received
+ * by both arms, and by definition not a choice between them. */
+static int deliver_committed_at(JSContext *ctx, const Flow *f, const char *fork_vec)
+{
+    int n = flow_world_commits(f), i, committed = 0;
+
+    for (i = 0; !committed && i < n; i++) {
+        JSValue e = flow_world_commit_at(f, i);
+        JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
+        const char *c = JS_ToCString(ctx, cv);
+
+        CHECK(c != NULL, "engine: OOM reading a receiving timeline's commitment while deciding whether it has "
+                         "already taken a side at a sender's branch");
+        if (world_vec_relate(fork_vec, c) == WORLD_REL_ANCESTOR) committed = 1;
+        JS_FreeCString(ctx, c);
+        JS_FreeValue(ctx, cv);
+        JS_FreeValue(ctx, e);
+    }
+    return committed;
 }
 
 /* THE INBOUND HALF OF THE ONE-WAY LINE — a record the trusted zone routed to THIS instance because it holds the
@@ -1276,23 +1322,17 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
            the receiving page observes one sender's two posts IN ORDER, and a slot that refused the second was
            an abort on the shortest path there is. (The section cited here used to be §9.4.4, which is "Message
            ports" — a whole section away from the one that defines this method.)
-           ONLY SENDERS WHOSE WORLDS CONTRADICT MAY NOT SHARE A TIMELINE, and that is the half still missing.
-           A fork retires the fork point and mints a child for BOTH arms (engine_sibling_assemble), so one
-           sender's world is a continuation of another's exactly when it IS it or names it as an ancestor, and
-           two arms of one branch name each other nowhere — decidable here from the vectors both records carry,
-           which is what deliver_worlds_agree asks. Merging those two into one queue fabricates a timeline
-           neither sender was in; what they need is a FORK, which cannot be taken here because this runs
-           between scheduler steps with no flow switched in and a sibling may only be assembled with its parent
-           applied (flow_answer_fork says why). So the assert stays, over the CONTRADICTORY case alone.
-           Driven by engine/route.mjs, whose posts are exactly this: two arms of one branch, each with a world
-           that now names the branch rather than one of the arms. */
-        DCHECK(deliver_queue_agrees(ctx, f, record),
-               "two routed records whose sending worlds CONTRADICT were queued on one timeline — neither is "
-               "the other and neither names the other as an ancestor, so they are two arms of one branch, and "
-               "delivering both in sequence hands the page a timeline neither sender was in. Sequential posts "
-               "from one world are what the queue is for; this pair needs a SIBLING FORK, taken at the "
-               "DELIVERY where the receiving flow is switched in (here there is no flow applied and a sibling "
-               "may only be assembled over its parent)");
+           AND SENDERS WHOSE WORLDS CONTRADICT ARE NOT REFUSED HERE ANY MORE, because the thing the refusal
+           asked for is built. It said this pair "needs a SIBLING FORK, taken at the DELIVERY where the
+           receiving flow is switched in", and that is where it is now taken (flow_deliver): the queue is
+           APPENDED TO unconditionally, and each timeline decides at its own delivery step which of the arms is
+           its own, minting the sibling that takes the other. Two reasons it could not have stayed here even as
+           an assert. It runs BETWEEN scheduler steps with no flow applied, so it can neither fork nor read a
+           timeline's state; and it compared the arrival against the records still QUEUED, which is the same
+           pair as the one already DELIVERED and gives the opposite answer — so a router that pumps between two
+           handovers passed it and a router that hands over both first did not, from one program. What a
+           timeline has received is written on the timeline (flow.h's `deliver_world_q`) and is asked where
+           that timeline is switched in. */
         flow_deliver_push(ctx, f, record, sender_origin);
         /* AND IT IS ASKABLE AGAIN. A flow that reported host-owed is out of the pick until the host does
            something for it, and this IS that something: the record is work only the trusted zone could hand it
@@ -1330,6 +1370,95 @@ static JSContext *doc_realm(uint32_t doc)
     return realm;
 }
 
+/* THE SIBLING THIS DELIVERY FORECLOSES — the arm CLAUDE.md §Security asks for by name ("two arms of a fork post
+ * two messages belonging to two contradictory worlds, and merging them fabricates a timeline neither sender was
+ * in"), minted at the DELIVERY because that is the one moment the receiving flow is switched in.
+ *
+ * IT IS NOT SPECULATION AND IT IS NOT A DUPLICATE. A world with a FORK POINT above it is one arm of a branch
+ * whose other arm was minted at the same instant (world_mint_child mints a child for both and retires the
+ * point), so a sending timeline that did NOT send this message exists whether or not it ever sends one of its
+ * own. The receiver therefore has a timeline that did not receive it, and that timeline is this arm — receiver
+ * state up to this delivery (which it inherits through the delta fork) conjoined with the other side of the
+ * sender's branch, which is exactly "receiver-baseline ∧ the sending flow's vector" for the sibling vector.
+ * A ROOT world names no fork point and gets NO ARM, which is the difference between this and a snapshot at
+ * every delivery: there was no branch, so there is no other side to be on, and minting one would fabricate a
+ * timeline that dropped a message.
+ *
+ * ONE ARM, NOT ONE PER ANCESTOR. The arm forecloses the whole SUBTREE at `vec`, so anything diverging higher up
+ * the sender's chain is admitted by it too; the arms for those higher branches were minted at the deliveries of
+ * the worlds ON them, each by this same line. Its decision state is decide_fork_same_path's — no arm is
+ * recorded because no PREDICATE was asked: the receiving program did not choose, a message arrived. That blob
+ * carries the honest limit decide.h names for the answer fork (a decision vector cannot record WHICH peer
+ * timeline a fork was over), and here it costs the same thing: the SET of arms is regenerated on a replay while
+ * which sender arm each arm took is not, so the mapping is carried by the commitment record (flow.h) across the
+ * park and by nothing at all across a re-run of the document.
+ * `f` GOES ON TO MAKE THE DELIVERY in this same step, which is why this returns nothing to the scheduler: there
+ * is at most ONE arm per delivery, so there is no second one for a later step to mint. */
+static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
+                                     void *dec_blob, void *pin_blob);
+/* AND WHAT THE STEP NAMES ITSELF, whose definition is with the scheduler below. A refusal is a step that
+   consumed a record and delivered nothing, and it says so: a mechanism whose work is indistinguishable from
+   the work it replaces is one no reader can tell has ever run. */
+static const char *g_step_unit;
+
+static void deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
+{
+    char *fork_point = world_vec_fork_point(vec);
+    Flow *sib;
+
+    if (fork_point == NULL) return;                    /* a ROOT world: no branch, so no other side to be on */
+    if (deliver_committed_at(ctx, f, fork_point)) { free(fork_point); return; }   /* a side already taken */
+    free(fork_point);
+    DCHECK(f->frame == NULL,
+           "a delivery-time fork was taken by a flow INSIDE a program — a delivery is made between programs "
+           "(flow_step reaches it only with no frame), so a parent holding one means this ran somewhere else "
+           "and the arm would be marked hot with nothing to resume");
+    DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
+           "a delivery-time fork was taken with page code on the stack — the arm re-enters its scheduler step "
+           "and re-reaches this delivery, which is only true of a fork asked between tasks");
+    sib = engine_sibling_assemble(ctx, f, NULL,
+                                  decide_fork_same_path("(a cross-document message arrived from one arm of a "
+                                                        "sender's branch — no predicate was asked)"),
+                                  concolic_pins_suspend());
+    /* THE ONE THING THAT MAKES THE ARM A DIFFERENT TIMELINE, written AFTER the assembly so the arm's inherited
+       copy of the record is its parent's as of the instant before this delivery — the arm never received it. */
+    flow_world_commit_push(ctx, sib, vec, 0);
+}
+
+/* AND THIS TIMELINE'S OWN HALF OF IT: the world it is about to hear from is one it IS in from here on.
+   A COMMITMENT ALREADY AT OR BELOW THIS WORLD MAKES THE PUSH REDUNDANT, and that is exact rather than a
+   saving. A world's ancestors are totally ordered, so a set of pairwise-comparable worlds is a chain and being
+   comparable with its deepest member implies being comparable with every member — a world some existing
+   commitment already descends from therefore refuses nothing that commitment does not already refuse. Skipping
+   it is what keeps this record O(the sender's distinct worlds) rather than O(the messages it sent), which is
+   the difference between a record that grows with the sender's SHAPE and one that grows with its traffic.
+   IT IS NOT A SEEN-SET: nothing is refused because of it, and a world arriving a second time is admitted
+   exactly as the first was — what is skipped is a duplicate ROW, not a duplicate delivery. The reverse case
+   (this world DESCENDS from an entry already here) leaves the shallower entry standing rather than replacing
+   it: both are true of this timeline, the deeper one is the one that decides every test, and a removal would
+   be a mutation of an Array whose entries the arms of this flow share. */
+static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec)
+{
+    int n = flow_world_commits(f), i, subsumed = 0;
+
+    for (i = 0; !subsumed && i < n; i++) {
+        JSValue e = flow_world_commit_at(f, i);
+        JSValue cv = JS_GetPropertyUint32(ctx, e, 0);
+        JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
+        const char *c = JS_ToCString(ctx, cv);
+        WorldRel rel;
+
+        CHECK(c != NULL, "engine: OOM reading a receiving timeline's commitments while recording a new one");
+        rel = world_vec_relate(vec, c);
+        if (JS_VALUE_GET_INT(tv) && (rel == WORLD_REL_SAME || rel == WORLD_REL_ANCESTOR)) subsumed = 1;
+        JS_FreeCString(ctx, c);
+        JS_FreeValue(ctx, cv);
+        JS_FreeValue(ctx, tv);
+        JS_FreeValue(ctx, e);
+    }
+    if (!subsumed) flow_world_commit_push(ctx, f, vec, 1);
+}
+
 /* THE DELIVERY ITSELF, made by the receiving flow's own step — so it runs with that flow switched in, under its
    delta, and the task it enqueues lands on that flow's own queue like every other job. This is the dispatch on
    the op, and the ONLY place a routed op is turned into a call: an op with no component here is a transport
@@ -1338,7 +1467,7 @@ static void flow_deliver(JSContext *ctx, Flow *f)
 {
     JSValue entry, rv, ov;
     const char *record, *origin;
-    char *dup, *doc, *worlds, *tail;
+    char *dup, *doc, *worlds, *tail, *vec;
     WorldId w;
     const WorldId *anc;
     uint32_t doc_id;
@@ -1351,6 +1480,37 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        crash is about. */
     DCHECK(flow_running() == f, "a routed delivery was made while another flow was switched in — it would run "
                                 "against that flow's delta and its task would land on that flow's queue");
+    /* WHOSE TIMELINE THE OLDEST RECORD BELONGS TO IS DECIDED BEFORE IT IS TAKEN, because two of the three
+       answers are not a delivery: this timeline may already have foreclosed the sending world, and taking a
+       record only to discover that would have consumed it out of the queue the residue is written from. Read,
+       decide, and only then consume. */
+    entry = flow_deliver_entry(f, 0);
+    rv = JS_GetPropertyUint32(ctx, entry, 0);
+    record = JS_ToCString(ctx, rv);
+    CHECK(record != NULL, "engine: OOM reading a routed delivery's record — a record that cannot be read is a "
+                          "peer's message this document never receives");
+    vec = record_worlds_dup(record);
+    JS_FreeCString(ctx, record);
+    JS_FreeValue(ctx, rv);
+    JS_FreeValue(ctx, entry);
+    if (!deliver_admits(ctx, f, vec)) {
+        /* NOT THIS TIMELINE'S MESSAGE, AND THAT IS NOT A DROPPED WORK ITEM. It is a message belonging to the
+           other side of a sender branch this timeline has taken a side at, and the flow on that side holds its
+           own copy of the same entry (engine_route attaches to EVERY live flow, and a fork hands the arm its
+           own Array naming the same entries) — deliver_admits asserts that side exists before answering no.
+           Consuming it HERE is what stops this timeline delivering it, and consuming is the whole of the work:
+           §9.3.3's ordering is per receiving timeline, and this one is not in the sender's. */
+        free(vec);
+        entry = flow_deliver_take(ctx, f);
+        JS_FreeValue(ctx, entry);
+        g_step_unit = "routed-delivery-not-this-timeline";
+        return;
+    }
+    /* THE ARM THAT DOES NOT RECEIVE IT, MINTED BEFORE IT IS RECEIVED — and this timeline's commitment to
+       receiving it, in that order, so the arm inherits a record that does not yet name this world. */
+    deliver_fork_arm(ctx, f, vec);
+    deliver_commit_taken(ctx, f, vec);
+    free(vec);
     /* THE OLDEST UNMADE DELIVERY, taken from the front and owned here. ONE per step: the record becomes a
        task at the receiving Window (window_message_route), the step returns, and the next step takes the next
        one — so two posts from one sender enqueue two tasks in the order they were posted, which is what
@@ -2234,8 +2394,8 @@ static void *g_fork_dec = NULL, *g_fork_pins = NULL;
 static int g_fork_snapshot_owed;
 /* …AND WHETHER THIS SESSION FORKS AT ALL — the explore/verify bit, written beside JS_SetFlowControlHooks. */
 static int g_sess_forking;
-static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
-                                     void *dec_blob, void *pin_blob);
+/* (engine_sibling_assemble is declared above the delivery fork, which is the first of its three callers in
+   this file; a second declaration here would be a second place to keep its signature in step.) */
 /* THE HANDOFF IS FILLED AND EMPTIED WITHIN ONE FORK, AND THAT IS ASSERTED HERE RATHER THAN HOPED FOR. Two
    pointers held between a `prepare` and a `finalize` are a slot with exactly one legal occupant: a second
    prepare arriving with the first still in it means the interpreter took the FORKED bit and never reached its
@@ -2619,6 +2779,15 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        arriving in two timelines of a document whose state IS its flows. Same split as the two above: the
        ARRAY is per-flow (each arm consumes at its own rate), the ENTRIES are shared. */
     sib->deliver_q = flow_deliver_fork(ctx, parent);
+    /* …AND WHICH SENDING TIMELINES THE ARM IS IN, WHICH IS NOT A QUEUE AND IS THE REASON THE QUEUE ABOVE IS
+       SAFE TO SHARE. The arm is this timeline continued, so every sender arm its parent had committed to is one
+       the arm is in too; an arm that inherited the QUEUE without the COMMITMENTS would re-admit a message its
+       own timeline had already foreclosed and deliver both arms of one sender branch — the exact fabrication
+       the delivery-time fork exists to prevent, re-created by the fork itself. Same split as the three queues
+       above: the ARRAY is per-flow (each arm commits on its own from here), the ENTRIES are shared (a
+       [vector, taken] pair is never edited after it is pushed). A field added to that pair is an obligation at
+       this line and at flow_release, which is why it is copied here by name rather than by a struct copy. */
+    sib->deliver_world_q = flow_world_commit_fork(ctx, parent);
     /* AN UNANSWERED SYNCHRONOUS REQUEST IS RE-ISSUED, NEVER INHERITED. Its answer is computed under the ASKING
        FLOW'S WORLD, and the sibling's world is not the parent's from this instant on — two arms of a fork that
        navigated a frame differently must not resolve to one Window. Sharing the id would deliver one answer
@@ -2740,7 +2909,10 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         clone = JS_FlowClone(ctx, (JSValue *)f->frame);
         CHECK(clone != NULL, "engine: a flow suspended on a cross-instance read could not be cloned — the "
                              "peer's other timeline has an answer and no arm to carry it");
-        sib = engine_sibling_assemble(ctx, f, clone, decide_fork_same_path(), concolic_pins_suspend());
+        sib = engine_sibling_assemble(ctx, f, clone,
+                                      decide_fork_same_path("(a peer's answer arrived — no predicate was "
+                                                            "asked)"),
+                                      concolic_pins_suspend());
         /* THE ARM'S OWN ANSWER, AND THE ONE RECORD IT CANNOT SHARE. pending_fork shares an ANSWERED entry
            deliberately — an answer that arrived before a fork was computed in a world both arms were in — and
            this is the case that is not: the two arms hold DIFFERENT answers to one question, which is exactly
@@ -3063,7 +3235,10 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
 
     g_orphans_driven++;
     base = engine_orphan_call(ctx, t.fn, t.argc, hash);
-    sib = engine_sibling_assemble(ctx, f, base, decide_fork_same_path(), concolic_pins_suspend());
+    sib = engine_sibling_assemble(ctx, f, base,
+                                  decide_fork_same_path("(a function the page never called was driven — no "
+                                                        "predicate was asked)"),
+                                  concolic_pins_suspend());
     sib->orphan = 1;
     /* AND THE FUNCTION IT RE-DRIVES, which is what flow.h says `fn` IS and what nothing had put there:
        every flow_add in this engine passed JS_UNDEFINED, so the field's comment described a flow kind that

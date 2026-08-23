@@ -626,9 +626,13 @@ static void *decide_fork_blob(int cursor, int arm, uint32_t asked) {
  * — every narrowing condition is a case quietly handed to the broken path. So the assert stands unnarrowed,
  * this site trips it, and the trip is the work queue: an arm forked over a peer's answer needs a slot that
  * records WHICH answer, which is the same N-way slot solver_outcome's n == 2 DCHECK is already waiting for. */
-void *decide_fork_same_path(void) {
+void *decide_fork_same_path(const char *why) {
     DecideBlob *b;
 
+    DCHECK(why != NULL && *why,
+           "a sibling was minted over a value that arrived with nothing naming what arrived — the census row "
+           "this counts into is the frontier's PROVENANCE, and a row with no name merges every mechanism that "
+           "forks without a predicate into one number that describes none of them");
     DCHECK(g_running, "a sibling's decision state was forked while no flow's was loaded — the blob would stand "
                       "on whatever chain the previously-switched-in flow left behind, and the sibling would "
                       "replay a path it never took");
@@ -648,8 +652,13 @@ void *decide_fork_same_path(void) {
        IT GETS ITS OWN ROW AND NOT A FABRICATED KEY. There is no predicate here — the paragraph above says so
        in as many words — so composing one would put a branch in the census that the program never took, and
        the row would merge with a real predicate the moment one spelled the same way. The row states what
-       actually happened, which is also what keeps the rows summing to the total. */
-    fork_key_count("(a peer's answer arrived — no predicate was asked)");
+       actually happened, which is also what keeps the rows summing to the total.
+       AND WHICH ROW IS THE CALLER'S TO SAY, which is the correction that came with the third caller. This was
+       one fixed string naming a peer's ANSWER, and it was already counting an orphan drive — a fork over a
+       function the page never called, which has no peer and no answer in it — so the row was false about most
+       of what it held while reading as a measurement of one thing. Every mechanism that forks without a
+       predicate gets its own row now, and the rows still sum to the total. */
+    fork_key_count(why);
     return b;
 }
 

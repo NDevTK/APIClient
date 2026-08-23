@@ -435,6 +435,11 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* AND THE ROUTED DELIVERIES, one release for the array and every [record, senderOrigin] pair it names. That
        they are gone at all is asserted above and by the caller, never cleaned up quietly here. */
     JS_FreeValue(ctx, f->deliver_q); f->deliver_q = JS_UNDEFINED;
+    /* AND WHICH SENDING TIMELINES IT WAS IN — one release for the array and every [vector, taken] pair it
+       names. It is NOT on the work-item list the assert above refuses to drop, and that is the distinction
+       rather than an omission: a commitment is not work owed to anybody, it is what this timeline WAS. A flow
+       that has ended has no timeline left to be wrong about. */
+    JS_FreeValue(ctx, f->deliver_world_q); f->deliver_world_q = JS_UNDEFINED;
     cow_delta_release(ctx, (CowDelta *)f->delta); f->delta = NULL;
     /* THE HEAD BEFORE THE CHAIN BELOW IT: a head node inserted under a segment's node is that node's child, and
        a child must be freed before the parent it hangs under is freed deep. */
@@ -652,6 +657,10 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* …AND THE DELIVERY QUEUE, the same sentence a third time: no peer posts to most documents, and an Array
        per flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
     f->deliver_q = JS_UNDEFINED;
+    /* …AND WHICH SENDING TIMELINES THIS ONE IS IN, empty because a flow that has received nothing has
+       committed to nothing — which is a POSITIVE statement and not a hole: with no commitment recorded, every
+       sender's world is still one this timeline may be in. */
+    f->deliver_world_q = JS_UNDEFINED;
     /* …AND THE JOB QUEUE, the same sentence a fourth time: most flows are enqueued nothing, and an Array per
        flow would put a JSObject on the heap for every member of a frontier that reached 29550 here. */
     f->jobs = JS_UNDEFINED;
@@ -895,6 +904,85 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent) {
     cow_engine_write_begin();
     for (i = 0; i < n; i++)
         JS_SetPropertyUint32(ctx, out, (uint32_t)i, JS_GetPropertyUint32(ctx, parent->deliver_q, (uint32_t)i));
+    cow_engine_write_end();
+    return out;
+}
+
+/* ─── WHICH SENDING TIMELINES THIS ONE IS IN (flow.h's `deliver_world_q`) ───────────────────────────────
+ * The same four operations as the queue above, over the same [a, b] pair shape, and separate from it for the
+ * reason flow.h gives: the queue is work this timeline still owes, this is what it has already become. An
+ * entry is never edited after it is pushed, so there is nothing here but append, read, count and fork. */
+int flow_world_commits(const Flow *f) {
+    JSValue v;
+    int n;
+
+    if (!JS_IsObject(f->deliver_world_q)) return 0;
+    v = JS_GetPropertyStr(pending_ctx(), f->deliver_world_q, "length");
+    DCHECK(JS_VALUE_GET_TAG(v) == JS_TAG_INT,
+           "a flow's delivery-world record has no small-integer length — it is the engine's own Array and "
+           "nothing outside flow_world_commit_push appends");
+    n = JS_VALUE_GET_INT(v);
+    JS_FreeValue(pending_ctx(), v);
+    return n;
+}
+
+JSValue flow_world_commit_at(const Flow *f, int i) {
+    JSValue e;
+
+    DCHECK(i >= 0 && i < flow_world_commits(f),
+           "a flow's delivery-world record was read past its end — the caller asked it for its length to get "
+           "here");
+    e = JS_GetPropertyUint32(pending_ctx(), f->deliver_world_q, (uint32_t)i);
+    DCHECK(JS_IsObject(e), "a flow's delivery-world record held something that is not a [vector, taken] pair — "
+                           "it is this engine's own Array and nothing outside flow_world_commit_push appends");
+    return e;
+}
+
+/* APPEND ONE. Inside cow_engine_write_begin/end for the reason the queue beside it is: this is the SCHEDULER's
+   record about a flow, written from outside any flow's delta, and a delta that captured it would un-commit a
+   timeline the moment a sibling switched in — which is exactly the state this field exists to make
+   impossible. */
+void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken) {
+    JSValue e;
+
+    DCHECK(vector != NULL && *vector,
+           "a receiving timeline recorded a commitment to no world — the record decides which of a sender's "
+           "arms this timeline may still hear from, and an empty one constrains nothing at all");
+    DCHECK(taken == 0 || taken == 1,
+           "a delivery-world commitment carried something other than RECEIVED or FORECLOSED — the two are the "
+           "whole vocabulary, and a third value would be read as one of them by whichever test asked first");
+    e = JS_NewArray(ctx);
+    CHECK(!JS_IsException(e), "flow: OOM recording which sending timeline a receiving flow is in — without it "
+                              "this timeline would go on to accept a message from the arm it did not take");
+    cow_engine_write_begin();
+    JS_SetPropertyUint32(ctx, e, 0, JS_NewString(ctx, vector));
+    JS_SetPropertyUint32(ctx, e, 1, JS_NewInt32(ctx, taken));
+    if (!JS_IsObject(f->deliver_world_q)) {
+        JS_FreeValue(ctx, f->deliver_world_q);
+        f->deliver_world_q = JS_NewArray(ctx);
+        CHECK(!JS_IsException(f->deliver_world_q), "flow: OOM allocating a flow's delivery-world record");
+    }
+    JS_SetPropertyUint32(ctx, f->deliver_world_q, (uint32_t)flow_world_commits(f), e);
+    cow_engine_write_end();
+}
+
+/* THE ARM'S OWN RECORD — a new Array naming the parent's entries, and then the fork adds the one entry that
+   makes the two arms different timelines. It is the same split as every other per-flow queue here (the ARRAY
+   is per-flow because each arm commits on its own from the branch onward; the ENTRIES are shared because none
+   of them ever changes), and it is why the field is carried at all: an arm that lost its parent's commitments
+   would re-accept a message its own timeline had already foreclosed. */
+JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent) {
+    int n = flow_world_commits(parent), i;
+    JSValue out;
+
+    if (n == 0) return JS_UNDEFINED;
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "flow: OOM forking which sending timelines a flow is in — an arm without them "
+                                "is a receiver that has forgotten which of its sender's arms it took");
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, out, (uint32_t)i,
+                             JS_GetPropertyUint32(ctx, parent->deliver_world_q, (uint32_t)i));
     cow_engine_write_end();
     return out;
 }
@@ -1720,6 +1808,15 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent "
            "operations or routed cross-document messages — each is a work item on the one frontier, and the "
            "WFQ may never drop one");
+    /* …AND THE ONE FIELD BESIDE THEM THAT IS NOT WORK, asserted separately BECAUSE it is not work: merging it
+       into the line above would put a message on it that is false about this field ("the WFQ may never drop
+       one" — a commitment is nobody's work item). What is true of it is the structural half both lines share:
+       a JSValue field added to Flow gets a line in flow_release and a line here, so a caller that skipped the
+       release crashes at the removal instead of holding an Array and its every string for the process. */
+    DCHECK(JS_IsUndefined(f->deliver_world_q),
+           "a flow was removed still holding the record of which sending timelines it was in — flow_release "
+           "frees that Array and every [vector, taken] pair it names, so a flow reaching here with one was "
+           "removed without being released");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_type == NULL && f->dyn_url == NULL &&
            f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_token == NULL &&
            f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,

@@ -422,6 +422,32 @@ static void park_rec_orphan(const Flow *f)
    BOTH FIELDS CROSS AS HEX for park_hex's own reason: a routed record holds the TABs of its own transport
    fields and a base64 payload, and a serialized origin is whatever origin_serialize wrote — neither is a
    charset this grammar can state, and a ';' in either would split the record in two on the way back. */
+/* WHICH SENDING TIMELINE A RECEIVING ONE IS IN — one record per [vector, taken] pair of the flow's commitment
+   record (solver/flow.h), written immediately AFTER the 'f' or 'c' record of the flow it belongs to and bound
+   to it by POSITION, exactly as the orphan locator and the unmade delivery are.
+   IT IS NOT DERIVABLE FROM THE 'm' RECORDS BESIDE IT and that is the whole reason it crosses. Those are the
+   messages this timeline has NOT yet delivered; a commitment is a message it already DID (or an arm of a
+   branch it foreclosed), and both are gone from the queue. A resumed flow rebuilt without them starts as a
+   receiver that has committed to nothing, so the first pair of contradictory arms it is handed is delivered in
+   sequence — which is the state the delivery-time fork exists to make impossible, re-created by the park.
+   THE VECTOR CROSSES AS HEX for park_hex's reason: a world vector holds the colons and commas world_serialize
+   writes and whatever the host called the root document, none of which this grammar states. The FLAG is one
+   digit and needs no encoding, and it is written rather than inferred because the two kinds refuse different
+   things — a record whose flag was dropped would be read as whichever kind the first test asked for. */
+static void park_rec_commit(const char *vector, int taken)
+{
+    DCHECK(vector != NULL && *vector,
+           "a receiving timeline's commitment was written to the park document with no world vector — the "
+           "vector IS the commitment, so a record without one constrains nothing on the way back in");
+    DCHECK(taken == 0 || taken == 1,
+           "a receiving timeline's commitment was written with neither RECEIVED nor FORECLOSED — the two are "
+           "the whole vocabulary and a third value would come back as one of them");
+    park_open_rec();
+    park_str("r");
+    park_hex(vector);
+    park_str(taken ? ",1" : ",0");
+}
+
 static void park_rec_deliver(const char *record, const char *sender_origin)
 {
     DCHECK(record != NULL && *record && sender_origin != NULL && *sender_origin,
@@ -735,6 +761,32 @@ void cold_park_flow(Flow *f)
                "through code that never took it");
         park_rec_orphan(f);
         g_parked_census.orphans++;
+    }
+    /* …AND WHICH SENDING TIMELINES THIS ONE IS IN, BEFORE THE MESSAGES IT STILL OWES, because the commitments
+       are what decide whether it may make them. A resumed flow that lost them would re-admit a message its own
+       timeline had foreclosed and deliver both arms of one sender branch — the fabrication the delivery-time
+       fork exists to prevent, re-created by the park. It is a fact ABOUT the flow and so a positional field
+       like the orphan locator above, never a kind: being in a sender's arm is not an alternative to being a
+       flow or a candidate. */
+    {
+        JSContext *qctx = pending_ctx();
+        int n = flow_world_commits(f), k;
+
+        for (k = 0; k < n; k++) {
+            JSValue e = flow_world_commit_at(f, k);
+            JSValue vv = JS_GetPropertyUint32(qctx, e, 0);
+            JSValue tv = JS_GetPropertyUint32(qctx, e, 1);
+            const char *vec = JS_ToCString(qctx, vv);
+
+            CHECK(vec != NULL,
+                  "the cold tier could not read which sending timeline a flow is in — a commitment that "
+                  "cannot be written is a resumed timeline that will accept the sender arm it did not take");
+            park_rec_commit(vec, JS_VALUE_GET_INT(tv));
+            JS_FreeCString(qctx, vec);
+            JS_FreeValue(qctx, vv);
+            JS_FreeValue(qctx, tv);
+            JS_FreeValue(qctx, e);
+        }
     }
     /* …AND THE MESSAGES THIS TIMELINE WAS HANDED AND HAS NOT DELIVERED, immediately after its own record and
        in queue order, because the reader binds each to the flow it last rebuilt. Written for BOTH kinds: a
@@ -1098,6 +1150,29 @@ void cold_resume(JSContext *ctx, const char *recipes)
             fl->pin_blob = concolic_pins_blob_empty();
             flows++; g_resumed.flows++;
             last_flow = fl;
+        } else if (kind == 'r') {
+            /* WHICH SENDING TIMELINE THE FLOW WRITTEN BEFORE THIS ONE IS IN — put back before any of its
+               unmade deliveries are, because it is what decides which of them this timeline may make. The
+               ORDER among commitments does not matter (every test below reads the whole record), but the
+               order against the 'm' records does not either for the same reason: nothing is delivered until
+               the flow is stepped, and by then the whole record is rebuilt. */
+            const char *comma;
+            char *vec;
+
+            DCHECK(last_flow != NULL,
+                   "a park document holds a receiving timeline's commitment before any flow — an 'r' record "
+                   "belongs to the flow written immediately before it, so one at the head of the document "
+                   "would be attached to whichever flow happened to come next and constrain a timeline that "
+                   "was never in that sender's arm");
+            for (comma = q; comma < end && *comma != ','; comma++)
+                ;
+            DCHECK(comma < end && end - comma == 2 && (comma[1] == '0' || comma[1] == '1'),
+                   "a parked commitment has no RECEIVED/FORECLOSED flag after its world vector — the two kinds "
+                   "refuse different things, so a reader that inferred one would either re-admit a message "
+                   "this timeline foreclosed or refuse one it is entitled to");
+            vec = park_unhex(q, comma);
+            flow_world_commit_push(ctx, last_flow, vec, comma[1] == '1');
+            free(vec);
         } else if (kind == 'm') {
             /* A MESSAGE A PEER SENT AND THIS DOCUMENT HAD NOT YET RECEIVED, put back on the queue of the flow
                it belonged to, in the order it was written — which is the order the page must observe (HTML
@@ -1252,7 +1327,7 @@ void cold_resume(JSContext *ctx, const char *recipes)
                told the document is corrupt. */
             DFAIL("a park record names a kind this grammar does not have — the recipe holds a GENERATION ('g'), "
                   "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f'), @S CANDIDATE SESSIONS ('c'), "
-                  "ORPHAN FUNCTION LOCATORS ('o') and "
+                  "ORPHAN FUNCTION LOCATORS ('o'), SENDING-TIMELINE COMMITMENTS ('r') and "
                   "UNMADE ROUTED DELIVERIES ('m') and nothing else. A 'd' record "
                   "is a DISCOVERY PROBE written by a session in which the engine seeded its own document "
                   "fetches; that flow kind no longer exists, so this residue predates the change or came from "

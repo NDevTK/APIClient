@@ -190,6 +190,24 @@ void cold_census(ColdCensus *out);
  *                                 minified bundle repeats one-line bodies dozens of times, so the name would
  *                                 identify a SET and the resume would drive whichever member the heap walk met
  *                                 first.
+ *     r<vector-hex>,<0|1>         WHICH SENDING TIMELINE A RECEIVING ONE IS IN — the world a cross-document
+ *                                 message came from, and whether this timeline RECEIVED it (1) or FORECLOSED
+ *                                 it (0) as the arm of a delivery-time fork. Bound by POSITION to the flow
+ *                                 record before it and a FIELD rather than a kind, for the orphan locator's
+ *                                 reason: being in a sender's arm is a fact ABOUT a flow and not an
+ *                                 alternative to being one, and a candidate session receives messages like
+ *                                 any other member.
+ *                                 IT IS NOT DERIVABLE FROM THE 'm' RECORDS BESIDE IT. Those are the messages
+ *                                 this timeline still owes; a commitment is one it already made, and the
+ *                                 queue forgot it at the delivery. A flow rebuilt without them comes back as
+ *                                 a receiver committed to nothing, so the first pair of CONTRADICTORY sender
+ *                                 arms it is handed is delivered in sequence — a timeline neither sender was
+ *                                 ever in, which is exactly what the fork at the delivery exists to prevent.
+ *                                 The vector crosses as HEX for park_hex's reason (it holds the colons and
+ *                                 commas world_serialize writes, and whatever the host called the root
+ *                                 document); the flag is written rather than inferred because the two kinds
+ *                                 refuse different things, so a dropped one would be read as whichever kind
+ *                                 the first test asked for.
  *
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
  * it, so the rebuild is one forward pass with nothing to patch up.

@@ -188,7 +188,12 @@ static int             g_segs_n, g_segs_cap;
    array had room for. They grow and are freed with the registry. */
 static WorldId *g_anc;      static int g_anc_n, g_anc_cap;
 static WorldId *g_parsed;   static int g_parsed_cap;
-/* AND THE THIRD, WHICH IS THE OUTBOUND HALF OF A DEATH. A collapse can free a whole chain at once and a park
+/* AND A PAIR MORE FOR THE ONE QUESTION THAT IS ABOUT TWO VECTORS AT ONCE (world_vec_relate). The published
+   parse borrows g_parsed to its caller until the next call, so answering a relation out of it would have handed
+   the comparison ONE ancestry twice — the second parse moving the buffer the first result names. Two buffers,
+   no capacity, freed with the registry like every other one here. */
+static WorldId *g_rel_a, *g_rel_b;   static int g_rel_a_cap, g_rel_b_cap;
+/* AND THE OUTBOUND HALF OF A DEATH. A collapse can free a whole chain at once and a park
    frees every world a session ever sent, so the count is the session's history and not a number a caller can
    state — the same reason neither buffer above takes a capacity. Each entry is owned here and freed at the
    start of the next call, which is what makes the borrow window in world.h a statement rather than a hope. */
@@ -262,6 +267,11 @@ void world_registry_free(JSContext *ctx)
        that runs several documents in one process would otherwise carry one instance's scratch into the next. */
     free(g_anc);    g_anc = NULL;    g_anc_n = g_anc_cap = 0;
     free(g_parsed); g_parsed = NULL; g_parsed_cap = 0;
+    /* …AND THE RELATION'S PAIR, by the same sentence. They are a THIRD and FOURTH buffer rather than a second
+       use of g_parsed because the question they answer is about two vectors at once; a host that ran several
+       documents would otherwise carry one instance's interned handles into the next instance's comparison. */
+    free(g_rel_a);  g_rel_a = NULL;  g_rel_a_cap = 0;
+    free(g_rel_b);  g_rel_b = NULL;  g_rel_b_cap = 0;
     world_gone_reset();
     free(g_gone);   g_gone = NULL;   g_gone_cap = 0;
     for (i = 0; i < (int)g_docs_n; i++) free(g_docs[i].name);
@@ -507,7 +517,13 @@ int world_serialize(WorldId w, char *dst, size_t cap)
    nearest-first ORDER is load-bearing: the reader forks the first ancestor it holds, so an order this function
    got wrong would silently fork a more distant one and lose the nearer writes. Destructive on a copy of its own
    making, so the caller's record is untouched. */
-int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
+/* THE WALK ITSELF, OVER A BUFFER THE CALLER NAMES — the one reader of the grammar, so that a SECOND vector can
+   be held open beside the first without the two moving each other. world_parse publishes into the registry's
+   own buffer and that buffer is borrowed until the next call (world.h), which is exactly right for its callers
+   and exactly wrong for a question ABOUT TWO VECTORS: the relation below has to hold both ancestries at once,
+   and a second call to the published entry point would have handed it one ancestry twice. Splitting the walk
+   out is what keeps that from becoming a second parser — the failure world_parse's own comment names. */
+static int world_parse_into(const char *s, WorldId *out, WorldId **buf_p, int *cap_p, const WorldId **ancestry)
 {
     char *dup, *q;
     int n_anc = 0;
@@ -549,7 +565,7 @@ int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
             if (world_is_none(*out)) {
                 *out = id;
             } else {
-                WorldId *buf = world_buf_room(&g_parsed, &g_parsed_cap, n_anc);
+                WorldId *buf = world_buf_room(buf_p, cap_p, n_anc);
                 buf[n_anc++] = id;
             }
         }
@@ -558,7 +574,7 @@ int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
     free(dup);
     /* PUBLISHED AFTER THE WALK, because the buffer MOVES: every push may realloc, so a pointer handed out
        before the last field names freed memory. */
-    *ancestry = g_parsed;
+    *ancestry = *buf_p;
     /* A VECTOR THAT NAMES NO WORLD IS TRUE IN NO TIMELINE — asserted where the name arrives rather than where
        the answer is used, because by then it is indistinguishable from whatever was last installed. */
     DCHECK(!world_is_none(*out), "a world vector named no world — its segment would come from whatever this "
@@ -573,6 +589,72 @@ int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
                    "the wrong segment");
     }
     return n_anc;
+}
+
+/* See world.h. The registry's own buffer, borrowed by every caller until the next call. */
+int world_parse(const char *s, WorldId *out, const WorldId **ancestry)
+{
+    return world_parse_into(s, out, &g_parsed, &g_parsed_cap, ancestry);
+}
+
+/* IS `needle` ONE OF `anc`? The ancestry is a chain of names and this is the only test taken over it, written
+   once so the two directions below cannot spell it differently. */
+static bool world_anc_holds(const WorldId *anc, int n, WorldId needle)
+{
+    int k;
+
+    for (k = 0; k < n; k++) if (world_eq(anc[k], needle)) return true;
+    return false;
+}
+
+WorldRel world_vec_relate(const char *a, const char *b)
+{
+    const WorldId *anc_a, *anc_b;
+    WorldId wa, wb;
+    int na, nb;
+
+    DCHECK(a != NULL && *a && b != NULL && *b,
+           "two sending timelines were compared and one of them named no world — the answer would decide "
+           "which messages a receiving timeline may hold out of a vector nobody wrote");
+    na = world_parse_into(a, &wa, &g_rel_a, &g_rel_a_cap, &anc_a);
+    nb = world_parse_into(b, &wb, &g_rel_b, &g_rel_b_cap, &anc_b);
+    /* TWO FORESTS, ASKED FIRST, because everything below it is a statement about ONE. `mint` stamps `g_doc`
+       and `g_session` on every world an instance makes, so a pair that disagrees about either was never one
+       tree and neither of them is the other's arm. */
+    if (wa.doc != wb.doc || wa.session != wb.session) return WORLD_REL_INDEPENDENT;
+    if (world_eq(wa, wb)) return WORLD_REL_SAME;
+    if (world_anc_holds(anc_b, nb, wa)) return WORLD_REL_ANCESTOR;
+    if (world_anc_holds(anc_a, na, wb)) return WORLD_REL_DESCENDANT;
+    /* NEITHER IS ABOVE THE OTHER IN ONE FOREST, WHICH IS THE WHOLE OF WHAT "CONTRADICT" MEANS HERE. A fork
+       retires the point it branched at and mints a child for BOTH arms, so a live world's chain names every
+       branch it came through; two live worlds that name each other nowhere came through different arms of
+       one of them. */
+    return WORLD_REL_CONTRADICT;
+}
+
+char *world_vec_fork_point(const char *vec)
+{
+    const WorldId *anc;
+    WorldId w;
+    char *dst;
+    size_t cap;
+    int n;
+
+    DCHECK(vec != NULL && *vec, "the fork point of a world vector was asked for with no vector");
+    n = world_parse_into(vec, &w, &g_rel_a, &g_rel_a_cap, &anc);
+    if (n == 0) return NULL;
+    /* SIZED FROM THE VECTOR, which is always enough and needs no arithmetic about name components: the field
+       this writes is one of the fields that vector is made of. */
+    cap = strlen(vec) + 1;
+    dst = malloc(cap);
+    CHECK(dst != NULL, "world registry: OOM naming the branch a sending timeline came through — without it a "
+                       "receiver cannot tell whether it has already taken a side at that branch");
+    /* NEAREST FIRST IS THE ANCESTRY'S ORDER (world_ancestry), so the first field IS the branch this world came
+       through most recently — the one a receiver that has committed to nothing yet forks at. Written as a
+       vector with no ancestry of its own: the relation above reads a head and an ancestry, and what this is
+       asked about it ("is this fork point an ancestor of that commitment?") needs only the head. */
+    world_name_write(anc[0], dst, cap);
+    return dst;
 }
 
 /* DOES THIS HANDLE NAME A DOCUMENT — the range every `WorldId.doc` is inside by construction, asked as a
