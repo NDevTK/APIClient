@@ -252,6 +252,9 @@ JSValue pending_push(JSValue *reg, int kind)
     pend_put(e, PEND_RESOLVE, JS_UNDEFINED);
     pend_put(e, PEND_VALUE, JS_UNDEFINED);
     pend_put(e, PEND_COMPLETION, JS_UNDEFINED);   /* no answer yet, so no completion type */
+    /* …and no answering TIMELINE, which is also what a zone-computed answer has: JS_NULL is the positive
+       statement "nobody's flow produced this", never a hole a reader fills in. */
+    pend_put(e, PEND_ANSWER_WORLD, JS_NULL);
     pend_put(e, PEND_EXTRA, JS_NULL);             /* …and no SECOND answer, which is the common case */
     /* THIS FLOW ISSUED THE REQUEST, so it is the one that forks an arm per further answer — an arm's own entry
        is the only place this is true of, and flow_answer_fork sets it there. */
@@ -318,14 +321,22 @@ void pending_list_add_pair(JSValueConst list, const char *name, const char *valu
 }
 
 /* ---- the answers beyond the first ---------------------------------------------------------------------------
-   See PEND_EXTRA in pending.h. They are PAIRS in the same shape the header list uses, deliberately: pend_list_fork
-   below already copies a pair list, so the field a fork must give each arm its own container of needs no second
-   copier — and a second copier is exactly where a container that must diverge quietly stays shared. */
+   See PEND_EXTRA in pending.h. They are TUPLES in the same shape the header list uses, deliberately:
+   pend_list_fork below copies a tuple list by its ARITY, so the field a fork must give each arm its own
+   container of needs no second copier — and a second copier is exactly where a container that must diverge
+   quietly stays shared. */
 
-void pending_extra_add(JSValueConst e, int completion, JSValue value)
+void pending_extra_add(JSValueConst e, int completion, JSValue value, const char *world)
 {
     JSValue list, pair;
 
+    /* THE TIMELINE IS NOT OPTIONAL ON A SECOND ANSWER. A second answer EXISTS only because the peer has more
+       than one timeline, so an unnamed one is the answer of a document whose state is its flows with the flow
+       left out — and the arm forked over it could then never say which of the peer's timelines it is in. */
+    DCHECK(world != NULL && *world,
+           "a peer's further answer was recorded without the timeline that computed it — a second answer is a "
+           "second timeline by definition, so one that names none cannot be told from the first answer arriving "
+           "twice, and the arm forked over it would belong to no timeline of the answering document");
     pend_atoms();
     list = pend_own(e, g_field[PEND_EXTRA]);
     cow_engine_write_begin();
@@ -343,9 +354,51 @@ void pending_extra_add(JSValueConst e, int completion, JSValue value)
        answers by RUNNING A PROGRAM and a program that threw completed just as truly as one that returned. */
     JS_SetPropertyUint32(pend_ctx(), pair, 0, JS_NewInt32(pend_ctx(), completion));
     JS_SetPropertyUint32(pend_ctx(), pair, 1, value);
+    /* …AND SO IS THE TIMELINE, for the same reason and in the same bracket. */
+    JS_SetPropertyUint32(pend_ctx(), pair, 2, JS_NewString(pend_ctx(), world));
     JS_SetPropertyUint32(pend_ctx(), list, (uint32_t)pend_len(list), pair);
     cow_engine_write_end();
     JS_FreeValue(pend_ctx(), list);
+}
+
+/* HAS THIS PEER TIMELINE ALREADY ANSWERED — the first answer's own world and then every triple. Read-only and
+   allocation-free apart from the string compare, because engine_host_answer asks it on the delivery path of
+   every cross-instance answer there is. */
+int pending_answer_world_seen(JSValueConst e, const char *world)
+{
+    JSValue w, list;
+    int seen = 0, i, n;
+
+    DCHECK(world != NULL && *world, "a request was asked whether an UNNAMED timeline had answered it — the "
+                                    "question is only meaningful about a named one");
+    pend_atoms();
+    w = pend_own(e, g_field[PEND_ANSWER_WORLD]);
+    if (JS_IsString(w)) {
+        const char *s = JS_ToCString(pend_ctx(), w);
+        CHECK(s != NULL, "engine: OOM reading the timeline that answered a cross-instance request");
+        seen = !strcmp(s, world);
+        JS_FreeCString(pend_ctx(), s);
+    }
+    JS_FreeValue(pend_ctx(), w);
+    if (seen) return 1;
+    list = pend_own(e, g_field[PEND_EXTRA]);
+    n = JS_IsObject(list) ? pend_len(list) : 0;
+    for (i = 0; i < n && !seen; i++) {
+        JSValue tuple = JS_GetPropertyUint32(pend_ctx(), list, (uint32_t)i);
+        JSValue tw = JS_GetPropertyUint32(pend_ctx(), tuple, 2);
+        const char *s;
+        DCHECK(JS_IsString(tw), "a recorded peer answer carries no timeline — the completion, the value and the "
+                                "world are one write, so a triple missing the third was written by something "
+                                "that does not share this record's shape");
+        s = JS_ToCString(pend_ctx(), tw);
+        CHECK(s != NULL, "engine: OOM reading the timeline that answered a cross-instance request");
+        seen = !strcmp(s, world);
+        JS_FreeCString(pend_ctx(), s);
+        JS_FreeValue(pend_ctx(), tw);
+        JS_FreeValue(pend_ctx(), tuple);
+    }
+    JS_FreeValue(pend_ctx(), list);
+    return seen;
 }
 
 int pending_extra_count(JSValueConst e)
@@ -360,7 +413,7 @@ int pending_extra_count(JSValueConst e)
     return n;
 }
 
-int pending_extra_pop(JSValueConst e, JSValue *pvalue)
+int pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld)
 {
     JSValue list, pair, c;
     int n;
@@ -369,6 +422,9 @@ int pending_extra_pop(JSValueConst e, JSValue *pvalue)
     DCHECK(pvalue != NULL, "a peer timeline's answer was taken with nowhere to put its value — the arm forked "
                            "over it would resume the same frame with the FIRST answer, which is the timeline "
                            "its parent is already exploring");
+    DCHECK(pworld != NULL, "a peer timeline's answer was taken with nowhere to put the TIMELINE that computed "
+                           "it — the arm forked over it would then be an arm of no timeline, and a later "
+                           "operation from it could not be addressed to the peer flow whose answer it holds");
     pend_atoms();
     list = pend_own(e, g_field[PEND_EXTRA]);
     DCHECK(JS_IsObject(list), "an answer beyond the first was taken from a request that has none recorded");
@@ -384,6 +440,10 @@ int pending_extra_pop(JSValueConst e, JSValue *pvalue)
     JS_ToInt32(pend_ctx(), &completion, c);
     JS_FreeValue(pend_ctx(), c);
     *pvalue = JS_GetPropertyUint32(pend_ctx(), pair, 1);
+    *pworld = JS_GetPropertyUint32(pend_ctx(), pair, 2);
+    DCHECK(JS_IsString(*pworld),
+           "a recorded peer answer carries no timeline — the completion, the value and the world are one write "
+           "(pending_extra_add), so a triple missing the third is a record written outside this file");
     JS_FreeValue(pend_ctx(), pair);
     cow_engine_write_begin();
     JS_SetProperty(pend_ctx(), list, g_len_atom, JS_NewInt32(pend_ctx(), n - 1));
@@ -447,14 +507,24 @@ static JSValue pend_list_fork(JSValueConst src)
     out = JS_NewArray(pend_ctx());
     CHECK(!JS_IsException(out), "engine: OOM inheriting a pending request's header list at a fork");
     cow_engine_write_begin();
+    /* BY THE TUPLE'S OWN ARITY, and this used to copy exactly two elements. Two lists go through here and they
+       are not the same width — a header is [name, value] and a peer's further answer is [completion, value,
+       world] — so a hardcoded pair SILENTLY TRUNCATED the wider one at a fork: the arm inherited an answer with
+       no timeline on it, which is the one thing that makes a second answer indistinguishable from a duplicate.
+       Reading the length is what makes the shape the LIST's business rather than this copier's, which is the
+       same reason pending.h says a field added there is inherited by default. */
     for (i = 0; i < n; i++) {
-        JSValue pair = JS_GetPropertyUint32(pend_ctx(), src, (uint32_t)i);
+        JSValue tuple = JS_GetPropertyUint32(pend_ctx(), src, (uint32_t)i);
         JSValue cp = JS_NewArray(pend_ctx());
-        CHECK(!JS_IsException(cp), "engine: OOM inheriting a pending request's header at a fork");
-        JS_SetPropertyUint32(pend_ctx(), cp, 0, JS_GetPropertyUint32(pend_ctx(), pair, 0));
-        JS_SetPropertyUint32(pend_ctx(), cp, 1, JS_GetPropertyUint32(pend_ctx(), pair, 1));
+        int w = pend_len(tuple), j;
+        CHECK(!JS_IsException(cp), "engine: OOM inheriting a pending request's tuple at a fork");
+        DCHECK(w > 0, "a pending record's list holds an EMPTY tuple — every list this file builds writes its "
+                      "elements in the bracket that appends the tuple, so a zero-width one is a container "
+                      "something outside this file has written to");
+        for (j = 0; j < w; j++)
+            JS_SetPropertyUint32(pend_ctx(), cp, (uint32_t)j, JS_GetPropertyUint32(pend_ctx(), tuple, (uint32_t)j));
         JS_SetPropertyUint32(pend_ctx(), out, (uint32_t)i, cp);
-        JS_FreeValue(pend_ctx(), pair);
+        JS_FreeValue(pend_ctx(), tuple);
     }
     cow_engine_write_end();
     return out;

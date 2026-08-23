@@ -1866,7 +1866,7 @@ async function hostNotice(eng, line) {
     await target.r.renderer.route(line, stampOrigin(eng.origin));
     return;
   }
-  /* `remoteop.answer <token> <completion>` — a COMPLETION this instance produced for an operation it was asked
+  /* `remoteop.answer <token> <world> <completion>` — a COMPLETION this instance produced for an operation it was asked
      to perform, naming the token this zone minted. It leaves as a NOTICE and not as a return value because a
      peer answers BY RUNNING A PROGRAM (an IDL getter, a page's setter, a page's function) as a flow on its own
      frontier, so the answer does not exist when qjs_perform returns and may be parked behind anything else that
@@ -1877,8 +1877,9 @@ async function hostNotice(eng, line) {
      This zone routes text; only an engine knows what a name means, so the remainder is kept whole rather than
      re-joined field by field on a grammar this file does not own. */
   if (f[0] === "remoteop.answer") {
-    DCHECK(f.length >= 3, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
-                          "token and the completion record, and a notice missing either names no call site");
+    DCHECK(f.length >= 4, "a remoteop.answer notice was short of its fields — the engine writes the rendezvous " +
+                          "token, the TIMELINE that computed the answer and the completion record, and a " +
+                          "notice missing any of them names no call site or no timeline");
     const to = _remoteOps.get(f[1]);
     /* A TOKEN THIS ZONE DID NOT MINT names no asker, and the answer is then unroutable: the flow that asked is
        parked on a completion that will never arrive, which is silent everywhere. It is this zone's own key, so
@@ -1886,12 +1887,25 @@ async function hostNotice(eng, line) {
     DCHECK(to !== undefined, "a peer answered a cross-agent operation under a rendezvous token this zone never " +
                              "minted — the token is echoed verbatim by the instance that performed it, so the " +
                              "flow that asked is parked on an answer nothing can deliver");
+    /* THE COMPLETION IS THE REMAINDER AFTER THE THIRD FIELD, and the WORLD is that third field. It is split
+       here and not left whole because the two are different kinds of thing: the world is a name in a grammar
+       BOTH engines share (world_serialize's, whose own separators are ':' and ','), so it is a field with a
+       boundary; the completion is remote_object.c's and may contain a tab, so it can only be the remainder.
+       This zone reads NEITHER — it relays both — but it has to know where one ends. */
     const _t2 = line.indexOf("\t", line.indexOf("\t") + 1);
-    DCHECK(_t2 > 0, "a remoteop.answer notice carried no completion record — an empty answer is not " +
-                    "`undefined`, it is a relay that lost the peer's completion, and the engine's own decoder " +
-                    "says so at the other end");
-    if (!to || _t2 < 0) return;
-    await to.asker.r.renderer.hostAnswerRemote(to.req, line.slice(_t2 + 1));
+    const _t3 = _t2 < 0 ? -1 : line.indexOf("\t", _t2 + 1);
+    DCHECK(_t3 > _t2 + 1, "a remoteop.answer notice carried no completion record after its timeline — an empty " +
+                          "answer is not `undefined`, it is a relay that lost the peer's completion, and the " +
+                          "engine's own decoder says so at the other end");
+    /* AND EVERY ONE OF THEM IS RELAYED, never the last one to arrive. A peer's document state IS its flows, so
+       one question has one true answer per timeline and the asking flow forks an arm over each; a zone that
+       kept one per token — which the two-instance harness driver did, in a one-slot map — hands the asking
+       page whichever answer the step interleaving happened to leave there, and a page reading one member twice
+       in one expression is then answered out of two CONTRADICTORY timelines of one document. The engine
+       refuses a repeat of the same timeline at its own delivery entry, which is what makes relaying all of
+       them safe rather than merely permitted. */
+    if (!to || _t3 < 0) return;
+    await to.asker.r.renderer.hostAnswerRemote(to.req, line.slice(_t2 + 1, _t3), line.slice(_t3 + 1));
     return;
   }
   /* `world.gone <world>` — a world of THIS instance is finished with: the flow holding it left the frontier, or

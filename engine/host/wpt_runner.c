@@ -962,9 +962,23 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                            COMPLETION: the peer ran a program, so it may have thrown, and this zone relays the
                            type rather than deciding anything about it — the asking flow's own machine raises
                            the throw at the call site that parked on it. */
+                        /* AND THE ANSWER NAMES THE CHILD'S TIMELINE, before the completion and separated from
+                           it by the one TAB this line splits on: a world vector's own separators are ':' and
+                           ',' (world_serialize), so the first tab is the boundary and the completion — which
+                           may itself contain a tab — is the remainder. */
                         int completion = ENGINE_COMPLETION_NORMAL;
-                        JSValue v = remote_completion_decode(ctx, answer, &completion);
-                        engine_host_answer(ctx, id, v, completion, ENGINE_ANSWER_PEER);
+                        const char *sep = strchr(answer, '\t');
+                        JSValue v;
+                        char *world;
+                        CHECK(sep != NULL && sep != answer,
+                              "wpt: a child answered a cross-agent operation without naming the timeline that "
+                              "computed it — a document's state is its flows, so an unnamed answer cannot be "
+                              "told from another of that document's timelines answering the same question");
+                        world = strndup(answer, (size_t)(sep - answer));
+                        CHECK(world != NULL, "wpt: OOM reading the timeline that answered a cross-agent operation");
+                        v = remote_completion_decode(ctx, sep + 1, &completion);
+                        engine_host_answer(ctx, id, world, v, completion, ENGINE_ANSWER_PEER);
+                        free(world);
                         answered = true;
                         JS_FreeValue(ctx, v);
                     }
@@ -1005,7 +1019,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             free(field_lines);
             /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
                program, and a load that did not load is `{body: null}` rather than a throw. */
-            engine_host_answer(ctx, id, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
+            engine_host_answer(ctx, id, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             answered = true;
             JS_FreeValue(ctx, v);
         }
@@ -1068,7 +1082,7 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             }
             /* Also the host's own — §3.5.6's fetch, answered out of the network; a network error is a reply
                this component reads, never a thrown value. */
-            engine_host_answer(ctx, id, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
+            engine_host_answer(ctx, id, NULL, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
             answered = true;
             JS_FreeValue(ctx, reply);
             free(body);
@@ -1602,7 +1616,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
    TOKEN and not by being the only one of its kind: a document's state is its flows, so a document with N
    timelines answers N times, and a second answer arriving for one question is a real thing this channel cannot
    yet carry rather than something to overwrite the first with. */
-static char *g_child_answer;   /* the completion for the token in flight, owned here until it is written */
+/* `<world><TAB><completion>` for the token in flight — the flow of the child that computed the answer and the
+   answer itself — owned here until it is written. The world is on the line because a document's state is its
+   flows: the parent has to be able to tell a SECOND timeline's answer from one answer relayed twice, and only
+   the flow that produced each can say which. */
+static char *g_child_answer;
 
 static void wpt_child_emit_notices(const char *token)
 {
@@ -1625,6 +1643,16 @@ static void wpt_child_emit_notices(const char *token)
                        "a second completion arrived for one cross-agent operation — this document has more than "
                        "one timeline and every one of their answers is true, so the channel that asked has to "
                        "be able to carry N of them: build the multi-answer reply before a peer may fork here");
+                /* THE REMAINDER IS `<world><TAB><completion>` AND IT CROSSES WHOLE. The world is the flow of
+                   THIS instance that computed the answer, and the parent needs it to tell the peer's other
+                   timelines from one answer delivered twice — so this channel relays it rather than reading it,
+                   exactly as it relays the completion. Its presence is asserted at the parent's decode, where
+                   the split happens and where a missing field would otherwise be read as part of the value. */
+                DCHECK(memchr(tab + 1, '\t', n - (size_t)(tab + 1 - p)) != NULL,
+                       "a cross-agent operation's answer carried no TIMELINE before its completion — every "
+                       "answer names the world of the flow that ran the program (flow_answer_perform), so this "
+                       "notice was written by something that does not share that grammar and the parent would "
+                       "read the world's bytes as the head of the completion record");
                 g_child_answer = strndup(tab + 1, n - (size_t)(tab + 1 - p));
                 CHECK(g_child_answer != NULL, "wpt: OOM keeping a cross-agent operation's completion");
                 p = end + 1;

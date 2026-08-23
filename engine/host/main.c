@@ -1212,7 +1212,9 @@ QJS_EXPORT void qjs_host_answer(unsigned req, const char *json, unsigned complet
         /* Routed to ONE call site by id — never broadcast the way a fetched body is, because the answer was
            computed under the ASKING FLOW's world. A zero return means that flow is gone, which is not an
            error: nobody is waiting on the answer. */
-        engine_host_answer(g_ctx, (uint32_t)req, v, (int)completion, ENGINE_ANSWER_HOST);
+        /* NO TIMELINE NAMED, and that is a positive statement rather than a gap: this zone computed the value
+           itself, so there is exactly one of it and no flow of anybody's produced it. */
+        engine_host_answer(g_ctx, (uint32_t)req, NULL, v, (int)completion, ENGINE_ANSWER_HOST);
         JS_FreeValue(g_ctx, v);
     }
 }
@@ -1259,9 +1261,11 @@ QJS_EXPORT void qjs_world_gone(const char *world)
  * NOTHING RUNS INSIDE THIS CALL and there is no answer to read when it returns. A peer answers BY RUNNING A
  * PROGRAM — an IDL getter, a page's setter, a page's function — so the operation becomes a program of every
  * live timeline of the named document, on the ONE frontier, preemptible and parkable at any depth. Each
- * completion leaves through `qjs_host_notices` as `remoteop.answer<TAB><token><TAB><completion>`, and there are
- * as many of them as that document has timelines: its state IS its flows, so `otherW.length` has an answer per
- * timeline and every one of them is true. */
+ * completion leaves through `qjs_host_notices` as `remoteop.answer<TAB><token><TAB><world><TAB><completion>`,
+ * and there are as many of them as that document has timelines: its state IS its flows, so `otherW.length` has
+ * an answer per timeline and every one of them is true. `<world>` is the flow that computed that one, which is
+ * what makes N true answers distinguishable from one answer relayed N times — a zone that routes them all to
+ * one slot keeps whichever arrived last, and the page then reads two contradictory values for one question. */
 QJS_EXPORT void qjs_perform(const char *token, const char *record)
 {
     DCHECK(g_begun, "a cross-agent operation was asked of an engine whose frontier was never seeded — there is "
@@ -1277,8 +1281,15 @@ QJS_EXPORT void qjs_perform(const char *token, const char *record)
  * either serialize — returning something that is not the thing — or drop. The decode happens HERE, inside the
  * asking instance, because a name only means something to an engine: the trusted zone routes the text and
  * never reads it.
- * `req` is this instance's own request id, which the zone recovers from the token it minted. */
-QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *completion)
+ * `req` is this instance's own request id, which the zone recovers from the token it minted.
+ *
+ * `world` IS WHICH OF THE ANSWERING DOCUMENT'S TIMELINES PRODUCED THIS COMPLETION, relayed verbatim off the
+ * `remoteop.answer` notice that carried it. It is a parameter and not a detail because a peer's document state
+ * IS its flows: one question has N true answers, and this entry is the only place that can tell a SECOND
+ * TIMELINE (a fork the asking flow owes) from ONE timeline's answer delivered TWICE (a relay defect). With the
+ * answers anonymous it could tell neither, and a page reading `w.closed` twice in one expression was answered
+ * out of two contradictory timelines of one document with nothing anywhere able to name the disagreement. */
+QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *world, const char *completion)
 {
     int type = ENGINE_COMPLETION_NORMAL;
     JSValue v;
@@ -1287,11 +1298,15 @@ QJS_EXPORT void qjs_host_answer_remote(unsigned req, const char *completion)
     DCHECK(completion != NULL && *completion,
            "a peer's completion arrived with no text — a completion record carries its TYPE in front of its "
            "value, so an empty one is not `undefined`, it is a relay that lost the answer");
+    DCHECK(world != NULL && *world,
+           "a peer's completion arrived naming no TIMELINE — the answering instance writes the world of the "
+           "flow that ran the program on every answer it emits, so an empty one is a relay that dropped the "
+           "field, and this instance can then no longer tell the peer's other timelines from a duplicate");
     v = remote_completion_decode(g_ctx, completion, &type);
     /* Routed to ONE call site by id, exactly as qjs_host_answer's is: the operation was performed under the
        ASKING FLOW's world, so this answer belongs to that flow and to no other. A zero return means that flow
        is gone, which is not an error — nobody is waiting on the answer. */
-    engine_host_answer(g_ctx, (uint32_t)req, v, type, ENGINE_ANSWER_PEER);
+    engine_host_answer(g_ctx, (uint32_t)req, world, v, type, ENGINE_ANSWER_PEER);
     JS_FreeValue(g_ctx, v);
 }
 

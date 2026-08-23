@@ -44,8 +44,13 @@
    THE ANSWER IS PER TIMELINE, and the fourth and fifth records are what show it: both ARMS of `a`'s fork make
    the read, so one peer is asked the same question by two different worlds and answers each under the segment
    that world has here. A peer holding SEVERAL timelines answers each question that many times — its document's
-   state IS its flows — and the asking flow must then FORK per answer; that half is named where the second
-   answer arrives (engine_host_answer) and this fixture's `b` has one timeline, so it is not reached here.
+   state IS its flows — and the asking flow must then FORK per answer (engine_host_answer records each, and
+   flow_answer_fork builds the arm). THIS FIXTURE REACHES THAT, and a line here used to say it did not: `b` has
+   one timeline only until the first record is routed to it, and by the time anything is asked of it it holds
+   four. Every one of them answers, which is why the answers carry the WORLD of the flow that produced each —
+   without it, N true answers and one answer relayed N times are the same bytes, this zone kept whichever
+   arrived last, and `a` read `w.closed` twice in one expression and got `true` then `false` out of two
+   contradictory timelines of one document.
 
    AND THE PARK, WHICH IS THE HALF OF THIS SEAM THAT HAD NEVER RUN AT ALL. Every mechanism above was exercised
    with both instances resident for the whole run, so "a flow suspends at a cross-instance read" was tested and
@@ -197,8 +202,19 @@ const reads = new Map();
 /* Tokens the peer handed back rather than answering. Kept as a COUNT rather than a silence: a retraction and
    a lost operation look identical from here, and only the notice tells them apart. */
 const retracted = [];
-/* The completions performing instances have emitted, by token, until the asker is handed each one. */
+/* THE COMPLETIONS PERFORMING INSTANCES HAVE EMITTED, BY TOKEN — a LIST per token and not a slot, which is the
+   defect this map used to be. A peer's document state IS its flows, so one question is answered once per live
+   timeline and every one of those answers is true; `answers.set(token, …)` kept whichever arrived LAST and the
+   relay below then handed the asker one arbitrary timeline's value and dropped the others. Measured: `b` held
+   four timelines, request #4 was answered `.b1 .b1 .b0 .b0`, and `a`'s page — whose `"/closed?v=" +
+   (typeof w.closed) + ":" + w.closed` reads that member TWICE — got `true` at one read and `false` at the next,
+   out of two CONTRADICTORY timelines of one document. Every entry carries the WORLD that computed it, because
+   that is the only thing that tells a second timeline from one answer relayed twice. */
 const answers = new Map();
+const answersFor = (token) => {
+  if (!answers.has(token)) answers.set(token, []);
+  return answers.get(token);
+};
 /* Every `/closed` the ASKING page fetched — `a`'s own report of what `w.closed` answered, collected apart from
    `got` because it is a different measurement: `got` counts what crossed INTO `b`, this counts what came BACK. */
 const closedReports = [];
@@ -310,7 +326,10 @@ async function service(e) {
       const holder = holderOf(op.split('\t')[1]);
       if (!holder) { unheldReads.set(key, op); continue; }
       unheldReads.delete(key);
-      reads.set(key, { asker: e.tag, op, world: op.split('\t')[2], answered: false, withheld: withholdReads });
+      reads.set(key, { asker: e.tag, op, world: op.split('\t')[2], answered: false, withheld: withholdReads,
+                       /* WHICH PEER TIMELINES ANSWERED IT — the list this driver could not previously write,
+                          because the answers were anonymous and it kept one. */
+                       by: [] });
       console.log(`  [${e.tag}] cross-agent read asked: ${op}`);
       /* THE PEER IS ASKED, AND NOTHING IS ANSWERED INSIDE THAT CALL. It answers by RUNNING A PROGRAM — the IDL
          getter §7.2.5.1 defines the member as — as a flow on its own frontier, so the completion arrives on a
@@ -325,16 +344,33 @@ async function service(e) {
          on the read — which is the correct behaviour for an unanswered request and is exactly the state a
          Level-1 eviction finds a flow in. */
       if (withholdReads) { console.log(`  [${e.tag}] WITHHELD — the asking flow stays suspended at the read`); continue; }
-      /* THE PEER'S TURN, AND ITS OWN THREE ANSWERS. A peer that STALLS with nothing this zone will supply has
-         said everything it is going to say about this question, which is a terminator and not a timeout. */
-      const turn = await pumpUntil(holder, () => answers.has(key));
-      if (turn !== PUMP_EMITTED) { console.log(`  NOT ANSWERED (${turn}): ${key}`); continue; }
-      /* RELAYED VERBATIM. The completion is in the engines' own grammar and this zone does not read it: a value
-         that is an OBJECT is a NAME in the answering agent's namespace, which means nothing out here. */
-      e.M.ccall('qjs_host_answer_remote', 'void', ['number','number'], [id, e.cs(answers.get(key))]);
-      paid++;
+      /* THE PEER'S TURN RUNS TO ITS OWN END, AND THAT IS THE FIX RATHER THAN A LONGER WAIT. This waited for the
+         FIRST answer (`() => answers.has(key)`) and then relayed and moved on — which stops the peer's turn in
+         the middle of a question every one of its timelines is still answering, and leaves the rest to arrive
+         on some later pump with no asker expecting them. A document's state IS its flows, so "the answer" is
+         not a thing that exists: what exists is one answer per timeline, and the peer's own statement that it
+         has said all of them is its frontier draining or STALLING on a bill this zone will not pay. Those are
+         the same two terminators pumpUntil already documents; the predicate is `false` because there is no
+         single emission to wait for. */
+      const turn = await pumpUntil(holder, () => false);
+      if (!answers.has(key)) { console.log(`  NOT ANSWERED (${turn}): ${key}`); continue; }
+      /* EVERY ONE OF THEM, RELAYED VERBATIM AND IN ARRIVAL ORDER. The completion is in the engines' own grammar
+         and this zone does not read it: a value that is an OBJECT is a NAME in the answering agent's namespace,
+         which means nothing out here. The WORLD it crosses beside is in world_serialize's grammar and this zone
+         does not read that either — it routes text; only an engine knows what a name means. The asking engine
+         takes the first onto the register and records each further one as another timeline to fork an arm over
+         (engine_host_answer), and it CRASHES on a repeat of one world, so relaying all of them is what the seam
+         was built for rather than something this zone is getting away with. */
+      const all = answers.get(key);
+      for (const a of all) {
+        e.M.ccall('qjs_host_answer_remote', 'void', ['number','number','number'],
+                  [id, e.cs(a.world), e.cs(a.completion)]);
+        paid++;
+      }
       answers.delete(key);
       reads.get(key).answered = true;
+      reads.get(key).by = all.map((a) => a.world);
+      console.log(`  [${e.tag}] answered by ${all.length} peer timeline(s): ${all.map((a) => a.world).join(' ')}`);
       continue;
     }
     console.log(`  [${e.docId}] request: ${op.slice(0, 90)}`);
@@ -442,7 +478,26 @@ async function drainNotices(e) {
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
        minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
-    else if (f[0] === 'remoteop.answer') answers.set(f[1], f.slice(2).join('\t'));
+    /* THE WORLD IS FIELD 3 AND THE COMPLETION IS THE REMAINDER, and the split is that way round because only
+       one of them has a boundary: a world vector's own separators are ':' and ',' (world_serialize), while a
+       completion is remote_object.c's grammar and may contain a tab. This zone reads neither. */
+    else if (f[0] === 'remoteop.answer') {
+      if (f.length < 4 || !f[1] || !f[2] || !f[3])
+        fail(`a remoteop.answer notice was short of its fields — every answer names the rendezvous token, the ` +
+             `TIMELINE of the flow that ran the program, and the completion: ${n}`);
+      const list = answersFor(f[1]);
+      /* ONE TIMELINE ANSWERS ONE QUESTION ONCE. Its flow spends the rendezvous token off its row as it answers
+         (flow_answer_perform), so a repeat under one token from one world is this instance emitting twice —
+         which is indistinguishable from a second timeline without the world, and which would fork the asker an
+         arm into a timeline another arm already holds. The engine refuses it at its delivery entry too; this is
+         the same statement made where the notices are read, so a duplicate is caught before it is relayed. */
+      if (list.some((a) => a.world === f[2]))
+        fail(`the peer answered one cross-agent operation TWICE from the SAME timeline — token ${f[1]}, world ` +
+             `${f[2]}. A document answers a question once per live flow and spends the token off the row as it ` +
+             `does, so a repeat is an emission this instance made twice and the arm forked over it would be a ` +
+             `second flow exploring a peer timeline that is already an arm`);
+      list.push({ world: f[2], completion: f.slice(3).join('\t') });
+    }
     /* AN OPERATION HANDED BACK, because the instance holding it PARKED while still holding it. The record and
        the token do NOT have one lifetime and that is the whole reason this arm exists: the record is text
        whose names are global (documents, world vectors), while the TOKEN is a name in THIS zone's namespace
@@ -636,7 +691,8 @@ for (const u of got) console.log('  ' + u);
 const readsAnswered = [...reads.values()].filter((r) => r.answered).length;
 console.log(`cross-agent reads asked: ${reads.size}   answered: ${readsAnswered}`);
 for (const r of reads.values())
-  console.log(`  [${r.asker}] ${r.withheld ? 'WITHHELD-AND-PARKED' : r.answered ? 'ANSWERED' : 'UNANSWERED'} ${r.op}`);
+  console.log(`  [${r.asker}] ${r.withheld ? 'WITHHELD-AND-PARKED' : r.answered ? 'ANSWERED' : 'UNANSWERED'}` +
+              `${r.by.length ? ` by ${r.by.length} timeline(s)` : ''} ${r.op}`);
 /* THE SEAM'S OWN COUNTS, from the receiving instance, and HELD IS NOT MADE. This line printed one number under
    a sentence describing the other: `_worldSegments` carried world.c's CUMULATIVE materialized count while the
    words beside it said "how many foreign worlds hold a segment here", which is the live table. The two agree
@@ -700,18 +756,47 @@ if (unheldReads.size)
    traversable, and the only record in existence that says so is `b`'s. `typeof` rides along for the reason it
    rides on the delivery — an answer that arrived as text and stayed text satisfies `v ? ...` and is not a
    boolean. */
-if (closedReports.length !== 1)
-  fail(`the asking page reported ${closedReports.length} reads of \`w.closed\` and this driver arranged exactly ` +
-       'one — it is produced by the RESUMED instance, since the answer was withheld from the session that ' +
-       'parked, so a zero here is a flow that did not come back from the cold tier and a two is a flow that ' +
-       'came back beside one that had never left');
-if (!closedReports[0].includes('v=boolean:true'))
-  fail(`\`w.closed\` answered \`${closedReports[0].split('v=')[1]}\` about a top-level traversable that had run ` +
-       'window.close() in the OTHER instance. §7.2.2.1 opening and closing windows makes `closed` the OR of a ' +
-       'null browsing context and the top-level traversable\'s is closing, and close() writes is closing in the ' +
-       'agent that RUNS it — so an answer read out of this agent\'s own copy of that record is false about a ' +
-       'window that has closed itself, which is the one cross-instance defect that produces a plausible value ' +
-       'instead of a missing one');
+/* HOW MANY OF THEM THERE ARE IS NOT A NUMBER THIS DRIVER MAY PIN, and pinning it was a confident false red.
+   This line demanded EXACTLY ONE, on the reasoning that "this driver arranged exactly one … a two is a flow
+   that came back beside one that had never left" — and there is no flow that never left (the parked session was
+   torn down, `qjs_teardown`), while there are at least two that came back: HTML_A branches on
+   `__FLAGS.admin`, which is server-injected absent state, so BOTH arms are real timelines of `a` and both run
+   the `.then` that reads the member. The expression reads it TWICE more (`typeof w.closed` and `w.closed` are
+   two [[Get]]s), and each read is answered once per timeline the PEER holds, over each of which the asking flow
+   forks an arm — so the count is a property of how much both documents forked, which is exactly the kind of
+   number §Testing says a gate may not store an expected copy of. What is checkable is the VALUE and the
+   PRESENCE, and both of those are what a wrong answer gets wrong. */
+if (!closedReports.length)
+  fail('the asking page never read `w.closed` back — every report here is produced by the RESUMED instance, ' +
+       'since the answer was withheld from the session that parked, so a zero is a flow that did not come back ' +
+       'from the cold tier');
+/* THE TYPE, ON EVERY ONE OF THEM. `typeof` rides the report for the reason it rides the delivery — an answer
+   that arrived as text and stayed text satisfies `v ? …` and is not a boolean, and §7.2.2 The Window object
+   declares `closed` as one. */
+const notBool = closedReports.filter((u) => !u.includes('v=boolean:'));
+if (notBool.length)
+  fail(`${notBool.length} of ${closedReports.length} reads of \`w.closed\` came back under a type §7.2.2 The ` +
+       `Window object does not declare for it — it is a boolean: ${notBool.join(' ; ')}`);
+/* AND THE ONE A WRONG ANSWER PASSES. Every check above fails by a NUMBER staying zero — a record that did not
+   cross, a segment that was not forked, a completion that never came — and none of them would have moved if
+   `w.closed` had been answered out of `a`'s own byte, because a local answer is instant and plausible. So this
+   check is on the VALUE: `b` ran `window.close()` in the timeline that received the third message, and the only
+   record in existence that says so is `b`'s.
+   AT LEAST ONE AND NOT ALL, because both answers are true of the document they were computed in. HTML §7.2.2.1
+   "Opening and closing windows" gives the getter as "return true if this's browsing context is null or its is
+   closing is true; otherwise false", and the same section's close() steps set "thisTraversable's is closing to
+   true" — in the agent that RUNS close(), which is `b`, and in the timelines of `b` that reached that line.
+   `b`'s other timelines never received the message that runs it and answer false as truly. A run in which
+   NONE of them says true is the defect this fixture exists for: `a` holds a WindowProxy for the same traversable
+   and its own copy of that record is never written, so `w.closed` was false for ever about a window that had
+   closed itself — a plausible value instead of a missing one, which is the only kind of cross-instance defect
+   that no counter can see. */
+if (!closedReports.some((u) => u.includes('v=boolean:true')))
+  fail(`no read of \`w.closed\` came back true, across ${closedReports.length}: ${closedReports.join(' ; ')}. ` +
+       'The OTHER instance ran window.close(), and HTML §7.2.2.1 "Opening and closing windows" makes the ' +
+       "getter's answer the OR of a null browsing context and the top-level traversable's `is closing`, which " +
+       "close() sets in the agent that RUNS it — so an answer read out of this agent's own copy of that record " +
+       'is false about a window that has closed itself');
 
 /* ── THE PARK, WHICH IS THE PART OF THIS SEAM NOTHING HAD EVER EXERCISED ──────────────────────────────────
    The checks above are all about two instances that were both resident for the whole run. These four are about

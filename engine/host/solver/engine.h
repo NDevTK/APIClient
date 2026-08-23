@@ -521,8 +521,16 @@ int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *pres
 enum { ENGINE_ANSWER_HOST, ENGINE_ANSWER_PEER };
 
 /* The host delivers. Routed by id to ONE call site — never broadcast the way a fetched body is. Returns 0 when
-   the asking flow is gone, which is not an error: nobody is waiting. */
-int      engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion, int source);
+   the asking flow is gone, which is not an error: nobody is waiting.
+   `world` NAMES THE TIMELINE THAT COMPUTED THE ANSWER, in world_serialize's grammar, and it is required of a
+   PEER answer and forbidden of a HOST one. That asymmetry is the whole of `source` made checkable: a peer's
+   document state is its flows, so one question has N true answers, and two of them are told apart from ONE
+   answer relayed twice only by the flow that produced each. Without it a duplicate relay is indistinguishable
+   from another timeline — which is not hypothetical: the harness zone kept one answer per token in a one-slot
+   map, and a page reading `w.closed` twice in one expression was answered out of two contradictory timelines
+   of one document with nothing able to say so. NULL for ENGINE_ANSWER_HOST, which has no flow to name. */
+int      engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueConst value, int completion,
+                            int source);
 /* What the host still owes, as `id<TAB>op` lines. Pulled each step, and deliberately NOT deduped. */
 const char *engine_host_requests(void);
 

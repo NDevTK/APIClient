@@ -78,12 +78,28 @@
    arrived before a fork was computed in a world both arms were in), and parks with it. Its default is
    JS_UNDEFINED — "no answer yet, so no completion type" — and engine_host_answer writes the two together, so a
    record that has a value and no type crashes at the take rather than reading as a normal completion. */
+/* `answerWorld` IS WHICH OF THE PEER'S TIMELINES COMPUTED THE ANSWER IN `value`, and it is written in the same
+   bracket for the same reason `completion` is: an answer that does not say which timeline produced it is
+   INDISTINGUISHABLE FROM A SECOND COPY OF ANOTHER ONE, and a seam that cannot tell those apart cannot assert
+   about either. That is not a hypothetical — with the answers anonymous, the routing zone kept whichever
+   arrived last in a one-slot map and dropped the rest, so one page's single expression
+   `(typeof w.closed) + ":" + w.closed` was answered `true` at one read and `false` at the next, out of two
+   CONTRADICTORY timelines of one peer document, with nothing anywhere able to name the disagreement.
+   It is the name of the ANSWERING flow's world in world_serialize's own grammar (solver/world.h), so its head
+   is a peer timeline's identity that this agent can compare, park beside and — next — PIN a subsequent
+   operation to. JS_NULL is "no answer yet, or an answer the trusted zone computed itself", which is a positive
+   statement and not a hole: a zone-computed answer has exactly one producer and no timeline, which is what
+   ENGINE_ANSWER_HOST says.
+   SHARE, for `value`'s reason exactly: an answer that arrived before a fork was computed in a world both arms
+   were in, and the timeline that computed it is the same fact about the same answer. */
 /* `extra` IS EVERY OTHER TRUE ANSWER TO THIS ONE QUESTION, and it is a field rather than a second register
    because it belongs to the REQUEST. A peer's document state IS its flows, so a cross-agent operation is
    performed by every live timeline the peer has and each completes with its own answer: `otherW.length` has N
-   answers for N peer timelines and all of them are true. The FIRST fills `value`/`completion` above; the rest
-   land here, as [completion, value] PAIRS — the same shape `headers` has, so pend_list_fork already copies it —
-   until the asking flow forks one arm per pair (engine.c's flow_answer_fork, which is the only reader).
+   answers for N peer timelines and all of them are true. The FIRST fills `value`/`completion`/`answerWorld`
+   above; the rest land here, as [completion, value, world] TRIPLES — the same shape `headers` has one field
+   wider, so pend_list_fork (which copies a tuple by its ARITY) already copies it — until the asking flow forks
+   one arm per triple (engine.c's flow_answer_fork, which is the only reader). The world is on the triple and
+   not beside it because it is that answer's, and an arm forked over answer k has to be able to say so.
    IT IS `STRUCT` AND THAT IS LOAD-BEARING: an arm DRAINS its own list, so two flows that share a record would
    drain each other's — the first to run would take an answer the other was going to fork over, and that peer
    timeline would then be explored by nobody. Each arm therefore owns its container; the ANSWERS in it are
@@ -120,6 +136,7 @@
     X(RESOLVE,    "resolve",   PEND_SHARE)   \
     X(VALUE,      "value",     PEND_SHARE)   \
     X(COMPLETION, "completion",PEND_SHARE)   \
+    X(ANSWER_WORLD, "answerWorld", PEND_SHARE) \
     X(EXTRA,      "extra",     PEND_STRUCT)  \
     X(ANSWER_FIXED, "answerFixed", PEND_SHARE) \
     X(URL,        "url",       PEND_SHARE)   \
@@ -229,17 +246,25 @@ void pending_set_int(JSValueConst e, int field, int64_t v);
    bytes that may not be text and the one XMLHttpRequest already uses for the same data. */
 void pending_set_bytes(JSValueConst e, int field, const void *p, size_t n);
 
-/* ANOTHER TRUE ANSWER TO THE SAME REQUEST — see PEND_EXTRA above. `value` is consumed. Recorded rather than
-   delivered, because the arm that will carry it cannot be forked where an answer ARRIVES: that runs between
-   scheduler steps, where the running flow, the applied delta and the live DOM head all still belong to some
-   other flow. */
-void pending_extra_add(JSValueConst e, int completion, JSValue value);
+/* ANOTHER TRUE ANSWER TO THE SAME REQUEST — see PEND_EXTRA above. `value` is consumed; `world` is the
+   ANSWERING timeline (world_serialize's grammar) and is copied. Recorded rather than delivered, because the arm
+   that will carry it cannot be forked where an answer ARRIVES: that runs between scheduler steps, where the
+   running flow, the applied delta and the live DOM head all still belong to some other flow. */
+void pending_extra_add(JSValueConst e, int completion, JSValue value, const char *world);
 /* How many answers beyond the first this request has been given — 0 for every request nothing forked. */
 int  pending_extra_count(JSValueConst e);
-/* TAKE one, with its completion TYPE as the return value and its value into `*pvalue` (owned). It leaves the
-   list, because the arm about to be forked over it is where it lives from now on — a pair read and left behind
-   would be forked over twice, which is two flows exploring one peer timeline. */
-int  pending_extra_pop(JSValueConst e, JSValue *pvalue);
+/* TAKE one, with its completion TYPE as the return value, its value into `*pvalue` and the timeline that
+   computed it into `*pworld` (both owned). It leaves the list, because the arm about to be forked over it is
+   where it lives from now on — a triple read and left behind would be forked over twice, which is two flows
+   exploring one peer timeline. */
+int  pending_extra_pop(JSValueConst e, JSValue *pvalue, JSValue *pworld);
+
+/* HAS THIS PEER TIMELINE ALREADY ANSWERED THIS REQUEST — asked of the first answer's `answerWorld` and of every
+   triple in `extra`. It is the question that separates the two things an arriving answer can be: another of the
+   peer's N timelines, which is a fork the asking flow owes, and the SAME timeline's answer delivered twice,
+   which is a relay that duplicated and would fork an arm into a timeline the peer was never in twice over. Only
+   the deliverer can tell them apart and only with this, which is why the world rides the answer. */
+int  pending_answer_world_seen(JSValueConst e, const char *world);
 
 /* A [name, value] LIST, for a request's headers: the same shape XMLHttpRequest's two header lists have. Built
    through these so this file needs no dependency on the browser half's HeaderList — the solver reaching into

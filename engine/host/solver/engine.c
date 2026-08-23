@@ -555,6 +555,17 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
  * which the answer differs, so N answers under one token is what that fork was built to produce. Taking the first and asserting on the rest picks a timeline; overwriting
  * picks the last, after the machine may already have read the first.
  *
+ * WHICH IS WHY EVERY PEER ANSWER NAMES THE TIMELINE THAT COMPUTED IT, and why this entry takes that name as a
+ * parameter rather than deriving anything from the arrival ORDER. "Another timeline answered" and "one
+ * timeline's answer was delivered twice" are two different events with identical shapes, and until the world
+ * rode the answer no zone and no engine could tell them apart: the first is a fork this flow owes, the second
+ * is a relay defect that forks an arm into a peer timeline that is already being explored. Both were happening
+ * — the routing zone kept one answer per token in a one-slot map and dropped the rest — and the symptom was a
+ * page reading `w.closed` twice in one expression and being answered out of two contradictory timelines of one
+ * document. The name is world_serialize's, so it is the same name the asking side already writes on its
+ * requests and the peer already keys its segments on. A HOST answer names NO timeline (NULL): the trusted zone
+ * computed it itself and there is exactly one of it, which is what `source` says.
+ *
  * SO THE ANSWER IS RECORDED HERE AND THE FORK IS TAKEN IN flow_step, and that split is the whole design. This
  * entry runs BETWEEN scheduler steps: `flow_running()` still names whichever flow was last switched in,
  * `cow_delta_fork` would freeze the delta CURRENTLY APPLIED and `dom_cow_fork` would fork the LIVE DOM head, so
@@ -573,7 +584,8 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
  * below found the entry, wrote the value, cleared the flow's host-owed mark and reported success onto a flow
  * whose scheduler no longer exists (qjs_step latches g_done). The host was told its answer landed; nothing
  * would ever read it. */
-int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int completion, int source) {
+int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueConst value, int completion,
+                       int source) {
     int extra = 0, fixed = 0;
 
     DCHECK(req != 0, "the host answered a request with no id");
@@ -582,6 +594,33 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
     DCHECK(source == ENGINE_ANSWER_HOST || source == ENGINE_ANSWER_PEER,
            "an answer arrived without saying who computed it — a value this zone computed has exactly one "
            "answer and a peer's has one per timeline, and only the deliverer knows which this is");
+    /* THE TWO SOURCES DIFFER EXACTLY IN WHETHER A TIMELINE PRODUCED THE ANSWER, so the name is required of one
+       and forbidden of the other. An anonymous PEER answer is the state this whole field exists to end: it
+       cannot be told from a duplicate, so the check below could not exist and the fork it guards would be taken
+       over a timeline that is already an arm. */
+    DCHECK((source == ENGINE_ANSWER_PEER) == (world != NULL && *world),
+           "a cross-instance answer disagreed with its own source about whether a peer TIMELINE computed it — "
+           "a peer answers BY RUNNING A PROGRAM on one of its flows and must name that flow's world, and a "
+           "value the trusted zone computed itself has no flow to name");
+    /* PARSED ONLY WHERE THE ASSERT IS COMPILED. world_parse INTERNS the document names it reads, which is a
+       side effect and therefore may not sit inside a DCHECK's condition — and in release there is no reader for
+       the result, so the whole block goes with the check rather than leaving a name interned for nobody. */
+#if APICLIENT_DEV
+    if (world) {
+        WorldId w;
+        const WorldId *anc;
+        (void)world_parse(world, &w, &anc);
+        /* THE ANSWERING TIMELINE BELONGS TO A PEER. A world of a document THIS agent holds means the answer was
+           produced in this heap and relayed back in as if it had crossed — a routing loop, which would deliver
+           one of this instance's own flows' state to a call site that asked another agent, and would then be
+           forked over as a peer timeline that does not exist. It is the mirror of engine_perform's assert on
+           the ASKING world, and it is the same sentence: an operation on this agent's own object never leaves. */
+        DCHECK(!world_doc_hosted(w.doc),
+               "a cross-instance answer was computed in a world of a document THIS agent holds — the operation "
+               "was routed back to the instance whose flow asked it, so the value came from this heap and the "
+               "arm forked over it would be a timeline of the asking agent wearing the peer's name");
+    }
+#endif
     /* THE SESSION IS OVER, SO THERE IS NOTHING HERE THAT CAN CONSUME AN ANSWER — and this is a HANDLED state,
        not an asserted one, which is the whole difference between it and the two aborts at the bottom. The
        registers below still exist (a park writes recipes and leaves the flows for the teardown to free), so the
@@ -608,6 +647,10 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
                        "that would wait for a question nobody was asked");
                 pending_set(p, PEND_VALUE, JS_DupValue(ctx, value));
                 pending_set(p, PEND_COMPLETION, JS_NewInt32(ctx, completion));
+                /* THE TIMELINE IS WRITTEN WITH THE VALUE, in the bracket the completion is written in and for
+                   the same reason: a flow that has taken an answer without knowing whose it is cannot address
+                   its NEXT operation to that same timeline, and cannot refuse the same one arriving again. */
+                pending_set(p, PEND_ANSWER_WORLD, world ? JS_NewString(ctx, world) : JS_NULL);
                 pending_set(p, PEND_HAVE_VALUE, JS_TRUE);
                 JS_FreeValue(ctx, p);
                 /* AND THE FLOW IS ASKABLE AGAIN. This is the event a flow parked on a synchronous request is
@@ -628,15 +671,36 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
                 g_host_answered++;   /* the PAY half of the rate above — every delivery that reached a flow */
                 return 1;
             }
-            DCHECK(source == ENGINE_ANSWER_PEER,
-                   "the trusted zone answered one request TWICE. A value this zone computed — §7.4 step 14's "
-                   "load, XHR §3.5.6's fetch — has exactly one answer, so the second is a delivery this zone "
-                   "made after it had already made one, and the flow has by now run on the first");
+            /* A `CHECK` AND NOT A DCHECK, and it became one when the answer started carrying its TIMELINE. A
+               zone-computed answer names no timeline (there is no flow of anybody's behind it), and everything
+               below this line is about recording ANOTHER TIMELINE'S answer — so a second HOST answer reaching
+               it would be recorded as a peer timeline with no name, and the asking flow would fork an arm into
+               a timeline of the answering document that does not exist. In release a DCHECK is not compiled at
+               all, so this would have been the one path where the missing name became a live record instead of
+               an abort. It is what CLAUDE.md's rule names: not-proceeding is required in production too. */
+            CHECK(source == ENGINE_ANSWER_PEER,
+                  "the trusted zone answered one request TWICE. A value this zone computed — §7.4 step 14's "
+                  "load, XHR §3.5.6's fetch — has exactly one answer, so the second is a delivery this zone "
+                  "made after it had already made one, and the flow has by now run on the first");
             /* AN ARM'S OWN ANSWER IS FIXED, and skipping it here is what keeps the frontier from doubling per
                answer: the arm holds the SAME request id (the id lives in the step state inside the frame it is
                a clone of), so without this a third answer would fork from the arm as well as from the issuer,
                producing a timeline that answered B and then C at one call site. */
             if (pending_get_int(p, PEND_ANSWER_FIXED)) { fixed++; JS_FreeValue(ctx, p); continue; }
+            /* AND THE SAME TIMELINE MAY NOT ANSWER ONE QUESTION TWICE. A peer performs the operation ONCE per
+               live flow (engine_perform attaches it to each) and spends the token off the row as it answers
+               (flow_answer_perform), so one timeline has exactly one completion for one rendezvous — a second
+               under that name is a RELAY that duplicated, and it is silent in every other way: the value is a
+               real value of a real timeline, so an arm forked over it explores a timeline an arm is already in
+               and the frontier grows a twin nothing can distinguish. This is the assert the world on the answer
+               exists to make possible, and it is why a duplicate must never be quietly dropped here — dropping
+               it would hide the relay defect that produced it, which is exactly how the routing zone came to
+               keep one answer per token and discard the peer's other timelines. */
+            DCHECK(!pending_answer_world_seen(p, world),
+                   "one peer TIMELINE answered one cross-instance request TWICE. Its flow spends the rendezvous "
+                   "token off its row as it answers, so this instance was handed the same completion twice by "
+                   "the zone that routes them — and the arm this would fork is a second flow exploring a "
+                   "timeline of the answering document that another arm already holds");
             /* …AND AN ANSWER BEYOND THE FIRST DOES NOT STOP AT THE FIRST FLOW, because it may not be written
                onto a SHARED record. Every issuing timeline still holding this request — the flow that asked and
                each of its BRANCH siblings, all of which observed the first answer — must fork over this peer
@@ -646,7 +710,7 @@ int engine_host_answer(JSContext *ctx, uint32_t req, JSValueConst value, int com
                arms must disagree about. */
             JS_FreeValue(ctx, p);
             p = pending_unshare(f->pending, i);
-            pending_extra_add(p, completion, JS_DupValue(ctx, value));
+            pending_extra_add(p, completion, JS_DupValue(ctx, value), world);
             JS_FreeValue(ctx, p);
             flow_clear_host_owed(f);
             g_host_answered++;
@@ -2933,16 +2997,24 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  * step — the scheduler re-ranks between each, which is what it is for.
  *
  * THE ARM'S WORLD is a CHILD of the asking flow's (flow_add mints and records the edge), so a peer that already
- * holds a segment for the asker materializes the arm's by forking it. What that does NOT yet carry is the
- * ANSWERING timeline's world: the completion crosses back naming only the rendezvous token, so an arm cannot
- * say which of the peer's timelines it belongs to, and a SECOND operation from that arm would be answered by
- * all of them again — the cross-product, of which every off-diagonal member is a timeline neither agent was
- * ever in. Carrying the answering world on the answer, and pinning the arm to it, is the next thing here. */
+ * holds a segment for the asker materializes the arm's by forking it. AND THE ARM NOW NAMES THE PEER TIMELINE
+ * IT BELONGS TO: the completion crosses back carrying the answering flow's world (flow_answer_perform), the
+ * delivery records it beside the answer (PEND_ANSWER_WORLD), and the arm takes it with the answer it was forked
+ * over. THE HALF THAT IS STILL MISSING IS THE PIN, and it is the next thing here and nothing else: a SECOND
+ * operation from this arm is still written with no addressee, so the peer performs it in every one of its
+ * timelines again and this arm forks over all of them — the cross-product, of which every off-diagonal member
+ * is a timeline neither agent was ever in (world_relation calls that pair CONTRADICT, and merging one is the
+ * same fabrication as merging two senders' worlds at a delivery). What that needs, in order: the asking flow
+ * carries the world it took an answer from (it is on the entry here, and engine_host_take drops the entry, so
+ * it has to move onto the flow); the record grammar gains an ADDRESSEE field beside the target document
+ * (remote_op.c's fields are positional, so it is one index and every operand shifts); and engine_perform
+ * attaches an addressed record to the ONE flow whose world it names instead of to all of them, crashing where
+ * that timeline is gone rather than answering out of another. */
 static int flow_answer_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
     for (i = 0; i < n; i++) {
-        JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, se;
+        JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, aw = JS_UNDEFINED, se;
         JSValue *clone;
         Flow *sib;
         int completion;
@@ -2973,7 +3045,7 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
            forks the delivery queue, so it does. */
         /* TAKEN FROM THE PARENT FIRST, so the arm inherits a list that no longer names it: the arm's copy is
            cleared below in any case, and the parent's must not fork over this answer a second time. */
-        completion = pending_extra_pop(e, &av);
+        completion = pending_extra_pop(e, &av, &aw);
         JS_FreeValue(ctx, e);
 
         clone = JS_FlowClone(ctx, (JSValue *)f->frame);
@@ -2990,6 +3062,10 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         se = pending_unshare(sib->pending, i);
         pending_set(se, PEND_VALUE, av);
         pending_set_int(se, PEND_COMPLETION, completion);
+        /* …AND WHOSE ANSWER IT IS, taken from the same triple. It is what makes this arm a flow of a NAMED pair
+           of timelines rather than of the asker's alone, and it is what the pin above will address this arm's
+           next operation with. */
+        pending_set(se, PEND_ANSWER_WORLD, aw);
         /* …AND NO ANSWERS BEYOND ITS OWN, in both directions. The arm inherited the parent's remaining list
            through the STRUCT copy, and leaving it would make the arm fork over answers the parent is still
            going to fork over; and its answer is FIXED, so a LATER answer to this request belongs to the flow
@@ -3959,6 +4035,15 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
     char *token;
     char *enc, *rec;
     size_t cap;
+    /* THE ANSWER SAYS WHICH TIMELINE COMPUTED IT, and it is not a diagnostic. This document's state IS its
+       flows, so the operation was performed by every one of them and the asking instance receives N completions
+       under ONE rendezvous token — which, with the timelines unnamed, is N interchangeable claims about one
+       question. Measured before this field existed: the routing zone held them in a one-slot map keyed by the
+       token, kept whichever arrived last and dropped the rest, and one page's `(typeof w.closed) + ":" +
+       w.closed` came back `true` at one read and `false` at the next out of two CONTRADICTORY timelines of this
+       document. The name is world_serialize's, the ONE spelling of a world on the wire (solver/world.h), so the
+       asker can compare it, record it beside the answer it belongs to, and refuse a second delivery of it. */
+    char world[1024];
 
     DCHECK(row >= 0 && row < f->dyn_n,
            "a cross-agent operation was answered from a cursor that is not on the queue — the kind that "
@@ -3978,11 +4063,16 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
        own intrinsics, and a value converted through another document's is converted by a platform that is not
        the one that produced it. It is the same realm the program was compiled in, asked the same way. */
     enc = remote_completion_encode(doc_realm(flow_dyn_doc(f)), completion, cv);
-    cap = strlen(token) + strlen(enc) + 24;
+    /* world_serialize CRASHES on its own truncation rather than sending a prefix, which is what makes the name
+       on this notice the same name every other record of this world carries. */
+    world_serialize(f->world, world, sizeof world);
+    cap = strlen(token) + strlen(world) + strlen(enc) + 24;
     rec = malloc(cap);
     CHECK(rec != NULL, "engine: OOM writing a cross-agent operation's answer — a dropped answer parks the "
                        "asking flow on a question nothing will answer again");
-    snprintf(rec, cap, "remoteop.answer\t%s\t%s", token, enc);
+    /* THE WORLD SITS BEFORE THE COMPLETION because the completion is the record's REMAINDER: a value grammar
+       may contain a tab, and a world vector may not (world_serialize's fields are ':' and ','). */
+    snprintf(rec, cap, "remoteop.answer\t%s\t%s\t%s", token, world, enc);
     engine_host_notify(ctx, rec);
     free(rec);
     free(enc);

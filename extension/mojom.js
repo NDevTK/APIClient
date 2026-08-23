@@ -397,6 +397,13 @@
         params: [
           { name: "request", type: "int32",
             why: "the host-request id of the flow that asked, on HostAnswer's rule" },
+          { name: "world", type: "string",
+            why: "which of the answering document's TIMELINES computed this completion, in world_serialize's " +
+                 "grammar and relayed verbatim off the notice that carried it. A peer's document state IS its " +
+                 "flows, so one question has N true answers — and this field is the only thing that tells a " +
+                 "SECOND timeline (a fork the asking flow owes) from ONE timeline's answer delivered TWICE (a " +
+                 "relay defect). Without it both look identical and the receiving engine cannot assert on " +
+                 "either" },
           { name: "completion", type: "string",
             why: "the peer's completion record, RELAYED WHOLE and unread for Perform's reason. An empty one is " +
                  "not `undefined`, it is a relay that lost the peer's answer, and the engine's own decoder " +
