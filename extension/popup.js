@@ -860,10 +860,9 @@ async function clearState() {
   await chrome.runtime.sendMessage({ type: "CLEAR_TAB", tabId: currentTabId });
   tabData = null;
   allTabsData = null;
-  // The run records name the pages that were analysed, so the view drops them with everything else. NOTE for
-  // the bridge lane: `self._engineLog` itself SURVIVES AST_CLEAR — it is declared at load and nothing in
-  // frontierClear empties it — so the next loadState will fetch the same records back. That is a real gap in
-  // the Clear contract ("delete ALL extension data") and it is bridge.js's to close, not this view's to hide.
+  // The run records name the pages that were analysed, so the view drops them with everything else — and so
+  // does the offscreen: hostClear truncates `self._engineLog` in place, which is what makes dropping the copy
+  // here a view following the store rather than a view hiding what the store still holds.
   engineRuns = null;
   discoveryChanges = null;   // the drift history is part of "delete ALL extension data"
   _lastKeysFp = _lastSecFp = _lastLogFp = _lastSendFp = "";
@@ -1031,17 +1030,27 @@ function renderDeepStatus() {
 }
 
 // WHAT EACH ENGINE RUN COST AND WHAT IT LEARNED — the eight counters solver/result.c emits in one snprintf,
-// which bridge.js asserts field-for-field and pushes onto `self._engineLog`, and which until now reached no
-// human at all: the array's only reader was `self.rendererPoolProbe`, a function nothing in this extension or
-// in testing/ calls. They are the ONLY observable that the single BFS context-switches, forks and pumps jobs
+// which bridge.js asserts field-for-field and writes onto `self._engineLog`, and which until recently reached
+// no human at all: the array's only reader was `self.rendererPoolProbe`, a function nothing in this extension
+// or in testing/ calls. They are the ONLY observable that the single BFS context-switches, forks and pumps jobs
 // rather than running its flows FIFO, and beside them ride what the run LEARNED (endpoints, sinks) and what
 // it PARKED for the next session — the cross-session frontier, otherwise invisible.
 //
 // A CRASH RECORD IS RENDERED AS AN ABSENCE, NEVER AS ZEROES. bridge.js builds two shapes on purpose: a run
-// with an @RESULT document carries all thirteen fields, and a run without one carries `crashed:true`,
-// `resumed` and `url` and nothing else, because "seven zeroes read as 'the engine ran and did nothing' —
+// with an @RESULT document carries all thirteen fields, and a run without one carries `run`, `resumed` and
+// `url` and nothing else, because "seven zeroes read as 'the engine ran and did nothing' —
 // indistinguishable in the log from a real run that explored nothing, which is a finding". A `|| 0` here would
 // undo exactly that distinction, one field at a time, which is why every field below is asserted instead.
+//
+// AND A SNAPSHOT OF A RUN STILL GOING IS NOT A RUN. The engine emits a partial every 750 ms and every one of
+// them used to become its own row here, so ONE page being analysed rendered as EIGHT engine runs of one URL,
+// each having "learned" a slightly different number of endpoints — eight measurements of a thing that had
+// happened once. bridge.js now gives a run ONE row and a partial WRITES it, and the row says which of the
+// three states it is reporting. The rendering follows that and does not merely relabel it: an in-progress row
+// is a SNAPSHOT, its numbers are "so far" rather than totals, and the section header counts runs and says how
+// many of them have not ended — because the reader's question about a list of runs is how many pages were
+// analysed, and the wrong answer there is a false impression rather than a crash.
+const RUN_STATES = ["partial", "complete", "crashed"];
 function renderEngineRuns() {
   if (!engineRuns || !engineRuns.length) return "";
   const FULL = [
@@ -1055,13 +1064,22 @@ function renderEngineRuns() {
     DCHECK(typeof m.url === "string" && typeof m.resumed === "number",
            "an engine run record reached the popup without url/resumed — bridge.js writes both on BOTH " +
            "record shapes (the crash arm included), so a record missing one is that relay broken");
+    /* WHICH OF THE THREE THIS ROW IS, ASSERTED AND NEVER INFERRED. It was inferred — from a `crashed` boolean,
+       which could say one of three things and so said the other two identically — and a mid-run snapshot
+       therefore rendered as a completed analysis with a full set of totals. A record whose state this view
+       does not know is bridge.js's log seam having changed, not a row to render as whichever arm falls out. */
+    DCHECK(RUN_STATES.indexOf(m.run) >= 0,
+           "an engine run record reached the popup in a state this view does not speak (`" + m.run + "`) — " +
+           "bridge.js writes `run` on every record it logs, so a missing or unknown one is that seam broken " +
+           "and a snapshot of a page still being analysed would be shown as a finished run of it");
     const where = esc(m.url ? _shortUrl(m.url) : "(no source url)");
-    if (m.crashed) {
+    if (m.run === "crashed") {
       // The honest report of a crashed run is that it has no numbers, said in those words.
       return `<div class="deep-row"><span class="deep-label">${where} — <strong>the engine crashed</strong>`
            + `; this run reported no result document, so it has no counters at all (not zeroes)`
            + `${m.resumed ? `, ${m.resumed} parked flow(s) had been resumed into it` : ""}</span></div>`;
     }
+    const live = m.run === "partial";
     const parts = FULL.map(([k, label]) => {
       DCHECK(typeof m[k] === "number",
              "an engine run record reached the popup with no numeric " + k + " — solver/result.c emits the " +
@@ -1069,10 +1087,16 @@ function renderEngineRuns() {
              "an @RESULT document and is missing one is that seam having changed underneath both");
       return esc(label) + " " + esc(String(m[k]));
     });
-    return `<div class="deep-row"><span class="deep-label">${where} — ${esc(String(m.resumed))} resumed · `
-         + parts.join(" · ") + `</span></div>`;
+    // The numbers on a snapshot are real observations of a page that is STILL being analysed, so they are
+    // shown — and they are labelled as a running total, which is the one thing a completed run's row is not.
+    const head = live
+      ? `<strong>still running</strong> — snapshot, not a total; ${esc(String(m.resumed))} resumed · so far: `
+      : `run complete · ${esc(String(m.resumed))} resumed · `;
+    return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ") + `</span></div>`;
   }).join("");
-  return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked (${engineRuns.length})</summary>${rows}</details>`;
+  const live = engineRuns.filter((m) => m.run === "partial").length;
+  return `<details class="deep-cross-tab"><summary>Engine runs — cost, what was learned, what was parked `
+       + `(${engineRuns.length}${live ? `, ${live} still running` : ""})</summary>${rows}</details>`;
 }
 
 // ─── Data Panel ──────────────────────────────────────────────────────────────

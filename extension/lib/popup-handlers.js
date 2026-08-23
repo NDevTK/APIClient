@@ -245,7 +245,7 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
     /* THE ENGINE'S OWN RUN RECORD, WHICH NO HUMAN SURFACE HAS EVER SHOWN. solver/result.c emits eight cost
        counters in ONE snprintf, bridge.js `assertResultDocument` checks every one of them field-for-field,
-       and `linesToAnalysis` pushes one record per run onto `self._engineLog` — and grep finds exactly one
+       and `linesToAnalysis` writes one record per run onto `self._engineLog` — and grep found exactly one
        reader for that array, `self.rendererPoolProbe`, which has no caller anywhere in this extension or in
        testing/. So the ONLY observable that the single BFS context-switches, forks and pumps jobs rather
        than running its flows FIFO — plus what each run LEARNED and what it PARKED for the next session —
@@ -254,10 +254,14 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
 
        IT CROSSES VERBATIM, BECAUSE THE RECORD HAS TWO SHAPES AND THEY MUST NOT BE NORMALISED. A run that
        produced an @RESULT document carries the eight counters plus endpoints/sinks/park/resumed; a run that
-       crashed carries `crashed:true`, `resumed` and `url` and NO counters at all — bridge.js's own comment
+       crashed carries `run`, `resumed` and `url` and NO counters at all — bridge.js's own comment
        says why, and it is this rule: nothing may compute a rate, a delta or a total out of a run that never
        reported one, because seven zeroes read as "the engine ran and did nothing", which is a finding. So
-       this hands the reader the records as they are and lets the view say which shape each one is. */
+       this hands the reader the records as they are and lets the view say which shape each one is.
+       AND EVERY ROW IS ONE RUN, WHICH IT DID NOT USED TO BE. A partial snapshot every 750 ms appended its own
+       row, so this slice of eight was routinely eight snapshots of ONE analysis; `run` on the record is what
+       tells a snapshot from a finished run, and bridge.js gives each run a single row that its partials
+       rewrite. Eight rows is now eight runs. */
     case "GET_ENGINE_RUNS": {
       DCHECK(Array.isArray(self._engineLog),
              "there is no _engineLog array in this document — bridge.js declares it at load (never on first " +

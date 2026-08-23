@@ -26,10 +26,17 @@
 // which is what lets HTML 4.8.5 create a child navigable inside the insertion steps without asking this zone.
 let nextDocumentId = 0;
 /* THE RUN LOG AND THE CRASH COUNT, DECLARED HERE SO THEIR ABSENCE IS THIS FILE NOT BEING LOADED and their
-   emptiness is no engine having finalized / no engine having aborted. linesToAnalysis appends one record per
-   finalized session, crashBanner counts every abort path, and rendererPoolProbe reads both (the log also
-   answers the popup's GET_ENGINE_RUNS). The log holds page ADDRESSES, so hostClear empties it and the crash
-   count stays — see the Clear path for why those two differ. */
+   emptiness is no engine having finalized / no engine having aborted. crashBanner counts every abort path, and
+   rendererPoolProbe reads both (the log also answers the popup's GET_ENGINE_RUNS). The log holds page
+   ADDRESSES, so hostClear empties it and the crash count stays — see the Clear path for why those two differ.
+   ONE ROW PER RUN, AND A RUN IS AN INSTANCE, NOT A REPORT ABOUT ONE. Every record `linesToAnalysis` builds was
+   pushed here, and streamPartial builds one every 750 ms — so ONE engine on ONE page wrote a new row every
+   cadence, each carrying that instant's accumulated totals and each indistinguishable from a run that had
+   ENDED. Measured on a local fixture: 77 rows for one page, of which the popup rendered the last 8 as eight
+   separate runs of one URL that had each learned ~198 endpoints. The counts were real and the thing they were
+   counts OF did not exist. A run therefore owns exactly one row (`eng._log`), a partial WRITES that row rather
+   than appending beside it, and `run` on the record says which of the three states the row is reporting — so
+   a snapshot of a run in progress can never be read as a run that finished. */
 self._engineLog = [];
 self._engineCrashOccurred = 0;
 
@@ -111,7 +118,29 @@ function assertResultDocument(r) {
          "here and the cross-session frontier would silently restart from the boot flow on every visit");
 }
 const RUN_OUTCOMES = ["partial", "complete", "crashed", "nothing-to-run"];
-function linesToAnalysis(lines, msg, outcome) {
+/* THE ROW THIS RUN OWNS. `eng` is the run's identity — one instance, one row — and it is absent for the two
+   records that belong to no instance: a document with nothing to run (which logs nothing at all) and a boot
+   that aborted before the reservation had an instance, whose record is built PER WAITING CALLER and so cannot
+   share a row with the others. A record that has a run writes that run's row IN PLACE, keeping the array
+   position the run STARTED at (which is the order a list of runs is read in) and keeping the row correct under
+   the log's own truncation: a row that has already been shifted out is no longer displayed and writing to it
+   is a no-op, where an index would have addressed somebody else's run.
+   THE FIELDS ARE REPLACED, NOT MERGED. A crashed run carries no counters at all — bridge's own rule, because
+   seven zeroes read as a run that explored nothing — so a terminal crash record landing on a row a partial had
+   filled must LEAVE it with no counters, and `Object.assign` alone would have left the last snapshot's numbers
+   underneath a row labelled crashed. */
+function engineLogWrite(eng, m) {
+  const row = eng ? eng._log : null;
+  if (!row) {
+    if (eng) eng._log = m;
+    self._engineLog.push(m);
+    if (self._engineLog.length > 200) self._engineLog.shift();
+    return;
+  }
+  for (const k of Object.keys(row)) delete row[k];
+  Object.assign(row, m);
+}
+function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
          "on `_run`, so a word none of them knows is a run whose completeness nothing can judge");
@@ -164,7 +193,8 @@ function linesToAnalysis(lines, msg, outcome) {
     /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single
        BFS context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits.
        NOT wrapped in a swallowing try/catch: every value here is a number off a document asserted above. */
-    ? { switches: result._switches, flows: result._flows, candidates: result._candidates,
+    ? { run: outcome,
+        switches: result._switches, flows: result._flows, candidates: result._candidates,
         jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
         worldSegmentsHeld: result._worldSegmentsHeld, worldSegmentsMade: result._worldSegmentsMade,
         worldSegmentsForked: result._worldSegmentsForked,
@@ -178,14 +208,18 @@ function linesToAnalysis(lines, msg, outcome) {
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
     /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
        Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real run that
-       explored nothing, which is a finding. `crashed` is the field that keeps the two apart, and the counters
+       explored nothing, which is a finding. `run` is the field that keeps the two apart, and the counters
        are simply not present: nothing may compute a rate, a delta or a total out of a run that never reported
-       one. THE ARM IS NOW CHOSEN BY THE OUTCOME AND NOT BY WHETHER A DOCUMENT ARRIVED, which is the same
+       one. IT IS `run` AND NOT `crashed:true`, AND THE BOOLEAN IS DELETED RATHER THAN KEPT BESIDE IT: the
+       record now has to speak THREE states (a snapshot of a run still going, a run that ended, a run that
+       died) and a flag that can only say one of them would have made the other two the same value — a partial
+       reading in the log exactly as a completed run does, which is the defect this record is being fixed for.
+       THE ARM IS CHOSEN BY THE OUTCOME AND NOT BY WHETHER A DOCUMENT ARRIVED, which is the same
        distinction one level down: a crash that left an unconsumed partial behind used to take the arm ABOVE
        and log as a complete run with a full set of counters, because the only question asked was "is there a
        document". Its findings still travel (they are on the returned analysis, labelled `_run:"crashed"`);
        what does not travel is a COST record for a run that did not finish. */
-    : { crashed: true, resumed: resumed, url: (msg && msg.sourceUrl) || "" };
+    : { run: outcome, resumed: resumed, url: (msg && msg.sourceUrl) || "" };
   // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
   // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
   /* AND THERE IS NO `self._engineMeta` BESIDE IT. It held the LAST record — a page URL and its counters — in a
@@ -200,10 +234,7 @@ function linesToAnalysis(lines, msg, outcome) {
      script — which is the mirror of the defect this seam is being fixed for: a false statement about a run
      in the one place a reader looks for what the runs did. An absent row and a row of zeroes are different
      facts, and so are an absent row and a crash row. */
-  if (outcome !== "nothing-to-run") {
-    self._engineLog.push(m);
-    if (self._engineLog.length > 200) self._engineLog.shift();
-  }
+  if (outcome !== "nothing-to-run") engineLogWrite(eng, m);
   /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once: there is no engine answer to default, so
      every field is the host's own empty and the engine's `_park` is absent rather than zero. The engine's own
      protocol errors still travel, because @E and @WHY are emitted on their own lines and do not ride the
@@ -797,9 +828,24 @@ function engineReserve(cluster, docId, msg, cold) {
      `docId` names only the one it was ROOTED at, so every document joined to it afterwards must answer for it
      in `hostHolderOf` — that is the routing table a `windowproxy.post` to a joined child resolves through, and
      a list that exists only once something has been joined is a list every reader has to ask about first. */
+  /* THE WIPE GENERATION THIS INSTANCE OBSERVES UNDER, TAKEN BEFORE THE FIRST AWAIT AND CARRIED FOR THE WHOLE
+     RUN. Everything an engine learns, it learns from the page it was rooted at — so the question a merge has to
+     answer is not "was this snapshot taken before the Clear" but "was this INSTANCE running before the Clear",
+     and the answer is the same for every advance it will ever produce. Taken once, here, it also cannot be
+     taken at the wrong TIME: a value read at the merge would be the generation AFTER the wipe, which is the
+     one reading that always agrees.
+     THE TERMINAL PATH ALREADY HAD THIS AND THE INCREMENTAL ONE HAD NOTHING. `_dispatchDocument` captures the
+     epoch before it dispatches and abandons its tail if it moved, so a Clear could not repopulate the store
+     through an analysis that was in the engine when it ran; `onFrontierAdvance` — the 750 ms snapshot merge and
+     the finalize merge of an instance with no live caller — wrote straight into globalStore and (since the
+     merge learned to name its documents) into a DOCUMENT, with no such question asked anywhere. */
+  DCHECK(typeof self.frontierEpoch === "function",
+         "the trusted zone states no frontier epoch — it is what tells an advance from this instance apart " +
+         "from one observed before the user emptied the store, and without it every finding this engine " +
+         "produces would merge into whatever the store holds when it lands");
   const eng = { state: "booting", cluster, docId, joinedDocIds: [], msg, groupId: msg && msg.groupId,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
-                r: null, _readyP: null };
+                _epoch: self.frontierEpoch(), r: null, _readyP: null };
   _pool.push(eng);
   _reserveStats.made++;
   const n = _bootingCount();
@@ -2076,7 +2122,7 @@ async function engineFinalize(eng) {
      THE FINDINGS STAY AND THE RUN IS LABELLED. `_run` is on the record from linesToAnalysis, on every arm, so
      the completeness claims a crash DOES invalidate are refused where each of them is made: no cost counters
      in the run log (above), no frontier write (finish), and a per-document crash marker the popup renders. */
-  const result = linesToAnalysis(eng.lines, eng.msg, eng._crashed ? "crashed" : "complete");
+  const result = linesToAnalysis(eng.lines, eng.msg, eng._crashed ? "crashed" : "complete", eng);
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
   return result;
 }
@@ -2138,7 +2184,11 @@ function crashRecord(stage, m, msg) {
   /* The empties are `linesToAnalysis`'s own, on the arm that has no document to read — not four assignments
      over a record it just built, which is how the two producers of a crash record drifted apart in the first
      place. `_run:"crashed"` is what every consumer reads; there is no second marker beside it. */
-  return linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, "crashed");
+  /* AND IT OWNS NO RUN ROW, which is the same split as the banner one line up. This is called PER WAITING
+     CALLER for one instance that never booted, and each caller is a different DOCUMENT with a different
+     address — so the records cannot share a row, and each states the run that document did not get. The
+     instance-level fact (one abort) is the crash COUNT, which is incremented once. */
+  return linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, "crashed", null);
 }
 
 /* MACROTASK yield (worker/offscreen). Between engine quanta the host MUST return to the event loop with a
@@ -2223,23 +2273,32 @@ async function hostSchedule(pool, ops) {
            "the pool was driven with no eviction op — the RAM floor is answered by the WFQ giving up the " +
            "lowest-value resident engine, so without it the floor is answered by refusing every admission " +
            "forever and one document holds the whole extension");
+    DCHECK(typeof ops.release === "function",
+           "the pool was driven with no release op — a Clear cannot take the frame of an engine this round " +
+           "has a call outstanding on, so this round is what gives it back, and without it every Clear during " +
+           "an analysis leaves a whole WASM instance resident under a document that does not reload");
     const evict = await ops.evictee(hot);
     if (evict) { target = evict; await ops.requestPark(evict); }
     /* THE PARK FLAG AND THE STEP THAT READS IT STAY ORDERED ACROSS THE BOUNDARY, and not by luck: both are
        calls on ONE renderer's port, which is point-to-point and delivers in order, and this loop makes no other
        call into that instance in between. The pair was atomic when it was two ccalls; it is sequenced now. */
     const st = await ops.step(target);
-    /* THE STEP CODE IS TWO VALUES, AND THIS SPOKE THREE. qjs_step answers ENGINE_STEP_DONE (0) or
-       ENGINE_STEP_YIELD (2) and nothing else — it folds the scheduler's STALLED into a yield deliberately,
-       "the bridge speaks two values". The third branch here tested for 1, a NEED_FETCH code no version of
-       engine_sched_step has ever returned, and it was the ONLY caller of ops.serviceFetch: the entire reply
-       path (qjs_pending -> safeFetch -> qjs_provide) was unreachable in the shipped extension, so every flow
-       a page's `fetch()` parked stayed parked, the engine answered STALLED forever, and the analysis promise
-       for that document never resolved. The `else` that caught everything not 0 or 1 is what made a value the
-       engine cannot produce look like a branch someone had thought about. */
-    DCHECK(st === 0 || st === 2,
-           "qjs_step answered with a code outside {DONE, YIELD} — the engine folds STALLED into YIELD itself, " +
-           "so a third value is an ABI that changed under a host still speaking the old one");
+    /* THE STEP CODE IS THREE VALUES AND EVERY ONE OF THEM IS THE ENGINE'S OWN STATEMENT. qjs_step answers
+       ENGINE_STEP_DONE (0), ENGINE_STEP_YIELD (2) or ENGINE_STEP_STALLED (3). It used to answer two — it FOLDED
+       the stall into the yield, "the bridge speaks two values" — and the fold is deleted because a host cannot
+       undo it: a yield asks to be OUTRANKED and a stall asks to be PAID, so one value for both leaves every
+       driver guessing. The one that guessed wrong is engine/route.mjs, whose pump had exactly two terminators
+       and therefore stepped a stalled peer 10.8 million times with no switches, no jobs and no emission.
+       THE ONE BEFORE IT WAS THE SAME DEFECT INVERTED, and it is why this branch is spelled out rather than left
+       as `if/else`: the third arm here once tested for 1, a NEED_FETCH code no version of engine_sched_step has
+       ever returned, and it was the ONLY caller of ops.serviceFetch — so the whole reply path
+       (qjs_pending -> safeFetch -> qjs_provide) was unreachable in the shipped extension, every flow a page's
+       `fetch()` parked stayed parked, and the analysis promise for that document never resolved. A value the
+       engine cannot produce wearing a branch someone had thought about, and a value the engine CAN produce
+       with no branch at all, are the two halves of one rule: the codes are enumerated, never defaulted. */
+    DCHECK(st === 0 || st === 2 || st === 3,
+           "qjs_step answered with a code outside {DONE, YIELD, STALLED} — a fourth value is an ABI that " +
+           "changed under a host still speaking the old one");
     // DEV __forcepark: request the park only after N dispatches, so it captures MID-EXPLORATION residue
     // (recipes with real decvecs + handler-driven async flows), mirroring a production RAM-pressure park.
     if (target._forceparkSteps > 0 && --target._forceparkSteps === 0) await ops.requestPark(target);
@@ -2251,14 +2310,38 @@ async function hostSchedule(pool, ops) {
        round started below appends to the same buffer, so an unawaited partial would splice by an index the
        round had already moved. Fire-and-forget was sound only while the ccall was synchronous. */
     if (st !== 0 && ops.streamPartial) await ops.streamPartial(target);
+    /* AN ENGINE THAT LEFT THE POOL MID-ROUND IS NOT CARRIED ANY FURTHER, AND THIS ROUND IS THE ONE THAT OWNS
+       ITS FRAME. Every op above suspends, and the only thing that takes an engine out of the pool while this
+       loop is holding it is a Clear — which cannot take the frame with it (a renderer with a call outstanding
+       may not be destroyed) and so hands that to whoever owns the outstanding call, exactly as the service
+       round is already handed it. Without this the round carried straight on into `finish` on an engine the
+       user had just wiped: the finalize would ask a dead instance for a result and write this origin's residue
+       back into a cross-session frontier that had just been emptied, and the waiters it answers were rejected
+       by the Clear before it got there.
+       IT IS ONE CHECK AND IT IS PLACED LAST, after every op that can suspend, because a drop that lands in
+       `setFloor`, in `step` or inside `streamPartial`'s own await is the same drop and must not need its own
+       site to notice it — the ops above are each safe on a dropped engine (the renderer is still there,
+       because the Clear could not take it) and streamPartial refuses to MERGE one, which is the only thing
+       any of them does that outlives the round.
+       The membership test is the POLICY'S own — `pool` is this function's array — so the pure scheduler stays
+       free of any knowledge of frames; `release` is what turns that into a teardown. */
+    if (pool.indexOf(target) < 0) { await ops.release(target); continue; }
     if (st === 0) {   // fully explored, or self-parked under RAM pressure: finalize (residue -> IDB cold tier)
       await ops.finish(target);
-    } else {   // ENGINE_STEP_YIELD — a cooperative quantum, or a STALL the engine reports as one.
+    } else {   // ENGINE_STEP_YIELD (a cooperative quantum) or ENGINE_STEP_STALLED (a bill) — see below.
       /* PAY EVERYTHING THE ENGINE SAYS IT IS OWED, in ONE round: the replies parked flows wait on, the lazy
-         chunks, the notices this zone must act on and the synchronous requests only it can answer. A stall is
-         indistinguishable from an ordinary quantum here on purpose, so asking is the only way to tell — and
-         asking costs an empty ccall on a quantum that owes nothing. Servicing only the REQUESTS (which is
-         what this did) left the fetch half of the same owed list unpaid forever.
+         chunks, the notices this zone must act on and the synchronous requests only it can answer. Servicing
+         only the REQUESTS (which is what this did) left the fetch half of the same owed list unpaid forever.
+         THE TWO CODES TAKE THIS ARM TOGETHER, AND THAT IS A DECIDED ANSWER RATHER THAN A DEFAULT. engine.c
+         states the schedule: this host pays at EVERY slice boundary and not only at a stall, because paying
+         only at a stall makes one flow's reply conditional on every other flow in the document also becoming
+         blocked — a cross-flow coupling that gets worse as exploration succeeds, since every fork adds a
+         member that must also block and re-issues its parent's unanswered request. So the PAYMENT does not
+         differ, and the two codes differ in what they say about RANK, which this loop does not read off a step
+         code at all: engine_top_weight already publishes -Infinity for a frontier whose every member is
+         host-owed, so a stalled engine sorts last through the ordering that exists rather than through a
+         second question asked here. Two answers to one question is the defect, not the shared arm.
+         WHAT WOULD BE A DEFAULT is treating an unknown code this way, which the enumeration above refuses.
          NON-BLOCKING, the way the unreachable branch was: the engine drops out of the hot set while its round
          runs, so a slow reply on this document never stalls another's. */
       target.state = "fetching";
@@ -2327,9 +2410,12 @@ function engineLiveDocumentIds(eng) {
          "engineCreate and the waiter list is what finalize resolves, so a cold engine holding a waiter " +
          "would answer a document nobody is running, and a live one holding none would merge this page's " +
          "findings to the moat alone and report the document that asked for them as clean. The one way a " +
-         "LIVE engine loses its waiters is hostClear, which also drops it from the pool and destroys its " +
-         "frame — so this firing says an engine that was dropped is still being driven, and the fix is at " +
-         "the round that kept driving it, not here");
+         "LIVE engine loses its waiters is hostClear, which also drops it from the pool and marks it — so " +
+         "this firing says an engine that was dropped is still being driven, and the fix is at the round " +
+         "that kept driving it, not here. That is exactly what it caught: a Clear landing inside " +
+         "streamPartial's own await left a live instance with no waiters, and the merge on the next line " +
+         "aborted the trusted zone rather than reaching the store. streamPartial refuses a dropped engine " +
+         "before it builds this list; a firing here now means some OTHER round is doing what that one was");
   return eng._resolvers.map((w) => {
     DCHECK(w.msg && w.msg.documentId,
            "a live caller waiting on this instance carries no documentId — astDispatch asserts the browser's " +
@@ -2410,6 +2496,17 @@ const _hostOps = {
        that reply. */
     try { await eng.r.renderer.emitPartial(); }
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "partial", e); return; }
+    /* A CLEAR LANDED WHILE THIS SNAPSHOT WAS IN THE AIR. This is the ONE await in this function, so a dropped
+       engine here is exactly that, and the snapshot below is an observation of a page the user has just asked
+       to have deleted — merging it repopulates the store the Clear emptied, into the cumulative moat AND (since
+       the merge learned to name its documents) into the document itself. It also cannot be merged even if one
+       wanted to: hostClear rejects a live instance's waiters, and `engineLiveDocumentIds` — evaluated as the
+       argument on the very next line — asserts that a live instance still has some, so the merge path for a
+       cleared engine ABORTS the trusted zone rather than reaching the store at all.
+       THE FRAME IS NOT TAKEN HERE. This round has one owner and it is the release step at the bottom of
+       hostSchedule; destroying here would be a second, and the second teardown removes an element that is
+       already gone — which renderer-host reports as a renderer having left the document twice. */
+    if (eng._dropped) return;
     let idx = -1;
     for (let i = eng.lines.length - 1; i >= 0; i--) if (String(eng.lines[i]).startsWith("@RESULT ")) { idx = i; break; }
     /* qjs_emit_partial PRINTS ONE, unconditionally. No line here means the print sink between the engine and
@@ -2417,7 +2514,7 @@ const _hostOps = {
     DCHECK(idx >= 0, "qjs_emit_partial produced no @RESULT line — it prints the one result document every time " +
                      "it is called, so its absence is this zone's own capture of the engine's output failing");
     if (idx < 0) return;   // release
-    const partial = linesToAnalysis([eng.lines[idx]], eng.msg, "partial");   // parse only the snapshot line
+    const partial = linesToAnalysis([eng.lines[idx]], eng.msg, "partial", eng);   // parse only the snapshot line
     eng.lines.splice(idx, 1);                                           // consume it
     // Merge on EITHER surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally
     // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
@@ -2432,7 +2529,7 @@ const _hostOps = {
     DCHECK(typeof self.onFrontierAdvance === "function",
            "the trusted zone has no onFrontierAdvance to merge an engine's findings into — every incremental " +
            "finding this engine emits has nowhere to go");
-    self.onFrontierAdvance(eng.msg.sourceUrl, engineLiveDocumentIds(eng), partial);
+    self.onFrontierAdvance(eng.msg.sourceUrl, engineLiveDocumentIds(eng), partial, eng._epoch);
   },
   step: async (eng) => {
     let st;
@@ -2464,6 +2561,22 @@ const _hostOps = {
   serviceFetch: async (eng) => {
     try { await engineServiceFetch(eng); await engineRecordFacts(eng); }
     finally { if (eng._dropped) eng.r.destroy(); }
+  },
+  /* THE ROUND'S HALF OF THE CLEAR, and the only thing it does is give back the frame the Clear could not take.
+     There is NOTHING else to do here on purpose: no result is asked for (the instance is going away and its
+     document would be a page nobody requested), no residue is persisted (the cross-session frontier was
+     emptied by the same Clear), no waiter is answered (hostClear already rejected them all with "cleared",
+     which is the error _dispatchDocument reads to abandon its tail). A `finish` here would have been all four. */
+  release: async (eng) => {
+    DCHECK(eng._dropped,
+           "the scheduler was handed an engine that left the pool without a Clear having dropped it — the pool " +
+           "is spliced by this loop's own `finish` and by hostClear and by nothing else, so a third remover is " +
+           "an instance being reclaimed by two owners and its frame freed twice");
+    DCHECK(eng.r.outstandingCalls() === 0,
+           "a cleared engine's round landed with " + eng.r.outstandingCalls() + " call(s) still outstanding — " +
+           "this is the round that owns the frame, so a call still in flight here is a second op driving an " +
+           "instance the user wiped, and the teardown below would abort inside renderer-host instead");
+    eng.r.destroy();
   },
   /* ADMISSION IS THE ONE ORDER ASKED WHERE THERE IS ROOM — the same question `evictee` asks where there is
      not. It runs in two parts and they are DIFFERENT KINDS OF QUESTION, which is why the ranked part no
@@ -2690,7 +2803,7 @@ const _hostOps = {
       DCHECK(typeof self.onFrontierAdvance === "function",
              "the trusted zone has no onFrontierAdvance to merge a finalized engine's findings into — a child " +
              "document's and a resumed frontier's entire output has nowhere to go");
-      self.onFrontierAdvance(eng.msg.sourceUrl, engineLiveDocumentIds(eng), result);
+      self.onFrontierAdvance(eng.msg.sourceUrl, engineLiveDocumentIds(eng), result, eng._epoch);
     }
     /* EVERY CALLER WAITING ON THIS DOCUMENT IS ANSWERED, not just the first. A cold/child engine has no
        caller at all, which is why the list is allowed to be empty and the merge above is what its findings
@@ -2899,16 +3012,23 @@ async function hostClear() {
      never stepped and never finalized, so nothing else will ever reach its renderer — and an iframe nobody
      reaches is a whole WASM instance held resident under a document that does not reload until the browser
      restarts. Two Clears with a heavy page open would have left two of them.
-     A ROUND IN FLIGHT KEEPS ITS FRAME UNTIL IT LANDS. `state === "fetching"` is exactly "this engine has a call
-     outstanding", and destroying then would break renderer-host's rule that a destroyed renderer has no caller
-     parked on an answer. `_dropped` is what the round reads on the way out (see serviceFetch). */
+     A ROUND IN FLIGHT KEEPS ITS FRAME UNTIL IT LANDS, and the question that decides it is ASKED rather than
+     inferred from the state. This read `state === "fetching"` and its comment said that state "is exactly
+     'this engine has a call outstanding'" — which is FALSE, and measurably so: a `hot` engine has a call
+     outstanding for the whole of every awaited scheduler op (setFloor, requestPark, step, streamPartial), which
+     is where the loop spends essentially all of its time. Clearing with one page open therefore destroyed a
+     renderer mid-`step` and hit renderer-host's own assert — "a renderer was destroyed with 1 call(s) still
+     outstanding" — which travels back out of astDispatch as an invariant abort, so AST_CLEAR rejected,
+     `clearGlobalStore` never ran, and the Clear button did not clear. The transport knows the answer, so it is
+     the transport that is asked; `_dropped` is what the owning round reads on the way out (see serviceFetch and
+     hostSchedule's release step). */
   /* AND A RESERVATION KEEPS ITS FRAME FOR THE SAME REASON, WHICH IS WHY THIS IS WRITTEN AS THE POSITIVE SET
      RATHER THAN AS `!== "fetching"`. A booting engine has no `r` at all until rendererLaunch answers, and from
      that instant until engineRoot finishes it has an ABI call outstanding on every await in between — so it is
      the same case the negative form would have missed twice over (a TypeError, then a broken renderer-host
      rule). engineCreate reads `_dropped` when its provisioning lands and removes the frame there, on both
      arms, exactly as the service round does. */
-  for (const eng of dropped) { eng._dropped = true; if (eng.state === "hot") eng.r.destroy(); }
+  for (const eng of dropped) { eng._dropped = true; if (eng.state === "hot" && eng.r.outstandingCalls() === 0) eng.r.destroy(); }
   /* EVERY OUTSTANDING RENDEZVOUS BELONGED TO AN INSTANCE THAT IS NOW DROPPED — the whole pool went. Left
      behind, each entry holds its asking engine's wasm Module alive for the life of the offscreen, which is the
      one shape a map keyed on a live instance fails in. */
@@ -2949,7 +3069,7 @@ self.astDispatch = async function astDispatch(msg) {
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     // NOTHING TO RUN, so no engine runs and there is no result document to expect — this is the one analysis
     // that legitimately has none, and it says so rather than sharing the absent-document path with a real run.
-    if (!html && !code) return { success: true, result: linesToAnalysis([], msg, "nothing-to-run") };
+    if (!html && !code) return { success: true, result: linesToAnalysis([], msg, "nothing-to-run", null) };
 
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
        other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc

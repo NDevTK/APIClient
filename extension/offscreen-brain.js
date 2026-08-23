@@ -401,7 +401,7 @@ function _emptyDocView() {
    re-derived from an address that names no document.
    AN EMPTY LIST IS A POSITIVE STATEMENT: this engine has no live caller, its findings are the moat's alone,
    and the transient view is then the right target because there is no document to be wrong about. */
-function _mergeFrontierResult(sourceUrl, documentIds, result) {
+function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
   // The engine↔JS contract guarantees a result OBJECT (never null) — a null here is a should-never-happen
   // in the engine's own output, not a case to `if(!result)return`-past.
   DCHECK(result && typeof result === "object", "_mergeFrontierResult: engine produced a non-object frontier result");
@@ -416,6 +416,27 @@ function _mergeFrontierResult(sourceUrl, documentIds, result) {
          "an engine advance reached the merge without a run outcome (`" + result._run + "`) — bridge.js writes " +
          "`_run` on every analysis it builds, so its absence is that seam broken and a crashed run's findings " +
          "would be stored as a completed page's");
+  /* WHICH STORE THIS ADVANCE WAS OBSERVED AGAINST. bridge.js stamps the wipe generation on the instance at
+     `engineReserve`, before its first await, so this is the generation the engine was RUNNING under — not the
+     one in force when the merge happens to land, which is always the current one and therefore always agrees.
+     THE TERMINAL PATH HAS ASKED THIS SINCE IT EXISTED AND THIS ONE HAD NOTHING. `_dispatchDocument` captures
+     `_dataEpoch` before it dispatches and abandons its whole tail if it moved; the incremental merge — every
+     750 ms snapshot, and the finalize of an instance with no live caller — asked nothing, so an advance that
+     crossed a Clear repopulated the store the user had just emptied. It reached globalStore alone while this
+     function had no documents to name; it reaches a DOCUMENT too now, which is why the guard is here rather
+     than pending.
+     ASSERTED, NEVER DEFAULTED: an absent generation cannot be read as "current" — that is the exact shape that
+     turns a producer which stopped stamping it into a merge that always passes. */
+  DCHECK(typeof epoch === "number",
+         "an engine advance reached the merge without the wipe generation it was observed under (`" + epoch +
+         "`) — bridge.js stamps `_epoch` on every instance it reserves, so its absence is that seam broken and " +
+         "findings observed before a Clear would repopulate the store the user just emptied");
+  if (epoch !== _dataEpoch) {
+    // Not a failure and not a swallow: the observation PREDATES the wipe, and the Clear button's whole
+    // contract is that nothing observed before it survives it. Said out loud, like the terminal path's.
+    console.debug("[frontier] advance discarded — store reset mid-run (epoch %s, now %s)", epoch, _dataEpoch);
+    return;
+  }
   try {
     // Merge on EITHER surface: an XSS-only page carries verified @S PoCs with no endpoints. Gating on
     // fetchCallSites alone dropped every incremental sink (they only surface here now, not just at teardown).
@@ -468,10 +489,16 @@ function _mergeFrontierResult(sourceUrl, documentIds, result) {
    the background while new tabs are learned promptly via the review queue. */
 // The bridge's ONE host pool advances cold parked recipes itself (admit rehydrates the highest-value ones
 // when live work drains). A cold engine finalizing calls back here so its facts merge to the GLOBAL moat.
-self.onFrontierAdvance = function (sourceUrl, documentIds, result) {
+/* THE WIPE GENERATION, ASKED BY THE ZONE THAT PRODUCES THE ADVANCES. bridge.js reads it ONCE per instance (at
+   engineReserve, before the first await) and hands it back on every advance that instance produces, which is
+   what lets this side tell an observation made before a Clear from one made after. It is a FUNCTION and not a
+   copied number for the same reason `onFrontierAdvance` is: a number would be read at load and be wrong from
+   the first Clear onwards, with nothing to say so. */
+self.frontierEpoch = function () { return _dataEpoch; };
+self.onFrontierAdvance = function (sourceUrl, documentIds, result, epoch) {
   // Do NOT wrap in a swallowing catch — that would silence the _mergeFrontierResult DCHECK (a broken engine↔JS
   // contract must crash LOUD in dev). notifyPopup is a UI side-effect whose own failure is non-fatal, isolated.
-  _mergeFrontierResult(sourceUrl, documentIds, result);
+  _mergeFrontierResult(sourceUrl, documentIds, result, epoch);
   /* THE POPUP IS TOLD WHICH DOCUMENT MOVED. `notifyPopup(null)` broadcast a tab-less update for advances that
      belong to real documents, and the popup's own listener re-loads on any update, so this is not a fix for a
      missed render — it is the same rule as above one layer out: a message about a document that does not name

@@ -409,6 +409,20 @@
     });
     (document.body || document.documentElement).appendChild(f);
     r.destroy = function () { rendererDestroy(r); };
+    /* WHETHER THIS RENDERER MAY BE DESTROYED YET, ANSWERED BY THE CONNECTION THAT KNOWS. `frameTeardown`
+       REFUSES a teardown with a call outstanding — each one is a caller parked on an answer that can no longer
+       be produced — so an owner that wants to reclaim a frame has to be able to ask the same question the
+       assert asks, rather than inferring it from a pool state that does not mean what it says. The Clear path
+       inferred it (`state === "fetching"`) and was wrong for the whole of every scheduler round, so the assert
+       fired on the ordinary case instead of on a bug. It is the CONNECTION'S count and not a second tally kept
+       beside it: two numbers for one fact is how the inference got to be wrong in the first place. */
+    r.outstandingCalls = function () {
+      DCHECK(r.conn !== null,
+             "a renderer was asked what it is waiting on before its Connection existed — the frame is created " +
+             "and its invitation offered in one step, so a record with a frame and no connection is this " +
+             "question reaching a renderer this file never finished forking");
+      return r.conn.outstandingCalls();
+    };
     /* A RENDERER THAT DID NOT BOOT IS STILL A FRAME IN THIS DOCUMENT, so the element and its port go first, or
        a caller that retried would accumulate dead renderers under a document that never reloads. The failure
        then TRAVELS ON: swallowing it would report a page as analysed by an instance that never existed.
