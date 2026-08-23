@@ -1057,7 +1057,15 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
    what is already built and never saw the list of what is not — the one sentence the crash exists to deliver,
    silently deleted by the one call that was supposed to deliver it. `sizeof` the literal is what it will
    actually be, and `unbuilt` bounds the name at 64, so the sum is a size that cannot go stale when the next
-   interface is struck off the list. */
+   interface is struck off the list.
+   AND A LIST OF WHAT REMAINS IS A CLAIM, WHICH THIS ONE GOT WRONG IN THE DIRECTION THAT COSTS MOST. It named
+   four interfaces and omitted `@property` — and `@property` is the one that fires, because a single
+   `@property --x { … }` in a shipping site's stylesheet aborts that instance at stage `create` with ZERO flows
+   run, so the whole document is lost before any of it executes. A reader standing at that abort was told to go
+   and build one of four things, none of them the one in front of them: the stale-`DFAIL` failure mode with a
+   spec behind it — authoritative, wrong, and followed. A name goes on this list because a standard defines an
+   interface for it, never because somebody remembered it, so each one carries the section number AND TITLE it
+   was read from and the next name added is read from the spec before it is written here. */
 static void rule_unbuilt_fail(const char *name)
 {
 #define RULE_UNBUILT_FMT                                                                                       \
@@ -1066,12 +1074,22 @@ static void rule_unbuilt_fail(const char *name)
     "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
     "CSSMediaRule, §7.4's CSSSupportsRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's "      \
     "CSSKeyframeRule and CSSKeyframesRule, and CSS Cascade §8.1/§8.2's CSSLayerBlockRule and "                  \
-    "CSSLayerStatementRule are built; what remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's "        \
+    "CSSLayerStatementRule are built; what remains is CSS Properties and Values API 1 §3 `The @property "       \
+    "Rule` / §6.1 `The CSSPropertyRule Interface`, CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's "           \
     "CSSContainerRule, CSS Counter Styles 3 §9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's "                \
     "CSSFontFeatureValuesRule — the last two have their §6.4.2 TYPE NUMBER declared (11 and 14) and no "        \
-    "interface behind it, which is what puts them on this list rather than off it. Build the one this names "   \
-    "and mint it in rule_from_parse — do NOT skip the rule, because every index after it would then name a "    \
-    "different rule than the page's"
+    "interface behind it, which is what puts them on this list rather than off it, while CSSPropertyRule has "  \
+    "no number at all (§6.4.2's table is frozen, so its `type` is 0, like the two CSSLayer* rules above it). "  \
+    "CSSPropertyRule is FIRST because `@property` is the one on this list that shipping documents actually "    \
+    "carry — an author registers a custom property to animate it, so it appears in ordinary site CSS rather "   \
+    "than in a stylesheet written to exercise a corner. §6.1's IDL is four readonly attributes over `CSSRule` " \
+    "and no `style` — `name`, `syntax`, "                                                                      \
+    "`inherits`, `initialValue` — so it is NOT a declaration-block rule and must not be minted as one; its "    \
+    "prelude is §3's `<custom-property-name>#` and its body supplies §3.1's `syntax` (initial \"*\"), §3.2's "  \
+    "`inherits` (initial true) and §3.3's `initial-value` (initial the guaranteed-invalid value, i.e. a null "  \
+    "`initialValue`), with every descriptor OPTIONAL and an unknown one ignored without invalidating the "      \
+    "rule. Build the one this names and mint it in rule_from_parse — do NOT skip the rule, because every "      \
+    "index after it would then name a different rule than the page's"
 
     char msg[sizeof RULE_UNBUILT_FMT + sizeof ((RuleBuild *)0)->unbuilt];
 
