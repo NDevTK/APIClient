@@ -1393,6 +1393,17 @@ static const char *HTML =
     "(async function(){ var p = new Promise(function(res){ Promise.resolve().then(function(){ res('lazyRegion'); }); }); var c = await p; fetch('/api/lazy?r=' + c); })();"   /* PENDING await: the promise resolves LATER via a microtask (stands in for the network) -> park + resume */
     "var _spr; var _sp = new Promise(function(r){ _spr = r; }); _sp.then(function(v){ fetch('/api/shared?v=' + v); }); _spr(state.beta ? 'shBETA' : 'shSTABLE');"   /* PROBE: _sp created BEFORE the state.beta snapshot fork -> shared; settled per-flow. If promise state is NOT per-flow COW, only ONE value survives (contamination) */
     "if (state.gamma) { delete delObj.k; } fetch('/api/tok?t=' + (delObj.k ? delObj.k : 'wasDeleted'));"   /* DELETE time-travel: the gamma-true flow deletes delObj.k; the gamma-false flow must STILL see keepVAL (the delete is per-flow) */
+    /* THE SAME DELETE ON THE GLOBAL, WHICH IS A DIFFERENT OBJECT KIND AND WAS THE ONE THIS DOCUMENT NEVER MADE.
+       Every `delete` above is on an ordinary object; the global is EXOTIC (the Window class's supported-index
+       hooks), so a delete of a name it does not own misses the shape and lands in the exotic dispatch — and a
+       creation this flow then removes is the same arrival by the other route. Both are what a real bundle does
+       (`delete globalThis.__loggedIn` sits in a logout path), and both reach the swap as a slot removal that
+       must consult neither 10.1.10.1 step 3's [[Configurable]] nor the class's own handler. gdSOLE on BOTH arms
+       is the two-sided claim: each arm read back ITS OWN global creation, and neither absent-slot delete left
+       anything behind for the other to find. */
+    "delete globalThis.gdGone; globalThis.gdTag = cfg.admin ? 'gdADMIN' : 'gdPUBLIC';"
+    " fetch('/api/gdel?v=' + globalThis.gdTag + (globalThis.gdGone === undefined ? 'gdSOLE' : 'gdLEAK'));"
+    " delete globalThis.gdTag;"
     "function floc(){ var o = { x: 'base' }; if (cfg.admin) { o.x = 'flocADMIN'; } else { o.x = 'flocPUBLIC'; } fetch('/api/floc?x=' + o.x); } floc();"   /* FLOW-LOCAL post-fork isolation: o is created inside floc() BEFORE the concolic fork; the snapshot shares o across siblings, so each arm's o.x mutation must be captured per-flow (cow_delta_fork forked=1). Both flocADMIN and flocPUBLIC ⇒ no cross-flow leak — settles whether the 'snapshot shares flow_local' comment is real or stale. */
     "var acc = 0; for (var i = 0; i < 15; i++) { acc = acc + i; }"   /* a real LOOP (back-edges) so the quantum fires: a flow yields MID-LOOP and the scheduler interleaves parked sibling flows, exercising the COW+decide+pins swap */
     "function* gen(n){ var s=0; for(var i=0;i<n;i++){ s=s+i; } yield s; yield s*2; }"   /* GENERATOR body with a LOOP: .next() runs the body on the tramp chain, the loop preempts the base flow */
@@ -1445,6 +1456,7 @@ static const char *HTML =
     "function* paf2(){ yield Promise.resolve('p0'); if (cfg.admin) { yield Promise.resolve('pf2A'); } else { yield Promise.resolve('pf2P'); } } Promise.all(paf2()).then(function(a){ fetch('/api/paf2fork?v=' + a[0] + '-' + a[1]); });"   /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 THEN branches (fork during .next() #2, index==1). The retained pre-fork element wrapper (p0) is RE-ATTACHED to the sibling aggregate -> BOTH arms resolve a[0]=='p0' AND their own a[1] (p0-pf2A and p0-pf2P) */
     "var _rr = 'x1y2'.replace(/\\d/g, function(d){ return cfg.admin ? 'rrA'+d : 'rrP'+d; }); fetch('/api/rerepfork?v=' + _rr);"   /* @@replace CALLBACK fork (JSReRep): an OBJECT searchValue dispatches to RegExp.prototype[@@replace], whose machine holds THREE things across each callback — the collected match array, the spec's captures List in its own block, and the StringBuffer accumulator with nextSourcePosition. The replacer branches on opaque state at the FIRST of two matches, so the sibling must get its own copy of all three or the second match lands in the wrong accumulator. Pure paths xrrA1yrrA2 and xrrP1yrrP2 both present => each arm substituted BOTH matches into its OWN buffer. */
     "var _red=[1,2].reduce(function(acc,x){ return acc + (cfg.admin ? 'rA' : 'rP') + x; }, 'r:'); fetch('/api/redfork?v=' + _red);"   /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold, so clone_deep_flow clones the JSArrayReduce accumulator per arm. The pure paths r:rA1rA2 and r:rP1rP2 both present ⇒ each arm threaded its OWN accumulator across both elements (never a shared/contaminated acc) */
+    "var _tpj={toString:function(){ return cfg.admin ? 'tpA' : 'tpP'; }}; fetch('/api/toprimfork?v=' + ['x','y'].join(_tpj));"   /* MACHINE-MODE ToPrimitive fork: 23.1.3.18 Array.prototype.join coerces its SEPARATOR, so §7.1.1 ToPrimitive runs the page's toString ON THE TRAMP with the JSArrayJoin machine as the JSToPrim's OUTER requester — a machine that owns no frame and is reachable only through `outer`. The branch is INSIDE that toString. Both pure paths xtpAy and xtpPy present ⇒ tramp_cont_relink_outer cloned the machine as well as the sequence, so each arm finished its own join with its own separator (a shared machine would leave one arm's separator in the other's buffer, or free the cursor twice) */
     "function* gcf(){ if (cfg.admin) { yield 'gcA'; } else { yield 'gcP'; } } var gci=gcf(); fetch('/api/gcallfork?v=' + gci.next.call(gci).value);"   /* generator .next() driven via .call BYPASS: gci.next.call(gci) reshapes at do_forward_call to the [this=gen, f=next] shape and is now routed onto do_generator_tramp (not the js_generator_next drive-to-completion). The body branches -> both gcA and gcP, never a DFAIL */
     "function* gapf(){ if (cfg.admin) { yield 'gapA'; } else { yield 'gapP'; } } var gapi=gapf(); fetch('/api/gapplyfork?v=' + gapi.next.apply(gapi, []).value);"   /* generator .next() via Function.prototype.apply BYPASS: reshaped at OP_call_method to [this=gen, next, arg0] and routed onto do_generator_tramp -> both gapA and gapP, never drive-to-completion */
     "function* graf(){ if (cfg.admin) { yield 'graA'; } else { yield 'graP'; } } var grai=graf(); fetch('/api/grefapplyfork?v=' + Reflect.apply(grai.next, grai, []).value);"   /* generator .next() via Reflect.apply BYPASS: [Reflect,apply,target,this,argsList] reshaped to [this=gen, next, arg0] and routed onto do_generator_tramp -> both graA and graP */
@@ -1747,6 +1759,9 @@ static const char *HTML_MIN =
     "<script>"
     "[1,2].forEach(function(e){ var w = cfg.admin ? 'feADMIN' : 'fePUBLIC'; fetch('/api/fefork?e=' + e + w); });"   /* forEach callback deep clone */
     "var owa = ['base']; if (cfg.admin) { owa[0] = 'owA'; } else { owa[0] = 'owB'; } fetch('/api/owfork?a=' + owa[0]);"   /* array-element COW */
+    "delete globalThis.gdGone; globalThis.gdTag = cfg.admin ? 'gdADMIN' : 'gdPUBLIC';"   /* slot removal on the EXOTIC global — see the full document */
+    " fetch('/api/gdel?v=' + globalThis.gdTag + (globalThis.gdGone === undefined ? 'gdSOLE' : 'gdLEAK'));"
+    " delete globalThis.gdTag;"
     "eval(\"'\" + state.code + \"'\");"                    /* @S eval re-fire flow */
     "setInnerHTML('<div>' + state.html + '</div>');"       /* @S innerHTML re-fire flow */
     "setLocation(state.next);"                              /* @S location re-fire flow */
@@ -1796,6 +1811,7 @@ static const char *HTML_MIN =
     "function* paf2(){ yield Promise.resolve('p0'); if (cfg.admin) { yield Promise.resolve('pf2A'); } else { yield Promise.resolve('pf2P'); } } Promise.all(paf2()).then(function(a){ fetch('/api/paf2fork?v=' + a[0] + '-' + a[1]); });"   /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 THEN branches (fork during .next() #2, index==1). The retained pre-fork element wrapper (p0) is RE-ATTACHED to the sibling aggregate -> BOTH arms resolve a[0]=='p0' AND their own a[1] (p0-pf2A and p0-pf2P) */
     "var _rr = 'x1y2'.replace(/\\d/g, function(d){ return cfg.admin ? 'rrA'+d : 'rrP'+d; }); fetch('/api/rerepfork?v=' + _rr);"   /* @@replace CALLBACK fork (JSReRep): an OBJECT searchValue dispatches to RegExp.prototype[@@replace], whose machine holds THREE things across each callback — the collected match array, the spec's captures List in its own block, and the StringBuffer accumulator with nextSourcePosition. The replacer branches on opaque state at the FIRST of two matches, so the sibling must get its own copy of all three or the second match lands in the wrong accumulator. Pure paths xrrA1yrrA2 and xrrP1yrrP2 both present => each arm substituted BOTH matches into its OWN buffer. */
     "var _red=[1,2].reduce(function(acc,x){ return acc + (cfg.admin ? 'rA' : 'rP') + x; }, 'r:'); fetch('/api/redfork?v=' + _red);"   /* reduce ACCUMULATOR fork (CONT_ARRAY_REDUCE): the reducer branches on opaque state mid-fold, so clone_deep_flow clones the JSArrayReduce accumulator per arm. The pure paths r:rA1rA2 and r:rP1rP2 both present ⇒ each arm threaded its OWN accumulator across both elements (never a shared/contaminated acc) */
+    "var _tpj={toString:function(){ return cfg.admin ? 'tpA' : 'tpP'; }}; fetch('/api/toprimfork?v=' + ['x','y'].join(_tpj));"   /* MACHINE-MODE ToPrimitive fork: 23.1.3.18 Array.prototype.join coerces its SEPARATOR, so §7.1.1 ToPrimitive runs the page's toString ON THE TRAMP with the JSArrayJoin machine as the JSToPrim's OUTER requester — a machine that owns no frame and is reachable only through `outer`. The branch is INSIDE that toString. Both pure paths xtpAy and xtpPy present ⇒ tramp_cont_relink_outer cloned the machine as well as the sequence, so each arm finished its own join with its own separator (a shared machine would leave one arm's separator in the other's buffer, or free the cursor twice) */
     "function* gcf(){ if (cfg.admin) { yield 'gcA'; } else { yield 'gcP'; } } var gci=gcf(); fetch('/api/gcallfork?v=' + gci.next.call(gci).value);"   /* generator .next() driven via .call BYPASS: gci.next.call(gci) reshapes at do_forward_call to the [this=gen, f=next] shape and is now routed onto do_generator_tramp (not the js_generator_next drive-to-completion). The body branches -> both gcA and gcP, never a DFAIL */
     "function* gapf(){ if (cfg.admin) { yield 'gapA'; } else { yield 'gapP'; } } var gapi=gapf(); fetch('/api/gapplyfork?v=' + gapi.next.apply(gapi, []).value);"   /* generator .next() via Function.prototype.apply BYPASS: reshaped at OP_call_method to [this=gen, next, arg0] and routed onto do_generator_tramp -> both gapA and gapP, never drive-to-completion */
     "function* graf(){ if (cfg.admin) { yield 'graA'; } else { yield 'graP'; } } var grai=graf(); fetch('/api/grefapplyfork?v=' + Reflect.apply(grai.next, grai, []).value);"   /* generator .next() via Reflect.apply BYPASS: [Reflect,apply,target,this,argsList] reshaped to [this=gen, next, arg0] and routed onto do_generator_tramp -> both graA and graP */
@@ -4245,6 +4261,15 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        still see keepVAL. Both present ⇒ the delete time-travels. FAILS under the snapshot fork (it shares the
        flow_local object across siblings) — a real unsoundness this asserts LOUD rather than leaving unchecked. */
     int delete_iso = (strstr(js, "\"/api/tok\"") && strstr(js, "wasDeleted") && strstr(js, "keepVAL"));
+    /* THE SAME ISOLATION OVER THE EXOTIC GLOBAL, which is a different code path and not a second spelling of the
+       row above. A slot removal on the global misses the shape (the name is not one of the Window class's
+       supported indices) and reaches the exotic [[Delete]] dispatch, which the swap must not consult: 10.5.10
+       [[Delete]] step 7's trap is the page's own code and every host class's hook is a VIEW over storage that is
+       captured on the object that owns it, so consulting either removes state the delta never named. gdSOLE on
+       BOTH arms says each flow read back its own creation AND that neither absent-slot delete left a slot
+       standing for the sibling. */
+    int global_delete = (strstr(js, "\"/api/gdel\"") && strstr(js, "gdADMINgdSOLE") &&
+                         strstr(js, "gdPUBLICgdSOLE"));
     /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
        by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
        post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
@@ -4305,6 +4330,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        threaded its OWN accumulator across both elements (never a shared/contaminated acc). */
     int redfork_tt = (strstr(js, "\"/api/redfork\"") && strstr(js, "r:rA1rA2") && strstr(js, "r:rP1rP2"));
     int rerepfork_tt = (strstr(js, "\"/api/rerepfork\"") && strstr(js, "xrrA1yrrA2") && strstr(js, "xrrP1yrrP2"));
+    /* MACHINE-MODE ToPrimitive fork: the JSToPrim driving the page's toString has an OUTER requester (the
+       JSArrayJoin machine coercing its separator), and that machine owns no frame — it is reachable only
+       through `outer`, so nothing but the requester walk clones it. Both xtpAy and xtpPy present ⇒ each arm
+       finished its own join with its own separator off its own machine. */
+    int toprimfork_tt = (strstr(js, "\"/api/toprimfork\"") && strstr(js, "xtpAy") && strstr(js, "xtpPy"));
     /* generator .next() driven via .call (gci.next.call(gci)): the reflection bypass that previously DFAILed as a
        drive-to-completion is now routed onto do_generator_tramp at do_forward_call. Both gcA and gcP present ⇒ the
        branch inside the .call-driven generator body snapshot-forks per arm, never drives to completion. */
@@ -4810,6 +4840,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "pending", pending_await, "/api/lazy", SESS_EXPLORE },
         { "promise-state", promise_state, "/api/shared", SESS_EXPLORE },
         { "delete-iso", delete_iso, "/api/tok", SESS_EXPLORE },
+        { "global-delete", global_delete, "/api/gdel", SESS_EXPLORE },
         { "floc-iso", floc_iso, "/api/floc", SESS_EXPLORE },
         { "ua", uafork_tt, "/api/uafork", SESS_EXPLORE },
         { "touch", touchfork_tt, "/api/touch", SESS_EXPLORE },
@@ -4846,6 +4877,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE },
         { "redfork", redfork_tt, "/api/redfork", SESS_EXPLORE },
         { "rerepfork", rerepfork_tt, "/api/rerepfork", SESS_EXPLORE },
+        { "toprimfork", toprimfork_tt, "/api/toprimfork", SESS_EXPLORE },
         { "gcallfork", gcallfork_tt, "/api/gcallfork", SESS_EXPLORE },
         { "gapplyfork", gapplyfork_tt, "/api/gapplyfork", SESS_EXPLORE },
         { "grefapplyfork", grefapplyfork_tt, "/api/grefapplyfork", SESS_EXPLORE },
