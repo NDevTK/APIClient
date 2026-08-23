@@ -125,11 +125,26 @@ function wfqReading(out) {
   };
 }
 
+/* A DIAGNOSIS DERIVED FROM A SIGNAL THE SUBJECT DOES NOT EMIT IS A CLAIM ABOUT THE INSTRUMENT, NOT THE RUN.
+   This discriminator reads @COLD, which only a stage that drives a scheduler prints. Applied to a stage that
+   never prints one -- the two-instance ABI drive -- it concluded "has not reached engine_sched_begin's first
+   census at all" about a run that had demonstrably done cross-agent reads and delivered five messages to its
+   peer. That is the same shape as counting a marker no shipped path writes: the zero was a property of the
+   question, and it read as a confident verdict about the subject. So the absence of the signal is now reported
+   AS an absence of the signal, and the tail -- which is what a reader actually has -- is named as the evidence
+   instead. `nothing has been established` is a true statement; `it never started` was not. */
 function hungCause(out) {
   const s = [];
   for (const m of out.matchAll(/^@COLD (\{.*\})$/gm)) { try { s.push(JSON.parse(m[1])); } catch { /* truncated tail */ } }
-  if (s.length < 2) return `only ${s.length} @COLD census line(s) — too few to say why, and a run that prints ` +
-                           `none has not reached engine_sched_begin's first census at all.`;
+  if (s.length === 0) {
+    const lines = out.split("\n").filter(l => l.trim().length);
+    return `NOT ESTABLISHED — this stage printed no @COLD census, so this discriminator has nothing to read ` +
+           `and says nothing about why it hung. A stage that drives no scheduler never prints one, and for ` +
+           `that stage the absence is expected rather than a finding. The evidence is the tail: ` +
+           `${lines.length} line(s), last was ${JSON.stringify((lines[lines.length - 1] || "").slice(0, 120))}.`;
+  }
+  if (s.length < 2) return `only ${s.length} @COLD census line(s) — too few to say why. The run reached ` +
+                           `engine_sched_begin's first census and then stopped producing them.`;
   const b = s[s.length - 1], a = s[Math.floor((s.length - 1) / 2)];
   for (const f of COLD_FIELDS) for (const c of [a, b])
     if (typeof c[f] !== "number")
