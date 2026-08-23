@@ -208,6 +208,10 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
    harness's business. */
 static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see the machine below */
 
+/* THE PEER THIS FIXTURE STANDS IN FOR — declared here and defined beside the park moment it belongs to, which
+   is the one thing that decides when the question is asked. */
+static int  fixture_cold_moment(void);
+static void fixture_ask_remote_op(JSContext *ctx);
 
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_fetches();
@@ -267,6 +271,7 @@ static int fixture_provide(JSContext *ctx) {
         urls = nl + 1;
     }
     url_record_free(&base);
+    if (fixture_cold_moment()) fixture_ask_remote_op(ctx);
     return filled + hostreq_answer_all(ctx);
 }
 
@@ -288,20 +293,30 @@ static const char *HTML =
        win. Order-only cascading answers `none` here, and every page puts its general rules last. */
     "<style>#cs1 { display: block; color: rgb(1, 2, 3) } div { display: none }</style>"
     /* CSS Properties and Values API 1 §3's `@property`, in a SHEET OF ITS OWN so its rules sit at fixed
-       indices and the sheet above keeps index 0. Four bodies, because §3 decides four different things about
+       indices and the sheet above keeps index 0. Five bodies, because §3 decides five different things about
        one: every descriptor declared; NONE, which is what exercises §3.1's initial `"*"`, §3.2's initial `true`
        and §3.3's initial (the guaranteed-invalid value, i.e. a null `initialValue`); only an UNKNOWN
        descriptor, which §3 says is "invalid and ignored, but do not invalidate the @property rule" — so the
-       rule must still be in `cssRules`; and a `syntax` whose string §5.4.3 refuses (`inherit` is not a
-       `<custom-ident>`), which §3.1 says leaves the descriptor ignored and therefore the initial standing.
-       A shipping site's own rule is exactly the first shape — developer.mozilla.org ships
-       `@property --switch-position{syntax:"<percentage>";inherits:false;initial-value:0}` — and it is the rule
+       rule must still be in `cssRules`; a `syntax` whose string §5.4.3 refuses (`inherit` is not a
+       `<custom-ident>`), which §3.1 says leaves the descriptor ignored and therefore the initial standing; and
+       §3.3's own cross-descriptor condition, which is the last one below and is the shape a shipping site
+       actually declares — developer.mozilla.org ships
+       `@property --switch-position{syntax:"<percentage>";inherits:false;initial-value:0}`, and it is the rule
        that used to abort the whole document at stage `create` with zero flows run. */
     "<style>"
     "@property --pfull { syntax: \"<percentage>\"; inherits: false; initial-value: 0% }"
     "@property --pbare { }"
     "@property --podd { not-a-descriptor: 3 }"
     "@property --pbad { syntax: \"inherit\" }"
+    /* §3.3's CROSS-DESCRIPTOR CONDITION, which is the one thing about this interface a page can only see
+       through `initialValue`: `if specified, the value of the initial-value descriptor must successfully parse
+       according to the rule's syntax descriptor, or else the descriptor is invalid and ignored`. `0` is a
+       `<number-token>` and CSS Values §5.5 makes a `<percentage>` a `<percentage-token>`, so the descriptor is
+       ignored and §3.3's initial — the guaranteed-invalid value — stands. THIS IS THE MDN RULE EXACTLY:
+       developer.mozilla.org ships `@property --switch-position{syntax:"<percentage>";inherits:false;
+       initial-value:0}`, and the rule above (`--pfull`) is the same declaration written with the `%` that
+       makes it parse — so the two differ by one byte and must differ in `initialValue`. */
+    "@property --pmiss { syntax: \"<percentage>\"; inherits: false; initial-value: 0 }"
     "</style>"
     "</head><body><div id=cs1 style=\"margin-top: 4px\"></div><h1 id=dh>doch</h1>"
     "<script>var cfg = { admin: state.admin };"
@@ -347,8 +362,8 @@ static const char *HTML =
     "<script>var pss = document.styleSheets[1].cssRules;"
     "var pv = pss.length + '|' + pss[0].name + '|' + pss[0].syntax + '|' + pss[0].inherits + '|' +"
     " pss[0].initialValue + '|' + pss[0].type + '|' + pss[1].syntax + '|' + pss[1].inherits + '|' +"
-    " pss[1].initialValue + '|' + pss[2].syntax + '|' + pss[3].syntax;"
-    "fetch('/api/cssprop?v=' + (pv === '4|--pfull|<percentage>|false|0%|0|*|true|null|*|*'"
+    " pss[1].initialValue + '|' + pss[2].syntax + '|' + pss[3].syntax + '|' + pss[4].initialValue;"
+    "fetch('/api/cssprop?v=' + (pv === '5|--pfull|<percentage>|false|0%|0|*|true|null|*|*|null'"
     " ? 'CSSPROPOK' : 'CSSPROPBAD:' + pv));"
     "var pt = pss[0].cssText + '~' + pss[1].cssText;"
     "fetch('/api/csspropText?v=' + (pt === '@property --pfull { syntax: \"<percentage>\"; inherits: false;"
@@ -1964,6 +1979,27 @@ static const char *HTML_COLD =
     "if (cfg.admin) { fetch('/api/cold/admin?a=' + acc); }"                        /* the fork: two arms, two decision chains, and an endpoint per arm */
     " else { fetch('/api/cold/public?a=' + acc); }"
     "eval(\"'\" + state.code + \"'\");"                                            /* the @S sink: candidate sessions, hence 'c' records */
+    /* AND CODE THE PAGE SHIPPED AND NEVER CALLED, which is the one member of this frontier whose work a
+       decision vector cannot reproduce — a resume re-runs the document, and re-running the document is exactly
+       the run that never calls this. So it is what makes the park write an 'o' record and the resume rebuild a
+       drive out of one, and without it every arm of that round trip was unreachable from any process in this
+       tree: the three documents above had uncalled functions only in the EXPLORING one, which never parks.
+       THREE THINGS IN ONE BODY, each of them a different half of the round trip.
+         - A LOOP, so the drive is PREEMPTED on its back-edges and the parked drive is one with a live frame,
+           rather than a flow that happened to be sitting at its entry.
+         - A BRANCH ON ITS OWN ARGUMENT, which is unknown external input because nothing ever supplied one: the
+           arms fork, so several flows carry the SAME locator and the resume has to hand one body back to all
+           of them. Handing it to the first would starve the rest, and one arm is what a residue of one drive
+           cannot catch.
+         - A NESTED FUNCTION NOTHING CALLS EITHER, which is not an orphan yet — it has no closure until this
+           body runs, which is what quickjs's take describes and what driving the enclosing one produces. It
+           keeps the orphan set non-empty across the park moment below rather than leaving it a single body
+           that is taken once and gone. */
+    "function coldOrphan(q) {"
+      "var s = 0; for (var j = 0; j < 4; j++) { s += j; }"
+      "function coldOrphanInner(r) { fetch('/api/cold/orphan2?r=' + r + '&s=' + s); }"
+      "if (q) { fetch('/api/cold/orphanA?s=' + s); } else { fetch('/api/cold/orphanB?s=' + s); }"
+    "}"
     "</script>"
     "</body></html>";
 
@@ -5057,6 +5093,40 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int cold_resumed_any   = g_sess == SESS_RESUME && (g_cr.flows + g_cr.cands) > 0;
     int cold_resumed_segs  = g_sess == SESS_RESUME && g_cr.segs > 0;
     int cold_resumed_cand  = g_sess == SESS_RESUME && g_cr.cands > 0;
+    /* AND THE ARM THAT CARRIES CODE THE PAGE NEVER RAN. `park-orphan` says the residue names a FUNCTION and not
+       only paths; `resumed-orphan` says the rebuild turned that name back into a drive waiting for its body;
+       `resumed-orphan-met` says a take in this session actually handed one over, which is the only one of the
+       three that can distinguish a locator that works from a locator that merely round-trips as text.
+       AND THE FOURTH IS THE ONE THAT CANNOT BE PASSED BY A LOCATOR THAT NAMES THE WRONG THING: no waiting drive
+       FINISHED without a body. The document's uncalled function forks arms, so several flows carry ONE locator
+       and every one of them has to be handed the body — a route that satisfied the first and left the rest
+       would pass `resumed-orphan-met` and fail only here. It is the engine's own count, asked of it rather than
+       parsed back out of a log line. */
+    long orphan_met = 0, orphan_unmet = 0;
+    int cold_park_orphan, cold_res_orphan, cold_res_orphan_met, cold_res_orphan_all;
+
+    engine_orphan_claims(&orphan_met, &orphan_unmet);
+    cold_park_orphan    = g_sess == SESS_PARK && g_cp.orphans > 0;
+    cold_res_orphan     = g_sess == SESS_RESUME && g_cr.orphans > 0;
+    cold_res_orphan_met = g_sess == SESS_RESUME && orphan_met > 0;
+    cold_res_orphan_all = g_sess == SESS_RESUME && orphan_unmet == 0;
+    /* AND THE QUESTION A PEER ASKED, HANDED BACK RATHER THAN CARRIED. `park-remoteop` is the row about the
+       refusal that used to abort here: a park that MET a STARTED cross-agent operation — a program mid-run with
+       the zone's rendezvous token on its row — and returned it. A 0 is not a flake and not a reason to soften
+       the row: it says the park moment did not contain one, and the moment is chosen in fixture_cold_moment,
+       which is where a fix for it belongs.
+       `park-remoteop-once` is the LAST-HOLDER rule, and it is the only one of the two that a per-flow hand-back
+       would fail. engine_perform attaches one question to EVERY live timeline, so a notice per holder would be
+       one hand-back repeated once per member — and worse than noisy: the zone would be told to forget a token
+       a surviving timeline is about to answer under, which its own assert catches one seam away from the engine
+       that caused it. One question asked, many holders, exactly one notice, and `flows > 1` is what makes the
+       `back == 1` half say something. */
+    long retract_flows = 0, retract_started = 0, retract_back = 0;
+    int cold_park_remoteop, cold_park_remoteop_once;
+
+    engine_retract_census(&retract_flows, &retract_started, &retract_back);
+    cold_park_remoteop      = g_sess == SESS_PARK && retract_started > 0;
+    cold_park_remoteop_once = g_sess == SESS_PARK && retract_flows > 1 && retract_back == 1;
     /* AND THE REPLAY REACHED ITS SINK AGAIN — the strongest thing a resumed residue can be asked to say, and a
        correction of what this row used to ask. It read BOTH ARMS of the branch out of the @H surface, and that
        is a statement about a program this session does not run: the moment fixture_want_park picks is the moment
@@ -5221,6 +5291,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "resumed-segs", cold_resumed_segs, "state.code", SESS_RESUME },
         { "resumed-cand", cold_resumed_cand, "state.code", SESS_RESUME },
         { "resumed-fired", cold_fired, "state.code", SESS_RESUME },
+        /* THE 'o' ARM AT BOTH ENDS. Keyed on the uncalled function itself, because a key is a substring of the
+           PROGRAM and this row is a statement about that function and nothing else. */
+        { "park-orphan", cold_park_orphan, "coldOrphan", SESS_PARK },
+        { "resumed-orphan", cold_res_orphan, "coldOrphan", SESS_RESUME },
+        { "resumed-orphan-met", cold_res_orphan_met, "coldOrphan", SESS_RESUME },
+        { "resumed-orphan-all", cold_res_orphan_all, "coldOrphan", SESS_RESUME },
+        /* KEYED ON THE FORK, because that is the program text these two statements are about. A peer's question
+           is asked by the host and no document contains it — but what makes the hand-back a mechanism rather
+           than a single free() is that ONE question is held by MANY timelines, and this is the line that makes
+           this document have many. */
+        { "park-remoteop", cold_park_remoteop, "cfg.admin", SESS_PARK },
+        { "park-remoteop-once", cold_park_remoteop_once, "cfg.admin", SESS_PARK },
     };
     /* WHICH ROWS THIS INVOCATION CARRIES — its SESSION, and whether its document contains the statement. */
     int n = 0;
@@ -5389,11 +5471,76 @@ static int fixture_have_answers(void) {
  * IT CANNOT RACE THE DRIVE'S EXECUTION, which is why the preview is the right thing to ask: `orphan` is set
  * when the flow is ASSEMBLED, so this is true from the instant a drive is seeded and does not depend on it
  * having reached anything. */
-static int fixture_want_park(void) {
+/* AND THE THIRD HALF OF THE MOMENT, WHICH NO DOCUMENT CAN PUT THERE. A cross-agent OPERATION arrives from
+ * another instance, so the frontier only holds one if a peer asked — and a park taken with one outstanding is
+ * the state cold_park_flow REFUSED (with an abort, which killed the renderer and discarded every finding) until
+ * the hand-back was built. Nothing in this tree could reach that state: this fixture is one instance, and every
+ * host that can provision a second is a corpus runner. So the fixture stands in for the peer, which is exactly
+ * what world_registry_selftest already does one component down.
+ * THE MOMENT IS LATCHED, AND THE LATCH IS THE POINT rather than a convenience. The residue condition is a
+ * property of a LIVE frontier — a candidate set drains — so a park that waits for two independent facts to be
+ * true at the same instant can wait forever, and the run then hangs rather than failing a row. Once the residue
+ * has been seen to hold what the park is a statement about, that stays a fact about this run.
+ * IT IS ASKED AT THE MOMENT AND PARKED TWO CONSULTATIONS LATER, and the gap is what makes the exercise real
+ * rather than hoped: engine_perform attaches the question to EVERY live timeline, the scheduler turns it into a
+ * program on whichever flow it picks next, and only then does a member hold a STARTED operation. Parking on the
+ * ask alone would meet the QUEUED half — the one that was already handed back — and never the started one. */
+static int g_cold_moment, g_op_asked;
+
+static int fixture_cold_moment(void) {
     ColdPreview would;
 
-    cold_park_preview(&would);
-    return would.deepcands > 0 && would.orphans > 0;
+    /* THE SESSION THAT PARKS IS THE ONLY ONE WITH A PEER, asked of `g_sess` rather than of a second flag: the
+       provider runs in all three, and which session this is is already stated once. */
+    if (!g_cold_moment && g_sess == SESS_PARK) {
+        cold_park_preview(&would);
+        g_cold_moment = would.deepcands > 0 && would.orphans > 0;
+    }
+    return g_cold_moment;
+}
+
+/* THE QUESTION, ASKED ONCE, THROUGH THE PRODUCTION DOOR. `windowproxy.get … length` is HTML §7.2.1.3.1
+   "CrossOriginProperties ( O )"'s `{ [[Property]]: "length", [[NeedsGetter]]: true }` — a member a cross-origin
+   WindowProxy really does expose — and §7.2.2.2 "Indexed access on the Window object" says what answering it
+   costs ("The length getter steps are to return this's associated Document's document-tree child navigables's
+   size"), which is why it is the cheapest real operation to ask: it reads, it allocates no navigable, and it
+   cannot fork. */
+static void fixture_ask_remote_op(JSContext *ctx) {
+    WorldId peer = { world_doc_intern("opeer"), 1, 0 };
+    const char *const *carried;
+    const char *vector = NULL;
+    char rec[512];
+    int n, i;
+
+    if (g_op_asked) return;
+    g_op_asked = 1;
+    /* THE PEER'S WORLD IN THE ONE WIRE FORM THERE IS. `world_serialize` refuses a world this instance did not
+       mint — correctly: only the minting instance holds the fork edges — so a fixture standing in for a peer
+       cannot call it, and composing the text here would be the second spelling of a grammar html_iframe.c was
+       already caught writing twice. The segment table holds the vector its own writer produced, so the arrival
+       is performed first (which is what a real one does) and the text is read back out of it. */
+    world_segment(ctx, peer, NULL, 0);
+    n = world_segments_park(&carried);
+    for (i = 0; i < n; i++) {
+        WorldId back;
+        const WorldId *anc;
+
+        world_parse(carried[i], &back, &anc);
+        if (world_eq(back, peer)) { vector = carried[i]; break; }
+    }
+    CHECK(vector != NULL,
+          "the peer world this fixture just materialized is not in the segment table it was materialized into "
+          "— the operation below would name a timeline this instance does not hold, and the park's own "
+          "hand-back would be exercised against a question no flow was ever given");
+    snprintf(rec, sizeof rec, "windowproxy.get\t%s\t%s\tlength", world_doc_name(world_local_doc()), vector);
+    /* THE TOKEN IS THE TRUSTED ZONE'S NAME and this fixture is standing in for the zone, so it mints one. It is
+       the thing that may never enter a recipe (solver/engine.h), which is the whole reason the park hands the
+       question back instead of carrying it. */
+    engine_perform(ctx, "tf-remoteop", rec);
+}
+
+static int fixture_want_park(void) {
+    return fixture_cold_moment() && engine_operations_started() > 0;
 }
 
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
@@ -5777,15 +5924,22 @@ int main(int argc, char **argv) {
            with the frontier it belongs to, so a store written after it would be written from freed memory —
            and the residue is the only remaining copy of every flow in it. */
         if (cold_park_path) tf_park_store(cold_park_path, recipes);
-        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,"
+        printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
                "\"bytes\":%zu,\"store\":\"%s\"}\n",
-               cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, strlen(recipes),
+               cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, strlen(recipes),
                cold_park_path ? cold_park_path : "-");
     }
     if (cold_resume_path) {
+        long met = 0, unmet = 0;
+
         cold_resumed(&g_cr);
-        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld}\n",
-               g_cr.segs, g_cr.flows, g_cr.cands);
+        /* THE REBUILD AND WHAT BECAME OF IT ON ONE LINE. `orphans` is what the residue named; `met` is how many
+           of those waits a take satisfied and `unmet` how many finished with nothing — the pair says whether
+           the locator found anything, which the rebuild count alone cannot. */
+        engine_orphan_claims(&met, &unmet);
+        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
+               "\"orphansMet\":%ld,\"orphansUnmet\":%ld}\n",
+               g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, met, unmet);
     }
 
     /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the
