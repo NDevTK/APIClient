@@ -593,7 +593,7 @@ static void queue_derived(void *user, const char *breakout) {
        probe that re-reaches the sink on another arm — finds it already held. A second capture would leak the
        first blob's segment reference and would replace a path that reached the sink with another that also
        did, which is not an improvement to trade a leak for. */
-    if (!e->reinject) e->reinject = decide_fork_same_path();
+    if (!e->reinject) e->reinject = decide_freeze_path();
     push_breakout(e, breakout);
 }
 

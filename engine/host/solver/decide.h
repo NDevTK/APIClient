@@ -102,6 +102,21 @@ long        decide_fork_total(void);
  * N-way outcome slot solver_outcome's own DCHECK already names. */
 void *decide_fork_same_path(void);
 
+/* THE SAME FREEZE WITH NO FRONTIER MEMBER BEHIND IT — for a caller that wants the running flow's PATH and is
+ * not minting a flow to stand on it.
+ * IT IS NOT A VARIANT OF THE CALL ABOVE, IT IS THE OTHER HALF OF WHAT THAT CALL DOES. decide_fork_same_path
+ * freezes the head AND counts a fork, because §census defines the frontier's provenance as
+ * `created = 1 + forks + candidates + joined documents + cold resumes` and every sibling it mints is a member
+ * of that sum. A caller that takes the blob and creates NO flow makes that identity false by one — and the
+ * comment on the count says exactly what a wrong term costs a reader: "a sum labelled with one of its terms is
+ * a number that means whichever term the reader had in mind". The @S re-injection point is that caller: it
+ * holds a path so that candidates SEEDED LATER can replay it, and those candidates are already counted as
+ * candidates. Counting them again as forks would double them in the one identity that says where the frontier
+ * came from.
+ * Refcounting is identical — the returned blob carries the caller's reference on the frozen segment, released
+ * with decide_blob_free — and so is the cursor. */
+void *decide_freeze_path(void);
+
 /* Swap the running decision state when the scheduler interleaves flows: suspend snapshots the evolving vector
    + cursor of the paused flow; resume restores them + re-binds the flow's fn. */
 void *decide_suspend(void);

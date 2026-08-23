@@ -587,6 +587,21 @@ void *decide_fork_same_path(void) {
     return b;
 }
 
+/* See decide.h. The freeze and the reference are the fork's; the CENSUS ENTRY is not, because no member of the
+   frontier is being made. Written as its own function rather than a flag on the one above so that neither
+   caller can be read as the other's special case: one mints a flow, one records a path. */
+void *decide_freeze_path(void) {
+    DecideBlob *b;
+
+    DCHECK(g_running, "a flow's path was frozen while no flow's decision state was loaded — the blob would "
+                      "stand on whatever chain the previously-switched-in flow left behind, and every "
+                      "candidate seeded from it would replay a path no flow ever took");
+    b = reclaim_malloc(sizeof *b); CHECK(b, "decide: OOM freezing a flow's decision path");
+    b->seg = dec_freeze();   /* the caller's reference, on top of the running flow's own */
+    b->c = g_c;
+    return b;
+}
+
 /* THE PREDICATE'S IDENTITY, which is what the flow's constraint is keyed by.
  *
  * IT IS THE IDENTITY OF THE VALUE THE BRANCH TESTS, and that one sentence is the whole rule — there is no
