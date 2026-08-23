@@ -35,6 +35,49 @@
  * nothing to sense and nothing to invent: a constructed event's coordinates are the ones it was constructed
  * with, in a browser with a mouse exactly as here.
  *
+ * AND THE COORDINATE FAMILY IS NOT ALL ONE SPEC'S, WHICH IS THE PART THAT DECIDES WHERE EACH ONE IS DERIVED
+ * FROM. Three standards put attributes on this interface and each names a different source of truth:
+ *
+ *   CSSOM VIEW §10 "Extensions to the MouseEvent Interface" adds `pageX`, `pageY`, `x`, `y`, `offsetX` and
+ *   `offsetY` — all six DERIVED, none of them stored, and each stated as an algorithm over values this object
+ *   or the viewport already has. It redefines `screenX`/`screenY`/`clientX`/`clientY` as `double` where
+ *   Pointer Events 4 declares them `long`, and flags that clash as an OPEN ISSUE in its own text ("the object
+ *   IDL fragment redefines some members. Can we resolve this somehow?"), so the declaration above is left as
+ *   the one this file has always made and the divergence is a question for the specs rather than a fact to
+ *   pick a side of here.
+ *
+ *   POINTER LOCK 2.0 §6 "Extensions to the MouseEvent Interface" adds `movementX` and `movementY`, and its §7
+ *   "Extensions to the MouseEventInit Dictionary" adds `double movementX = 0` / `double movementY = 0`. They
+ *   are NOT CSSOM VIEW's and putting them there would be a citation that sends the next reader to a section
+ *   which does not mention them. They are STORED, like `clientX`: §6 states "the un-initialized value of
+ *   movementX and movementY must be 0" and §7 declares the members that override it, so this engine answers
+ *   them exactly as a browser with a mouse does for a constructed event — the deltas a real pointer would have
+ *   produced are the ones the constructor was given, and there is no device in the derivation either way.
+ *
+ *   INPUT DEVICE CAPABILITIES adds `sourceCapabilities` to UIEvent, not to this interface, and it is ABSENT.
+ *   See ui_event.c.
+ *
+ * WHY `pageX` HAS ONE EXPRESSION AND NOT TWO BRANCHES. §10 writes it as three steps: with the dispatch flag
+ * set, the coordinate of the position where the event occurred "relative to the origin of the INITIAL
+ * CONTAINING BLOCK"; otherwise `scrollX` plus `clientX`. Those are the SAME NUMBER by CSSOM VIEW's own two
+ * definitions and not by anything this engine models: §10 defines `clientX` as that same position "relative to
+ * the origin of the VIEWPORT", and §4 defines `scrollX` as "the x-coordinate, RELATIVE TO THE INITIAL
+ * CONTAINING BLOCK ORIGIN, of the left of the viewport" — which is precisely the vector between the two
+ * origins. So step 1 is `clientX + scrollX` written in the other frame, the split exists because a real user
+ * agent has a hit-test result at dispatch time that is more precise than the `long` it reported, and an `if`
+ * over the dispatch flag here would be two spellings of one derivation with one chance to disagree.
+ *
+ * `offsetX` AND `offsetY` ARE THE TWO OF §10's SIX THAT ARE NOT HERE, and the reason is a POSITION and not a
+ * policy. Their step 2 is `pageX`, which this file now has; their step 1, taken whenever the dispatch flag is
+ * set — which is every read inside a listener, and therefore every read a library makes — is the position
+ * "relative to the origin of the PADDING EDGE of the target node". That needs three things this engine does
+ * not yet put in one place: DOM §2.9's `target` read out to C (event.c stores it and exposes no getter),
+ * core/layout/flow_position.h's border-box origin for the target's box (which places in-flow block-level boxes
+ * and crashes by name for a float, an out-of-flow box and an INLINE one — the last being most of what a page
+ * clicks), and §8.1's leading border to reach the padding edge from it. And §10 states no answer at all for a
+ * target that generates no box — a Document, a Window, a `display: none` element — which is a gap in the spec
+ * and not in this engine, so it is a question to settle before a member is installed rather than after.
+ *
  * `layerX`/`layerY` HAVE NO INIT MEMBER — the IDL declares the attributes and no dictionary member for them,
  * so their value is the un-initialized 0 for every event that is not produced by a hit-test against a laid-out
  * box. They are slots like every other attribute, written at creation, so the native-input path writes them
@@ -64,6 +107,7 @@
 #include "core/events/event_target.h"
 #include "core/events/mouse_event.h"
 #include "core/events/ui_event.h"
+#include "core/frame/viewport.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -190,6 +234,12 @@ static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
        written is the un-initialized value the spec states for them. */
     JS_SetPropertyStr(ctx, slots, "layerX", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, slots, "layerY", JS_NewInt32(ctx, 0));
+    /* Pointer Lock 2.0 §7's two `double` members over §6's two attributes, whose un-initialized value §6
+       states as 0 — which is the dictionary's own default, so there is one number and no second table. */
+    JS_SetPropertyStr(ctx, slots, "movementX",
+                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "movementX")));
+    JS_SetPropertyStr(ctx, slots, "movementY",
+                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "movementY")));
     JS_SetPropertyStr(ctx, slots, "button", JS_NewInt32(ctx, md_button_of(ctx, init)));
     JS_SetPropertyStr(ctx, slots, "buttons", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "buttons")));
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
@@ -229,9 +279,11 @@ JSValue mouse_event_new(JSContext *ctx)
 
 /* ---- the attributes ----------------------------------------------------------------------------------------- */
 
-enum { MD_SCREEN_X = 0, MD_SCREEN_Y, MD_CLIENT_X, MD_CLIENT_Y, MD_LAYER_X, MD_LAYER_Y, MD_BUTTON, MD_BUTTONS };
+enum { MD_SCREEN_X = 0, MD_SCREEN_Y, MD_CLIENT_X, MD_CLIENT_Y, MD_LAYER_X, MD_LAYER_Y, MD_BUTTON, MD_BUTTONS,
+       MD_MOVEMENT_X, MD_MOVEMENT_Y };
 static const char *const MD_SLOT[] = {
     "screenX", "screenY", "clientX", "clientY", "layerX", "layerY", "button", "buttons",
+    "movementX", "movementY",
 };
 
 static JSValue js_md_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -247,6 +299,47 @@ static JSValue js_md_get(JSContext *ctx, JSValueConst this_val, int magic)
     v = JS_GetPropertyStr(ctx, slots, MD_SLOT[magic]);
     JS_FreeValue(ctx, slots);
     return v;
+}
+
+/* CSSOM VIEW §10's `pageX`/`pageY` — the ONE derivation their three steps state; see the file comment for why
+   the dispatch-flag branch is not a second expression. `magic` is MD_CLIENT_X or MD_CLIENT_Y: the coordinate
+   this member is the page-relative form OF, so the axis and the operand are ONE fact here rather than two that
+   a later edit could pair the wrong way round. */
+static JSValue js_md_get_page(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue slots = md_slots(ctx, this_val), v;
+    JSContext *view;
+    double client = 0.0, offset;
+
+    DCHECK(magic == MD_CLIENT_X || magic == MD_CLIENT_Y,
+           "a §10 page coordinate was declared over a slot that is not one of the two client coordinates its "
+           "steps add the scroll offset to");
+    if (!JS_IsObject(slots)) {
+        JS_FreeValue(ctx, slots);
+        return JS_ThrowTypeError(ctx, "a MouseEvent attribute was read on something that is not one");
+    }
+    v = JS_GetPropertyStr(ctx, slots, MD_SLOT[magic]);
+    JS_FreeValue(ctx, slots);
+    /* TWO-SIDED, and it is the seam this member sits on. The sum below runs on the EXAMPLE, in C, which is
+       right exactly while the slot holds a number the declaration computed. The day a concolic reaches this
+       slot — the day MouseEventInit's coordinates carry unknown external input across their conversion — the
+       sum must stop being C arithmetic and be minted through core/frame/viewport.h's one seam instead, or the
+       domain is dropped at the `+`. This is where that day is noticed. */
+    DCHECK(JS_IsNumber(v),
+           "a MouseEvent's client coordinate slot holds something that is not a number — CSSOM VIEW §10's page "
+           "coordinate sums it in C, so a value carrying a domain would be collapsed to its example here");
+    JS_ToFloat64(ctx, &client, v);
+    JS_FreeValue(ctx, v);
+    /* "Let offset be the value of the scrollX attribute of the event's ASSOCIATED WINDOW OBJECT, if there is
+       one, or zero otherwise." UI Events §3.2.1's `view` is that Window — it is the only Window a UIEvent is
+       associated with — and the ATTRIBUTE is what is invoked, not the derivation under it, because §2 says an
+       algorithm said to call an attribute must invoke its internal API. `viewport_window_scroll` is that
+       attribute whole, including its own "or zero if there is no viewport", which is a DIFFERENT absence from
+       this step's "if there is one" and must not be folded into it: an event with a `view` whose document is no
+       longer presented has a Window and no viewport. */
+    view = ui_event_view_realm(ctx, this_val);
+    offset = view ? viewport_window_scroll(view, /*vertical*/ magic == MD_CLIENT_Y) : 0.0;
+    return JS_NewFloat64(ctx, offset + client);
 }
 
 /* §2.2's relatedTarget, read off the EVENT — the value §2.9 step 4 retargets. */
@@ -299,8 +392,9 @@ static JSValue js_md_get_modifier_state(JSContext *ctx, JSValueConst this_val, i
  * THE ARGUMENT LIST IS THE SPEC'S, IN ITS ORDER, AND IT IS NOT THE ATTRIBUTE ORDER. The four modifiers arrive
  * ctrl, ALT, SHIFT, meta — a different order from the one §3.5.3 pairs the attributes in, and from the one
  * MD_MODIFIER is written in — so the pairing is stated once, below, rather than being read off a table that
- * means something else. `buttons`, `layerX` and `layerY` have no argument here and are left exactly as they
- * were, which is what an argument list that does not name them means.
+ * means something else. `buttons`, `layerX`, `layerY` and Pointer Lock 2.0 §6's `movementX`/`movementY` have no
+ * argument here and are left exactly as they were, which is what an argument list that does not name them
+ * means — and Pointer Lock declares no legacy initializer of its own to write them either.
  *
  * `short buttonArg` is declared IDL_UNSIGNED_SHORT and folded, for the reason md_button_fold gives: the pool
  * declares no `short`, and Web IDL §3.2.4.3's two halves are the modulo (the declaration's) and the signed fold (this
@@ -383,6 +477,11 @@ static const IdlDictMember MD_INIT[] = {
     EVENT_MODIFIER_INIT_MEMBERS,
     { "button", IDL_UNSIGNED_SHORT, false, NULL, 3 }, { "buttons", IDL_UNSIGNED_SHORT, false, NULL, 3 },
     { "clientX", IDL_LONG, false, NULL, 3 }, { "clientY", IDL_LONG, false, NULL, 3 },
+    /* Pointer Lock 2.0 §7's two members. A PARTIAL DICTIONARY's members are members of the dictionary itself,
+       so they sort among MouseEventInit's OWN at level 3 — between `clientY` and `relatedTarget` — and not in
+       a block of their own after them. Which spec contributed a member is not something §3.2.17's read order
+       can see. */
+    { "movementX", IDL_DOUBLE, false, NULL, 3 }, { "movementY", IDL_DOUBLE, false, NULL, 3 },
     { "relatedTarget", IDL_ANY, false, NULL, 3 },
     { "screenX", IDL_LONG, false, NULL, 3 }, { "screenY", IDL_LONG, false, NULL, 3 },
 };
@@ -406,6 +505,18 @@ static const JSCFunctionListEntry js_md_proto[] = {
     JS_CGETSET_MAGIC_DEF("screenY", js_md_get, NULL, MD_SCREEN_Y),
     JS_CGETSET_MAGIC_DEF("clientX", js_md_get, NULL, MD_CLIENT_X),
     JS_CGETSET_MAGIC_DEF("clientY", js_md_get, NULL, MD_CLIENT_Y),
+    /* CSSOM VIEW §10: "the x attribute must return the value of clientX" and "the y attribute must return the
+       value of clientY". An ALIAS, stated by the spec as one — so it is the same getter over the same slot,
+       and there is no second value to keep in step or to disagree about `layerX`-style un-initialization. */
+    JS_CGETSET_MAGIC_DEF("x", js_md_get, NULL, MD_CLIENT_X),
+    JS_CGETSET_MAGIC_DEF("y", js_md_get, NULL, MD_CLIENT_Y),
+    /* §10's page coordinates, DERIVED — the axis is named by the client coordinate each one is built on. */
+    JS_CGETSET_MAGIC_DEF("pageX", js_md_get_page, NULL, MD_CLIENT_X),
+    JS_CGETSET_MAGIC_DEF("pageY", js_md_get_page, NULL, MD_CLIENT_Y),
+    /* Pointer Lock 2.0 §6's two, STORED — §7 declares the dictionary members that fill them and §6 states the
+       un-initialized 0 they otherwise carry, so they are slots exactly as `clientX` is. */
+    JS_CGETSET_MAGIC_DEF("movementX", js_md_get, NULL, MD_MOVEMENT_X),
+    JS_CGETSET_MAGIC_DEF("movementY", js_md_get, NULL, MD_MOVEMENT_Y),
     JS_CGETSET_MAGIC_DEF("layerX", js_md_get, NULL, MD_LAYER_X),
     JS_CGETSET_MAGIC_DEF("layerY", js_md_get, NULL, MD_LAYER_Y),
     JS_CGETSET_MAGIC_DEF("button", js_md_get, NULL, MD_BUTTON),

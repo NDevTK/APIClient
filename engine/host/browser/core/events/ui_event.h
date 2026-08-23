@@ -36,6 +36,23 @@ bool ui_event_is(JSContext *ctx, JSValueConst v);
    Answers JS_NULL, an owned dup, or JS_EXCEPTION with the TypeError live. */
 JSValue ui_event_view_of(JSContext *ctx, JSValueConst v);
 
+/* §3.2.1's `view` AS THE REALM IT NAMES — the answer to "the event's associated Window object, IF THERE IS ONE"
+ * that CSSOM VIEW §10's `pageX`/`pageY` step 2 asks, resolved to the JSContext every per-realm fact about that
+ * Window is answered out of. NULL is the "or zero otherwise" arm and is a POSITIVE statement: the IDL's
+ * `Window? view = null` means an event constructed without one has no Window, not that its Window is unknown.
+ *
+ * IT IS HERE RATHER THAN AT THE MEMBER THAT NEEDS IT because `view` is THIS interface's slot and the mapping
+ * from a Window value to its realm is this interface's business twice over: `ui_event_view_of` is what put
+ * either shape in the slot, so the two functions are the two halves of one type and a second reader that
+ * re-derived the mapping could disagree with the writer about which shapes are admissible.
+ *
+ * THE VIEWPORT IS PER REALM AND THAT IS THE WHOLE POINT — a child navigable's is 300 CSS pixels wide and the
+ * top-level traversable's is 1280 (core/frame/viewport.h) — so `new MouseEvent('m', {view: frame.contentWindow})`
+ * must be answered out of the FRAME's realm however the getter was reached. A member that read the running
+ * realm instead would be the module-static defect CLAUDE.md names, with the wrong answer sourced from whichever
+ * realm's prototype the call happened to go through. */
+JSContext *ui_event_view_realm(JSContext *ctx, JSValueConst ev);
+
 /* §6.1.1's initUIEvent, AS THE PREFIX EVERY LEGACY INITIALIZER SHARES. All three of them — initUIEvent,
    Pointer Events 4's initMouseEvent and §6.1.2's initKeyboardEvent — begin with the same four arguments and
    the same sentence ("this method has the same behavior as initEvent()", then `view`), so it is one
@@ -101,5 +118,9 @@ JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueCons
    value. Shared by the three interfaces because all three read integer members the same way. */
 int32_t  ui_event_dict_i32(JSContext *ctx, JSValueConst init, const char *name);
 uint32_t ui_event_dict_u32(JSContext *ctx, JSValueConst init, const char *name);
+/* A `double` member, read the same way and for the same reason — Pointer Lock 2.0 §7's `movementX`/`movementY`
+   are `double` where §"Interface MouseEvent"'s coordinates are `long`, and the type a member is DECLARED with
+   is what the conversion already ran, so the read back out must not narrow it a second time. */
+double   ui_event_dict_f64(JSContext *ctx, JSValueConst init, const char *name);
 
 #endif

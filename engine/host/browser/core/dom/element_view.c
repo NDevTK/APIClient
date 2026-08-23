@@ -196,13 +196,11 @@ static JSValue ev_env_long(JSContext *ctx, const EvTarget *t, const char *member
     return viewport_env_value(t->dctx, member, ev_long(ctx, v));
 }
 
-/* THE `scrollX`/`scrollY` ATTRIBUTES' OWN ANSWER, which four of the steps below invoke by name: the viewport's
-   scroll position, "or zero if there is no viewport". */
-static double ev_window_scroll(JSContext *dctx, bool vertical)
-{
-    if (!viewport_exists(dctx)) return 0.0;
-    return vertical ? viewport_scroll_y(dctx) : viewport_scroll_x(dctx);
-}
+/* THE `scrollX`/`scrollY` ATTRIBUTES' OWN ANSWER, which four of the steps below invoke by name, is
+   `viewport_window_scroll` — the component that owns the derivation owns the member's "or zero if there is no
+   viewport" with it. It was a private static here, and a THIRD caller (CSSOM VIEW §10's `pageX`/`pageY` step 2,
+   which invokes the attribute in those words) is what said so: §2 requires an algorithm that calls an attribute
+   to invoke its internal API, and an internal API each caller re-states is not one API. */
 
 bool element_view_has_box(const lxb_dom_node_t *n)
 {
@@ -312,10 +310,10 @@ static JSValue ev_scroll_position(JSContext *ctx, const EvTarget *t, bool vertic
     /* step 4 */
     if (t->is_root && t->quirks) return JS_NewFloat64(ctx, 0.0);
     /* step 5 */
-    if (t->is_root) return JS_NewFloat64(ctx, ev_window_scroll(t->dctx, vertical));
+    if (t->is_root) return JS_NewFloat64(ctx, viewport_window_scroll(t->dctx, vertical));
     /* step 6 */
     if (t->is_body && t->quirks && ev_not_potentially_scrollable_in_some_axis(t))
-        return JS_NewFloat64(ctx, ev_window_scroll(t->dctx, vertical));
+        return JS_NewFloat64(ctx, viewport_window_scroll(t->dctx, vertical));
     /* step 7 */
     if (!t->has_box) return JS_NewFloat64(ctx, 0.0);
     /* step 8 */
@@ -363,9 +361,9 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
        scrolls the window, step 10 terminates), and the condition between them is now decided rather than
        approximated by the body's box existence, which is only the first of the definition's three conditions. */
     if (t.is_root || (t.is_body && t.quirks && ev_not_potentially_scrollable_in_some_axis(&t))) {
-        double req = unknown ? ev_window_scroll(t.dctx, vertical) : v;
-        double x = vertical ? ev_window_scroll(t.dctx, false) : req;
-        double y = vertical ? req : ev_window_scroll(t.dctx, true);
+        double req = unknown ? viewport_window_scroll(t.dctx, vertical) : v;
+        double x = vertical ? viewport_window_scroll(t.dctx, false) : req;
+        double y = vertical ? req : viewport_window_scroll(t.dctx, true);
 
         viewport_scroll(t.dctx, x, y);
         return JS_UNDEFINED;
@@ -532,8 +530,8 @@ static void ev_border_area_px(const EvTarget *t, CssPx out[4])
     CssPx w = used_value_border_edge_px(el, false);
     CssPx h = used_value_border_edge_px(el, true);
     FlowPoint o = flow_border_box_origin(el);
-    CssPx x = css_px_sub(o.x, css_px(ev_window_scroll(t->dctx, false)));
-    CssPx y = css_px_sub(o.y, css_px(ev_window_scroll(t->dctx, true)));
+    CssPx x = css_px_sub(o.x, css_px(viewport_window_scroll(t->dctx, false)));
+    CssPx y = css_px_sub(o.y, css_px(viewport_window_scroll(t->dctx, true)));
 
     /* Step 3's FIRST CONSTRAINT, and the last term of the rectangle this engine does not have. */
     DFAIL("CSSOM VIEW §6's getClientRects() step 3 states its first constraint as 'Apply the transforms that "

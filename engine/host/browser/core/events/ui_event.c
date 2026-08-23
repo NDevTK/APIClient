@@ -27,6 +27,24 @@
  * property write is captured by the COW delta, so the event's state time-travels with the flow that made it,
  * and the symbol is a brand a page cannot forge.
  *
+ * `sourceCapabilities` IS NOT UI EVENTS' AND LOOKING FOR IT HERE IS WHY THIS PARAGRAPH EXISTS. The flattened
+ * IDL files it under UIEvent, and the UI Events draft contains neither that name nor `InputDeviceCapabilities`
+ * anywhere in its text. It is the INPUT DEVICE CAPABILITIES specification's, whose editor's draft numbers no
+ * sections and whose §"Extensions to the UIEvent interface and UIEventInit dictionary" states the whole of it:
+ *
+ *     partial interface UIEvent   { readonly attribute InputDeviceCapabilities? sourceCapabilities; };
+ *     partial dictionary UIEventInit { InputDeviceCapabilities? sourceCapabilities = null; };
+ *
+ * SO IT IS NOT A MEMBER TO ADD HERE, IT IS AN INTERFACE TO BUILD ELSEWHERE FIRST. §"The InputDeviceCapabilities
+ * interface" declares a CONSTRUCTIBLE interface with two boolean attributes filled from a dictionary
+ * (`firesTouchEvents`, `pointerMovementScrolls`), which is a real component with real state and no device
+ * behind it — `input_device_capabilities.c`, beside this file, with its own per-realm prototype and interface
+ * object. Only once that type exists can this slot hold anything, because the member's TYPE is that interface
+ * and a `[NewObject]`-less nullable interface member has exactly two values a page can tell apart: an instance
+ * of it and null. Installing the attribute before the interface would make `null` the only answer it could
+ * ever give, and the spec's own null means "no input device was responsible" — a POSITIVE statement about a
+ * resize event, indistinguishable from an engine that cannot express anything else.
+ *
  * WHY EventModifierInit IS HERE AND NOT IN EITHER SUBCLASS. It is a `dictionary EventModifierInit : UIEventInit`
  * that MouseEvent and KeyboardEvent BOTH derive from, and both declare `getModifierState()` and
  * ctrlKey/shiftKey/altKey/metaKey over the one internal key modifier state it fills. Putting it in either
@@ -141,6 +159,17 @@ uint32_t ui_event_dict_u32(JSContext *ctx, JSValueConst init, const char *name)
     return n;
 }
 
+double ui_event_dict_f64(JSContext *ctx, JSValueConst init, const char *name)
+{
+    JSValue v = idl_dict_get(ctx, init, name);
+    double n = 0.0;
+
+    if (!JS_IsUndefined(v))
+        JS_ToFloat64(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
 /* `Window?` — Web IDL §3.2.15 over the `view` member and over every legacy initializer's `viewArg`. null and
    undefined are the IDL null; a Window (which in this engine is the realm's global, and is also what `window`
    hands a page) crosses as itself; anything else matches the type not at all, which is Web IDL's own TypeError
@@ -152,6 +181,52 @@ JSValue ui_event_view_of(JSContext *ctx, JSValueConst v)
     if (window_proxy_is_window(ctx, v))
         return JS_DupValue(ctx, v);
     return JS_ThrowTypeError(ctx, "a UIEvent's `view` must be a Window or null");
+}
+
+/* §3.2.1's `view`, RESOLVED TO ITS REALM — see ui_event.h for why the resolution lives beside the conversion
+   that wrote the slot. NULL is the IDL null and is a statement, never an absence. */
+JSContext *ui_event_view_realm(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = ue_slots(ctx, ev), view;
+    JSContext *realm;
+    bool own_global;
+
+    DCHECK(JS_IsObject(slots),
+           "a UIEvent's `view` was asked for as a realm on something with no UIEvent slots — the interface that "
+           "declares the member reading it brand-checks its own receiver first, which is what makes this "
+           "impossible");
+    view = JS_GetPropertyStr(ctx, slots, "view");
+    JS_FreeValue(ctx, slots);
+    if (JS_IsNull(view)) {
+        JS_FreeValue(ctx, view);
+        return NULL;
+    }
+    /* A WindowProxy NAMES A NAVIGABLE, so the realm is that navigable's active document's — and asking for it
+       CRASHES when the navigable belongs to another WASM instance, which is the correct crash and not a gap
+       this member may route around: a cross-instance read is a SUSPEND of the reading flow, and a C activation
+       inside a getter is exactly where CLAUDE.md §Security says an answer that has to suspend cannot be
+       produced by reading a property from C. */
+    if (window_proxy_is(view)) {
+        realm = window_proxy_realm(ctx, view);
+        JS_FreeValue(ctx, view);
+        DCHECK(realm != NULL,
+               "a WindowProxy this agent holds resolved to no realm — window_proxy_realm materializes the "
+               "active document's realm and crashes for a peer's, so a NULL here is a third state neither of "
+               "those two produces");
+        return realm;
+    }
+    /* The only other shape ui_event_view_of admits is a realm's OWN GLOBAL, and it admits one only for the
+       realm it is asked in — so when this holds, `ctx` IS that Window's realm and nothing else can be. */
+    own_global = window_proxy_is_window(ctx, view);
+    JS_FreeValue(ctx, view);
+    DCHECK(own_global,
+           "a UIEvent's `view` is a Window that is neither a WindowProxy nor THIS realm's global, and a bare "
+           "global carries no route back to the realm it belongs to. It reaches here when a `view` set in one "
+           "realm is read through another realm's prototype. THE MISSING PRIMITIVE IS A Window -> JSContext MAP "
+           "FOR A REALM'S OWN GLOBAL — a WindowProxy already has one (window_proxy_realm) because it names a "
+           "navigable, and a global does not. Answering with the RUNNING realm would report the reader's "
+           "viewport as the event's Window's, which is the one-fact-answered-from-one-place defect itself");
+    return ctx;
 }
 
 /* THE KEY MODIFIER STATE as its own record: a null-prototype object whose keys are the key modifier names that

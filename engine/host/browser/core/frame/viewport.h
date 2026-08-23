@@ -145,6 +145,18 @@ JSValue viewport_env_derived(CssPx len, JSValue computed);
 double viewport_scroll_x(JSContext *ctx);
 double viewport_scroll_y(JSContext *ctx);
 
+/* THE `scrollX`/`scrollY` ATTRIBUTES' OWN ANSWER — the derivation above plus §4's own "or zero if there is no
+   viewport", which is a DIFFERENT question from the derivation and belongs to the MEMBER. `vertical` false is
+   the x axis.
+   IT IS HERE BECAUSE THREE ALGORITHMS INVOKE THE ATTRIBUTE BY NAME AND §2 SAYS THEY MUST: "when a method or an
+   attribute is said to call another method or attribute, the user agent must invoke its INTERNAL API for that
+   attribute" (CSSOM VIEW §2 Terminology). §4's own member is one caller, four steps of §6's scroll members are
+   the second, and §10's `pageX`/`pageY` step 2 — "let offset be the value of the scrollX attribute of the
+   event's associated Window object, if there is one, or zero otherwise" — is the third. The `viewport_exists`
+   test written once per caller is ONE fact with three spellings, and the third spelling is where it goes
+   wrong; it had two already. */
+double viewport_window_scroll(JSContext *ctx, bool vertical);
+
 /* CSSOM VIEW §2's SCROLLING AREA OF THIS REALM'S VIEWPORT — the ICB extended by the margin edges of all of the
    viewport's descendants' boxes, which is the ICB itself while no box in the model has geometry (see
    core/dom/element_view.h). Exported because THREE algorithms read it and none of them may state it for itself:

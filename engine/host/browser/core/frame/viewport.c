@@ -233,6 +233,14 @@ double viewport_scroll_y(JSContext *ctx)
     return 0.0;
 }
 
+/* THE ATTRIBUTE, as opposed to the derivation above — see viewport.h for why the two are separate and why the
+   member's "or zero if there is no viewport" is written once here rather than at each of its three callers. */
+double viewport_window_scroll(JSContext *ctx, bool vertical)
+{
+    if (!viewport_exists(ctx)) return 0.0;
+    return vertical ? viewport_scroll_y(ctx) : viewport_scroll_x(ctx);
+}
+
 /* §2's SCROLLING AREA OF A VIEWPORT — "the initial containing block extended by the margin edges of all of the
    viewport's DESCENDANTS' BOXES". The ICB is the viewport, and no box in this model has the geometry to extend
    it by (core/dom/element_view.h), so it is the viewport's own size.
@@ -399,9 +407,11 @@ static JSValue js_vp_get(JSContext *ctx, JSValueConst this_val, int magic)
     /* "The scrollX attribute must return the x-coordinate, relative to the initial containing block origin, of
        the left of the viewport, or zero if there is no viewport." An `unrestricted double`, not a `long`.
        CONCRETE: the derivation below leaves one valid scroll position, and the layout that would give it a
-       range would also give it a WRITER — see viewport.h. */
-    case VP_SCROLL_X: return JS_NewFloat64(ctx, presented ? viewport_scroll_x(ctx) : 0.0);
-    case VP_SCROLL_Y: return JS_NewFloat64(ctx, presented ? viewport_scroll_y(ctx) : 0.0);
+       range would also give it a WRITER — see viewport.h. The member is `viewport_window_scroll`, which is this
+       sentence WHOLE — the derivation and the no-viewport zero — because §10's `pageX` and §6's scroll members
+       invoke this attribute by name and must get the same two halves. */
+    case VP_SCROLL_X: return JS_NewFloat64(ctx, viewport_window_scroll(ctx, /*vertical*/ false));
+    case VP_SCROLL_Y: return JS_NewFloat64(ctx, viewport_window_scroll(ctx, /*vertical*/ true));
     /* "The screenX and screenLeft attributes must return the x-coordinate, relative to the origin of the
        Web-exposed screen area, of the left of the client window as number of CSS pixels, or zero if there is
        no such thing." CONCRETE: a position derived from screen.c's available area and the client window's
