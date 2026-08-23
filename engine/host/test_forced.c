@@ -5371,14 +5371,143 @@ static void css_property_grammar_selftest(void)
         { "", false, 0, "and neither does an empty prelude — `<custom-property-name>` is REQUIRED" },
         { "--a --b", false, 0, "the multiplier is comma-separated; juxtaposition is not it" },
     };
+    /* THE COMPONENTS THEMSELVES, which are what §3.3 consumes. The table above only asks whether a string is a
+       syntax definition; this one asks what definition it is, because a parse that dropped a component or lost
+       a multiplier answers both of those questions identically and only diverges at the value match. */
+    static const struct { const char *s; size_t n; const char *first; CssSyntaxMultiplier mult;
+                          const char *why; } SHAPE[] = {
+        { "<length>", 1, "<length>", CSS_SYNTAX_MULT_NONE, "§5.4.2 step 5 runs once for a lone component" },
+        { "<length> | <percentage> | auto", 3, "<length>", CSS_SYNTAX_MULT_NONE,
+          "§5.3: `syntax strings may use U+007C VERTICAL LINE (|) to provide multiple syntax component names. "
+          "Such syntax strings will result in a syntax definition with multiple syntax components`" },
+        { "<color>#", 1, "<color>", CSS_SYNTAX_MULT_COMMA, "§5.2's `#` indicates a comma-separated list" },
+        { "<length>+", 1, "<length>", CSS_SYNTAX_MULT_SPACE, "§5.2's `+` indicates a space-separated list" },
+        { "I\\ dent|none", 2, "I dent", CSS_SYNTAX_MULT_NONE,
+          "§5.4.3's ident arm appends the UNESCAPED code point, so the component's name is the six-code-point "
+          "`I dent` and that is what §5.1's codepoint-wise comparison is against" },
+        { "<transform-list>", 1, "<transform-list>", CSS_SYNTAX_MULT_NONE,
+          "§5.4.3 returns a pre-multiplied component BEFORE the multiplier is looked for, so its own `+` lives "
+          "in the NAME and never in this field" },
+    };
+    /* §3.3's cross-descriptor condition, which is a VALUE parse: `if specified, the value of the initial-value
+       descriptor must successfully parse according to the rule's syntax descriptor`, and §4.1 makes the
+       non-universal arm `according to syntax definition`. Every row is one type grammar or one multiplier. */
+    static const struct { const char *s, *v; bool want; const char *why; } MATCH[] = {
+        { "<percentage>", "0", false,
+          "CSS Values §5.5: a percentage is `a number immediately followed by a percent sign %`, which is the "
+          "`<percentage-token>` production — a bare `0` is a `<number-token>`. This is developer.mozilla.org's "
+          "own `@property --switch-position{syntax:\"<percentage>\";inherits:false;initial-value:0}`, whose "
+          "`initialValue` must therefore be null" },
+        { "<percentage>", "0%", true, "and the same rule written with the sign parses" },
+        { "<length>", "0", true,
+          "CSS Values §6: `for zero lengths the unit identifier is optional (i.e. can be syntactically "
+          "represented as the <number> 0)`" },
+        { "<length>", "1", false, "which is the ZERO alone — a unitless non-zero is a `<number>`" },
+        { "<length>", "0px", true, "at-property-cssom.html's `--valid-reverse` initial value" },
+        { "<length>", "2em", true,
+          "§6.1.1's font-relative units are `<length>`s whether or not this engine can absolutize one — a "
+          "grammar that refused them would report an unbuilt component as an author's mistake" },
+        { "<length>", "50%", false, "a `<percentage>` is a sibling production of §6's, never a `<length>`" },
+        { "<length>", "10deg", false, "and so is §7.1's `<angle>`" },
+        { "<length>", "1px 2px", false, "an unmultiplied component is ONE component value and nothing after it" },
+        { "<length-percentage>", "50%", true,
+          "§5.1: `any valid <length> or <percentage> value`" },
+        { "<number>", "1.5", true, "CSS Values §5.3's `<number-token>`" },
+        { "<integer>", "-3", true,
+          "CSS Values §5.2: `the first digit of an integer may be immediately preceded by - or + to indicate "
+          "the integer's sign`" },
+        { "<integer>", "1.5", false,
+          "§5.2's integer is `a subset of the <number-token> production` — CSS Syntax §4.3.13 sets type to "
+          "`number` at its fraction step" },
+        { "<integer>", "1e3", false, "and at its exponent step, which is the same sentence of §4.3.13" },
+        { "<angle>", "0.25turn", true, "CSS Values §7.1 names `turn`: `there is 1 turn in a full circle`" },
+        { "<angle>", "0", false,
+          "§7.1's note: the legacy bare-0 spelling `is not true in general, however, and will not occur in "
+          "future uses of the <angle> type`" },
+        { "<time>", "200ms", true, "CSS Values §7.2's two identifiers" },
+        { "<time>", "200MS", true, "a CSS unit identifier is ASCII case-insensitive" },
+        { "<resolution>", "2x", true, "CSS Values §7.4 lists `x` beside `dppx` with the same definition" },
+        { "<resolution>", "-2dppx", false,
+          "§7.4: `the allowed range of <resolution> values always excludes negative values`, and §5.1: `if the "
+          "value is outside the allowed range ... the declaration is invalid and must be ignored`" },
+        { "<string>", "\"hi\"", true, "CSS Values §4.4's `<string-token>`" },
+        { "<string>", "hi", false, "an unquoted ident is not one" },
+        { "<custom-ident>", "foo", true, "CSS Values §4.2's production" },
+        { "<custom-ident>", "inherit", false,
+          "§4.2: `the CSS-wide keywords are not valid <custom-ident>s`" },
+        { "<custom-ident>", "DEFAULT", false,
+          "§4.2 reserves `default` too, `excluded in all ASCII case permutations`" },
+        { "<color>", "red", true, "CSS Color 4's named colours" },
+        { "<color>", "rgb(1, 2, 3)", true,
+          "a functional notation is ONE component value, commas included — CSS Syntax §5.5.8 consumes a "
+          "function whole, so this is not a two-item list that `<color>` unmultiplied would refuse" },
+        { "<color>", "notacolour", false, "and an ident that names no colour is not one" },
+        { "<color> | none", "none", true,
+          "§5.3: `the syntax components are matched in the order specified`, so the second one is asked" },
+        { "<color> | none", "nope", false, "and when neither matches, the definition does not" },
+        { "red | <color>", "red", true,
+          "§5.3's own note: `given the syntax string \"red | <color>\", matching the value red against it will "
+          "parse as an identifier`" },
+        { "big | bigger", "BIGGER", false,
+          "§5.1's note: `specifying an ident like Red means that the precise value Red is accepted; red, RED, "
+          "and any other casing variants are not matched by this`" },
+        { " <color># ", "red, blue", true,
+          "§5.2's `#`, over at-property-cssom.html's `--valid-whitespace`; §5.4.2 step 1 stripped the spaces "
+          "around the syntax string before the component was read" },
+        { "<color>#", "red", true, "a comma-separated list of one is a list" },
+        { "<color>#", "red,", false, "a separator with nothing after it is not a shorter one" },
+        { "<color>#", "red blue", false, "and juxtaposition is `+`'s separator, not `#`'s" },
+        { "<length>+", "1px 2px 3px", true, "§5.2's `+`" },
+        { "<length>+", "1px, 2px", false, "whose separator is whitespace and not the comma" },
+        { "I\\ dent|none", "I\\ dent", true,
+          "at-property-cssom.html's `--escape-syntax`: both sides are UNESCAPED before they are compared, so "
+          "the value's ident token and the component's name are the same six code points" },
+        { "I\\ dent|none", "I dent", false,
+          "and the same six code points written WITHOUT the escape are two ident tokens with whitespace "
+          "between them, which is two component values and matches no unmultiplied component" },
+        { "<url>", "url(a.png)", true,
+          "CSS Values §4.5: the unquoted spelling `is specially-parsed as a <url-token>`, which is `<url()>`'s "
+          "second arm" },
+        { "<url>", "url(\"a.png\")", true, "and `url( <string> <url-modifier>* )` is its first" },
+        { "<url>", "src(\"a.png\")", true, "§4.5's `<url> = <url()> | <src()>`" },
+        { "<url>", "\"a.png\"", false,
+          "§4.5's bare-string spelling belongs to `SOME CSS contexts (such as @import)` and is not the `<url>` "
+          "production itself" },
+    };
     unsigned i;
 
     for (i = 0; i < sizeof(SYNTAX) / sizeof(SYNTAX[0]); i++) {
-        bool universal = SYNTAX[i].valid ? !SYNTAX[i].universal : true;   /* the WRONG answer, so a no-write shows */
-        bool got = css_property_syntax_definition(SYNTAX[i].s, strlen(SYNTAX[i].s), &universal);
+        /* Pre-seeded with the WRONG answer and a sentinel count, so a refused parse that still wrote shows. */
+        CssSyntaxDefinition def = { NULL, 99, SYNTAX[i].valid ? !SYNTAX[i].universal : true };
+        bool got = css_property_syntax_definition(SYNTAX[i].s, strlen(SYNTAX[i].s), &def);
 
         CHECK(got == SYNTAX[i].valid, SYNTAX[i].why);
-        CHECK(!got || universal == SYNTAX[i].universal, SYNTAX[i].why);
+        CHECK(!got || def.universal == SYNTAX[i].universal, SYNTAX[i].why);
+        /* §5.4.1's two outcomes are DISJOINT: the universal definition "accepts any valid token stream" and
+           carries no components, and every other definition is a non-empty list of them. A refused string is
+           neither and must leave nothing allocated — the entry's own contract, asserted rather than trusted. */
+        CHECK(!got || (def.universal ? def.n == 0 : def.n > 0), SYNTAX[i].why);
+        CHECK(got || (def.v == NULL && def.n == 0),
+              "a refused syntax string left a partly-built definition allocated");
+        css_syntax_definition_free(&def);
+    }
+    for (i = 0; i < sizeof(SHAPE) / sizeof(SHAPE[0]); i++) {
+        CssSyntaxDefinition def = { NULL, 0, true };
+        bool got = css_property_syntax_definition(SHAPE[i].s, strlen(SHAPE[i].s), &def);
+
+        CHECK(got && !def.universal && def.n == SHAPE[i].n, SHAPE[i].why);
+        CHECK(strcmp(def.v[0].name, SHAPE[i].first) == 0, SHAPE[i].why);
+        CHECK(def.v[0].multiplier == SHAPE[i].mult, SHAPE[i].why);
+        css_syntax_definition_free(&def);
+    }
+    for (i = 0; i < sizeof(MATCH) / sizeof(MATCH[0]); i++) {
+        CssSyntaxDefinition def = { NULL, 0, true };
+        bool got = css_property_syntax_definition(MATCH[i].s, strlen(MATCH[i].s), &def);
+
+        CHECK(got && !def.universal,
+              "a match case names a syntax string that is not a non-universal syntax definition");
+        CHECK(css_property_syntax_matches(&def, MATCH[i].v, strlen(MATCH[i].v)) == MATCH[i].want, MATCH[i].why);
+        css_syntax_definition_free(&def);
     }
     for (i = 0; i < sizeof(SYN_DESC) / sizeof(SYN_DESC[0]); i++) {
         char *got = css_property_descriptor_syntax(SYN_DESC[i].s, strlen(SYN_DESC[i].s));
