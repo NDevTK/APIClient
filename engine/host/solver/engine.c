@@ -2224,19 +2224,92 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
 /* Snapshot-fork handoff: solver_decide stashes the sibling's hot decision + pins here at a forking branch;
    the interpreter then clones the frame and calls engine_fork_finalize, which assembles the sibling flow. */
 static void *g_fork_dec = NULL, *g_fork_pins = NULL;
+/* AND WHO IS ASKING, WHICH IS THE HALF THE SEAM COULD NOT SEE. The interpreter and the step driver both hold a
+   resume point and clone it a moment after they ask, and a plain C body holds none — but they call the SAME
+   two symbols, so nothing at the seam could tell them apart and every C-body fork was stashed for a consumer
+   that never came. engine.c installs the hooks, so engine.c is where the difference can be stated: the two
+   wrappers below raise this across their call and nothing else does. It is a declaration by the one caller
+   that can make it, not an inference from the flow's state — and it is not a routing table either, because
+   there is nothing to look up: raised means "a clone is coming", clear means "there is no activation here". */
+static int g_fork_snapshot_owed;
+/* …AND WHETHER THIS SESSION FORKS AT ALL — the explore/verify bit, written beside JS_SetFlowControlHooks. */
+static int g_sess_forking;
+static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clone,
+                                     void *dec_blob, void *pin_blob);
 /* THE HANDOFF IS FILLED AND EMPTIED WITHIN ONE FORK, AND THAT IS ASSERTED HERE RATHER THAN HOPED FOR. Two
    pointers held between a `prepare` and a `finalize` are a slot with exactly one legal occupant: a second
    prepare arriving with the first still in it means the interpreter took the FORKED bit and never reached its
    fork hook, and the assignment then overwrites a decision blob and a pin blob that nothing else names — a leak
    per unconsumed fork, of the shared decision chain reference the sibling was going to stand on, so the whole
-   frozen prefix under it stays alive too. That is the exact shape the abort seam was found in, and the only
-   reason it was found is that someone went looking. The invariant belongs where it can be broken. */
-void engine_prepare_fork(void *dec_blob, void *pin_blob) {
+   frozen prefix under it stays alive too. It stays as the BACKSTOP it always was; what it can no longer be is
+   the diagnosis, because the two ways to reach it without a consumer now crash where they are born. */
+int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable) {
+    Flow *f = flow_running();
+
+    DCHECK(f != NULL, "a sibling was prepared with no flow running — the blobs were frozen off whatever "
+                      "decision state the last switched-in flow left behind, so they describe no timeline");
+    DCHECK(g_sess_forking,
+           "a fork was prepared inside a NON-FORKING session — §@S's candidate re-fire is ONE concrete path, "
+           "and the explore/verify bit reaches the interpreter through the hook table, which a C builtin "
+           "asking the decision seam by symbol never consults. That caller has to be given the non-forking "
+           "answer its own site defines, the way the interpreter falls through to ToBool and the step driver "
+           "takes outcome 0");
+    if (!g_fork_snapshot_owed) {
+        /* NOBODY IS GOING TO CLONE A FRAME, so the sibling's resume point has to be the flow's own state — and
+           it is, for exactly one kind of caller: engine code that is re-reached by RE-RUNNING the flow's
+           scheduler step. HTML §8.1.7.3 "Processing model" step 1 makes that choice "in an
+           implementation-defined manner", between tasks, with the flow switched in and nothing of it on any
+           stack; the sibling is assembled with NO frame and its step re-runs the same walk, where the arm
+           recorded for it here replays. Assembled HERE and not stashed, because there is no later moment at
+           which the parent is still the switched-in flow. */
+        if (restartable) {
+            DCHECK(f->frame == NULL,
+                   "a restartable fork was asked for by a flow holding a live program frame — the caller "
+                   "promised its computation is re-reached by re-running the flow's step, and a flow inside a "
+                   "program re-enters that frame instead, so the sibling would never re-reach the ask");
+            DCHECK(!JS_HasActivation(JS_GetRuntime(ctx)),
+                   "a restartable fork was asked for while page code was on the stack — the caller was "
+                   "reached THROUGH an activation (a queued job's callback, a listener inside a rendering "
+                   "step), which the flow's frame handle cannot show because it is NULL for those too. Its "
+                   "sibling would resume at a scheduler step that re-reaches nothing, and the arm recorded "
+                   "for it would be replayed by whatever question that step asks first");
+            engine_sibling_assemble(ctx, f, NULL, dec_blob, pin_blob);
+            return 0;
+        }
+        /* AND A C BODY MID-ALGORITHM HAS NEITHER, WHICH IS AN UNBUILT DECLARATION AND NOT A REASON TO ASK
+           LESS. It is already inside its own activation, so there is no machine state for the other arm to be
+           snapshotted at and no way to re-reach the ask by re-running anything. What it needs is to become a
+           step machine — JS_CFUNC_STEP_DEF at its definition, the ask moved into step_fork_run — after which
+           the driver holds the resume point and takes the first branch above. */
+#if APICLIENT_DEV
+        {
+            char why[512], name[192];
+            size_t i;
+            /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (decide.c's
+               concolic_ident_compose), and this line goes out as JSON with no escaping — so the one thing the
+               reader needs from it, the name of the predicate that forked, is copied through printable-only.
+               A raw separator here would break the bridge's parse of the very message that names the caller. */
+            for (i = 0; i + 1 < sizeof name && asked && asked[i]; i++)
+                name[i] = (asked[i] >= 0x20 && asked[i] < 0x7f && asked[i] != '"' && asked[i] != '\\')
+                          ? asked[i] : '.';
+            name[i] = '\0';
+            snprintf(why, sizeof why,
+                     "a C builtin forked over unknown input from inside its own activation, so the sibling has "
+                     "nowhere to resume: nothing will clone a frame for it and re-running the flow's step does "
+                     "not re-reach the ask. Declare that builtin a step machine (JS_CFUNC_STEP_DEF) and move "
+                     "this question into its step_fork_run, so the driver snapshots the machine AT the ask. "
+                     "The question was: %s", asked ? name : "(no source identity)");
+            DFAIL(why);
+        }
+#endif
+        (void)asked;
+    }
     DCHECK(g_fork_dec == NULL && g_fork_pins == NULL,
            "a sibling's snapshot state was prepared while a PREVIOUS one was still unconsumed — the branch that "
            "prepared it never reached its fork hook, and this assignment drops that flow's decision and pin "
            "blobs on the floor with nothing naming them");
     g_fork_dec = dec_blob; g_fork_pins = pin_blob;
+    return 1;
 }
 
 /* GENERATOR-STATE fork stash: clone_deep_flow fires gen_fork for each generator body frame it clones (during
@@ -2285,12 +2358,22 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     DCHECK(dec_blob != NULL, "a sibling was assembled with no decision state — it would resume its parent's "
                              "frame standing on nothing, and every branch its parent had already taken would "
                              "be re-asked as a new one");
-    /* A SIBLING WITHOUT A SNAPSHOT IS NOT A SIBLING. `started` is set below, so a NULL frame here produces a flow
-       the scheduler believes is hot and which has nothing to resume — it compiles the program again and REPLAYS
-       side effects the parent already performed. The engine's clone now CHECKs before it calls this, so this is
-       the receiving end of that same contract said where the pointer arrives. */
-    DCHECK(clone != NULL, "a fork arrived with no frame snapshot — the sibling would be marked hot with nothing "
-                          "to resume and would replay the program from its start");
+    /* A SIBLING RESUMES WHERE ITS PARENT STANDS, AND A FRAME IS ONLY HALF OF WHERE THAT IS. The claim here used
+       to be "a sibling without a snapshot is not a sibling", which was the right worry stated as the wrong
+       invariant: what makes a frameless sibling dangerous is not the missing handle, it is a parent that IS
+       inside a program — `started` is set below, so such a sibling is hot with nothing to resume, and
+       flow_step compiles the row at `script_i` again and REPLAYS side effects the parent already performed.
+       A parent with NO frame is a flow between programs, and a sibling of it is a flow between programs too:
+       its cursor is past the sequence, so there is nothing to recompile, and it re-enters its scheduler step
+       exactly where its parent was. That is what a fork asked between tasks needs (engine_prepare_fork), and
+       it is the state the cold tier's own rebuilds already have (flow.h: started, no frame, replaying arms).
+       The orphan drive is the third shape and passes a FRESH call frame over a frameless parent, which this
+       permits for the same reason: what is asserted is that a frameless SIBLING never stands over a parent
+       that was mid-program. */
+    DCHECK(clone != NULL || parent->frame == NULL,
+           "a fork of a flow that is INSIDE a program arrived with no frame snapshot — the sibling would be "
+           "marked hot with nothing to resume, and its first step would compile that program's row again and "
+           "replay every side effect the parent has already performed");
     /* AN UNSTARTED CROSS-AGENT OPERATION AND A ROUTED DELIVERY ARE NOT ASSERTED HERE, and their assertions have
        moved to the BRANCH hook where they are true claims: they are statements about a flow being AT A BRANCH
        (nothing routed can be outstanding, because a delivery and an operation are both turned into work before
@@ -2333,9 +2416,16 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        other field of the parent's history copied below. It is FIRST because it is what decides where this flow
        enters the queue, and everything after this line is the construction of a flow that is already ranked. */
     flow_fork_inherit(sib, parent);
-    sib->started = 1;                 /* HOT: resume from the cloned frame + blobs, never a fresh re-run */
-    sib->frame = clone;               /* the frame snapshot taken AT the branch */
+    sib->started = 1;                 /* HOT: resume from the blobs (and the cloned frame, when there is one) */
+    sib->frame = clone;               /* the frame snapshot taken AT the branch — NULL for a fork between tasks */
     sib->script_i = parent->script_i; /* same position in the script sequence */
+    /* AND HOW FAR THE SEQUENCE HAS ALREADY BEEN RUN, which is what makes the no-replay assert at the compile
+       site mean anything for an arm. Every sibling inherited -1, so a sibling that reached the compile with a
+       cursor its parent had already compiled passed a check that only ever compared against "nothing yet" —
+       and a FRAMELESS sibling is the shape that can actually reach it. The obligation is the same one every
+       field above and below carries: an arm is its parent's timeline continued, so it has run what its parent
+       had run. */
+    sib->last_compiled = parent->last_compiled;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
     /* GENERATOR-STATE swaps built by clone_deep_flow for this fork: record each on the sibling's delta so the
        shared generator object resolves to the sibling's own cloned execution state while it runs. */
@@ -4618,7 +4708,36 @@ static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down i
    preemption off) is the cardinal violation twice over — a second scheduler beside the BFS AND a drive-to-
    completion (an unbounded candidate loop would hang, non-parkable). So verify is this same loop with forking off:
    ONE concrete path (no branch/fork hook), yet every candidate flow is preemptible + parkable like any other. */
-static const JSFlowControlHooks FC_EXPLORE = { .branch = solver_decide, .outcome = solver_outcome,
+/* THE TWO ASKS THAT COME WITH A RESUME POINT — and this is the whole of the wrapper. An interpreter at an
+ * OP_if and a step driver holding a machine that yielded JS_STEP_FORK both clone their activation a moment
+ * after they ask; a C builtin calling the same symbol by name does not. Nothing at the seam could tell those
+ * apart, so every C-body fork was stashed for a consumer that never came and the diagnosis landed at the NEXT
+ * fork anywhere in the agent. The declaration is made HERE because this is the one place that knows: these two
+ * function pointers ARE the interpreter's way in.
+ * IT IS NOT A NESTING COUNTER. Neither seam runs page code, so nothing can ask again underneath one; the
+ * assertion says so rather than leaving a saved-and-restored depth to imply it. */
+static int engine_branch_hook(JSContext *ctx, JSValueConst cond) {
+    int r;
+    DCHECK(!g_fork_snapshot_owed,
+           "the interpreter asked for a branch arm while another snapshot-owning ask was still open — the "
+           "decision seam runs no page code, so a second one means something re-entered it and the inner "
+           "fork would be built against the outer ask's activation");
+    g_fork_snapshot_owed = 1;
+    r = solver_decide(ctx, cond);
+    g_fork_snapshot_owed = 0;
+    return r;
+}
+static int engine_outcome_hook(JSContext *ctx, JSValueConst over, const char *op, int n) {
+    int r;
+    DCHECK(!g_fork_snapshot_owed,
+           "the step driver asked for an outcome arm while another snapshot-owning ask was still open — see "
+           "engine_branch_hook");
+    g_fork_snapshot_owed = 1;
+    r = solver_outcome(ctx, over, op, n);
+    g_fork_snapshot_owed = 0;
+    return r;
+}
+static const JSFlowControlHooks FC_EXPLORE = { .branch = engine_branch_hook, .outcome = engine_outcome_hook,
                                                .fork = engine_fork_finalize, .preempt = preempt_hook };
 static const JSFlowControlHooks FC_VERIFY  = { .preempt = preempt_hook };   /* candidate re-fire: no fork, still preemptible */
 static const JSFlowControlHooks FC_OFF     = { 0 };
@@ -4664,6 +4783,7 @@ static void engine_session_close(void) {
     JS_SetJobDropHook(NULL);
     JS_SetJobRemoveHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
+    g_sess_forking = 0;   /* …and the same bit for the callers that ask the seam by symbol — see engine_sched_begin */
     /* THE SESSION'S GENERATION ENDS HERE, and it is the LIVE stamp that is cleared rather than the scheduler's
        saved copy, because this runs INSIDE the slice: the bracket below saves whatever the slice leaves, so
        clearing it here is what makes the saved copy zero too. A session that ended and a host that is merely
@@ -4990,6 +5110,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     dom_cow_set_ctx(ctx);                   /* the DOM delta needs ctx for the attribute taint-shadow dup/free */
     cow_set_ctx(ctx);                       /* …and the heap delta needs one for the component records it captures */
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
+    /* THE SAME ONE BIT, WRITTEN WHERE THE CALLERS THAT DO NOT GO THROUGH THAT TABLE CAN BE HELD TO IT. The
+       hook table carries the explore/verify policy into the INTERPRETER; a C builtin asking the decision seam
+       by symbol (core/dom/abort.c, core/timing/timer.c) never consults it, so a candidate re-fire — which
+       §@S defines as ONE concrete path — could mint frontier members from inside its own verification. It is
+       asserted rather than answered because what a non-forking answer MEANS differs per site (the interpreter
+       falls through to ToBool, the step driver takes outcome 0, and the timer order has no third answer), and
+       a seam that picked one for all of them would be choosing a page's timer order at random. */
+    g_sess_forking = forking;
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
     JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
     JS_SetJobRemoveHook(engine_remove_job);     /* …and a toggle task tracker takes ONE back off, by name */

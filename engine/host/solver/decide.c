@@ -743,17 +743,22 @@ static int dec_replay(uint32_t asked) {
    branch, re-asks it, takes FALSE out of its recorded slot and records FALSE itself on the line below — the
    same constraint, one branch later, derived rather than planted. What the sibling DOES inherit is everything
    this flow knew BEFORE the branch, which is what the snapshot is. */
-static int dec_fork_here(const char *key, uint32_t asked, int *forked) {
+/* `*forked` COMES BACK FROM THE SEAM AND MEANS "THE CALLER MUST STILL SNAPSHOT", which is not the same
+   statement as "a fork happened" and used to be conflated with it. A fork always happens here; whether anything
+   is left for the caller to do depends on WHO can build the sibling's resume point (engine_prepare_fork), and
+   a caller whose sibling was assembled on the spot must not be told to clone a frame it does not have.
+   The parent's own arm is constrained by decide_arm's tail rather than here, so that the constraint is applied
+   in ONE place for all three ways a decision is reached — and so that the seam, which may assemble the sibling
+   before this returns, sees the parent's constraint exactly as the sibling's frozen copy left it. */
+static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int restartable, int *forked) {
     void *dblob = decide_fork_blob(g_c, 0, asked);
     void *pblob;
 
     fork_key_count(key ? key : "(no source identity)");
     pblob = concolic_pins_suspend();
-    if (key) concolic_constrain_branch(key, 1);   /* THIS flow's arm, into the head above the shared freeze */
-    engine_prepare_fork(dblob, pblob);
+    *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable);
     dec_append(1, asked);            /* this flow: TRUE arm, onto the head the freeze above just emptied */
     g_c++;
-    *forked = 1;
     return 1;
 }
 
@@ -767,7 +772,7 @@ static int dec_fork_here(const char *key, uint32_t asked, int *forked) {
    exists and dec_key_hash for what the name is. The check lives HERE and only here because this is the one
    place a recorded slot is CONSUMED, and an identity that is not compared where it is consumed is a field
    nobody will notice is wrong. */
-static int decide_arm(const char *key, int *forked) {
+static int decide_arm(JSContext *ctx, const char *key, int restartable, int *forked) {
     uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
@@ -805,20 +810,26 @@ static int decide_arm(const char *key, int *forked) {
            nothing ever reported it. The mismatch is now a DIVERGENCE rather than an abort: the recorded tail
            is left behind and this branch forks like any other. */
         if (g_c < dec_total()) dec_leave_path();
-        arm = dec_fork_here(key, asked, forked);
+        arm = dec_fork_here(ctx, key, asked, restartable, forked);
     }
-    if (key && !*forked) concolic_constrain_branch(key, arm);   /* a REPLAYED arm narrows this flow just the same */
+    /* ONE PLACE, ALL THREE ARMS — a replayed arm and a refined one narrow this flow exactly as a forked one
+       does, and the fork path used to state it separately (inside dec_fork_here) so that the `!*forked` guard
+       here would not apply it twice. That guard was reading the FORK as its condition; `*forked` now says only
+       whether the caller owes a snapshot, which is a different fact, so the statement is made once. It is
+       still made ABOVE the freeze the fork took, which is the only ordering this constraint has. */
+    if (key) concolic_constrain_branch(key, arm);
     DCHECK(g_c <= dec_total(), "the decision cursor ran past the vector — a branch answered without consuming "
                                "its recorded slot, so the next one will read that slot as its own");
     return arm;
 }
 
-int solver_decide(JSContext *ctx, JSValueConst cond) {
+/* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
+   where its sibling comes back, and it is the only thing that differs between them. */
+static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable) {
     const char *src = NULL, *tok = NULL;
     char *key;
     int op, forked = 0, arm;
 
-    (void)ctx;
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
     /* If the condition is a COMPARISON result (`x === 'admin'`), the taken arm may PIN the source to a concrete
@@ -826,13 +837,24 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
     op = concolic_cmp(cond, &src, &tok);
 
     key = decide_key(cond);
-    arm = decide_arm(key, &forked);
+    arm = decide_arm(ctx, key, restartable, &forked);
     free(key);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
         concolic_pin(src, tok);
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
+}
+
+int solver_decide(JSContext *ctx, JSValueConst cond) { return decide_branch(ctx, cond, 0); }
+
+int solver_decide_restartable(JSContext *ctx, JSValueConst cond) {
+    int r = decide_branch(ctx, cond, 1);
+    DCHECK(r < 0 || !SOLVER_FORKED(r),
+           "a restartable branch was told to snapshot a frame — the seam assembles this sibling itself "
+           "(there is no activation to clone), so the bit can only mean the seam took the other path and the "
+           "caller is about to strand a prepared blob");
+    return r;
 }
 
 /* JSFlowControlHooks.outcome — the SAME decision asked from a C builtin, which has no OP_if to ask it at.
@@ -848,7 +870,6 @@ int solver_decide(JSContext *ctx, JSValueConst cond) {
  * same question at successive POSITIONS (an iteration over an unknown collection) says so there — each position
  * is its own predicate and must not be decided by the last one's answer. */
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
-    (void)ctx;
     if (!g_running) return -1;
     DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
                               "operation forks only where its operand's domain permits more than one completion");
@@ -870,7 +891,10 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
         DCHECK(key != NULL, "an operand whose identity this engine cannot spell reached the outcome seam — "
                             "with no key its completions are re-forked at every ask rather than replayed, "
                             "which is sound and is not what a machine declaring a fork expects");
-        arm = decide_arm(key, &forked);
+        /* NOT RESTARTABLE, AND THAT IS A STATEMENT ABOUT THE MACHINE RATHER THAN A DEFAULT. An outcome ask
+           comes from a C body that is mid-algorithm: re-running the flow's scheduler step would not re-reach
+           it, so its sibling's resume point can only be the step driver's snapshot of the machine. */
+        arm = decide_arm(ctx, key, 0, &forked);
         free(key);
         return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }

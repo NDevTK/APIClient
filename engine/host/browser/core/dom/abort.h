@@ -67,9 +67,12 @@ void abort_signal_add_algorithm(JSContext *ctx, JSValueConst sig, JSValueConst f
 void abort_signal_remove_algorithm(JSContext *ctx, JSValueConst sig, JSValueConst fn);
 
 /* IS THIS SIGNAL ABORTED, and WITH WHAT — §4.2.4 step 5 tests the flag before it registers, and its abort
-   algorithm reads the reason. Both go through the concolic-safe test, so a signal whose flag is unknown forks
-   rather than silently taking one arm. Returns 0/1, and never -1: a caller that must branch has already been
-   given a definite answer by solver_decide. */
+   algorithm reads the reason. Both go through the concolic-safe test, so the ARM a signal's unknown flag is
+   read on is this flow's own rather than one silently taken. Returns 0/1, and never -1: a caller that must
+   branch has already been given a definite answer.
+   THE FORK ITSELF IS NOT COMPLETE HERE and abort.c's header says why: these members are plain C bodies, so a
+   FIRST-TIME fork on an unknown flag has no place to build its sibling and crashes at the seam. Replaying a
+   decision this flow has already taken is unaffected — that consumes a recorded arm and forks nothing. */
 bool    abort_signal_aborted(JSContext *ctx, JSValueConst sig);
 
 /* IS THIS AN AbortSignal? Web IDL's `AbortSignal signal` member is an interface type, so a value that is not

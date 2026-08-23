@@ -29,10 +29,40 @@
 #define SOLVER_FORKED(r)  (((r) & SOLVER_FORKED_BIT) != 0)
 int  solver_decide(JSContext *ctx, JSValueConst cond);
 
+/* THE SAME DECISION, ASKED BY ENGINE CODE THAT IS RE-REACHED BY RE-RUNNING THE FLOW'S SCHEDULER STEP — and the
+ * difference from the call above is not the QUESTION, it is where the sibling comes back.
+ *
+ * A prepared fork is only half a sibling: the other half is a RESUME POINT, and every consumer of
+ * SOLVER_FORKED_BIT is an activation that owns one — the interpreter's branch fork clones the frame at the
+ * `if`, a step machine's JS_STEP_FORK clones the machine at its ask. Engine code running BETWEEN a flow's
+ * tasks has no activation at all: HTML §8.1.7.3 "Processing model" step 1 chooses the next task queue "in an
+ * implementation-defined manner", so the engine's own choice is made with the flow switched in (its delta, its
+ * DOM head and its decision state are the right ones) and nothing of it on any stack. That is not a missing
+ * resume point, it is a resume point made of the flow's own recorded state: the sibling is assembled with NO
+ * frame, and re-entering its scheduler step re-runs the same walk and REPLAYS the arm recorded for it here.
+ *
+ * SO THE CALLER DECLARES THE CONTRACT, which is that its whole computation is re-reached by re-running the
+ * flow's step — no page code has run under it, nothing it has already done would be done twice. The seam
+ * asserts the two halves it can see (the flow holds no program frame; the runtime holds no activation) and
+ * builds the sibling before returning, so this NEVER returns SOLVER_FORKED_BIT: there is nothing left for the
+ * caller to snapshot. A caller that cannot make that promise asks solver_decide, and a fork there crashes at
+ * this seam naming the predicate rather than stranding a blob for some later fork to trip over.
+ *
+ * IT IS NOT decide_fork_same_path, WHICH IS A DIFFERENT MECHANISM AND WOULD LOSE THE ARM. That one is for a
+ * fork over a VALUE THAT ARRIVED, where no question was asked and there is no slot to record; this one asks a
+ * real predicate, so the sibling MUST carry the other arm at the cursor. A sibling given its parent's path
+ * unchanged would re-reach this walk with nothing recorded, re-fork, take the same arm as its parent, and mint
+ * another sibling exactly like itself — an unbounded chain at one site whose second arm never runs. */
+int  solver_decide_restartable(JSContext *ctx, JSValueConst cond);
+
 /* JSFlowControlHooks.outcome — the same decision, asked by a C BUILTIN that has no OP_if to ask it at. `over`
    is the unknown operand its completion depends on, `op` names the operation ("JSON.parse"), `n` is how many
    completions the machine declares feasible. Returns the arm this flow takes, ORed with 0x100 when a sibling
-   was prepared for the other — the same protocol solver_decide uses, because it is the same fork. */
+   was prepared for the other — the same protocol solver_decide uses, because it is the same fork.
+   THE FORKED BIT IS FOR THE STEP DRIVER, WHICH IS THE ONLY THING THAT CAN CONSUME IT FOR A C BUILTIN. A plain
+   C body is already inside its activation when it asks and has no machine state for the other arm to be
+   snapshotted at, so a fork from one crashes at the seam naming the operation — and what that names is the
+   DECLARATION to build: JS_CFUNC_STEP_DEF, with the ask moved into the machine's own step_fork_run. */
 int  solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n);
 
 /* Take the decision vector out of a fork blob (ownership transfers; blob struct freed). For the replay fork. */

@@ -15,8 +15,18 @@
  *
  * WHICH IS WHY THE C SIDE NEVER TESTS THE FLAG ITSELF. `throwIfAborted()` and the `reason` getter both have to
  * branch on a value that may be concolic, and a C `if` would silently pick one arm — the exact failure the
- * solver exists to prevent. They ask solver_decide, the same frame-agnostic hook an OP_if asks, so a builtin
- * forks by the identical call and the sibling arm is parked as its own flow.
+ * solver exists to prevent. They ask solver_decide, the same seam an OP_if asks, so the ARM is right wherever
+ * the question is asked from.
+ *
+ * THE ARM IS NOT THE WHOLE FORK, AND THIS FILE'S MEMBERS CANNOT YET SUPPLY THE REST. A fork also needs a place
+ * for the SIBLING to come back, and every one of these asks is made from inside a plain C activation the page
+ * called into: there is no machine state for the other arm to be snapshotted at, and re-running the flow's
+ * scheduler step does not re-reach a getter's body. So the seam CRASHES at the fork naming the predicate
+ * (solver/engine.h engine_prepare_fork), and what that names is the declaration to build — the members that
+ * test the flag become step machines (JS_CFUNC_STEP_DEF) and ask through the machine's own step_fork_run, so
+ * the driver snapshots at the ask. Until then a page that branches on an `AbortSignal.timeout()` flag this
+ * flow has not already decided aborts HERE rather than stranding a prepared sibling for some later fork
+ * elsewhere in the agent to trip over, which is what it did before and why it was never traced to this file.
  *
  * THE INTERNAL SLOTS ARE AN OWN PROPERTY UNDER A PRIVATE SYMBOL, for the reason EventTarget's listener map is:
  * a write to them is an ordinary property write, so the per-flow COW delta captures it with no new delta kind.
@@ -113,10 +123,13 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
     return st;
 }
 
-/* IS THIS SIGNAL ABORTED, ASKED THE ONLY WAY A C BUILTIN MAY ASK. solver_decide answers with the arm this flow
-   takes for a concolic flag and parks the other arm as its own flow; -1 means the flag is an ordinary boolean
-   and the real ToBool is the answer. A bare `if` here would pick one arm of an unknown and delete the other's
-   code.
+/* IS THIS SIGNAL ABORTED, ASKED THROUGH THE SEAM RATHER THAN WITH A BARE `if`. solver_decide answers with the
+   arm this flow takes for a concolic flag and prepares the other arm as its own flow; -1 means the flag is an
+   ordinary boolean and the real ToBool is the answer. A bare `if` here would pick one arm of an unknown and
+   delete the other's code.
+   IT IS NOT "the only way a C builtin may ask", WHICH IS WHAT THIS SAID AND IS NOT TRUE OF THE FORK. See the
+   file header: the arm comes back right, and the SIBLING has nowhere to resume until these members are
+   declared step machines, so a first-time fork on a concolic flag crashes at the seam naming the predicate.
    THE ARM IS READ THROUGH SOLVER_ARM, and that is not decoration. The result carries SOLVER_FORKED_BIT when a
    sibling was prepared, so a first-time fork onto the true arm returns 257; this compared the raw value against
    1, took the FALSE arm, and left the flow disagreeing with its own decision vector for the rest of the run.

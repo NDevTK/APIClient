@@ -232,42 +232,26 @@ static int timer_rel(JSContext *ctx, JSValueConst a, JSValueConst b, int q)
                               ? "HTML §8.7 run steps after a timeout: milliseconds <"
                               : "HTML §8.7 run steps after a timeout: milliseconds ==",
                             a, b);
-    d = solver_decide(ctx, pred);
+    /* ASKED AS A RESTARTABLE BRANCH, WHICH IS A PROMISE THIS SITE CAN MAKE AND MOST CANNOT. §8.1.7.3
+       "Processing model" step 1 picks the next task queue "in an implementation-defined manner", so this walk
+       runs BETWEEN a flow's tasks: the flow is switched in — its delta, its DOM head and its decision state
+       are the ones an arm inherits — and nothing of it is on any stack. There is therefore no activation for
+       the sibling to be cloned from AND none is needed: it is assembled with no frame, and re-entering its
+       scheduler step re-runs this same walk over its own timer map, where the arm recorded for it replays.
+       Nothing this walk has already done is done twice, which is the whole of what `restartable` asserts.
+       The seam builds the sibling before answering, so the FORKED bit never comes back here — solver/decide.h
+       says so and solver_decide_restartable asserts it. */
+    d = solver_decide_restartable(ctx, pred);
     JS_FreeValue(ctx, pred);
     DCHECK(d >= 0,
            "the timer task source's ORDER was asked over an unknown expiry and the solver answered that the "
-           "value is not unknown — solver_decide answers -1 for an ordinary value and for a flow that is not "
+           "value is not unknown — the branch seam answers -1 for an ordinary value and for a flow that is not "
            "running, and the timer source's order is only ever decided from inside a flow's own step");
     DCHECK(SOLVER_ARM(d) == 0 || SOLVER_ARM(d) == 1,
            "a two-armed decision answered with an arm that is neither of them");
-    /* THE ARM IS RIGHT AND THE SIBLING HAS NOWHERE TO BE BUILT, WHICH IS A FACT ABOUT WHERE THIS IS ASKED
-       RATHER THAN ABOUT THE QUESTION. solver_decide prepares the other arm's decision and pin blobs and returns
-       the FORKED bit, and every consumer of that bit is an ACTIVATION: the interpreter's branch_arm_fork
-       snapshots the frame at the `if`, and a step machine's JS_STEP_FORK snapshots the machine at its ask. This
-       ask has neither. §8.1.7's choice of which task source runs next is made in the scheduler's idle branch —
-       the flow is switched in, so the delta and the constraint are the right ones, but there is no pc, no
-       operand stack and no coroutine state to clone, so nothing consumes the prepared blobs and the NEXT fork
-       anywhere in the agent trips engine_prepare_fork's "a sibling's snapshot state was prepared while a
-       PREVIOUS one was still unconsumed". Measured: 20 documents of one WPT area aborted there, three layers
-       from here, with nothing in the message about timers.
-       WHAT TO BUILD IS THE SCHEDULER'S OWN VALUE FORK, and solver/decide.h already names it and says why it is
-       a different mechanism: "A flow forks over a VALUE as well as over a predicate... Nothing about that is a
-       branch — the asking program asked no question it could have answered two ways, so there is no slot to
-       record and the sibling's path is its parent's, unchanged" (decide_fork_same_path, assembled by
-       engine.c's flow_answer_fork). The event loop's choice of next task IS that shape exactly: no program
-       asked it, so the sibling has no resume point to snapshot and instead stands on the parent's path and
-       re-reaches this walk, where its recorded arm replays. Build that seam, ask it here instead of
-       solver_decide, and the two-arm order is complete.
-       DO NOT reach for the other repair — deciding the order from the unknown's EXAMPLE, or from whichever
+    /* DO NOT reach for the other repair — deciding the order from the unknown's EXAMPLE, or from whichever
        entry the walk happened to reach first. Both delete an arm, and the deleted arm is a real program: it is
        the order in which the page's other timer runs second. */
-    if (SOLVER_FORKED(d))
-        DFAIL("§8.1.7 chose between two timer expiries where one is UNKNOWN, and the fork it needs cannot be "
-              "built here: the choice is made in the scheduler's idle branch, which has no activation to "
-              "snapshot, so solver_decide's prepared sibling is stranded and the next fork in the agent trips "
-              "engine_prepare_fork. Build the scheduler's VALUE fork (solver/decide.h decide_fork_same_path + "
-              "engine.c flow_answer_fork — a sibling that stands on its parent's path and re-reaches this "
-              "walk) and ask that here instead of the interpreter's branch fork");
     return SOLVER_ARM(d) == 1;
 }
 
@@ -664,24 +648,17 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
                "step, and idl_number_of has already established the value is unknown external input");
         DCHECK(SOLVER_ARM(d) == 0 || SOLVER_ARM(d) == 1,
                "a two-armed decision answered with an arm that is neither of them");
-        /* AND THE SIBLING NEEDS A DECLARATION THIS MEMBER DOES NOT HAVE — the same gap timer_rel names, at the
-           other end of the algorithm. solver_outcome prepares the other arm and returns the FORKED bit, and
-           the only thing that consumes that bit for a C builtin is the interpreter's JS_STEP_FORK driver,
-           which reaches it because the builtin DECLARED ITSELF A STEP MACHINE and yielded its ask. This body is
-           a plain JSCFunction (idl_method_id), so it is already inside its C activation when it asks and there
-           is no machine state to snapshot the other arm at; the prepared blobs are then stranded exactly as
-           they are in timer_rel.
-           WHAT TO BUILD IS THE DECLARATION: §8.7's members become step machines (idl_method_id_step, the entry
-           the synchronous host read already uses), step 4's comparison becomes the machine's outcome ask, and
-           the driver snapshots the flow AT the ask so the sibling re-enters the algorithm holding the other
-           arm. Nothing about the QUESTION changes — the true arm is still the spec's own 0. */
-        if (SOLVER_FORKED(d))
-            DFAIL("§8.7 step 4 forked over an unknown `timeout` and the sibling has nowhere to be built: "
-                  "`setTimeout` is declared as a plain C body (idl_method_id), so it is already inside its "
-                  "activation when it asks and the interpreter's JS_STEP_FORK driver — the one consumer of "
-                  "solver_outcome's FORKED bit for a C builtin — never sees it, leaving the prepared sibling "
-                  "stranded for the next fork in the agent to trip over. Declare §8.7's members as step "
-                  "machines (idl_method_id_step) and make step 4's comparison the machine's outcome ask");
+        /* AND THE SIBLING NEEDS A DECLARATION THIS MEMBER DOES NOT HAVE, WHICH IS NOT THE GAP timer_rel HAD.
+           That one is asked between tasks and its sibling stands on the flow's own state; this one is asked
+           from inside a plain JSCFunction (idl_method_id) that is already in its C activation, so there is no
+           machine state for the other arm to be snapshotted at and no scheduler step that re-reaches the ask.
+           The seam CRASHES on it, at the fork, naming this operation — which is the forcing function for the
+           declaration: §8.7's members become step machines (idl_method_id_step, the entry the synchronous
+           host read already uses), step 4's comparison becomes the machine's own outcome ask through
+           step_fork_run, and the driver snapshots the flow AT the ask so the sibling re-enters the algorithm
+           holding the other arm. Nothing about the QUESTION changes — the true arm is still the spec's own 0.
+           There is no second DFAIL here for that: a site-local copy of a crash the seam already makes would
+           be unreachable prose claiming to be the mechanism. */
         if (SOLVER_ARM(d) == 1)
             timeout = JS_NewFloat64(ctx, 0);   /* step 4's own assignment, on its own arm */
         else

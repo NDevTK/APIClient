@@ -174,9 +174,28 @@ void engine_set_document_done_hook(int (*fn)(JSContext *ctx));
    transaction") is why asking at every step costs nothing. */
 void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
 
-/* solver_decide calls this at a forking branch to stash the sibling's hot decision + pins; the interpreter's
-   fork hook (engine_fork_finalize) assembles the sibling from the frame clone + these. */
-void engine_prepare_fork(void *dec_blob, void *pin_blob);
+/* WHERE A SIBLING COMES BACK — the one thing a prepared fork needs that the decision seam cannot derive, so
+ * this is where it is decided and where a fork that has no answer CRASHES.
+ *
+ * decide.c calls this with the sibling's decision + pin blobs already built. Two things can consume them, and
+ * exactly one of them will:
+ *   - AN ACTIVATION THAT WILL BE CLONED. The interpreter asking at an OP_if, or the step driver asking for a
+ *     machine that yielded JS_STEP_FORK, both hold a resume point and clone it a moment later. They ask
+ *     through the flow-control hooks, which is how this knows: engine.c installs its own wrappers and they
+ *     declare it. The blobs are stashed and engine_fork_finalize assembles from them plus the clone. Returns 1
+ *     — the caller still owes the snapshot.
+ *   - THE FLOW'S OWN SCHEDULER STEP, when `restartable` says the asking code is re-reached by re-running it
+ *     (solver_decide_restartable). There is no activation, and none is needed: the sibling is assembled here
+ *     with NO frame, and re-entering its step re-runs the same engine code and replays the arm recorded for
+ *     it. Returns 0 — nothing is owed and the FORKED bit is never raised.
+ * A C body that is neither — already inside its own activation with nothing that will clone it — has no
+ * resume point at all, and this DFAILs naming the predicate it asked. What that names is the declaration to
+ * build (JS_CFUNC_STEP_DEF), never a way to ask less. `asked` is the constraint key, or NULL.
+ *
+ * IT USED TO STASH UNCONDITIONALLY, and the cost of that was a diagnosis three layers from the cause: a C body
+ * took the FORKED bit, nothing consumed it, and the NEXT fork anywhere in the agent aborted on a stash that
+ * was still full — 20 documents of one WPT area, with nothing in the message about where the blobs came from. */
+int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable);
 
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order.
