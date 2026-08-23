@@ -3,6 +3,9 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LOADER_DOCUMENT_LOAD_TYPE_H
 #define ENGINE_HOST_BROWSER_CORE_LOADER_DOCUMENT_LOAD_TYPE_H
 
+#include <stddef.h>
+
+#include "core/fetch/headers.h"
 #include "core/mime/mime_type.h"
 
 /* §7.4.5's ARMS, one value per `<dt>` of its "if the type is one of the following types" list, in the order the
@@ -34,6 +37,26 @@ typedef enum {
    why), so "I could not tell" no longer exists as an answer, and nothing here defaults to HTML — a computed
    `application/octet-stream` is still DOC_LOAD_EXTERNAL and still crashes by name. */
 DocumentLoadType document_load_type_of(const MimeType *computed);
+
+/* §7.4.5's OWN FIRST STEP — "Let type be the computed type of navigationParams's response" — over the RESPONSE,
+   which is the form every loader actually holds: a header list and the bytes. It runs MIME Sniffing §5.1
+   "Interpreting the resource metadata" over the header list, Fetch §3.6 "`X-Content-Type-Options` header"'s
+   determine-nosniff over the same list, and §7 "Determining the computed MIME type of a resource" over §5.2's
+   resource header, and it answers the record `document_load_type_of` takes.
+   IT IS HERE BECAUSE THE OTHER HALF OF THIS ALGORITHM IS, and a loader that has only the second half computes
+   the first one itself. That is not a hypothetical: the type dispatch was reachable from ONE loader while a
+   second one handed every response it fetched straight to the HTML parser, so an XML document reported its
+   failure as a JavaScript COMPILE error — `<script><![CDATA[` is XML §2.7 "CDATA Sections" under an XML parser
+   and, under HTML §13.2.6.4.4 The "in head" insertion mode, which switches the tokenizer to §13.2.5.4 Script
+   data state, it is program text. One absent capability, two unrelated-looking names, and the misleading one
+   pointed at the JavaScript compiler for a document that was never JavaScript.
+   `out` is a record the CALLER FREES (mime_type_free), on every path, exactly like mime_sniff_computed's.
+   `body` is the response's bytes and is never NULL: a caller with no response is not asking this question —
+   HTML §7.4's initial about:blank has no response to compute a type from and is an HTML document by §7.4
+   rather than by anything defaulting here. `body_len` is the WHOLE body; §5.2's 1445-byte resource header is
+   taken from it here, so no caller has to know that number. */
+void document_load_computed_type(MimeType *out, const HeaderList *response_headers,
+                                 const void *body, size_t body_len);
 
 /* The §7.5 subsection that loads this arm, number and title, for the crash at a caller that has no loader for
    it. Never NULL — every arm has one, and a caller formatting an arm this does not know has asked the wrong

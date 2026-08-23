@@ -1,4 +1,10 @@
-/* HTML §7.4.5 "Populating a session history entry" — the "load a document" TYPE DISPATCH, and nothing else.
+/* HTML §7.4.5 "Populating a session history entry" — the "load a document" TYPE DECISION, both halves of it:
+ * step 1's "Let type be the computed type of navigationParams's response", and the dispatch of that type onto
+ * the §7.5 subsection that loads it. Nothing else.
+ *
+ * BOTH HALVES, BECAUSE A LOADER THAT CAN ONLY REACH THE SECOND ONE COMPUTES THE FIRST ITSELF. That is how the
+ * one question below acquires a second answer, and it is how it acquired a second SILENCE: a loader that never
+ * asked at all handed every response it fetched to the HTML parser.
  *
  * THE ALGORITHM, in its own words: "To load a document given navigation params navigationParams, source
  * snapshot params sourceSnapshotParams, and origin initiatorOrigin … Let type be the computed type of
@@ -30,11 +36,62 @@
  * to test it with. The day one is added, it is a set THIS function consults, not a condition sprinkled into
  * callers.
  */
+#include <stdbool.h>
 #include <string.h>
 
 #include "core/loader/document_load_type.h"
+#include "core/fetch/headers.h"
+#include "core/html/media_element.h"   /* §7 steps 5/7's "supported by the user agent" — the device's own list */
+#include "core/mime/mime_sniff.h"      /* §5.1's metadata and §7's sniff: WHICH type a response's bytes ARE */
 #include "core/mime/mime_type.h"
 #include "check.h"
+
+/* §7.4.5's FIRST STEP, over the response — see the header. The two halves of "which document does this response
+   load as" live in one file for the reason the paragraph above gives: a loader that can only reach the second
+   half computes the first one itself, and then there are two answers to one question. */
+void document_load_computed_type(MimeType *out, const HeaderList *response_headers,
+                                 const void *body, size_t body_len)
+{
+    MimeType supplied;
+    MimeSniffResource r;
+    bool apache_bug = false, supplied_defined;
+
+    DCHECK(out != NULL && response_headers != NULL && body != NULL,
+           "§7.4.5's computed type was asked for without a response — it is a fact about a header list AND the "
+           "bytes those headers describe, so half of it is a type computed for some other response, and no "
+           "bytes at all is a caller that has no response and is not asking this question");
+    /* §5.1 "Interpreting the resource metadata" — the SUPPLIED MIME type and §5's check-for-apache-bug flag.
+       THE LAST `Content-Type` HEADER, UNJOINED, which is what §5.1 says and is NOT Fetch §2.2.3's "extract a
+       MIME type" over the joined list: §5's apache-bug table is a byte-exact comparison against four literal
+       header values that a joined list can never equal. A caller that also needs the JOINED value (HTML
+       §13.2.3.2 "Determining the character encoding" does) reads it separately — two standards read this one
+       header differently and both are right. */
+    supplied_defined = mime_sniff_supplied(&supplied, &apache_bug,
+                                           header_list_get_last(response_headers, "content-type"));
+    /* NULL IS §5.1's "the supplied MIME type is undefined" as a POSITIVE statement, which §7 step 2 branches
+       on: an EMPTY record and an ABSENT one are different facts and mime_sniff_computed asserts the difference. */
+    r.supplied = supplied_defined ? &supplied : NULL;
+    r.apache_bug = apache_bug;
+    /* §5's NO-SNIFF flag, which Fetch §3.6 "`X-Content-Type-Options` header"'s determine-nosniff answers over
+       the same list — values[0] with its HTTP whitespace stripped, not a substring test. */
+    r.no_sniff = header_list_determine_nosniff(response_headers);
+    /* §7 steps 5 and 7's "SUPPORTED BY THE USER AGENT", the conjunct core/mime deliberately does not own:
+       §4.6's groups say what a byte stream IS and what this build can decode is its decoders' fact. An IMAGE
+       type is never supported here — this engine has no image decoder, so step 5's set is EMPTY — and an
+       audio-or-video type is supported exactly when the modelled media device renders it, which is the one
+       list §4.8.11.3's canPlayType answers from. It is stated ONCE, here, because a second loader restating it
+       is a second answer to a question about one device. */
+    r.ua_renders_supplied = supplied_defined && !mime_type_is_image(&supplied) &&
+                            media_device_renders(&supplied);
+    /* §5.2 "Reading the resource header": at most 1445 bytes. It is a bound on WHAT §7 LOOKS AT and never a
+       truncation of the body — the parse that follows still gets every byte. */
+    r.header = (const unsigned char *)body;
+    r.header_len = body_len < MIME_SNIFF_RESOURCE_HEADER_MAX ? body_len : MIME_SNIFF_RESOURCE_HEADER_MAX;
+    mime_sniff_computed(out, &r);
+    /* §4.4 leaves an initialised-and-empty record behind on failure, so this free is the same operation
+       whether §5.1 answered a type or `undefined`, and there is no path out of here that skips it. */
+    mime_type_free(&supplied);
+}
 
 DocumentLoadType document_load_type_of(const MimeType *m)
 {

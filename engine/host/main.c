@@ -33,6 +33,7 @@
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
 #include "browser/core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
+#include "browser/core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as */
 #include "browser/core/frame/navigable.h"
 #include "browser/core/frame/navigation_params.h"
 #include "browser/core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
@@ -272,21 +273,59 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
    after that byte was a script this engine never knew the page had.
    WHAT THIS DOES NOT DO IS DECIDE THE ENCODING. The bytes are handed to lexbor as UTF-8, which is HTML
    §13.2.3.2 "Determining the character encoding" left unbuilt — a separate capability, and one the length is a
-   PRECONDITION for rather than a part of: sniffing is defined over a byte sequence, and there was none. */
-static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n)
+   PRECONDITION for rather than a part of: sniffing is defined over a byte sequence, and there was none.
+   WHAT IT DOES DO IS ASK WHICH KIND OF DOCUMENT THIS RESPONSE LOADS AS, which is why the RESPONSE'S HEADER
+   LIST arrives beside its bytes. HTML §7.4.5 "Populating a session history entry"'s load-a-document dispatches
+   on the COMPUTED TYPE of the response, and this host asked nothing at all: every response the trusted zone
+   captured went to the HTML parser, so an XML document came back as a real tree with `<html>` and `<body>`
+   synthesised around its root element and nothing to say so. That is not a missing feature, it is a wrong
+   answer — and it made this host DISAGREE WITH ITS OWN CHILD LOADER, which has always crashed by name for a
+   non-HTML child navigable (core/frame/navigable.c's child_document): one absent capability reporting under
+   two different names depending on which loader the response arrived through. The dispatch is the loader's
+   (core/loader/document_load_type.h) and is shared with that one; only the crash is stated here, where the
+   parse it guards is. */
+static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n,
+                                                  const HeaderList *response_headers)
 {
-    lxb_html_document_t *dom = dom_document_create();
+    lxb_html_document_t *dom;
+    DocumentLoadType load;
 
-    CHECK(dom != NULL, "the document allocation failed");
-    /* NO `html ? html : ""` HERE ANY MORE. That ternary turned "the caller handed over no document" into a
+    /* NO `html ? html : ""` ANYWHERE HERE. That ternary turned "the caller handed over no document" into a
        document that parses to nothing — a successful analysis of an empty page, which reads exactly like a
        page with no endpoints and no sinks (the same default bridge.js deleted at its own end of this
        argument). Both entries CHECK the pointer, so this asserts rather than substituting. A zero LENGTH is a
        different statement and a legitimate one: an empty response is still a Document, and tree construction
-       still produces <html><head><body>. */
+       still produces <html><head><body>. It is asked FIRST because the type dispatch below reads those bytes. */
     DCHECK(html != NULL,
            "a document was parsed from no bytes at all — both entries CHECK the pointer before reaching here, "
            "so a null one is a third caller that does not");
+    /* §7.4.5's TYPE DISPATCH, ASKED BEFORE ANYTHING IS ALLOCATED: an arm this build has no loader for must
+       crash naming the §7.5 subsection to build, and doing that after a Document exists would leak it. */
+    DCHECK(response_headers != NULL,
+           "a Document was built out of a response with no header list — MIME Sniffing §7's computed type is "
+           "what HTML §7.4.5 dispatches on, and a caller with bytes and no headers is one that never asked "
+           "which kind of document it fetched");
+    {
+        MimeType computed;
+
+        document_load_computed_type(&computed, response_headers, html, html_n);
+        load = document_load_type_of(&computed);
+        mime_type_free(&computed);
+        /* THE ARM THIS BUILD HAS NO LOADER FOR CRASHES BY NAME — the statement child_document makes at its own
+           site, where §7.5.3's already-present dependencies and the grammar still owed for it are enumerated.
+           Every one of those sites is deleted together when that loader lands. */
+        if (load != DOC_LOAD_HTML) DFAIL(document_load_type_section(load));
+    }
+    dom = dom_document_create();
+
+    CHECK(dom != NULL, "the document allocation failed");
+    /* THE HTML PARSER IS UNREACHABLE FOR A DOCUMENT §7.4.5 DOES NOT LOAD AS HTML, and this is what keeps it so.
+       The dispatch above crashes by name for every other arm, so this can only fire for a route added later
+       that reaches this parse without going through it — which is exactly the state this function was in. */
+    DCHECK(load == DOC_LOAD_HTML,
+           "this host reached HTML §13.2's parser with a response HTML §7.4.5 loads as some other kind of "
+           "document — the type dispatch is above and every arm but the HTML one crashes there, so this is a "
+           "second route into the parse that never asked what it fetched");
     if (html_parse_document(dom, (const lxb_char_t *)html, html_n) != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
     return dom;
@@ -444,7 +483,11 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     header_list_parse_field_lines(&response_headers, headers);
     navigation_params_from_response(&np, &response_headers, 0,
                                     secure_context_url_potentially_trustworthy(top_level_url));
-    header_list_free(&response_headers);
+    /* THE LIST IS NOT FREED HERE ANY MORE: §7.4.5 reads this response TWICE — once for the navigation params
+       above, and once for the COMPUTED TYPE that decides which kind of Document its bytes load as — and the
+       second read is at the parse below. Freeing between them is what made this host parse every response as
+       HTML: by the time there were bytes to build a tree from, the only thing that could say what they were
+       had already been released. */
 
     g_rt = JS_NewRuntime();
     CHECK(g_rt != NULL, "the runtime allocation failed: a dropped engine loses the whole frontier");
@@ -473,7 +516,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
 
-    g_dom = engine_parse_document(html, html_len);
+    g_dom = engine_parse_document(html, html_len, &response_headers);
+    header_list_free(&response_headers);
 
     /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot
        represent per-<script> scope and would shift with an inline script the page did not ship. */
@@ -652,7 +696,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
     header_list_parse_field_lines(&response_headers, headers);
     navigation_params_from_response(&np, &response_headers, 0,
                                     secure_context_url_potentially_trustworthy(top_level_url));
-    header_list_free(&response_headers);
+    /* HELD PAST THE PARSE, for the reason qjs_init states: §7.4.5 reads this one response for its navigation
+       params AND for the computed type the parse dispatches on. */
 
     /* THIS AGENT HOLDS IT — said before the realm is built, because §7.2.3's mint below asserts it and
        because "this agent holds `doc`" is what makes every same-origin read through this document answer in
@@ -664,7 +709,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            "to it resolving to whichever of the two the registry wrote last");
     world_doc_adopt(doc);
 
-    dom = engine_parse_document(html, html_len);
+    dom = engine_parse_document(html, html_len, &response_headers);
+    header_list_free(&response_headers);
     cctx = engine_realm_new(g_rt, top_level_url);
     {
         /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME — the same statement qjs_init makes about the

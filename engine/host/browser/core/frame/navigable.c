@@ -20,10 +20,8 @@
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
 #include "core/html/html_encoding_sniff.h"  /* §13.2.3.2: WHICH ENCODING a navigated response's bytes are in */
-#include "core/html/media_element.h"    /* §7 steps 5/7's "supported by the user agent" — the device's own list */
-#include "core/mime/mime_sniff.h"       /* mimesniff §7: WHICH TYPE a navigated response's bytes ARE */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
-#include "core/loader/document_load_type.h"  /* §7.4.5's dispatch: WHICH document a response loads as */
+#include "core/loader/document_load_type.h"  /* §7.4.5: a response's COMPUTED TYPE, and which document it loads as */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
@@ -633,12 +631,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* The JOINED `Content-Type`, which is Fetch §2.2.3's input and therefore §13.2.3.2's; same ownership as
        resp_csp above. The type §7.4.5 dispatches on is NOT computed from it — see the read below. */
     char *resp_ctype = NULL;
-    /* MIME Sniffing §5's metadata for this response, and §7's answer. `supplied` and `computed` are records
-       this frame owns and frees on every path; `supplied_defined` is §5.1's "the supplied MIME type is
-       undefined" as a positive statement, because an EMPTY record and an ABSENT one are different facts and
-       §7 step 2 branches on exactly that difference. */
-    MimeType supplied, computed;
-    bool supplied_defined = false, apache_bug = false, no_sniff = false, computed_defined = false;
+    /* §7.4.5's COMPUTED TYPE for this response — a record this frame owns and frees on every path.
+       `computed_defined` is "there was a response to compute it from" as a positive statement: a fetch that
+       did not load has no resource, which is a DIFFERENT fact from a response that carried no `Content-Type`
+       (that one HAS bytes and is exactly what MIME Sniffing §7 exists to answer for). */
+    MimeType computed;
+    bool computed_defined = false;
     bool inherited = false;
     /* §7.1.3.2's `swapGroup`, once its arm has RUN — so the whole of the load below it is skipped. It is not a
        second copy of the predicate's answer: a load that swapped has no Document to create in this heap and no
@@ -653,7 +651,6 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    mime_type_init(&supplied);
     mime_type_init(&computed);
     memset(&response_headers, 0, sizeof response_headers);
     opener_policy_init(&response_coop);   /* §7.4.5: "Let responseCOOP be a new opener policy" */
@@ -717,19 +714,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "legacy extract an encoding" runs on the extraction's record. MIME Sniffing §5.1's supplied MIME type
            detection takes "the value of the LAST `Content-Type` header" UNJOINED, because §5's
            check-for-apache-bug flag is a byte-exact comparison a joined list can never satisfy. Reading one and
-           calling it the other is how a component ends up answering a question nobody asked. */
+           calling it the other is how a component ends up answering a question nobody asked. So the JOINED one
+           is read here, for the encoding, and the UNJOINED one is read out of this same list by the component
+           that runs §5.1 and §7 (core/loader/document_load_type.h) — two reads of one header because they are
+           two algorithms, never one read passed to both. */
         resp_ctype = header_list_get(&response_headers, "content-type");
-        /* §5.1 "Interpreting the resource metadata" — the resource's SUPPLIED MIME type and its
-           check-for-apache-bug flag. Read here, where the header list is, and BEFORE the free below: the value
-           §5.1 takes belongs to the list and dies with it. */
-        supplied_defined = mime_sniff_supplied(&supplied, &apache_bug,
-                                               header_list_get_last(&response_headers, "content-type"));
-        /* §5's NO-SNIFF flag, which Fetch §3.6 "`X-Content-Type-Options` header"'s DETERMINE NOSNIFF answers:
-           "let values be the result of getting, decoding, and splitting `X-Content-Type-Options` from list. If
-           values is null, then return false. If values[0] is an ASCII case-insensitive match for `nosniff`,
-           then return true." values[0] is the FIRST comma-separated value with its HTTP whitespace stripped —
-           a substring test would set the flag for `foo, nosniff`, which is a different algorithm. */
-        no_sniff = header_list_determine_nosniff(&response_headers);
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
            field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
@@ -750,25 +739,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            initial-about:blank treatment below; that is a different fact from a response that carried no
            `Content-Type`, which HAS bytes and is exactly what §7 exists to answer for. */
         if (body) {
-            MimeSniffResource res;
-
-            res.supplied = supplied_defined ? &supplied : NULL;
-            res.apache_bug = apache_bug;
-            res.no_sniff = no_sniff;
-            /* §7 steps 5 and 7's "SUPPORTED BY THE USER AGENT", which core/mime deliberately does not answer:
-               §4.6's groups say what a byte stream IS and what this build can decode is its decoders' fact.
-               An IMAGE type is never supported here — this engine has no image decoder at all, so §7 step 5's
-               set is EMPTY and its pattern matching could not change an answer. An audio-or-video type is
-               supported exactly when the modelled media device renders it, which is the one list §4.8.11.3's
-               canPlayType answers from (core/html/media_element.h). */
-            res.ua_renders_supplied = supplied_defined && !mime_type_is_image(&supplied) &&
-                                      media_device_renders(&supplied);
-            /* §5.2 "Reading the resource header": at most 1445 bytes, which is a bound on WHAT §7 LOOKS AT and
-               not a truncation of the body — the parse below still gets every byte. */
-            res.header = (const unsigned char *)body;
-            res.header_len = body_len < MIME_SNIFF_RESOURCE_HEADER_MAX ? body_len
-                                                                      : MIME_SNIFF_RESOURCE_HEADER_MAX;
-            mime_sniff_computed(&computed, &res);
+            document_load_computed_type(&computed, &response_headers, body, body_len);
             computed_defined = true;
         }
     }
@@ -913,10 +884,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     if (inherited) JS_FreeCString(ctx, csp);
     free(resp_csp);
     free(resp_ctype);
-    /* Both records are initialised at the top of this frame and freed unconditionally — §4.4 leaves an empty
-       record behind on failure, so a `free` of one that was never filled is the same operation as a free of
-       one that was, and there is no path out of here that can skip it. */
-    mime_type_free(&supplied);
+    /* Initialised at the top of this frame and freed unconditionally — §4.4 leaves an empty record behind on
+       failure, so a `free` of one that was never filled is the same operation as a free of one that was, and
+       there is no path out of here that can skip it. */
     mime_type_free(&computed);
     JS_FreeCString(ctx, field_lines);
     /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
