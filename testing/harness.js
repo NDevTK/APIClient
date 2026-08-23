@@ -314,14 +314,49 @@ function resolveUnprivileged(chromePath) {
    namespace, a Chrome that degrades quietly — each leaves a harness that reports a sandboxed run and delivers
    an unsandboxed one, which is worse than never having claimed it. Linux states the answer per process:
    `Seccomp: 2` is filter mode, and a sandboxed renderer also carries `NoNewPrivs: 1`. */
-function assertRendererSandboxed(expectSandbox) {
+/* THE PROCESSES BELOW ONE ROOT, because this checkout holds several agents at once and each of them has a
+   Chrome. Walked from /proc's own parent links rather than from `ps --ppid`, which answers one level. */
+function descendantsOf(rootPid) {
+  const parent = new Map();
+  let names = [];
+  try { names = fs.readdirSync("/proc").filter((n) => /^\d+$/.test(n)); } catch { return null; }
+  for (const n of names) {
+    try {
+      const st = fs.readFileSync(`/proc/${n}/stat`, "utf8");
+      /* comm is parenthesised and may contain spaces, so the fields after it are read from the LAST ')'. */
+      const after = st.slice(st.lastIndexOf(")") + 2).split(" ");
+      parent.set(Number(n), Number(after[1]));
+    } catch { /* the process exited between the readdir and the read */ }
+  }
+  /* The depth bound is a guard against a /proc read that raced into a cycle, not a limit on process depth:
+     Chrome's browser → zygote → renderer is three, and no real chain here is anywhere near it. */
+  const under = (pid) => {
+    for (let p = pid, i = 0; p > 0 && i < 64; i++) {
+      if (p === rootPid) return true;
+      const q = parent.get(p);
+      if (q === undefined || q === p) return false;
+      p = q;
+    }
+    return false;
+  };
+  return new Set([...parent.keys()].filter(under));
+}
+
+/* THE ASSERTION IS ABOUT THE BROWSER THIS FUNCTION JUST LAUNCHED, WHICH IS WHY IT TAKES ITS PID. It scanned
+   EVERY `--type=renderer` on the machine, and on a shared box that is every agent's Chrome: a launch that died
+   before it forked a renderer at all still printed "sandbox verified: 6/6", because six of somebody else's
+   were sandboxed. A security assertion passing on evidence from a process it did not start is the same defect
+   as a gate run against a tree no revision contains — the number is real and it is about nothing. */
+function assertRendererSandboxed(expectSandbox, rootPid) {
   let renderers = [];
+  const ours = descendantsOf(rootPid);
   try {
     renderers = execSync("ps -eo pid,args", { stdio: ["ignore", "pipe", "ignore"] }).toString()
       .split("\n").filter((l) => l.includes("--type=renderer"))
-      .map((l) => Number(l.trim().split(/\s+/)[0])).filter(Boolean);
+      .map((l) => Number(l.trim().split(/\s+/)[0])).filter(Boolean)
+      .filter((p) => !ours || ours.has(p));
   } catch { /* no ps: the check is unavailable, which is not the same as passing — say so below */ }
-  if (!renderers.length) { log("sandbox check: no renderer process yet — nothing to verify against"); return; }
+  if (!renderers.length) { log("sandbox check: no renderer process of THIS Chrome yet — nothing to verify against"); return; }
   const read = (pid, key) => {
     try {
       const m = fs.readFileSync(`/proc/${pid}/status`, "utf8").match(new RegExp("^" + key + ":\\s*(\\d+)", "m"));
@@ -353,6 +388,25 @@ async function cmdStart(args) {
   }
 
   const port = Number(args[0] || process.env.HARNESS_PORT || DEFAULT_PORT);
+  /* AND THE PORT MUST BE FREE, BECAUSE THE READINESS POLL BELOW CANNOT TELL WHOSE BROWSER ANSWERED. The lock
+     above has already established that OUR browser is not running, so anything answering here belongs to
+     another agent of this shared checkout — and the poll after the spawn would find it, report "started", and
+     write our lock naming a port we do not own. Every command after that drives somebody else's Chrome: their
+     extension, their profile, their tabs. Measured here — a launch whose own Chrome died on its first line
+     reported success and then answered `diag` with another lane's extension id, and nothing in the output
+     said so. Refuse instead, and name the fix, because a second agent's browser is a normal state of this box
+     and not an error to work around silently. */
+  /* WAITED OUT FIRST, because `restart` has just killed OUR browser and a killed Chrome does not release its
+     listening socket on the same tick — a constant sleep before this point would be a guess, and this is the
+     condition that sleep was guessing at. Only a port that is STILL answering after it belongs to somebody. */
+  for (let i = 0; i < 20 && (await pingPort(port)); i++) await sleep(400);
+  if (await pingPort(port)) {
+    throw new Error(
+      `port ${port} already has a browser on it, and it is not ours (no live lock at ${LOCK_FILE}).\n` +
+      `  Another agent of this checkout owns it. Pick a free port and a private profile/lock:\n` +
+      `      HARNESS_PROFILE=/tmp/<lane>/prof HARNESS_LOCK=/tmp/<lane>/harness.lock \\\n` +
+      `      node testing/harness.js restart <free-port>`);
+  }
   /* The container states its egress path in the environment; the harness does not invent one. */
   const proxy = process.env.HARNESS_NO_PROXY === "1" ? null
     : (process.env.HARNESS_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || null);
@@ -470,7 +524,8 @@ async function cmdStart(args) {
 
   /* Checked AFTER the port answers, because renderers do not exist until Chrome has something to render, and
      a check run before them would pass by finding nothing — which is the excluded-test shape. */
-  assertRendererSandboxed(!!dropTo || (typeof process.getuid === "function" && process.getuid() !== 0));
+  assertRendererSandboxed(!!dropTo || (typeof process.getuid === "function" && process.getuid() !== 0),
+                          chromeProc.pid);
 
   await writeLock({ port, pid: chromeProc.pid, extId, startedAt: Date.now() });
   log(`started. chrome pid=${chromeProc.pid} port=${port} extId=${extId || "(unknown)"}`);
