@@ -96,7 +96,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
      fire-verified  `{"sink":..,"source":..,"poc":..,"firesOn":..[,"cspBlocks":".."][,"trustedTypes":"script"]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
-                      "survivedOf":L,"escaped":E[,"fires":F],"payloads":[..]
+                      "survivedOf":L,"escaped":E[,"fires":F],"payloads":[..],"survivedBy":[..]
                       [,"sourceEncodes":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -145,6 +145,18 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    about the PAYLOAD and `fires:0` is only sometimes one. Every state the scan cannot decide answers 0: an
    escape is never claimed on a scan that could not be made, because a rung that over-claims promotes a
    candidate that cannot fire while one that under-claims merely leaves it where it was.
+   `survivedBy` IS `survived` PER CANDIDATE, one entry per `payloads` entry and in the same order, and it
+   exists because the ratchet that makes `survived` cheap is also what blinds it. `survived`/`survivedOf` is
+   the search's BEST, so it saturates at a full-length run the instant ANY candidate lands intact and can no
+   longer say WHICH one did — and for a derived class the candidates are an inert context PROBE and the
+   breakouts built out of what that probe observed, two flows whose only difference is these bytes. So
+   `survived:16,survivedOf:16` beside `reached:0` is exactly the reading the pair cannot resolve, and
+   `survivedBy:[16,0]` resolves it: the probe's bytes reached a sink and the breakout's never did, which is a
+   question about the SECOND traversal, while `[16,9]` would say the breakout travelled and something after
+   arrival is the problem. A ZERO is a real value each entry must be able to say, and a candidate whose payload
+   this session's record does not hold — a cold-resumed one, whose bytes ride the resumed FLOW rather than the
+   record, which is the same reason `payloads` can be empty beside a non-zero `tried` — contributes to
+   `survived` and to no column here, because there is no row of this session's for it.
    `payloads` IS THE ONE FIELD THAT IS NOT A COUNT, and the search's most common state is the one
    that needs it: a breakout that ARRIVED and did not fire is a question about the BYTES, and no quantity
    answers it. Entry 0 of a derived class is its inert context probe — it is one of the runs `tried` counts, so

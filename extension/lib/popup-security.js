@@ -123,6 +123,18 @@ function _encodeSentence(item) {
 function _parkedProgress(item) {
   var held = 'its candidates have held the thread ' + item.turns + ' time' + (item.turns === 1 ? "" : "s");
   var got  = item.survived + ' of ' + item.survivedOf + ' bytes of the furthest candidate';
+  // HOW MANY OF THIS SEARCH'S CANDIDATES HAVE NEVER BEEN SEEN AT A SINK — counted, never indexed. solve.h
+  // says the inert context probe is entry 0 of a DERIVED class and that it is told apart by carrying no
+  // marker; deciding WHICH entry is the probe from its POSITION would be this view restating a producer fact
+  // it cannot check, which is the drift these cards exist to end. A count needs no such claim and answers the
+  // question anyway: with `survived` saturated at a full-length run, "and N of its M candidates have never
+  // been seen at a sink" is what says the run belongs to one candidate and the others never travelled.
+  var unseen = item.survivedBy.filter(function (n) { return n === 0; }).length;
+  var alsoUnseen = unseen
+    ? ', and ' + unseen + ' of its ' + item.survivedBy.length + ' candidate'
+      + (item.survivedBy.length === 1 ? "" : "s") + ' ' + (unseen === 1 ? 'has' : 'have')
+      + ' never been seen at a sink at all'
+    : "";
 
   if (item.turns === 0)
     return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
@@ -132,9 +144,10 @@ function _parkedProgress(item) {
     return held + ' and NONE of their bytes has been seen at any sink — the flows run and do not get this far '
          + 'through the document, so this is still a distance question and not one about the payload';
   if (item.reached === 0)
-    return held + ' and ' + got + ' survived the page\'s own transforms to a sink, but no whole breakout has '
-         + 'ARRIVED at this sink — the page\'s FILTER is what is eating the candidate, and that is a question '
-         + 'about the BYTES rather than about the schedule';
+    return held + ' and ' + got + ' survived the page\'s own transforms to a sink' + alsoUnseen
+         + ', but no whole breakout has ARRIVED at this sink. A candidate that has never been seen at a sink '
+         + 'has not re-traversed the document yet; one whose bytes arrived short of their own length was cut '
+         + 'down by the page\'s own FILTER. Those are different questions and this line separates them';
   if (item.escaped === 0)
     return item.reached + ' breakout' + (item.reached === 1 ? "" : "s") + ' arrived at the sink and NONE '
          + 'reached an executable position — the bytes are still inside the literal, comment or text they were '
@@ -324,7 +337,8 @@ function renderSecurityPanel() {
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
     // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, survived,
-    // survivedOf, escaped, fires?, payloads, sourceEncodes?, delivery?, deliveryPrefix?} for a parked one. This card used to read `shape`,
+    // survivedOf, escaped, fires?, payloads, survivedBy, sourceEncodes?, delivery?, deliveryPrefix?} for a
+    // parked one. This card used to read `shape`,
     // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
     // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
     // `shape`) could not appear for any finding the engine has ever emitted. A bridge edge asserts its
@@ -484,6 +498,22 @@ function renderSecurityPanel() {
         + "queued — for those classes the escape is observed in the same block that queues the program, so "
         + "one without the other means solve.c's fire oracle and its escape rung came apart (sink=" + pit.sink
         + " escaped=" + pit.escaped + " fires=" + JSON.stringify(pit.fires) + ")");
+      // `survivedBy` IS ASSERTED AGAINST `payloads`, BECAUSE THE TWO ARE ONE FACT READ BY INDEX. A card that
+      // lines up a run with the wrong payload states that the page ate a candidate it never ran, which is a
+      // confident wrong instruction rather than a missing one — so the LENGTHS are the assertion, not the
+      // presence. Each entry is bounded by the byte length of the payload it belongs to for the same reason
+      // `survived <= survivedOf` is asserted above: a run is a substring of its own candidate by construction.
+      DCHECK(Array.isArray(pit.survivedBy) && pit.survivedBy.length === pit.payloads.length,
+        "a parked @S record's per-candidate survival does not line up with its payload list — solve_json_array "
+        + "writes the two in one order and the card reads them by index, so a mismatch would attribute a "
+        + "surviving run to a candidate that did not produce it (sink=" + pit.sink + " payloads="
+        + pit.payloads.length + " survivedBy=" + JSON.stringify(pit.survivedBy) + ")");
+      DCHECK(pit.survivedBy.every(function (n, i) {
+               return typeof n === "number" && n >= 0 && n <= pit.payloads[i].length;
+             }),
+        "a parked @S record reports a candidate surviving more bytes than that candidate has — the run is a "
+        + "substring of its own payload, so this column was measured against a different string (sink="
+        + pit.sink + " survivedBy=" + JSON.stringify(pit.survivedBy) + ")");
       DCHECK(pit.fires === undefined || typeof pit.fires === "number",
         "a parked @S record carries a `fires` that is not a count — the field is emitted only for a sink class "
         + "whose breakout becomes a QUEUED program, and its absence is the statement that this class evaluates "

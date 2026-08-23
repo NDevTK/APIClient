@@ -107,6 +107,13 @@ typedef struct {
        (cold.c parks `cand_payload` as bytes for exactly this reason), so a recipe parked this session must
        still mean the same thing to a build whose tables have changed. */
     char **pl; int npl, plcap, seeded;
+    /* THE PER-CANDIDATE HALF OF THE SURVIVAL PAIR, parallel to `pl` (see push_breakout). `surv_run`/`surv_len`
+       is the search's BEST and saturates at a full-length run the moment any one candidate lands intact — the
+       ratchet's own consequence — so it cannot say whether the run it is reporting was the inert probe's or a
+       breakout's. Those are the two flows whose only difference is these bytes, so telling them apart IS the
+       remaining question. Report-only: the WFQ credit stays on the search-level ratchet, worth at most one
+       rung, so adding this changes no ordering. */
+    int *surv_pl; int svcap;
 } Cand;
 static Cand *g_pending = NULL; static int g_pending_n = 0, g_pending_cap = 0;
 
@@ -395,6 +402,7 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        best-so-far ratchet that is not merely a wrong report — a garbage `surv_len` makes the first real
        observation compare against a maximum nothing ever achieved and the rung never pays at all. */
     e->surv_run = 0; e->surv_len = 0;
+    e->surv_pl = NULL; e->svcap = 0;
     e->escaped = 0;
     e->pl = NULL; e->npl = e->plcap = 0; e->seeded = 0;
     *created = 1;
@@ -416,6 +424,18 @@ static void push_breakout(Cand *e, const char *payload) {
     }
     e->pl[e->npl] = strdup(payload);
     CHECK(e->pl[e->npl], "solve: OOM recording a breakout for a sink search");
+    /* PARALLEL TO `pl` AND GROWN WITH IT, so the two cannot come apart. `surv_pl[i]` is the longest run of
+       `pl[i]` ITSELF that has ever been seen at a sink — the per-candidate half of `surv_run`/`surv_len`, which
+       saturates at 1.0 the moment ANY candidate lands intact and then cannot say WHICH one did. A derived
+       class's `pl[0]` is its inert context probe and `pl[1..]` are the breakouts built from what that probe
+       observed, so this array is exactly the statement "the probe's bytes got somewhere and the breakout's did
+       not" — the two flows differ in nothing but these bytes, so that is the whole question. */
+    if (e->plcap > e->svcap) {
+        e->surv_pl = realloc(e->surv_pl, (size_t)e->plcap * sizeof(int));
+        CHECK(e->surv_pl, "solve: OOM recording a breakout's own survival");
+        e->svcap = e->plcap;
+    }
+    e->surv_pl[e->npl] = 0;
     e->npl++;
 }
 
@@ -609,6 +629,23 @@ static void filter_survived(const char *out) {
     solve_filter_survival(out, f->cand_payload, &o);
     DCHECK(o.len > 0, "a candidate flow carries an empty payload — see solve_filter.c's own assert");
     if (o.run == 0) return;                  /* none of this candidate is in this string: an OBSERVATION */
+    /* WHICH CANDIDATE THIS IS, recorded before the search-level ratchet because the ratchet is what erases the
+       distinction. A NEGATIVE index is a POSITIVE statement and not a miss: solve_resume_candidate raises
+       `tried` for a cold-resumed candidate whose payload rides the resumed FLOW rather than this session's
+       record, so its bytes are legitimately not in `pl` (solve.h says the same thing about `payloads` being
+       empty beside a non-zero `tried`). The search-level pair still records it, so nothing is lost — only the
+       per-candidate column, which this session has no row for. */
+    {
+        int idx = -1;
+        for (int i = 0; i < e->npl; i++) if (!strcmp(e->pl[i], f->cand_payload)) { idx = i; break; }
+        if (idx >= 0) {
+            DCHECK(o.len == (int)strlen(e->pl[idx]),
+                   "a candidate's payload matched its search's record by text and disagrees with it by length — "
+                   "the two are the same bytes by construction, so the per-candidate survival column is about "
+                   "to be scaled by a denominator that is not this candidate's");
+            if (o.run > e->surv_pl[idx]) e->surv_pl[idx] = o.run;
+        }
+    }
     /* Cross-multiplied so the comparison is exact rather than a float one, and so the zero state — no
        observation yet, held as 0/0 — is the one case that falls through rather than comparing against itself. */
     if (e->surv_len != 0 && (long)o.run * e->surv_len <= (long)e->surv_run * o.len) return;
@@ -1237,6 +1274,20 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_str(&b, g_pending[i].pl[c]);
         }
         json_buf_puts(&b, "]");
+        /* …AND HOW FAR EACH OF THOSE PAYLOADS GOT, one entry per `payloads` entry and in the same order, so a
+           reader lines the two up by index rather than by guessing. It is the column `survived` cannot have:
+           the ratchet saturates the moment ANY candidate lands intact, so `survived:16 survivedOf:16` beside
+           `reached:0` says a full-length run of SOMETHING arrived and nothing about WHICH — and for a derived
+           class the two candidates differ in nothing except these bytes, so that is the entire question.
+           `[14,0]` says the inert probe's bytes reached a sink and the breakout built from them never did;
+           `[14,9]` says the breakout travelled too and something after arrival is the problem. Those take
+           opposite work and `survived` alone reports them identically. */
+        json_buf_puts(&b, ",\"survivedBy\":[");
+        for (int c = 0; c < g_pending[i].npl; c++) {
+            if (c) json_buf_puts(&b, ",");
+            snprintf(t, sizeof t, "%d", g_pending[i].surv_pl[c]); json_buf_puts(&b, t);
+        }
+        json_buf_puts(&b, "]");
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no
            vector to state and no PoC to reproduce, so `firesOn`/`cspBlocks`/`trustedTypes` would be claims
            about a PoC that does not exist. What it does carry is the whole source declaration — the bytes a
@@ -1260,6 +1311,7 @@ void solve_free(void) {
     for (int i = 0; i < g_pending_n; i++) {
         for (int c = 0; c < g_pending[i].npl; c++) free(g_pending[i].pl[c]);
         free(g_pending[i].pl);
+        free(g_pending[i].surv_pl);   /* grown with `pl` (push_breakout), so freed beside it */
         free(g_pending[i].src);
         free(g_pending[i].root);
     }
