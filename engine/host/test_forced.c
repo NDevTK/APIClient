@@ -28,6 +28,8 @@
 #include "core/dom/observable.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/css/media_query_list.h"
+#include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_property_syntax.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -284,6 +286,22 @@ static const char *HTML =
     /* Author CSS whose SPECIFICITY and DOCUMENT ORDER disagree: the id rule is written FIRST and must still
        win. Order-only cascading answers `none` here, and every page puts its general rules last. */
     "<style>#cs1 { display: block; color: rgb(1, 2, 3) } div { display: none }</style>"
+    /* CSS Properties and Values API 1 §3's `@property`, in a SHEET OF ITS OWN so its rules sit at fixed
+       indices and the sheet above keeps index 0. Four bodies, because §3 decides four different things about
+       one: every descriptor declared; NONE, which is what exercises §3.1's initial `"*"`, §3.2's initial `true`
+       and §3.3's initial (the guaranteed-invalid value, i.e. a null `initialValue`); only an UNKNOWN
+       descriptor, which §3 says is "invalid and ignored, but do not invalidate the @property rule" — so the
+       rule must still be in `cssRules`; and a `syntax` whose string §5.4.3 refuses (`inherit` is not a
+       `<custom-ident>`), which §3.1 says leaves the descriptor ignored and therefore the initial standing.
+       A shipping site's own rule is exactly the first shape — developer.mozilla.org ships
+       `@property --switch-position{syntax:"<percentage>";inherits:false;initial-value:0}` — and it is the rule
+       that used to abort the whole document at stage `create` with zero flows run. */
+    "<style>"
+    "@property --pfull { syntax: \"<percentage>\"; inherits: false; initial-value: 0% }"
+    "@property --pbare { }"
+    "@property --podd { not-a-descriptor: 3 }"
+    "@property --pbad { syntax: \"inherit\" }"
+    "</style>"
     "</head><body><div id=cs1 style=\"margin-top: 4px\"></div><h1 id=dh>doch</h1>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
@@ -305,6 +323,36 @@ static const char *HTML =
     "soEl.textContent = \"__so += 'X';\";"
     "document.body.appendChild(soEl);"
     "__so += 'B';</script>"
+    /* §6.1's FOUR ATTRIBUTES AND ITS SERIALIZATION, READ FROM THE PAGE. They are IDL getters, so the read has
+       to be page code on the trampolined chain — a C activation has no flow base under it, and
+       `JS_GetPropertyInternal` refuses to run a getter from one outright. Reading them here is also what a real
+       page does, which is worth more than a C read would have been: `document.styleSheets`, §6.1.1's
+       `cssRules`, §6.1.2's indexed getter and the rule objects are the whole route, and a member that is not on
+       §6.1's prototype fails here rather than being read out of the record behind it.
+       THE COMPARISON IS IN THE PAGE AND ONLY A TOKEN CROSSES THE URL, which is not a style choice: a fetch URL
+       goes through the WHATWG query percent-encode set, which encodes SPACE, `"`, `<` and `>` — so a syntax
+       string shipped as a query value arrives as `%3Cpercentage%3E`, and an assertion over that is an assertion
+       about the encoder. The expected bytes are JS literals here, where nothing rewrites them, and the failing
+       arm still carries the actual value for whoever has to read it.
+       TWO FETCHES BECAUSE THEY ARE TWO INDEPENDENT CLAIMS — what the attributes ANSWER, and what §6.1's own
+       serialization arm EMITS. A build could get the four right and the arm's order or spacing wrong, and one
+       token over both would say only that one of two unrelated things is broken.
+       NO FORK: every value is concrete (the CSSOM computed it), so each `===` runs rather than forking, and
+       this adds two endpoint records and no arms. The joined string leads with the rule COUNT because an
+       unknown descriptor and an unreadable syntax string are DESCRIPTOR failures and §3 says neither
+       invalidates the rule — all four must be in `cssRules` — and it ends with the two syntaxes that reach
+       §3.1's initial by two different routes. `type` is in it because §6.4.2's table is frozen and this
+       interface is not in it, so the answer is 0, the same answer the two `@layer` rules give. */
+    "<script>var pss = document.styleSheets[1].cssRules;"
+    "var pv = pss.length + '|' + pss[0].name + '|' + pss[0].syntax + '|' + pss[0].inherits + '|' +"
+    " pss[0].initialValue + '|' + pss[0].type + '|' + pss[1].syntax + '|' + pss[1].inherits + '|' +"
+    " pss[1].initialValue + '|' + pss[2].syntax + '|' + pss[3].syntax;"
+    "fetch('/api/cssprop?v=' + (pv === '4|--pfull|<percentage>|false|0%|0|*|true|null|*|*'"
+    " ? 'CSSPROPOK' : 'CSSPROPBAD:' + pv));"
+    "var pt = pss[0].cssText + '~' + pss[1].cssText;"
+    "fetch('/api/csspropText?v=' + (pt === '@property --pfull { syntax: \"<percentage>\"; inherits: false;"
+    " initial-value: 0%; }~@property --pbare { syntax: \"*\"; inherits: true; }'"
+    " ? 'CSSTEXTOK' : 'CSSTEXTBAD:' + pt));</script>"
     "<script>"
     "fetch('/api/u?uid=' + state.id);"   /* concolic query param -> uid carries {state}.id */
     "if (navigator.userAgent.indexOf('Chrome') >= 0) { fetch('/api/uafork?v=chrome'); } else { fetch('/api/uafork?v=other'); }"   /* THE UA GATE: navigator.userAgent is concolic with a real Chrome example, so the string method computes on the example AND the comparison forks -> BOTH arms' endpoints are learned */
@@ -4432,6 +4480,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        derivable from the other: the transaction's is why it died, the open request's is §5.1 step 10.8's. */
     int idbuniq_tt = (strstr(js, "\"/api/idbuniq\"") && strstr(js, "ConstraintError:AbortError"));
 
+    /* §6.1's TWO CLAIMS, as the tokens the page's own comparison emitted. The expected bytes are in the
+       document (see `/api/cssprop` in HTML above) because that is where the read happens and where nothing
+       percent-encodes them; what reaches here is a verdict, and its failing spelling carries the actual value
+       so a red row names what answered instead of only that something did. */
+    int cssprop_tt = strstr(js, "CSSPROPOK") != NULL;
+    int csspropText_tt = strstr(js, "CSSTEXTOK") != NULL;
+
     /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, and one boolean over both is not a measurement of
        either — the same reason `deepest` and `completed` are two numbers a few hundred lines up. This was ONE
        row, it has read 0 for as long as it has existed, and a 0 said only "one of two unrelated things is
@@ -4923,6 +4978,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "idb-index", idbidx_tt, "/api/idbidx", SESS_EXPLORE },
         { "idb-index-uniq", idbuniq_tt, "/api/idbuniq", SESS_EXPLORE },
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
+        { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE },
+        { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE },
         { "s-eval", s_eval, "state.code", SESS_EXPLORE },
         { "s-evalc", s_evalc, "state.note", SESS_EXPLORE },
         { "s-html", s_html, "state.html", SESS_EXPLORE },
@@ -5122,11 +5179,133 @@ static int fixture_have_answers(void) {
  *
  * WHAT THIS MOMENT CANNOT CONTAIN is a DISCOVERY PROBE ('d'), and that is structural: active discovery is the
  * trusted zone's, so nothing in this engine seeds one. */
+/* AND A DRIVE OF UNCALLED CODE BESIDE IT, which is the second half of the moment and not a refinement of the
+ * first. `deepcands` says the residue will carry attacker text over a recorded path — the 'c' arm and the hex
+ * — and says nothing whatever about the 'o' arm: an orphan drive is seeded only when a flow has run out of
+ * everything else, so a park taken at the first deep candidate is taken BEFORE any drive exists and the record
+ * that names a function is never written. The moment is where this file's own census comment says the fix for a
+ * zero row belongs, so it is stated here rather than by softening the row.
+ * IT CANNOT RACE THE DRIVE'S EXECUTION, which is why the preview is the right thing to ask: `orphan` is set
+ * when the flow is ASSEMBLED, so this is true from the instant a drive is seeded and does not depend on it
+ * having reached anything. */
 static int fixture_want_park(void) {
     ColdPreview would;
 
     cold_park_preview(&would);
-    return would.deepcands > 0;
+    return would.deepcands > 0 && would.orphans > 0;
+}
+
+/* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
+ * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
+ * stated by reference to.
+ *
+ * IT IS PURE C AND IT READS NO CSSOM MEMBER, and that is a rule and not a convenience: §6.1's four attributes
+ * are IDL getters, and a getter is page-observable code that must run on the trampolined chain as a flow — a C
+ * activation has no flow base under it, so a loop in a getter body would drive to completion instead of
+ * parking. `JS_GetPropertyInternal` refuses one outright. So the two halves of this interface are tested from
+ * the two places that can see them: the GRAMMARS here, where the parsing risk actually is and where one fixture
+ * exercises one contract; and the four ATTRIBUTES from the fixture document's own JavaScript, where every other
+ * page read in this engine happens (see `/api/cssprop` in HTML above and the two probe rows over it). */
+static void css_property_grammar_selftest(void)
+{
+    static const struct { const char *s; bool valid, universal; const char *why; } SYNTAX[] = {
+        { "*", true, true, "§5.4.2 step 3: a lone `*` IS the universal syntax definition" },
+        { " * ", true, true, "§5.4.2 step 1 strips ASCII whitespace before step 3 measures the length" },
+        { "", false, false, "§5.4.2 step 2: a zero-length string is failure" },
+        { "   ", false, false, "and so is one that is nothing but the whitespace step 1 strips" },
+        { "<length>", true, false, "§5.1 names `<length>`, so §5.4.4 returns it" },
+        { " <color># ", true, false,
+          "§5.2's `#` follows the name immediately; the whitespace around the whole string is step 1's" },
+        { "<length> | <percentage>", true, false, "§5.3's combinator, with §5.4.2 step 6's whitespace" },
+        { "<length>|auto", true, false, "and with none — the whitespace is `as much as possible`, not required" },
+        { "big | bigger | BIGGER", true, false,
+          "§5.1's ident arm is codepoint-wise, so three spellings are three components and not one" },
+        { "I\\ dent|none", true, false,
+          "§5.4.3's `\\` arm: an escaped space is part of the ident sequence, which is what makes "
+          "css/css-properties-values-api/at-property-cssom.html's `--escape-syntax` a valid rule" },
+        { "<LENGTH>", false, false,
+          "§5.4.4 asks whether what it BUILT is a supported syntax component name and §5.1 spells all fifteen "
+          "in lower case — neither section folds case, and §5.1's own note says `<custom-ident>`s are compared "
+          "codepoint-wise" },
+        { "<bogus>", false, false, "a data type name outside §5.1's fifteen is §5.4.4's `otherwise return failure`" },
+        { "<length", false, false, "§5.4.4 runs to EOF without a `>`, which its `anything else` arm refuses" },
+        { "inherit", false, false,
+          "§5.4.3: `if component's name does not parse as a <custom-ident>, return failure`, and CSS Values "
+          "§4.2 excludes the CSS-wide keywords in all ASCII case permutations" },
+        { "DEFAULT", false, false, "§4.2 excludes the reserved `default` the same way, case included" },
+        { "<transform-list>+", false, false,
+          "§5.2: `any syntax component name EXCEPT pre-multiplied data type names may be immediately followed "
+          "by a multiplier`, so §5.4.3 returns before the `+` and §5.4.2 step 7 meets it" },
+        { "<transform-list>", true, false, "the same name unmultiplied is a component like any other" },
+        { "* | <length>", false, false,
+          "§5.1's note: `*` may not be combined with anything else — it is not a syntax component, so step 5 "
+          "refuses it" },
+        { "<length> <percentage>", false, false, "juxtaposition is not §5.3's combinator" },
+        { "<length> |", false, false, "a trailing combinator leaves step 5 with nothing to consume" },
+    };
+    static const struct { const char *s; const char *want; const char *why; } SYN_DESC[] = {
+        { "\"<length>\"", "<length>", "§3.1's `Value: <string>` denotes the string's own VALUE, unquoted" },
+        { "\" <color># \"", " <color># ",
+          "§6.1's `exactly as specified` keeps the spaces INSIDE the string — §5.4.2's strip is for the "
+          "validity question alone, which is why css/css-properties-values-api/at-property-cssom.html reads "
+          "`--valid-whitespace`'s syntax back with them" },
+        { "\"I\\\\ dent|none\"", "I\\ dent|none", "the tokenizer unescapes the string, so `\\\\` is one backslash" },
+        { "<length>", NULL, "an unquoted value is not a `<string>` and the descriptor is ignored" },
+        { "\"a\" \"b\"", NULL, "`Value: <string>` is ONE value, so a second token matches no grammar" },
+        { "", NULL, "and a descriptor with no value at all matches none either" },
+    };
+    static const struct { const char *s; bool ok, want; const char *why; } INHERITS[] = {
+        { "true", true, true, "§3.2's `Value: true | false`" },
+        { "FALSE", true, false, "a CSS keyword is ASCII case-insensitive" },
+        { "1", false, false, "and nothing else is one of the two" },
+        { "true false", false, false, "one value, so a second token matches no grammar" },
+    };
+    static const struct { const char *s; bool ok; unsigned n; const char *why; } NAMES[] = {
+        { "--a", true, 1, "CSS Variables §2: a `<custom-property-name>` is a `<dashed-ident>`" },
+        { "--switch-position", true, 1, "the shape a shipping site actually declares" },
+        { " --a , --b , --c ", true, 3, "§3's `#` multiplier, whose commas may carry whitespace" },
+        { "--", false, 0, "§2 reserves `--` itself, so it is not a custom property name" },
+        { "a", false, 0, "an ident with no dashes is not a `<dashed-ident>`" },
+        { "-a", false, 0, "and neither is one with a single dash" },
+        { "--a,", false, 0, "`#` has no zero-length arm, so a trailing comma matches nothing" },
+        { "", false, 0, "and neither does an empty prelude — `<custom-property-name>` is REQUIRED" },
+        { "--a --b", false, 0, "the multiplier is comma-separated; juxtaposition is not it" },
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(SYNTAX) / sizeof(SYNTAX[0]); i++) {
+        bool universal = SYNTAX[i].valid ? !SYNTAX[i].universal : true;   /* the WRONG answer, so a no-write shows */
+        bool got = css_property_syntax_definition(SYNTAX[i].s, strlen(SYNTAX[i].s), &universal);
+
+        CHECK(got == SYNTAX[i].valid, SYNTAX[i].why);
+        CHECK(!got || universal == SYNTAX[i].universal, SYNTAX[i].why);
+    }
+    for (i = 0; i < sizeof(SYN_DESC) / sizeof(SYN_DESC[0]); i++) {
+        char *got = css_property_descriptor_syntax(SYN_DESC[i].s, strlen(SYN_DESC[i].s));
+
+        CHECK(!SYN_DESC[i].want == !got, SYN_DESC[i].why);
+        CHECK(!got || strcmp(got, SYN_DESC[i].want) == 0, SYN_DESC[i].why);
+        free(got);
+    }
+    for (i = 0; i < sizeof(INHERITS) / sizeof(INHERITS[0]); i++) {
+        bool flag = !INHERITS[i].want;   /* the WRONG answer, so a refused descriptor that still wrote shows */
+        bool ok = css_property_descriptor_inherits(INHERITS[i].s, strlen(INHERITS[i].s), &flag);
+
+        CHECK(ok == INHERITS[i].ok, INHERITS[i].why);
+        CHECK(flag == (INHERITS[i].ok ? INHERITS[i].want : !INHERITS[i].want), INHERITS[i].why);
+    }
+    for (i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++) {
+        CssPropertyNames got = { NULL, 0 };
+        bool ok = css_prelude_property_names(NAMES[i].s, strlen(NAMES[i].s), &got);
+
+        CHECK(ok == NAMES[i].ok, NAMES[i].why);
+        CHECK(!ok || got.n == NAMES[i].n, NAMES[i].why);
+        /* A false answer allocates NOTHING, which is the entry's own contract and the one thing a leak here
+           would be. Freeing an untouched list is a no-op, so this asserts it rather than relying on it. */
+        CHECK(ok || (got.v == NULL && got.n == 0),
+              "a refused `<custom-property-name>#` prelude left a list allocated");
+        css_property_names_free(&got);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -5139,6 +5318,7 @@ int main(int argc, char **argv) {
     csp_element_matching_selftest();
     csp_url_matching_selftest();
     document_policy_selftest();
+    css_property_grammar_selftest();
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
