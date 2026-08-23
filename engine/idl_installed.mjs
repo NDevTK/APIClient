@@ -725,6 +725,17 @@ const CALL_FORMS = new Map(Object.entries({
   idl_install_replaceable:       { target: 1, name: 2, fn: 3, kind: "accessor" },
   idl_install_replaceable_value: { target: 1, name: 2, kind: "accessor" },
   JS_DefinePropertyGetSet:       { target: 1, name: 2, fn: 3, kind: "accessor" },
+  /* Web IDL §3.7.1 Interface object — "the property has attributes { [[Writable]]: true, [[Enumerable]]:
+     false, [[Configurable]]: true }", a DATA property on the global. These two are core/dom/node.c's shared
+     install helpers for one, and they are HERE for the reason every other shared helper is: the helper's own
+     `JS_SetPropertyStr(ctx, global, name, ctor)` takes the name from a PARAMETER, so it is the one line that
+     cannot resolve by construction. Unregistered, that line was reported UNRESOLVED against every interface
+     whose row names node.c — a defect count with no root fix behind it, since no change to the C could have
+     made the forwarding line name a member — while the CALL SITES that do name one (`"HTMLElement"`,
+     `"Element"`, `"Document"`, `"Node"` and thirty more literals) were read by nobody. Registered, the
+     forwarding line is skipped by the shared-helper rule and each caller is audited where its literal is. */
+  node_install_interface:        { target: 1, name: 2, kind: "data" },
+  node_install_interface_ctor:   { target: 1, name: 2, kind: "data" },
   /* Both write a DATA property, which is what makes them the two forms that can be an §3.7.6 violation: an
      IDL attribute is an accessor and nothing else. */
   JS_SetPropertyStr:             { target: 1, name: 2, fn: 3, ambiguous: true, kind: "data" },

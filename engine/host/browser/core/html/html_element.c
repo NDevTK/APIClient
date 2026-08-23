@@ -561,8 +561,9 @@ void html_element_install_protos(JSContext *ctx)
        prototype like every other. */
     element_internals_install_html_members(ctx, html_p);
     /* §6.6.6's `HTMLOrSVGOrMathMLElement` members — `focus(options)` and `blur()`, the two entry points of
-       §6.6.4's processing model. They were one body returning undefined; they are now the real algorithms,
-       which move the document's focused area and fire the page's focus handlers (core/html/focus.c). */
+       §6.6.4's processing model, and §6.6.3's `tabIndex`. They were one body returning undefined; they are now
+       the real algorithms, which move the document's focused area and fire the page's focus handlers
+       (core/html/focus.c). */
     focus_install_html_members(ctx, html_p);
     /* CSSOM VIEW §7's `partial interface HTMLElement` — the offset family, installed on THIS realm's prototype
        like every other member. It is per realm because its answers are: every used value it reports bottoms out

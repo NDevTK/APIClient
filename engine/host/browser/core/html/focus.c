@@ -46,6 +46,8 @@
  * moved in, and the composed flag is what decides whether the event escapes a shadow tree at all. The interface
  * is core/events/focus_event.c and the mint below is its one internal caller. */
 #include <limits.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -56,6 +58,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
+#include "core/dom/element.h"
 #include "core/dom/element_view.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
@@ -64,6 +67,7 @@
 #include "core/frame/navigation.h"
 #include "core/frame/window_proxy.h"
 #include "core/html/focus.h"
+#include "core/html/html_element.h"
 #include "core/html/html_form.h"
 #include "core/html/html_iframe.h"
 #include "core/html/integer_microsyntax.h"
@@ -78,6 +82,7 @@ enum { FA_NONE = 0, FA_ELEMENT, FA_VIEWPORT, FA_DOCUMENT, FA_NAVIGABLE };
 
 static int g_focus_slot = -1;
 static int g_id_el_focus = -1, g_id_el_blur = -1, g_id_win_focus = -1, g_id_has_focus = -1;
+static int g_id_set_tab_index = -1;   /* §6.6.3's `tabIndex` setter — the mixin's, installed beside focus/blur */
 static int g_id_viewport = -1, g_id_autofocus = -1;
 static int g_ready;
 
@@ -286,10 +291,35 @@ static bool node_is_inert(const lxb_dom_node_t *n)
    predicate under the other of its two names (HTML defines being rendered AS having layout boxes), so a second
    copy would have been one fact with two answers the day either moved. */
 
+/* HTML §4.11.2 The summary element — "A summary element is a summary for its parent details if the following
+   algorithm returns true: 1. If this summary element has no parent, then return false. 2. Let parent be this
+   summary element's parent. 3. If parent is not a details element, then return false. 4. If parent's first
+   summary element child is not this summary element, then return false. 5. Return true."
+   ONE ANSWER, because §6.6.3 asks it TWICE and asks it in two different sentences: the focusability list below
+   spells it out ("the first summary element child of a details element") and the tabIndex getter's default
+   names the definition ("is a summary element that is a summary for its parent details"). Written at each site
+   they would be one fact with two answers the day §4.11.2's algorithm changes under either. */
+static bool el_is_summary_for_parent_details(const lxb_dom_node_t *n)
+{
+    const lxb_dom_node_t *p, *c;
+
+    if (!el_is(n, "summary")) return false;
+    p = n->parent;                        /* steps 1-2 */
+    if (!el_is(p, "details")) return false;                       /* step 3 */
+    for (c = p->first_child; c; c = c->next)                      /* step 4 */
+        if (el_is(c, "summary")) return c == n;
+    return false;
+}
+
 /* §6.6.3's "MODULO PLATFORM CONVENTIONS, it is SUGGESTED that the following elements should be considered as
    focusable areas" — the standard's own list, which is what "determined by the user agent to be focusable"
    means for a user agent with no platform conventions of its own to differ by. Every entry is a fact about the
-   element's markup, so every entry is decidable here. */
+   element's markup, so every entry is decidable here.
+   IT IS NOT THE SAME LIST AS THE `tabIndex` GETTER'S DEFAULT, which is why the two are two functions. This one
+   admits an `a` only WITH an `href`, an `input` only when its type is not Hidden, an editing host and any
+   element carrying `draggable`; that one admits `a`, `area`, `frame`, `iframe`, `input` and `object`
+   unconditionally and admits none of the last three. A shared predicate would have to be wrong for one of
+   them. */
 static bool el_is_ua_focusable(const lxb_dom_node_t *n)
 {
     size_t len = 0;
@@ -300,14 +330,9 @@ static bool el_is_ua_focusable(const lxb_dom_node_t *n)
         const lxb_char_t *t = el_attr(n, "type", &len);
         return !(t && len == 6 && !strncasecmp((const char *)t, "hidden", 6));
     }
-    if (el_is(n, "summary")) {
-        /* "summary elements that are the FIRST summary element child of a details element". */
-        const lxb_dom_node_t *p = n->parent, *c;
-        if (!el_is(p, "details")) return false;
-        for (c = p->first_child; c; c = c->next)
-            if (el_is(c, "summary")) return c == n;
-        return false;
-    }
+    /* "summary elements that are the FIRST summary element child of a details element" — §4.11.2's algorithm,
+       above, which is the definition that sentence restates. */
+    if (el_is(n, "summary")) return el_is_summary_for_parent_details(n);
     if (el_attr(n, "draggable", &len)) return true;
     /* An EDITING HOST: an element whose `contenteditable` is in the true or plaintext-only state. */
     {
@@ -1540,6 +1565,109 @@ int focus_element_run(JSContext *ctx, JSValueConst el, uint8_t *phase, JSValue *
     return 0;
 }
 
+/* ---- HTML §6.6.3 The tabindex attribute — the `tabIndex` IDL attribute -------------------------------------
+ *
+ * ITS IDL IS `[CEReactions, ReflectSetter] attribute long tabIndex` ON HTMLOrSVGOrMathMLElement, so only the
+ * SETTER reflects and the getter is the section's own algorithm. That asymmetry is why it is a member of this
+ * component and not a row of core/dom/element.c's ElReflect registry — element.h states the test ("A KIND MUST
+ * ANSWER BOTH DIRECTIONS FROM THE ATTRIBUTE ALONE") and names this member as one of the twenty-eight that
+ * cannot. It lives HERE rather than in a file of its own because every operand of the getter's default is
+ * already here: §6.6.3's tabindex value is what el_is_sequentially_focusable branches on, and §4.11.2's
+ * summary-for-parent-details is what el_is_ua_focusable asks.
+ *
+ * WHY A MIRROR IS A WRONG ANSWER AND NOT A LENIENT ONE. `<div>` has no `tabindex` attribute and its `tabIndex`
+ * is −1; `<a>`'s is 0; `<input tabindex="x">` is 0, not the string. A bundle's `if (el.tabIndex >= 0)` — the
+ * ordinary way a focus-trap library collects candidates — reads `undefined` on an absent member and takes its
+ * false arm for every element in the document, which is a whole region of the page's own code never explored.
+ *
+ * THE MIXIN'S OTHER HOME IS HONESTLY ABSENT. HTMLOrSVGOrMathMLElement is included by SVGElement and
+ * MathMLElement as well, and neither interface exists in this engine (SVGElement is a name on
+ * browser/platform_names.h, so reading it is the ReferenceError that names the component to write). The
+ * getter's default therefore never sees an SVG `a` or a MathML `a`, which is why those two of §6.6.3's arms are
+ * not written below: they are unreachable through the only prototype this member is installed on, and a branch
+ * for a receiver that cannot arrive is a claim this file cannot make. */
+
+/* §6.6.3's LAST GETTER STEP, as its own predicate: "Return 0 if this is an a, area, button, frame, iframe,
+   input, object, select, textarea, or SVG a element, or MathML a element, or is a summary element that is a
+   summary for its parent details; otherwise −1."
+   NOTE WHAT IS NOT CONDITIONAL HERE. `a` and `area` are in this list with NO `href` requirement and `input`
+   with no exclusion of the Hidden type — unlike the focusability list above, which is the whole reason the two
+   lists are two functions. `frame` has no interface row in core/html/html_element.c and is therefore an
+   HTMLUnknownElement, which still inherits HTMLElement and so still reaches this member: the answer is decided
+   by the LOCAL NAME the section names, never by which interface the element wears. */
+static bool el_tabindex_default_is_zero(const lxb_dom_node_t *n)
+{
+    static const char *const ZERO[] = { "a", "area", "button", "frame", "iframe", "input", "object",
+                                        "select", "textarea" };
+    size_t i;
+
+    for (i = 0; i < sizeof ZERO / sizeof ZERO[0]; i++)
+        if (el_is(n, ZERO[i])) return true;
+    return el_is_summary_for_parent_details(n);
+}
+
+/* §6.6.3's GETTER STEPS: "1. Let attribute be this's tabindex attribute. 2. If attribute is not null: 1. Let
+   parsedValue be the result of integer parsing attribute's value. 2. If parsedValue is not an error and is
+   WITHIN THE LONG RANGE, then return parsedValue. 3. Return 0 if this is [the list above]; otherwise −1."
+   THE LONG-RANGE TEST IS NOT tabindex_value's TEST, which is why this parses rather than calling it. That
+   helper answers §6.6.3's *tabindex value* — a number whose SIGN is all its two callers read — so it maps an
+   overflowing digit run onto LLONG_MIN/LLONG_MAX to keep the sign, which is right for them and wrong here:
+   step 2.2 sends a value outside the `long` range to step 3's DEFAULT, so `<div tabindex="99999999999">`
+   reads −1 and `<a tabindex="99999999999">` reads 0. Two questions, two answers, one parse shared. */
+static JSValue js_tab_index_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+    const lxb_char_t *v;
+    size_t len = 0;
+    HtmlInteger parsed;
+
+    (void)magic;
+    /* WEB IDL §3.7.5's brand check, a THROW and not an assert: this accessor sits on HTMLElement.prototype and
+       a page reaches one off a prototype with `.call` on anything at all. */
+    if (!html_element_is(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLElement.tabIndex was reached on something that is not an HTML "
+                                      "element");
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "html_element_is admitted a value with no element node behind it");
+    v = el_attr(n, "tabindex", &len);                                                    /* steps 1-2 */
+    if (v && html_parse_integer((const char *)v, len, &parsed) && !parsed.overflow &&
+        parsed.value >= INT32_MIN && parsed.value <= INT32_MAX)
+        return JS_NewInt32(ctx, (int32_t)parsed.value);                                  /* step 2.2 */
+    return JS_NewInt32(ctx, el_tabindex_default_is_zero(n) ? 0 : -1);                     /* step 3 */
+}
+
+/* `[ReflectSetter]` on a `long`, which HTML §2.6.1 Reflecting content attributes in IDL attributes states in
+   full: "The setter steps are: … Run this's set the content attribute with the given value converted to the
+   shortest possible string representing the number as a valid integer." (Its first setter step — the
+   "IndexSizeError" throw — belongs to a reflection LIMITED TO ONLY NON-NEGATIVE NUMBERS, which §6.6.3's is
+   not: `el.tabIndex = -1` is the single most common assignment this member ever receives.)
+   `%d` over the `long` conversion's own result IS that shortest string: the conversion has already produced a
+   value in the 32-bit signed range, and the shortest valid integer for one is its decimal digits with a `-`
+   for a negative and no `+`, no leading zero and no exponent. */
+static JSValue js_tab_index_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    char buf[16];
+    int32_t v = 0;
+    int wrote;
+
+    (void)magic;
+    if (!html_element_is(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLElement.tabIndex was set on something that is not an HTML element");
+    DCHECK(JS_IsNumber(val),
+           "§6.6.3's tabIndex setter was handed something that is not a number — it is declared IDL_LONG, so "
+           "Web IDL's `long` conversion produced one before this body was entered");
+    JS_ToInt32(ctx, &v, val);
+    wrote = snprintf(buf, sizeof buf, "%d", (int)v);
+    /* The widest a 32-bit signed decimal can be is "-2147483648", eleven characters, so a truncation here is
+       not a small buffer — it is a value that did not come through the `long` conversion, and the attribute
+       written would be a DIFFERENT NUMBER from the one assigned rather than an absent one. */
+    DCHECK(wrote > 0 && (size_t)wrote < sizeof buf,
+           "§6.6.3's tabIndex setter could not serialise its `long` — the value is not one the Web IDL `long` "
+           "conversion can produce");
+    element_attr_set(ctx, this_val, "tabindex", buf);
+    return JS_UNDEFINED;
+}
+
 /* ---- declaration and install -------------------------------------------------------------------------------- */
 
 void focus_init(JSContext *ctx)
@@ -1576,6 +1704,9 @@ void focus_init(JSContext *ctx)
     g_id_viewport = idl_method_id_step(ctx, NULL, 0, NULL, 0, &VIEWPORT_STEP, FOCUS_VIEWPORT);
     g_id_autofocus = idl_method_id_step(ctx, ONE_ANY, 1, NULL, 0, &AUTOFOCUS_STEP, FOCUS_AUTOFOCUS);
     g_id_has_focus = idl_method_id(ctx, NULL, 0, js_has_focus, 0);
+    /* §6.6.3's `[CEReactions, ReflectSetter] attribute long tabIndex` — the `long` conversion (ToNumber, then
+       modulo 2^32 signed) runs on the page's own `valueOf` before the body below is entered. */
+    g_id_set_tab_index = idl_setter_id(ctx, IDL_LONG, false, js_tab_index_set, 0);
     g_ready = 1;
 }
 
@@ -1608,6 +1739,8 @@ void focus_install_html_members(JSContext *ctx, JSValueConst proto)
     DCHECK(g_ready, "§6.6's HTMLElement members were installed before focus_init ran");
     idl_install_method(ctx, proto, "focus", 0, g_id_el_focus);
     idl_install_method(ctx, proto, "blur", 0, g_id_el_blur);
+    /* The same mixin's `tabIndex`, on THIS realm's prototype like every other member. */
+    idl_install_accessor(ctx, proto, "tabIndex", js_tab_index_get, 0, g_id_set_tab_index);
 }
 
 void focus_install_window_members(JSContext *ctx, JSValueConst global)
@@ -1626,6 +1759,6 @@ void focus_free(void)
     DCHECK(g_ready, "§6.6's focus machinery was released in an agent that never declared it");
     g_ready = 0;
     g_focus_slot = -1;
-    g_id_el_focus = g_id_el_blur = g_id_win_focus = g_id_has_focus = -1;
+    g_id_el_focus = g_id_el_blur = g_id_win_focus = g_id_has_focus = g_id_set_tab_index = -1;
     g_id_viewport = g_id_autofocus = -1;
 }

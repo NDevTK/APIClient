@@ -1,4 +1,4 @@
-/* HTML's ENUMERATED GLOBAL ATTRIBUTES — the six HTMLElement members that COMPUTE a value from the tree.
+/* HTML's ENUMERATED GLOBAL ATTRIBUTES — the seven HTMLElement members that COMPUTE a value from the tree.
  *
  * WHY THEY ARE NOT REFLECTIONS AND CANNOT BE. core/dom/element.c's ElReflect registry mirrors ONE attribute in
  * both directions: the IDL property IS the attribute. Every member here answers a question the attribute alone
@@ -7,7 +7,10 @@
  * than from a parent, and `isContentEditable` is a property of the element's position in an editing host. A
  * REFLECT_BOOL for any of them would answer the attribute's PRESENCE — `<div translate=no>` would read `true`
  * because the attribute is there — which is the failure html_style_element.c records for `<style disabled>`:
- * wrong in both directions, silently.
+ * wrong in both directions, silently. §6.11.7's `draggable` is the same trap in its sharpest form: the state
+ * an author writes is `true`/`false` TEXT, so a boolean reflection would answer `true` for `<img draggable=false>`
+ * — the exact opposite of what the page said — and would answer false for the `<img>` and the `<a href>` whose
+ * Auto state the section says are draggable.
  *
  * EACH IS AN ENUMERATED ATTRIBUTE — HTML §2.3.3 Keywords and enumerated attributes — and that section's
  * determine-the-state algorithm is written ONCE here, in its stated ORDER: an absent attribute is the missing
@@ -44,6 +47,7 @@ static int g_id_set_spellcheck = -1;
 static int g_id_set_writing_suggestions = -1;
 static int g_id_set_autocorrect = -1;
 static int g_id_set_content_editable = -1;
+static int g_id_set_draggable = -1;
 static bool g_ready;
 
 /* ---- HTML §2.3.3 Keywords and enumerated attributes ------------------------------------------------------ */
@@ -441,6 +445,70 @@ static JSValue js_is_content_editable(JSContext *ctx, JSValueConst this_val, int
     return JS_NewBool(ctx, is_editing_host(el) || is_editable(el));
 }
 
+/* ---- HTML §6.11.7 The draggable attribute ------------------------------------------------------------------ */
+
+enum { DRAGGABLE_TRUE, DRAGGABLE_FALSE, DRAGGABLE_AUTO };
+static const EnumKeyword DRAGGABLE_KW[] = {
+    { "true", DRAGGABLE_TRUE }, { "false", DRAGGABLE_FALSE }, { NULL, 0 }
+};
+
+/* §6.11.7: "The attribute's missing value default and invalid value default are both the Auto state." It
+   declares NO empty value default, so `<div draggable="">` falls to the invalid one — which is what passing
+   Auto in the `empty` position expresses, exactly as enum_state's own comment states. */
+static int draggable_state(lxb_dom_element_t *el)
+{
+    return enum_state(el, "draggable", DRAGGABLE_KW, DRAGGABLE_AUTO, DRAGGABLE_AUTO, DRAGGABLE_AUTO);
+}
+
+/* §6.11.7's THREE-BRANCH getter, in the section's own order: "If an element's draggable content attribute has
+   the state True, the draggable IDL attribute must return true. Otherwise, if ... the state False, ... return
+   false. Otherwise, the element's draggable content attribute has the state Auto. If the element is an img
+   element, an object element that represents an image, or an a element with an href content attribute, the
+   draggable IDL attribute must return true; otherwise, ... false."
+   THE `object` ARM IS UNREACHABLE IN THIS ENGINE AND THAT IS A FACT ABOUT §4.8.7, NOT A SHORTCUT HERE — the
+   same shape as the `designMode` arm of is_editing_host above. "The object element represents the specified
+   image" is a branch of §4.8.7's RUN THE OBJECT ELEMENT STEPS, reached only after that algorithm has FETCHED
+   the resource and found a type starting with `image/` "and support for images has not been disabled". Nothing
+   in this engine runs those steps and nothing decodes an image, so no object element has ever represented one;
+   an element whose steps have not run represents its fallback content. Building §4.8.7's steps is what makes
+   the arm reachable, and this is one of the readers it has to reach. */
+static bool draggable_true(lxb_dom_element_t *el)
+{
+    switch (draggable_state(el)) {
+    case DRAGGABLE_TRUE:  return true;
+    case DRAGGABLE_FALSE: return false;
+    default:              break;   /* the Auto state */
+    }
+    DCHECK(element_is_html(el),
+           "§6.11.7's draggable was computed for an element that is not an HTML element — the member sits on "
+           "HTMLElement.prototype and its receiver() brand check already refused everything else");
+    if (local_name_is(el, "img")) return true;
+    if (local_name_is(el, "a"))
+        return lxb_dom_element_has_attribute(el, (const lxb_char_t *)"href", 4);
+    return false;
+}
+
+static JSValue js_draggable_get(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el = receiver(ctx, this_val, "draggable");
+
+    (void)magic;
+    if (!el) return JS_EXCEPTION;
+    return JS_NewBool(ctx, draggable_true(el));
+}
+
+/* §6.11.7: "If the draggable IDL attribute is set to the value false, the draggable content attribute must be
+   set to the literal value `false`. If the draggable IDL attribute is set to the value true, the draggable
+   content attribute must be set to the literal value `true`." Neither direction ever REMOVES the attribute,
+   which is what separates this from a boolean reflection's setter. */
+static JSValue js_draggable_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    (void)magic;
+    if (!receiver(ctx, this_val, "draggable")) return JS_EXCEPTION;
+    element_attr_set(ctx, this_val, "draggable", JS_ToBool(ctx, val) ? "true" : "false");
+    return JS_UNDEFINED;
+}
+
 /* ---- declaration and install ------------------------------------------------------------------------------ */
 
 void global_attributes_declare(JSContext *ctx)
@@ -451,6 +519,7 @@ void global_attributes_declare(JSContext *ctx)
     g_id_set_writing_suggestions = idl_setter_id(ctx, IDL_DOMSTRING, false, js_writing_suggestions_set, 0);
     g_id_set_autocorrect = idl_setter_id(ctx, IDL_BOOLEAN, false, js_autocorrect_set, 0);
     g_id_set_content_editable = idl_setter_id(ctx, IDL_DOMSTRING, false, js_content_editable_set, 0);
+    g_id_set_draggable = idl_setter_id(ctx, IDL_BOOLEAN, false, js_draggable_set, 0);
     g_ready = true;
 }
 
@@ -464,11 +533,12 @@ void global_attributes_install(JSContext *ctx, JSValueConst proto)
     idl_install_accessor(ctx, proto, "autocorrect", js_autocorrect_get, 0, g_id_set_autocorrect);
     idl_install_accessor(ctx, proto, "contentEditable", js_content_editable_get, 0, g_id_set_content_editable);
     idl_install_accessor(ctx, proto, "isContentEditable", js_is_content_editable, 0, -1);
+    idl_install_accessor(ctx, proto, "draggable", js_draggable_get, 0, g_id_set_draggable);
 }
 
 void global_attributes_free(void)
 {
     g_id_set_translate = g_id_set_spellcheck = g_id_set_writing_suggestions = -1;
-    g_id_set_autocorrect = g_id_set_content_editable = -1;
+    g_id_set_autocorrect = g_id_set_content_editable = g_id_set_draggable = -1;
     g_ready = false;
 }

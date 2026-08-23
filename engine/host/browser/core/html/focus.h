@@ -30,7 +30,9 @@ void focus_install_document_members(JSContext *ctx, JSValueConst proto);
 /* The same mixin's ONE member on ShadowRoot, whose getter RETARGETS against the receiver — which is why the
    member is one implementation over two interfaces and not two getters. */
 void focus_install_shadow_root_members(JSContext *ctx, JSValueConst proto);
-/* §6.6.6's `focus(options)` and `blur()` — HTMLOrSVGOrMathMLElement's, installed on HTMLElement.prototype. */
+/* §6.6.6's `focus(options)` and `blur()` and §6.6.3's `tabIndex` — HTMLOrSVGOrMathMLElement's three members
+   this engine can install, on HTMLElement.prototype. The mixin's other two homes, SVGElement and MathMLElement,
+   do not exist here (both are names on browser/platform_names.h), so this is the whole of the mixin's reach. */
 void focus_install_html_members(JSContext *ctx, JSValueConst proto);
 /* §6.6.6's `Window.focus()`. `Window.blur()` is NOT here: §6.6.6 states its method steps as "do nothing", so
    it is the spec's own no-effect and belongs with the Window's other members. */
