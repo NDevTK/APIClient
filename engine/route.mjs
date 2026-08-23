@@ -131,6 +131,11 @@ async function makeEngine(html, url, docId, csp, topLevelUrl, recipes) {
     const u8 = typeof b === 'string' ? new TextEncoder().encode(b) : b;
     const p = M._malloc(u8.length + 1);
     M.HEAPU8.set(u8, p);
+    /* THE GUARD BYTE THE EXTRA ALLOCATION WAS ALWAYS FOR, and which nothing wrote. The engine asserts it on
+       every pair it is handed: the length is what bounds the read, and the terminator is what makes the same
+       buffer safe for the one consumer that still asks for a C string. Without it that assert reads whatever
+       the allocator left there. */
+    M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
   /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>URL` lines and the delivery
@@ -147,8 +152,14 @@ async function makeEngine(html, url, docId, csp, topLevelUrl, recipes) {
                   [id, cs(JSON.stringify(meta)), 0, p, n]); }
     finally { M._free(p); }
   };
-  M.ccall('qjs_init', 'number', ['number','number','number','number','number'],
-    [cs(html), cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
+  /* THE DOCUMENT CROSSES AS A PAIR, because a zero byte is a legal character in a document and `strlen` would
+     end the parse at the first one. `bs` is the same helper the reply bodies use, for the same reason. */
+  {
+    const [hp, hn] = bs(html);
+    M.ccall('qjs_init', 'number', ['number','number','number','number','number','number'],
+      [hp, hn, cs(url), cs(docId), cs(csp || ''), cs(topLevelUrl)]);
+    M._free(hp);
+  }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
      is the language cold_park_recipes both writes and reads; the extension joins the stored ARRAY the same
      way, so this zone stores what that one stores. */

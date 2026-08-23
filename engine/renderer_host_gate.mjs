@@ -499,7 +499,8 @@ try {
   const OPENER_DOC = '<!doctype html><script>window.open("' + CHILD_ADDR + '","child");</script>';
   const opener = await self.rendererLaunch('gate-group' + NUL + new URL(OPENER_ADDR).origin);
   noteId(opener.routingId, 'phase 4');
-  /* THE FIVE ARGUMENTS ARE `qjs_init`'s, and they are the same five the probe passes: the document as BYTES,
+  /* THE ARGUMENTS ARE `qjs_init`'s, and they are the same ones the probe passes: the document as BYTES (a
+     pointer and a LENGTH, which the mojom layer places from the array below),
      §4.4's address, the name this agent's root document is known by, the response's header field lines (empty
      — this document had no response) and §8.1.3.1's top-level creation URL, which for a root document is its
      own address. */

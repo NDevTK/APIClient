@@ -196,8 +196,17 @@ async function child(docPath, schedName) {
      solver's own allocations. */
   async function session(recipes, sched) {
     const e = await instance();
-    e.M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number"],
-              [e.cs(html), e.cs(url), e.cs(name), e.cs(""), e.cs(url)]);
+    /* THE DOCUMENT CROSSES AS A PAIR — a zero byte is legal in a document, and a `strlen` on this side would
+       end the parse at the first one. The fixtures here are source text, so this is an ENCODE. */
+    {
+      const u8 = new TextEncoder().encode(html);
+      const hp = e.M._malloc(u8.length + 1);
+      e.M.HEAPU8.set(u8, hp);
+      e.M.HEAPU8[hp + u8.length] = 0;
+      e.M.ccall("qjs_init", "number", ["number", "number", "number", "number", "number", "number"],
+                [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url)]);
+      e.M._free(hp);
+    }
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);
     if (sched === "preempt")
       /* THE HOST'S OWN LEVEL-1 YIELD, with a rival this engine can never outrank. Nothing is dropped across
