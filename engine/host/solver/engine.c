@@ -812,19 +812,141 @@ void engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int
     }
 }
 
-/* See engine.h. Placed with the other two park-time announcements because the three are one statement about
-   what this instance is handing over: the residue (world.parked), the names it will never use again
-   (world.gone), and the questions it was asked and did not answer (this). */
-void engine_retract_operations(JSContext *ctx)
+/* WHAT THE HAND-BACK DID — counted at the retraction itself, so the numbers cannot disagree with the notices
+   that left. See engine.h for what each one is a statement about. */
+static long g_retract_flows, g_retract_started, g_retract_back;
+
+void engine_retract_census(long *flows, long *started, long *handed_back)
+{
+    DCHECK(flows != NULL && started != NULL && handed_back != NULL,
+           "the retraction census was asked to fill nothing");
+    *flows = g_retract_flows; *started = g_retract_started; *handed_back = g_retract_back;
+}
+
+/* HOW MANY PROGRAM ROWS ACROSS THE FRONTIER STILL CARRY A RENDEZVOUS TOKEN — see engine.h. Scanned, for
+   flow_owes_answer's reason. */
+long engine_operations_started(void)
+{
+    Flow *f;
+    int i, k;
+    long n = 0;
+
+    for (i = 0; (f = flow_at(i)) != NULL; i++)
+        for (k = 0; k < f->dyn_n; k++)
+            if (f->dyn_token[k]) n++;
+    return n;
+}
+
+/* IS THIS QUESTION STILL SOMEBODY'S TO ANSWER — asked of every member of the frontier, of BOTH places a
+   question lives (queued on the arrival slot, or started with its token on a program's row).
+ *
+ * IT IS THE WHOLE OF WHY A HAND-BACK IS NOT PER FLOW. One operation is attached to EVERY live timeline
+ * (engine_perform), because a document's state is its flows; the QUESTION is still one question and the zone
+ * routes by token. So a notice sent while another timeline still holds the operation tells the zone to FORGET
+ * a token that timeline is about to answer under — and the zone's own assert is what fires ("a peer answered a
+ * cross-agent operation under a rendezvous token this zone never minted"), one seam away from the engine that
+ * caused it. So the notice belongs to the LAST holder leaving, and this is the question that decides it —
+ * asked AFTER the strip, which is why it takes no exclusion: a flow the hand-back has already emptied answers
+ * `no` about itself.
+ *
+ * SCANNED RATHER THAN COUNTED, for flow_owes_answer's reason exactly: a refcount is a second representation of
+ * this fact and it drifts at the three sites hardest to keep in step — the fork (perform_q_fork shares the
+ * entries, engine_sibling_assemble strdups the row's token), the start (the token MOVES from the queue to the
+ * row) and the answer. */
+static int perform_token_held(JSContext *ctx, const char *token)
+{
+    Flow *f;
+    int i, k;
+
+    for (i = 0; (f = flow_at(i)) != NULL; i++) {
+        for (k = 0; k < flow_perform_pending(f); k++) {
+            JSValue e = JS_GetPropertyUint32(ctx, f->perform_q, (uint32_t)k);
+            JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
+            const char *t = JS_ToCString(ctx, tv);
+            int hit;
+
+            CHECK(t != NULL, "engine: OOM reading a queued cross-agent operation's token while deciding whether "
+                             "a question may be handed back — a token that cannot be read is one this walk "
+                             "would report as absent, and the hand-back would race a timeline still answering");
+            hit = !strcmp(t, token);
+            JS_FreeCString(ctx, t);
+            JS_FreeValue(ctx, tv);
+            JS_FreeValue(ctx, e);
+            if (hit) return 1;
+        }
+        for (k = 0; k < f->dyn_n; k++)
+            if (f->dyn_token[k] && !strcmp(f->dyn_token[k], token)) return 1;
+    }
+    return 0;
+}
+
+/* THE DISTINCT QUESTIONS A HAND-BACK HAS TAKEN OFF ITS FLOWS — collected during the strip so the notices can
+   be decided once per QUESTION rather than once per holder. See engine_retract_span for why that is not an
+   optimisation but the difference between linear and quadratic in the size of the frontier. */
+static void retract_seen_add(char ***seen, int *n, int *cap, const char *token)
+{
+    int j;
+
+    for (j = 0; j < *n; j++)
+        if (!strcmp((*seen)[j], token)) return;
+    if (*n == *cap) {
+        int c = *cap ? *cap * 2 : 8;
+        char **g = realloc(*seen, (size_t)c * sizeof *g);
+        CHECK(g != NULL, "engine: OOM collecting the operations a park hands back");
+        *seen = g;
+        *cap = c;
+    }
+    (*seen)[*n] = strdup(token);
+    CHECK((*seen)[*n] != NULL, "engine: OOM naming an operation a park hands back");
+    (*n)++;
+}
+
+/* HAND BACK EVERY QUESTION A SET OF FLOWS IS HOLDING — one member (`only`), or every member (`only` NULL). The
+ * two callers are the two shapes of a park: the PAGER sells one flow while the instance keeps running, and the
+ * whole-frontier park writes the residue and leaves. `only` selects WHICH members, never which implementation
+ * — there is one implementation and no second body to fall back to.
+ *
+ * BOTH HALVES OF THE DEBT, AND THE STARTED ONE IS NOT A DIFFERENT KIND. cold.c's refusal asked for the
+ * difference to be named: "state why a half-run peer program is different from every other suspended frame this
+ * tier regenerates". It is not different, and the reason is OWNERSHIP. A started operation's partial work is
+ * its flow's own COW delta, and the delta LEAVES WITH THE FLOW — so a program abandoned here has produced
+ * nothing that outlives the park, exactly as every other suspended program's partial work does not. What the
+ * peer is owed is not a stored value either: HTML §7.2.1.3.5 "CrossOriginGet ( O, P, Receiver )" ends "Return ?
+ * Call(getter, Receiver)", so what this instance owes is a CALL, and a call abandoned before it completes has
+ * been made zero times. The zone re-asks, the call is made once, and §7.2.2.2 "Indexed access on the Window
+ * object" ("The length getter steps are to return this's associated Document's document-tree child navigables's
+ * size") is why answering it later is the ordinary answer rather than a stale one — the value is read off the
+ * active document at the moment of the call, which is §Time-travel-resume's "re-derives example VALUES from
+ * CURRENT sources" said by the spec.
+ *
+ * A ROW KEEPS ITS KIND AND LOSES ITS TOKEN, which is the state flow_answer_perform already leaves behind after
+ * an answer — so nothing downstream learns a new shape, and a row that somehow ran anyway aborts in
+ * flow_answer_perform naming the missing token rather than emitting an answer under a name the zone forgot.
+ *
+ * STRIP, THEN DECIDE, AND THE ORDER IS THE WHOLE COST. The notice belongs to the LAST holder leaving, and
+ * asking that question per HOLDER means a walk of the frontier per flow — quadratic, on a frontier that is
+ * routinely thousands, for an answer that is `no` every time but once. Asked per distinct QUESTION after the
+ * strip, it is one walk per outstanding peer operation, and that number is not a function of the frontier's
+ * size (engine_perform attaches ONE question to every timeline; the questions are the peer's, not ours). */
+static void engine_retract_span(JSContext *ctx, Flow *only)
 {
     char **seen = NULL;
-    int seen_n = 0, seen_cap = 0, i, k, j;
+    int seen_n = 0, seen_cap = 0, i, k;
     Flow *f;
 
     for (i = 0; (f = flow_at(i)) != NULL; i++) {
-        int n = flow_perform_pending(f);
+        int n, held = 0;
 
-        if (n == 0) continue;
+        if (only && f != only) continue;
+        /* THE FLOW MAY NOT BE THE ONE HOLDING THE THREAD. Both callers switch out first (the park before it
+           walks, the pager by construction), and it is asserted rather than assumed because the failure is
+           silent: a switched-in flow can still run its program to completion, and the row's token has just
+           been returned to the zone. */
+        DCHECK(f != flow_running(),
+               "a cross-agent operation was handed back on the flow the scheduler is switched into — that flow "
+               "can still run its program to completion, and the completion would find a row whose token this "
+               "call has already given back");
+        n = flow_perform_pending(f);
         for (k = 0; k < n; k++) {
             JSValue e = JS_GetPropertyUint32(ctx, f->perform_q, (uint32_t)k);
             JSValue tv = JS_GetPropertyUint32(ctx, e, 1);
@@ -833,52 +955,72 @@ void engine_retract_operations(JSContext *ctx)
             CHECK(tok != NULL, "engine: OOM reading a cross-agent operation's token at the park — a question "
                                "handed back without its name leaves the flow that asked, in another instance, "
                                "suspended on an answer nothing will send");
-            /* ONE NOTICE PER DISTINCT TOKEN, and the dedup is the ARRIVAL's shape rather than a nicety: one
-               operation is attached to EVERY live timeline (engine_perform), because a document's state is its
-               flows and `otherW.length` has N answers for N of them. The QUESTION is still one question, and
-               the zone routes by token — so N notices would be one hand-back repeated once per flow, on a
-               frontier that is routinely thousands. Linear over the DISTINCT set, which is the number of peer
-               operations outstanding and not the number of flows. */
-            for (j = 0; j < seen_n; j++)
-                if (!strcmp(seen[j], tok)) break;
-            if (j == seen_n) {
-                size_t cap = strlen(tok) + 20;   /* "remoteop.retracted" + TAB + the token + NUL */
-                char *rec;
-
-                if (seen_n == seen_cap) {
-                    int c = seen_cap ? seen_cap * 2 : 8;
-                    char **g = realloc(seen, (size_t)c * sizeof *g);
-                    CHECK(g != NULL, "engine: OOM collecting the operations a park hands back");
-                    seen = g;
-                    seen_cap = c;
-                }
-                seen[seen_n] = strdup(tok);
-                CHECK(seen[seen_n] != NULL, "engine: OOM naming an operation a park hands back");
-                seen_n++;
-                rec = malloc(cap);
-                CHECK(rec != NULL, "engine: OOM announcing an operation a park hands back");
-                snprintf(rec, cap, "remoteop.retracted\t%s", tok);
-                engine_host_notify(ctx, rec);
-                free(rec);
-            }
+            held = 1;
+            retract_seen_add(&seen, &seen_n, &seen_cap, tok);
             JS_FreeCString(ctx, tok);
             JS_FreeValue(ctx, tv);
             JS_FreeValue(ctx, e);
         }
-        /* AND THE QUEUE IS EMPTY, which is what keeps the park's own assert at full strength: `flow_owes_answer`
-           is two disjuncts, and after this the UNSTARTED one cannot be true, so the abort there names the
-           STARTED operation and nothing else. Through the engine's write bracket for perform_q_take's reason —
-           this is the scheduler's record about a flow, written from outside any flow's delta, and a delta that
-           captured it would restore the entries the moment a sibling switched in. */
-        cow_engine_write_begin();
-        JS_SetPropertyStr(ctx, f->perform_q, "length", JS_NewInt32(ctx, 0));
-        cow_engine_write_end();
-        DCHECK(flow_perform_pending(f) == 0,
-               "a flow's operation queue survived the retraction that emptied it — the park is about to abort "
-               "on a question this instance has already told the zone it is handing back");
+        if (n) {
+            /* AND THE QUEUE IS EMPTY, which is what keeps cold.c's assert a statement rather than a tolerance.
+               Through the engine's write bracket for perform_q_take's reason — this is the scheduler's record
+               about a flow, written from outside any flow's delta, and a delta that captured it would restore
+               the entries the moment a sibling switched in. */
+            cow_engine_write_begin();
+            JS_SetPropertyStr(ctx, f->perform_q, "length", JS_NewInt32(ctx, 0));
+            cow_engine_write_end();
+            DCHECK(flow_perform_pending(f) == 0,
+                   "a flow's operation queue survived the retraction that emptied it — the park is about to "
+                   "abort on a question this instance has already told the zone it is handing back");
+        }
+        for (k = 0; k < f->dyn_n; k++) {
+            if (!f->dyn_token[k]) continue;
+            held = 1;
+            g_retract_started++;
+            retract_seen_add(&seen, &seen_n, &seen_cap, f->dyn_token[k]);
+            free(f->dyn_token[k]);
+            f->dyn_token[k] = NULL;
+        }
+        g_retract_flows += held;
+        /* THE POSTCONDITION, ASSERTED WHERE IT IS PRODUCED rather than only where cold.c reads it. Both
+           disjuncts of flow_owes_answer are addressed above, so a flow that still owes one here holds a token
+           in some THIRD place — and nothing downstream would ever find it. */
+        DCHECK(!flow_owes_answer(f),
+               "a flow still owed a peer an answer after every question it held was handed back — a rendezvous "
+               "token survives somewhere that is neither the arrival slot nor a program's row, so this flow "
+               "parks with a debt the zone has been told is returned");
     }
-    for (j = 0; j < seen_n; j++) free(seen[j]);
+    for (k = 0; k < seen_n; k++) {
+        /* THE LAST HOLDER, ASKED AFTER THE STRIP — every flow this call was given holds nothing by now, so a
+           hit is a member that is STAYING and will answer under this token. */
+        if (!perform_token_held(ctx, seen[k])) {
+            size_t cap = strlen(seen[k]) + 20;   /* "remoteop.retracted" + TAB + the token + NUL */
+            char *rec = malloc(cap);
+
+            CHECK(rec != NULL, "engine: OOM announcing an operation a park hands back");
+            snprintf(rec, cap, "remoteop.retracted\t%s", seen[k]);
+            engine_host_notify(ctx, rec);
+            free(rec);
+            g_retract_back++;
+        }
+        free(seen[k]);
+    }
     free(seen);
+}
+
+/* ONE MEMBER — the pager's shape. */
+static void engine_retract_flow(JSContext *ctx, Flow *f)
+{
+    DCHECK(f != NULL, "a question was handed back on no flow at all");
+    engine_retract_span(ctx, f);
+}
+
+/* See engine.h. Placed with the other two park-time announcements because the three are one statement about
+   what this instance is handing over: the residue (world.parked), the names it will never use again
+   (world.gone), and the questions it was asked and did not answer (this). */
+void engine_retract_operations(JSContext *ctx)
+{
+    engine_retract_span(ctx, NULL);
 }
 
 /* THE INBOUND HALF OF IT — see engine.h. It is deliberately NOT engine_route: a delivery becomes a work item of
@@ -4666,16 +4808,15 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        more answers may arrive for and stays in the reported count. */
     g_paged_reqs += pending_count_kind(tail->pending, FLOW_PENDING_HOSTREQ);
     g_paged_owed += pending_owed_replies(tail->pending);
-    /* AND THE DEBT THAT MAY NOT LEAVE AT ALL. cold_park_flow refuses a flow holding a cross-agent operation
-       (cold.c) — its recipe does not carry the record or the token, so selling it parks a flow in ANOTHER
-       instance forever. That refusal reads the flow's arrival slot, which stops being where a STARTED
-       operation's token lives the moment the token moves onto its program's row, so the queue is asked here
-       too. Two asks, one invariant, until the recipe carries the operation and neither is needed. */
-    DCHECK(!flow_owes_answer(tail),
-           "the pager chose a flow that still owes a peer the answer to a cross-agent operation — the record "
-           "and the token are not in its recipe, so the operation is dropped and the flow that ASKED, in "
-           "another instance, stays suspended on an answer nothing will ever send. Park it as what it is: the "
-           "token is text and crosses as text, and a resumed flow re-queues the program and answers it");
+    /* AND THE DEBT THAT LEAVES BY BEING GIVEN BACK, which is where the refusal that stood here used to abort.
+       A recipe cannot carry a rendezvous token (engine.h: it is the zone's name, it has no generation, and it
+       does not outlive that zone's session), so the question is RETURNED rather than parked — and returned per
+       FLOW here rather than per frontier, because this is a PARTIAL park: the instance keeps running and the
+       operation is attached to every other timeline too, so the notice belongs to the last holder leaving and
+       usually to nobody at all. Selling a flow that is one of many holders costs the peer one timeline's
+       answer, which is exactly what a timeline that never existed would have cost it, and the remaining
+       holders still answer under the token the zone still has. */
+    engine_retract_flow(g_sess_ctx, tail);
     cold_park_flow(tail);
     flow_release(g_sess_ctx, tail);
     g_flows_sold++;

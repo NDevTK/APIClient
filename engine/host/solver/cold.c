@@ -621,42 +621,35 @@ void cold_park_flow(Flow *f)
        shape as the delivery above and for the same reason, with one thing added" — the asking instance's flow
        is SUSPENDED on the answer this one's program will produce. Dropping the record therefore does not merely
        lose this flow's work: it parks a flow in ANOTHER instance forever, on a completion nothing will ever
-       send. The delivery was asserted here and this was not, which is the asymmetry a reader of the pair would
-       have to notice for themselves. */
-    /* AND THE OTHER HALF OF THAT SHAPE, WHICH IS TWO CAPABILITIES AND NOT ONE. `flow_owes_answer` is a
-       disjunction — an operation still QUEUED, or one already STARTED with its token on a program row — and a
-       single assert over both named whichever fired as though the other did not exist. They are asked
-       separately here because they have DIFFERENT ANSWERS, and the first one now has its answer built.
-       QUEUED IS ALREADY GONE BY THIS LINE. engine_retract_operations hands every unstarted operation back to
-       the zone before the park walks the frontier, so this states that it ran rather than tolerating what it
-       was supposed to have removed — an entry surviving here is the retraction not having happened, which is a
-       question this instance has told the zone it gave up and is still holding. */
+       send.
+       A TOKEN MAY NEVER ENTER A RECIPE, which is why this is not a record kind and must not become one: a
+       token is the trusted zone's name for an entry in its in-memory routing table, it carries no generation,
+       and it does not outlive that zone's session — strictly shorter than this residue's life. A recipe
+       carrying one would emit, on resume, an answer under a name that zone never minted, which is the
+       identical defect the 'g' record closes for a WorldId and remote_object.c REFUSES for an export id. So
+       the question is HANDED BACK before any park, per flow (engine.c's engine_retract_flow), and the two
+       asserts below state that it was rather than tolerating what it was supposed to have removed.
+       TWO ASSERTS AND NOT ONE, because `flow_owes_answer` is a disjunction — an operation still QUEUED on the
+       arrival slot, or one already STARTED with its token on a program's row — and a single assert over both
+       would report whichever fired under the message written for the other. Two facts with two failure modes;
+       one mechanism closes them. */
     DCHECK(flow_perform_pending(f) == 0,
-           "a flow was parked still holding an UNSTARTED cross-agent operation — the park hands those back to "
-           "the trusted zone before it writes anything (engine_retract_operations), so an entry here is a "
+           "a flow was parked still holding an UNSTARTED cross-agent operation — the park hands every question "
+           "back to the trusted zone before it writes anything (engine_retract_flow), so an entry here is a "
            "question the zone has been told it owns and this instance is about to page out anyway");
-    /* STARTED IS THE ONE WITH NO RECIPE, and the fix is NOT the one this message used to name. It said "the
-       record and the token are text and cross as text… a resumed flow re-queues the program and answers the
-       same token", and the second half of that is wrong in a way that would only show up in a later browser
-       session: a TOKEN'S LIFETIME IS THE ZONE SESSION'S, strictly shorter than this residue's. It names an
-       entry in the trusted zone's in-memory routing table and carries no generation, so a recipe carrying one
-       emits, on resume, an answer under a name that zone never minted — the identical defect the 'g' record
-       closes for a WorldId and remote_object.c REFUSES for an export id. A recipe half built on that sentence
-       would produce an answer nobody can route.
-       WHAT IS ACTUALLY MISSING IS THE PROGRAM, not the name of the question. The record can be re-asked by the
-       zone for free (it is re-asked already, for the unstarted case); what a park cannot yet do is give up a
-       cross-agent program MID-RUN and have the resumed session re-run it from the start under a question the
-       zone asks again. So: retract a STARTED operation as well — its program's partial work is exactly what a
-       replay throws away for every other program (cold.h), and its completion has not been sent — or state why
-       a half-run peer program is different from every other suspended frame this tier regenerates. */
+    /* AND STARTED IS NOT A DIFFERENT KIND OF DEBT, which is what the refusal that stood here asked to be told.
+       A half-run peer program is not different from every other suspended frame this tier regenerates, and the
+       reason is OWNERSHIP: its partial work is this flow's own COW delta, and the delta LEAVES WITH THE FLOW,
+       so a program abandoned at the park has produced nothing that outlives the park. What the peer is owed is
+       not a value either — HTML §7.2.1.3.5 "CrossOriginGet ( O, P, Receiver )" ends "Return ? Call(getter,
+       Receiver)", so what this instance owes is a CALL, and a call abandoned before it completes has been made
+       zero times. The zone re-asks and it is made once. */
     DCHECK(!flow_owes_answer(f),
-           "a flow holding a STARTED cross-agent operation was parked — its program is mid-run with the zone's "
-           "rendezvous token on the row, and the token may not be written into the recipe (it is the zone's "
-           "name, it has no generation, and it does not outlive that zone's session), so the operation is "
-           "dropped and the flow that ASKED for it, in another instance, stays suspended on an answer nothing "
-           "will ever send. Hand it back the way the UNSTARTED one is handed back — a replay regenerates every "
-           "other program's partial work, and this one has sent no completion — or say what makes a half-run "
-           "peer program different");
+           "a flow was parked still holding a STARTED cross-agent operation — its program's row still carries "
+           "the zone's rendezvous token, which may not be written into a recipe (it is the zone's name, it has "
+           "no generation, and it does not outlive that zone's session), so the hand-back that runs before "
+           "every park (engine_retract_flow) did not reach this row and the flow that ASKED for it, in another "
+           "instance, stays suspended on an answer nothing will ever send");
     /* AND THE QUEUED JOBS, WHICH ARE NOT ALL THE SAME KIND OF DEBT — the row cold.h writes for them ("re-
        enqueued by the same reactions, on the same flow's queue") is TRUE of every job the replayed program
        CAUSES and false of exactly one. A promise reaction, a timer callback, a custom-element reaction and a

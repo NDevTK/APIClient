@@ -489,10 +489,23 @@ void        engine_notify_worlds_gone(JSContext *ctx, const char *const *names, 
  * actually carries, rather than every death for every cold document forever. */
 void        engine_notify_worlds_parked(JSContext *ctx, const char *const *vectors, int n);
 
-/* HAND BACK EVERY CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED AND HAS NOT STARTED — `remoteop.retracted<TAB>
- * <token>`, one notice per distinct token, and the queues are EMPTY when it returns. Taken at the park, before
- * the residue is written, which is why the park's own assert can stay at full strength instead of being taught
- * to tolerate a queued entry.
+/* HAND BACK EVERY CROSS-AGENT OPERATION THIS INSTANCE WAS ASKED — `remoteop.retracted<TAB><token>`, one notice
+ * per distinct token, and no member owes an answer when it returns. Taken at the park, before the residue is
+ * written, which is why the park's own asserts can stay at full strength instead of being taught to tolerate a
+ * question the residue cannot carry.
+ *
+ * BOTH HALVES OF THE DEBT, and the STARTED one is not a different kind. A question is queued on the arrival
+ * slot until a flow performs it and then rides its program's row as a token; this returns it from wherever it
+ * is. The half-run program is not a loss to weigh: its partial work is the parked flow's own COW delta and
+ * leaves with the flow, exactly as every other suspended program's does, and what the peer is owed is a CALL
+ * rather than a value — HTML §7.2.1.3.5 "CrossOriginGet ( O, P, Receiver )" ends "Return ? Call(getter,
+ * Receiver)", so a call abandoned before it completes has been made zero times and the re-ask makes it once.
+ *
+ * ONE NOTICE PER QUESTION, NOT PER HOLDER. An operation is attached to EVERY live timeline (engine_perform),
+ * so a notice per flow would be one hand-back repeated thousands of times — and worse than noisy: a notice
+ * sent while another timeline still holds the operation tells the zone to forget a token that timeline is
+ * about to answer under. The notice therefore belongs to the LAST holder leaving, which is why the single-flow
+ * form of this exists at all (the pager sells one member while the rest keep answering).
  *
  * WHY IT IS RETURNED AND NOT PARKED, which is the whole question and it turns on ONE fact: A TOKEN'S LIFETIME
  * IS THE ZONE SESSION'S, and that is strictly SHORTER than the residue's. The token is minted by the trusted
@@ -519,6 +532,21 @@ void        engine_notify_worlds_parked(JSContext *ctx, const char *const *vecto
  * asking flow's request is still being reported every step, and the next sighting asks again — routed, by the
  * zone, to whichever instance holds that document by then. */
 void        engine_retract_operations(JSContext *ctx);
+
+/* WHAT THE HAND-BACK DID, counted AT THE RETRACTION so it cannot disagree with the notices that left.
+ * `flows` is how many members held a question at all; `started` is how many PROGRAM ROWS were returned — the
+ * half a park used to refuse, and the one number that distinguishes a run which exercised it from a run which
+ * only met the queued half; `handed_back` is how many notices left, which is the number of distinct QUESTIONS
+ * and not of holders. `handed_back` far below `flows` is the last-holder rule working; `handed_back` equal to
+ * `flows` on a forked frontier is that rule not being applied. */
+void        engine_retract_census(long *flows, long *started, long *handed_back);
+
+/* HOW MANY OF THIS FRONTIER'S MEMBERS ARE MID-ANSWER — program rows still carrying a peer's rendezvous token.
+ * It is the state a park used to refuse, asked of the frontier while it is live, so a host CHOOSING a moment
+ * to evict at can choose one that contains it rather than hope one does; the same number after the fact is
+ * engine_retract_census's `started`. A live 0 is a positive statement: every question this instance was asked
+ * is either still queued on the arrival slots or already answered. */
+long        engine_operations_started(void);
 
 /* …AND THE INBOUND HALF OF IT: a peer says one of ITS worlds is gone, so the segment this instance holds for
    that world can go. The third record on the one-way line, beside a routed delivery and a performed operation,

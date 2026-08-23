@@ -364,7 +364,7 @@ async function drainNotices(e) {
     /* A COMPLETION THIS INSTANCE PRODUCED for an operation it was asked to perform, naming the token this zone
        minted. Held rather than delivered here: the asker is another instance and this loop is inside its step. */
     else if (f[0] === 'remoteop.answer') answers.set(f[1], f.slice(2).join('\t'));
-    /* AN OPERATION HANDED BACK, because the instance holding it PARKED before performing it. The record and
+    /* AN OPERATION HANDED BACK, because the instance holding it PARKED while still holding it. The record and
        the token do NOT have one lifetime and that is the whole reason this arm exists: the record is text
        whose names are global (documents, world vectors), while the TOKEN is a name in THIS zone's namespace
        and dies with this zone's session. So a parked engine cannot carry the token into its recipe and answer
@@ -374,13 +374,18 @@ async function drainNotices(e) {
        FORGETTING IS THE ACTION. Dropping the read from this map is what lets the next step re-route it; there
        is no store, no cross-session mapping, and nothing to persist. One notice per DISTINCT token, because
        one operation is attached to every live timeline and per-flow notices would repeat one hand-back across
-       a frontier of thousands. */
+       a frontier of thousands — the sender emits it when the LAST holder of that token leaves.
+       AN ANSWER AND A RETRACTION FOR ONE TOKEN ARE NOT A CONTRADICTION, and an assert here used to say they
+       were. A peer's document state IS its flows, so one operation is performed by every live timeline and
+       `otherW.length` has N answers for N of them (solver/engine.c's engine_host_answer records the extras on
+       purpose). A park that lands after one timeline has answered and before the others have is therefore an
+       ordinary state: those answers are real, and the timelines that never ran are handed back. What would be
+       a defect is a SECOND retraction of one token — that is a hand-back repeated per holder, which is the
+       thing the last-holder rule exists to prevent — and that is what is checked instead. */
     else if (f[0] === 'remoteop.retracted') {
       if (f.length < 2 || !f[1]) fail(`a remoteop.retracted notice carried no token: ${n}`);
       const r = reads.get(f[1]);
-      if (!r) fail(`a retracted token names no read this zone asked: ${f[1]}`);
-      if (r.answered) fail(`a retracted token names a read already ANSWERED — the peer performed it and then ` +
-                           `handed it back, so a completion and a retraction both exist for ${f[1]}`);
+      if (!r) fail(`a retracted token names no read this zone asked, or one already handed back: ${f[1]}`);
       retracted.push(f[1]);
       reads.delete(f[1]);
     }
