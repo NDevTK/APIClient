@@ -55,6 +55,7 @@
 #include "core/dom/document_current_script.h"
 #include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
+#include "core/html/document_write.h"   /* §8.4's three members drive the PARSER, not the tree — see its header */
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
@@ -2346,6 +2347,10 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     /* §7.1.1.2's `domain`, the fifth member of that partial interface — see document_domain.h for why the
        origin-mutating one is not in the component that reads the resource's metadata. */
     document_domain_install(ctx, proto);
+    /* §8.4 Dynamic markup insertion's `write`, `writeln` and `close`. A THIRD problem again: every member
+       above answers a question about this tree, and these three drive the parser that builds it — and
+       `document.write` is a top-three DOM-XSS sink whose absence meant no @S search was ever opened for it. */
+    document_write_install(ctx, proto);
     /* CSSOM §6.2.3's `styleSheets`, one of the two members its `partial interface mixin DocumentOrShadowRoot`
        adds. ShadowRoot gets the same call from its own component, because a `<style>` in a shadow tree is in
        THAT tree's collection and not in this one. `adoptedStyleSheets`, the mixin's other member, is an
@@ -2570,6 +2575,11 @@ void document_init(JSContext *ctx)
        operation in the platform that mutates an origin — so it is its own component, declared here beside the
        other four for the reason document_metadata_init's line gives. */
     document_domain_init(ctx);
+    /* §8.4's `write`, `writeln` and `close` — declared here beside the others for the reason
+       document_metadata_init's line gives, and because `write`/`writeln` are VARIADIC DOMString members whose
+       declaration is what converts every argument the page passed (and suspends on the page's own toString)
+       before the algorithm sees one. */
+    document_write_init(ctx);
     /* §3.1.7's `currentScript` is a sixth member of that partial interface and a THIRD problem: its getter is
        one line and everything about it is the §4.12.1.1 bracket that WRITES it, which is a per-flow slot rather
        than a fact about this tree. Declared here for the reason the two above are — its install runs from
@@ -3247,6 +3257,7 @@ void document_agent_free(JSRuntime *rt)
     document_fragment_free();
     document_current_script_free();
     document_domain_free();
+    document_write_free();
     document_metadata_free();
     /* THE PROTOTYPES ARE THE REALMS' — each is in its own class-proto slot and released with its context. What
        this component itself holds is the class, the pool entries and the two realm-value slot ids. */

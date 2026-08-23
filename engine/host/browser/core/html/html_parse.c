@@ -229,9 +229,29 @@ lxb_html_parser_t *html_parse_new_parser(void)
     return parser;
 }
 
-lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t *html, size_t size)
+bool html_parse_insertion_point_defined(const lxb_dom_document_t *doc)
 {
+    const lxb_html_parser_t *parser;
+
+    DCHECK(doc != NULL, "§13.2.3.5's insertion point was asked of no document");
+    /* A DOCUMENT WITH NO PARSER HAS NO INPUT STREAM, which is §13.2.3.5's "initially, the insertion point is
+       undefined" and not a hole: `lxb_html_document_parser_prepare` is what creates one, so a document nothing
+       has parsed into has never had a stream to insert into. */
+    if (doc->parser == NULL)
+        return false;
+    parser = (const lxb_html_parser_t *)doc->parser;
+    /* PROCESS IS THE WINDOW, and it is lexbor's own statement of it rather than a second flag beside it:
+       `lxb_html_parse_chunk_process` answers LXB_STATUS_ERROR_WRONG_STAGE in every other state, and
+       `lxb_html_parse_chunk_end` moves the parser to END — which is §13.2.7 "The end"'s "Set the insertion
+       point to undefined". A parser in ERROR is undefined too, because nothing may be handed to it. */
+    return parser->state == LXB_HTML_PARSER_STATE_PROCESS;
+}
+
+lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_char_t *html, size_t size)
+{
+    lxb_html_document_opt_t opt;
     lxb_dom_document_t *doc;
+    lxb_status_t st;
 
     DCHECK(document != NULL, "no document was parsed");
     DCHECK(html != NULL,
@@ -260,7 +280,90 @@ lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t
               "html-parse-oom: a document's HTML parser could not be created, so the document cannot be "
               "parsed at all — every flow in this instance reads the DOM this parse produces");
     }
-    return lxb_html_document_parse(document, html, size);
+    /* THE `opt` BRACKET IS LEXBOR'S OWN AND IS KEPT BYTE-FOR-BYTE. `lxb_html_document_parse` saves
+       `document->opt` across the prepare and the chunk and writes it back on BOTH its exits, while
+       `lxb_html_document_parse_chunk_begin` — the entry this pair is built out of — does not. Dropping it
+       would make an open-then-close parse answer differently from the one-shot one it replaces, which is
+       exactly the silent divergence a re-expression must not introduce. */
+    opt = document->opt;
+    st = lxb_html_document_parse_chunk_begin(document);
+    if (st == LXB_STATUS_OK)
+        st = lxb_html_document_parse_chunk(document, html, size);
+    document->opt = opt;
+    DCHECK(st != LXB_STATUS_OK || html_parse_insertion_point_defined(doc),
+           "a document parse that lexbor reported OK left no live input stream behind it — §13.2.3.5's "
+           "insertion point is the parser standing in PROCESS, which is what `lxb_html_parse_chunk_prepare` "
+           "puts it in and only `chunk_end` takes it out of, so an OK status with the stream already shut "
+           "means something closed this parse between the two calls above");
+    return st;
+}
+
+lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_char_t *text, size_t size)
+{
+    lxb_status_t st;
+
+    DCHECK(document != NULL, "§8.4.3 steps 10-11 were reached with no document to write into");
+    DCHECK(text != NULL,
+           "§8.4.3 steps 10-11 were handed a NULL pointer — the standard's `string` is always a string, and an "
+           "empty write is a zero SIZE over a real pointer exactly as an empty parse is");
+    /* §8.4.3 STEP 9 IS WHAT ANSWERS AN UNDEFINED INSERTION POINT, so reaching step 10 without a live stream is a
+       caller that skipped it — or a HOST that never opened one. Both are named here because the reader of this
+       crash cannot tell them apart from where they stand:
+         - the caller half is core/html/document_write.c, which runs step 9 before this;
+         - the HOST half is that a document whose parse ran to §13.2.7 "The end" before its scripts ever ran has
+           no insertion point for any of them, and every `document.write` on that document lands here. The fix
+           is that the ACTIVE document's parse is opened with html_parse_document_open and closed at §13.2.7's
+           own moment — the lifecycle stage that moves the readiness to "interactive" — instead of being
+           completed by html_parse_document before the first flow is seeded. That change has TWO hazards that
+           must be answered with it, and the second is the bigger one:
+             (a) lexbor emits the EOF token in `chunk_end`, and §13.2.6 builds `html`/`head`/`body` from that
+                 token when the source produced none, so a ZERO-LENGTH response left open has no document
+                 element until the close and every walk of the tree in between sees an empty document. That is
+                 what a browser does too — a still-parsing empty document has a null `documentElement` — so
+                 what has to change is each reader that assumes otherwise, not this.
+             (b) THE TREE CONSTRUCTION THIS CALL DRIVES BYPASSES THE PER-FLOW DOM DELTA. solver/dom_cow.h owns
+                 the one place a tree write is captured and it is a convention over the BROWSER components;
+                 lexbor's §13.2.6 inserts through its own mutators, which nothing captures. Every other parse
+                 in this engine is out-of-tree and its result is PLACED through the chokepoint, which is what
+                 keeps the delta honest; a live parser feeding the document's own tree has no placement step,
+                 so its nodes are shared-baseline writes belonging to no flow — one flow's `document.write`
+                 visible to every sibling and unapplied on every context switch. That is the mechanism this
+                 entry is waiting on. */
+    DCHECK(html_parse_insertion_point_defined(lxb_dom_interface_document(document)),
+           "§8.4.3 \"document.write()\" step 10 was reached on a document whose §13.2.3.5 insertion point is "
+           "undefined — see the paragraph above this assert for the two ways that happens and for what the "
+           "host has to do about the second one");
+    st = lxb_html_document_parse_chunk(document, text, size);
+    /* A `CHECK` AND NOT A `DCHECK`, for html_fire's reason one layer up: §13.2 tokenization and tree
+       construction are error-RECOVERING and define no input they reject, so a non-OK status here is the
+       allocation floor — and a markup sink that silently dropped its markup in release would be a document
+       this engine reports on having never built. */
+    CHECK(st == LXB_STATUS_OK,
+          "html-parse-oom: the markup a document wrote into its own input stream could not be tokenized — "
+          "§13.2 rejects no input, so this is memory, and continuing would analyse a document the page's own "
+          "`document.write` was supposed to have built");
+    return st;
+}
+
+lxb_status_t html_parse_document_close(lxb_html_document_t *document)
+{
+    DCHECK(document != NULL, "§13.2.7 \"The end\" was reached with no document");
+    DCHECK(html_parse_insertion_point_defined(lxb_dom_interface_document(document)),
+           "§13.2.7 \"The end\" was reached for a document whose input stream is not open — the close is the "
+           "ONE moment the insertion point becomes undefined, so a second one would hand lexbor a parser in "
+           "the END stage, which answers LXB_STATUS_ERROR_WRONG_STAGE and emits no EOF token at all");
+    return lxb_html_document_parse_chunk_end(document);
+}
+
+lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t *html, size_t size)
+{
+    lxb_status_t st = html_parse_document_open(document, html, size);
+
+    /* THE FAILURE PATH DOES NOT CLOSE, which is `lxb_html_document_parse`'s own `goto failed` — a parse that
+       did not begin has no EOF token to emit and no stage `chunk_end` would accept. */
+    if (st != LXB_STATUS_OK)
+        return st;
+    return html_parse_document_close(document);
 }
 
 bool html_parse_owns_tokens_of(const lxb_dom_document_t *doc)

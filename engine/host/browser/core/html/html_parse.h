@@ -91,9 +91,77 @@
    parse so a suspended parse cannot share a tokenizer with a sibling flow's. */
 lxb_html_parser_t *html_parse_new_parser(void);
 
-/* THE ONE PLACE A DOCUMENT IS PARSED. `lxb_html_document_parse` over `document`, with the parser created here
-   first so the tokenizer is owned before its first token — after that lexbor's entry finds `doc->parser`
-   already set and reuses it, which is the same object it would have made itself. */
+/* ---- HTML §13.2.3.5 "Preprocessing the input stream" — THE INPUT STREAM AND ITS INSERTION POINT -------------
+ *
+ * §13.2.3.5: "The insertion point is the position (just before a character or just before the end of the input
+ * stream) where content inserted using document.write() is actually inserted. … Initially, the insertion point
+ * is undefined." So the insertion point is not a coordinate this engine invents — it is a STATE OF THE PARSER,
+ * and lexbor already holds it: `lxb_html_parse_chunk_process` refuses a chunk unless the parser is in
+ * LXB_HTML_PARSER_STATE_PROCESS, which is exactly the window between `chunk_prepare` and `chunk_end`. A parser
+ * standing in that state with its source consumed has its insertion point just before the END of the input
+ * stream, which §13.2.3.5's own definition names as one of the two positions an insertion point can hold.
+ *
+ * SO THE THREE ENTRIES BELOW ARE THE THREE MOMENTS THE STANDARD NAMES, and nothing else:
+ *   - OPEN  is the parse with the stream still open. §13.2.6.4.8 'The "text" insertion mode' is why that state
+ *     has to be reachable at all: at a `script` end tag it says "Let the insertion point be just before the
+ *     next input character", runs the script, and then "Let the insertion point have the value of the old
+ *     insertion point" — so the insertion point is DEFINED for the whole of a parser-inserted script's
+ *     execution, and §8.4.3's step 9 test turns on it.
+ *   - WRITE is §8.4.3 "document.write()" step 11's "have the HTML parser process string, one code point at a
+ *     time, processing resulting tokens as they are emitted". It is the DOCUMENT's parser and not a fragment
+ *     parse, which is the whole difference between this sink and §8.5.4's innerHTML: the tokens go through
+ *     §13.2.6 tree construction in the mode the parse is standing in, so §13.2.6.4.4 'The "in head" insertion
+ *     mode' PREPARES a written `script` element (its fragment-case "already started" clause does not apply)
+ *     and the written script runs.
+ *   - CLOSE is §13.2.7 "The end" step "Set the insertion point to undefined", which is also where lexbor emits
+ *     the EOF token — so a document whose source produced no `html` element yet (an empty response) grows one
+ *     HERE and not before.
+ *
+ * `html_parse_document` IS OPEN-THEN-CLOSE and not a second implementation: a caller that wants a COMPLETE
+ * document — §8.5.1's DOMParser, §4.5.1's createHTMLDocument, XHR's responseXML, an @S fire oracle's scratch
+ * parse — is asking for a Document the standard gives no live parser and no insertion point at all, which is
+ * the state `document.write` reaches through §8.4.1's document open steps rather than through step 11.
+ *
+ * THE STEP NUMBERS ABOVE ARE THE ORDERED LIST'S OWN AND WERE OFF BY TWO WHEN THIS PARAGRAPH WAS FIRST WRITTEN
+ * (step 7 for the insertion-point test, step 9 for the parser processing the string). §8.4.3's "document write
+ * steps" list eleven items — 1 `string`, 2 `isTrusted`, 3 the append loop, 4 the Trusted Types compliant
+ * string, 5 the line feed, 6 the XML throw, 7 the throw-on-dynamic-markup-insertion throw, 8 the aborted-parser
+ * return, 9 the undefined-insertion-point arm, 10 the insert into the input stream, 11 the parser processing —
+ * and a citation nobody can look up is one nobody can check, which is the whole value of citing at all. */
+
+/* THE ONE PLACE A DOCUMENT IS PARSED, WITH ITS INPUT STREAM LEFT OPEN — the parser created here first so the
+   tokenizer is owned before its first token, then lexbor's own chunk begin/process over `html`. On return the
+   whole of `html` has been tokenized and the insertion point is just before the end of the input stream. */
+lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_char_t *html, size_t size);
+
+/* §13.2.3.5's QUESTION, asked of a real parser: is `doc`'s insertion point DEFINED. False for a document with
+   no parser at all and for one whose parse has reached §13.2.7 "The end" — both of which are the standard's
+   "undefined", not a hole. */
+bool html_parse_insertion_point_defined(const lxb_dom_document_t *doc);
+
+/* §8.4.3 "document.write()" steps 10 AND 11 — insert `text` into the input stream just before the insertion
+   point, and have the HTML parser process it. They are ONE entry because in lexbor they are one call: the
+   input stream is not a buffer this engine holds, it is the tokenizer's own cursor, so "insert just before the
+   insertion point" of a parser standing at the end of its stream IS handing the bytes to `chunk_process`.
+   CRASHES on a document whose insertion point is undefined: step 9 is what answers that case (§8.4.1's
+   document open steps), so reaching here without a live stream means the caller skipped it.
+ *
+ * AND IT WRITES INTO THE SHARED TREE WITH NO COW CAPTURE, WHICH IS WHY IT HAS NO CALLER YET. §13.2.6 tree
+ * construction inserts through lexbor's own mutators, and solver/dom_cow.h is a CONVENTION over the browser
+ * components rather than a hook inside Lexbor — every other parse in this engine is out-of-tree (a fragment,
+ * a scratch document) and its RESULT is then placed through the chokepoint, which is what keeps the delta
+ * honest. A live parser feeding the document's own tree has no such placement step, so the nodes it builds
+ * would be shared-baseline writes no flow's delta captured: one flow's `document.write` visible to every
+ * sibling and unapplied by none. That is the mechanism `document.write` is waiting on, and it is named at the
+ * assert below rather than here alone. */
+lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_char_t *text, size_t size);
+
+/* §13.2.7 "The end" — the EOF token, and the insertion point becomes undefined. Crashes on a document whose
+   stream is not open, because closing twice would hand lexbor a parser in the wrong stage and the second call
+   would silently do nothing. */
+lxb_status_t html_parse_document_close(lxb_html_document_t *document);
+
+/* THE COMPLETE PARSE — open then close, in one call. What every caller that wants a finished Document uses. */
 lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t *html, size_t size);
 
 /* Whether every token `doc`'s parses produced went through this component. TRUE for a document with no parser
