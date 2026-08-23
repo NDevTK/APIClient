@@ -1,0 +1,30 @@
+vercel_login	https://vercel.com/login	React/Next.js (App Router)
+supabase_signin	https://supabase.com/dashboard/sign-in	React/Next.js
+sentry_login	https://sentry.io/auth/login/	React/webpack
+stripe_dashboard	https://dashboard.stripe.com/login	React/custom bundler
+posthog_login	https://us.posthog.com/login	React/Vite
+nuxt_modules	https://nuxt.com/modules	Vue/Nuxt (Vite)
+svelte_playground	https://svelte.dev/playground	Svelte/SvelteKit (Vite)
+angular_material	https://material.angular.dev/components/button/overview	Angular (CLI/esbuild)
+juiceshop	https://juice-shop.herokuapp.com/	Angular/webpack (OWASP Juice Shop)
+discourse_meta	https://meta.discourse.org/latest	Ember (Embroider/webpack)
+excalidraw	https://excalidraw.com/	React/Vite
+tldraw	https://www.tldraw.com/	React/Next.js
+google_signin	https://accounts.google.com/signin/v2/identifier	Closure (hand-rolled)
+telegram_web	https://web.telegram.org/k/	hand-rolled/webpack SPA
+notion_login	https://app.notion.com/login	React/webpack
+figma_login	https://www.figma.com/login	hand-rolled/esbuild
+digitalocean_login	https://cloud.digitalocean.com/login	React/webpack
+spotify_open	https://open.spotify.com/	React/webpack
+twitch_login	https://www.twitch.tv/login	React/webpack
+dropbox_login	https://www.dropbox.com/login	React/webpack
+wikimedia_login	https://en.wikipedia.org/wiki/Special:UserLogin	MediaWiki ResourceLoader/jQuery
+moodle_login	https://school.moodledemo.net/login/index.php	Moodle/jQuery+AMD
+parabank	https://parabank.parasoft.com/parabank/index.htm	legacy JSP/jQuery
+flyio_signin	https://fly.io/app/sign-in	Phoenix LiveView
+mastodon_login	https://mastodon.social/auth/sign_in	Rails + React/webpack
+bsky	https://bsky.app/	React Native Web/Expo webpack
+railway_login	https://railway.com/login	React/Next.js
+netlify_login	https://app.netlify.com/login	React/Vite
+clickup_login	https://app.clickup.com/login	Angular/webpack
+astro_build	https://astro.build/	Astro islands
