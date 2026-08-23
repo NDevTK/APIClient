@@ -828,7 +828,7 @@ function byArea(rel) {
                       .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
   if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0,
-                              unread: 0, abPass: 0, abFail: 0, abFiles: 0, lines: [] }));
+                              unread: 0, errored: 0, abPass: 0, abFail: 0, abFiles: 0, lines: [] }));
   return a;
 }
 
@@ -845,7 +845,14 @@ function byArea(rel) {
    area is done". Every area's file count is known before the first file runs, so the answer is exact. */
 for (const r of runs) byArea(relative(WPT, r.file)).expected++;
 const AREA_W = Math.max(...[...areas.keys()].map((n) => n.length));
-/* FOUR COLUMNS, NOT THREE, AND THE FOURTH IS NOT A KIND OF ABORT. §Testing insists a wrong answer, a missing
+/* FIVE COLUMNS, AND `aborted` USED TO BE TWO OF THEM ADDED TOGETHER. The rule below is this file's own and it
+   was broken by this file: `aborted` counted the ERROR population too — a file that RAN, registered no subtest
+   and threw, which is a result about the page rather than a capability the engine lacks — so the column was a
+   sum over two different diagnoses. It read 332 in an area with 331 runs and 319 ABORT lines, which is the
+   shape of the defect: a per-file count that exceeds the file count is not a per-file count. Worse than the
+   13 it was over by, the SUM is what two runs get compared on, and two different mixes total the same number —
+   so "the abort column did not move" was read as "the same aborts fired", which it does not mean and cannot.
+   FOUR COLUMNS, NOT THREE, AND THE FOURTH IS NOT A KIND OF ABORT. §Testing insists a wrong answer, a missing
    capability, a kill and an artifact of HOW the run happened stay distinguishable — this is that rule applied
    to the corpus itself. `unread` is "the gate collected this file and then could not read it": nothing about
    the engine was measured, so folding it into `aborted` would report a checkout fact as a missing capability
@@ -854,7 +861,7 @@ const AREA_W = Math.max(...[...areas.keys()].map((n) => n.length));
 function areaRow(a) {
   console.log(`  ${a.name.padEnd(AREA_W)}  runs ${String(a.runs).padStart(5)}  pass ${String(a.pass).padStart(7)}` +
               `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}` +
-              `  unread ${String(a.unread).padStart(3)}`);
+              `  errored ${String(a.errored).padStart(3)}  unread ${String(a.unread).padStart(3)}`);
   /* WHICH PART OF THE ROW ABOVE IS WORK THAT DID NOT FINISH — see the accumulation for the incident. Printed
      only when there IS such a part, because a row where every counted subtest came from a file that ran to
      completion is a row with nothing extra to say, and a line that reads `0` every time is a line nobody reads
@@ -972,7 +979,7 @@ async function substituted(dep) {
   return out;
 }
 
-let pass = 0, fail = 0, aborted = 0, unread = 0;
+let pass = 0, fail = 0, aborted = 0, unread = 0, errored = 0;
 /* THE CENSUS BELOW IS A VERDICT, so it needs a home outside its own block: a test file on disk that neither list
    accounts for is an excluded test, and an excluded test is a failure — not a row a reader may skip. */
 let g_undecided = 0;
@@ -1137,8 +1144,13 @@ for (const { file: f, kind, variant } of runs) {
        the same fact — this file ran against a corpus it was not written for — so it is the same ABORT, and it
        names the path so WPT_PATHS can be widened. Its partial subtests are dropped for the reason the count
        exists at all: they are numbers from a test that is not the test. */
+    /* `!abortedHere` — A FILE IS COUNTED ONCE. The block above does not `continue` (deliberately: an abort does
+       not erase what the file already reported), so this fired IN ADDITION to it and a file that both aborted
+       and asked for a script the corpus lacks was counted TWICE, in a column whose whole meaning is one per
+       file. Measured: moveBefore/fullscreen-preserve.html, which is why the area read 332 over 331 runs. Its
+       abort already names the file and its cause; the missing path rides that row rather than opening a second. */
     const noscript = out.match(/^@WPTERR .*<script src> did not load: (.*)$/m);
-    if (noscript) {
+    if (noscript && !abortedHere) {
       aborted++; area.aborted++;
       failures.push(`  ABORT  ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
       continue;
@@ -1168,7 +1180,10 @@ for (const { file: f, kind, variant } of runs) {
     }
     const err = out.match(/^@WPTERR (.*)$/m);
     if (!abortedHere && err && !filePass && !fileFail) {
-      aborted++; area.aborted++;
+      /* NOT AN ABORT. The file ran and threw before registering a subtest — a result about the PAGE, where an
+         abort is a capability the engine does not have. Folding it in is the very thing the column rule above
+         forbids, and it is what made that column exceed the run count. */
+      errored++; area.errored++;
       failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
       continue;
     }
@@ -1388,7 +1403,7 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
                     : "[rev] the engine did not move during this run");
 }
 console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
-            `   fail ${fail}   aborted-runs ${aborted}   unreadable-runs ${unread}` +
+            `   fail ${fail}   aborted-runs ${aborted}   errored-runs ${errored}   unreadable-runs ${unread}` +
             `   undecided-files ${g_undecided}`);
 console.log("===========================================================");
 process.exit(fail || aborted || unread || g_undecided ? 1 : 0);
