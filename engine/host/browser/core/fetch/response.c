@@ -151,7 +151,13 @@ static int response_set(JSContext *ctx, ResponseData *d, JSValueConst url_list, 
 /* §2.2.6's URL list, from the SERIALIZED URLs a caller observed. `n == 0` is the spec's « ». Every item is an
    ABSOLUTE URL: §5.4's constructor parses a request's URL before it fetches and §4.5 parses a redirect's
    Location against it, so a relative reference or a concolic display shape reaching here is a host that
-   reported something that is not a URL, and `url` below would then have nothing to serialize. */
+   reported something that is not a URL, and `url` below would then have nothing to serialize.
+   THE ITEMS ARE OWN DEFINES, NEVER A [[Set]], for the reason fetch.c's fetch_reply_new states in full at its
+   own writes: this list is part of a record the TRUSTED ZONE builds, its array's prototype is the PAGE'S
+   `Array.prototype`, and [[Set]] (ECMA-262 §10.1.9 "[[Set]] ( propertyKey, value, receiver )") walks that chain — so an index
+   accessor the page installed there would be CALLED while the host is building the record, and a frozen
+   Array.prototype would make the write refuse by throwing into the host's own time. A define creates an own
+   data property and asks the chain nothing. */
 JSValue response_url_list(JSContext *ctx, const char *const *urls, int n)
 {
     JSValue a = JS_NewArray(ctx);
@@ -165,7 +171,8 @@ JSValue response_url_list(JSContext *ctx, const char *const *urls, int n)
                "a response's URL list was built with a hole in it — a host reports every item of the list it "
                "observed, or none of them, and a missing item silently shortens the list `redirected` is read "
                "off");
-        if (JS_SetPropertyUint32(ctx, a, (uint32_t)i, JS_NewString(ctx, urls[i])) < 0) {
+        if (JS_DefinePropertyValueUint32(ctx, a, (uint32_t)i, JS_NewString(ctx, urls[i]),
+                                         JS_PROP_C_W_E) < 0) {
             JS_FreeValue(ctx, a);
             return JS_EXCEPTION;
         }

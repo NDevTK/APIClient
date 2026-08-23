@@ -384,6 +384,34 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
        condition here precisely because this macro keeps them. */
     CHECK(!JS_IsException(o), "fetch: OOM allocating the host's reply record — the flow parked on this reply "
                               "would resume holding a Response with no status, no headers and no body");
+    /* EVERY FIELD BELOW IS AN OWN DEFINE, NEVER A [[Set]], AND THAT IS A STATEMENT ABOUT WHOSE OBJECT THIS IS.
+     *
+     * This record belongs to the TRUSTED ZONE — it is what a host hands the engine when a flow's fetch is
+     * answered — but it is built out of an ordinary `JS_NewObject`, so its prototype is the PAGE'S
+     * `Object.prototype`. `JS_SetPropertyStr` is [[Set]] — ECMA-262 §10.1.9 "[[Set]] ( propertyKey, value,
+     * receiver )", which delegates to §10.1.9.2 "OrdinarySetWithOwnDescriptor ( obj, propertyKey, value,
+     * receiver, ownDesc )", whose first step is "If ownDesc is undefined, then Let parent be ? obj.[[GetPrototypeOf]]()"
+     * — the prototype-chain walk. So writing `body`, `status`, `headers`, `statusText`, `urlList` or `computedType` through it
+     * consults whatever the page put on that chain. Three things follow, and each of them has been observed as
+     * a different-looking bug elsewhere in this tree:
+     *   (1) an ACCESSOR on Object.prototype named for one of these fields makes this function CALL PAGE CODE —
+     *       and it is called in the HOST's own time, between two scheduler slices, where a flow may be parked
+     *       and there is no flow base to run anything on. That is the exact state quickjs.c's JS_CallInternal
+     *       entry aborts on ("JS was entered while a flow is PARKED"), reached from a host that never meant to
+     *       run anything at all;
+     *   (2) a FROZEN Object.prototype, or a non-writable data property on it, makes the [[Set]] REFUSE, and
+     *       JS_SetPropertyStr refuses by THROWING — leaving a completion standing in the per-runtime exception
+     *       slot during the host's own time, which the next flow the scheduler resumes then finds as its own;
+     *   (3) prototype pollution is a thing this engine exists to FIND (§@S names it beside DOM-clobbering), so
+     *       a page that pollutes Object.prototype could read every URL, status and body the trusted zone
+     *       delivers, and substitute values in them. The untrusted side must not be able to see this record
+     *       being built, let alone intercept it.
+     * solver/cow.c reached the identical conclusion for the identical reason and wrote it down at its own
+     * restore ("This was a JS_SetProperty: a [[Set]], an operation THROUGH the slot, which walks the prototype
+     * chain, calls a setter, and consults `writable` and `extensible` — and refuses by THROWING"). Same
+     * sentence, different file. A define creates an OWN data property: no chain walk, no setter, no consult,
+     * nothing for a page to reach. JS_PROP_C_W_E is exactly the shape a plain assignment would have produced,
+     * so every reader — including engine.c's own provide-side field census — sees what it saw before. */
     DCHECK(url_list_n >= 1,
            "a host built a reply with an empty URL list — §4.1 gives a fetched response at least a clone of "
            "the request's URL list, and `url`/`redirected` are read off nothing else");
@@ -394,12 +422,12 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     CHECK(!JS_IsException(v), "fetch: OOM building a reply's §2.2.6 URL list — `url` and `redirected` are read "
                               "off nothing else, so the Response would report a different address than the one "
                               "that was fetched");
-    CHECK(JS_SetPropertyStr(ctx, o, "urlList", v) >= 0, "fetch: a reply record refused its URL list");
-    CHECK(JS_SetPropertyStr(ctx, o, "status", JS_NewInt32(ctx, status)) >= 0,
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "urlList", v, JS_PROP_C_W_E) >= 0, "fetch: a reply record refused its URL list");
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "status", JS_NewInt32(ctx, status), JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its status");
     v = JS_NewString(ctx, status_text ? status_text : "");
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's status message");
-    CHECK(JS_SetPropertyStr(ctx, o, "statusText", v) >= 0, "fetch: a reply record refused its status message");
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "statusText", v, JS_PROP_C_W_E) >= 0, "fetch: a reply record refused its status message");
     /* §2.2.5's BODY, AS THE BYTE SEQUENCE IT IS. This was `JS_NewStringLen`, and that call is a DECODE — the
        lenient UTF-8 one cutils.h describes ("encoding errors are converted as 0xFFFD and use a single byte"),
        run by the record's BUILDER on bytes no standard had looked at yet. So every C host destroyed the
@@ -409,7 +437,7 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     v = JS_NewArrayBufferCopy(ctx, (const uint8_t *)(body ? body : ""), body_len);
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's body — a body that silently became empty is a "
                               "page reading a successful response with nothing in it");
-    CHECK(JS_SetPropertyStr(ctx, o, "body", v) >= 0, "fetch: a reply record refused its body");
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "body", v, JS_PROP_C_W_E) >= 0, "fetch: a reply record refused its body");
     h = JS_NewArray(ctx);
     CHECK(!JS_IsException(h), "fetch: OOM allocating a reply's header list");
     for (i = 0; headers && i < headers->n; i++) {
@@ -417,15 +445,16 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
         CHECK(!JS_IsException(pair), "fetch: OOM allocating a reply header's name/value pair");
         v = JS_NewString(ctx, headers->e[i].name);
         CHECK(!JS_IsException(v), "fetch: OOM allocating a reply header's name");
-        CHECK(JS_SetPropertyUint32(ctx, pair, 0, v) >= 0, "fetch: a header pair refused its name");
+        CHECK(JS_DefinePropertyValueUint32(ctx, pair, 0, v, JS_PROP_C_W_E) >= 0, "fetch: a header pair refused its name");
         v = JS_NewString(ctx, headers->e[i].value);
         CHECK(!JS_IsException(v), "fetch: OOM allocating a reply header's value");
-        CHECK(JS_SetPropertyUint32(ctx, pair, 1, v) >= 0, "fetch: a header pair refused its value");
-        CHECK(JS_SetPropertyUint32(ctx, h, (uint32_t)i, pair) >= 0,
+        CHECK(JS_DefinePropertyValueUint32(ctx, pair, 1, v, JS_PROP_C_W_E) >= 0, "fetch: a header pair refused its value");
+        CHECK(JS_DefinePropertyValueUint32(ctx, h, (uint32_t)i, pair, JS_PROP_C_W_E) >= 0,
               "fetch: a reply's header list refused a pair — the Content-Type that decides whether a body "
               "parses is one of these");
     }
-    CHECK(JS_SetPropertyStr(ctx, o, "headers", h) >= 0, "fetch: a reply record refused its header list");
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "headers", h, JS_PROP_C_W_E) >= 0,
+          "fetch: a reply record refused its header list");
     /* AND WHAT THE HOST DECIDED THIS RESOURCE IS (fetch.h). Asserted rather than defaulted at the WRITE, so a
        host that has not run the sniff aborts here — where the omission is — instead of at the reader, which
        would only be able to say that some producer somewhere left the field off. */
@@ -435,7 +464,7 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
            "server that named nothing and bytes that named nothing is the EMPTY string, which is a value");
     v = JS_NewString(ctx, computed_type ? computed_type : "");
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's computed MIME type");
-    CHECK(JS_SetPropertyStr(ctx, o, "computedType", v) >= 0,
+    CHECK(JS_DefinePropertyValueStr(ctx, o, "computedType", v, JS_PROP_C_W_E) >= 0,
           "fetch: a reply record refused its computed MIME type");
     return o;
 }
