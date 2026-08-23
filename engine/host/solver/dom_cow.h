@@ -150,6 +150,61 @@ void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_
 /* A character-data node's VALUE (§4.10 `data`) — the third thing a flow can change about the tree, on a node
    whose identity must survive the write, so it cannot be a remove+insert of a replacement. */
 void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len);
+/* HTML §13.2.6.1 "Creating and inserting nodes"'s "insert a character" step 3 — "If there is a Text node
+   immediately before insertionLocation, then append data to that Text node's data".
+ *
+ * IT IS ITS OWN ENTRY BECAUSE THE STANDARD MAKES IT ONE, not because tree construction is a special caller.
+ * That step writes DOM §4.10 "Interface CharacterData"'s `data` CONCEPT directly — the spec's own link — and
+ * NOT §4.10's "replace data" algorithm, whose step 4 queues a "characterData" mutation record and whose steps
+ * 7-10 move every live range that straddles the write. So this fires no cdata hook and touches no range: an
+ * entry that routed the merge through dom_cow_set_text would report a mutation the page must not observe and
+ * move ranges the parser must not move. The two are the same DELTA record (a character-data node's whole
+ * value, restored over the node) and two different DOM operations.
+ *
+ * AND UNAPPLYING IT IS NOT DELETING A NODE, which is the whole reason it cannot ride the insert entry that
+ * covers every other thing tree construction does. The merge target is a Text node that EXISTED before the
+ * write — §13.2.6.1's own worked example is "A<script>…document.body.appendChild(text)…</script>C", which the
+ * standard annotates "the parser appends to the Text node created by the script" — so the node is not the
+ * flow's to remove and the append is not a creation to undo. What reverts is the node's VALUE: the entry holds
+ * the bytes the node had BEFORE the append, and an unapply writes them back over the whole of the node's
+ * current data, which truncates the appended tail with the node's identity, its parent and its position
+ * untouched. N merges into one Text node push N entries holding progressively longer prefixes; the head is
+ * unapplied newest-first, so it walks back down to the baseline, and applied oldest-first, so it walks back up
+ * to the flow's value. There is no dedup — "this entry says the same thing as an earlier one" is a seen-set,
+ * and the cost is one entry per MERGE rather than per node.
+ *
+ * THE ARENA IS THE NODE'S OWN DOCUMENT'S TEXT ARENA, which is what `lexbor_str_append` in §13.2.6.1 used and
+ * what `lxb_dom_character_data_replace` reaches for on the restore, so the capture and its undo allocate out
+ * of one place. */
+void dom_cow_append_text_data(lxb_dom_node_t *node, const char *data, size_t len);
+
+/* HTML §13.2.6 "Tree construction" — INSTALL THIS FILE AS THE PARSER'S DOM WRITER.
+ *
+ * §13.2.6 runs inside lexbor and writes the document without one call to the chokepoint above; that is the gap
+ * core/html/html_parse.c's parse entry asserts around rather than closes. The vendored parser now makes every
+ * one of those writes through a single interposable table (`lxb_html_tree_dom_cb_t`, html/tree.h) instead of
+ * through the raw `_wo_events` primitives and a `lexbor_str_append` into a Text node's storage, and this
+ * installs THIS file as the implementation.
+ *
+ * WHAT THE IMPLEMENTATION DOES IS DECIDED BY WHOSE TREE IS BEING BUILT, and lexbor already answers that:
+ * `lxb_html_document_is_original` is false exactly for §13.4 "Parsing HTML fragments"' temporary document,
+ * whose whole tree is the running flow's own product and therefore flow-private in §state-isolation's sense —
+ * so its structural writes push no entry, which is what keeps a delta O(shared state touched) rather than
+ * O(everything the parse built). A parse into an ORIGINAL document is today a parse into a tree no other flow
+ * can reach, and that is not argued here: it is the condition html_parse.c asserts where the parse opens, and
+ * the per-write echo of it is asserted at the members below, so a live parse on the ACTIVE document crashes at
+ * its first insertion instead of writing shared tree that no delta recorded.
+ * The character merge is the one member that captures either way — see dom_cow_append_text_data.
+ *
+ * IT DOES NOT FIRE THE TREE HOOK. §4.2.3's insertion and removing steps are lexbor's per-document `mutation`
+ * table's job and this engine already routes them there; the eight sites that used the `_wo_events` primitives
+ * were opting OUT of that table, and routing them through the public mutators is what put them back. Firing
+ * the chokepoint's own hook here as well would run every parsed element's steps twice. */
+void dom_cow_install_tree_construction(void);
+/* Whether that install has happened and still stands — asked by the parse entry on every parser it makes, and
+   a POSITIVE statement rather than a hole: a §13.2.6 write reaching lexbor's own table is a write no delta
+   can ever see, and there is no later point at which that becomes visible. */
+bool dom_cow_owns_tree_construction(void);
 /* A DOM PROPERTY's taint (textContent and its kind): the value half is already captured as Text nodes by the
    insert/remove chokepoints, so this captures the taint shadow so it reverts with them. JS_UNDEFINED clears. */
 void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *name, JSValueConst opaque);

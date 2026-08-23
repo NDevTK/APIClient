@@ -1083,6 +1083,164 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len) {
     lxb_dom_character_data_replace(cd, (const lxb_char_t *)val, val_len, 0, cd->data.length);
 }
 
+/* HTML §13.2.6.1 "Creating and inserting nodes"'s "insert a character" step 3 — see dom_cow.h for why this is
+   its own entry point and why unapplying it is a value restore rather than a node removal. */
+void dom_cow_append_text_data(lxb_dom_node_t *node, const char *data, size_t len) {
+    lxb_dom_character_data_t *cd;
+    lexbor_mraw_t *text;
+
+    DCHECK(node != NULL, "§13.2.6.1's insert-a-character was asked to append to no node — step 3 reaches here "
+                         "only having FOUND a Text node immediately before the insertion location");
+    DCHECK(node->type == LXB_DOM_NODE_TYPE_TEXT,
+           "§13.2.6.1's insert-a-character merged into a node that is not a Text node — step 3's test is "
+           "`there is a Text node immediately before insertionLocation`, so anything else means the parser "
+           "found the previous sibling and never asked what it was");
+    DCHECK(node->owner_document != NULL,
+           "a character merge reached a Text node with no node document — its data is allocated out of that "
+           "document's text arena, so there is nowhere for the appended bytes to live");
+    cd = lxb_dom_interface_character_data(node);
+    /* THE CAPTURE IS UNCONDITIONAL UNDER THE GATE, exactly like dom_cow_set_text's, and that is the SOUND
+       direction rather than the lazy one: over-capturing a Text node the running flow itself built costs one
+       entry and reverts to the same bytes, while under-capturing a node the baseline owns leaves a page's text
+       written by one flow and visible to every other. §13.2.6.1's own example — "the parser appends to the
+       Text node created by the script" — is the second case, and no property of the node distinguishes them.
+       `cd->data.length` is read BEFORE the allocation and `cd->data.data` copied out AFTER it, so the sale
+       that allocation can trigger stands between the read and the use (see the capture scope's comment). */
+    if (g_dom_capture) {
+        DomUndo u; memset(&u, 0, sizeof u);
+        dom_capture_begin();
+        u.kind = 3; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
+        u.had = 1; u.old_len = cd->data.length;
+        u.old = reclaim_malloc(u.old_len ? u.old_len : 1);
+        CHECK(u.old != NULL, "dom-cow-oom: the character-merge baseline snapshot failed — unapply would leave "
+                             "the parser's appended text in a Text node the baseline owns");
+        /* A Text node whose storage was never allocated has a NULL `data` and a zero length, and memcpy from a
+           null source is undefined however small the count — the allocation above is still made, so the entry
+           holds an empty baseline rather than a missing one and the unapply arm needs no case for it. */
+        if (u.old_len) memcpy(u.old, cd->data.data, u.old_len);
+        dom_undo_push(u);
+        dom_capture_end();
+    }
+    /* The append itself, out of the node's OWN document's text arena — the one §13.2.6.1 used and the one
+       lxb_dom_character_data_replace reaches for on the restore, so a captured node and its undo allocate from
+       one place. The empty arm is a Text node whose storage was never allocated: initialise at `len` and the
+       append below fills it. */
+    text = node->owner_document->text;
+    if (cd->data.data == NULL) {
+        CHECK(lexbor_str_init(&cd->data, text, len) != NULL,
+              "dom-cow-oom: §13.2.6.1's character merge could not initialise the Text node's storage");
+    }
+    CHECK(lexbor_str_append(&cd->data, text, (const lxb_char_t *)data, len) != NULL,
+          "dom-cow-oom: §13.2.6.1's character merge could not append to the Text node's data");
+}
+
+/* HTML §13.2.6 "Tree construction"'s DOM writes, as this file's own — see dom_cow.h.
+ *
+ * `tree->document` is what names the parse, and `lxb_html_document_is_original` is what says whose tree it is:
+ * false only for §13.4 "Parsing HTML fragments"' temporary document, whose whole contents are the running
+ * flow's own product. That is the ONE question these members ask, and it is lexbor's answer rather than a
+ * predicate over the node — an unparented root is what a fragment and a subtree some flow REMOVED both look
+ * like, and only one of those may be written without an entry. */
+static bool cow_tc_private(lxb_html_tree_t *tree)
+{
+    DCHECK(tree != NULL && tree->document != NULL,
+           "a §13.2.6 tree-construction write arrived with no tree builder or no document on it — the document "
+           "is what says whose tree is being built, and without it this file cannot tell a fragment parse's "
+           "own product from a write to the page's tree");
+    return !lxb_html_document_is_original(tree->document);
+}
+
+/* THE PER-WRITE ECHO OF THE PARSE ENTRY'S OWN ASSERT. core/html/html_parse.c refuses to OPEN a parse on a
+   document that already has a tree, because §13.2.6's writes are captured by nothing and that is harmless only
+   while the target is a tree no other flow can reach. Capture being OFF is the same statement made per write:
+   the initial document parse runs before the first scheduler slice, so nothing is being recorded and nothing
+   is being missed. A live parser on the ACTIVE document (§8.4.3 `document.write`) runs INSIDE a slice with
+   capture on, so it lands here — which is the crash that says the per-parse capture context has to exist
+   before that parse may be opened. */
+static void cow_tc_structural_check(lxb_html_tree_t *tree)
+{
+    DCHECK(cow_tc_private(tree) || !g_dom_capture,
+           "HTML §13.2.6 tree construction wrote the tree of an ORIGINAL document while the running flow's DOM "
+           "delta was recording — every node this parse builds and every reparent its adoption agency performs "
+           "is then a shared-baseline write no delta captured, so one flow's parse is visible to every sibling "
+           "and unapplied by none. Give the parse a capture context that declares its root, and route these "
+           "members at the capturing chokepoint (dom_cow_append_child / dom_cow_insert_before / "
+           "dom_cow_remove_child) for a parse whose target the page already holds");
+}
+
+static void cow_tc_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
+{
+    cow_tc_structural_check(tree);
+    DCHECK(to != NULL && node != NULL, "§13.2.6 inserted nothing, or inserted into nothing");
+    /* EVERY §13.2.6 INSERT IS OF A PARENTLESS NODE, and it is asserted rather than assumed: the insertion
+       modes insert elements, comments, Text nodes and the DocumentType they created a statement earlier, and
+       §13.2.6.4.7's adoption agency removes a node in its own step before every append it performs. A node
+       that still has a parent here is one being MOVED with its removal seen by nothing. */
+    DCHECK(node->parent == NULL,
+           "§13.2.6 inserted a node that is still in a tree — that is a move, and the removal half of it "
+           "reached neither the removing steps nor any delta");
+    g_dom_version++;
+    lxb_dom_node_insert_child(to, node);
+}
+
+static void cow_tc_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
+{
+    cow_tc_structural_check(tree);
+    DCHECK(to != NULL && node != NULL, "§13.2.6 inserted nothing, or inserted before nothing");
+    DCHECK(node->parent == NULL,
+           "§13.2.6 foster-parented a node that is still in a tree — that is a move, and the removal half of "
+           "it reached neither the removing steps nor any delta");
+    /* §13.2.6.1's foster-parented position is "inside last table's parent node, immediately before last
+       table", so the reference node has a parent by construction; without one lexbor links the child to a null
+       parent and the fostered content is reachable from nothing. */
+    DCHECK(to->parent != NULL,
+           "§13.2.6.1's appropriate place for inserting a node gave a BEFORE position at a node with no "
+           "parent — there is no position before a tree's root");
+    g_dom_version++;
+    lxb_dom_node_insert_before(to, node);
+}
+
+static void cow_tc_remove(lxb_html_tree_t *tree, lxb_dom_node_t *node)
+{
+    cow_tc_structural_check(tree);
+    DCHECK(node != NULL, "§13.2.6 removed nothing");
+    DCHECK(node->parent != NULL,
+           "§13.2.6.4.7's adoption agency removed a node that is in no tree — its own steps guard every "
+           "remove with `if lastNode's parent is non-null`, so reaching here past that guard means the "
+           "algorithm lost track of where the node was");
+    g_dom_version++;
+    lxb_dom_node_remove(node);
+}
+
+static lxb_status_t cow_tc_append_data(lxb_html_tree_t *tree, lxb_dom_character_data_t *chrs,
+                                       const lxb_char_t *data, size_t len)
+{
+    /* NO structural check, and that is the difference this member exists to state: the merge captures whichever
+       tree it lands in, so there is nothing here for a live parse on the page's own document to make unsound.
+       `tree` is not consulted for the same reason — the arena the append allocates out of is the TEXT NODE's
+       own document's, which is the one a restore will reach for, and not the one the parse happens to name. */
+    (void)tree;
+    dom_cow_append_text_data(lxb_dom_interface_node(chrs), (const char *)data, len);
+    return LXB_STATUS_OK;
+}
+
+static const lxb_html_tree_dom_cb_t g_cow_tc_ops = {
+    cow_tc_insert_child,
+    cow_tc_insert_before,
+    cow_tc_remove,
+    cow_tc_append_data
+};
+
+void dom_cow_install_tree_construction(void)
+{
+    lxb_html_tree_dom_set(&g_cow_tc_ops);
+}
+
+bool dom_cow_owns_tree_construction(void)
+{
+    return lxb_html_tree_dom() == &g_cow_tc_ops;
+}
+
 void dom_cow_append_child(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     g_dom_version++;
     dom_insert_capture(child);   /* record the insertion FIRST so it reverts per-flow (detached on unapply) */

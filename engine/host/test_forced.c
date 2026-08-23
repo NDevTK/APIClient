@@ -6365,6 +6365,69 @@ static void file_reader_package_selftest(JSContext *ctx)
  * correct verdict, arrived at by the pin's own semantics.
  * BOTH SPELLINGS OF THE DEMAND ARE ONE DEMAND, which is the half a src-keyed rule would have missed:
  * `String(e.origin) === X` pins a DERIVED identity, and the attacker's principal is what both are about. */
+/* ---- BEGIN tree-construction-write lane: HTML §13.2.6's DOM writes go through solver/dom_cow.h ------------
+ *
+ * §13.2.6.1 "Creating and inserting nodes"' "insert a character" step 3 — "If there is a Text node immediately
+ * before insertionLocation, then append data to that Text node's data" — was a `lexbor_str_append` straight
+ * into the node's own storage, with no interception point at any version, and it is what produces most of a
+ * page's text. It goes through this engine's writer now, and the risk that change carries is not subtle: a
+ * merge that appends the wrong bytes silently corrupts every document, and every gate in this repo would stay
+ * green because the tree SHAPE is unaffected. So the fixture is over the BYTES.
+ *
+ * THE FIXTURE FORCES MULTIPLE CHARACTER TOKENS INTO ONE Text NODE, which is the only way to reach step 3 at
+ * all: a character reference is tokenized as its own run, so `a&amp;b` is three character tokens and one Text
+ * node, and `&#65;&#66;` is two references that must coalesce to `AB`. A single-token text would take step 3's
+ * "Otherwise" arm and never merge. */
+static void tree_construction_write_selftest(void)
+{
+    static const char *SRC = "<html><body><p>a&amp;b &#65;&#66; c</p></body></html>";
+    static const char *WANT = "a&b AB c";
+    lxb_html_document_t *dom = dom_document_create();
+    lxb_dom_node_t *p, *text;
+    lxb_dom_character_data_t *cd;
+    size_t want_len = strlen(WANT);
+
+    CHECK(dom != NULL, "the tree-construction fixture could not create a document");
+    /* THE INSTALL IS ASSERTED FROM OUTSIDE THE PARSE, because inside it every §13.2.6 write has already
+       happened: a table that was still lexbor's would have produced a byte-identical tree here (the default
+       IS the vendor's behaviour), so the equality below would pass while nothing this lane built had run. */
+    html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    CHECK(dom_cow_owns_tree_construction(),
+          "§13.2.6's DOM writes are not this engine's after a parse — html_parse_new_parser installs them and "
+          "the whole fixture below would be measuring lexbor's own default instead");
+
+    p = lxb_dom_interface_node(lxb_html_document_body_element(dom))->first_child;
+    CHECK(p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT,
+          "the tree-construction fixture's <p> was not parsed into body");
+    text = p->first_child;
+    CHECK(text != NULL && text->type == LXB_DOM_NODE_TYPE_TEXT,
+          "the tree-construction fixture's <p> has no Text child — §13.2.6.1's insert-a-character built none");
+    /* ONE Text NODE, NOT FIVE. Coalescing is step 3 itself: if the routed append_data ever failed to write
+       into the EXISTING node, the "Otherwise" arm would create a sibling per token and this would be false
+       with every byte still present somewhere in the tree. */
+    CHECK(text->next == NULL,
+          "§13.2.6.1's insert-a-character did not coalesce its character tokens into one Text node — the "
+          "routed append_data is creating a node per token instead of appending to the previous one");
+    cd = lxb_dom_interface_character_data(text);
+    CHECK(cd->data.length == want_len && !memcmp(cd->data.data, WANT, want_len),
+          "§13.2.6.1's character merge produced the wrong bytes — the routed append_data must be byte-identical "
+          "to the `lexbor_str_append` it replaced, or every parsed document's text is silently corrupt");
+
+    /* AND THE ENTRY POINT ITSELF, on the node the parse just built. Capture is off in this harness, so what
+       this exercises is the append half and its four DCHECKs; the delta half is the same kind-3 record
+       dom_cow_set_text writes, whose unapply replaces the node's whole data with the captured baseline and so
+       truncates the appended tail with the node's identity and position untouched. */
+    dom_cow_append_text_data(text, "!!", 2);
+    CHECK(cd->data.length == want_len + 2 && !memcmp(cd->data.data + want_len, "!!", 2),
+          "dom_cow_append_text_data did not append to the Text node's data — §13.2.6.1 step 3 appends, and a "
+          "write that replaced instead would drop every character token that came before it");
+    CHECK(cd->data.data[want_len + 2] == 0x00,
+          "dom_cow_append_text_data left the Text node's storage unterminated — lexbor's own readers take the "
+          "NUL as well as the length, so a page's text would run into whatever follows it in the arena");
+    dom_document_destroy(dom);
+}
+/* ---- END tree-construction-write lane -------------------------------------------------------------------- */
+
 static void message_source_selftest(void)
 {
     const char *kind = NULL, *enc;
@@ -6521,6 +6584,7 @@ int main(int argc, char **argv) {
     file_reader_package_selftest(ctx);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
+    tree_construction_write_selftest();   /* §13.2.6's DOM writes, and the character merge's bytes */
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */

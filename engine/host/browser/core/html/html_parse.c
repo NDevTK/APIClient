@@ -9,6 +9,9 @@
 #include "check.h"
 #include "core/dom/node_heap.h"
 #include "core/html/html_parse.h"
+/* §13.2.6's DOM writes are the per-flow delta's — this component owns the one place a parser is made, so it is
+   where that implementation is installed. */
+#include "solver/dom_cow.h"
 
 /* LEXBOR'S TOKEN-DONE CALLBACK IS STATIC, SO IT IS CAPTURED RATHER THAN NAMED — `lxb_html_tree_token_callback`
    has no declaration in any header, and re-writing its six lines here would be a second copy of a function
@@ -241,6 +244,18 @@ lxb_html_parser_t *html_parse_new_parser(void)
     lxb_html_tokenizer_token_f inner;
     void *inner_ctx;
 
+    /* HTML §13.2.6 "Tree construction"'s DOM WRITER, INSTALLED WHERE A PARSER IS MADE — the same reason the
+       token-done wrapper is installed here and not at each parse: `lxb_html_document_parse` creates the parser
+       it uses, so a call that reached lexbor's entry directly would get a tree builder writing the document
+       through the vendor's own table, where no delta can see it. This is the one line every parse in this
+       engine passes, so there is no parse left to forget. Idempotent by construction — one process-wide table
+       whose address does not change — and asserted from the other side on every parse open. */
+    dom_cow_install_tree_construction();
+    DCHECK(dom_cow_owns_tree_construction(),
+           "installing this engine's §13.2.6 DOM writer did not take — the table is one process-wide pointer "
+           "and this is the line that sets it, so a mismatch here means a second component is competing for "
+           "tree construction's writes and the two have to be composed rather than one silently dropped");
+
     if (parser == NULL)
         return NULL;
     if (lxb_html_parser_init(parser) != LXB_STATUS_OK) {
@@ -312,34 +327,33 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
            "a document that has already been parsed is being parsed again — lexbor cleans it first and that "
            "clean empties the AGENT's two DOM arenas, so every node of every other document in this instance "
            "would be returned to the allocator with its tree still naming it; parse into a new document");
-    /* AND IT BUILDS A DOCUMENT FROM NOTHING, WHICH IS THE UNSTATED ARGUMENT EVERY PARSE IN THIS ENGINE RESTS ON.
-       HTML §13.2.6 "Tree construction" does not reach the DOM through solver/dom_cow.h's chokepoint, so not one
-       node a parse builds is captured into the running flow's delta. FIRING A CALLBACK IS NOT A CAPTURE, and
-       the distinction is the whole of this paragraph now that lexbor fires one: `lxb_html_tree_insert_node`
-       (`lxb_inline` in `html/tree.h`) reaches `lxb_dom_node_insert_child` for the CHILD position, so §13.2.6's
-       ordinary insertion does run `->mutation->inserted` — over every shadow-including descendant
-       (`dom/interfaces/node.c`), and nothing this engine registers there records a delta entry. The other four
-       shapes do not even reach it: the FOSTER-PARENTED insert is still `lxb_dom_node_insert_before_wo_events`
-       one line above; §13.2.6.4.1's DOCTYPE is a raw `_wo_events` append; §13.2.6.4.7's adoption agency
-       reparents through six raw `_wo_events` calls in `html/tree.c`; and a character token does not reach a
-       mutator at all — `lxb_html_tree_insert_character_for_data` appends into the PREVIOUS Text node's own
-       `char_data.data` with `lexbor_str_append`, which has no interception point in any lexbor version.
-       THAT IS SOUND ONLY BECAUSE THE TREE IS ONE NO OTHER FLOW CAN REACH. Every caller here creates the document
-       immediately before parsing into it and wraps it immediately after, so at this line the target has no
-       children and nothing in the agent names it — its nodes are flow-private in exactly the sense
-       solver/dom_cow.h's private-tree entries declare, which is why they may be built raw. Open a parse on a
-       document that already HAS a tree and the same insertions become shared-baseline writes belonging to no
-       flow: one flow's markup visible to every sibling and unapplied on every context switch.
+    /* §13.2.6's WRITES ARE THIS ENGINE'S NOW, AND THE HALF THAT IS STILL UNCAPTURED IS WHAT THIS ASSERTS.
+       HTML §13.2.6 "Tree construction" wrote the document through lexbor's own `_wo_events` primitives at
+       eight sites and, for §13.2.6.1's character merge, through a `lexbor_str_append` into a Text node's own
+       storage that was not a mutator call at all — so none of it had an interception point and FIRING A
+       CALLBACK IS NOT A CAPTURE anyway. The vendored parser now makes every one of those writes through one
+       interposable table and solver/dom_cow.h installs itself as the implementation
+       (dom_cow_install_tree_construction, asserted below on every parse this component opens).
+       WHAT THAT BOUGHT AND WHAT IT DID NOT. The character merge IS captured — §13.2.6.1's own example is the
+       parser appending to a Text node a SCRIPT created, so its target is a node the parse did not build and
+       its undo is a value restore rather than a node removal. The STRUCTURAL writes are not: an entry per node
+       a parse builds is O(everything the flow built) rather than O(shared state it touched), which is the
+       invariant solver/dom_cow.h's private-tree entries exist to keep. They may be written without one only
+       while the tree is one NO OTHER FLOW CAN REACH — every caller here creates the document immediately
+       before parsing into it and wraps it immediately after, so at this line the target has no children and
+       nothing in the agent names it. Open a parse on a document that already HAS a tree and those same
+       insertions become shared-baseline writes belonging to no flow: one flow's markup visible to every
+       sibling and unapplied on every context switch.
        SO THIS IS THE LINE §8.4.3 `document.write` ARRIVES AT FROM THE OTHER END. Its step 9 needs a live parser
        on the ACTIVE document — a document whose tree is the page's — and this assert is what says that cannot
-       be had by opening one here. It is checkable rather than argued: the emptiness is the reachability. */
+       be had by opening one here. It is checkable rather than argued: the emptiness is the reachability, and
+       solver/dom_cow.c's own members assert the per-write echo of it. */
     DCHECK(lxb_dom_interface_node(document)->first_child == NULL,
-           "an HTML parse was opened on a document that already has a tree — §13.2.6 tree construction reaches "
-           "the DOM without one call to solver/dom_cow.h, so NOTHING it does is captured into the running "
-           "flow's DOM delta, and that is only "
-           "harmless while the document is one no other flow can observe. Route §13.2.6's insertions through "
-           "solver/dom_cow.h's chokepoint (dom_cow_append_child / dom_cow_insert_before, and a character-data "
-           "capture for the token merge) before parsing into a tree the page already holds");
+           "an HTML parse was opened on a document that already has a tree — §13.2.6's STRUCTURAL writes push "
+           "no delta entry, which is harmless only while the document is one no other flow can observe. Give "
+           "the parse a capture context that declares its root and route those writes at the capturing "
+           "chokepoint (dom_cow_append_child / dom_cow_insert_before / dom_cow_remove_child) before parsing "
+           "into a tree the page already holds");
     doc = lxb_dom_interface_document(document);
     if (doc->parser == NULL) {
         /* THE CREATION LEXBOR WOULD HAVE MADE, MADE HERE. `lxb_html_document_parser_prepare` is static and
@@ -352,6 +366,16 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
               "html-parse-oom: a document's HTML parser could not be created, so the document cannot be "
               "parsed at all — every flow in this instance reads the DOM this parse produces");
     }
+    /* AND THAT §13.2.6's WRITES COME TO THIS ENGINE AT ALL — asked HERE, after the parser is resolved, because
+       a document that already carried one got it from somewhere and the install rides parser creation. A tree
+       builder still writing through lexbor's own DOM table produces a document whose text no delta ever saw,
+       and there is no later point at which that becomes visible, so it is asked before the first token rather
+       than discovered from a wrong answer. */
+    DCHECK(dom_cow_owns_tree_construction(),
+           "an HTML parse was opened while §13.2.6 tree construction was still writing through lexbor's own "
+           "DOM table — every character token this parse merges into an existing Text node is then a write the "
+           "running flow's delta cannot revert; dom_cow_install_tree_construction runs at html_parse_new_parser, "
+           "so something replaced the table after this component installed it");
     /* THE `opt` BRACKET IS LEXBOR'S OWN AND IS KEPT BYTE-FOR-BYTE. `lxb_html_document_parse` saves
        `document->opt` across the prepare and the chunk and writes it back on BOTH its exits, while
        `lxb_html_document_parse_chunk_begin` — the entry this pair is built out of — does not. Dropping it
