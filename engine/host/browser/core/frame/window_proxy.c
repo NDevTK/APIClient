@@ -2033,6 +2033,30 @@ typedef struct { uint32_t req; } ProxyGetState;
 
 static void proxy_get_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)ctx; (void)st; (void)v; }
 
+/* §7.2.2 The Window object DECLARES WHAT AN ANSWER MAY BE — `[Replaceable] readonly attribute unsigned long
+   length` and `readonly attribute boolean closed`. A peer resolves the read by RUNNING the member's getter, so
+   a normal completion carries one of those two types and nothing else, and this is the only place anything can
+   say so: remote_object.h's grammar exists because `otherW.length === 0` distinguishes the number 0 from the
+   string "0", and a relay that encoded a number as `s…` or lost it to `u` hands the page a plausible value with
+   nothing whatever to say what happened. The two LOCAL arms above are typed by construction (JS_NewInt32,
+   JS_NewBool); this one is whatever arrived.
+   A PREDICATE RATHER THAN AN EXPRESSION AT THE CALL SITE, because check.h compiles a DCHECK's condition to
+   `sizeof` in release and the condition must still TYPE-CHECK there. Side-effect-free: it reads the value's tag
+   and nothing else.
+   A MEMBER THIS FUNCTION DOES NOT NAME ANSWERS FALSE, deliberately. A third member routed onto the remote path
+   is one whose IDL type nothing has stated, and an unstated type is an unchecked one. */
+static int proxy_answer_matches_idl(JSValueConst v, int magic)
+{
+    if (magic == WP_CLOSED) return JS_IsBool(v);
+    if (magic != WP_LENGTH) return 0;
+    if (JS_VALUE_GET_TAG(v) == JS_TAG_INT) return JS_VALUE_GET_INT(v) >= 0;
+    if (JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(v))) {
+        double d = JS_VALUE_GET_FLOAT64(v);
+        return d >= 0 && d <= 4294967295.0 && d == (double)(uint32_t)d;
+    }
+    return 0;
+}
+
 /* WHERE THIS MACHINE RESTS. Both members it drives are read off state the OTHER instance keeps — §7.2.3's
    `length` off that navigable's active document, §7.2.2.1's `closed` off the top-level traversable whichever
    agent ran close() wrote — so the read is one step of the standard performed in another instance, and the
@@ -2150,6 +2174,27 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     {
         int r = engine_host_take_completion(ctx, s->req, presult);
         s->req = 0;
+        /* AND AGAINST §7.2.2's IDL TYPE FOR THE MEMBER THAT WAS ASKED. A throw is exempt: the thrown value is
+           an Error OBJECT and crosses as a name, which is the point of layering the completion over the value
+           grammar rather than beside it.
+           WHAT A HIT MEANS, AND IT IS ONE ORDERED PAIR RATHER THAN A LIST. Either the completion lost its TYPE
+           crossing the seam — the failure remote_object.h's leading byte exists to make impossible — or the
+           peer answered by an ORDINARY [[Get]] of its own global, which is what `windowproxy.get` performs
+           today (remote_op.c's OPS table: `globalThis[__apiclientKey]`). §7.2.1.3.4 CrossOriginGetOwnProperty-
+           Helper does not read a property: for a member with [[NeedsGetter]] it calls "an anonymous built-in
+           function, created in the current realm, that performs the same steps as the getter of the IDL
+           attribute P on object O". `length` is [Replaceable], so a peer page that assigns `window.length =
+           "0"` changes what an ordinary [[Get]] reads while a real browser still answers the child-navigable
+           count — and THIS agent answers the identical read out of the navigable's own tree in the hosted
+           branch above, so one fact is answered by the getter's steps locally and by whatever the page left on
+           its global remotely. The fix has this file's own idiom one file over: remote_op.c already captures
+           %Reflect.set% and %Reflect.apply% as realm intrinsics BEFORE any page script runs, precisely so a
+           peer performs an internal method through the intrinsic rather than through something the page owns;
+           capture §7.2.1.3.1's accessor members' original getters the same way and CALL one. */
+        DCHECK(r != JS_STEP_DONE || proxy_answer_matches_idl(*presult, magic),
+               "a peer answered a cross-instance WindowProxy member with a value §7.2.2 The Window object does "
+               "not declare for it — `length` is an unsigned long and `closed` is a boolean, so the page's "
+               "`otherW.length === 0` is being decided against something that is not a number");
         return r;
     }
 }
@@ -2181,8 +2226,9 @@ void window_proxy_install_proto(JSContext *ctx)
        §7.2.1.3.2's CrossOriginPropertyFallback answers %Symbol.toStringTag% with undefined before any walk, so
        a cross-origin read never reaches this object at all.
        Without the statement every member installed here belonged to no interface: the Web IDL gap audit could
-       attribute none of the twelve below, nor `close`, nor window_message.c's §9.4.4 `postMessage`, which goes
-       onto this same object — 50 installed members whose target interface it could not decide. */
+       attribute none of the twelve below, nor `close`, nor window_message.c's `postMessage` — §9.3.3 Posting
+       messages, and NOT §9.4.4, which is Message ports and defines nothing on this interface — which goes onto
+       this same object, 50 installed members whose target interface it could not decide. */
     idl_interface_tag(ctx, proto, "Window");
     for (i = 0; i < WP_MEMBER_N; i++) {
         if (i == WP_LENGTH)
