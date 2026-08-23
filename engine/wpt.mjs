@@ -124,6 +124,28 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       multi-fact domain by design. That crash's frequency IS the size of the next subproblem,
                       which is what a first measurement is for. */
                    "css/cssom", "css/cssom-view", "css/css-values",
+                   /* AND THE HELPERS THOSE THREE STANDARDS' TESTS LOAD, which is the missing-META-script defect
+                      this file already calls an EXCLUDED TEST one screen up — measured, not anticipated: 111
+                      collected files aborted with "a <script src> the corpus does not serve" naming a file
+                      under `css/support`, and 107 of them are in `css/css-values` alone, out of the 268 that
+                      area runs. TWO FIFTHS of the area was reporting a fact about THIS LIST rather than about
+                      the engine, and the abort NAMED the path every time, which is exactly the widening those
+                      abort lines exist to ask for. Five of the nine helpers here answer all 111:
+                      parsing-testcommon.js (38), serialize-testcommon.js (21), numeric-testcommon.js (19),
+                      interpolation-testcommon.js (18) and computed-testcommon.js (11).
+                      IT COSTS NO TEST AND NO SUBTREE, which is the whole reason it is safe to name and is
+                      CHECKED rather than assumed: at the pinned revision `css/support` is FLAT — 61 files, zero
+                      subdirectories — and not one of them loads `/resources/testharness.js`, so it is checked
+                      out to BE USED, with the same standing as `html/resources`, `wai-aria/scripts` and
+                      `service-workers/service-worker/resources`, and it adds nothing to the stray census below.
+                      Its only ancestor is `css` itself, whose own level cone mode has already materialized for
+                      the three standards above and which holds two blobs, neither a test.
+                      THE OTHER HELPERS THOSE ABORTS NAME ARE DELIBERATELY NOT HERE, because they are not the
+                      same shape: `css/mediaqueries/resources`, `css/css-scroll-snap/support` and
+                      `css/css-fonts/support` each sit under a standard whose OWN LEVEL cone mode would then
+                      materialize — 106, 92 and 680 blobs respectively — so each is a decision about running
+                      that standard, not a helper that costs nothing, and each belongs to whoever takes it. */
+                   "css/support",
                    /* THE COMPONENTS' OWN SPEC DIRECTORIES, each named because the component exists in
                       engine/host/browser/core and its tests were not being collected: request.c and body.c
                       (fetch/api/headers and .../response were checked out and their two siblings were not),
@@ -806,7 +828,7 @@ function byArea(rel) {
                       .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
   if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0,
-                              unread: 0, lines: [] }));
+                              unread: 0, abPass: 0, abFail: 0, abFiles: 0, lines: [] }));
   return a;
 }
 
@@ -833,6 +855,13 @@ function areaRow(a) {
   console.log(`  ${a.name.padEnd(AREA_W)}  runs ${String(a.runs).padStart(5)}  pass ${String(a.pass).padStart(7)}` +
               `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}` +
               `  unread ${String(a.unread).padStart(3)}`);
+  /* WHICH PART OF THE ROW ABOVE IS WORK THAT DID NOT FINISH — see the accumulation for the incident. Printed
+     only when there IS such a part, because a row where every counted subtest came from a file that ran to
+     completion is a row with nothing extra to say, and a line that reads `0` every time is a line nobody reads
+     the one time it does not. */
+  if (a.abFail || a.abPass)
+    console.log(`  ${" ".repeat(AREA_W)}    └─ of which ${a.abFail} fail / ${a.abPass} pass came from ` +
+                `${a.abFiles} file(s) that ABORTED — counted, but not a finished measurement of anything`);
 }
 /* An area's failure lines are held only until that area finishes, for the same reason: buffered to the end of
    the RUN they are lost with it; buffered to the end of the AREA they arrive with the row they belong to. */
@@ -1208,6 +1237,20 @@ for (const { file: f, kind, variant } of runs) {
     fail += fileFail;
     area.pass += filePass;
     area.fail += fileFail;
+    /* AND HOW MUCH OF THAT COLUMN CAME FROM A FILE THAT DID NOT FINISH — the fact whose absence turned this
+       area's row into a number about nothing. Counting an aborted file's subtests is right and stays (see the
+       paragraph at the abort above); what was missing is that the row never said it had done so, and the two
+       populations do not decompose the same way. `css/css-values` read `pass 82 fail 15072`, which was taken as
+       an area failing 99.5% of its subtests and sent a reader hunting one wrong serialization convention across
+       the CSS value machinery. 14134 of those 15072 came from TWO files, each killed by the CPU budget while
+       re-registering ONE subtest name — 6469 and 7663 times — so the column was one runaway counted per
+       registration, and the area's real surface was 938 failures against 82 passes: a completely different
+       diagnosis, in a completely different component.
+       IT HIDES NOTHING AND SUBTRACTS NOTHING. Both totals are printed exactly as they were; this is one extra
+       line saying which part of them belongs to files whose own row already says they did not finish. A number
+       that cannot be decomposed into finished and unfinished work is the shape §Testing warns about — an
+       artifact of HOW the run went, wearing the shape of a measurement of WHAT ran. */
+    if (abortedHere) { area.abPass += filePass; area.abFail += fileFail; area.abFiles++; }
   } finally {
     /* THE ONE PLACE THE AREA'S PROGRESS IS COUNTED, so that every `continue` above — a missing META script, a
        missing <script src>, an abort, a harness that never completed — still advances it. A count kept at the
