@@ -391,8 +391,14 @@ function lexborSourceId() {
     }
     return out;
   };
+  /* THE PATH IS RELATIVE TO THE SOURCE ROOT, because an absolute one makes the id a property of WHERE the tree
+     is checked out rather than of what is in it. A gate runs from a frozen snapshot in a scratch directory, so
+     an absolute path recompiled 213 sources on content byte-identical to the tree it was cloned from — never a
+     wrong answer, but a per-build cost paid to learn nothing, and an id that cannot be compared between two
+     checkouts of the same revision is not an identity. */
   const h = createHash("sha256");
-  for (const p of walk(join(LEXBOR_SRC, "lexbor"), [])) h.update(p).update(readFileSync(p));
+  const root = join(LEXBOR_SRC, "lexbor");
+  for (const p of walk(root, [])) h.update(relative(root, p).replace(/\\/g, "/")).update(readFileSync(p));
   return h.digest("hex").slice(0, 16);
 }
 const LEXBOR_ID_FILE = join(WORK, "liblexbor.srcid");
