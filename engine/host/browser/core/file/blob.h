@@ -33,6 +33,10 @@ bool        blob_is(JSValueConst v);
    two, so this is also the "is it a File" test. */
 const char *blob_file_name_of(JSValueConst v);
 int64_t     blob_last_modified_of(JSValueConst v);
+/* The class a `Blob blob` IDL position brands against (idl_iface_brand). §4's File wears this SAME id — a File
+   IS a Blob, so every position that accepts one accepts the other, which is what the inheritance means — so
+   there is one id here and not two. File API §6.2's four read methods are declared over it. */
+JSClassID   blob_class_id(void);
 
 /* RECORD WHERE THIS BLOB'S BYTE SEQUENCE CAME FROM — the source identity of external input this engine did not
    compute, which for a File read off the virtual filesystem is the file itself. `shape` is the @H/@S display
@@ -42,6 +46,12 @@ int64_t     blob_last_modified_of(JSValueConst v);
    reach it), and every other reader answers with the real bytes. Called once, at the mint, by the component
    that knows the provenance; a second call is a byte sequence claiming two origins. */
 void blob_set_source(JSContext *ctx, JSValueConst v, const char *shape, const char *src);
+/* READ THAT IDENTITY BACK, for the OTHER readers of the same byte sequence. §3.3's `text()` is not the only
+   algorithm that turns these bytes into a value the page computes with — File API §6.2's read operation is the
+   one a real upload handler uses — and each such read mints the source itself, per read, for the reason
+   blob_set_source states. The pair is the record's own storage and dies with it; false means this byte sequence
+   is the page's own and carries no source, which is a POSITIVE statement and not a hole. */
+bool blob_source_of(JSValueConst v, const char **shape, const char **src);
 
 /* ---- File API §8's BLOB URL STORE ------------------------------------------------------------------------
  *

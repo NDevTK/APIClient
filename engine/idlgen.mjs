@@ -162,6 +162,13 @@ const INTERFACES = {
   TransformStreamDefaultController: "core/streams/transform_stream.c",
   Blob:                 "core/file/blob.c",
   File:                 "core/file/blob.c",
+  /* File API §6.2 The FileReader API. Its six event handler IDL attributes are §6.2.1's, declared ON this
+     interface, and the three members it INHERITS from EventTarget come off the shared component — the same
+     rule Node's and VisualViewport's rows state. §6.5.1's FileReaderSync has no row because no component
+     declares it: its IDL is `[Exposed=(DedicatedWorker,SharedWorker)]` and this engine has no worker global,
+     so it is honestly absent rather than unbuilt, and file_reader.c's own header says so beside the algorithm
+     (§6.3's package data) that a worker exposure would reach it through. */
+  FileReader:          ["core/file/file_reader.c", "core/events/event_target.c"],
   /* File System Standard §2.2-§2.4. These three shipped with no row at all, so the audit said nothing about
      them in either direction — the lying-by-omission this map's own comment names. Each names the component
      plus File System Access §2.3's partial interface (queryPermission/requestPermission), whose members land

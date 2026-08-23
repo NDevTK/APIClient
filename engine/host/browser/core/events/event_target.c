@@ -700,7 +700,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
 #define EVENT_HANDLERS(X)                                                                                        \
     /* GlobalEventHandlers — HTML §8.1.8.2 Event handlers on elements, Document objects, and Window              \
        objects, whose first table is the set every HTML element, Document and Window must support. */            \
-    X("onabort", "abort", EH_GLOBAL | EH_SIGNAL | EH_XHR | EH_IDB_TRANSACTION)                                   \
+    X("onabort", "abort", EH_GLOBAL | EH_SIGNAL | EH_XHR | EH_IDB_TRANSACTION | EH_FILE_READER)                                   \
     X("onauxclick", "auxclick", EH_GLOBAL)                                                                       \
     X("onbeforeinput", "beforeinput", EH_GLOBAL)                                                                 \
     X("onbeforematch", "beforematch", EH_GLOBAL)                                                                 \
@@ -737,7 +737,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("ondurationchange", "durationchange", EH_GLOBAL)                                                           \
     X("onemptied", "emptied", EH_GLOBAL)                                                                         \
     X("onended", "ended", EH_GLOBAL)                                                                             \
-    X("onerror", "error", EH_GLOBAL | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION)                              \
+    X("onerror", "error", EH_GLOBAL | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION | EH_FILE_READER)                              \
     X("onfocus", "focus", EH_GLOBAL)                                                                             \
     X("onformdata", "formdata", EH_GLOBAL)                                                                       \
     X("oninput", "input", EH_GLOBAL)                                                                             \
@@ -745,10 +745,10 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onkeydown", "keydown", EH_GLOBAL)                                                                         \
     X("onkeypress", "keypress", EH_GLOBAL)                                                                       \
     X("onkeyup", "keyup", EH_GLOBAL)                                                                             \
-    X("onload", "load", EH_GLOBAL | EH_XHR)                                                                      \
+    X("onload", "load", EH_GLOBAL | EH_XHR | EH_FILE_READER)                                                                      \
     X("onloadeddata", "loadeddata", EH_GLOBAL)                                                                   \
     X("onloadedmetadata", "loadedmetadata", EH_GLOBAL)                                                           \
-    X("onloadstart", "loadstart", EH_GLOBAL | EH_XHR)                                                            \
+    X("onloadstart", "loadstart", EH_GLOBAL | EH_XHR | EH_FILE_READER)                                                            \
     X("onmousedown", "mousedown", EH_GLOBAL)                                                                     \
     X("onmouseenter", "mouseenter", EH_GLOBAL)                                                                   \
     X("onmouseleave", "mouseleave", EH_GLOBAL)                                                                   \
@@ -760,7 +760,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onpause", "pause", EH_GLOBAL)                                                                             \
     X("onplay", "play", EH_GLOBAL)                                                                               \
     X("onplaying", "playing", EH_GLOBAL)                                                                         \
-    X("onprogress", "progress", EH_GLOBAL | EH_XHR)                                                              \
+    X("onprogress", "progress", EH_GLOBAL | EH_XHR | EH_FILE_READER)                                                              \
     X("onratechange", "ratechange", EH_GLOBAL)                                                                   \
     X("onreset", "reset", EH_GLOBAL)                                                                             \
     /* CSSOM VIEW §12 declares these three on VisualViewport as well, which is what the second bit says. */      \
@@ -815,7 +815,7 @@ static JSValue idl_add_or_remove(JSContext *ctx, JSValueConst this_val, int argc
     X("onreadystatechange", "readystatechange", EH_DOCUMENT | EH_XHR_READYSTATE)                                 \
     X("onvisibilitychange", "visibilitychange", EH_DOCUMENT)                                                     \
     /* XHR §3.3 — the two of its seven that belong to NO other mixin, so this list is where they arrive. */      \
-    X("onloadend", "loadend", EH_XHR)                                                                            \
+    X("onloadend", "loadend", EH_XHR | EH_FILE_READER)                                                                            \
     X("ontimeout", "timeout", EH_XHR)                                                                            \
     /* HTML §7.2.6.2's Navigation and §7.2.6.5's NavigationHistoryEntry, each declaring its own. ALL FOUR of     \
        §7.2.6.2's are here now: core/frame/navigate_event_fire.c performs §7.2.6.10.4, which dispatches          \

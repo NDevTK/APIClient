@@ -103,6 +103,31 @@ int64_t blob_last_modified_of(JSValueConst v)
     return b ? b->last_modified : 0;
 }
 
+JSClassID blob_class_id(void)
+{
+    DCHECK(g_blob_class != 0,
+           "a `Blob` IDL position was declared before blob_init built the class it brands against — the "
+           "declaration would then brand against class id 0, which every object fails");
+    return g_blob_class;
+}
+
+bool blob_source_of(JSValueConst v, const char **shape, const char **src)
+{
+    BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;
+
+    DCHECK(shape != NULL && src != NULL,
+           "a byte sequence's SOURCE was asked for with nowhere to put half of it — the shape is what an @H "
+           "record displays and the src is what a candidate delivery is keyed by, and a caller needs both");
+    if (!b || !b->src)
+        return false;
+    DCHECK(b->shape != NULL,
+           "a Blob carries a source identity with no display shape — blob_set_source records the pair or "
+           "neither, so one without the other is a record something else wrote");
+    *shape = b->shape;
+    *src = b->src;
+    return true;
+}
+
 void blob_set_source(JSContext *ctx, JSValueConst v, const char *shape, const char *src)
 {
     BlobObj *b = g_blob_class ? JS_GetOpaque(v, g_blob_class) : NULL;

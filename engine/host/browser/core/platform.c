@@ -22,6 +22,7 @@
 #include "core/events/report_exception.h"
 #include "core/fetch/fetch.h"
 #include "core/file/blob.h"
+#include "core/file/file_reader.h"
 #include "core/file/file_system.h"
 #include "core/file/file_system_access.h"
 #include "core/file/file_picker.h"
@@ -128,6 +129,7 @@ static void d_event_target(JSContext *c, const PlatformAgent *a) { (void)a; even
 static void d_window(JSContext *c, const PlatformAgent *a) { (void)a; window_init(c); }
 static void d_navigator(JSContext *c, const PlatformAgent *a) { (void)a; navigator_init(c); }
 static void d_file_system(JSContext *c, const PlatformAgent *a) { (void)a; file_system_init(c); }
+static void d_file_reader(JSContext *c, const PlatformAgent *a) { (void)a; file_reader_init(c); }
 static void d_fs_writable(JSContext *c, const PlatformAgent *a) { (void)a; fs_writable_init(c); }
 static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_handle_init(c); }
 static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
@@ -277,6 +279,8 @@ static void r_broadcast_channel(JSRuntime *rt) { broadcast_channel_free(rt); }
 /* XMLHttpRequest holds the agent's step definitions and, through §5's ProgressEvent, the private Symbol that
    interface's own slots hang off. main.c freed it, wpt_runner.c and test_forced.c did not. */
 static void r_xhr(JSRuntime *rt) { xhr_free(rt); }
+/* File API §6.2 holds the agent's two step definitions and the four pool entries its read methods are. */
+static void r_file_reader(JSRuntime *rt) { file_reader_free(rt); }
 /* §7.2.6.10.3's NavigationDestination, AND IT IS THE ROW THE AUDIT FOUND RATHER THAN THE LEAK WALK. Its release
    was written, exported from its header, and CALLED BY NOBODY — not by a host, not by another component — so
    the private Symbol its internal slots hang off had been leaked by every run this engine had made up to that
@@ -388,6 +392,7 @@ static void i_message_event(JSContext *c, JSValueConst g, const PlatformDocument
 static void i_error_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; error_event_install(c, g); }
 static void i_message_port(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; message_port_install(c, g); }
 static void i_xhr(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xhr_install(c, g); }
+static void i_file_reader(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; file_reader_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
@@ -576,6 +581,13 @@ static const PlatformComponent PLATFORM[] = {
     { "report_exception",    d_report_exception,    NULL },
     { "message_port",        d_message_port,        i_message_port, r_message_port },
     { "xml_http_request",    d_xhr,                 i_xhr,       r_xhr },
+    /* FILE API §6 Reading Data, AFTER `xml_http_request` and not beside `blob`. Two rows decide it and
+       both are the standards' own: §6.4.1 Event Summary makes every event this component fires a
+       ProgressEvent, whose interface XHR §5 defines and whose class and per-realm prototype `xhr_init`
+       declares — so a row before it would build a FileReader whose events had no interface. It reads §3's
+       Blob (its byte sequence, its type and the source identity a File carries), which the `blob` row far
+       above has already declared. */
+    { "file_reader",         d_file_reader,         i_file_reader, r_file_reader },
     { "location",            d_location,            NULL,        r_location },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
     { "session_history",     d_session_history,     NULL },
@@ -695,6 +707,7 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "ErrorEvent",            "error_event" },
     { "MessageChannel",        "message_port" },
     { "XMLHttpRequest",        "xml_http_request" },
+    { "FileReader",            "file_reader" },
     { "BroadcastChannel",      "broadcast_channel" },
     { "PromiseRejectionEvent", "unhandled_rejection" },
     { "PageRevealEvent",       "page_reveal" },

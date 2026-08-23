@@ -139,11 +139,16 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
    to the derived interface alone: an ordinary `store.get()` request must not answer `onupgradeneeded`.
    EH_IDB_DATABASE is §4.4's `onversionchange`, which is the one of that interface's four whose event an
    algorithm here FIRES — see the X-list for why the other three are not declared yet. */
+/* EH_FILE_READER is File API §6.2.1 Event Handler Content Attributes' six on FileReader, which that section
+   declares ON that interface ("the event handler content attributes … that user agents must support on
+   FileReader as DOM attributes"). All six names already belong to GlobalEventHandlers and/or XHR §3.3's mixin,
+   so each entry carries one more bit — which is exactly what a bitmask is for, and which is why a FileReader
+   does NOT get them by including some other mixin: it includes none. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
        EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256,
        EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024, EH_NAVIGATION = 2048,
        EH_NAVIGATION_HISTORY_ENTRY = 4096, EH_IDB_REQUEST = 8192, EH_IDB_TRANSACTION = 16384,
-       EH_IDB_OPEN_REQUEST = 32768, EH_IDB_DATABASE = 65536 };
+       EH_IDB_OPEN_REQUEST = 32768, EH_IDB_DATABASE = 65536, EH_FILE_READER = 131072 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);

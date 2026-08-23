@@ -62,6 +62,7 @@
 #include "core/url/url_search_params.h"
 #include "core/html/form_data.h"
 #include "core/file/blob.h"
+#include "core/file/file_reader.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/queuing_strategy.h"
 #include "core/streams/writable_stream.h"
@@ -5785,6 +5786,89 @@ static void css_property_grammar_selftest(void)
     }
 }
 
+/* FILE API §6.3 Packaging data — the one part of the FileReader that is a PURE FUNCTION of four values, and
+ * therefore the part a fixture can hold to a known answer without an event loop under it. The event ORDER
+ * §6.2 produces is exercised by wpt/FileAPI/reading-data-section; what is checked here is what those tests
+ * cannot separate from the sequence — the BYTES each of §6.3's four arms returns.
+ *
+ * The rows are the standard's own switch, and the two that are not obvious carry their reason:
+ * the empty-mimeType Data URL is `application/octet-stream` because §6.3's own text flags that step as
+ * unspecified ("Better specify how the DataURL is generated. [Issue #104]") and the corpus pins the
+ * interoperable answer; and the BOM row is Encoding §6.1 Legacy hooks for standards' `decode`, whose BOM
+ * sniff overrules the label and the charset parameter alike. */
+static void file_reader_package_selftest(JSContext *ctx)
+{
+    static const char UTF16BE_H[] = { (char)0xFE, (char)0xFF, 0x00, 'h' };
+    static const char WIN1252_EURO[] = { (char)0x80 };
+    static const char UTF8_HELLO[] = { 'h', 'e', 'l', 'l', (char)0xC3, (char)0xB6 };
+    static const char RAW[] = { 0x00, 'A', (char)0xFF };
+    static const struct {
+        const char  *bytes;
+        size_t       len;
+        FileReadType type;
+        const char  *mime;
+        const char  *label;
+        const char  *want;      /* the answer, as its UTF-8 bytes */
+        size_t       want_len;
+        const char  *why;
+    } ROWS[] = {
+        { "TEST", 4, FILE_READ_DATA_URL, "text/plain", NULL,
+          "data:text/plain;base64,VEVTVA==", 31,
+          "§6.3's DataURL arm uses mimeType when it is not the empty string" },
+        { "TEST", 4, FILE_READ_DATA_URL, "", NULL,
+          "data:application/octet-stream;base64,VEVTVA==", 44,
+          "§6.3's DataURL arm with no media type is the interoperable application/octet-stream (Issue #104)" },
+        { "", 0, FILE_READ_DATA_URL, "", NULL,
+          "data:application/octet-stream;base64,", 36,
+          "§6.3's DataURL arm over an empty byte sequence is the header and nothing after it" },
+        { UTF8_HELLO, sizeof UTF8_HELLO, FILE_READ_TEXT, "", NULL,
+          "hell\xc3\xb6", 6,
+          "§6.3's Text arm step 4: no label and no charset parameter is UTF-8" },
+        { WIN1252_EURO, sizeof WIN1252_EURO, FILE_READ_TEXT, "", "windows-1252",
+          "\xe2\x82\xac", 3,
+          "§6.3's Text arm step 2: the encodingLabel decides, and 0x80 in windows-1252 is U+20AC" },
+        { WIN1252_EURO, sizeof WIN1252_EURO, FILE_READ_TEXT, "text/plain;charset=windows-1252", NULL,
+          "\xe2\x82\xac", 3,
+          "§6.3's Text arm step 3: with no label the mimeType's charset parameter decides" },
+        { WIN1252_EURO, sizeof WIN1252_EURO, FILE_READ_TEXT, "text/plain;charset=windows-1252", "UTF-8",
+          "\xef\xbf\xbd", 3,
+          "§6.3's Text arm step 2 beats step 3: an explicit label overrides the type's charset" },
+        { UTF16BE_H, sizeof UTF16BE_H, FILE_READ_TEXT, "text/plain;charset=windows-1252", NULL,
+          "h", 1,
+          "Encoding §6.1's decode: the BOM overrules the charset parameter the row above obeyed" },
+        { RAW, sizeof RAW, FILE_READ_BINARY_STRING, "", NULL,
+          "\x00" "A\xc3\xbf", 4,
+          "§6.3's BinaryString arm: every byte is one code unit of equal value, NUL and 0xFF included" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof ROWS / sizeof ROWS[0]; i++) {
+        JSValue v = file_reader_package_data(ctx, ROWS[i].bytes, ROWS[i].len, ROWS[i].type,
+                                             ROWS[i].mime, ROWS[i].label);
+        size_t n = 0;
+        const char *got;
+
+        CHECK(!JS_IsException(v), ROWS[i].why);
+        got = JS_ToCStringLen(ctx, &n, v);
+        CHECK(got != NULL, ROWS[i].why);
+        CHECK(n == ROWS[i].want_len && !memcmp(got, ROWS[i].want, n), ROWS[i].why);
+        JS_FreeCString(ctx, got);
+        JS_FreeValue(ctx, v);
+    }
+    {
+        /* §6.3's ArrayBuffer arm: "Return a new ArrayBuffer whose contents are bytes." Its own row, because
+           the answer is not a string and cannot be compared as one — which is the whole of what makes it the
+           one arm the source overlay must not wrap. */
+        JSValue v = file_reader_package_data(ctx, "TEST", 4, FILE_READ_ARRAY_BUFFER, "", NULL);
+        size_t n = 0;
+        const uint8_t *p = JS_GetArrayBuffer(ctx, &n, v);
+
+        CHECK(p != NULL && n == 4 && !memcmp(p, "TEST", 4),
+              "§6.3's ArrayBuffer arm did not answer with an ArrayBuffer over the byte sequence it was given");
+        JS_FreeValue(ctx, v);
+    }
+}
+
 int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
@@ -5871,6 +5955,10 @@ int main(int argc, char **argv) {
        position core/file/file_system.c's two roots are built at, and for the same reason: a record written
        here belongs to the pre-boot baseline rather than to whichever flow happened to run first. */
     idb_store_selftest(ctx);
+
+    /* FILE API §6.3's four arms, over known bytes. It needs only a realm — see the function for why this
+       half of the FileReader is the half a C fixture can hold to an answer at all. */
+    file_reader_package_selftest(ctx);
 
     /* The two hook SETS the solver owns, each declared by its own component. They were struct literals here
        and again in test_forced.c, and the pair had drifted. */
