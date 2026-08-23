@@ -1611,18 +1611,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            An IDL conversion is a BOUNDARY, not an ECMAScript operator: nothing observes its result except the
            component behind it, and every one of those bodies already asks explicitly for what it needs from a
            concolic (concolic_shape_c for the bytes a Text node carries, the attribute taint shadow for a value
-           parked in the DOM). A DICTIONARY is excluded because it is not a value that crosses at all — it is a
-           bag of member READS, and those happen on a concolic exactly as they do on anything else.
-           Converting here would do the one thing that must never happen — hand ToString a
+           parked in the DOM). Converting here would do the one thing that must never happen — hand ToString a
            concolic, which the C boundary asserts against because opacity has to SURVIVE a coercion or the value
            stops forking control flow and stops being solvable at a sink. This is the same answer JSON.stringify
-           gives an opaque field: yield the opaque itself, never a de-tainting placeholder. */
-        /* AN INTERFACE BRAND IS NOT A COERCION, so the pass-through below does not cover it: unknown external
-           input is not a platform object, and letting it cross as itself hands the body something node_of
-           answers NULL for. §3.2.15's answer to "this is not a Node" is a TypeError either way, and a
-           TypeError de-taints nothing. */
-        if (t != IDL_ANY && t != IDL_DICT && t != IDL_DICT_OR_BOOL_FIRST && t != IDL_INTERFACE &&
-            concolic_is(a)) {
+           gives an opaque field: yield the opaque itself, never a de-tainting placeholder.
+           WHICH TYPES THOSE ARE IS NOT SPELLED OUT HERE ANY MORE, and that is the whole of this hunk: the list
+           was written twice, as this condition's `t != …` chain and as the assert below, and the two disagreed
+           about three types for as long as both existed. idl_args.h states it ONCE and both read it — a
+           dictionary and an interface brand ask the value nothing this pass-through has to answer for (see
+           IDL_CONCOLIC_UNASKED), and a union whose ARM is a test of the value is neither crossed nor picked
+           but FORKED at its own resolution site (IDL_CONCOLIC_FORKS). */
+        if (idl_concolic_rule(t) == IDL_CONCOLIC_CROSSES && concolic_is(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             *slot = JS_DupValue(ctx, a);
@@ -1656,9 +1655,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* BEFORE THE ARMS AND NOT AFTER THEM, because each `if` below OVERWRITES `t` with the arm it chose:
            asked afterwards this would read IDL_ANY or IDL_DOMSTRING and pass for exactly the value it exists to
            catch. It is not a tautology about the current order — it is that order's invariant, stated where a
-           later move of these three blocks back above the pass-through, or an added exclusion in the
-           pass-through's type list, makes it fire instead of silently answering a union arm for an unknown. */
-        DCHECK(!concolic_is(a),
+           later move of these blocks back above the pass-through, or a `goto` that reaches them around it,
+           makes it fire instead of silently answering a union arm for an unknown.
+           IT ASKS THE RULE AND NOT `!concolic_is(a)`, AND THE DIFFERENCE IS EVERY MEMBER THAT TAKES AN `any`.
+           Written as "no concolic reaches this line at all" it was a claim the pass-through above never made:
+           that condition deliberately leaves three types uncrossed, so the assert fired on the FIRST unknown
+           handed to an `any` position (Indexed Database §4.5 The IDBObjectStore interface declares
+           `IDBRequest put(any value, optional any key)`, so one `store.put(location.hash, 1)` reaches it) —
+           and it named a union arm that
+           value had not reached and could not reach, since every arm below is a type whose rule is CROSSES.
+           A false @WHY is the stale-DFAIL failure mode with an abort behind it: authoritative, reproducible,
+           and about a program that was working. IDL_CONCOLIC_FORKS is likewise not caught here, because its
+           arm is asked further down at the site that acts on it, where the value it forks over still exists. */
+        DCHECK(!concolic_is(a) || idl_concolic_rule(t) != IDL_CONCOLIC_CROSSES,
                "unknown external input reached a §3.2.25 union arm that is decided by a runtime type test — the "
                "pass-through above is what stops that, so a concolic here means the arm is about to be chosen "
                "from what the SOLVER's value class is rather than from what the page's value is, which is how "
@@ -1773,6 +1782,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
+            /* WHICH ARM OF `(dictionary or boolean)` THIS FLOW IS ON — §3.2.25 step 11 against steps 12/18.
+               For a dictionary type there is no union and no arm, and the answer is the type's own §3.2.17
+               step 1: an Object is read, anything else has already thrown or defaulted. */
+            bool object_arm;
             /* A DICTIONARY ARGUMENT IS BUILT IN PLACE, in the vector slot, rather than through `slot` and
                `placed:` — its members are written onto the object across many re-entries, so there is nothing to
                append at the end. That is why a VARIADIC member may not declare one at all: its body reads the
@@ -1796,17 +1809,65 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 JS_ThrowTypeError(ctx, "the dictionary argument is neither an object, null nor undefined");
                 return JS_STEP_ABRUPT;
             }
-            if (!JS_IsObject(a)) {
+            /* §3.2.25's ARM FOR `(AddEventListenerOptions or boolean)`, ASKED HERE — at the site that acts on
+               it — because this union's two arms ARE the two halves of the dictionary this block builds, and
+               there is no third type to collapse `t` to in the arm block above.
+               For a value the page determined it is the union's own clause order: step 11 "If V is an Object"
+               takes the dictionary arm, and everything else falls to step 12 "If V is a Boolean" / step 18
+               "If types includes boolean" — which is what DOM §2.7 "Interface EventTarget"'s flatten options
+               states as "If options is a boolean, then return options".
+               OVER UNKNOWN EXTERNAL INPUT IT IS A FORK AND NOT A TEST, and it was a test. A concolic is an
+               object carrying a [[Call]] — solver/concolic.c installs one so a method on an unknown yields
+               another unknown instead of throwing "not a function" and taking the rest of the program with it
+               — so JS_IsObject is TRUE over EVERY unknown external input, for a reason that is a fact about
+               this engine's value class and not about the page's value. Asked here it sent every unknown down
+               the dictionary arm and DELETED the other world, which is the collapse `(DOMString or Function)`
+               had one type over, arriving in the one union the arm block above never saw.
+               THE ARMS DIFFER IN WHAT THE ALGORITHM OBSERVES, which is why neither may be picked: DOM §2.7's
+               flatten more options leaves `once` false and `passive` and `signal` NULL on the boolean arm and
+               READS all three off the value on the dictionary arm, and a null `passive` is the whole of what
+               makes a wheel listener on a Window passive by default. So BOTH arms run.
+               OUTCOME 0 IS THE DICTIONARY ARM, per step_fork_run's one rule on the numbering — outcome 0 is
+               what a run with no forking policy takes, and an @S candidate re-fire must not be diverted on its
+               way to a sink. It is also the arm §3.2.25 gives the object an unknown is represented BY, so a
+               no-policy run answers exactly as it did and the boolean world is the one the fork ADDS. */
+            object_arm = JS_IsObject(a);
+            if (t == IDL_DICT_OR_BOOL_FIRST && concolic_is(a)) {
+                int arm = 0, rc;
+
+                DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
+                       "this conversion forked §3.2.25's arm for a type idl_args.h does not declare as one it "
+                       "forks — the SITE and the rule are the two halves of one statement, and a type that "
+                       "loses its FORKS rule while this ask stands would fork an arm the pass-through above "
+                       "had already crossed the value at");
+                /* `cb_result` is this machine's outstanding answer and step_fork_run takes no `in` to hand it
+                   to, so it is released HERE, exactly as the boolean arm below releases it — the sibling's
+                   snapshot is taken at this return and nothing of the caller's may be live across it. */
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                rc = step_fork_run(ctx, &s->hdr, a, "§3.2.25 (dictionary or boolean) arm", 2, &arm);
+                if (rc) return rc;
+                object_arm = (arm == 0);
+            }
+            if (!object_arm) {
                 JS_FreeValue(ctx, cb_result);
                 cb_result = JS_UNDEFINED;
                 /* §2.7 "flatten": a non-object IS the first member's boolean. There is nothing to READ, so
-                   this runs none of the page's code either way. */
+                   this runs none of the page's code either way.
+                   AND THE VALUE THE UNION SAYS *IS* THAT MEMBER CROSSES AS ITSELF WHEN IT IS UNKNOWN. DOM §2.7
+                   "Interface EventTarget"'s flatten options is "If options is a boolean, then return options"
+                   — the member IS V, so ToBoolean here would be this boundary coercing unknown external input
+                   after the fork above decided only that V is on the boolean arm, which is not the same fact
+                   as V being TRUE. A concolic object is truthy, so the coercion pinned `capture` for every
+                   unknown while destroying the taint that says it is one. It is placed instead, which is what
+                   every other type does with unknown input, and the taint reaches the member's readers. */
                 if (t == IDL_DICT_OR_BOOL_FIRST && m->dict_n > 0) {
                     DCHECK(m->dict[0].type == IDL_BOOLEAN,
                            "a (dictionary or boolean) union declared a non-boolean first member — the union's "
                            "rule is that the bare value IS that member");
                     JS_SetPropertyStr(ctx, *idl_arg_slot(m, s, s->i), m->dict[0].name,
-                                      JS_NewBool(ctx, JS_ToBool(ctx, a)));
+                                      concolic_is(a) ? JS_DupValue(ctx, a)
+                                                     : JS_NewBool(ctx, JS_ToBool(ctx, a)));
                 }
                 for (r = 0; r < m->dict_n; r++) {
                     if (m->dict[r].required)

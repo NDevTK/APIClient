@@ -363,6 +363,57 @@ typedef enum {
     IDL_FORMVALUE_NULLABLE,
 } IdlArgType;
 
+/* WHAT A DECLARED TYPE ASKS OF UNKNOWN EXTERNAL INPUT — ONE statement of it, because it was TWO and they
+   DISAGREED. The conversion stated it once as a pass-through's `t != … && t != … && t != …` chain and once as
+   the ASSERT guarding §3.2.25's arm block, which restated it as "no concolic reaches here at all". Those are
+   different sets: the chain lists the types the pass-through does NOT answer for, and three of them are types
+   at which a concolic legitimately arrives — so the assert fired for every `any`-typed argument that was
+   handed unknown external input (Indexed Database §4.5 The IDBObjectStore interface writes
+   `IDBRequest put(any value, optional any key)`, which is two of them on one line) and named a union arm that
+   value could not have reached, because the arms it names are all types the chain crossed.
+   A hand-maintained mirror of a hand-maintained list is the defect, not either list; both readers ask THIS.
+   The three answers are the three things a conversion can do to a value whose bytes it does not know. */
+typedef enum {
+    /* NOTHING IS ASKED AND NOTHING IS COERCED, so unknown external input is already what the body receives:
+       `any` (no conversion at all by declaration — including every position past a non-variadic member's
+       declared arity), §3.2.17's dictionary (not a value that crosses at all, but a bag of member READS, each
+       a request like any other and each yielding another unknown), and §3.2.15's interface brand (whose only
+       answer for a value that is not a platform object is a TypeError, and a TypeError de-taints nothing). */
+    IDL_CONCOLIC_UNASKED = 0,
+    /* THE CONVERSION COERCES — ToString, ToNumber, ToBoolean, §3.2.18's enumeration check. Opacity has to
+       SURVIVE a coercion or the value stops forking control flow and stops being solvable at a sink, so the
+       value CROSSES AS ITSELF and the body asks it for what it needs (concolic_shape_c for the bytes a Text
+       node carries, the attribute taint shadow for a value parked in the DOM). It is the answer
+       JSON.stringify gives an opaque field: yield the opaque, never a de-tainting placeholder. */
+    IDL_CONCOLIC_CROSSES,
+    /* §3.2.25's ARM IS A TEST OF THE VALUE — step 11 "If V is an Object" against step 12 "If V is a Boolean"
+       and step 18 "If types includes boolean". Over unknown input BOTH clauses are feasible, and the arms
+       differ in what the member's own algorithm then observes, so the arm is neither crossed nor picked: it is
+       an OUTCOME FORK, asked at the type's own resolution site through the conversion machine's
+       step_fork_run, so both worlds run. A type is only ever this when the SITE that resolves it asks that
+       fork — the two assert against each other. */
+    IDL_CONCOLIC_FORKS,
+} IdlConcolicRule;
+
+static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
+{
+    switch (t) {
+    case IDL_ANY:
+    case IDL_DICT:
+    case IDL_INTERFACE:
+        return IDL_CONCOLIC_UNASKED;
+    /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM. Its arm decides
+       whether DOM §2.7 "Interface EventTarget"'s flatten more options READS `once`, `passive` and `signal`
+       off the value or leaves them at false, null and null, and a null `passive` is the whole of what makes a
+       wheel listener on a Window passive by default — so the two arms differ in what the algorithm observes
+       and neither may be picked for a value nothing is known about. */
+    case IDL_DICT_OR_BOOL_FIRST:
+        return IDL_CONCOLIC_FORKS;
+    default:
+        return IDL_CONCOLIC_CROSSES;
+    }
+}
+
 /* A DICTIONARY MEMBER, as its IDL declares it: the name, the type of its value, and whether the IDL marks it
    `required` (an absent required member is a TypeError, and for a dictionary `undefined` IS absent). A member
    with no `required` written is optional, which is what leaving the field off an initialiser gives. */
