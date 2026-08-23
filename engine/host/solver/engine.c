@@ -2946,7 +2946,15 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
                "a flow holding a peer's second answer has no suspended frame — the arm exists to resume the "
                "call site that asked, and a flow with no frame has already left it, so the answer belongs to a "
                "timeline that cannot be re-entered");
-        DCHECK(f->park_fn == NULL,
+        /* THE PARK HAS TWO HOMES AND THIS ASKED THE ONE THAT IS ALWAYS EMPTY HERE. A parked continuation rides
+           the Flow while the flow is switched OUT (flow_switch_out's JS_TakeParkedFlow) and sits in the RUNTIME
+           slot while it is switched IN (flow_switch_in's JS_PutParkedFlow, which clears `f->park_fn` as it
+           hands the pair over) — and this runs with the flow switched in, on every iteration of flow_step's
+           loop, so `f->park_fn` is NULL at this line whatever the flow is holding. An assert that cannot fire
+           is not a weaker assert, it is the read-side of the same defect a defaulted field is: it reads as a
+           guarantee and states nothing. Both halves of the pair are asked, which is the form the two other
+           readers of this fact in this file already use (flow_finish's, and the checkpoint guard's). */
+        DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->park_fn == NULL,
                "a flow whose blocked machine is in the runtime's PARK slot got a peer's second answer — the "
                "frame clone below copies the flow's own chain and not that continuation, so the arm would "
                "resume without the activation that asked the question. Carry the parked continuation into the "
