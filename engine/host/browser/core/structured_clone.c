@@ -278,7 +278,7 @@ static JSValue ab_out(JSContext *ctx, JSValueConst v)
     structured_data_free(ctx, &d);
     if (JS_IsException(h))
         return h;
-    /* §2.7.7 step 4.4's DetachArrayBuffer, AFTER the holder exists: a page that catches an allocation failure
+    /* §2.7.7 step 5.4.3's DetachArrayBuffer, AFTER the holder exists: a page that catches an allocation failure
        here still has its buffer. */
     JS_DetachArrayBuffer(ctx, v);
     return h;
@@ -352,9 +352,10 @@ uint32_t structured_transfer_len(JSContext *ctx, JSValueConst arr)
     int r;
 
     if (JS_IsUndefined(arr)) return 0;
-    DCHECK(JS_IsArray(arr), "a transfer list or holder list was read that this file did not build — everything "
-                            "past structured_transfer_list is the engine's own array, and a page's object here "
-                            "would run its getters where no stage names the read");
+    DCHECK(JS_IsArray(arr), "a transfer list or holder list was read that this file did not build — a transfer "
+                            "list arrives as IDL_SEQUENCE_OBJECT's materialized Array and a holder list is this "
+                            "file's own, and a page's object here would run its getters where no stage names "
+                            "the read");
     len = JS_GetPropertyStr(ctx, arr, "length");
     DCHECK(!JS_IsException(len), "reading the length of an engine-built array threw");
     r = JS_ToUint32(ctx, &n, len);
@@ -362,63 +363,6 @@ uint32_t structured_transfer_len(JSContext *ctx, JSValueConst arr)
     (void)r;
     JS_FreeValue(ctx, len);
     return n;
-}
-
-int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out)
-{
-    uint32_t n = 0, i;
-    JSValue arr;
-
-    *out = JS_UNDEFINED;
-    arr = JS_NewArray(ctx);
-    if (JS_IsException(arr)) return -1;
-    if (JS_IsUndefined(list) || JS_IsNull(list)) { *out = arr; return 0; }
-    /* THE PAGE ACTUALLY PASSED A LIST, so from here down this walks a value of the page's from C. Two things
-       are wrong with that and they are the same thing: `list.length` and every `list[i]` below can be an
-       accessor or a Proxy trap, which is the page's code in an activation with no flow base — a loop in it
-       drives to completion — and length-plus-indices is not §3.2.21 at all, it is the array-like algorithm, so
-       an iterable that is not an array converts to nothing here where the standard iterates it.
-       IDL_SEQUENCE_OBJECT is the declared type that performs it on the tramp; `structuredClone` takes it, and
-       so does window.postMessage — whose §3.6 overload split is IDL_USVSTRING_OR_DICT and whose third position
-       is the sequence itself. ONE caller is left, and it is the one whose overload this file cannot yet
-       express: MessagePort.postMessage's second argument is `sequence<object> transfer` in one entry and
-       `optional StructuredSerializeOptions options = {}` in the other, and BOTH entries are two positions
-       long — so §3.6 step 4 removes neither and step 12 decides between them by performing
-       GetMethod(V, @@iterator), which is the page's code and therefore a REST POINT before either arm is
-       chosen. IterCursor already performs that read as its first phase (IT_GET_ITERFN) but THROWS "not
-       iterable" where §3.6 needs the answer reported, and the method it found must be handed to §3.2.21
-       rather than read a second time. Give the cursor that probe, declare the row, and this function goes
-       with its last caller. */
-    DFAIL("§3.2.21's `sequence<object>` was converted from C — MessagePort.postMessage's second argument is "
-          "still IDL_ANY. Declare §3.6's `sequence<object>`-or-dictionary split (the arm is chosen by "
-          "GetMethod(V, @@iterator), so IterCursor must REPORT an absent @@iterator instead of throwing, and "
-          "keep the method it found for the walk), then delete structured_transfer_list");
-    if (!JS_IsObject(list)) {
-        JS_FreeValue(ctx, arr);
-        JS_ThrowTypeError(ctx, "the transfer list is not a sequence");
-        return -1;
-    }
-    {
-        JSValue len = JS_GetPropertyStr(ctx, list, "length");
-        if (JS_IsException(len)) { JS_FreeValue(ctx, arr); return -1; }
-        if (JS_ToUint32(ctx, &n, len) < 0) { JS_FreeValue(ctx, len); JS_FreeValue(ctx, arr); return -1; }
-        JS_FreeValue(ctx, len);
-    }
-    for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, list, i);
-        if (JS_IsException(e)) { JS_FreeValue(ctx, arr); return -1; }
-        /* Web IDL §3.2.13: the element type is `object`, so a non-object is the conversion's TypeError and never a
-           DataCloneError — a page passing `[1]` is a type error about its argument, not a clone failure. */
-        if (!JS_IsObject(e)) {
-            JS_FreeValue(ctx, e);
-            JS_FreeValue(ctx, arr);
-            JS_ThrowTypeError(ctx, "a transfer list entry is not an object");
-            return -1;
-        }
-        JS_SetPropertyUint32(ctx, arr, i, e);
-    }
-    *out = arr;
-    return 0;
 }
 
 int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
@@ -430,8 +374,9 @@ int structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst t
     out->data.len = 0;
     out->holders = JS_UNDEFINED;
     DCHECK(JS_IsArray(transfer), "StructuredSerializeWithTransfer was handed a transfer list that is not the "
-                                 "materialized sequence — structured_transfer_list is what converts one, and "
-                                 "reading the page's object again here would run its getters a second time");
+                                 "materialized sequence — IDL_SEQUENCE_OBJECT is what §3.2.21 converts one "
+                                 "into, and reading the page's object again here would run its iterator a "
+                                 "second time");
     n = structured_transfer_len(ctx, transfer);
 
     /* §2.7.7 STEP 2, BEFORE THE MESSAGE IS SERIALIZED: every entry must be transferable and must appear once.
@@ -581,7 +526,7 @@ static JSValue js_structured_clone(JSContext *ctx, JSValueConst this_val, int ar
     (void)this_val; (void)magic;
     DCHECK(argc >= 1, "structuredClone ran with no value — §3.6 step 5 is the declaration's, and "
                       "idl_optional_from names position 1 as the first optional one");
-    /* §2.7.6's `= []`: an options dictionary with no `transfer` member is a transfer list of nothing. That is
+    /* §9.4.4's `= []`: an options dictionary with no `transfer` member is a transfer list of nothing. That is
        the IDL's own default and not a hole filled at the reader — an absent member of a dictionary IS the empty
        sequence here, which is why the list is built rather than the walk skipped. */
     transfer = argc > 1 ? idl_dict_get(ctx, argv[1], "transfer") : JS_UNDEFINED;
@@ -613,7 +558,8 @@ static int g_id_clone = -1;
 void structured_clone_init(JSContext *ctx)
 {
     static const IdlArgType CLONE_ARGS[2] = { IDL_ANY, IDL_DICT };
-    /* §2.7.6 `dictionary StructuredSerializeOptions { sequence<object> transfer = []; };` — one member, and it
+    /* HTML §9.4.4 Message ports' `dictionary StructuredSerializeOptions { sequence<object> transfer = []; };`
+       — one member, declared there and not in §2.7 (whose §2.7.6 is StructuredDeserialize), and it
        is the whole reason this member is declared rather than read from its body. */
     static const IdlDictMember CLONE_OPTS[] = { { "transfer", IDL_SEQUENCE_OBJECT } };
 
@@ -621,7 +567,7 @@ void structured_clone_init(JSContext *ctx)
                                     (int)(sizeof CLONE_OPTS / sizeof CLONE_OPTS[0]),
                                     js_structured_clone, 0);
     idl_optional_from(1);   /* `structuredClone(value, optional StructuredSerializeOptions options = {})` */
-    agent_state_id("structured_clone", &g_id_clone, "§2.7.6's structuredClone declaration");
+    agent_state_id("structured_clone", &g_id_clone, "§2.7.10's structuredClone declaration");
     agent_state_flag("structured_clone", &g_transferable_n, "the platform's transferable-interface registry");
 }
 

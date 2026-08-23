@@ -683,6 +683,16 @@ typedef struct {
        It is shared between an argument position and a dictionary member's for exactly the reason `seq` is:
        arguments are converted strictly left to right, so the two are never in flight at once. */
     uint8_t    uni_phase;
+    /* §3.6 STEP 12'S ARM FOR AN OVERLOAD SPLIT THAT ASKS THE SAME QUESTION — a separate byte from the one
+       above, and the reason is exactly the sentence above it is NOT. `uni_phase` is shared between an argument
+       position and a dictionary member's because arguments convert strictly left to right and the two are
+       never in flight at once. AN OVERLOAD ARM THAT RESOLVED TO A DICTIONARY BREAKS THAT: the argument's arm
+       is still in flight while that dictionary's members are being read, and the member loop RESETS
+       `uni_phase` to IDL_UNI_ASK as each member finishes — so a park inside member two would resume, re-enter
+       the conversion loop, find the arm "unasked" and perform `GetMethod(V, %Symbol.iterator%)` on the page's
+       value a SECOND time. A Proxy `get` trap counts that read and an accessor may answer it differently, and
+       the second answer could choose the other overload for a call already half-converted. */
+    uint8_t    ovl_phase;
     /* THE NESTED CONVERSION'S STACK POINTER — how many IdlConvFrame frames (which live immediately after this
        state, one per declared sequence level) are live. Zero means no nested conversion is in flight, which is
        what tells a resumed member's sequence branch to continue rather than start over. */
@@ -799,12 +809,12 @@ static const void *idl_body_state_const(const IdlMember *m, const void *st)
  * hand-roll `argc > N ? argv[N] : JS_UNDEFINED` — which is the consumer-side default §Offensive-programming
  * names, one call site at a time. It read as correct wherever the IDL default happened to equal what the
  * hand-rolled `undefined` produced (`idl_dict_bool` answers false, and `= false` is the common default), and
- * it was WRONG wherever it did not: HTML §9.4.4's `WindowPostMessageOptions` gives `targetOrigin` the default
+ * it was WRONG wherever it did not: HTML §7.2.2's `WindowPostMessageOptions` gives `targetOrigin` the default
  * "/", so `window.postMessage(msg)` read an undefined target origin where the spec reads "/". */
 static bool idl_type_is_dictionary(IdlArgType t)
 {
     return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_STRING_OR_DICT ||
-           t == IDL_USVSTRING_OR_DICT;
+           t == IDL_USVSTRING_OR_DICT || t == IDL_SEQUENCE_OBJECT_OR_DICT;
 }
 
 static int idl_declared_positions(const IdlMember *m)
@@ -1017,35 +1027,47 @@ static int idl_conv_run(JSContext *ctx, JSIdlArgsState *s, const IdlMember *m, J
     }
 }
 
-/* ---- §3.2.25 OVER `(DOMString or sequence<DOMString>)`: THE ARM, AS A REQUEST -----------------------------
+/* ---- `? GetMethod(V, %Symbol.iterator%)`: THE ARM, AS A REQUEST -------------------------------------------
  *
- * The union's member types are a string and a sequence and NOTHING else, so steps 4 through 10 of the
- * conversion name no arm it has and the whole decision is step 11.2 against step 15. Step 11.2 is
- * `? GetMethod(V, %Symbol.iterator%)`, which is a [[Get]] of the PAGE'S value — so this is a rest point, and
- * which arm it answered has to survive the rest.
+ * TWO ALGORITHMS ASK THIS ONE QUESTION, and they are stated here once because a second copy is a second notion
+ * of GetMethod that can answer differently:
+ *   - §3.2.25 Union types over `(DOMString or sequence<DOMString>)` and `(double or sequence<double>)`. The
+ *     member types are a flat type and a sequence and NOTHING else, so steps 4 through 10 name no arm the
+ *     union has and the whole decision is step 11.2 against the flat clause below it.
+ *   - §3.6 Overload resolution algorithm step 12's SEQUENCE clause — "Otherwise: if V is an Object and there
+ *     is an entry in S that has … a sequence type … and after performing the following steps, Let method be
+ *     ? GetMethod(V, %Symbol.iterator%). method is not undefined, then remove from S all other entries."
+ * Either way it is a [[Get]] of the PAGE'S value, so this is a rest point, and which arm it answered has to
+ * survive the rest.
  *
- * WHY THE METHOD IS HANDED TO THE CURSOR RATHER THAN RE-READ. §3.2.21.1's "create a sequence from an iterable"
- * takes the iterable AND the method the union already obtained; a cursor that read @@iterator itself would
- * perform the property access twice for one conversion, which a Proxy `get` trap counts and an accessor can
- * answer differently the second time. iter_cursor_init_from_method is that second entry, and it is why the
- * method is never held on this state across a park: it is consumed on the entry that completes the read. */
+ * WHY THE METHOD IS HANDED TO THE CURSOR RATHER THAN RE-READ. §3.2.21.1's "creating a sequence from an
+ * iterable" takes the iterable AND the method the caller already obtained — which is why §3.6 step 14 says
+ * "creating a sequence of type T from V and method" rather than converting V afresh. A cursor that read
+ * @@iterator itself would perform the property access twice for one conversion, which a Proxy `get` trap
+ * counts and an accessor can answer differently the second time. iter_cursor_init_from_method is that second
+ * entry, and it is why the method is never held on this state across a park: it is consumed on the entry that
+ * completes the read. */
 enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
 
-/* Resolve the union at `v` to the type its arm is: IDL_DOMSTRING (step 15) or IDL_SEQUENCE_DOMSTRING (step
-   11.2, with this machine's cursor already planted on the method the page gave). §3.2.25 step 2's null arm is
-   the CALLER's — it runs none of the page's code and the two callers place the IDL null in two different
-   slots.
+/* Resolve the arm at `v`: `flat_arm` (there is no @@iterator) or `seq_arm` (there is, with this machine's
+   cursor already planted on the method the page gave). §3.2.25 step 2's null arm is the CALLER's — it runs
+   none of the page's code and the callers place the IDL null in different slots — and so is §3.6 step 12's
+   undefined/null/non-object clause chain, for the same reason.
+   `phase` IS THE CALLER'S BYTE and not a fixed field, because which conversions can be in flight at once
+   differs: a union arm and a dictionary member's union arm never overlap, while an OVERLOAD arm that resolved
+   to a dictionary is still live while that dictionary's members convert. See JSIdlArgsState::ovl_phase.
    `*pin` is the request answer on the way in and is CLEARED when it was consumed, because a resume that lands
    here on its way back INTO the sequence still has to hand that answer to the cursor. Returns >0 (the caller
    returns it), 0 with *pout set, or -1 with a throw live. */
-static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, JSValue *pin,
+static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, uint8_t *phase, JSValueConst v, JSValue *pin,
                              IdlArgType *pout, IdlArgType seq_arm, IdlArgType flat_arm,
                              JSValue **out_cb, int *out_argc)
 {
-    /* Step 11 asks its whole question of an OBJECT; every other value reaches step 15 without a read. */
-    if (s->uni_phase == IDL_UNI_ASK && !JS_IsObject(v))
-        s->uni_phase = IDL_UNI_STRING;
-    if (s->uni_phase == IDL_UNI_ASK) {
+    /* §3.2.25 step 11 asks its whole question of an OBJECT; every other value reaches the flat clause without
+       a read. (§3.6's caller has already refused a non-object, so this line is the union's alone.) */
+    if (*phase == IDL_UNI_ASK && !JS_IsObject(v))
+        *phase = IDL_UNI_STRING;
+    if (*phase == IDL_UNI_ASK) {
         JSValue method = JS_UNDEFINED;
         int r = step_getprop_run(ctx, &s->hdr, v, JS_WellKnownSymbolAtom(JS_WKS_ITERATOR), *pin, &method,
                                  out_cb, out_argc);
@@ -1053,16 +1075,16 @@ static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, 
         *pin = JS_UNDEFINED;
         if (r > 0) return r;      /* parked INSIDE the page's @@iterator getter or its Proxy trap */
         if (r < 0) return -1;
-        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 11.2 names and not a plain [[Get]]. Its
-           three steps after the read are stated ONCE, in idl_iter.c: undefined and null are "there is no
-           method" and fall through to the string arm, and anything else that is not callable is a TypeError
-           rather than a quiet second arm. The copy that stood here was the same three lines, and the two other
-           unions in the tree each spelled the question a third way. */
+        /* ECMAScript's GetMethod, which is the operation §3.2.25 step 11.2 and §3.6 step 12's sequence clause
+           both name and not a plain [[Get]]. Its three steps after the read are stated ONCE, in idl_iter.c:
+           undefined and null are "there is no method" and fall through to the flat arm, and anything else that
+           is not callable is a TypeError rather than a quiet second arm. The copy that stood here was the same
+           three lines, and the two other unions in the tree each spelled the question a third way. */
         r = idl_get_method(ctx, method, "the value's @@iterator");
         if (r <= 0) {
             JS_FreeValue(ctx, method);
             if (r < 0) return -1;
-            s->uni_phase = IDL_UNI_STRING;
+            *phase = IDL_UNI_STRING;
         } else {
             /* THE STATE IS COMPLETE BEFORE THE METHOD IS HANDED OVER: the list is placed on the machine
                first, so a failure here tears down through the same `visit` that would have named it, and the
@@ -1078,16 +1100,17 @@ static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, 
             }
             iter_cursor_init_from_method(ctx, &s->seq, method);   /* CONSUMES `method` */
             s->seq_phase = 1;
-            s->uni_phase = IDL_UNI_SEQUENCE;
+            *phase = IDL_UNI_SEQUENCE;
         }
     }
-    DCHECK(s->uni_phase == IDL_UNI_STRING || s->uni_phase == IDL_UNI_SEQUENCE,
-           "a `(T or sequence<T>)` position resumed at an arm this union never parks in");
-    /* WHICH TWO TYPES THE TWO OUTCOMES ARE is the only thing each union states for itself; §3.2.25 step 11.2's
-       read above is the ALGORITHM's and is stated once. `IDL_UNI_STRING` names the FLAT arm rather than a
-       string one — the phase is "there was no @@iterator", which is the same fact for every union of this
-       shape — and the two DOMSTRING spellings kept the old name honest only while there was one such union. */
-    *pout = (s->uni_phase == IDL_UNI_SEQUENCE) ? seq_arm : flat_arm;
+    DCHECK(*phase == IDL_UNI_STRING || *phase == IDL_UNI_SEQUENCE,
+           "a position whose arm is decided by @@iterator resumed at an arm neither §3.2.25 step 11.2 nor "
+           "§3.6 step 12's sequence clause parks in");
+    /* WHICH TWO TYPES THE TWO OUTCOMES ARE is the only thing each caller states for itself; the
+       `? GetMethod(V, %Symbol.iterator%)` read above is the ALGORITHM's and is stated once. `IDL_UNI_STRING`
+       names the FLAT arm rather than a string one — the phase is "there was no @@iterator", which is the same
+       fact for every caller of this shape, and §3.6's flat arm is a DICTIONARY rather than a string at all. */
+    *pout = (*phase == IDL_UNI_SEQUENCE) ? seq_arm : flat_arm;
     return 0;
 }
 
@@ -1547,8 +1570,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* §3.6: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
            undefined — which is what lets it tell "no base" from the base "undefined". A VARIADIC TAIL is not
            one of those positions (see idl_declared_positions): every value passed to a `T...` is converted.
-           OPTIONALITY IS THE SURVIVING ENTRY'S, NOT THE DECLARATION'S. §3.6 step 14 reads it "at index i in the
-           list of optionality values of the remaining entry", and the entry that made this position optional is
+           OPTIONALITY IS THE SURVIVING ENTRY'S, NOT THE DECLARATION'S. §3.6 step 15.3 reads it "at index i in
+           the list of optionality values of the REMAINING entry", and the entry that made this position optional is
            exactly the one step 4 just removed — so `postMessage(m, undefined, [p])` converts the string
            "undefined" rather than treating the target origin as absent. */
         /* …AND IT IS NOT ABOUT A DICTIONARY. `store.createObjectStore('s', undefined)` and
@@ -1568,22 +1591,6 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             if (JS_IsException(*slot)) { *slot = JS_UNDEFINED; return JS_STEP_ABRUPT; }
             goto placed;
         }
-
-        if (t == IDL_STRING_UNLESS_CALLABLE)
-            t = JS_IsFunction(ctx, a) ? IDL_ANY : IDL_DOMSTRING;   /* the union's own rule */
-        if (t == IDL_STRING_UNLESS_IFACE) {
-            DCHECK(m->iface != 0, "a member declared an interface-or-string union with no interface to brand "
-                                  "against — the class is half of what that type states");
-            t = idl_is_iface(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
-        }
-        /* §3.2.26 over `(object or DOMString)`, read in the union algorithm's own ORDER — which is the whole
-           of the difference between this and IDL_STRING_OR_DICT. The union names no nullable and no dictionary
-           type, so `null` never reaches an object arm: it falls past every Object clause to the string one and
-           becomes the four characters "null". Reading it as "an object is the object, everything else is a
-           string" agrees on every ordinary case and is the same sentence; it is written as one clause because
-           that is what §3.2.26 leaves once the arms are named. */
-        if (t == IDL_STRING_UNLESS_OBJECT)
-            t = JS_IsObject(a) ? IDL_ANY : IDL_DOMSTRING;
 
         /* §3.2.20's NULLABLE RULE over the two interface-valued types: null AND undefined are the IDL null, and
            what survives takes the un-nullable type's own conversion — which is why this collapses the TYPE
@@ -1622,6 +1629,57 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             goto placed;
         }
 
+        /* §3.2.25 Union types OVER THE THREE UNIONS WHOSE ARM IS A RUNTIME TYPE TEST ON THE VALUE ITSELF, and
+           they are HERE — below the pass-through — for the reason every other union in this function is, which
+           they were the only three not to obey. The rule this whole block states is that unknown external input
+           reaches no coercion and answers no question about what it IS; §3.2.25 decides a union arm by asking
+           exactly such questions ("If V is an Object …", "If IsCallable(V) is true, then: If types includes a
+           callback function type, then return the result of converting V to that callback function type"), and
+           asking one of a concolic is a CONTROL-FLOW decision over unknown input, which §@S forbids.
+           IT ANSWERED, AND IT ANSWERED THE WRONG WAY. A concolic is an object carrying a [[Call]] —
+           solver/concolic.c installs one so `document.cookie.indexOf("role=admin")` yields another unknown
+           instead of throwing "not a function" and taking the rest of the program with it — so IsCallable over
+           EVERY unknown external input is true, and `(DOMString or Function)` took the callback arm for all of
+           them. HTML §8.7 Timers makes the OTHER arm a code-execution sink (its task substeps: "If handler is a
+           Function, then invoke handler … Otherwise: … Assert: handler is a string … Let script be the result
+           of creating a classic script given handler … Run the classic script script"), so
+           `setTimeout(location.hash, 1)` was routed to the callback arm and announced to nobody: measured on
+           this artifact, an eval sink over the same source fired a verified PoC and the string timer over it
+           produced no @S entry at all. Nothing crashed, because taking a real arm of a real union is not a
+           broken invariant — it is the collapse this pass-through exists to prevent, arriving three types
+           early.
+           WHAT A CONCOLIC DOES NOW is cross as itself, exactly as it does at every other declared type, and the
+           BODY decides — which is the only place that can, because which arm of a union unknown input belongs
+           to is a fact about the member's algorithm and not about the value.
+           §3.2.26 is Buffer source types; the citation on the `(object or DOMString)` clause below said so and
+           was wrong. The clause it is about is this one. */
+        /* BEFORE THE ARMS AND NOT AFTER THEM, because each `if` below OVERWRITES `t` with the arm it chose:
+           asked afterwards this would read IDL_ANY or IDL_DOMSTRING and pass for exactly the value it exists to
+           catch. It is not a tautology about the current order — it is that order's invariant, stated where a
+           later move of these three blocks back above the pass-through, or an added exclusion in the
+           pass-through's type list, makes it fire instead of silently answering a union arm for an unknown. */
+        DCHECK(!concolic_is(a),
+               "unknown external input reached a §3.2.25 union arm that is decided by a runtime type test — the "
+               "pass-through above is what stops that, so a concolic here means the arm is about to be chosen "
+               "from what the SOLVER's value class is rather than from what the page's value is, which is how "
+               "`(DOMString or Function)` sent every unknown down the callback arm and left HTML §8.7's string "
+               "handler with no @S detection at all");
+        if (t == IDL_STRING_UNLESS_CALLABLE)
+            t = JS_IsFunction(ctx, a) ? IDL_ANY : IDL_DOMSTRING;   /* the union's own rule */
+        if (t == IDL_STRING_UNLESS_IFACE) {
+            DCHECK(m->iface != 0, "a member declared an interface-or-string union with no interface to brand "
+                                  "against — the class is half of what that type states");
+            t = idl_is_iface(a, m->iface) ? IDL_ANY : IDL_DOMSTRING;
+        }
+        /* §3.2.25 over `(object or DOMString)`, read in the union algorithm's own ORDER — which is the whole
+           of the difference between this and IDL_STRING_OR_DICT. The union names no nullable and no dictionary
+           type, so `null` never reaches an object arm: it falls past every Object clause to the string one and
+           becomes the four characters "null". Reading it as "an object is the object, everything else is a
+           string" agrees on every ordinary case and is the same sentence; it is written as one clause because
+           that is what §3.2.25 leaves once the arms are named. */
+        if (t == IDL_STRING_UNLESS_OBJECT)
+            t = JS_IsObject(a) ? IDL_ANY : IDL_DOMSTRING;
+
         /* §3.2.25 over `(DOMString or D)`, and it is resolved AFTER the pass-through above on purpose: a
            concolic IS an object, so asking the union first would send unknown external input down the
            dictionary arm and read members off it. What reaches here is a real value, and then the union's own
@@ -1657,8 +1715,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 *slot = JS_NULL;
                 goto placed;
             }
-            r = idl_union_seq_arm(ctx, s, a, &cb_result, &t, IDL_SEQUENCE_DOMSTRING, IDL_DOMSTRING,
-                                  out_cb, out_argc);
+            r = idl_union_seq_arm(ctx, s, &s->uni_phase, a, &cb_result, &t,
+                                  IDL_SEQUENCE_DOMSTRING, IDL_DOMSTRING, out_cb, out_argc);
             if (r > 0) return r;   /* parked ON THE ARM's read; the resume finds the arm already chosen */
             if (r < 0) return JS_STEP_ABRUPT;
         }
@@ -1667,10 +1725,51 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            Resolved AFTER the concolic pass-through above for the reason every union here is: unknown external
            input IS an object, and asking it for @@iterator would read a property off an attacker's value. */
         if (t == IDL_DOUBLE_OR_SEQUENCE) {
-            r = idl_union_seq_arm(ctx, s, a, &cb_result, &t, IDL_SEQUENCE_DOUBLE, IDL_DOUBLE,
-                                  out_cb, out_argc);
+            r = idl_union_seq_arm(ctx, s, &s->uni_phase, a, &cb_result, &t,
+                                  IDL_SEQUENCE_DOUBLE, IDL_DOUBLE, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
+        }
+
+        /* §3.6 STEP 12 OVER TWO ENTRIES STEP 4 REMOVED NEITHER OF — a `sequence<object>` against an
+           `optional StructuredSerializeOptions options = {}` at the same index, which is what
+           HTML §9.4.4 Message ports' `MessagePort.postMessage` declares. The row above can decide its split
+           on the ARGUMENT COUNT because one of its entries is longer; here both type lists are the same
+           length, so nothing is removed before the value is looked at and every outcome is one of step 12's
+           clauses. Resolved AFTER the concolic pass-through above for the reason every arm here is: unknown
+           external input IS an object, and asking it for @@iterator would read a property off an attacker's
+           value. */
+        if (t == IDL_SEQUENCE_OBJECT_OR_DICT) {
+            DCHECK(m->dict_n > 0, "a member declared a `sequence<object>`-or-dictionary overload split with no "
+                                  "dictionary members — the dictionary is half of what that type states");
+            if (JS_IsNull(a) || JS_IsUndefined(a)) {
+                /* Step 12's FIRST clause ("V is undefined, and there is an entry whose list of optionality
+                   values has 'optional' at index i") and its SECOND ("V is null or undefined, and there is an
+                   entry that has … a dictionary type") both name the dictionary entry here, so the two land
+                   together. §3.2.17 then converts undefined/null to that dictionary's own defaults, which is
+                   why this is a type collapse and not a placed IDL null. */
+                t = IDL_DICT;
+            } else if (!JS_IsObject(a)) {
+                /* Step 12's FINAL "Otherwise: throw a TypeError". Neither entry has a string, numeric,
+                   boolean, bigint or `any` type at this position, so no clause between the dictionary one and
+                   the end of the chain names an entry and there is nothing left to select. This is the one
+                   place this type is observably NOT the row above, whose string arm swallows the same values:
+                   `port.postMessage(m, "x")` throws, and an implementation that reused the string union here
+                   would build a transfer list out of a value the standard refuses. */
+                JS_FreeValue(ctx, cb_result);
+                JS_ThrowTypeError(ctx, "argument %d is neither a sequence nor a dictionary", s->i + 1);
+                return JS_STEP_ABRUPT;
+            } else {
+                /* Step 12's SEQUENCE clause against its callback-interface/dictionary/record/object clause,
+                   and the test between them is `? GetMethod(V, %Symbol.iterator%)` — the page's code, so this
+                   position PARKS here exactly as a `(T or sequence<T>)` union does. The phase byte is this
+                   member's own (ovl_phase) rather than the union's, because the dictionary arm's member reads
+                   run while this answer is still live and they reset the union's. */
+                r = idl_union_seq_arm(ctx, s, &s->ovl_phase, a, &cb_result, &t,
+                                      IDL_SEQUENCE_OBJECT, IDL_DICT, out_cb, out_argc);
+                if (r > 0) return r;   /* parked ON THE OVERLOAD's read; the resume finds it already chosen */
+                if (r < 0) return JS_STEP_ABRUPT;
+            }
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST) {
@@ -1742,6 +1841,15 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 }
                 DCHECK(mt != IDL_DICT, "a dictionary member was declared as a dictionary — the conversion "
                                        "cursor is per-argument, so a nested one would read the outer's names");
+                /* AN OVERLOAD SPLIT IS NOT A TYPE A MEMBER CAN HAVE. §3.6 resolves between two ENTRIES of an
+                   effective overload set at an ARGUMENT INDEX; a dictionary member has no entries and no
+                   index, so a member declared this way names a decision there is nothing to decide. Asserted
+                   here because the member loop below would otherwise fall past every arm and place the page's
+                   value unconverted, which is the silent shape rather than the loud one. */
+                DCHECK(mt != IDL_SEQUENCE_OBJECT_OR_DICT,
+                       "a dictionary member was declared as a §3.6 overload split — that type resolves between "
+                       "two overload ENTRIES at an argument position, and a member is inside one entry already; "
+                       "the member's own IDL names either the sequence or the dictionary, never both");
                 /* §3.2.17 step 4.1.5's DEFAULT comes first, because it is the difference between a member
                    that does not exist and one that exists holding what the IDL wrote. It is already an IDL
                    value, so nothing converts it. */
@@ -1773,7 +1881,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         s->dict_v = JS_NULL;
                         mt = IDL_ANY;
                     } else {
-                        r = idl_union_seq_arm(ctx, s, s->dict_v, &cb_result, &mt,
+                        r = idl_union_seq_arm(ctx, s, &s->uni_phase, s->dict_v, &cb_result, &mt,
                                               IDL_SEQUENCE_DOMSTRING, IDL_DOMSTRING, out_cb, out_argc);
                         if (r > 0) return r;   /* parked ON THIS MEMBER's arm; the resume finds it chosen */
                         if (r < 0) return JS_STEP_ABRUPT;
@@ -1783,7 +1891,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    §2.4's `threshold`. The same step 11.2 read, resolved here so the @@iterator access parks on
                    the MEMBER it is on rather than after every later member of the same dictionary was read. */
                 if (mt == IDL_DOUBLE_OR_SEQUENCE) {
-                    r = idl_union_seq_arm(ctx, s, s->dict_v, &cb_result, &mt,
+                    r = idl_union_seq_arm(ctx, s, &s->uni_phase, s->dict_v, &cb_result, &mt,
                                           IDL_SEQUENCE_DOUBLE, IDL_DOUBLE, out_cb, out_argc);
                     if (r > 0) return r;
                     if (r < 0) return JS_STEP_ABRUPT;
@@ -1844,7 +1952,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                             if (r > 0) return r;   /* parked ON THIS ELEMENT; the resume comes back to it */
                             if (r < 0) return JS_STEP_ABRUPT;
                             if (s->seq.done) break;
-                            /* §3.2.13's `object` over a dictionary member — HTML §2.7.6's `transfer`. An
+                            /* §3.2.13's `object` over a dictionary member — HTML §9.4.4's `transfer`. An
                                Object crosses as itself and anything else is a TypeError, which runs none of
                                the page's code, so it is decided here rather than being a rest point. */
                             if (mt == IDL_SEQUENCE_OBJECT) {
@@ -2022,6 +2130,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             s->dict_i = 0;
+            /* THE OVERLOAD ARM IS PER POSITION and this branch does not pass through `placed:`, so the reset
+               is stated here too — a dictionary reached AS the flat arm of §3.6 step 12 leaves the arm chosen,
+               and the next declared position must ask its own value rather than inherit this answer. */
+            s->ovl_phase = IDL_UNI_ASK;
             s->i++;
             continue;
         }
@@ -2036,7 +2148,10 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* IDL_SEQUENCE_DOMSTRING IS ONE OF THEM AT AN ARGUMENT POSITION, and it reaches this loop by two
            roads: declared outright, and as the arm §3.2.25 resolved a `(DOMString or sequence<DOMString>)` to
            — in which case the cursor was already planted on the method the union read and `seq_phase` is
-           already 1, so the setup below is skipped and nothing reads @@iterator twice. */
+           already 1, so the setup below is skipped and nothing reads @@iterator twice. IDL_SEQUENCE_OBJECT has
+           a THIRD road for the same reason and with the same cursor already planted: §3.6 step 12's sequence
+           clause, whose step 14 says to create the sequence "from V and method" — the method that clause
+           already obtained, never a second read. */
         if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT ||
             t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE) {
             if (!JS_IsObject(a)) {
@@ -2320,8 +2435,11 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             s->vstage = JS_UNDEFINED;
         }
         /* THE UNION'S ARM IS PER POSITION — the same reason the store above is per position. Two
-           `(DOMString or sequence<DOMString>)` arguments in one member each ask their own value. */
+           `(DOMString or sequence<DOMString>)` arguments in one member each ask their own value. §3.6 step
+           12's overload arm is per position for the identical reason, and keeps its own byte because a
+           dictionary it resolved to would otherwise clear the union's out from under it. */
         s->uni_phase = IDL_UNI_ASK;
+        s->ovl_phase = IDL_UNI_ASK;
         s->i++;
     }
 

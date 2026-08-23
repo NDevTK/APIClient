@@ -497,7 +497,7 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
     if (JS_IsException(tov)) { JS_FreeValue(ctx, transfer); return JS_EXCEPTION; }
     DCHECK(JS_IsString(tov), "postMessage's target origin is not a string — the declaration converts it as a "
                              "USVString and places the IDL's own default when the page wrote none");
-    /* §2.7.6's `= []`: no `transfer` member is a transfer list of nothing. That is the IDL's own default and
+    /* §9.4.4's `= []`: no `transfer` member is a transfer list of nothing. That is the IDL's own default and
        not a hole filled at the reader — see js_structured_clone, which states the same thing about the same
        dictionary member. Everything downstream walks THIS array, which the engine built. */
     if (JS_IsUndefined(transfer)) {

@@ -12,7 +12,7 @@
    whose declare column was NULL — and its body read `options.transfer` with JS_GetPropertyStr from C. */
 void structured_clone_init(JSContext *ctx);
 void structured_clone_install(JSContext *ctx, JSValueConst global);
-/* Agent teardown — core/platform.h's release column. It gives back §2.7.6's pool entry and the registry of
+/* Agent teardown — core/platform.h's release column. It gives back §2.7.10's pool entry and the registry of
    transferable interfaces below, which is the AGENT's: a count carried into a second agent is a platform that
    reports interfaces registered by a runtime that no longer exists. */
 void structured_clone_free(JSRuntime *rt);
@@ -57,28 +57,18 @@ typedef struct {
 } StructuredTransferable;
 void structured_register_transferable(const StructuredTransferable *t);
 
-/* §3.2.21's `sequence<object>` — the transfer list, MATERIALIZED ONCE into an engine-built Array.
+/* THE TRANSFER LIST IS A DECLARED IDL TYPE AND NOT A WALK THIS FILE PERFORMS. It used to be one — a
+ * function reading `list.length` and one index per entry — and that is the ARRAY-LIKE algorithm rather than
+ * §3.2.21's, so a page's iterable that is not an Array converted to nothing, and every
+ * one of those reads could be an accessor or a Proxy trap run from an activation with no flow base under it.
+ * IDL_SEQUENCE_OBJECT (core/idl_args.h) performs §3.2.21 on the tramp, so it rests on the element it is on;
+ * IDL_SEQUENCE_OBJECT_OR_DICT performs §3.6's split for the member that has two overloads to choose between.
  *
- * IT IS ONE CALL BECAUSE IT IS THE ONE PLACE THE PAGE'S CODE RUNS. §9.4.2's post message steps read the list
- * three times (does it contain the source port, does it contain the target port, and then §2.7.7's two loops),
- * and against a page-supplied object each of those reads is an accessor or a Proxy trap that can answer
- * DIFFERENTLY every time — so a list read per question is a list that can be four different lists. Everything
- * downstream of this call walks an Array the engine built, and reads nothing of the page's at all.
- *
- * IT IS SUPERSEDED AND IT ABORTS. §3.2.21 converts a sequence through the ITERATOR protocol
- * (GetMethod(@@iterator), its call, one `next()` per element, a `done` and a `value` read), and every one of
- * those is a rest point a declared member parks on — which is why IDL_SEQUENCE_DOMSTRING and
- * IDL_SEQUENCE_INTERFACE are DECLARED TYPES in idl_args.h rather than walks a body performs. IDL_SEQUENCE_OBJECT
- * is now the third, `structuredClone` and window.postMessage take it, and this function's `length`-and-indices
- * walk is the array-like algorithm — a different algorithm wearing this one's name, and one that runs the page's
- * accessors and Proxy traps from an activation with no flow base. So a non-empty list DFAILs here rather than
- * being walked, and ONE caller is left: MessagePort.postMessage, whose two overload entries are BOTH two
- * positions long (`sequence<object> transfer` against `optional StructuredSerializeOptions options = {}`), so
- * §3.6 step 4 removes neither and step 12 chooses by performing GetMethod(V, @@iterator) — the page's code, and
- * so a rest point before either arm exists. See the DFAIL for what that costs.
- *
- * Returns 0 with `*out` an owned Array (empty for an absent list), or -1 with a throw live. */
-int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out);
+ * SO EVERY `transfer` PARAMETER BELOW IS AN ENGINE-BUILT ARRAY, and that is what the DCHECKs assert. It has to
+ * be materialized once for a reason that is not tidiness: §9.4.4's post message steps read the list three
+ * times (does it contain the source port, does it contain the target port) before §2.7.7's two loops read it
+ * twice more, and against a page-supplied object each of those five reads is a trap that can answer
+ * DIFFERENTLY — a list read per question is a list that can be five different lists. */
 
 /* §2.7.7's StructuredSerializeWithTransfer and §2.7.8's StructuredDeserializeWithTransfer.
  *
@@ -96,7 +86,7 @@ int structured_transfer_list(JSContext *ctx, JSValueConst list, JSValue *out);
  * `memory` does not hold it, so it reaches the writer as what it is — a platform object, which §2.7 does not
  * serialize. */
 typedef struct { StructuredData data; JSValue holders; } StructuredWithTransfer;
-/* `transfer` is the MATERIALIZED list from structured_transfer_list. Returns 0, or -1 with a throw live. */
+/* `transfer` is the MATERIALIZED list — IDL_SEQUENCE_OBJECT's Array. Returns 0, or -1 with a throw live. */
 int  structured_serialize_transfer(JSContext *ctx, JSValueConst v, JSValueConst transfer,
                                    StructuredWithTransfer *out);
 /* HOW LONG ONE OF THIS FILE'S OWN ARRAYS IS — a materialized transfer list, or a record's `holders`. Both are

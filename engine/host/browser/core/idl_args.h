@@ -190,8 +190,9 @@ typedef enum {
        `ariaLabelledByElements`-shaped members are the first, and their `?` is what CLEARS them. */
     IDL_SEQUENCE_INTERFACE_NULLABLE,
     /* `sequence<object>` — §3.2.21's iterator-protocol conversion with §3.2.13's `object` as the element type.
-       HTML §2.7.6's `StructuredSerializeOptions.transfer` is the first, and it is what `structuredClone`,
-       `window.postMessage` and `MessagePort.postMessage` all take.
+       HTML §9.4.4 Message ports' `StructuredSerializeOptions.transfer` is the first — that dictionary is
+       declared THERE and not in §2.7 Safe passing of structured data, whose §2.7.6 is StructuredDeserialize —
+       and it is what `structuredClone`, `window.postMessage` and `MessagePort.postMessage` all take.
        IT IS A DECLARED TYPE BECAUSE THE WALK IS THE PAGE'S CODE. structured_clone.c converted it from C with a
        `length` read and one indexed read per entry, which is not §3.2.21 at all (that is the array-like
        algorithm) and which runs a getter or a Proxy trap from an activation with no flow base — so
@@ -228,7 +229,9 @@ typedef enum {
     IDL_STRING_OR_DICT,
     /* THE POSITION AT WHICH TWO OVERLOADS SPLIT, one of them ending here and the other continuing — §3.6's
        resolution algorithm rather than §3.2.25's union, and the difference between the two is why this is its
-       own row and not IDL_STRING_OR_DICT with a USVString arm. HTML §9.4.4's `postMessage` is what declares it:
+       own row and not IDL_STRING_OR_DICT with a USVString arm. HTML §7.2.2 The Window object is where the IDL
+       that declares it is written (the METHOD STEPS are §9.3.3 Posting messages, which is a different
+       section and states no types):
 
            undefined postMessage(any message, USVString targetOrigin, optional sequence<object> transfer = []);
            undefined postMessage(any message, optional WindowPostMessageOptions options = {});
@@ -239,7 +242,8 @@ typedef enum {
        `postMessage(m, {}, [])` is the three-argument overload, whose second argument is a required USVString,
        and the four characters "[object Object]" are then a "SyntaxError" from the URL parser. Which also means
        this position is REQUIRED at that arity, so its `undefined` is the string "undefined" and not an absent
-       optional: the optionality §3.6 step 14 reads belongs to the entry that SURVIVED step 4, never to the
+       optional: the optionality §3.6 step 15.3 reads ("let optionality be the value at index i in the list of
+       optionality values of the REMAINING entry") belongs to the entry that SURVIVED step 4, never to the
        declaration as a whole.
        Only once the longer entry is gone does step 12 choose between the two remaining ones, and there the
        rule is IDL_STRING_OR_DICT's own order: null and undefined take the dictionary (step 12.2 — and step
@@ -247,9 +251,43 @@ typedef enum {
        takes it (the callback-interface/dictionary/record clause), and everything else falls through to the
        string clause. `postMessage(m, 123)` is therefore the target origin "123", which is a SyntaxError, and
        not an options dictionary with no members.
-       The string arm is a USVString (§3.2.12's scalar value conversion), which is what §9.4.4's IDL writes and
+       The string arm is a USVString (§3.2.12's scalar value conversion), which is what §7.2.2's IDL writes and
        what every other member of the URL surface takes. The dictionary is named beside the member. */
     IDL_USVSTRING_OR_DICT,
+    /* THE SAME §3.6 SPLIT WHERE NEITHER ENTRY IS LONGER — the position the two entries of HTML §9.4.4 Message
+       ports' `MessagePort.postMessage` differ at:
+
+           undefined postMessage(any message, sequence<object> transfer);
+           undefined postMessage(any message, optional StructuredSerializeOptions options = {});
+
+       IT IS NOT THE ROW ABOVE WITH A SEQUENCE ARM, AND THE DIFFERENCE IS WHICH STEP DECIDES. Both type lists
+       are TWO long, so §3.6 step 4 ("remove from S all entries whose type list is not of length argcount")
+       removes NEITHER at any arity this member can be called at — the arity shortcut IDL_USVSTRING_OR_DICT
+       leans on has nothing to shortcut, and the whole decision is step 12's clause chain at the distinguishing
+       argument index. That chain READS THE PAGE'S VALUE, so this position is a rest point.
+
+       EVERY OUTCOME IS ONE OF STEP 12'S CLAUSES, IN THE ALGORITHM'S OWN ORDER:
+         - `undefined` — "if V is undefined, and there is an entry in S whose list of optionality values has
+           'optional' at index i, then remove from S all other entries". The dictionary entry is the one
+           declaring this position optional, so `port.postMessage(m)` and `port.postMessage(m, undefined)` are
+           both `options = {}` with every member at its IDL default.
+         - `null` — the next clause, "if V is null or undefined, and there is an entry that has … a dictionary
+           type": the dictionary again. `port.postMessage(m, null)` therefore transfers nothing rather than
+           throwing.
+         - an Object whose @@iterator is callable — the SEQUENCE clause, whose test is
+           `Let method be ? GetMethod(V, %Symbol.iterator%)`. That is the same operation §3.2.25 step 11.2
+           performs, so it is the same read, the same park and the same resolver; step 14 then hands the method
+           it found to §3.2.21.1's "creating a sequence from an iterable" rather than reading @@iterator twice.
+         - any other Object — the "callback interface type / dictionary type / record type / object" clause:
+           the dictionary. `port.postMessage(m, {})` is an options bag, not a zero-length transfer list.
+         - EVERYTHING ELSE IS A TypeError, from step 12's final "Otherwise: throw a TypeError". Neither entry
+           has a string, numeric, boolean, bigint or `any` type at this position, so no clause below the
+           dictionary one names an entry and there is nothing left to select — `port.postMessage(m, "x")`
+           THROWS where `window.postMessage(m, "x")` names a target origin. That asymmetry is the whole reason
+           this is its own row: an implementation that reuses the string-arm union here invents a transfer list
+           out of a value the standard refuses.
+       The dictionary is named beside the member, as it is for every row of this shape. */
+    IDL_SEQUENCE_OBJECT_OR_DICT,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
        is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so

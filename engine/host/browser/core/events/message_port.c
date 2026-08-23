@@ -35,6 +35,7 @@
 #include "core/events/event_target.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
+#include "solver/concolic.h"
 #include "solver/cow.h"
 
 typedef struct {
@@ -430,35 +431,67 @@ static void port_enable(JSContext *ctx, JSValueConst port, PortData *d)
  * standard's step 4 calls that case `doomed`, transfers the port anyway and then delivers nothing, which is a
  * different thing from "there was no target". Reading `entangled` back after the transfer steps had already
  * disentangled it happened to answer the same way for the shapes tried so far, and would have stopped the
- * moment anything else moved that field — §scheduler's rule that an operation takes its inputs with it. */
+ * moment anything else moved that field — §scheduler's rule that an operation takes its inputs with it.
+ *
+ * ONE BODY FOR BOTH OVERLOADS, WHICH IS WHAT §9.4.4 ITSELF WRITES. The `(message, options)` entry's method
+ * steps run the message port post message steps with `options`; the `(message, transfer)` entry's steps say
+ * "Let options be «[ "transfer" → transfer ]»" and then run the SAME steps — so there is one algorithm and its
+ * step 1 is `options["transfer"]`. The wrapping is all that differs, and it is three lines below. */
 static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     PortData *d = port_of(this_val), *t;
-    JSValueConst opts = argc > 1 ? argv[1] : JS_UNDEFINED;
+    JSValueConst second = argc > 1 ? argv[1] : JS_UNDEFINED;
     StructuredWithTransfer swt;
-    JSValue raw, transfer, target;
+    JSValue transfer, target;
     uint32_t n, i;
     bool doomed = false;
 
     (void)magic;
     if (!d)
         return JS_ThrowTypeError(ctx, "not a MessagePort");
+    /* UNKNOWN EXTERNAL INPUT CROSSES A DECLARED POSITION AS ITSELF, which means §3.6 chose NO overload for it
+       and there is no arm to read back. Both arms stay FEASIBLE: an unknown that is an iterable is a transfer
+       list, and an unknown that is not is an options bag — and the two differ in what gets DETACHED, so
+       deciding it here would either detach objects the page still holds or silently transfer nothing. What
+       every earlier version of this body did instead was fall to the dictionary arm and read `transfer` off
+       the attacker's own value, which manufactures a plausible datum out of a measurement nobody made.
+       js_window_post names the same missing mechanism at its own §3.6 split for the same reason. */
+    if (concolic_is(second))
+        DFAIL("MessagePort.postMessage was given a CONCOLIC second argument — §3.6 step 12 decides its two "
+              "overloads by `? GetMethod(V, %Symbol.iterator%)`, so an unpinned one leaves the transfer-list "
+              "arm and the options arm both feasible. Fork the post: convert and run the member under each "
+              "arm, the way a branch on unknown external input forks anywhere else, rather than choosing one "
+              "here");
     /* §9.4.4 STEP 1 of `postMessage`: targetPort is the port this one is entangled with, TAKEN NOW. */
     target = JS_DupValue(ctx, d->entangled);
 
-    /* §9.4.4's second argument is either the transfer SEQUENCE or a StructuredSerializeOptions whose
-       `transfer` member is one — the two overloads the standard still carries. Whichever it is, it is
-       MATERIALIZED once: the three questions below and §2.7.7's two loops are five walks of one list, and a
-       page-supplied one can answer each of them differently. */
-    raw = JS_IsArray(opts) ? JS_DupValue(ctx, opts)
-        : JS_IsObject(opts) ? JS_GetPropertyStr(ctx, opts, "transfer") : JS_UNDEFINED;
-    if (JS_IsException(raw)) { JS_FreeValue(ctx, target); return JS_EXCEPTION; }
-    if (structured_transfer_list(ctx, raw, &transfer) < 0) {
-        JS_FreeValue(ctx, raw);
-        JS_FreeValue(ctx, target);
-        return JS_EXCEPTION;
+    /* THE OVERLOAD, READ BACK OFF THE CONVERTED VALUE — never duck-typed off the page's. This body used to
+       perform §3.6's whole resolution itself: `JS_IsArray(opts)` on the page's own object (which is not the
+       algorithm's test — §3.6 step 12 asks `? GetMethod(V, %Symbol.iterator%)`, so every non-Array iterable
+       took the dictionary arm and had `transfer` read off it), then a `length`-and-indices walk that is the
+       array-like algorithm rather than §3.2.21's iterator protocol, run from an activation with no flow base
+       under the page's getters. IDL_SEQUENCE_OBJECT_OR_DICT performs it on the tramp now, so what arrives here
+       is one of exactly two ENGINE-BUILT values: §3.2.21's materialized Array, or the converted
+       StructuredSerializeOptions. Asking which is reading an arm off a value this engine made.
+       IT IS MATERIALIZED ONCE for the reason it always was: the three questions below and §2.7.7's two loops
+       are five walks of one list, and a page-supplied one can answer each of them differently. */
+    DCHECK(JS_IsObject(second),
+           "postMessage's second argument reached the body as neither a materialized sequence nor a "
+           "dictionary — IDL_SEQUENCE_OBJECT_OR_DICT resolves to exactly those two, and an OMITTED one is the "
+           "`optional StructuredSerializeOptions options = {}` dictionary rather than an absent argument");
+    transfer = JS_IsArray(second) ? JS_DupValue(ctx, second)      /* «[ "transfer" → transfer ]» */
+                                  : idl_dict_get(ctx, second, "transfer");
+    if (JS_IsException(transfer)) { JS_FreeValue(ctx, target); return JS_EXCEPTION; }
+    /* `sequence<object> transfer = []`: an options dictionary carrying no `transfer` member IS a transfer list
+       of nothing. That is the IDL's own default and not a hole a reader fills — the absence is the positive
+       statement — and js_structured_clone and js_window_post make the same sentence about the same member. */
+    if (JS_IsUndefined(transfer)) {
+        transfer = JS_NewArray(ctx);
+        if (JS_IsException(transfer)) { JS_FreeValue(ctx, target); return JS_EXCEPTION; }
     }
-    JS_FreeValue(ctx, raw);
+    DCHECK(JS_IsArray(transfer), "postMessage's transfer list is not the materialized sequence — "
+                                 "IDL_SEQUENCE_OBJECT is what §3.2.21 builds, and reading the page's object "
+                                 "again here would run its iterator a second time");
 
     /* §9.4.4 STEPS 2-4. A transfer list naming THIS port is a DataCloneError; one naming the TARGET dooms the
        message. Both are here rather than in the transfer steps because only the post knows which ports it is
@@ -481,8 +514,15 @@ static JSValue js_port_post(JSContext *ctx, JSValueConst this_val, int argc, JSV
 
     /* §9.4.4 STEP 5: SERIALIZE NOW, and run the transfer steps. The throw belongs to this call, not to the
        delivery task — a page's try/catch around postMessage is where the standard puts the DataCloneError. It
-       happens even when there is no target, which is why it precedes the null check. */
-    if (structured_serialize_transfer(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, transfer, &swt) < 0) {
+       happens even when there is no target, which is why it precedes the null check.
+       `message` IS PRESENT, and this asserts it rather than defaulting it: `any message` is not optional, so
+       §3.6 step 4 removes both entries at argcount 0 and step 5 throws before this body runs. The
+       `argc > 0 ? … : JS_UNDEFINED` that stood here read as prudence and was a consumer-side default over a
+       producer that cannot omit — the shape §Offensive-programming names, one call site at a time. */
+    DCHECK(argc >= 1, "MessagePort.postMessage ran with no message — `any message` is a required argument, so "
+                      "§3.6 step 5 is the declaration's and idl_optional_from names position 1 as the first "
+                      "optional one");
+    if (structured_serialize_transfer(ctx, argv[0], transfer, &swt) < 0) {
         JS_FreeValue(ctx, transfer);
         JS_FreeValue(ctx, target);
         return JS_EXCEPTION;
@@ -795,9 +835,26 @@ void message_port_init(JSContext *ctx)
     JS_NewClass(rt, g_chan_class, &cd);
 
     {
-        static const IdlArgType POST_ARGS[2] = { IDL_ANY, IDL_ANY };
-        g_id_post = idl_method_id(ctx, POST_ARGS, 2, js_port_post, 0);
-        idl_optional_from(1);   /* `postMessage(any message, optional StructuredSerializeOptions options)` */
+        /* §9.4.4's TWO OVERLOADS, AS ONE DECLARATION:
+
+               undefined postMessage(any message, sequence<object> transfer);
+               undefined postMessage(any message, optional StructuredSerializeOptions options = {});
+
+           BOTH type lists are TWO long, so §3.6 step 4 removes neither at any arity and the split is decided
+           entirely at position 1 — by `? GetMethod(V, %Symbol.iterator%)`, which is the page's code and
+           therefore a rest point. IDL_SEQUENCE_OBJECT_OR_DICT is that split (see core/idl_args.h); position 1
+           was IDL_ANY, which declared no conversion at all and left the body performing the resolution, the
+           iteration and the element type check from C. */
+        static const IdlArgType POST_ARGS[2] = { IDL_ANY, IDL_SEQUENCE_OBJECT_OR_DICT };
+        /* §9.4.4's `dictionary StructuredSerializeOptions { sequence<object> transfer = []; };` — one member,
+           declared HERE because §9.4.4 is where the standard writes it, and it is the same dictionary
+           `structuredClone` takes and the one `WindowPostMessageOptions` inherits from. */
+        static const IdlDictMember POST_OPTS[] = { { "transfer", IDL_SEQUENCE_OBJECT, false, NULL, 0 } };
+
+        g_id_post = idl_method_id_dict(ctx, POST_ARGS, 2, POST_OPTS,
+                                       (int)(sizeof POST_OPTS / sizeof POST_OPTS[0]), js_port_post, 0);
+        idl_optional_from(1);   /* the dictionary entry's `optional … options = {}` — §3.6 step 12's first
+                                   clause reads it, which is what makes `postMessage(m, undefined)` that arm */
         g_id_start = idl_method_id(ctx, NULL, 0, js_port_start, 0);
         g_id_close = idl_method_id(ctx, NULL, 0, js_port_close, 0);
     }
