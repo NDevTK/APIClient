@@ -339,48 +339,28 @@ mkdirSync(EXT_QJS, { recursive: true });
    so build it ONCE into a cached static archive (liblexbor.a) and link that; rebuilds
    of the engine (quickjs + main.c) then stay fast. Rebuild the archive with
    `node engine/build.mjs lexbor`. */
-/* The vendored checkout lives beside its build product in .work, which is where it actually is and where
-   liblexbor.o was compiled from. It used to be named at engine/lexbor/source — a second, git-ignored location
-   that is empty in a fresh container, so the build died on a missing <lexbor/html/html.h> while the headers sat
-   in .work. One location, no fallback. */
-/* PINNED, and provisioned here. Lexbor's C API moves between releases — a container that cloned its default
-   branch instead got a css_declaration_list_parse with a different arity and the build died in the CSSOM. The
-   version is part of the build, so it is stated in the build rather than in whoever's shell history. */
-const LEXBOR_TAG = "v3.0.0";
-const LEXBOR_DIR = join(WORK, "lexbor-src");
-if (!existsSync(join(LEXBOR_DIR, "source", "lexbor"))) {
-  console.log("[build] lexbor " + LEXBOR_TAG + " not present — cloning it");
-  const r = spawnSync("git", ["clone", "--depth", "1", "--branch", LEXBOR_TAG,
-                              "https://github.com/lexbor/lexbor.git", LEXBOR_DIR], { stdio: "inherit" });
-  if (r.status !== 0) { console.error("[build] could not clone lexbor " + LEXBOR_TAG); process.exit(1); }
-} else {
-  /* THE PIN IS CHECKED, BECAUSE A PIN NOBODY CHECKS IS A PIN THAT LIES. The clone above runs only when the
-     directory is ABSENT, so on every machine that already had a checkout the tag above was decoration: editing
-     it changed the build's REPORT and not one byte of what compiled. That is this tree's recurring defect in
-     its purest form — a value read from one place and written in another, with nothing asserting they agree —
-     and it is worse in a build than in the engine, because every number a gate then reports is attributed to a
-     revision pair whose second half is wrong.
-     A tag is a NAME and a checkout is a COMMIT, so the two are compared as commits: `git rev-parse <tag>^{}`
-     dereferences an annotated tag to the commit it points at, which is what HEAD can equal. A shallow clone
-     does not have the new tag, so it is fetched before being asked about — and a fetch that fails is fatal
-     rather than a fallback to whatever is on disk, because building the wrong source is the outcome this whole
-     block exists to prevent. */
-  const at = (rev) => spawnSync("git", ["-C", LEXBOR_DIR, "rev-parse", rev + "^{}"],
-                                { encoding: "utf8" }).stdout.trim();
-  if (at("HEAD") !== at(LEXBOR_TAG)) {
-    console.log("[build] lexbor checkout is not " + LEXBOR_TAG + " — moving it");
-    const f = spawnSync("git", ["-C", LEXBOR_DIR, "fetch", "--depth", "1", "origin", "tag", LEXBOR_TAG],
-                        { stdio: "inherit" });
-    if (f.status !== 0) { console.error("[build] could not fetch lexbor " + LEXBOR_TAG); process.exit(1); }
-    const c = spawnSync("git", ["-C", LEXBOR_DIR, "checkout", "--detach", LEXBOR_TAG], { stdio: "inherit" });
-    if (c.status !== 0) { console.error("[build] could not check out lexbor " + LEXBOR_TAG); process.exit(1); }
-    /* The archive is built from these sources and cached by presence alone, so a moved checkout must invalidate
-       it or the link silently keeps the previous version's objects — the same lie one layer down. */
-    const cached = join(WORK, "liblexbor.o");   // LEXBOR_LIB is declared below; this block runs before it
-    if (existsSync(cached)) rmSync(cached);
-  }
-}
+/* THE SOURCE IS TRACKED, so there is nothing to provision and nothing to pin. It lives at engine/lexbor,
+   vendored at v3.0.0 in one commit with the fork's delta in the next, which is what makes `git diff` against
+   that baseline the answer to "what did we change" — the property the engine/qjs submodule has and the reason
+   this is worth a directory in the tree.
+   WHAT THIS REPLACED, so the next reader does not rebuild it: a clone into .work/lexbor-src guarded by a tag
+   comparison. The clone ran only when the directory was ABSENT, so on any machine that already had a checkout
+   the tag was decoration — editing it changed the build's REPORT and not one byte of what compiled. The later
+   pin check fixed that for a MOVED checkout and still could not see an EDITED one, because a working-tree edit
+   leaves HEAD on the tag; the moment tree construction needed an embedder seam in html/tree.c, the fork existed
+   and the pin said the source was pristine. A pin that cannot see the edit is not a weaker pin, it is a false
+   statement, and the fix is not a better comparison but a source the repository holds.
+   An older comment here warned that engine/lexbor/source was "a second, git-ignored location that is empty in
+   a fresh container". That was true of an ignored path and is the opposite of true for a tracked one: a fresh
+   container now has the source before it has a network. */
+const LEXBOR_DIR = join(ENGINE, "lexbor");
 const LEXBOR_SRC = join(LEXBOR_DIR, "source");
+if (!existsSync(join(LEXBOR_SRC, "lexbor", "html", "html.h"))) {
+  console.error("[build] lexbor source missing at " + LEXBOR_SRC);
+  console.error("[build]   it is TRACKED, not fetched — a checkout without it is incomplete, so this is a");
+  console.error("[build]   broken working tree rather than a step somebody forgot to run.");
+  process.exit(1);
+}
 const LEXBOR_LIB = join(WORK, "liblexbor.o");   // relocatable partial-link object (emcc -o .a doesn't archive from .c)
 const LEXBOR_INC = LEXBOR_SRC;
 function findC(dir, out) {
@@ -391,8 +371,37 @@ function findC(dir, out) {
   }
   return out;
 }
+/* WHAT THE CACHED ARCHIVE WAS COMPILED FROM, asked of the SOURCE rather than of a version string. While lexbor
+   was fetched by tag, "same tag" implied "same bytes" and presence was a sound cache key. A tracked source is
+   EDITABLE — that is the whole point of vendoring it — so presence now means "some archive exists", which is
+   the defect this build already carries a paragraph about one level up: a value read from one place and written
+   in another with nothing asserting they agree. An edit to html/tree.c would relink the PREVIOUS objects and
+   every gate would attribute the result to the edited revision.
+   Content, not mtime: a fresh clone writes every file at checkout time, so mtimes would rebuild 213 sources on
+   a tree that changed nothing, and a restored file would keep a stale hash. Reading 22 MB to hash it costs a
+   fraction of the compile it guards. */
+function lexborSourceId() {
+  /* HEADERS COUNT. They are not compiled on their own, so a walk that collected only .c would call a tree with
+     an edited html/tree.h unchanged — and that header is exactly where this fork's seam is declared. */
+  const walk = (dir, out) => {
+    for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { if (p.includes("windows_nt")) continue; walk(p, out); }
+      else if (e.name.endsWith(".c") || e.name.endsWith(".h")) out.push(p);
+    }
+    return out;
+  };
+  const h = createHash("sha256");
+  for (const p of walk(join(LEXBOR_SRC, "lexbor"), [])) h.update(p).update(readFileSync(p));
+  return h.digest("hex").slice(0, 16);
+}
+const LEXBOR_ID_FILE = join(WORK, "liblexbor.srcid");
 function buildLexbor(force) {
-  if (!force && existsSync(LEXBOR_LIB)) return;
+  const id = lexborSourceId();
+  const cachedId = existsSync(LEXBOR_ID_FILE) ? readFileSync(LEXBOR_ID_FILE, "utf8").trim() : null;
+  if (!force && existsSync(LEXBOR_LIB) && cachedId === id) return;
+  if (existsSync(LEXBOR_LIB) && cachedId !== id)
+    console.log("[build] lexbor source changed (" + (cachedId || "no id") + " -> " + id + ") — recompiling");
   const srcs = findC(join(LEXBOR_SRC, "lexbor"), []);
   console.log("[build] lexbor: compiling " + srcs.length + " sources -> liblexbor.a (once, ~minutes)");
   const rsp = join(WORK, "lexbor.rsp");
@@ -400,7 +409,11 @@ function buildLexbor(force) {
   writeFileSync(rsp, [...srcs.map(fwd), "-I", fwd(LEXBOR_INC), "-O2", "-w", "-D_GNU_SOURCE", "-DENABLE_DUMPS", "-r", "-o", fwd(LEXBOR_LIB)].join("\n"));
   const r = spawnSync(EMCC, ["@" + rsp], { stdio: "inherit", shell: true, cwd: ENGINE });
   if (r.status !== 0) { console.error("[build] lexbor FAILED rc=" + r.status); process.exit(r.status || 1); }
-  console.log("[build] lexbor OK -> " + LEXBOR_LIB);
+  /* STAMPED ONLY ON SUCCESS, and only after the archive exists: a failed compile that recorded the id would
+     make the next build skip it and link whatever object was there before, which is the stale-link this
+     mechanism exists to prevent, reached through its own cache. */
+  writeFileSync(LEXBOR_ID_FILE, id + "\n");
+  console.log("[build] lexbor OK -> " + LEXBOR_LIB + " (source " + id + ")");
 }
 buildLexbor(process.argv[2] === "lexbor");
 if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
@@ -575,7 +588,7 @@ if (NATIVE) {
     ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
     ...quiet,
     "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"', "-DAPICLIENT_DEV=1",
-    "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + join(WORK, "lexbor-src", "source"),
+    "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
     /* THE SMOKE ENTRY, always: this target BUILDS AND RUNS a fixture, and main.c has no main() to run. */
     ...SHARED_SOURCES, ENTRY_SMOKE, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
   ], { stdio: "inherit" });

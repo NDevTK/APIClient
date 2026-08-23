@@ -73,9 +73,12 @@ engine/.recursion-ir/
 # directory is ignored, so it stays true.
 engine/.work/v8regexp/
 engine/.work/v8mjsunit/
-# lexbor fetched + compiled locally to build the new-world engine natively (the cached liblexbor.o is a WASM
-# object, and emcc is not always present). Regenerable; never committed.
-engine/.work/lexbor-src/
+# DELETED: engine/.work/lexbor-src/. lexbor is no longer fetched — its source is TRACKED at engine/lexbor,
+# vendored at v3.0.0 with the fork's delta as the next commit. "Regenerable; never committed" was true of a
+# pristine checkout and became false the moment tree construction needed an embedder seam: the delta lived only
+# in a working tree that a fresh container re-cloned away, and the build's tag check passed anyway because a
+# working-tree edit leaves HEAD on the tag.
+engine/.work/liblexbor.srcid
 engine/.work/lxnat/
 engine/.work/lxlist
 # The same lexbor, built natively by the WPT gate (cmake + make into a static archive) so the gate's runner can

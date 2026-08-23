@@ -791,9 +791,10 @@ const bin = join(mkdtempSync(join(tmpdir(), "wpt-")), "wpt.exe");
    -Werror on that one diagnostic makes it a build failure naming the function. */
 /* LEXBOR, BUILT NATIVELY ONCE. Streams §5.4 gives every writable controller a real AbortSignal, which is an
    EventTarget, which reaches the solver's decision hook and through it the scheduler — and the scheduler's COW
-   covers the DOM, so the gate needs the same tree the shipped build has. Vendored and built on first use, like
-   the corpus itself; the .a is committed to nothing and rebuilt if the source moves. */
-const LEXBOR_SRC = join(WORK, "lexbor-src");
+   covers the DOM, so the gate needs the same tree the shipped build has. The .a is committed to nothing and
+   built on first use; the SOURCE is tracked at engine/lexbor and is no longer fetched, so this gate and the
+   emscripten build compile the same bytes by construction rather than by two clones agreeing. */
+const LEXBOR_SRC = join(ENGINE, "lexbor");
 const LEXBOR_BUILD = join(WORK, "lexbor-native");
 const LEXBOR_LIB = join(LEXBOR_BUILD, "liblexbor_static.a");
 if (!existsSync(LEXBOR_LIB)) {
