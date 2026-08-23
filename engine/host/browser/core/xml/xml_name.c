@@ -5,6 +5,7 @@
 #include <lexbor/encoding/decode.h>
 
 #include "check.h"
+#include "core/xml/xml_char.h"   /* [4]/[4a] are range tables like §2.2's [2] Char, and share its ordered walk */
 #include "core/xml/xml_name.h"
 
 /* THE PRODUCTIONS, TRANSCRIBED IN §2.3'S OWN ORDER AND SPLIT THE WAY §2.3 SPLITS THEM: [4] is the whole of
@@ -24,8 +25,9 @@
  * AND THE TRANSCRIPTION IS HELD TO THE STANDARD'S OWN ORDER BY A DCHECK ON EVERY LOOKUP — port_blocking.c's
  * mechanism, for its reason: both productions are listed in strictly ascending, non-overlapping order, so a
  * transposed or duplicated range is a mis-transcription of a normative table that no compiler can catch and
- * whose only symptom would be a code point silently changing class. */
-typedef struct { uint32_t lo, hi; } XmlCpRange;
+ * whose only symptom would be a code point silently changing class. That walk is core/xml/xml_char.h's,
+ * because §2.2's [2] Char is a table of the same kind held to the same discipline and one assert for both is
+ * one place the discipline can be got right. */
 
 /* [4] NameStartChar ::= ":" | [A-Z] | "_" | [a-z] | [#xC0-#xD6] | [#xD8-#xF6] | [#xF8-#x2FF] | [#x370-#x37D]
  *                     | [#x37F-#x1FFF] | [#x200C-#x200D] | [#x2070-#x218F] | [#x2C00-#x2FEF] | [#x3001-#xD7FF]
@@ -48,34 +50,15 @@ static const XmlCpRange NAME_CHAR_ONLY[] = {
     { 0x0300, 0x036F }, { 0x203F, 0x2040 },
 };
 
-#define XML_CP_RANGE_N(t) (sizeof(t) / sizeof((t)[0]))
-
-/* The walk is LINEAR and exhaustive rather than a binary search, for port_blocking.c's reason: a linear walk
-   depends on no ordering, so a transposed row cannot make a code point silently change class, while the DCHECK
-   still holds the table to the order §2.3 prints it in. */
-static bool in_ranges(const XmlCpRange *r, size_t n, uint32_t cp)
-{
-    size_t i;
-
-    for (i = 0; i < n; i++) {
-        DCHECK(r[i].lo <= r[i].hi && (i == 0 || r[i].lo > r[i - 1].hi),
-               "an XML §2.3 character-class table is not strictly ascending and non-overlapping — it is "
-               "transcribed range by range in the standard's own order, so a reversed pair or a transposition "
-               "here is a mis-transcription of a normative production and the range it displaced is a class of "
-               "code points this engine would get wrong in both directions");
-        if (cp >= r[i].lo && cp <= r[i].hi) return true;
-    }
-    return false;
-}
-
 static bool name_start_char(uint32_t cp)
 {
-    return in_ranges(NAME_START_CHAR, XML_CP_RANGE_N(NAME_START_CHAR), cp);
+    return xml_char_in_ranges(NAME_START_CHAR, XML_CP_RANGE_N(NAME_START_CHAR), cp);
 }
 
 static bool name_char(uint32_t cp)
 {
-    return name_start_char(cp) || in_ranges(NAME_CHAR_ONLY, XML_CP_RANGE_N(NAME_CHAR_ONLY), cp);
+    return name_start_char(cp)
+        || xml_char_in_ranges(NAME_CHAR_ONLY, XML_CP_RANGE_N(NAME_CHAR_ONLY), cp);
 }
 
 bool xml_name_is_name(const char *s, size_t len)

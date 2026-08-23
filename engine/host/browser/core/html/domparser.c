@@ -12,9 +12,14 @@
  * but the four PARSE-BOUNDARY seams a lexbor tree needs afterwards, and WHICH of them §8.5.1 asks for is
  * decided by the standard rather than by symmetry — see the seams at the end of `parse_html_from_a_string`.
  *
- * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because there is no XML parser in this build: lexbor 2.7.0 ships
- * `core css dom encoding engine html ns ports punycode selectors style tag unicode url utils` and no `xml`
- * module. XMLHttpRequest §3.6.6 already stands at the same wall and says so in the same words
+ * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because there is no XML parser in this build. Lexbor ships no
+ * `xml` module — `engine/build.mjs` states which release this tree pins and `ls source/lexbor` in the vendored
+ * checkout is the whole of the check — so CLAUDE.md's bind-before-build order has nothing at the "existing
+ * Lexbor module" rung and what is owed is a faithful spec port. THE RELEASE NUMBER THAT STOOD IN THIS SENTENCE
+ * IS GONE ON PURPOSE: it was a version this build no longer uses, and a citation that stays true about the
+ * standard while going wrong about this tree is precisely the stale `DFAIL` CLAUDE.md describes — the claim to
+ * make is the one a reader can re-run, not the one that was measured once.
+ * XMLHttpRequest §3.6.6 already stands at the same wall and says so in the same words
  * (core/xhr/xml_http_request.c, "set a document response" step 6) — checked, not assumed, before this DFAIL was
  * written to point at it. Answering the XML arm with an empty document, or with §8.5.1's `parsererror`
  * document, would be a claim about a parse that never happened: `parsererror` is what a WELL-FORMEDNESS ERROR
@@ -268,11 +273,19 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
            never ran: §8.5.1 produces one for an XML WELL-FORMEDNESS ERROR, which a build with no parser has not
            found. The release build throws for the same reason — a capability that is not supportable outside
            development fails rather than fabricating a Document the moat would then report on. */
-        DFAIL("HTML §8.5.1 parseFromString reached its XML arm and this build has no XML parser (lexbor 2.7.0 "
-              "ships no xml module). XMLHttpRequest §3.6.6 step 6 stands at the same wall in "
-              "core/xhr/xml_http_request.c. BUILD ONE COMPONENT FOR BOTH: a namespace-aware XML parser that "
-              "produces a Lexbor tree and reports XML and XML-namespace well-formedness errors; then route this "
-              "arm to it, build §8.5.1 step 3's parsererror element in the "
+        DFAIL("HTML §8.5.1 parseFromString reached its XML arm and this build has no XML parser (lexbor ships "
+              "no xml module at the release engine/build.mjs pins). XMLHttpRequest §3.6.6 step 6 stands at the "
+              "same wall in core/xhr/xml_http_request.c. BUILD ONE COMPONENT FOR BOTH: a namespace-aware XML "
+              "parser that produces a Lexbor tree and reports XML and XML-namespace well-formedness errors. "
+              "ITS LEAVES ARE ALREADY IN core/xml/ AND MUST NOT BE REBUILT — xml_char.h is XML 1.0 5e §2.2's "
+              "[2] Char, §2.3's [3] S and §2.11's end-of-line normalization as the reader every production "
+              "reads through, xml_name.h is §2.3's [5] Name with Namespaces in XML's NCName and QName, and "
+              "xml_ns.h is that standard's §6 scope stack with every §3 and §5 constraint as a returned error. "
+              "What is owed is the GRAMMAR between them: §2.8's [22] prolog, §3's [39] element with [40] STag "
+              "/ [42] ETag / [44] EmptyElemTag and [43] content, §2.5's [15] Comment, §2.6's [16] PI, §2.7's "
+              "[18] CDSect, §4.1's [66] CharRef and [68] EntityRef with §4.6's five predefined entities, and "
+              "§3.3.3 attribute-value normalization. Then route this arm to it, build §8.5.1 step 3's "
+              "parsererror element in the "
               "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace from the error it reports, and "
               "route §3.6.6's arm to it too");
         return JS_ThrowInternalError(ctx, "parseFromString: this build has no XML parser");

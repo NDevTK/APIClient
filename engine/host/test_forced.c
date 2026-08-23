@@ -8,6 +8,7 @@
 #include "solver/flow.h"
 #include "solver/world.h"
 #include "core/crypto/secure_hash.h"
+#include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -5837,6 +5838,179 @@ static int fixture_want_park(void) {
     return fixture_cold_moment() && engine_operations_started() > 0;
 }
 
+/* XML 1.0 (Fifth Edition) §2.2 Characters, §2.3 Common Syntactic Constructs' [3] `S`, and §2.11 End-of-Line
+ * Handling — core/xml/xml_char.h, the layer every other XML production reads its input through.
+ *
+ * TWO HALVES AND NEITHER SUBSUMES THE OTHER. The class predicates are asked at the BOUNDARIES the standard's
+ * own ranges create, because a hand-transcribed range table is wrong at a boundary if it is wrong anywhere —
+ * one row off and a code point silently changes class with no compiler and no other test to say so. The reader
+ * is then driven over whole entities whose every character, every position and every fatal error is stated,
+ * because §2.11's normalization and the line counter it defines exist ONLY there: a predicate can be perfect
+ * and a reader can still collapse two line breaks into one.
+ *
+ * IT IS PURE C AND NEEDS NO REALM. This layer holds no JSValue, allocates nothing and has no flow — the reader
+ * is a value, which is the property the parse above it will need in order to peek, fork and park, so a copy
+ * round trip is exercised here rather than asserted in prose. */
+static void xml_char_selftest(void)
+{
+    static const struct { uint32_t cp; bool ch, s; const char *why; } CLASS[] = {
+        { 0x0000, false, false,
+          "§2.2 [2] Char's first alternative is #x9, so NUL is not a character an XML document may contain — "
+          "which is why this layer carries a length and never a terminator" },
+        { 0x0008, false, false, "and neither is BACKSPACE: the gap below #x9 is why [2] writes three singletons" },
+        { 0x0009, true,  true,  "[2]'s first alternative, and [3] S's `#x9`" },
+        { 0x000A, true,  true,  "[2]'s second, and [3]'s `#xA`" },
+        { 0x000B, false, false, "VERTICAL TAB sits between [2]'s singletons and is in neither production" },
+        { 0x000D, true,  true,
+          "#xD is a Char, and §2.3's note keeps it in S for the character reference that is the only way a "
+          "production can ever match one — §2.11 has removed every literal #xD before a grammar looks" },
+        { 0x000E, false, false, "[2] resumes at #x20, so SHIFT OUT is not a Char" },
+        { 0x001F, false, false, "nor the last control below that run" },
+        { 0x0020, true,  true,  "[#x20-#xD7FF] opens at SPACE, which is also [3]'s first alternative" },
+        { 0x0021, true,  false, "the character after it is a Char and is not white space" },
+        { 0xD7FF, true,  false, "the last code point before the surrogate blocks" },
+        { 0xD800, false, false, "[2]'s own gloss: `excluding the surrogate blocks` — the first of them" },
+        { 0xDFFF, false, false, "and the last" },
+        { 0xE000, true,  false, "[#xE000-#xFFFD] resumes immediately above them" },
+        { 0xFFFD, true,  false, "REPLACEMENT CHARACTER closes that range and IS a Char like any other" },
+        { 0xFFFE, false, false, "[2]'s gloss excludes FFFE by name" },
+        { 0xFFFF, false, false, "and FFFF" },
+        { 0x10000, true, false, "[#x10000-#x10FFFF] is the whole of the supplementary planes" },
+        { 0x10FFFF, true, false, "up to Unicode's last code point" },
+        { 0x110000, false, false, "and no further — there is no code point above it for [2] to admit" },
+        { XML_CHAR_EOF, false, false,
+          "the end of the entity is not a character, which is why the sentinel is above [2]'s ceiling rather "
+          "than inside the range it would otherwise have to be excluded from" },
+    };
+    /* THE ENTITIES, and what the reader must produce from each. `line`/`column` is where the reader STANDS when
+       it stops — after the last character for a well-formed entity, ON the offending one for a fatal error,
+       which is the position a `parsererror` has to quote. */
+    static const uint32_t R_CRLF[]   = { 'a', 0x0A, 'b' };
+    static const uint32_t R_CRCRLF[] = { 'a', 0x0A, 0x0A, 'b' };
+    static const uint32_t R_LFCR[]   = { 'a', 0x0A, 0x0A, 'b' };
+    static const uint32_t R_ACUTE[]  = { 0x00E9, '!' };
+    static const uint32_t R_ASTRAL[] = { 0x1F600 };
+    static const uint32_t R_FFFD[]   = { 0xFFFD };
+    static const uint32_t R_TABSP[]  = { 0x09, 0x20 };
+    static const uint32_t R_A[]      = { 'a' };
+    static const struct { const char *in; size_t n; const uint32_t *want; size_t want_n;
+                          XmlCharError err; size_t line, column; const char *why; } READ[] = {
+        { "a\r\nb", 4, R_CRLF, 3, XML_CHAR_OK, 2, 2,
+          "§2.11: `the two-character sequence #xD #xA` is ONE #xA, so this entity is three characters on two "
+          "lines and not four on three" },
+        { "a\rb", 3, R_CRLF, 3, XML_CHAR_OK, 2, 2,
+          "and `any #xD that is not followed by #xA` is the same single #xA — the two spellings of a line "
+          "break must be indistinguishable above this layer" },
+        { "a\r\r\nb", 5, R_CRCRLF, 4, XML_CHAR_OK, 3, 2,
+          "a bare #xD followed by a #xD#xA is TWO breaks: the lookahead is exactly one character deep, so a "
+          "reader that swallowed greedily would lose a line" },
+        { "a\n\rb", 4, R_LFCR, 4, XML_CHAR_OK, 3, 2,
+          "and #xA#xD is two breaks as well — the sequence §2.11 collapses is #xD#xA, in that order" },
+        { "\xC3\xA9!", 3, R_ACUTE, 2, XML_CHAR_OK, 1, 3,
+          "`column` counts CHARACTERS: U+00E9 is two bytes and one column, which is the whole reason this "
+          "position is the reader's and not a byte offset" },
+        { "\xF0\x9F\x98\x80", 4, R_ASTRAL, 1, XML_CHAR_OK, 1, 2,
+          "and a supplementary character is four bytes and one column" },
+        { "\xEF\xBF\xBD", 3, R_FFFD, 1, XML_CHAR_OK, 1, 2,
+          "U+FFFD closes [#xE000-#xFFFD] and is an ordinary Char — a decoder that substituted it for errors "
+          "would make this entity indistinguishable from an ill-formed one" },
+        { "\t ", 2, R_TABSP, 2, XML_CHAR_OK, 1, 3,
+          "[3] S's characters are ordinary characters to the reader: the `+` and where a run is required are "
+          "each grammar rule's own business" },
+        { "", 0, NULL, 0, XML_CHAR_OK, 1, 1,
+          "an empty entity ends at the position it started — a document that ends immediately is a thing this "
+          "reader answers about, not the absence of one" },
+        { "a\x01" "b", 3, R_A, 1, XML_CHAR_ERR_NOT_A_CHAR, 1, 2,
+          "§2.2: U+0001 is below [2]'s first alternative, and the reader stops ON it — column 2 is the "
+          "character the report has to name" },
+        { "a\0b", 3, R_A, 1, XML_CHAR_ERR_NOT_A_CHAR, 1, 2,
+          "a NUL is the same fatal error and not an end of input, which is what a terminator would have made it" },
+        { "\xEF\xBF\xBE", 3, NULL, 0, XML_CHAR_ERR_NOT_A_CHAR, 1, 1,
+          "U+FFFE is well-formed UTF-8 and excluded by [2]'s own gloss — the two fatal errors are different "
+          "sentences and a report that merged them would send an author to the wrong one" },
+        { "a\xC3", 2, R_A, 1, XML_CHAR_ERR_ILL_FORMED_UTF8, 1, 2,
+          "§4.3.3: a sequence the entity ends inside is ill-formed, not a request for more bytes — this reader "
+          "is handed the whole entity, so there are none" },
+        { "a\x80", 2, R_A, 1, XML_CHAR_ERR_ILL_FORMED_UTF8, 1, 2,
+          "and a continuation byte with no lead byte is ill-formed" },
+        { "\xC0\x80", 2, NULL, 0, XML_CHAR_ERR_ILL_FORMED_UTF8, 1, 1,
+          "an overlong encoding of NUL is refused as an ENCODING error before [2] is ever asked — Unicode 3.9 "
+          "makes it ill-formed, and §4.3.3 names that sentence" },
+        { "\xED\xA0\x80", 3, NULL, 0, XML_CHAR_ERR_ILL_FORMED_UTF8, 1, 1,
+          "the UTF-8 encoding of an unpaired surrogate is excluded twice over — by §4.3.3 as an encoding and "
+          "by [2] as a character — and the encoding sentence is reached first, which is the answer a report "
+          "quotes and therefore the one this engine must be definite about" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(CLASS) / sizeof(CLASS[0]); i++) {
+        CHECK(xml_char_is_char(CLASS[i].cp) == CLASS[i].ch, CLASS[i].why);
+        CHECK(xml_char_is_s(CLASS[i].cp) == CLASS[i].s, CLASS[i].why);
+        /* Every alternative of [3] S is one of [2]'s first four, so a white-space character that is not a Char
+           is the two tables disagreeing about the same four code points. */
+        CHECK(!xml_char_is_s(CLASS[i].cp) || xml_char_is_char(CLASS[i].cp),
+              "a code point is [3] S and not [2] Char — S's four alternatives are all Chars, so the two "
+              "transcriptions have drifted apart");
+    }
+    CHECK(strcmp(xml_char_error_message(XML_CHAR_ERR_ILL_FORMED_UTF8),
+                 xml_char_error_message(XML_CHAR_ERR_NOT_A_CHAR)) != 0,
+          "the two fatal errors this layer decides carry one message — §4.3.3's ill-formed byte sequence and "
+          "§2.2's illegal character are different mistakes and an author has to be told which one it was");
+    for (i = 0; i < sizeof(READ) / sizeof(READ[0]); i++) {
+        XmlCharReader r, before;
+        uint32_t cp = 0;
+        XmlCharError e;
+        size_t got = 0;
+
+        xml_char_reader_init(&r, READ[i].in, READ[i].n);
+        CHECK(r.p == r.start && r.line == 1 && r.column == 1 && r.fatal == XML_CHAR_OK,
+              "a fresh XML character reader does not stand at its entity's first byte, line 1, column 1");
+        for (;;) {
+            before = r;
+            e = xml_char_read(&r, &cp);
+            if (e != XML_CHAR_OK || cp == XML_CHAR_EOF) break;
+            CHECK(got < READ[i].want_n && cp == READ[i].want[got], READ[i].why);
+            got++;
+        }
+        CHECK(e == READ[i].err && got == READ[i].want_n, READ[i].why);
+        CHECK(r.line == READ[i].line && r.column == READ[i].column, READ[i].why);
+        CHECK(r.fatal == e, "an XML character reader's §1.2 latch disagrees with the error it just returned");
+        CHECK(e == XML_CHAR_OK
+                  || (r.p == before.p && r.line == before.line && r.column == before.column),
+              "an XML character reader advanced past the character it reported a fatal error for — the "
+              "position a `parsererror` quotes would then name the character AFTER the mistake");
+        if (e == XML_CHAR_OK) {
+            /* EOF IS IDEMPOTENT, because a tokenizer state that looks at the next character twice must see one
+               entity and not two. */
+            XmlCharReader again = r;
+            uint32_t eof = 0;
+
+            CHECK(xml_char_read(&again, &eof) == XML_CHAR_OK && eof == XML_CHAR_EOF
+                      && again.p == r.p && again.line == r.line && again.column == r.column,
+                  "reading at the end of an XML entity did not answer EOF again without moving");
+        }
+    }
+    /* THE COPY IS THE PEEK AND THE COPY IS THE PARK — the property the parse above this will fork and suspend
+       on, so it is exercised rather than described. */
+    {
+        static const char SRC[] = "x\r\ny";
+        XmlCharReader r, saved;
+        uint32_t cp = 0;
+        size_t k;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        CHECK(xml_char_read(&r, &cp) == XML_CHAR_OK && cp == 'x', "the first character of a known entity");
+        saved = r;
+        for (k = 0; k < 3; k++) CHECK(xml_char_read(&r, &cp) == XML_CHAR_OK, "a known entity read to its end");
+        CHECK(cp == XML_CHAR_EOF && r.line == 2 && r.column == 2, "a known entity's end position");
+        r = saved;
+        CHECK(xml_char_read(&r, &cp) == XML_CHAR_OK && cp == 0x0A && r.line == 2 && r.column == 1,
+              "an XML character reader restored from a copy did not resume at the character and position it "
+              "was copied at — peeking and parking ARE that copy, so a reader that cannot be rewound this way "
+              "can neither fork an arm nor suspend a parse");
+    }
+}
+
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
  * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
  * stated by reference to.
@@ -6265,6 +6439,7 @@ int main(int argc, char **argv) {
     csp_url_matching_selftest();
     document_policy_selftest();
     css_property_grammar_selftest();
+    xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
