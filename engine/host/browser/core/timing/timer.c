@@ -722,7 +722,25 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
        known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
        running the page's source inside this C activation is exactly what the flow machinery exists to avoid.
        It has no cancellable entry because it is no longer a timer at that point; it is a script. */
-    if (!JS_IsFunction(ctx, argv[0])) {
+    /* WHICH ARM UNKNOWN EXTERNAL INPUT TAKES IS THIS ALGORITHM'S QUESTION, AND IT IS ASKED BEFORE IsCallable —
+       which is the whole of what was wrong here, and it was invisible because both arms are real. §8.7's task
+       substeps split on "If handler is a Function … Otherwise: … Assert: handler is a string", and Web IDL
+       §3.2.25 Union types answers that for `(DOMString or Function)` with IsCallable(V). A concolic is an
+       object carrying a [[Call]] — solver/concolic.c installs one so `document.cookie.indexOf(x)` yields
+       another unknown instead of throwing — so IsCallable is TRUE over EVERY unknown external input, for a
+       reason that is a fact about this engine's value class and not about the page's value. Asking it here
+       therefore chose an arm from the model, which is the collapse §@S forbids, and it did not choose
+       neutrally: the callback arm over an unknown callee runs no page code and emits nothing (concolic_call
+       mints a derived unknown and returns), while the string arm is the code-execution sink this file exists to
+       announce. Measured on the shipped artifact: `eval(location.hash.substr(1))` produced a fire-verified @S
+       PoC and `setTimeout(location.hash.substr(1), 1)` on the same page shape produced no @S entry at all —
+       the arm below had never been entered by an attacker value in production.
+       SO UNKNOWN INPUT TAKES THE STRING ARM, and that is not a guess standing in for a fork: it is the only arm
+       with an observable in it, and the @S search resolves it for real — a candidate run substitutes a
+       CONCRETE breakout at this source, at which point IsCallable is false, this same test picks the same arm
+       for the page's own reason, and the classic script below runs the marker. idl_args.c's own assert states
+       the other half: the union may not be resolved over a concolic at the boundary either. */
+    if (concolic_is(argv[0]) || !JS_IsFunction(ctx, argv[0])) {
         /* TimerHandler is `(DOMString or Function)`: the declaration converted the non-callable arm to a
            string already, so this reads one rather than running the page's toString from C. */
         const char *src;
