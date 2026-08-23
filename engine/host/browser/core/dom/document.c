@@ -1453,6 +1453,50 @@ int document_encoding(JSContext *ctx)
     return d->encoding;
 }
 
+/* THE SAME FACT ASKED OF A DOCUMENT RATHER THAN OF A REALM, which is a different question and not a
+   convenience: HTML §4.10.22.5 "Selecting a form submission encoding" step 1 is "let encoding be THE
+   DOCUMENT's character encoding", and the document it means is the form's NODE DOCUMENT — a realm holds
+   several (an inert template document, a `createHTMLDocument` result), so answering from the active one would
+   report a different document's encoding for a form that is not in it. Same shape as document_base_url_of one
+   screen up, and for the same reason. */
+int document_encoding_of(const lxb_dom_document_t *dom)
+{
+    const Document *d = doc_rec(dom);
+
+    DCHECK(d != NULL, "HTML §3.1.1's encoding was asked of a document with no record");
+    DCHECK(d->encoding >= 0,
+           "a document's encoding was read before the record carried one — §3.1.1 gives every Document an "
+           "encoding and doc_rec_new writes it, so a negative id is a record some other path built");
+    return d->encoding;
+}
+
+/* HTML §13.2.3.2 "Determining the character encoding"'s ANSWER, WRITTEN ONTO THE DOCUMENT IT IS ABOUT.
+ *
+ * DOM §4.5 Interface Document gives every document the utf-8 encoding "unless stated otherwise", which
+ * doc_rec_new writes; this is the one algorithm that states otherwise, and it is a NAVIGATION's step rather
+ * than a Document's own — the bytes and the response metadata it reads belong to the load, so the loader calls
+ * it and hands the result here. That is why this is a setter and not a lazy read: nothing reachable from a
+ * Document can re-derive it, because by the time anything asks, the bytes have been decoded and parsed.
+ *
+ * IT IS PER-FLOW, and the capture is the POD one for the same reason document_set_url's is: a document's
+ * encoding is an `int` on this record, and the `document` object is what owns the record's storage for a flow
+ * parked in the middle of a load. Two flows loading one navigable from two forked responses see their own. */
+void document_set_encoding(JSContext *ctx, int encoding)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(encoding >= 0,
+           "a Document's encoding was set to a failure — §13.2.3.2's last step is a DEFAULT and therefore "
+           "always answers, so a negative id here is a caller that skipped the algorithm and passed on a raw "
+           "`get an encoding` result instead");
+    DCHECK(JS_IsObject(d->doc_obj),
+           "a Document's encoding was set before its `document` object existed — the object is what owns the "
+           "storage the flow's delta captures, so there would be nothing to keep the value alive for a flow "
+           "that parks inside this load");
+    cow_capture_host_state(ctx, d->doc_obj, &d->encoding, sizeof d->encoding);
+    d->encoding = encoding;
+}
+
 /* HTML §2.4.3 "Document base URLs" — SET THE URL, step 1: "Set document's URL to url". It is the only way a
  * Document's address changes without a new Document, and §7.4.4's URL and history update steps perform it.
  *
@@ -1870,23 +1914,20 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
                                      ? "BackCompat" : "CSS1Compat");
     default:
         DCHECK(magic == 3, "a Document string accessor was declared with a magic this table does not name");
-        /* §4.5's encoding trio: "return this's encoding's NAME". `charset` and `inputEncoding` are the spec's
-           own historical aliases of `characterSet` and are the SAME getter rather than three that could
-           disagree. The encoding is the record's — §3.1.1 state, not a constant at this line — and this
-           document's is UTF-8 because every document this engine parses is decoded as UTF-8.
-           THE NAME IS ENCODING §4.2'S `Name` COLUMN, WHICH IS MIXED CASE ("UTF-8", "Shift_JIS",
-           "ISO-8859-8-I"), AND THE REGISTRY HAS ONLY THE LOWERCASED FORM §7.1's `encoding` attribute answers
-           ("utf-8") — one column where the standard has two, so `encoding_name_of` is the WRONG function to
-           reach for here and would report `utf-8` for a member every browser answers `UTF-8` for. The two
-           coincide for exactly this one encoding, which is what this asserts: the day a Document is created
-           with any other encoding, the name this getter owes is one the registry cannot yet produce, and the
-           thing to build is §4.2's Name column in engine/encgen.mjs beside the labels it already emits. */
-        DCHECK(d->encoding == encoding_utf8(),
-               "a Document was created with an encoding other than UTF-8 and §4.5's characterSet has no name "
-               "to answer with — Encoding §4.2's `Name` column is mixed case and this engine's registry keeps "
-               "only §7.1's ASCII-lowercased form, so build the Name column in engine/encgen.mjs and answer "
-               "this getter from it");
-        return JS_NewString(ctx, "UTF-8");
+        /* DOM §4.5 Interface Document: "The characterSet, charset, and inputEncoding getter steps are to
+           return this's encoding's NAME." `charset` and `inputEncoding` are the spec's own historical aliases
+           of `characterSet` and are the SAME getter rather than three that could disagree.
+           THE NAME IS ENCODING §4.2 Names and labels' `Name` COLUMN, WHICH IS MIXED CASE ("UTF-8",
+           "Shift_JIS", "ISO-8859-8-I") — a DIFFERENT column from §7.1 Interface mixin TextDecoderCommon's
+           `encoding`, which is "this's encoding's name, ASCII lowercased". Asking for the wrong one of the two
+           is a defect that reads as a spelling choice: it reports `shift_jis` for a member every browser
+           answers `Shift_JIS` for. `encoding_name` is the one this line owes and `encoding_name_ascii_
+           lowercased` is the other; the registry keeps both because the standard has both.
+           THE VALUE IS THE RECORD'S, which is §3.1.1's per-Document state and not a constant at this line:
+           DOM §4.5 gives a document the utf-8 encoding "unless stated otherwise", and HTML §13.2.3.2
+           "Determining the character encoding" is what states otherwise (core/html/html_encoding_sniff.h),
+           writing it through document_set_encoding when a navigation's response is decoded. */
+        return JS_NewString(ctx, encoding_name(d->encoding));
     }
 }
 

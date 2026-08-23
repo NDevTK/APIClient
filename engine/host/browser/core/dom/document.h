@@ -137,6 +137,16 @@ void document_set_about_base_url(JSContext *ctx, const char *url);
    classic script decodes a fetched body with when the response names no charset of its own. ONE component owns
    it, exactly as one owns the document's address. */
 int document_encoding(JSContext *ctx);
+/* The same fact asked of a DOCUMENT — HTML §4.10.22.5 "Selecting a form submission encoding" step 1's "the
+   document's character encoding", where the document is the form's node document and not whichever one the
+   realm currently calls active. See the definition. */
+int document_encoding_of(const lxb_dom_document_t *dom);
+/* HTML §13.2.3.2 "Determining the character encoding"'s ANSWER. DOM §4.5 Interface Document gives a document
+   the utf-8 encoding "unless stated otherwise"; the encoding sniffing algorithm
+   (core/html/html_encoding_sniff.h) is what states otherwise, and the LOADER runs it — the response bytes and
+   its `Content-Type` are the navigation's, not the Document's — so the answer is written here. Per flow, like
+   the address. */
+void document_set_encoding(JSContext *ctx, int encoding);
 /* HTML's SET THE URL — what HTML §7.4.4's URL and history update steps step 8 performs, and the only way a
    Document's address changes without a new Document being installed. PER FLOW: the address rides the running
    flow's COW delta, so the arm that called `history.pushState(s, "", "/b")` is the only one whose

@@ -986,8 +986,13 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
        received bytes now reach it AS THE BYTES THE SERVER SENT — they used to arrive re-encoded out of a JS
        string the reply record's producer had already decoded, so the sentence that stood here ("decoded by the
        string boundary rather than by the prescan") described a boundary that no longer exists. What is still
-       owed is the prescan itself: §3.6.6 step 5 runs the final encoding, then HTML §13.2.3.3's meta-charset
-       prescan, then UTF-8, and this arm runs the third of those three. */
+       owed is the WIRING, not the prescan: §3.6.6 step 5 runs the final encoding, then the meta-charset
+       prescan (html_prescan_byte_stream, core/html/html_encoding_sniff.h), then UTF-8, and this arm runs the
+       third of those three. The citation that stood here named §13.2.3.3 for that prescan and was WRONG: the
+       prescan is defined inside HTML §13.2.3.2 "Determining the character encoding", while §13.2.3.3 is
+       "Character encodings", the list of encodings a user agent must support. Steps 6 and 9 land with it —
+       "a known definite encoding" is not Encoding §6.1's `decode`, which lets a BOM overrule the label — and
+       both need `document_new` to take an encoding, which is one change to its contract. */
     CHECK(html_parse_document(dom, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
           "XMLHttpRequest: the response document could not be parsed");
     url = JS_ToCString(ctx, d->response_url);

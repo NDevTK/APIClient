@@ -508,29 +508,54 @@ static void fb_value(JSContext *ctx, FormBuf *b, JSValueConst v)
     }
 }
 
-/* §4.10.22.5 "SELECTING A FORM SUBMISSION ENCODING". The document's character encoding is UTF-8 in this engine
-   — the parse is Lexbor's and it decodes to it — so the only thing that can move this is `accept-charset`:
-   split it on ASCII whitespace, GET AN ENCODING for each token in order, and take the first that is not a
-   failure; UTF-8 when the attribute names none that is. The result is observable through exactly one entry:
-   §4.10.22.4 step 5.9's `_charset_`. */
+/* §4.10.22.5 "SELECTING A FORM SUBMISSION ENCODING", all three of its steps.
+ *
+ * STEP 1 IS "LET ENCODING BE THE DOCUMENT'S CHARACTER ENCODING", and this used to be the literal `"UTF-8"` on
+ * the reasoning that every document this engine parses is decoded as UTF-8. That reasoning stopped being true
+ * the moment HTML §13.2.3.2 "Determining the character encoding" landed (core/html/html_encoding_sniff.h): a
+ * document served `windows-1252`, or declaring `<meta charset=shift_jis>`, submits its form in THAT encoding,
+ * and a literal here would have gone on reporting UTF-8 with nothing to say so. It is the FORM'S NODE
+ * DOCUMENT's encoding, asked of that document rather than of the realm — see document_encoding_of.
+ *
+ * STEP 2 is the `accept-charset` override: split on ASCII whitespace, GET AN ENCODING for each token in order,
+ * take the first that is not a failure, and UTF-8 when the attribute names none that is.
+ *
+ * STEP 3 IS "RETURN THE RESULT OF GETTING AN OUTPUT ENCODING FROM ENCODING", and it was missing. Encoding §4.3
+ * Output encodings: "if encoding is replacement or UTF-16BE/LE, then return UTF-8" — and its note names this
+ * caller by name ("useful for URL parsing and HTML form submission, which both need exactly this"). Without it
+ * `<form accept-charset="utf-16">` submitted as UTF-16LE, an encoding no form may be submitted in, which real
+ * browsers answer `UTF-8` for.
+ *
+ * THE ANSWER IS §4.2 Names and labels' NAME COLUMN and not §7.1's ASCII-lowercased form, because the one place
+ * it is observable — §4.10.22.4 step 5.9's `_charset_` entry, "a value consisting of the submission character
+ * encoding" — is a name: a `Shift_JIS` submission carries `Shift_JIS`, not `shift_jis`. */
 static const char *form_pick_encoding(lxb_dom_element_t *form)
 {
     size_t len = 0, i;
     const char *v = attr_of(form, "accept-charset", &len);
+    int enc = document_encoding_of(form->node.owner_document);                                  /* step 1 */
 
-    if (!v) return "UTF-8";
-    for (i = 0; i < len; ) {
-        size_t j;
-        int enc;
-        while (i < len && (v[i] == '\t' || v[i] == '\n' || v[i] == '\f' || v[i] == '\r' || v[i] == ' ')) i++;
-        for (j = i; j < len && !(v[j] == '\t' || v[j] == '\n' || v[j] == '\f' || v[j] == '\r' || v[j] == ' '); j++)
-            ;
-        if (j == i) break;
-        enc = encoding_lookup(v + i, j - i);
-        if (enc >= 0) return encoding_name_of(enc);
-        i = j;
+    if (v) {
+        /* STEP 2 REPLACES THE DOCUMENT'S ENCODING WHOLESALE, including when the attribute resolves to nothing:
+           step 2.5 is "if candidate encodings is empty, return UTF-8", not "return the document's". So
+           `<form accept-charset=nonsense>` in a windows-1252 document submits as UTF-8, and that is the whole
+           reason this is written as an assignment before the loop rather than as a `break` out of it. */
+        enc = encoding_utf8();                                                                /* step 2.5 */
+        for (i = 0; i < len; ) {
+            size_t j;
+            int cand;
+            while (i < len && (v[i] == '\t' || v[i] == '\n' || v[i] == '\f' || v[i] == '\r' || v[i] == ' ')) i++;
+            for (j = i; j < len && !(v[j] == '\t' || v[j] == '\n' || v[j] == '\f' || v[j] == '\r' || v[j] == ' '); j++)
+                ;
+            if (j == i) break;
+            /* Steps 2.4 and 2.6 in one pass: the list is only ever read for its FIRST member, so the first
+               token that is not a failure IS the answer and the rest of the attribute is never resolved. */
+            cand = encoding_lookup(v + i, j - i);
+            if (cand >= 0) { enc = cand; break; }
+            i = j;
+        }
     }
-    return "UTF-8";
+    return encoding_name(encoding_output_encoding(enc));                                        /* step 3 */
 }
 
 /* ---- §4.10.19.6's ATTRIBUTES FOR FORM SUBMISSION ------------------------------------------------------------

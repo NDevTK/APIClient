@@ -193,9 +193,38 @@ const rows = encodings.flatMap((e) => e.labels.map((l) => [l, enumName(e.name)])
 for (const [l, id] of rows) h += `    { ${JSON.stringify(l)}, ${id} },\n`;
 h += `};\n#define ENCODING_LABEL_N ((int)(sizeof ENCODING_LABELS / sizeof ENCODING_LABELS[0]))\n\n`;
 
-h += `/* The NAME each encoding reports through TextDecoder's \`encoding\` attribute — the standard's own name,\n` +
-     `   ASCII-lowercased, which is what the attribute returns. */\nstatic const char *const ENCODING_NAMES[ENC_COUNT] = {\n`;
-for (const e of encodings) h += `    ${JSON.stringify(e.name.toLowerCase())},\n`;
+h += `/* §4.2 Names and labels' NAME COLUMN, in the standard's own case — "UTF-8", "Shift_JIS", "ISO-8859-8-I".\n` +
+     `   It is a SECOND column beside the labels and not a spelling of one: DOM §4.5 Interface Document's\n` +
+     `   characterSet/charset/inputEncoding answer "this's encoding's name", which is this, while Encoding §7.1\n` +
+     `   Interface mixin TextDecoderCommon's \`encoding\` answers "this's encoding's name, ASCII lowercased",\n` +
+     `   which is the row below. */\nstatic const char *const ENCODING_NAMES[ENC_COUNT] = {\n`;
+for (const e of encodings) h += `    ${JSON.stringify(e.name)},\n`;
+h += `};\n\n`;
+
+/* §7.1's ASCII-lowercased name is NOT emitted as a second array of strings, because the standard already says
+   where it lives: §4.2 Names and labels — "For each encoding, ASCII-lowercasing its name yields one of its
+   labels." So the lowercased name is a LABEL, and what an encoding needs is WHICH ROW of the label table its
+   own is. Asserted here rather than assumed: the day the registry gains an encoding the sentence stops holding
+   for, this generator stops instead of emitting an index into the wrong row. */
+const nameLabelRow = encodings.map((e) => {
+  const lower = e.name.toLowerCase();
+  const row = rows.findIndex(([l, id]) => l === lower && id === enumName(e.name));
+  if (row < 0) {
+    console.error(`[encgen] §4.2 says ASCII-lowercasing an encoding's name yields one of its labels, and ` +
+                  `${e.name} lowercases to ${JSON.stringify(lower)}, which is not one of its labels — the ` +
+                  `standard's own invariant no longer holds, so §7.1's ASCII-lowercased name needs a column ` +
+                  `of its own rather than an index into the labels.`);
+    process.exit(1);
+  }
+  return row;
+});
+h += `/* WHICH LABEL each encoding's §7.1 ASCII-lowercased name IS. §4.2 Names and labels: "For each encoding,\n` +
+     `   ASCII-lowercasing its name yields one of its labels" — so Encoding §7.1 Interface mixin\n` +
+     `   TextDecoderCommon's \`encoding\` getter has no string of its own to store, and storing one would be a\n` +
+     `   second place for a name to be true. The generator FAILS rather than emitting this if the standard's\n` +
+     `   sentence ever stops holding. */\nstatic const short ENCODING_NAME_LABEL[ENC_COUNT] = {\n`;
+for (let i = 0; i < encodings.length; i++)
+  h += `    ${nameLabelRow[i]},  /* ${encodings[i].name} -> ${JSON.stringify(rows[nameLabelRow[i]][0])} */\n`;
 h += `};\n\n`;
 
 h += `/* §9.1's SINGLE-BYTE INDEXES: byte 0x80..0xFF maps to index[byte - 0x80], and a 0 entry means the byte\n` +

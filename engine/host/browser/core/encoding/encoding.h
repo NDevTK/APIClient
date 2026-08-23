@@ -23,8 +23,24 @@ typedef struct EncDecoder EncDecoder;
    §4.2 itself does not. */
 int  encoding_lookup(const char *label, size_t len);
 bool encoding_is_replacement(int enc);
-/* §4.1's name, already lowercased — what both `encoding` attributes answer with. */
-const char *encoding_name_of(int enc);
+/* §4.2 Names and labels' NAME, in the standard's own case — "UTF-8", "Shift_JIS", "ISO-8859-8-I". The table
+   there has TWO columns and this engine used to keep one, which is a defect that reads as a spelling choice
+   and is not: DOM §4.5 Interface Document's characterSet/charset/inputEncoding return "this's encoding's
+   name", so a Document decoded as Shift_JIS whose registry knows only `shift_jis` answers a string no browser
+   produces, and HTML §4.10.22.4's `_charset_` entry carries the same name into a form submission. */
+const char *encoding_name(int enc);
+/* Encoding §7.1 Interface mixin TextDecoderCommon's `encoding` getter: "this's encoding's name, ASCII
+   lowercased" — the OTHER of the two, and the reason it is a separate entry rather than a caller's tolower
+   loop is that a caller choosing between them is a caller stating which spec line it is answering.
+   §4.2 Names and labels also states "For each encoding, ASCII-lowercasing its name yields one of its labels",
+   so this answers a LABEL out of the same table rather than a second column of strings — see encoding_table.h,
+   whose generator FAILS if the standard's sentence ever stops holding. */
+const char *encoding_name_ascii_lowercased(int enc);
+/* §4.3 Output encodings' "get an output encoding": "If encoding is replacement or UTF-16BE/LE, then return
+   UTF-8. Return encoding." It is here rather than at its callers because the standard names exactly who asks —
+   "useful for URL parsing and HTML form submission, which both need exactly this" — and a caller that folded
+   the three ids itself would be a second statement of which encodings cannot be OUTPUT. */
+int encoding_output_encoding(int enc);
 
 EncDecoder *enc_decoder_new(int enc, bool fatal, bool ignore_bom);
 void        enc_decoder_free(EncDecoder *d);

@@ -294,26 +294,29 @@ static const EncodingLabel ENCODING_LABELS[] = {
 };
 #define ENCODING_LABEL_N ((int)(sizeof ENCODING_LABELS / sizeof ENCODING_LABELS[0]))
 
-/* The NAME each encoding reports through TextDecoder's `encoding` attribute — the standard's own name,
-   ASCII-lowercased, which is what the attribute returns. */
+/* §4.2 Names and labels' NAME COLUMN, in the standard's own case — "UTF-8", "Shift_JIS", "ISO-8859-8-I".
+   It is a SECOND column beside the labels and not a spelling of one: DOM §4.5 Interface Document's
+   characterSet/charset/inputEncoding answer "this's encoding's name", which is this, while Encoding §7.1
+   Interface mixin TextDecoderCommon's `encoding` answers "this's encoding's name, ASCII lowercased",
+   which is the row below. */
 static const char *const ENCODING_NAMES[ENC_COUNT] = {
-    "utf-8",
-    "ibm866",
-    "iso-8859-2",
-    "iso-8859-3",
-    "iso-8859-4",
-    "iso-8859-5",
-    "iso-8859-6",
-    "iso-8859-7",
-    "iso-8859-8",
-    "iso-8859-8-i",
-    "iso-8859-10",
-    "iso-8859-13",
-    "iso-8859-14",
-    "iso-8859-15",
-    "iso-8859-16",
-    "koi8-r",
-    "koi8-u",
+    "UTF-8",
+    "IBM866",
+    "ISO-8859-2",
+    "ISO-8859-3",
+    "ISO-8859-4",
+    "ISO-8859-5",
+    "ISO-8859-6",
+    "ISO-8859-7",
+    "ISO-8859-8",
+    "ISO-8859-8-I",
+    "ISO-8859-10",
+    "ISO-8859-13",
+    "ISO-8859-14",
+    "ISO-8859-15",
+    "ISO-8859-16",
+    "KOI8-R",
+    "KOI8-U",
     "macintosh",
     "windows-874",
     "windows-1250",
@@ -326,17 +329,65 @@ static const char *const ENCODING_NAMES[ENC_COUNT] = {
     "windows-1257",
     "windows-1258",
     "x-mac-cyrillic",
-    "gbk",
+    "GBK",
     "gb18030",
-    "big5",
-    "euc-jp",
-    "iso-2022-jp",
-    "shift_jis",
-    "euc-kr",
+    "Big5",
+    "EUC-JP",
+    "ISO-2022-JP",
+    "Shift_JIS",
+    "EUC-KR",
     "replacement",
-    "utf-16be",
-    "utf-16le",
+    "UTF-16BE",
+    "UTF-16LE",
     "x-user-defined",
+};
+
+/* WHICH LABEL each encoding's §7.1 ASCII-lowercased name IS. §4.2 Names and labels: "For each encoding,
+   ASCII-lowercasing its name yields one of its labels" — so Encoding §7.1 Interface mixin
+   TextDecoderCommon's `encoding` getter has no string of its own to store, and storing one would be a
+   second place for a name to be true. The generator FAILS rather than emitting this if the standard's
+   sentence ever stops holding. */
+static const short ENCODING_NAME_LABEL[ENC_COUNT] = {
+    195,  /* UTF-8 -> "utf-8" */
+    65,  /* IBM866 -> "ibm866" */
+    78,  /* ISO-8859-2 -> "iso-8859-2" */
+    79,  /* ISO-8859-3 -> "iso-8859-3" */
+    80,  /* ISO-8859-4 -> "iso-8859-4" */
+    81,  /* ISO-8859-5 -> "iso-8859-5" */
+    82,  /* ISO-8859-6 -> "iso-8859-6" */
+    85,  /* ISO-8859-7 -> "iso-8859-7" */
+    86,  /* ISO-8859-8 -> "iso-8859-8" */
+    88,  /* ISO-8859-8-I -> "iso-8859-8-i" */
+    72,  /* ISO-8859-10 -> "iso-8859-10" */
+    74,  /* ISO-8859-13 -> "iso-8859-13" */
+    75,  /* ISO-8859-14 -> "iso-8859-14" */
+    76,  /* ISO-8859-15 -> "iso-8859-15" */
+    77,  /* ISO-8859-16 -> "iso-8859-16" */
+    151,  /* KOI8-R -> "koi8-r" */
+    153,  /* KOI8-U -> "koi8-u" */
+    175,  /* macintosh -> "macintosh" */
+    208,  /* windows-874 -> "windows-874" */
+    198,  /* windows-1250 -> "windows-1250" */
+    199,  /* windows-1251 -> "windows-1251" */
+    200,  /* windows-1252 -> "windows-1252" */
+    201,  /* windows-1253 -> "windows-1253" */
+    202,  /* windows-1254 -> "windows-1254" */
+    203,  /* windows-1255 -> "windows-1255" */
+    204,  /* windows-1256 -> "windows-1256" */
+    205,  /* windows-1257 -> "windows-1257" */
+    206,  /* windows-1258 -> "windows-1258" */
+    221,  /* x-mac-cyrillic -> "x-mac-cyrillic" */
+    59,  /* GBK -> "gbk" */
+    55,  /* gb18030 -> "gb18030" */
+    5,  /* Big5 -> "big5" */
+    53,  /* EUC-JP -> "euc-jp" */
+    69,  /* ISO-2022-JP -> "iso-2022-jp" */
+    180,  /* Shift_JIS -> "shift_jis" */
+    54,  /* EUC-KR -> "euc-kr" */
+    178,  /* replacement -> "replacement" */
+    193,  /* UTF-16BE -> "utf-16be" */
+    194,  /* UTF-16LE -> "utf-16le" */
+    226,  /* x-user-defined -> "x-user-defined" */
 };
 
 /* §9.1's SINGLE-BYTE INDEXES: byte 0x80..0xFF maps to index[byte - 0x80], and a 0 entry means the byte

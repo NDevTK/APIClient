@@ -19,6 +19,7 @@
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
+#include "core/html/html_encoding_sniff.h"  /* §13.2.3.2: WHICH ENCODING a navigated response's bytes are in */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "core/loader/document_load_type.h"  /* §7.4.5's dispatch: WHICH document a response loads as */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
@@ -412,6 +413,13 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
 {
     lxb_html_document_t *dom;
     JSContext *cctx;
+    /* HTML §13.2.3.2's ANSWER FOR THIS RESPONSE, and the UTF-8 the parser is handed because of it. -1 is "no
+       response", which is §7.4's initial about:blank and an address whose fetch failed: those get DOM §4.5
+       Interface Document's default ("unless stated otherwise, a document's encoding is the utf-8 encoding"),
+       which doc_rec_new already wrote, and there is nothing here to determine. */
+    int encoding = -1;
+    char *decoded = NULL;
+    size_t decoded_len = 0;
 
     /* A REALM THIS AGENT BUILDS IS A DOCUMENT OF THIS AGENT'S PRINCIPAL. §7.1.1's check says so here, at the
        one place a second realm is made, which is what lets the host boundary below carry only a SERIALIZATION:
@@ -428,7 +436,27 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    dom = child_document(body, body_len, content_type);
+    /* HTML §13.2.3.2 "Determining the character encoding", THEN §13.2.3.1 "Parsing with a known character
+       encoding" — the two halves of what this site used to do by handing the response's bytes to a parser that
+       takes UTF-8 and hoping. The comment at the fetch (js_nav_load_step) named this as the decode still owed
+       once the bytes stopped being destroyed a zone earlier, and this is it: the response's `Content-Type`,
+       its BOM and its first 1024 bytes decide the encoding (core/html/html_encoding_sniff.h), and Encoding
+       §6.1 Legacy hooks for standards' `decode` turns the body into the UTF-8 lexbor's tokenizer requires.
+       THE CONTAINER DOCUMENT'S ENCODING IS §13.2.3.2's STEP 6, and `ctx` is the realm of the document that is
+       performing this navigation — which for a child navigable IS the container document. Its origin is the
+       same as this one's by the assertion at the top of this function (an instance is an ORIGIN-KEYED agent
+       cluster, so a realm built here can only be same-origin), which is the first half of the step's own
+       condition; the second half is the algorithm's and is applied there.
+       A DECODE IS NOT A RE-ENCODE OF THE SAME BYTES: `decoded` is what the tree is built from, so the token
+       byte ownership html_parse.h describes attaches to the decoded buffer's contents through lexbor's own
+       copies, and this buffer is freed as soon as the parse that consumed it has returned. */
+    if (body) {
+        encoding = html_encoding_sniff(body, body_len, content_type, document_encoding(ctx));
+        decoded = encoding_decode(body, body_len, encoding, &decoded_len);
+        CHECK(decoded != NULL, "navigable: OOM decoding a child navigable's response body");
+    }
+    dom = child_document(body ? decoded : NULL, decoded_len, content_type);
+    free(decoded);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted above. */
     /* §7.1.5 STATES A CONSEQUENCE OF THE FLAG SET THIS AGENT CANNOT HONOUR, AND IT IS ASSERTED RATHER THAN
@@ -452,6 +480,11 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin), csp,
                            csp_self_origin, sandbox_flags, doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
+    /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
+       about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.
+       It is written here rather than before the parse because the Document RECORD is what carries it and the
+       record is the realm builder's product — the bytes the parse consumed were already decoded with it. */
+    if (encoding >= 0) document_set_encoding(cctx, encoding);
     /* HTML §7.4's ABOUT BASE URL, WRITTEN BEFORE ANYTHING RESOLVES A URL IN THIS DOCUMENT. It is §2.4.3's
        fallback base URL for a Document addressed `about:blank`, so §4.2.3's freeze and every relative
        reference read it — which is why it is set here, between the realm's construction and the scripts
@@ -655,19 +688,21 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            before there was any dispatch at all — is what made an XML response an HTML document.
            WHAT IS STILL OWED IS SNIFFING: mimesniff §5.1 "interpreting the resource metadata" is what turns an
            absent or generic `Content-Type` into a computed type by reading the bytes, and this engine does not
-           run it, so a response with no type reaches the crash rather than being guessed at. That is the same
-           shape as the decoding gap noted below — a named component to build, not a silent default. */
+           run it, so a response with no type reaches the crash rather than being guessed at. It is a named
+           component to build, not a silent default — and it is the LAST such gap on this path now that the
+           decode below is built, so a document that reaches the crash is one whose TYPE, not whose encoding,
+           nothing has computed. */
         resp_ctype = header_list_get(&response_headers, "content-type");
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
            field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
            and the algorithm that decides its encoding had nothing left to decide. §2.2.5's body is a byte
-           sequence and the host now hands one over (core/fetch/fetch.h). WHAT IS STILL OWED HERE IS THE DECODE
-           ITSELF: HTML §13.2.3.2's "encoding sniffing algorithm" — the BOM sniff, then the transport layer's
-           charset, then §13.2.3.3's prescan of the first 1024 bytes — and lexbor's parser takes UTF-8, so this
-           arm hands it the bytes as they arrived and is right exactly for the documents that are UTF-8. That is
-           a decoding gap with a name and a component to build it in, which is what it was NOT while the bytes
-           were being destroyed one zone earlier. */
+           sequence and the host now hands one over (core/fetch/fetch.h), and HTML §13.2.3.2 "Determining the
+           character encoding" runs on it in navigable_realm — the BOM sniff, then the transport layer's
+           charset, then the prescan of the first 1024 bytes — with Encoding §6.1 Legacy hooks for standards'
+           `decode` producing the UTF-8 lexbor's tokenizer takes. So the pair that travels from here is the
+           BYTES AND THE HEADER VALUE, never a string somebody already decoded: reinstating a decode on this
+           side would put the answer back out of §13.2.3.2's reach. */
         if (!JS_IsUndefined(bodyv) && !JS_IsNull(bodyv)) body = fetch_body_bytes(ctx, bodyv, &body_len);
     }
     /* §7.2.6: the RESPONSE'S policy when it carried one, and otherwise the INHERITED clone — which the job

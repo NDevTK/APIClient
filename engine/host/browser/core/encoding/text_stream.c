@@ -121,7 +121,11 @@ static JSValue js_tds_get(JSContext *ctx, JSValueConst this_val, int magic)
     if (!t) return JS_ThrowTypeError(ctx, "not a TextDecoderStream");
     DCHECK(t->dec != NULL, "a TextDecoderStream reached its attributes with no decoder — the constructor "
                            "builds one before the object is reachable");
-    if (magic == TDS_ENCODING) return JS_NewString(ctx, encoding_name_of(enc_decoder_encoding(t->dec)));
+    /* §7.1 Interface mixin TextDecoderCommon: "return this's encoding's name, ASCII lowercased". §7.5's
+       TextDecoderStream includes that mixin, so it answers the SAME lowercased half of §4.2's Name column
+       TextDecoder does — not DOM §4.5's characterSet, which is the other column. */
+    if (magic == TDS_ENCODING)
+        return JS_NewString(ctx, encoding_name_ascii_lowercased(enc_decoder_encoding(t->dec)));
     if (magic == TDS_FATAL) return JS_NewBool(ctx, enc_decoder_fatal(t->dec));
     DCHECK(magic == TDS_IGNORE_BOM,
            "a TextDecoderStream attribute was declared with a magic this component does not answer");

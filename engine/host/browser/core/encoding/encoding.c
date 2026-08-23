@@ -701,7 +701,10 @@ static JSValue js_decoder_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     EncDecoder *d = JS_GetOpaque(this_val, g_dec_class);
     if (!d) return JS_ThrowTypeError(ctx, "not a TextDecoder");
-    if (magic == DEC_ENCODING) return JS_NewString(ctx, ENCODING_NAMES[d->enc]);
+    /* §7.1 Interface mixin TextDecoderCommon: "return this's encoding's name, ASCII lowercased" — the
+       LOWERCASED half of §4.2's name column, which is a different string from DOM §4.5's characterSet and is
+       asked for by name so the two can never be confused at a call site. */
+    if (magic == DEC_ENCODING) return JS_NewString(ctx, encoding_name_ascii_lowercased(d->enc));
     if (magic == DEC_FATAL) return JS_NewBool(ctx, d->fatal);
     DCHECK(magic == DEC_IGNORE_BOM, "a TextDecoder attribute was declared with a magic this component does not "
                                     "answer");
@@ -747,7 +750,7 @@ JSValue enc_decoder_decode(JSContext *ctx, EncDecoder *d, const uint8_t *p, size
            this is the caller that has a realm to turn it into one. */
         free(o.b);
         decoder_reset(d);
-        return JS_ThrowTypeError(ctx, "the encoded data was not valid %s", ENCODING_NAMES[d->enc]);
+        return JS_ThrowTypeError(ctx, "the encoded data was not valid %s", encoding_name(d->enc));
     }
     if (!stream) {
         /* THE FLUSH. An incomplete sequence held across the last chunk is an error here — a stream that ends
@@ -810,10 +813,38 @@ int encoding_utf8(void) { return ENC_UTF_8; }
 
 bool encoding_is_replacement(int enc) { return enc == ENC_REPLACEMENT; }
 
-const char *encoding_name_of(int enc)
+const char *encoding_name(int enc)
 {
     DCHECK(enc >= 0 && enc < ENC_COUNT, "the name of an encoding this registry does not have was asked for");
     return ENCODING_NAMES[enc];
+}
+
+const char *encoding_name_ascii_lowercased(int enc)
+{
+    DCHECK(enc >= 0 && enc < ENC_COUNT, "the name of an encoding this registry does not have was asked for");
+    /* §4.2 Names and labels' invariant, ASSERTED AT THE READ AND NOT ONLY AT THE GENERATOR: the row this
+       indexes must be a label OF THIS ENCODING, because an index that drifted by one would answer a real
+       label of a real encoding and nothing would look wrong. */
+    DCHECK(ENCODING_NAME_LABEL[enc] >= 0 && ENCODING_NAME_LABEL[enc] < ENCODING_LABEL_N &&
+               ENCODING_LABELS[ENCODING_NAME_LABEL[enc]].id == (EncodingId)enc,
+           "an encoding's §7.1 ASCII-lowercased name indexes a label row belonging to a DIFFERENT encoding — "
+           "encoding_table.h's ENCODING_NAME_LABEL is generated from the same registry as the label table and "
+           "the two have gone out of step, so `encoding` would answer another encoding's label");
+    return ENCODING_LABELS[ENCODING_NAME_LABEL[enc]].label;
+}
+
+/* §4.3 Output encodings' "get an output encoding": "To get an output encoding from an encoding encoding, run
+   these steps: If encoding is replacement or UTF-16BE/LE, then return UTF-8. Return encoding."
+   THE THIRD ID IS NOT A THIRD CASE — §14.2 Common infrastructure for UTF-16BE/LE states "UTF-16BE/LE is
+   UTF-16BE or UTF-16LE", so the standard's two-name list is three registry ids and writing it as two would
+   leave `<form accept-charset="utf-16be">` submitting as an encoding no form may be submitted in. */
+int encoding_output_encoding(int enc)
+{
+    DCHECK(enc >= 0 && enc < ENC_COUNT,
+           "an output encoding was asked for an id this registry does not have — §4.3 takes an ENCODING, so a "
+           "caller holding a label has not run §4.2's get an encoding on it yet");
+    if (enc == ENC_REPLACEMENT || enc == ENC_UTF_16BE || enc == ENC_UTF_16LE) return ENC_UTF_8;
+    return enc;
 }
 
 EncDecoder *enc_decoder_new(int enc, bool fatal, bool ignore_bom)
@@ -1179,6 +1210,34 @@ static const IdlDictMember DECODE_OPTIONS[] = {
     { "stream", IDL_BOOLEAN },
 };
 
+/* THE REGISTRY'S TWO COLUMNS, CHECKED AGAINST EACH OTHER IN THE BINARY THAT SHIPPED THEM. §4.2 Names and
+   labels states the relation — "For each encoding, ASCII-lowercasing its name yields one of its labels" — and
+   encgen.mjs refuses to emit a table that violates it, which is a fact about the GENERATOR and says nothing
+   about the header a given build compiled. This is that sentence run against these bytes: every name in the
+   Name column lowercases to a label, "get an encoding" resolves that label back to the encoding it names, and
+   the index §7.1's getter reads points at exactly that row. It walks 40 rows once per runtime and observes
+   nothing the program can see, which is what lets it be a DCHECK's condition. */
+static bool encoding_registry_consistent(void)
+{
+    int i;
+
+    for (i = 0; i < ENC_COUNT; i++) {
+        const char *name = ENCODING_NAMES[i];
+        size_t n = strlen(name), k;
+        char lower[64];
+
+        if (n == 0 || n >= sizeof lower) return false;
+        for (k = 0; k < n; k++)
+            lower[k] = (name[k] >= 'A' && name[k] <= 'Z') ? (char)(name[k] - 'A' + 'a') : name[k];
+        if (encoding_get(lower, n) != i) return false;
+        if (ENCODING_NAME_LABEL[i] < 0 || ENCODING_NAME_LABEL[i] >= ENCODING_LABEL_N) return false;
+        if (ENCODING_LABELS[ENCODING_NAME_LABEL[i]].id != (EncodingId)i) return false;
+        if (strlen(ENCODING_LABELS[ENCODING_NAME_LABEL[i]].label) != n ||
+            memcmp(ENCODING_LABELS[ENCODING_NAME_LABEL[i]].label, lower, n) != 0) return false;
+    }
+    return true;
+}
+
 void encoding_init(JSContext *ctx)
 {
     JSClassDef dec_def = { "TextDecoder", .finalizer = decoder_finalizer };
@@ -1194,6 +1253,11 @@ void encoding_init(JSContext *ctx)
            "to the first, and one WASM instance is one document");
     if (g_enc_rt == rt)
         return;
+    DCHECK(encoding_registry_consistent(),
+           "the Encoding registry's §4.2 Name column and its label table disagree — a name does not "
+           "ASCII-lowercase to one of its own encoding's labels, or the index §7.1's `encoding` getter reads "
+           "points at another encoding's row; encoding_table.h is generated by engine/encgen.mjs from the "
+           "standard's own encodings.json and the two columns must be regenerated together");
     g_enc_rt = rt;
     JS_NewClassID(rt, &g_dec_class);
     JS_NewClass(rt, g_dec_class, &dec_def);
