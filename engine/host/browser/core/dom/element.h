@@ -23,9 +23,9 @@ enum {
     SHADOW_ROOT_SET_INNER_HTML,   /* §8.5.4's innerHTML setter, on ShadowRoot */
     SHADOW_ROOT_SET_HTML_UNSAFE,  /* §8.5.2's setHTMLUnsafe, on ShadowRoot */
     /* §8.5.2's `setHTML` — the SAFE member — on the same two interfaces. It is the same machine and not a
-       sixth algorithm: §8.8 Microtask queuing's `set and filter HTML` is what all four of these are, and `safe` is the one
-       argument that differs. What `safe` decides is stated where §8.8 Microtask queuing states it — the sanitizer the options
-       resolve to, and §8.8 Microtask queuing's step 3 removal of what is unsafe from it. */
+       sixth algorithm: §8.6.4 set and filter HTML's `set and filter HTML` is what all four of these are, and `safe` is the one
+       argument that differs. What `safe` decides is stated where §8.6.4 set and filter HTML states it — the sanitizer the options
+       resolve to, and §8.6.4 set and filter HTML's step 3 removal of what is unsafe from it. */
     ELEMENT_SET_HTML,             /* §8.5.2's setHTML, on Element */
     SHADOW_ROOT_SET_HTML,         /* §8.5.2's setHTML, on ShadowRoot */
 };

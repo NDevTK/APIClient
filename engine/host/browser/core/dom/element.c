@@ -601,21 +601,21 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
                     "compliant string with TrustedHTML and this sink), which is where Trusted Types §4.2's " \
                     "default-policy callback runs") \
     X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
-                  "insertAdjacentHTML steps 2-4 / §8.5.2 setHTMLUnsafe step 2 and §8.8 Microtask queuing set and filter HTML " \
+                  "insertAdjacentHTML steps 2-4 / §8.5.2 setHTMLUnsafe step 2 and §8.6.4 set and filter HTML set and filter HTML " \
                   "steps 1-5 (the target the fragment is parsed against)") \
-    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.8 Microtask queuing set and filter HTML step 6 " \
+    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.6.4 set and filter HTML set and filter HTML step 6 " \
                   "(the fragment parsing algorithm), one byte per step") \
-    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.8 Microtask queuing set and filter HTML step 8 " \
+    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML set and filter HTML step 8 " \
                   "(insert one node of the fragment at the position the member names)") \
-    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.8 Microtask queuing set and filter HTML step 8 " \
+    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML set and filter HTML step 8 " \
                   "(the fragment is placed)")
 /* FOUR STAGES, NOT FIVE, for insertAdjacentHTML: it never replaces its target's children, so FRAG_CLEAR is past
    the end of what it declares and the driver says so if the shared machine ever reaches it from there. It is
    its own list for that reason — the setter's declaration is the shared four followed by this one. */
 #define EL_SET_HTML_EXTRA(X) \
-    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.8 Microtask queuing set and filter HTML step 8 (replace all within target: remove " \
+    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 set and filter HTML set and filter HTML step 8 (replace all within target: remove " \
                   "one existing child per step)")
-/* AND §8.8 Microtask queuing's FILTER, whose stages are sanitizer.h's own X-list. They belong to the members that FILTER —
+/* AND §8.6.4 set and filter HTML's FILTER, whose stages are sanitizer.h's own X-list. They belong to the members that FILTER —
    §8.5.2's setHTML and setHTMLUnsafe — and are numbered after this machine's because the walk runs between the
    parse and the placement. The list is expanded HERE for the numbering and inside sanitizer.c for its own, from
    the one declaration, and the base travels to the walk as SAN_CHILD so neither file states the offset. */
@@ -642,13 +642,13 @@ typedef struct {
        that is in no tree, so this machine has to destroy it. Owned, and released on the throw path too. */
     lxb_dom_element_t *own_context;
     lxb_dom_node_t *anchor, *ref, *frag, *node;
-    /* §8.8 Microtask queuing's STEPS 4 AND 7. `san_config` is the canonical configuration the options resolved to, held from
+    /* §8.6.4 set and filter HTML's STEPS 4 AND 7. `san_config` is the canonical configuration the options resolved to, held from
        step 4 (which reads the options, before the parse) until step 7 hands it to the walk that consumes it;
        `sanitize` is whether this member filters at all, which is what tells §8.5.4's innerHTML setter and
        §8.5.6's insertAdjacentHTML — neither of which is `set and filter HTML` — from the four that are. */
     JSValue san_config;
     uint8_t sanitize;
-    uint8_t safe;               /* §8.8 Microtask queuing's own `safe` argument — true for the two `setHTML` members */
+    uint8_t safe;               /* §8.6.4 set and filter HTML's own `safe` argument — true for the two `setHTML` members */
     SanitizerWalk san;
 } FragState;
 
@@ -669,7 +669,7 @@ static void frag_visit(JSContext *ctx, void *st, JSStepVisit *v)
    AND THE SECOND ONE WAS SAYING NOTHING AT ALL, which is worse than the first. This predicate tested `parser`
    and only `parser`, so the instant the feed ended and the parser was destroyed the machine reported itself
    FORKABLE — while still OWNING the whole tree the parse had produced (`frag`, deep-destroyed by frag_release,
-   with `node` the cursor into it and §8.8 Microtask queuing's sanitizer walk standing inside it) and, for §8.5.5 step 5, an
+   with `node` the cursor into it and §8.6.4 set and filter HTML's sanitizer walk standing inside it) and, for §8.5.5 step 5, an
    `own_context` element that is in no tree and that frag_release also destroys. Neither is in frag_visit,
    because JSStepVisit has no operation for a private DOM tree — so a fork taken at a FRAG_PLACE or FRAG_CLEAR
    or SAN_* rest point handed two arms ONE tree: both would place the same nodes into their own documents and
@@ -701,7 +701,7 @@ static const char *frag_unforkable(const void *st)
     if (s->frag != NULL || s->own_context != NULL)
         return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
                "tree the parse produced (`frag`, which frag_release deep-destroys, with `node` the cursor into "
-               "it and §8.8 Microtask queuing's sanitizer walk standing inside it) and, for §8.5.5 step 5, an `own_context` "
+               "it and §8.6.4 set and filter HTML's sanitizer walk standing inside it) and, for §8.5.5 step 5, an `own_context` "
                "element that is in no tree and that frag_release destroys too. frag_visit declares neither, "
                "because JSStepVisit has no operation for a PRIVATE DOM TREE, so the sibling arm would share one "
                "tree with the original: two arms placing the same nodes and two frag_releases destroying them. "
@@ -772,7 +772,7 @@ static void frag_release(JSContext *ctx, void *st)
         if (root) s->frag = root;
     }
     /* WHATEVER OF THE PARSE IS LEFT. After a completed placement this is NULL, because FRAG_PLACE's terminal
-       destroys the emptied root and gives up its claim there; a placement or a §8.8 Microtask queuing filter that threw
+       destroys the emptied root and gives up its claim there; a placement or a §8.6.4 set and filter HTML filter that threw
        half-way leaves the un-placed remainder here, still holding nodes. */
     if (s->frag) {
         dom_cow_destroy_private(s->frag, /*with_children*/ true);
@@ -804,8 +804,8 @@ static void frag_begin(JSContext *ctx, FragState *s, lxb_dom_element_t *context,
     s->node = NULL;
 }
 
-/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.8 Microtask queuing step 8 — WHERE THE PARSE GOES NEXT, which is one
-   answer reached from two places: the end of the feed, and the end of §8.8 Microtask queuing's filter between them. Written
+/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML step 8 — WHERE THE PARSE GOES NEXT, which is one
+   answer reached from two places: the end of the feed, and the end of §8.6.4 set and filter HTML's filter between them. Written
    once because the two must not drift — a filter that resumed at the wrong one of these would place an
    unsanitized fragment or clear the target twice. */
 static void frag_after_parse(FragState *s, JSStepHdr *hdr)
@@ -940,7 +940,7 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
                : (s->where == PLACE_FIRST_CHILD) ? s->anchor->first_child
                : s->anchor;
-        /* §8.8 Microtask queuing STEP 7, between the parse and the replacement: the fragment is filtered while it is still
+        /* §8.6.4 set and filter HTML STEP 7, between the parse and the replacement: the fragment is filtered while it is still
            this parse's private tree, which is the only moment at which removing from it is invisible to
            everything else — and the only moment at which a `<script>` the configuration removes has not yet
            been prepared by the insertion steps. */
@@ -1015,7 +1015,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
 {
     FragState *s = st;
     int magic = idl_step_magic(hdr);
-    /* §8.8 Microtask queuing's `safe`, and which members are `set and filter HTML` AT ALL — §8.5.4's innerHTML setter and
+    /* §8.6.4 set and filter HTML's `safe`, and which members are `set and filter HTML` AT ALL — §8.5.4's innerHTML setter and
        §8.5.5's outerHTML setter are not, so they parse and place without ever consulting a configuration. */
     bool safe = magic == ELEMENT_SET_HTML || magic == SHADOW_ROOT_SET_HTML;
     bool unsafe = magic == ELEMENT_SET_HTML_UNSAFE || magic == SHADOW_ROOT_SET_HTML_UNSAFE;
@@ -1029,7 +1029,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     DCHECK(magic >= 0 && magic < (int)(sizeof(FRAG_SINK) / sizeof(FRAG_SINK[0])),
            "the fragment-parse machine was declared with a magic no member of element.h's list names");
 
-    /* §8.8 Microtask queuing STEP 7's WALK owns every stage past this machine's own, and it resumes into itself for as many
+    /* §8.6.4 set and filter HTML STEP 7's WALK owns every stage past this machine's own, and it resumes into itself for as many
        nodes as the fragment has. When it is done the member continues at step 8, which is the same placement
        the unfiltered members reach straight from the parse. */
     if (hdr->stage >= SAN_CHILD && hdr->stage <= SAN_POP) {
@@ -1077,7 +1077,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             JS_ThrowTypeError(ctx, "an Element markup member was written on something that is not an element");
             return JS_STEP_ABRUPT;
         }
-        /* §8.8 Microtask queuing's STEPS 3, 4 AND 5, read before anything is parsed because the standard reads them before its
+        /* §8.6.4 set and filter HTML's STEPS 3, 4 AND 5, read before anything is parsed because the standard reads them before its
            step 6's parse — and the options are a dictionary the declaration already converted, so nothing of
            the page's runs here. */
         if (filtered) {
@@ -1092,7 +1092,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             if (safe && (context->ns == LXB_NS_HTML || context->ns == LXB_NS_SVG) &&
                 lxb_html_tree_node_is(context, LXB_TAG_SCRIPT))
                 return JS_STEP_DONE;
-            /* STEP 4. The configuration is resolved HERE and not at step 7, because §8.8 Microtask queuing resolves it before
+            /* STEP 4. The configuration is resolved HERE and not at step 7, because §8.6.4 set and filter HTML resolves it before
                the parse and a page can tell: a `sanitizer` that is not one is a TypeError thrown before the
                markup is parsed at all. */
             s->san_config = sanitizer_config_from_options(ctx, options, safe);
@@ -1183,7 +1183,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                            "template one");
                 target = &t->content->node;
             }
-            /* §8.8 Microtask queuing step 6 invokes the fragment parsing algorithm with allowDeclarativeShadowRoots TRUE for
+            /* §8.6.4 set and filter HTML step 6 invokes the fragment parsing algorithm with allowDeclarativeShadowRoots TRUE for
                ALL FOUR of its members — a `<template shadowrootmode>` a SAFE member parses becomes a real
                shadow root and is then sanitized like any other tree, which is what step 1.5.6 walks into.
                §8.5.4's innerHTML setter is not one of them and passes false. */
@@ -1203,7 +1203,7 @@ static const char *const EL_SET_HTML_STEPS[] = {
 
 static const IdlStepDecl EL_SET_HTML_STEP = { js_el_set_html, sizeof(FragState), frag_visit, frag_release,
                                               "HTML §8.5.4/§8.5.5 innerHTML/outerHTML setter, §8.5.2 "
-                                              "setHTMLUnsafe (over §8.8 Microtask queuing's set and filter HTML)",
+                                              "setHTMLUnsafe (over §8.6.4 set and filter HTML's set and filter HTML)",
                                               EL_SET_HTML_STEPS, .unforkable = frag_unforkable };
 
 const IdlStepDecl *element_set_html_decl(void)
@@ -1242,11 +1242,11 @@ int element_declare_set_html_unsafe(JSContext *ctx, int magic)
 }
 
 /* §8.5.2's `[CEReactions] undefined setHTML(DOMString html, optional SetHTMLOptions options = {})` — the SAFE
-   member, on both interfaces that have it, and the same machine as the three above with §8.8 Microtask queuing's `safe` true.
+   member, on both interfaces that have it, and the same machine as the three above with §8.6.4 set and filter HTML's `safe` true.
    ITS OWN DECLARATION and not a magic on setHTMLUnsafe's, because the IDL is a different line: there is no
    `(TrustedHTML or DOMString)` union (nothing is trusted — the SANITIZER is what makes it safe, which is also
    why the member exists) and SetHTMLOptions declares ONE member where SetHTMLUnsafeOptions declares two. A
-   `runScripts` this declaration does not list is one the body can never see, which is what makes §8.8 Microtask queuing step
+   `runScripts` this declaration does not list is one the body can never see, which is what makes §8.6.4 set and filter HTML step
    5.1's assert structural here rather than a check. */
 int element_declare_set_html(JSContext *ctx, int magic)
 {
