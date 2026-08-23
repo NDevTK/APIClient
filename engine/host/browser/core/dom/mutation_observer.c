@@ -617,24 +617,51 @@ void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *nod
  * `node_insert_at` free of a JSContext it does not have: the hook already receives one per call, and the two
  * aggregate records are emitted at the end from the context that was actually running.
  *
- * The two targets are fixed by the algorithm, not discovered: removals during the scope belong to the FRAGMENT
- * (step 4's record, which the standard says intentionally ignores suppressObservers) and insertions belong to
- * the PARENT. Anything else inside the scope would be a different operation and is asserted against.
+ * THE OPERATION'S PARENT IS GIVEN, NOT DISCOVERED, AND SO IS THE ONE REMOVAL IT SUPPRESSES. This scope used to
+ * infer both — the parent from whichever insertion came first, the "removals belong to the fragment" from the
+ * fact that insert step 4 is the only place it was opened — and that inference is wrong the moment §4.2.3's
+ * OTHER algorithm uses it. `replace` removes `child` FROM THE OPERATION'S OWN PARENT with suppressObservers
+ * set, and queues ONE record naming BOTH lists; `insert` removes a fragment's children from the FRAGMENT and
+ * queues a second record for it. Told the parent, this scope tells the three removals apart by where they come
+ * from:
+ *   - from the operation's parent AND the node the operation suppresses  → the operation's own removedNodes;
+ *   - from anywhere else inside the scope                                → step 4's record on that fragment;
+ *   - from the operation's parent but some OTHER node                    → NOT this operation. That is adopt's
+ *     own step 2 removing the inserted node from a parent it already had, which the standard queues as its own
+ *     record, in order, before this one — so it is handed back to the per-node path rather than absorbed.
+ * Inferring it instead is what made `p.replaceChild(x, c)` queue two records where a browser queues one, and
+ * would have made `p.replaceChild(x, c)` for an `x` already in `p` merge two operations into one.
  *
  * A run with no observer registered never reaches here at all, so the scope is inert until someone is watching. */
 static int      g_batch;
 static JSContext *g_batch_ctx;
-static JSValue  g_batch_add = JS_UNDEFINED, g_batch_rem = JS_UNDEFINED;
-static uint32_t g_batch_nadd, g_batch_nrem;
-static lxb_dom_node_t *g_batch_parent, *g_batch_from, *g_batch_prev, *g_batch_next;
+static JSValue  g_batch_add = JS_UNDEFINED, g_batch_rem = JS_UNDEFINED, g_batch_frem = JS_UNDEFINED;
+static uint32_t g_batch_nadd, g_batch_nrem, g_batch_nfrem;
+static lxb_dom_node_t *g_batch_parent, *g_batch_suppressed, *g_batch_from, *g_batch_prev, *g_batch_next;
 
-void mutation_observer_batch_begin(void)
+void mutation_observer_batch_begin(lxb_dom_node_t *parent, lxb_dom_node_t *suppressed, lxb_dom_node_t *from)
 {
+    DCHECK(parent != NULL, "§4.2.3's insert and replace each have exactly one parent, and this scope was opened "
+                           "without it — the target of the record it will queue is not a thing to discover");
     if (g_batch++ == 0) {
-        g_batch_nadd = g_batch_nrem = 0;
-        g_batch_parent = g_batch_from = g_batch_prev = g_batch_next = NULL;
+        g_batch_nadd = g_batch_nrem = g_batch_nfrem = 0;
+        g_batch_parent = parent;
+        g_batch_suppressed = suppressed;
+        g_batch_from = from;
+        g_batch_prev = g_batch_next = NULL;
         g_batch_ctx = NULL;
+        return;
     }
+    /* NESTED: `parent.replaceChild(fragment, child)` opens replace's scope and then insert's inside it. It is
+       ONE operation with one record, so the inner scope must not start a second — but insert's scope is where
+       the FRAGMENT is known, so that half is adopted rather than discarded. */
+    DCHECK(parent == g_batch_parent,
+           "a mutation-record scope was nested inside one naming a different parent — §4.2.3's replace opens "
+           "insert's scope for the same parent, and two parents here means two operations sharing one record");
+    DCHECK(suppressed == NULL || suppressed == g_batch_suppressed,
+           "a nested mutation-record scope named a different suppressed child — only replace suppresses one, "
+           "and it is the outermost of the two scopes");
+    if (from && !g_batch_from) g_batch_from = from;
 }
 
 void mutation_observer_batch_end(void)
@@ -644,16 +671,19 @@ void mutation_observer_batch_end(void)
     DCHECK(g_batch > 0, "a mutation-record batch ended that never began");
     if (--g_batch > 0) return;
     if (!ctx) return;                       /* nothing accumulated: no observer, or an empty fragment */
-    /* Step 4's record on the FRAGMENT, then the operation's own record on the PARENT — in that order, because
-       the standard queues them in that order and §4.3's queue is observably ordered. */
-    if (g_batch_nrem && g_batch_from)
+    /* Insert step 4.2's record on the FRAGMENT, then the operation's own record on the PARENT — in that order,
+       because the standard queues them in that order and §4.3's queue is observably ordered. */
+    if (g_batch_nfrem)
         mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, g_batch_from, NULL, NULL, NULL, 0,
-                                       JS_UNDEFINED, g_batch_rem, NULL, NULL);
-    if (g_batch_nadd && g_batch_parent)
+                                       JS_UNDEFINED, g_batch_frem, NULL, NULL);
+    /* ONE RECORD, BOTH LISTS. Insert's is « » removed and replace's is « child »; the standard queues the same
+       record from both algorithms and the only difference is what is in the two lists. */
+    if (g_batch_nadd || g_batch_nrem)
         mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, g_batch_parent, NULL, NULL, NULL, 0,
-                                       g_batch_add, JS_UNDEFINED, g_batch_prev, g_batch_next);
+                                       g_batch_add, g_batch_rem, g_batch_prev, g_batch_next);
     JS_FreeValue(ctx, g_batch_add); g_batch_add = JS_UNDEFINED;
     JS_FreeValue(ctx, g_batch_rem); g_batch_rem = JS_UNDEFINED;
+    JS_FreeValue(ctx, g_batch_frem); g_batch_frem = JS_UNDEFINED;
     g_batch_ctx = NULL;
 }
 
@@ -661,29 +691,36 @@ void mutation_observer_batch_end(void)
    the per-node record the standard does not have. */
 static bool batch_take(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int inserted, JSValue wrap)
 {
-    JSValue *list = inserted ? &g_batch_add : &g_batch_rem;
-    uint32_t *count = inserted ? &g_batch_nadd : &g_batch_nrem;
+    JSValue *list;
+    uint32_t *count;
 
     if (!g_batch) return false;
+    if (inserted) {
+        DCHECK(g_batch_parent == parent,
+               "one mutation-record batch spanned two insertion parents — §4.2.3's insert has exactly one, so "
+               "this scope is wrapped around something that is not one insert");
+        list = &g_batch_add; count = &g_batch_nadd;
+    } else if (n == g_batch_suppressed && parent == g_batch_parent) {
+        list = &g_batch_rem; count = &g_batch_nrem;          /* replace step 7's suppressed removal */
+    } else if (parent == g_batch_from) {
+        list = &g_batch_frem; count = &g_batch_nfrem;        /* insert step 4's, from the fragment */
+    } else {
+        /* NOT THIS OPERATION. Adopt's own step 2 removing the inserted node from a parent it already had —
+           the standard queues that as its own record, in order, with the old siblings this scope does not
+           carry, so it goes back to the per-node path rather than being folded in here. */
+        return false;
+    }
     if (!g_batch_ctx) g_batch_ctx = ctx;
     if (JS_IsUndefined(*list)) {
         *list = JS_NewArray(ctx);
         CHECK(!JS_IsException(*list), "a batched tree mutation record's node list could not be allocated");
     }
     if (inserted) {
-        if (!g_batch_parent) {              /* the operation's position is the FIRST insertion's */
-            g_batch_parent = parent;
-            g_batch_prev = n->prev;
-        }
+        /* The operation's position is the FIRST insertion's previous sibling and the LAST one's next — which,
+           because replace's suppressed removal has already happened, is child's previous sibling and the
+           referenceChild the standard binds at its steps 2 and 4. */
+        if (!g_batch_nadd) g_batch_prev = n->prev;
         g_batch_next = n->next;
-        DCHECK(g_batch_parent == parent,
-               "one mutation-record batch spanned two insertion parents — §4.2.3's insert has exactly one, so "
-               "this scope is wrapped around something that is not one insert");
-    } else {
-        if (!g_batch_from) g_batch_from = parent;
-        DCHECK(g_batch_from == parent,
-               "one mutation-record batch spanned two removal parents — step 4 removes a fragment's children "
-               "from that one fragment");
     }
     JS_SetPropertyUint32(ctx, *list, (*count)++, wrap);
     return true;

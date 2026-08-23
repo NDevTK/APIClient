@@ -698,6 +698,178 @@ static void node_insert_adopt(lxb_dom_node_t *parent, lxb_dom_node_t *node)
     node_adopt(document_realm_of(parent), node, node_document_of(parent));
 }
 
+static bool node_is_chardata(const lxb_dom_node_t *n);
+
+/* §4.2.3 "ensure pre-insert validity" — the ELEVEN steps that keep a node tree a node tree, in ONE place.
+ *
+ * This engine had exactly ONE of them: step 2's ancestor check, written out separately at appendChild, at
+ * insertBefore and at replaceChild and absent from the seven ChildNode/ParentNode mixins entirely. Every other
+ * step was missing, and each missing step is a tree a browser refuses to build and this engine built:
+ * `document.appendChild(document.createTextNode("x"))` put a Text node beside <html>; `document.appendChild(el)`
+ * gave a Document two element children; `el.appendChild(doctype)` put a doctype inside a <div>;
+ * `text.appendChild(el)` gave a Text node children. None of them threw, so the page went on running against a
+ * tree whose shape no serializer, no selector match and no walk in this engine is written for — the failure
+ * surfaces far from the call that caused it, which is the whole reason the standard checks first.
+ *
+ * `childrenToExclude` is « » for pre-insert and « child » for replace — the ONLY two the standard ever passes —
+ * so it is one node pointer rather than a list, and the DCHECK says which two it may be. Steps 9 and 11 are
+ * where it is read, and reading it is the whole of the difference between the two algorithms' validity.
+ *
+ * STEP 2 IS HOST-INCLUDING, NOT PLAIN ANCESTOR (§4.2.2 "Shadow tree": "A is a host-including inclusive ancestor
+ * of B if either A is an inclusive ancestor of B, or if B's root has a non-null host and A is a host-including
+ * inclusive ancestor of B's root's host"). A shadow root is the only fragment this engine gives a host, so
+ * shadow_root_is_shadow_including_inclusive_ancestor IS that relation here — and it is the one that matters:
+ * `host.shadowRoot.appendChild(host)` is a cycle a plain parent walk answers `false` for.
+ *
+ * Returns false HAVING THROWN, so every caller is `if (!…) return JS_EXCEPTION;`. */
+static bool node_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+                                  lxb_dom_node_t *child, lxb_dom_node_t *exclude)
+{
+    lxb_dom_node_t *c;
+    unsigned n_el = 0;
+    bool has_text = false;
+
+    DCHECK(node != NULL && parent != NULL,
+           "§4.2.3's pre-insert validity was asked about no node or no parent — both are non-nullable in the "
+           "algorithm's own signature, and a member reaching here with one is a member that skipped its "
+           "declaration's brand check");
+    DCHECK(exclude == NULL || exclude == child,
+           "§4.2.3's childrenToExclude is « » for pre-insert and « child » for replace, and nothing else — a "
+           "third list would be an algorithm the standard does not have");
+
+    /* STEP 1 */
+    if (parent->type != LXB_DOM_NODE_TYPE_DOCUMENT && parent->type != LXB_DOM_NODE_TYPE_ELEMENT &&
+        !node_is_document_fragment(parent))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "only a Document, DocumentFragment or Element can be a parent"), false;
+    /* STEP 2 */
+    if (shadow_root_is_shadow_including_inclusive_ancestor(node, parent))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "a node cannot be inserted into its own descendant"), false;
+    /* STEP 3 */
+    if (child && child->parent != parent)
+        return JS_ThrowDOMException(ctx, "NotFoundError",
+                                    "the reference child is not a child of this node"), false;
+    /* STEP 4 */
+    if (!node_is_document_fragment(node) && node->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE &&
+        node->type != LXB_DOM_NODE_TYPE_ELEMENT && !node_is_chardata(node))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "only a DocumentFragment, DocumentType, Element or CharacterData node can "
+                                    "be inserted"), false;
+    /* STEP 5 — everything below this line is about a DOCUMENT parent, whose children the standard constrains
+       far more tightly than any other node's. */
+    if (parent->type != LXB_DOM_NODE_TYPE_DOCUMENT) {
+        if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)                                  /* STEP 5.1 */
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "a doctype's parent can only be a document"), false;
+        return true;                                                                        /* STEP 5.2 */
+    }
+    /* STEP 6. A CDATASection IS a Text node — §4.11's CDATASection inherits Text — so both are the one case. */
+    if (node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION)
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "a document cannot have a Text node child"), false;
+    /* STEP 7 — the CharacterData nodes step 6 did not reject (Comment, ProcessingInstruction) are legal
+       children of a Document at any position, so no further constraint applies to them. */
+    if (node_is_chardata(node)) return true;
+    /* STEP 8 */
+    if (node_is_document_fragment(node)) {
+        for (c = node->first_child; c; c = c->next) {
+            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) n_el++;
+            else if (c->type == LXB_DOM_NODE_TYPE_TEXT || c->type == LXB_DOM_NODE_TYPE_CDATA_SECTION)
+                has_text = true;
+        }
+        if (n_el > 1 || has_text)                                                           /* STEP 8.1 */
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "a document cannot take a fragment holding more than one element or "
+                                        "any text"), false;
+        if (n_el == 0) return true;                                                         /* STEP 8.2 */
+    }
+    /* STEP 9 — a document has AT MOST ONE element child, and it must follow the doctype. */
+    if (node_is_document_fragment(node) || node->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        for (c = parent->first_child; c; c = c->next)
+            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && c != exclude)
+                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                            "a document already has an element child"), false;
+        for (c = child ? child->next : NULL; c; c = c->next)
+            if (c->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
+                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                            "an element cannot be inserted before the doctype"), false;
+        if (child && child->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE && child != exclude)
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "an element cannot be inserted before the doctype"), false;
+        return true;                                                                        /* STEP 9.2 */
+    }
+    /* STEP 10 — the standard asserts this rather than testing it, and so does this engine: steps 4 through 9
+       have eliminated every other kind, so a node reaching here that is not a doctype means one of those steps
+       is reading the wrong type and the tree it would build is one no later step checks. */
+    DCHECK(node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
+           "§4.2.3 step 10 asserts the node is a doctype, and it is not — steps 4-9 above have already returned "
+           "or thrown for every other node kind, so reaching here with one means a step read the wrong type");
+    /* STEP 11 — at most one doctype, and it must precede the element. */
+    for (c = parent->first_child; c; c = c->next)
+        if (c->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE && c != exclude)
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "a document already has a doctype child"), false;
+    for (c = child ? child->prev : NULL; c; c = c->prev)
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT)
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "a doctype cannot be inserted after the element"), false;
+    if (!child)
+        for (c = parent->first_child; c; c = c->next)
+            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && c != exclude)
+                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                            "a doctype cannot be appended after the element"), false;
+    return true;
+}
+
+/* §4.2.3 "pre-insert" — validity, then the reference child, then insert. FOUR STEPS AND A RETURN, and the
+   reason it is a function rather than three lines at each caller is that the three lines were NOT at each
+   caller: seven members inserted with no validity check at all. */
+bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent, lxb_dom_node_t *child)
+{
+    if (!node_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1, childrenToExclude « » */
+    /* STEPS 2-3 are node_insert_at's `if (ref == node) ref = node->next`, decided there because the fragment
+       arm needs the same adjustment and a caller cannot make it after the fragment has been emptied. */
+    node_insert_at(parent, node, child);                                        /* STEP 4 */
+    return true;
+}
+
+/* §4.2.3 "replace" — NOT a pre-insert followed by a remove, which is what `replaceChild` and `replaceWith` each
+   wrote out and which is wrong in three ways the standard's own ordering fixes. (a) Its validity runs with
+   childrenToExclude « child », so `document.replaceChild(newHtml, document.documentElement)` is legal where a
+   pre-insert is not — a pre-insert would see the element child that is about to leave and throw. (b) Its
+   reference child is child's NEXT sibling and the removal comes FIRST, so `p.replaceChild(n, n)` is a no-op
+   returning n; inserting before n and then removing n took the node OUT of the tree. (c) The removal carries
+   `suppressObservers` and the operation queues ONE tree mutation record naming both lists, where
+   insert-then-remove queues two. Returns false HAVING THROWN. */
+static bool node_replace(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *child, lxb_dom_node_t *parent)
+{
+    lxb_dom_node_t *ref;
+
+    DCHECK(child != NULL, "§4.2.3's replace was asked to replace nothing — `child` is the node the algorithm "
+                          "removes and returns, and it is non-nullable in both members stated over this");
+    if (!node_pre_insert_valid(ctx, node, parent, child, child)) return false;   /* STEP 1, « child » */
+    ref = child->next;                                                          /* STEP 2 */
+    if (ref == node) ref = node->next;                                          /* STEP 3 */
+    /* STEPS 4-9. `previousSibling` and `referenceChild` are read off the tree by the scope at the moment the
+       insertion happens, which — because the removal precedes it — is exactly the pair the standard binds at
+       its steps 2 and 4. */
+    /* STEP 6 IS BEFORE STEP 7, IT IS OUTSIDE THE SCOPE, AND BOTH OF THOSE ARE OBSERVABLE. Adopt removes `node`
+       from the parent it already had, which is a removal of ITS OWN — the standard queues it as a separate
+       record with the siblings `node` had at that moment, so it must run before `child` leaves and must not be
+       folded into the operation's record. `p.replaceChild(p.lastChild, p.firstChild)` is where the sibling
+       matters and `p.replaceChild(n, n)` is where the separation does: adopt takes `n` out, which makes step
+       7's condition FALSE — the standard's own note — so that call is two records, one removing and one
+       adding, and not one record naming `n` twice. */
+    node_insert_adopt(parent, node);                                            /* STEP 6 */
+    /* STEP 7's removal is the only one this operation suppresses, and only when there is one to suppress. */
+    mutation_observer_batch_begin(parent, child->parent ? child : NULL, NULL);
+    if (child->parent) dom_cow_remove_child(child);                             /* STEP 7 */
+    node_insert_at(parent, node, ref);                                          /* STEP 9 */
+    mutation_observer_batch_end();                                              /* STEP 10 */
+    return true;
+}
+
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref)
 {
     if (node_is_document_fragment(node)) {
@@ -706,7 +878,7 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
            children with `suppressObservers` set to TRUE and queues one record for the FRAGMENT; the last step
            queues one record for the PARENT with the whole node list. Without the scope the per-node hook
            queued one record per child at each end — which is what "expected 1 but got 2" reports. */
-        mutation_observer_batch_begin();
+        mutation_observer_batch_begin(parent, NULL, node);
         for (c = node->first_child; c; c = next) {
             next = c->next;
             dom_cow_remove_child(c);            /* STEP 4, with `suppressObservers` set */
@@ -748,13 +920,9 @@ static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc,
             return JS_ThrowDOMException(ctx, "NotFoundError", "the node to remove is not a child of this node");
         dom_cow_remove_child(child);
     } else {
-        /* §4.2.3 "pre-insert": the hierarchy check that keeps the tree a tree, which insertBefore already made
-           and this one did not — `a.appendChild(a)` and `child.appendChild(ancestor)` both built a CYCLE, and
-           every walk in this file loops forever on one. */
-        if (node_is_inclusive_ancestor(child, n))
-            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                        "a node cannot be inserted into its own descendant");
-        node_insert_at(n, child, NULL);
+        /* §4.5 appendChild IS §4.2.3's pre-insert with a null child — all eleven validity steps, not the one
+           ancestor check that used to stand here. */
+        if (!node_pre_insert(ctx, child, n, NULL)) return JS_EXCEPTION;
     }
     return JS_DupValue(ctx, argv[0]);
 }
@@ -799,10 +967,49 @@ static lxb_dom_node_t *node_from_arg(JSContext *ctx, lxb_dom_node_t *owner, JSVa
     return lxb_dom_interface_node(text);
 }
 
+/* §4.2.8's "is one of `nodes`" — the membership test the two viable-sibling steps are written over. A linear
+   scan of the argument list is the whole of it: the list is the call's own arguments, so it is as long as the
+   page wrote and no shorter, and a set would be a structure to build and free for a walk that is usually one
+   step. */
+static bool mixin_names_node(int argc, JSValueConst *argv, const lxb_dom_node_t *cand)
+{
+    int i;
+
+    for (i = 0; i < argc; i++)
+        if (node_of(argv[i]) == cand) return true;
+    return false;
+}
+
+/* §4.2.6 "to convert nodes into a node" — the FIVE steps, which produce ONE node: each string becomes a Text
+   node, a single node is returned as itself, and anything else is appended into a fresh DocumentFragment. Every
+   ChildNode/ParentNode member is stated over the RESULT of this, which is why they each take
+   `(Node or DOMString)...` and each perform exactly one pre-insert. Returns NULL having thrown. */
+static lxb_dom_node_t *node_convert_into_a_node(JSContext *ctx, lxb_dom_node_t *owner,
+                                                int argc, JSValueConst *argv)
+{
+    lxb_dom_document_fragment_t *frag;
+    lxb_dom_node_t *fnode;
+    int i;
+
+    if (argc == 1) return node_from_arg(ctx, owner, argv[0]);          /* STEPS 1-2 */
+    frag = lxb_dom_document_fragment_interface_create(owner->owner_document);   /* STEP 3 */
+    CHECK(frag != NULL, "§4.2.6's convert-nodes-into-a-node could not create the fragment its result is");
+    fnode = lxb_dom_interface_node(frag);
+    /* THIS FLOW MADE IT — the same record createDocumentFragment pushes at its own creation site. The fragment
+       is emptied by the insertion that consumes it and never becomes reachable from the tree, so without the
+       entry it is left in the document's Lexbor arena owned by nothing and invisible to the GC walk. */
+    dom_cow_note_created(fnode);
+    for (i = 0; i < argc; i++) {                                       /* STEP 4 */
+        lxb_dom_node_t *x = node_from_arg(ctx, owner, argv[i]);
+        if (!x) return NULL;
+        node_insert_at(fnode, x, NULL);       /* "append node to fragment" — §4.2.3's append, not a raw link */
+    }
+    return fnode;                                                      /* STEP 5 */
+}
+
 static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val), *parent, *ref, *added;
-    int i;
 
     if (!n) return JS_UNDEFINED;
     parent = n->parent;
@@ -810,27 +1017,62 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
        not an error, which is what lets a page call `el.remove()` twice. */
     if (magic <= 3 && !parent) return JS_UNDEFINED;
 
-    if (magic == 6) {                       /* replaceChildren: empty first, then append */
-        lxb_dom_node_t *c = n->first_child, *next;
-        for (; c; c = next) { next = c->next; dom_cow_remove_child(c); }
+    if (magic == 0) { dom_cow_remove_child(n); return JS_UNDEFINED; }   /* §4.2.8 remove */
+
+    /* §4.2.8 STEP 2 — the VIABLE sibling, computed BEFORE the conversion because the conversion MOVES the
+       nodes it is given and a reference child that moves is a reference to nothing. It is the nearest sibling
+       in the member's direction that is not one of `nodes`, which is what makes `el.after(a, el.nextSibling)`
+       land the pair where the standard says rather than around a sibling that is about to leave. */
+    if (magic == 1) {
+        for (ref = n->prev; ref && mixin_names_node(argc, argv, ref); ref = ref->prev) {}
+    } else if (magic == 2 || magic == 3) {
+        for (ref = n->next; ref && mixin_names_node(argc, argv, ref); ref = ref->next) {}
+    } else {
+        ref = NULL;
     }
-    /* `before`/`after` insert beside THIS node; `replaceWith` does that and then removes it. The reference
-       child is fixed BEFORE anything is inserted, because inserting moves `n->next`. */
-    ref = (magic == 1 || magic == 3) ? n : (magic == 2 ? n->next : NULL);
-    for (i = 0; i < argc; i++) {
-        added = node_from_arg(ctx, n, argv[i]);
-        if (!added) return JS_EXCEPTION;
-        if (added == n) continue;           /* inserting a node beside itself is its own removal first */
-        switch (magic) {
-        case 1: case 3: node_insert_at(parent, added, ref); break;
-        case 2: node_insert_at(parent, added, ref); break;
-        case 4: case 6: node_insert_at(n, added, NULL); break;
-        case 5: node_insert_at(n, added, n->first_child);
-                break;
-        default: DFAIL("a ChildNode/ParentNode member ran with an unknown magic"); break;
+
+    /* §4.2.6 "convert nodes into a node" — ONE node, which is a DocumentFragment when there is more than one.
+       This loop used to pre-insert each argument SEPARATELY, which is a different algorithm in three visible
+       ways: `document.append(a, b)` must throw for the pair rather than insert `a` and then reject `b`;
+       `el.before(a, b)` is ONE tree mutation record, not two; and a validity check made per argument cannot see
+       the fragment the standard checks. */
+    added = node_convert_into_a_node(ctx, n, argc, argv);
+    if (!added) return JS_EXCEPTION;
+    /* §4.2.8 before STEP 5, and it is AFTER the conversion on purpose: the conversion moves nodes out of this
+       parent, so both `parent's first child` and `viablePreviousSibling's next sibling` are read from the tree
+       the insertion will actually happen in. `after` and `replaceWith` have no such step — they pre-insert
+       before the viable NEXT sibling as it stands. */
+    if (magic == 1) ref = ref ? ref->next : parent->first_child;
+
+    /* §4.2.6 and §4.2.8 STATE EVERY ONE OF THESE OVER "PRE-INSERT" or over "replace", and this loop wrote the
+       tree links directly — so the seven convenience members were the seven places §4.2.3's validity was not
+       checked at all. `document.append(text)` and `document.prepend(el)` built the trees appendChild refuses. */
+    switch (magic) {
+    case 1: case 2: if (!node_pre_insert(ctx, added, parent, ref)) return JS_EXCEPTION; break;
+    /* §4.2.8 replaceWith STEP 4: `this`'s parent is checked AGAIN, because the conversion above may have moved
+       `this` into the fragment; only when it is still there is this the REPLACE algorithm. */
+    case 3: if (n->parent == parent) { if (!node_replace(ctx, added, n, parent)) return JS_EXCEPTION; }
+            else if (!node_pre_insert(ctx, added, parent, ref)) return JS_EXCEPTION;
+            break;
+    case 4: if (!node_pre_insert(ctx, added, n, NULL)) return JS_EXCEPTION; break;
+    case 5: if (!node_pre_insert(ctx, added, n, n->first_child)) return JS_EXCEPTION; break;
+    case 6:
+        /* §4.2.6 replaceChildren STEPS 2-3: the validity is ensured BEFORE anything is removed, which is the
+           whole point of it being a separate step — this used to empty the parent first, so a call that must
+           throw destroyed the children on its way to not throwing at all.
+           WHAT IS NOT BUILT HERE is §4.2.3's "replace all" record: the standard removes every child with
+           suppressObservers set and queues ONE tree mutation record naming both lists, and these removals still
+           queue one record each. That needs a suppress-ALL scope, which mutation_observer.h's scope does not
+           have — it suppresses the ONE child `replace` names. */
+        if (!node_pre_insert_valid(ctx, added, n, NULL, NULL)) return JS_EXCEPTION;
+        {
+            lxb_dom_node_t *c = n->first_child, *next;
+            for (; c; c = next) { next = c->next; dom_cow_remove_child(c); }
         }
+        node_insert_at(n, added, NULL);
+        break;
+    default: DFAIL("a ChildNode/ParentNode member ran with an unknown magic"); break;
     }
-    if (magic == 0 || magic == 3) dom_cow_remove_child(n);
     return JS_UNDEFINED;
 }
 
@@ -2199,24 +2441,19 @@ static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!parent) return JS_UNDEFINED;
     if (!node)
         return JS_ThrowTypeError(ctx, magic ? "replaceChild requires a Node" : "insertBefore requires a Node");
-    /* §4.2.3 "pre-insert": the hierarchy check that keeps the tree a tree. A page that inserts an ancestor into
-       its own descendant would build a CYCLE, and every walk in this file loops forever on one. */
-    if (node_is_inclusive_ancestor(node, parent))
-        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                    "a node cannot be inserted into its own descendant");
-    if (magic == 0 && !child) {
-        node_insert_at(parent, node, NULL);       /* insertBefore(n, null) IS append */
+    /* §4.4's IDL is `insertBefore(Node node, Node? child)` and `replaceChild(Node node, Node child)`, so the
+       SECOND argument's nullability is the whole of what these two differ in before the algorithms start: an
+       omitted or null reference child means APPEND for one and is a TypeError for the other. Anything that is
+       neither null nor a Node fails the interface conversion in both. */
+    if (!child && !(magic == 0 && (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1]))))
+        return JS_ThrowTypeError(ctx, magic ? "replaceChild requires a Node as its second argument"
+                                            : "insertBefore's reference child must be a Node or null");
+    if (magic == 0) {
+        if (!node_pre_insert(ctx, node, parent, child)) return JS_EXCEPTION;
         return JS_DupValue(ctx, argv[0]);
     }
-    if (!child || child->parent != parent)
-        return JS_ThrowDOMException(ctx, "NotFoundError",
-                                    "the reference child is not a child of this node");
-    node_insert_at(parent, node, child);
-    if (magic == 1) {
-        dom_cow_remove_child(child);
-        return JS_DupValue(ctx, argv[1]);         /* replaceChild returns the node it REMOVED */
-    }
-    return JS_DupValue(ctx, argv[0]);
+    if (!node_replace(ctx, node, child, parent)) return JS_EXCEPTION;   /* §4.2.3 "replace", STEPS 1-10 */
+    return JS_DupValue(ctx, argv[1]);             /* STEP 11 — replaceChild returns the node it REMOVED */
 }
 
 /* §4.4 lookupPrefix / lookupNamespaceURI / isDefaultNamespace — the three namespace lookups, one walk. Lexbor

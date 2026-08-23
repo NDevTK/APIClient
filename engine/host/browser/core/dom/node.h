@@ -162,6 +162,13 @@ void node_adopt(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_document_t *docume
    the fragment rule is how fragments quietly stop working. `ref` NULL appends. */
 void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
 
+/* §4.2.3's "PRE-INSERT" — "ensure pre-insert validity" and then insert, which is what every member the standard
+   states over pre-insert must run and what raw `node_insert_at` skips. Exported because §4.9's "insert adjacent"
+   is four pre-inserts and lives in element.c: writing the tree links there instead is how
+   `document.documentElement.insertAdjacentText("beforebegin", "x")` came to put a Text node beside <html>
+   rather than throwing. `child` NULL appends. Returns false HAVING THROWN. */
+bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent, lxb_dom_node_t *child);
+
 /* HTML §4.12.3's TEMPLATE CONTENTS — a `<template>`'s content fragment, or NULL for every other node. It is
    here rather than inside one walk because a `<template>`'s markup is NOT under the element (§4.10: only the
    parser and `t.content` reach the fragment), so EVERY tree walk that means "all of this node's markup" has to

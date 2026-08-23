@@ -1271,8 +1271,14 @@ int element_declare_set_html(JSContext *ctx, int magic)
    XSS invisible, which is the pair this engine exists to report.
    magic 0 = HTML, 1 = Element, 2 = Text. */
 /* §4.9's ADJACENT POSITION, shared by the three members that take one. The four names, ASCII
-   case-insensitively; anything else is a SyntaxError, not a quiet no-op. Returns false having thrown. */
-static bool adjacent_where(JSContext *ctx, JSValueConst posv, lxb_dom_node_t *n, int *pwhere, bool *poutside)
+   case-insensitively; anything else is a SyntaxError, not a quiet no-op. Returns false having thrown.
+   THE POSITION IS ALL THIS ANSWERS. It used to also reject an outside position whose parent is not an ELEMENT,
+   with a NoModificationAllowedError — which is HTML §8.5.6 "The insertAdjacentHTML() method"'s rule applied to
+   all three members, and DOM §4.9's "insert adjacent" has no such step: for "beforebegin" and "afterend" it
+   RETURNS NULL when the parent is null, and otherwise PRE-INSERTS, which is what makes
+   `document.documentElement.insertAdjacentText("beforebegin", "x")` a §4.2.3 HierarchyRequestError rather than
+   a NoModificationAllowedError. Two of the three members were answering the third's question. */
+static bool adjacent_where(JSContext *ctx, JSValueConst posv, int *pwhere, bool *poutside)
 {
     const char *pos = JS_ToCString(ctx, posv);   /* a real string by now: the declaration converted it */
 
@@ -1287,11 +1293,6 @@ static bool adjacent_where(JSContext *ctx, JSValueConst posv, lxb_dom_node_t *n,
         return false;
     }
     JS_FreeCString(ctx, pos);
-    if (*poutside && (!n->parent || n->parent->type != LXB_DOM_NODE_TYPE_ELEMENT)) {
-        JS_ThrowDOMException(ctx, "NoModificationAllowedError",
-                             "an adjacent position outside an element with no element parent");
-        return false;
-    }
     return true;
 }
 
@@ -1325,7 +1326,16 @@ static int js_el_insert_adjacent_html(JSContext *ctx, JSStepHdr *hdr, void *st, 
 
         if (!el || argc < 2) return JS_STEP_DONE;
         n = lxb_dom_interface_node(el);
-        if (!adjacent_where(ctx, argv[0], n, &where, &outside)) return JS_STEP_ABRUPT;
+        if (!adjacent_where(ctx, argv[0], &where, &outside)) return JS_STEP_ABRUPT;
+        /* HTML §8.5.6 "The insertAdjacentHTML() method" step 3: for the two outside positions the context is
+           this's parent, and "if context is null or a Document, throw a NoModificationAllowedError". NOT "is
+           not an Element", which is what this used to ask through adjacent_where — an element inside a
+           DocumentFragment has a parent that is neither, and its insertAdjacentHTML must work. */
+        if (outside && (!n->parent || n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT)) {
+            JS_ThrowDOMException(ctx, "NoModificationAllowedError",
+                                 "insertAdjacentHTML at an outside position whose context is null or a Document");
+            return JS_STEP_ABRUPT;
+        }
         solve_html_sink(ctx, s->compliant);
         if (concolic_is(s->compliant)) return JS_STEP_DONE;
         DCHECK(JS_IsString(s->compliant), "insertAdjacentHTML reached the body unconverted");
@@ -1364,9 +1374,9 @@ static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int 
 
     if (!el || argc < 2) return JS_UNDEFINED;
     n = lxb_dom_interface_node(el);
-    if (!adjacent_where(ctx, argv[0], n, &where, &outside)) return JS_EXCEPTION;
+    if (!adjacent_where(ctx, argv[0], &where, &outside)) return JS_EXCEPTION;
     {
-        lxb_dom_node_t *added, *ref;
+        lxb_dom_node_t *added, *ref, *into;
         if (magic == 1) {
             added = node_of(argv[1]);
             if (!added) return JS_ThrowTypeError(ctx, "insertAdjacentElement requires an Element");
@@ -1382,18 +1392,26 @@ static JSValue js_el_insert_adjacent(JSContext *ctx, JSValueConst this_val, int 
             added = lxb_dom_interface_node(t);
             dom_cow_note_created(added);   /* this flow made it: the delta owns it and destroys it on discard */
         }
-        ref = (where == PLACE_AFTER) ? n->next : (where == PLACE_FIRST_CHILD ? n->first_child : n);
+        /* §4.9 "insert adjacent" — FOUR PRE-INSERTS, not four raw tree writes. Each arm of the standard's list
+           says "return the result of pre-inserting node into X before Y", so the node is adopted into the
+           right document and §4.2.3's eleven validity steps decide the answer. Writing the links directly is
+           what let `document.documentElement.insertAdjacentText("beforebegin", "x")` put a Text node beside
+           <html> instead of throwing, and it skipped the adopt as well, so an element from another document
+           landed in this tree still naming its old one. */
         switch (where) {
-        case PLACE_BEFORE:      dom_cow_insert_before(n, added); break;
-        case PLACE_CHILDREN:    dom_cow_append_child(n, added); break;
-        case PLACE_AFTER:       if (ref) dom_cow_insert_before(ref, added);
-                                else dom_cow_append_child(n->parent, added);
-                                break;
-        case PLACE_FIRST_CHILD: if (ref) dom_cow_insert_before(ref, added);
-                                else dom_cow_append_child(n, added);
-                                break;
-        default: DFAIL("insertAdjacent ran with an unknown position"); break;
+        case PLACE_BEFORE:      into = n->parent; ref = n;               break;
+        case PLACE_AFTER:       into = n->parent; ref = n->next;         break;
+        case PLACE_FIRST_CHILD: into = n;         ref = n->first_child;  break;
+        case PLACE_CHILDREN:    into = n;         ref = NULL;            break;
+        default: DFAIL("insertAdjacent ran with a position adjacent_where does not produce");
+                 return JS_UNDEFINED;
         }
+        /* The two OUTSIDE arms open with "if element's parent is null, return null" — a return, not a throw,
+           which is the whole of what distinguishes these two members from insertAdjacentHTML's step 3. §4.9's
+           IDL returns `Element?` from one and `undefined` from the other, so the null is the ELEMENT member's
+           answer and the text member simply returns. */
+        if (!into) return magic == 1 ? JS_NULL : JS_UNDEFINED;
+        if (!node_pre_insert(ctx, added, into, ref)) return JS_EXCEPTION;
         /* §4.9: insertAdjacentElement returns the inserted node; insertAdjacentText returns undefined. */
         return magic == 1 ? JS_DupValue(ctx, argv[1]) : JS_UNDEFINED;
     }
