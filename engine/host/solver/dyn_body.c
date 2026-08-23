@@ -31,18 +31,20 @@ static DynBody *dyn_body_wrap(char *text, size_t len)
     return b;
 }
 
-DynBody *dyn_body_new(const char *text)
+DynBody *dyn_body_new(const char *text, size_t len)
 {
-    size_t len;
     char *copy;
 
     DCHECK(text != NULL,
            "a program was queued with no source text — every row of a flow's sequence is a program or the "
            "ADDRESS of one, and both are strings, so a NULL here is a caller that has neither");
-    len = strlen(text);
     copy = (char *)malloc(len + 1);
     if (!copy) return NULL;
-    memcpy(copy, text, len + 1);
+    memcpy(copy, text, len);
+    /* THE GUARD, WRITTEN HERE AND NOT COPIED FROM THE SOURCE. `text` is `len` bytes and this call makes no
+       claim about what — if anything — follows them, so reading a terminator out of the caller's buffer would
+       be a read past the range it handed over. */
+    copy[len] = '\0';
     return dyn_body_wrap(copy, len);
 }
 
@@ -51,15 +53,20 @@ DynBody *dyn_body_adopt(char *text, size_t len)
     DCHECK(text != NULL,
            "a program's source text was adopted from nothing — the decode that produces one answers a "
            "malloc'd buffer or fails, and a failure is CHECKed at the decode rather than handed on");
-    /* THE LENGTH AND THE TERMINATOR ARE ONE FACT, asserted where the buffer is taken over rather than trusted
-       from wherever it was decoded. Every reader compiles this text as a NUL-terminated program while the
-       census reports `len` bytes for it, so a pair that disagrees runs one program and measures another —
-       and a source that decoded a U+0000 runs truncated at it with the rest of the bundle simply absent,
-       which is the same thing engine.c's REPLY_SOURCE_WHOLE says at the decode. Both ends, one invariant. */
-    DCHECK(strlen(text) == len,
-           "a program's source text was adopted with a length that is not its NUL-terminated length — the "
-           "queue hands every body to the compiler as a NUL-terminated string and reports `len` bytes for it, "
-           "so the program that runs and the program that is measured are different lengths of the same buffer");
+    /* THE GUARD IS ASSERTED, THE LENGTH IS NOT DERIVED FROM IT. This assertion used to read `strlen(text) ==
+       len`, and that was the truncation stated as an invariant: it fired on a bundle that legitimately
+       contains a U+0000 (ECMAScript §11.1 "Source Text" permits every code point from U+0000 up), which is
+       what it was FOR — it named the missing length so it could be built, and the queue now carries one end to
+       end. What is left to assert is the one thing a holder may still rely on: there is a NUL AT `len`, so a
+       C read that walks off the end stops at the boundary this file owns rather than in the allocator's.
+       BOTH SIDES, because this is where a length and a NUL-terminated read can disagree: a caller that meant
+       `strlen` and passed something shorter would leave the guard byte inside its own text and the body would
+       report a length whose last byte is not the program's. `text[len]` is the only byte in the buffer whose
+       value this file gets to state. */
+    DCHECK(text[len] == '\0',
+           "a program's source text was adopted with no NUL at its stated length — the body carries (text, "
+           "len) and every reader takes the pair, but the guard byte is what stops a C read that walks past "
+           "the end inside this allocation instead of in the heap after it");
     return dyn_body_wrap(text, len);
 }
 

@@ -470,10 +470,18 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
                    script element" is a switch on EL and its classic arm sets this document's §3.1.7
                    `currentScript` to it for the run — which is what a page reads back to find its own
                    `<script>` and, through it, the prefix its lazy chunks are served from. */
+                /* AND `n_len` GOES WITH IT, WHICH IS THE LENGTH THIS CALL ALREADY HELD AND WAS DROPPING. The
+                   queue took a C string, so an injected program was read to its first NUL — and THIS element's
+                   text is the one inline source that can hold one: it was ASSIGNED by page code
+                   (`s.textContent = …`, `s.text = …`), so it never went through HTML §13.2.5.4 "Script data
+                   state", whose U+0000 NULL row ("Emit a U+FFFD REPLACEMENT CHARACTER character token") is
+                   what makes a PARSED inline script NUL-free. ECMAScript §11.1 "Source Text" permits every
+                   code point from U+0000 up, so an assignment of `x="<U+0000>";X9()` is a program a browser
+                   runs whole and this engine ran the three bytes in front of that code point of. */
                 if (st == SCRIPT_TYPE_MODULE) engine_queue_element_script(document_doc(ctx),
-                                                                          (const char *)txt, st, el);
+                                                                          (const char *)txt, n_len, st, el);
                 else                          engine_queue_script_immediate(document_doc(ctx),
-                                                                            (const char *)txt, el);
+                                                                            (const char *)txt, n_len, el);
             }
             lxb_dom_document_destroy_text(n->owner_document, txt);
         }

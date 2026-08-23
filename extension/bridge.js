@@ -964,8 +964,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
   /* qjs_init ANSWERS, and this discarded the answer. Its C body is a wall of CHECKs whose failures abort the
      instance, so the only value it can return is 0 — which is exactly why reading it costs nothing and why a
      non-zero would be an entry that started reporting a failure this zone was not listening for. */
-  /* THE DOCUMENT CROSSES AS BYTES, ONE SHAPE, because `qjs_init` takes one thing: a NUL-terminated byte
-     sequence it `strlen`s. It used to cross as EITHER — content.js ships a SERIALIZED DOM (the renderer parsed
+  /* THE DOCUMENT CROSSES AS BYTES, ONE SHAPE, because `qjs_init` takes one thing: a byte sequence and its
+     LENGTH. It used to cross as EITHER — content.js ships a SERIALIZED DOM (the renderer parsed
      the response and this is its characters) while a child navigable's document is the response's own BYTES off
      safeFetch — and the UNTRUSTED frame was the zone that ran the UTF-8 encode on the first of those.
      `content.mojom.Renderer.Init` declares `array<uint8>`, so the encode happens HERE, in the zone that already
@@ -984,17 +984,21 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl) {
          "renderer's serialized DOM and safeFetch ships a response body, so anything else is a producer that " +
          "stopped producing a document, with nothing downstream to notice but an empty finding set");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
-  /* THE SAME NUL, NOW ASSERTED OVER BOTH SHAPES — which the byte-only form of this check could not do: a
-     STRING document containing U+0000 encodes to a 0x00 and truncated the parse there just as silently, and
-     that half was unasserted. HTML §13.2.5's tokenizer has a rule for that byte (it emits U+FFFD), which is
-     the proof it is a byte a document may legitimately contain. What to build is the LENGTH beside the
-     pointer, the way qjs_provide already carries one, and with it §13.2.3.2's encoding sniffing algorithm so
-     that the document's own encoding is decided by the engine rather than assumed to be UTF-8. */
-  DCHECK(_doc.indexOf(0) < 0,
-         "a document's bytes contain a 0x00 and qjs_init takes a NUL-terminated C string — the parse would " +
-         "stop there and the rest of the document would be absent with nothing to say so. Give qjs_init a " +
-         "LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding sniffing " +
-         "over those bytes in the engine");
+  /* A 0x00 IN THESE BYTES IS NOT ASSERTED AGAINST ANY MORE, AND THE ASSERT THAT STOOD HERE IS DELETED RATHER
+     THAN WEAKENED. It read `_doc.indexOf(0) < 0` and named the fix — "Give qjs_init a LENGTH beside the
+     pointer (qjs_provide now carries one)" — and that length exists: `qjs_init`/`qjs_join` take `(bytes,
+     len)`, renderer.html's `bytes-pair-retained` placement puts both operands in linear memory, and the C
+     entry DCHECKs the guard byte at `bytes[len]` so a length and a C read cannot disagree without crashing.
+     The state it forbade is a state the standard defines: HTML §13.2.3.5 "Preprocessing the input stream" says
+     "The handling of U+0000 NULL characters varies based on where the characters are found … They are either
+     ignored or, for security reasons, replaced with a U+FFFD REPLACEMENT CHARACTER", and the tokenizer has a
+     rule per state (§13.2.5.4 "Script data state" emits a U+FFFD; §13.2.5.1 "Data state" emits the character
+     and §13.2.6.4.7 The "in body" insertion mode ignores it). Measured: three sites of a thirty-site mirror
+     aborted on this defect, one of them on five NULs in its own markup.
+     WHAT IS STILL OWED IS THE OTHER HALF OF THE OLD NOTE — HTML §13.2.3.2 "Determining the character encoding"
+     — and it is a DIFFERENT capability rather than the rest of this one: the engine still decodes these bytes
+     as UTF-8 instead of sniffing them. The length is that algorithm's precondition (sniffing is defined over a
+     byte sequence, and until now there was none), not a piece of it. */
   /* AND THE ADDRESS IS ASSERTED RATHER THAN DEFAULTED TOO, for the reason the line below it already proves:
      `(msg && msg.sourceUrl) || ""` stood here, and `originOf("")` is `""` — a frontier key every unidentifiable
      document would share, so one page's parked residue would resume inside another's engine. The engine's own
@@ -1377,14 +1381,12 @@ async function engineJoin(eng, msg, docName, topLevelUrl) {
          "is safeFetch's response body and a reported one is the renderer's serialized DOM, so anything else " +
          "is a document this agent would hold as nothing at all");
   const _doc = html instanceof Uint8Array ? html : new TextEncoder().encode(html);
-  /* THE SAME NUL THE ROOT'S DOCUMENT IS ASSERTED FOR, and for the same reason: qjs_join strlen()s the bytes,
-     so a document carrying a 0x00 is parsed truncated at it with the rest simply absent. HTML §13.2.5's
-     tokenizer has a rule for that byte, which is the proof a document may legitimately contain one. */
-  DCHECK(_doc.indexOf(0) < 0,
-         "a joined document's bytes contain a 0x00 and qjs_join takes a NUL-terminated C string — the parse " +
-         "would stop there and the rest of the document would be absent with nothing to say so. Give qjs_join " +
-         "a LENGTH beside the pointer (qjs_provide now carries one) and run HTML §13.2.3.2's encoding " +
-         "sniffing over those bytes in the engine");
+  /* THE SAME 0x00 THE ROOT'S DOCUMENT NO LONGER ASSERTS AGAINST, deleted here with it and for the one reason:
+     `qjs_join` takes `(bytes, len)` now, so a joined document carrying a NUL parses whole and the tokenizer
+     applies its own per-state rule to that byte (§13.2.5.4 "Script data state" emits a U+FFFD; §13.2.5.1
+     "Data state" emits the character and §13.2.6.4.7 The "in body" insertion mode ignores it). The two entries
+     take ONE contract — main.c's signatures are byte-identical — so a change to what a document arrives with
+     reaches both, which is exactly what this pair of asserts existed to keep true. */
   const _join = await eng.r.renderer.join(_doc, msg.sourceUrl, docName,
                                           responseFieldLines(msg.responseHeaders), topLevelUrl);
   DCHECK(_join.rc === 0,

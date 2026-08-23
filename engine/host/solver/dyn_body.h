@@ -56,22 +56,39 @@
    a type error rather than a heap corruption that only a fork would ever surface. */
 typedef struct DynBody DynBody;
 
-/* One body over a COPY of `text`, with one reference. NULL only if the allocation failed — the callers CHECK,
-   because a program that cannot be stored is a program the sequence silently would not run. */
-DynBody *dyn_body_new(const char *text);
+/* A PROGRAM IS `len` BYTES AND NOT "UP TO THE FIRST NUL", AND THAT IS THE SPEC'S ANSWER RATHER THAN THIS
+   FILE'S CONVENIENCE. ECMAScript §11.1 "Source Text" says it outright — "All Unicode code point values from
+   U+0000 to U+10FFFF, including surrogate code points, may occur in ECMAScript source text where permitted by
+   the ECMAScript grammars" — so a U+0000 inside a string literal is a program a page may legitimately ship,
+   and a bundle carrying one is not a corrupt bundle. Real ones do: measured over a 30-site mirror, one site
+   shipped 125 of them in a single script and another 2309.
+   WHAT THAT COSTS IF THE LENGTH IS DROPPED IS NOT A PARSE ERROR, IT IS SILENCE. Reading the text to its first
+   NUL hands the compiler a PREFIX of the page's program, so every endpoint, every sink and every branch after
+   that byte is unreachable — a run that learns less and reports nothing missing. The pair is therefore the
+   type: every entry here takes a length, and `dyn_body_len` is what every reader asks rather than `strlen`.
+
+   One body over a COPY of `text[0 .. len)`, with one reference. The copy is NUL-terminated at `len` because
+   the compiler entries (`JS_FlowNew` / `JS_FlowEvalModule`) take the pair AND lexbor's arena scans want a
+   sentinel, but that terminator is a guard and never the length. NULL only if the allocation failed — the
+   callers CHECK, because a program that cannot be stored is a program the sequence silently would not run. */
+DynBody *dyn_body_new(const char *text, size_t len);
 
 /* One body over `text` ITSELF, which this call owns from here on: `len` is its length and `text[len]` must be
-   the NUL every reader compiles it through. Consumes `text` on every path — on failure it is freed and NULL is
-   answered — so the decode paths that already hold a malloc'd source text hand it over without a second copy
-   of a megabyte. */
+   the NUL guard. `text` MAY contain embedded NULs — see the paragraph above — and that is the one thing this
+   entry's assertion no longer says otherwise. Consumes `text` on every path — on failure it is freed and NULL
+   is answered — so the decode paths that already hold a malloc'd source text hand it over without a second
+   copy of a megabyte. */
 DynBody *dyn_body_adopt(char *text, size_t len);
 
 DynBody *dyn_body_ref(DynBody *b);
 void     dyn_body_unref(DynBody *b);
 
-/* The program, NUL-terminated, for as long as the caller holds a reference. */
+/* The program, for as long as the caller holds a reference. There is a NUL at `dyn_body_len(b)` and there may
+   be NULs BEFORE it, so this is never read on its own: a caller takes it WITH `dyn_body_len` or it is reading
+   a prefix of somebody's bundle. */
 const char *dyn_body_text(const DynBody *b);
-/* Its length, which is `strlen` of the above and is kept rather than recomputed: the census walks every row of
+/* Its length — the number this file exists to carry. It is NOT `strlen` of the above (that is exactly the read
+   this pair replaces), and it is kept rather than recomputed for a second reason: the census walks every row of
    every flow, and a `strlen` there is a pass over every byte of every bundle the frontier holds. */
 size_t dyn_body_len(const DynBody *b);
 

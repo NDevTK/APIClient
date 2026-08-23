@@ -256,14 +256,37 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
    the arenas outlive every document and DOM §4.5's adopt across two of this agent's documents is a pointer
    write. A per-document arena could not do this — `iframe.contentDocument.body.appendChild(x)` would free one
    document's bytes out of another's allocator — which is exactly why HTML's similar-origin window agent is
-   the boundary an instance is keyed on. */
-static lxb_html_document_t *engine_parse_document(const char *html)
+   the boundary an instance is keyed on.
+   THE BYTES ARRIVE AS `(html, html_n)` AND A 0x00 IS ONE OF THEM. This used to `strlen` its argument, which
+   made the tokenizer's input END at the document's first NUL byte — and a NUL is a byte a document may
+   legitimately contain: HTML §13.2.3.5 "Preprocessing the input stream" says so in as many words ("The
+   handling of U+0000 NULL characters varies based on where the characters are found and happens at the later
+   stages of the parsing. They are either ignored or, for security reasons, replaced with a U+FFFD REPLACEMENT
+   CHARACTER"), and the tokenizer then has a rule per state: §13.2.5.1 "Data state" EMITS it as a character
+   token, §13.2.5.4 "Script data state" and §13.2.5.2 "RCDATA state" emit a U+FFFD instead, and tree
+   construction finishes the job — §13.2.6.4.7 The "in body" insertion mode IGNORES a U+0000 character token,
+   §13.2.6.5 "The rules for parsing tokens in foreign content" inserts a U+FFFD.
+   None of that is reachable if the bytes stop at the first one. Measured on a 30-site frozen mirror, one site's
+   own document carried five: with a `strlen` here the parse produced a truncated tree, so every `<script>`
+   after that byte was a script this engine never knew the page had.
+   WHAT THIS DOES NOT DO IS DECIDE THE ENCODING. The bytes are handed to lexbor as UTF-8, which is HTML
+   §13.2.3.2 "Determining the character encoding" left unbuilt — a separate capability, and one the length is a
+   PRECONDITION for rather than a part of: sniffing is defined over a byte sequence, and there was none. */
+static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n)
 {
     lxb_html_document_t *dom = dom_document_create();
 
     CHECK(dom != NULL, "the document allocation failed");
-    if (html_parse_document(dom, (const lxb_char_t *)(html ? html : ""),
-                            html ? strlen(html) : 0) != LXB_STATUS_OK)
+    /* NO `html ? html : ""` HERE ANY MORE. That ternary turned "the caller handed over no document" into a
+       document that parses to nothing — a successful analysis of an empty page, which reads exactly like a
+       page with no endpoints and no sinks (the same default bridge.js deleted at its own end of this
+       argument). Both entries CHECK the pointer, so this asserts rather than substituting. A zero LENGTH is a
+       different statement and a legitimate one: an empty response is still a Document, and tree construction
+       still produces <html><head><body>. */
+    DCHECK(html != NULL,
+           "a document was parsed from no bytes at all — both entries CHECK the pointer before reaching here, "
+           "so a null one is a third caller that does not");
+    if (html_parse_document(dom, (const lxb_char_t *)html, html_n) != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
     return dom;
 }
@@ -316,9 +339,23 @@ static lxb_html_document_t *engine_parse_document(const char *html)
  * COOP, COEP and `Origin-Agent-Cluster` are response headers only. The list is read ONCE, here, into the
  * decisions §7.5.1 creates the Document from, and then freed: nothing the bundle runs can reach it afterwards.
  * SECURITY.md's boundary is unchanged by this — the zone that captured the response states the bytes, exactly
- * as it states the address, the origin and the top-level creation URL. */
-QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, const char *headers,
-                        const char *top_level_url)
+ * as it states the address, the origin and the top-level creation URL.
+ *
+ * `html_len` IS THE DOCUMENT'S LENGTH, AND IT IS AN ARGUMENT BECAUSE A DOCUMENT MAY CONTAIN A 0x00. This entry
+ * used to take the bytes as a NUL-terminated pointer it `strlen`d, which is a shape the wire never had —
+ * `Init`'s parameter is mojom's `array<uint8>`, a byte sequence with its own length — and the zone on the
+ * other side was asserting the hole shut instead: bridge.js DCHECKed `_doc.indexOf(0) < 0` and named this fix
+ * ("Give qjs_init a LENGTH beside the pointer, the way qjs_provide already carries one"). A NUL is a byte a
+ * document may legitimately contain (HTML §13.2.3.5 "Preprocessing the input stream" defines its handling
+ * rather than forbidding it), and one site of a 30-site mirror shipped five in its own markup, so the assert
+ * fired on real pages that a browser parses whole. `unsigned` and not `size_t` because that is the width every
+ * other length crosses this ABI in (`qjs_provide`'s `body_len`), and the wire declares an i32.
+ * THE GUARD BYTE IS ASSERTED, NOT USED AS THE LENGTH: renderer.html's byte placement writes a NUL after the
+ * document, so `html[html_len]` is readable and is what the two sides agree on — a placement that stopped
+ * writing it, or a length that disagreed with it, is the one thing that would put this read past the buffer,
+ * and it crashes HERE rather than inside lexbor. */
+QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
+                        const char *headers, const char *top_level_url)
 {
     char *origin;
     HeaderList response_headers;
@@ -335,6 +372,16 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
        frontier. Calling this twice is not that entry, and it would silently be a second agent. */
     CHECK(g_dom == NULL, "qjs_init ran twice in one WASM instance — it ROOTS the agent, and a second document "
                          "of this origin-keyed cluster joins through the join entry rather than re-rooting it");
+    CHECK(html != NULL, "the host started this engine with no document at all — a Document is a tree over the "
+                        "bytes the trusted zone captured, and there is no tree to build from nothing");
+    /* THE LENGTH AND THE GUARD ARE ONE FACT AND BOTH SIDES STATE IT. renderer.html's byte placement writes a
+       NUL after the sequence it puts in linear memory; this reads that byte and nothing else past `html_len`.
+       A placement that stopped writing it, or a length that named a different end, would otherwise be a
+       document this entry and the trusted zone disagree about, and the only symptom would be a shorter tree. */
+    DCHECK(html[html_len] == '\0',
+           "a document's bytes carry no guard byte at their stated length — the ABI placement writes one past "
+           "the sequence, so a length that does not name that byte is this entry and the trusted zone holding "
+           "two different documents under one call");
     {
         UrlRecord rec;
         CHECK(url != NULL && *url && url_parse(&rec, url, strlen(url), NULL),
@@ -395,7 +442,7 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
     concolic_install_hooks();
     concolic_install_source_overlay();   /* a SOLVER host: attacker-controlled values are symbolic sources */
 
-    g_dom = engine_parse_document(html);
+    g_dom = engine_parse_document(html, html_len);
 
     /* Identity and script inventory from the DOM's OWN executable scripts: a concatenation of them cannot
        represent per-<script> scope and would shift with an inline script the page did not ship. */
@@ -485,12 +532,14 @@ QJS_EXPORT int qjs_init(const char *html, const char *url, const char *doc_id, c
  * flow, minted for this document on the ONE frontier (engine_join_document). That split is the same one
  * `qjs_init` + `qjs_begin` already are.
  *
- * `html` IS THE RESPONSE'S BYTES, `url` ITS ADDRESS, `doc_id` ITS NAME, `headers` ITS RESPONSE HEADER LIST and
- * `top_level_url` HTML §8.1.3.1's TOP-LEVEL CREATION URL — each exactly what the same-named argument of
- * `qjs_init` is, stated by the same zone for the same reason, and read here ONCE into the decisions §7.5.1
- * creates a Document from. */
-QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, const char *headers,
-                        const char *top_level_url)
+ * `html` IS THE RESPONSE'S BYTES and `html_len` THEIR LENGTH, `url` ITS ADDRESS, `doc_id` ITS NAME, `headers`
+ * ITS RESPONSE HEADER LIST and `top_level_url` HTML §8.1.3.1's TOP-LEVEL CREATION URL — each exactly what the
+ * same-named argument of `qjs_init` is, stated by the same zone for the same reason, and read here ONCE into
+ * the decisions §7.5.1 creates a Document from. The length is that entry's for that entry's reason: a document
+ * may contain a 0x00 and the tokenizer has a rule for it per state, none of which is reachable if the bytes
+ * stop there. */
+QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
+                        const char *headers, const char *top_level_url)
 {
     HeaderList response_headers;
     NavigationParams np;
@@ -511,6 +560,12 @@ QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, c
     DCHECK(g_begun,
            "qjs_join ran before qjs_begin seeded the frontier — a joined document's scripts are members of the "
            "ONE frontier, and there is no session for them to be members of yet");
+    CHECK(html != NULL, "a document joined this agent with no bytes at all — a join ADDS a Document, and there "
+                        "is no tree to build from nothing");
+    /* THE SAME TWO-SIDED READ `qjs_init` MAKES, at the same boundary and for the same reason. */
+    DCHECK(html[html_len] == '\0',
+           "a joined document's bytes carry no guard byte at their stated length — the ABI placement writes "
+           "one past the sequence so that a length and a C read cannot disagree silently");
 
     /* THE PRINCIPAL, BEFORE ANYTHING IS BUILT OUT OF THE BYTES. §7.1.1's same origin, asked of the AGENT's own
        record against this document's address, which is the one comparison that decides whether this document
@@ -563,7 +618,7 @@ QJS_EXPORT int qjs_join(const char *html, const char *url, const char *doc_id, c
            "to it resolving to whichever of the two the registry wrote last");
     world_doc_adopt(doc);
 
-    dom = engine_parse_document(html);
+    dom = engine_parse_document(html, html_len);
     cctx = engine_realm_new(g_rt, top_level_url);
     {
         /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME — the same statement qjs_init makes about the

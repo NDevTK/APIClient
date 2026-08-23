@@ -103,14 +103,18 @@
     return p;
   }
   /* BYTES ARE PLACED, NEVER ENCODED — the same rule bridge.js states at its own document argument: a document
-     that arrived as a byte sequence must not be run through an encode on the way in. The extra byte is the NUL
-     `qjs_init` strlen()s to; it is retained for retainString's reason. */
-  function retainBytes(b) {
+     that arrived as a byte sequence must not be run through an encode on the way in. It is retained for
+     retainString's reason, and it answers the PAIR the C entry takes.
+     THE EXTRA BYTE IS A GUARD AND NO LONGER THE LENGTH. It used to be "the NUL `qjs_init` strlen()s to", which
+     made the document END at its first 0x00 — a byte a document may legitimately contain, and one that three
+     of a thirty-site mirror shipped. `qjs_init`/`qjs_join` take `(ptr, len)` now and the entry DCHECKs that
+     `ptr[len]` is this byte, so the two sides assert one fact from both ends instead of one side assuming it. */
+  function retainBytesPair(b) {
     var p = M._malloc(b.length + 1);
     CHECK(p !== 0, "OOM placing an ABI byte argument in the renderer's linear memory");
     M.HEAPU8.set(b, p);
     M.HEAPU8[p + b.length] = 0;
-    return p;
+    return [p, b.length];
   }
   /* A BODY IS A (ptr, len) PAIR AND `null` IS A POSITIVE STATEMENT — "this answer carries no body at all", a
      network error or a load that did not load. The mojom declares it `array<uint8>?` for exactly that and the
@@ -134,21 +138,26 @@
 
      THE PLACEMENTS, AND EVERY ONE IS A FACT ABOUT THE C ENTRY:
        string-retained — malloc'd, UTF-8 written, NUL-terminated, NEVER FREED (the entry keeps the pointer)
-       bytes-retained  — the same retention for a parameter that arrived as bytes, copied without an encode
+       bytes-pair-retained — a parameter that arrived as BYTES: copied without an encode, expanded to TWO
+                         operands (the pointer and the length) and NEVER FREED, because the entry keeps the
+                         pointer. It is the placement `qjs_init`/`qjs_join`'s document takes: a document may
+                         contain a 0x00, so its length crosses beside it rather than being recovered with a
+                         `strlen` that would end the parse at that byte
        string          — emscripten's own transient copy (what M.ccall("…","string") does), for an entry that
                          reads the string during the call and keeps nothing
        number          — passed through; the wasm signature decides i32 or f64, which is why `int32` and
                          `double` place identically
        bytes-pair      — expands to TWO operands, the pointer and the length, freed after the call returns
 
-     `qjs_provide` and `qjs_host_answer` are the two entries whose ONE mojom parameter becomes TWO C operands,
-     which is the whole reason a placement is per-parameter rather than per-type. */
+     `qjs_init`, `qjs_join`, `qjs_provide` and `qjs_host_answer` are the entries whose ONE mojom parameter
+     becomes TWO C operands, which is the whole reason a placement is per-parameter rather than per-type. The
+     two pairs differ only in LIFETIME, which is a fact about the C entry and not about the bytes. */
   var ABI = {
     init:             { fn: "qjs_init",               ret: "number", out: "rc",
-                        place: ["bytes-retained", "string-retained", "string-retained", "string-retained",
+                        place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
                                 "string-retained"] },
     join:             { fn: "qjs_join",               ret: "number", out: "rc",
-                        place: ["bytes-retained", "string-retained", "string-retained", "string-retained",
+                        place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
                                 "string-retained"] },
     getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId", place: [] },
     begin:            { fn: "qjs_begin",              ret: null,     out: null,       place: ["string"] },
@@ -179,11 +188,11 @@
      exact defect the byte types exist to prevent, and one that produces a plausible shorter document rather
      than a crash. */
   var PLACEABLE = {
-    "string-retained": ["string"],
-    "bytes-retained":  ["array<uint8>"],
-    "string":          ["string"],
-    "number":          ["int32", "double"],
-    "bytes-pair":      ["array<uint8>?"],
+    "string-retained":     ["string"],
+    "bytes-pair-retained": ["array<uint8>"],
+    "string":              ["string"],
+    "number":              ["int32", "double"],
+    "bytes-pair":          ["array<uint8>?"],
   };
 
   /* ONE ABI CALL, driven by the binding rather than by anything the caller said about its own arguments. The
@@ -196,7 +205,14 @@
     var types = [], vals = [], transient = [], i, pr, v;
     for (i = 0; i < e.place.length; i++) {
       if (e.place[i] === "string-retained") { types.push("number"); vals.push(retainString(args[i])); continue; }
-      if (e.place[i] === "bytes-retained")  { types.push("number"); vals.push(retainBytes(args[i])); continue; }
+      if (e.place[i] === "bytes-pair-retained") {
+        /* TWO OPERANDS AND NO `transient` ENTRY — the pointer is the entry's from here on (retainString's
+           reason), and the length rides beside it because the C entry takes the pair. */
+        pr = retainBytesPair(args[i]);
+        types.push("number"); vals.push(pr[0]);
+        types.push("number"); vals.push(pr[1]);
+        continue;
+      }
       if (e.place[i] === "string")          { types.push("string"); vals.push(args[i]); continue; }
       if (e.place[i] === "number")          { types.push("number"); vals.push(args[i]); continue; }
       if (e.place[i] === "bytes-pair") {

@@ -320,14 +320,22 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
                    program no `<script>` caused, and a row seeded out of a document's inventory is never one.
                    Same position (this seed builds the sequence in document order, so APPEND *is* in place) and
                    the same type the assert above has just pinned; what it adds is the element §4.12.1.1's
-                   "execute the script element" switches on and sets §3.1.7's `currentScript` to. */
-                engine_queue_element_script(doc, ds.bodies[i], ds.types[i], ds.els[i]);
+                   "execute the script element" switches on and sets §3.1.7's `currentScript` to.
+                   THE LENGTH IS THE `strlen` FOR THIS SEAM, AND THAT IS THE TOKENIZER'S GUARANTEE. Every row
+                   of `ds` came out of a Lexbor parse of this document's bytes, so an inline `<script>`'s text
+                   is what HTML §13.2.5.4 "Script data state" emitted — and its U+0000 NULL row is "This is an
+                   unexpected-null-character parse error. Emit a U+FFFD REPLACEMENT CHARACTER character token",
+                   with §13.2.5.84 "Numeric character reference end state" answering the same for `&#0;`. A
+                   program that CAN carry a NUL never comes from here; the seams that do (an injected element's
+                   `.textContent`, a `javascript:` URL, an @S candidate) each hand this queue a real length. */
+                engine_queue_element_script(doc, ds.bodies[i], strlen(ds.bodies[i]), ds.types[i], ds.els[i]);
             } else {
                 DCHECK(ds.types[i] == SCRIPT_TYPE_MODULE,
                        "an inline entry of a document's script inventory is scheduled somewhere other than its "
                        "own parse position and is not a module — §4.12.1.1 owes no fetch for a classic script "
                        "whose source it already has, so nothing else can reach a list from an inline row");
-                engine_queue_element_script(doc, ds.bodies[i], ds.types[i], ds.els[i]);
+                /* …AND THE SAME LENGTH FOR THE SAME REASON — see the classic arm above. */
+                engine_queue_element_script(doc, ds.bodies[i], strlen(ds.bodies[i]), ds.types[i], ds.els[i]);
             }
             continue;
         }
@@ -969,17 +977,20 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url)
            "Encoding §6's hook runs its decoder in \"replacement\" error mode, which makes every malformed "
            "sequence a U+FFFD, so this is the decoder contradicting its own error mode and what it reaches is "
            "a compiler that refuses the byte rather than the program");
-    DCHECK(strlen(source) == n,
-           "a javascript: URL's script source decoded to a U+0000, and the program queue holds a NUL-terminated "
-           "body — build the queue over a length so a source with a NUL in it runs whole rather than truncated "
-           "at it");
+    /* A U+0000 IN THIS SOURCE IS ORDINARY AND IS NO LONGER ASSERTED AGAINST. A `strlen(source) == n` DCHECK
+       stood here and named what to build — "build the queue over a length" — and the queue is built over one:
+       engine_queue_javascript_url takes `(source, n)` and the row carries both to the compiler. The assertion
+       is DELETED rather than weakened, because the state it forbade is the state the spec produces: step 3's
+       percent-decode is URL §1.3 "Percent-encoded bytes", whose output is a BYTE SEQUENCE that `%XX` reaches
+       every value of, and ECMAScript §11.1 "Source Text" says every code point from U+0000 up may occur in
+       source text. `javascript:x='%00'` is a program, not a malformed URL. */
     /* Steps 4-7: the classic script is created with the target navigable's active document's settings and API
        base URL — this document's, which is what makes this the same-navigable case the header names — and RUN.
        Its completion value decides step 9, and the scheduler is the only place that value exists (engine.h). */
     /* IN THE TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 names as the settings object the script is
        created with. `ctx` is that document's realm — the activation behaviour that reached here ran in it — so
        the program is a program OF that document and is compiled there. */
-    engine_queue_javascript_url(document_doc(ctx), source);
+    engine_queue_javascript_url(document_doc(ctx), source, n);
     free(source);
 }
 

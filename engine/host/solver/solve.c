@@ -203,12 +203,14 @@ static JSValue js_x9(JSContext *ctx, JSValueConst t, int c, JSValueConst *v) {
    remaining program of the document — which puts the proof back behind flow completion, the exact dependency
    js_x9's own comment above records as removed. The marker still records the finding the instant it runs; this
    is about when it gets to run. */
+/* AND THE PAYLOAD CROSSES AS `(src, len)`, WHICH IS THE PAIR THIS FUNCTION ALREADY HELD. It used to malloc a
+   NUL-TERMINATED copy and hand the queue only the pointer — so a candidate the search had built with a U+0000
+   in it (a `%00` percent-decoded out of a hash, a NUL a JSON reply carried) was fired as its PREFIX, and the
+   "did not fire" that followed was a verdict about a program nobody chose. The copy is gone with it: the queue
+   copies into the shared body it makes (solver/dyn_body.h), so the temporary was a second copy of the payload
+   whose only job was to carry a terminator the queue writes for itself. */
 static void fire_js(const char *src, size_t len, DynPos pos) {
-    char *body = malloc(len + 1);
-    CHECK(body, "solve: OOM queueing a fired PoC body");
-    memcpy(body, src, len); body[len] = 0;
-    engine_queue_candidate(body, pos);
-    free(body);
+    engine_queue_candidate(src, len, pos);
 }
 
 /* THE BREAKOUTS A SINK CLASS STARTS ITS SEARCH FROM, where they are WRITTEN DOWN rather than derived.

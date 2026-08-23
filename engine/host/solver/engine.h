@@ -8,6 +8,8 @@
 #ifndef ENGINE_HOST_SOLVER_ENGINE_H
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
+#include <stddef.h>   /* size_t — every program crosses this header as (text, LENGTH); see engine_queue_script */
+
 #include <lexbor/dom/dom.h>
 
 #include "core/fetch/fetch.h"
@@ -58,7 +60,14 @@ typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
    with no `<script>` element behind it rather than a default this entry picks: §8.6's string handler is
    evaluated as a classic script and a lazy chunk's reply is the body an already-running program asked for. A
    row that DOES have an element behind it states which of §8.1.4.4's two algorithms runs it — the entry below
-   this one. */
+   this one.
+   A PROGRAM IS `(text, len)` EVERYWHERE ELSE IN THIS FILE, AND THIS IS THE ONE ENTRY THAT IS STILL A C STRING.
+   ECMAScript §11.1 "Source Text" permits every code point from U+0000 up, so a bundle carrying a NUL is a
+   bundle a browser runs whole and this engine used to run a PREFIX of — silently, with every endpoint and sink
+   past that byte unreachable. Every entry below therefore takes a length. This one cannot yet: it is §8.6's
+   string-handler sink, whose shape is core/timing/timer.h's `void (*)(uint32_t, const char *)`, and the length
+   is already gone by the time that hook is called. `setTimeout("\0…")` is the remaining truncation and it is
+   fixed in timer.c's conversion, not here. */
 void engine_queue_script(uint32_t doc, const char *body);
 /* …AND THE ROW A `<script>` ELEMENT PUT THERE, at the same position and carrying one more fact. HTML §4.12.1.1
    "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type — "classic" runs the
@@ -78,7 +87,13 @@ void engine_queue_script(uint32_t doc, const char *body);
    so nothing at the completion could re-derive which element it was, and a C save/restore bracket around the
    compile would set the slot for whichever flow was running when the NEXT program started. See solver/flow.h's
    `dyn_el`. */
-void engine_queue_element_script(uint32_t doc, const char *body, ScriptType stype, lxb_dom_element_t *el);
+/* `body_n` IS THE PROGRAM'S LENGTH and is not `strlen(body)`: an element page code INSERTED carries whatever
+   was assigned to its `.textContent`, which never went through HTML §13.2.5.4 "Script data state" (the state
+   that turns a U+0000 into a U+FFFD), so its text may hold a NUL that a parsed document's inline script
+   provably cannot. The DOM already answers the length — `lxb_dom_node_text_content` fills one — and dropping
+   it was how an injected chunk ran as a prefix of itself. */
+void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
+                                 lxb_dom_element_t *el);
 /* …AND THE ONE THAT IS NOT. HTML §4.12.1.1 "Processing model": an inline classic script whose element a page
    INSERTED reaches the end of "prepare the script element" — "Otherwise, immediately execute the script
    element el, even if other scripts are already executing" — and "execute the script element" then runs the
@@ -90,8 +105,10 @@ void engine_queue_element_script(uint32_t doc, const char *body, ScriptType styp
    type is `classic` and el has a src attribute, or el's type is `module`", so every module — inline or not —
    has already gone to one of the three lists by then. An inline module has a graph to LOAD before its result
    exists, which is why the standard does not run it in place. */
-/* `el` IS THE ELEMENT THE PAGE INSERTED — see engine_queue_element_script. */
-void engine_queue_script_immediate(uint32_t doc, const char *body, lxb_dom_element_t *el);
+/* `el` IS THE ELEMENT THE PAGE INSERTED, and `body_n` ITS PROGRAM'S LENGTH — both for the reasons
+   engine_queue_element_script states, and the length for that entry's exactly: this element's text is a page's
+   own string, not a tokenizer's output. */
+void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el);
 /* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
    script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
    tokenizer (§13.2.6.4.8), and the `list of scripts that will execute when the document has finished parsing`
@@ -117,7 +134,11 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
    expression — IMMEDIATE. A markup sink's auto-firing `onerror`/`onload` and a URL sink's `javascript:`
    navigation are TASKS, so they take the tail like every other task — APPEND. §@S's "the firing vector is
    chosen per sink from its real semantics" is the same sentence about the same table. */
-void engine_queue_candidate(const char *body, DynPos pos);
+/* `body_n` IS THE CANDIDATE'S LENGTH, and here the pair is load-bearing for the SOLVER rather than for
+   fidelity: a candidate is constructed out of attacker-shaped bytes (a `%00` percent-decoded from a hash, a
+   U+0000 a JSON reply carried), so reading it to its first NUL fires a program the search did not choose and the
+   "no hit" that follows is a verdict about a payload nobody built. */
+void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
 /* A `javascript:` URL's SCRIPT SOURCE, queued as the program HTML §7.4.2.3.2's evaluate-a-javascript:-URL runs.
    Same queue, and it is the same thing — code the page caused to run — but it differs from a page <script> at
    both ends of that program's life, which is why it is its own entry point rather than a third caller of the
@@ -132,7 +153,10 @@ void engine_queue_candidate(const char *body, DynPos pos);
    on one.
      `doc` is the TARGET NAVIGABLE'S ACTIVE DOCUMENT, which step 5 names as the settings object the classic
    script is created with — the realm it is compiled in, and not always the session's. */
-void engine_queue_javascript_url(uint32_t doc, const char *body);
+/*   `body_n` is what STEP 3 produced. "Let scriptSource be the UTF-8 decoding of the percent-decoding of
+   encodedScriptSource" — URL §1.3 "Percent-encoded bytes"'s percent-decode reaches all 256 byte values, so
+   `javascript:a=%00` is a source text with a U+0000 in it and ECMAScript §11.1 "Source Text" permits one. */
+void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
    and a member of §4.12.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7

@@ -2116,24 +2116,26 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
     return src;
 }
 
-/* AND WHAT THE PROGRAM QUEUE CAN CARRY, asserted where the source is stored rather than where it is compiled.
-   Every program in this engine is handed to JS_FlowNew / JS_FlowEvalModule as a NUL-TERMINATED body, so a
-   source that decoded a U+0000 runs truncated at it — silently, with the rest of the bundle simply absent. The
-   decode is the first place the two lengths can be compared, because before it there was no source text. */
-#define REPLY_SOURCE_WHOLE(src, n) \
-    DCHECK(strlen(src) == (n), \
-           "a fetched script's source text decoded to a U+0000 and the program queue holds a NUL-terminated " \
-           "body — build the queue over a LENGTH so a source with a NUL in it runs whole rather than " \
-           "truncated at it, exactly as navigable.c's javascript: URL states for the same queue")
+/* WHAT THE PROGRAM QUEUE CAN CARRY IS `len` BYTES, WHICHEVER OF THEM ARE NUL. A `REPLY_SOURCE_WHOLE` macro
+   stood here and asserted `strlen(src) == n` at each of the two decodes below, naming the fix — "build the
+   queue over a LENGTH". It is built: `dyn_body_adopt` takes the decode's own `(src, src_n)`, the row keeps
+   both, and flow_step hands both to JS_FlowNew / JS_FlowEvalModule, which have taken a length all along. The
+   assertion is DELETED rather than relaxed, because what it was guarding no longer has a way to go wrong here:
+   the length never becomes a `strlen` between this line and the compiler. The invariant that survives is
+   dyn_body_adopt's, and it is about the GUARD byte rather than the length.
+   THE MEASUREMENT THAT MADE THIS URGENT: over a 30-site frozen mirror, two of the three sites in this defect's
+   cluster aborted HERE — one shipping 125 U+0000s in a single script, the other 2309. A page whose script
+   carries one is not a broken page (ECMAScript §11.1 "Source Text"), and running it to the first NUL is a
+   silently shorter program with every endpoint and sink past that byte unreachable. */
 
 /* A REPLY THAT IS A PROGRAM JOINS THE SEQUENCE, which is why the drain below reaches the queue that is
    defined past it. Declared rather than moved: the queue belongs beside the other queue entry points and
    the drain belongs beside the register it walks. */
-static void engine_queue(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
-                         DynPos pos);
+static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
+                         const char *url, DynPos pos);
 /* …and the same entry for a row an ELEMENT put there — see engine_queue_el below. */
-static void engine_queue_el(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
-                            DynPos pos, lxb_dom_element_t *el);
+static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
+                            const char *url, DynPos pos, lxb_dom_element_t *el);
 /* …and the one a caller reaches when it ALREADY holds the decoded text as a shared body, which is every reply
    that arrives as a program: the drain below adopts the decode and hands it over without a second copy. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
@@ -2204,7 +2206,6 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                    "type column was written by something that is not one of the two seams that queue them");
             src = reply_source_text(ctx, pv, (ScriptType)f->dyn_type[di], doc_realm(f->dyn_doc[di]), &src_n);
             CHECK(src, "engine: OOM storing an external document script");
-            REPLY_SOURCE_WHOLE(src, src_n);
             /* THE ADDRESS IS TAKEN OUT OF THE BODY COLUMN RATHER THAN DISCARDED, and this is the ONE moment at
                which it can be: the row's body IS the URL until this line, and everything the address decides
                happens after it. §8.1.4.2 creates the script with the RESPONSE'S URL as its base — "let script
@@ -2230,6 +2231,19 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                    between — a census, a release, a sale of the frontier's tail — would read it. */
                 DynBody *nb = dyn_body_adopt(src, src_n);   /* the decode above already made this buffer */
                 CHECK(nb, "engine: OOM adopting an external document script's source text");
+                /* AND THE ONE PLACE A BODY IS READ AS A C STRING IS THE ONE PLACE THAT SAYS SO. A DYN_SCRIPT_SRC
+                   row's body is its ADDRESS, and an address is a NUL-terminated string every URL API takes —
+                   which is exactly the read the rest of this file no longer makes of a body (a PROGRAM is
+                   (text, len) and may hold a U+0000). The two shapes live in one column, so the assertion is
+                   HERE, at the read that assumes the narrower one: an address whose stored length is not its
+                   `strlen` is a body that got into this column by some route other than the two that queue an
+                   address, and the base URL every nested `import()` of this bundle resolves against would be a
+                   prefix of it. */
+                DCHECK(strlen(dyn_body_text(f->dyn[di])) == dyn_body_len(f->dyn[di]),
+                       "an external document script's row holds an address with a U+0000 in it — the row's "
+                       "body is its URL until this drain takes it across, and a URL is the one body in this "
+                       "column that is read as a NUL-terminated string, so this row was filled by something "
+                       "that is not engine_queue_docscript_url or the seed");
                 f->dyn_url[di] = strdup(dyn_body_text(f->dyn[di]));
                 CHECK(f->dyn_url[di], "engine: OOM keeping an external script's address as its base URL");
                 dyn_body_unref(f->dyn[di]);
@@ -2265,9 +2279,8 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             CHECK(u != NULL, "engine: OOM reading an injected script's address off its park");
             src = reply_source_text(ctx, pv, st, doc_realm(doc), &src_n);
             /* THE SAME `CHECK` THE DOCUMENT-SCRIPT BRANCH ABOVE MAKES, which this branch did not: the decode
-               answers NULL when it cannot allocate, and the very next line is a `strlen` of it. */
+               answers NULL when it cannot allocate, and the adopt below would take a NULL buffer. */
             CHECK(src, "engine: OOM storing an injected script");
-            REPLY_SOURCE_WHOLE(src, src_n);
             /* §8.1.4.2's created script is based on the RESPONSE'S URL, so the program carries the address its
                bytes came from — the base a nested `import('./chunk.js')` resolves against and, for a module,
                the module map key that keeps two injected chunks two modules. */
@@ -3494,16 +3507,22 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
     engine_queue_into(f, doc, body, kind, stype, url, NULL, pos, el);
 }
 
-/* …AND THE ROW A CALLER HOLDS AS A PLAIN STRING — a `setTimeout` body, a `javascript:` URL, an @S candidate, a
-   cross-agent operation's program. The one copy those need is made HERE and released HERE, so the sharing is
-   the only thing the rest of the engine has to know about. */
-static void engine_queue_el(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
-                            DynPos pos, lxb_dom_element_t *el) {
+/* …AND THE ROW A CALLER HOLDS AS BYTES IT HAS NOT SHARED — a `setTimeout` body, a `javascript:` URL, an @S
+   candidate, a cross-agent operation's program. The one copy those need is made HERE and released HERE, so the
+   sharing is the only thing the rest of the engine has to know about.
+   IT IS `(body, body_n)` AND NOT A C STRING, and the callers are why rather than symmetry: a `javascript:` URL
+   percent-decodes to a byte sequence in which `%00` is an ordinary byte, an @S candidate is a payload built
+   from attacker input, and an injected `<script>`'s text is whatever a page assigned to `.textContent`. None of
+   those went through HTML §13.2.5.4 "Script data state", which is the one thing that would have made a NUL
+   impossible (it emits a U+FFFD instead), so each of them can hold one and each of them was being read to the
+   first. */
+static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
+                            const char *url, DynPos pos, lxb_dom_element_t *el) {
     DynBody *b;
 
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
-    b = dyn_body_new(body);
+    b = dyn_body_new(body, body_n);
     CHECK(b, "engine: OOM dynamic-script body");
     engine_queue_el_body(doc, b, kind, stype, url, pos, el);
     dyn_body_unref(b);
@@ -3515,9 +3534,9 @@ static void engine_queue_el(uint32_t doc, const char *body, DynKind kind, Script
    §3.1.7 `currentScript` stays null while they run, which is that section's own answer and not a default this
    entry picks. It is a separate entry rather than a NULL at each call site so that a caller that DOES hold an
    element cannot pass nothing by omission. */
-static void engine_queue(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
-                         DynPos pos) {
-    engine_queue_el(doc, body, kind, stype, url, pos, NULL);
+static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
+                         const char *url, DynPos pos) {
+    engine_queue_el(doc, body, body_n, kind, stype, url, pos, NULL);
 }
 
 /* A DOCUMENT'S SCRIPT INVENTORY, SEEDED AS THE ROWS OF ONE FLOW'S SEQUENCE — the ONE thing that turns a
@@ -3585,7 +3604,15 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
             engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
                               NULL, DYN_POS_APPEND, rows[i].el);
         } else {
-            DynBody *addr = dyn_body_new(rows[i].url);
+            /* AN ADDRESS IS THE ONE BODY WHOSE LENGTH IS ITS `strlen`, and this is where that is stated. It
+               came out of script_src_absolute, which serializes a parsed URL record (URL §4.5 "URL
+               serializing"), and every component of one has been through a percent-encode set that contains
+               U+0000: URL §1.3 "Percent-encoded bytes" defines the C0 control percent-encode set as "C0
+               controls and all code points greater than U+007E", and every other set in that section is
+               defined as containing it. So a serialized URL holds `%00` where a NUL was, never the byte, and
+               the two agree by construction here — flow_drain_pending ASSERTS they still do at the one read
+               that depends on it. */
+            DynBody *addr = dyn_body_new(rows[i].url, strlen(rows[i].url));
             CHECK(addr, "engine: OOM seeding an external script's address as its row's body");
             engine_queue_into(f, doc, addr, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL, DYN_POS_APPEND,
                               rows[i].el);
@@ -3660,8 +3687,17 @@ static lxb_dom_element_t *flow_dyn_el(const Flow *f) {
    element behind it rather than a default this entry happens to pick: §8.6's string handler is evaluated as a
    classic script, and a lazy chunk's reply is the body an already-running program asked for. An entry that DOES
    have an element behind it says which of the two algorithms runs it — engine_queue_element_script below. */
+/* THE ONE ENTRY THAT STILL TAKES A NUL-TERMINATED BODY, AND IT IS NOT THIS FILE'S TO FIX. It is §8.6's string
+   handler sink (`timer_set_script_sink`), so its shape is that hook's `void (*)(uint32_t, const char *)`, and
+   the length is lost one level UP — at the `JS_ToCString` in core/timing/timer.c that turns the handler
+   DOMString into C. Widening this signature without widening that hook and that conversion would move the
+   truncation rather than remove it, so the length goes end to end there or not at all: a `setTimeout("\0…")`
+   is still read to the first NUL. The `strlen` is written HERE, once, rather than left implicit in
+   engine_queue, so that the site carrying the remaining gap is the site that names it. */
 void engine_queue_script(uint32_t doc, const char *body) {
-    engine_queue(doc, body, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
+    DCHECK(body != NULL, "a §8.6 string handler was queued with no source at all — the sink is called with "
+                         "the handler's DOMString and there is no program in a null one");
+    engine_queue(doc, body, strlen(body), DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
 }
 
 /* …AND THE ROW A `<script>` ELEMENT PUT THERE, which is the same position and one more fact: HTML §4.12.1.1
@@ -3681,11 +3717,12 @@ void engine_queue_script(uint32_t doc, const char *body) {
    which has its own entry below. */
 /* …AND IT CARRIES THE ELEMENT, because "execute the script element" is a switch on EL and its classic arm
    brackets the run with that document's §3.1.7 `currentScript`. */
-void engine_queue_element_script(uint32_t doc, const char *body, ScriptType stype, lxb_dom_element_t *el) {
+void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, ScriptType stype,
+                                 lxb_dom_element_t *el) {
     DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
                        "ELEMENT reaches (the other is engine_queue_script), so a caller with nothing to pass "
                        "is a caller at the wrong entry");
-    engine_queue_el(doc, body, DYN_PAGE_SCRIPT, stype, NULL, DYN_POS_APPEND, el);
+    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, DYN_POS_APPEND, el);
 }
 
 /* …AND THE ONE SCRIPT SOURCE THAT IS NOT A TASK. HTML §4.12.1.1 "Processing model" ends "prepare the script
@@ -3699,11 +3736,11 @@ void engine_queue_element_script(uint32_t doc, const char *body, ScriptType styp
    one of the three lists above, and only what falls past that switch reaches "Otherwise, immediately execute
    the script element el". An inline module has a graph to load before its result exists, which is exactly why
    the standard does not run it here. */
-void engine_queue_script_immediate(uint32_t doc, const char *body, lxb_dom_element_t *el) {
+void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el) {
     DCHECK(el != NULL, "an inline classic script was queued to run IMMEDIATELY with no element — §4.12.1.1 "
                        "reaches `immediately execute the script element` from `prepare the script element`, "
                        "whose whole subject is EL");
-    engine_queue_el(doc, body, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_IMMEDIATE, el);
+    engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_IMMEDIATE, el);
 }
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
@@ -3718,7 +3755,12 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
     DCHECK(el != NULL, "an external document script took its slot with no element — the row is that element's "
                        "program from the moment it takes the position, not from the moment its bytes arrive, "
                        "and §4.12.1.1's `execute the script element` is a switch on EL");
-    engine_queue_el(doc, url, DYN_SCRIPT_SRC, stype, NULL, DYN_POS_APPEND, el);
+    /* AND ITS LENGTH IS ITS `strlen`, WHICH IS A FACT ABOUT AN ADDRESS AND NOT A DEFAULT. The caller resolved
+       this with script_src_absolute, so it is a serialized URL (URL §4.5 "URL serializing") and every one of
+       its components went through a percent-encode set built on URL §1.3's C0 control percent-encode set —
+       "C0 controls and all code points greater than U+007E" — which contains U+0000. flow_drain_pending
+       asserts the pair again at the read that turns this body back into a C string. */
+    engine_queue_el(doc, url, strlen(url), DYN_SCRIPT_SRC, stype, NULL, DYN_POS_APPEND, el);
 }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
@@ -3732,8 +3774,13 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
 /* AND `pos` IS THE SINK'S OWN SEMANTICS — see engine.h. An eval sink's code is ECMAScript §19.2.1.1
    PerformEval, which evaluates the body inside the call expression; a markup sink's auto-firing handler and a
    URL sink's `javascript:` navigation are tasks. The caller knows which sink fired, so the caller says. */
-void engine_queue_candidate(const char *body, DynPos pos) {
-    engine_queue(g_sess_doc, body, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL, pos);
+/* AND IT IS `(body, body_n)` FOR A REASON THAT IS THIS HALF OF THE PROJECT'S OWN: a candidate is BUILT out of
+   attacker-shaped bytes — a percent-decoded `%00` in a hash, a `\0` in a JSON string a reply carried — and the
+   solver's whole claim is that the candidate it fires is the bytes it constructed. Read to the first NUL, a
+   candidate carrying one fires a DIFFERENT program from the one the search decided on, and the verdict
+   ("no hit") would be about a payload nobody chose. */
+void engine_queue_candidate(const char *body, size_t body_n, DynPos pos) {
+    engine_queue(g_sess_doc, body, body_n, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL, pos);
 }
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
@@ -3747,10 +3794,16 @@ void engine_queue_candidate(const char *body, DynPos pos) {
 /* APPEND, and HTML §7.4.2.2 "Beginning navigation" is why: it reaches this case by "Queue a global task on the
    navigation and traversal task source given navigable's active window to navigate to a javascript: URL". The
    evaluation this row runs is therefore a TASK, and it takes the tail like every other one. */
-void engine_queue_javascript_url(uint32_t doc, const char *body) {
+/* AND `body_n` IS STEP 3's OWN ANSWER. "Let scriptSource be the UTF-8 decoding of the percent-decoding of
+   encodedScriptSource" — URL §1.3's percent-decode reaches all 256 byte values, so `javascript:a=%00` decodes
+   to a source text with a U+0000 in it, which ECMAScript §11.1 "Source Text" permits ("All Unicode code point
+   values from U+0000 to U+10FFFF … may occur in ECMAScript source text where permitted by the ECMAScript
+   grammars"). navigable.c used to assert that this could not happen, naming the length as the thing to build;
+   the length is the parameter. */
+void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n) {
     /* CLASSIC, and §7.4.2.3.2 step 6 says so in as many words — "let script be the result of creating a CLASSIC
        script given scriptSource" — so there is nothing here to parameterise. */
-    engine_queue(doc, body, DYN_JAVASCRIPT_URL, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
+    engine_queue(doc, body, body_n, DYN_JAVASCRIPT_URL, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
 }
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
@@ -3813,7 +3866,12 @@ static void flow_perform(JSContext *ctx, Flow *f)
         char *own = strdup(token);
         /* THE PROGRAM IS READ BEFORE THE ROW IS MADE because reading it is what SETS the operation's operands
            on the answering realm's global (remote_op.c) — one call, and the row's body is what it answered. */
-        DynBody *prog = dyn_body_new(remote_op_program(rctx, op));
+        /* AND ITS LENGTH IS ITS `strlen` BECAUSE THIS ENGINE WROTE IT. remote_op_program answers one of this
+           file's own fixed programs for a §7.2.1 member, not page text and not anything an attacker reached,
+           so there is no U+0000 to lose — which is the whole content of stating the length at the site rather
+           than letting an entry point compute it out of sight. */
+        const char *prog_src = remote_op_program(rctx, op);
+        DynBody *prog = dyn_body_new(prog_src, strlen(prog_src));
         CHECK(own != NULL, "engine: OOM moving a cross-agent operation's rendezvous token onto its program");
         CHECK(prog != NULL, "engine: OOM making the body of a cross-agent operation's program");
         /* NO ELEMENT: this program is the ENGINE'S own text, not a `<script>`, so §4.12.1.1's "execute the
@@ -5397,8 +5455,17 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                later seeding whatever that free left behind.
                ONCE, THOUGH, AND NOT ONCE PER FLOW: the copy is the shared body every timeline of this document
                then references (solver/dyn_body.h), so the document's own bundle is in this instance exactly one
-               time however many flows the frontier grows. */
-            g_root_scripts[g_root_n].body = dyn_body_new(bodies[i]);
+               time however many flows the frontier grows.
+               AND ITS LENGTH IS ITS `strlen`, WHICH IS THE TOKENIZER'S GUARANTEE AND NOT AN ASSUMPTION. This
+               column is an INLINE `<script>`'s text as document_exec_scripts scanned it out of a parsed tree,
+               and HTML §13.2.5.4 "Script data state" is the state that produced those characters: its U+0000
+               NULL row reads "This is an unexpected-null-character parse error. Emit a U+FFFD REPLACEMENT
+               CHARACTER character token" — so a NUL in the document's bytes is a U+FFFD by the time it is
+               text, and `&#0;` is the same answer one state later (§13.2.5.84 "Numeric character reference end
+               state": "If the number is 0x00 … Set the character reference code to 0xFFFD"). An inline script
+               is therefore the one program shape in this engine that provably cannot carry one, which is why
+               this seam still crosses as `char **` while every seam that CAN carry one now crosses as a pair. */
+            g_root_scripts[g_root_n].body = dyn_body_new(bodies[i], strlen(bodies[i]));
             CHECK(g_root_scripts[g_root_n].body,
                   "engine: OOM copying a program of the root document into its seed table");
         }
@@ -5578,9 +5645,12 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
         /* THE COPY IS MADE ONCE, HERE, and every timeline of this document then references it — the row's body
            is the shared program text (solver/dyn_body.h) rather than a borrowed pointer into the host's
            inventory, so this document's own bundle is in the instance exactly one time however many arms its
-           boot flow forks. Borrowing was sound only because the seed copied immediately; it no longer does. */
+           boot flow forks. Borrowing was sound only because the seed copied immediately; it no longer does.
+           THE LENGTH IS THE `strlen` HERE FOR THE ROOT DOCUMENT'S REASON — this column is an inline
+           `<script>`'s text off a parsed tree, and HTML §13.2.5.4 "Script data state" turns a U+0000 into a
+           U+FFFD before it can become one. See engine_sched_begin's own note. */
         if (bodies[i]) {
-            rows[rown].body = dyn_body_new(bodies[i]);
+            rows[rown].body = dyn_body_new(bodies[i], strlen(bodies[i]));
             CHECK(rows[rown].body,
                   "engine: OOM copying a joined document's program into its script table");
         }
@@ -6018,8 +6088,12 @@ static int engine_sched_slice(void) {
                        left to find the code is bisecting the fixture by hand, which is the thing this assertion
                        exists to replace. */
                     const char *bodytxt = NULL;
+                    size_t bodyn = 0;
                     int si = cur ? cur->script_i : -1;
-                    if (cur && si >= 0 && si < cur->dyn_n) bodytxt = dyn_body_text(cur->dyn[si]);
+                    if (cur && si >= 0 && si < cur->dyn_n) {
+                        bodytxt = dyn_body_text(cur->dyn[si]);
+                        bodyn = dyn_body_len(cur->dyn[si]);
+                    }
                     uint64_t pq = 0, pf = 0;
                     const char *slow_name = "(none)";
                     long wrap_n = 0, wrap_cap = 0;
@@ -6073,11 +6147,17 @@ static int engine_sched_slice(void) {
                        anything that would break the line is replaced rather than emitted. */
                     for (; pl && *pl && wi < (int)sizeof why - 2; pl++, wi++)
                         why[wi] = (*pl < 0x20 || *pl > 0x7E || *pl == '"' || *pl == '\\') ? '.' : *pl;
+                    /* THE BODY IS WALKED BY ITS LENGTH, NOT TO ITS FIRST NUL — this diagnostic exists to NAME
+                       the program a stuck flow is running, and a bundle carrying a U+0000 (ECMAScript §11.1
+                       "Source Text" permits one) would have named the empty string or a prefix of itself. The
+                       byte filter below already replaces every non-printable with '.', so a NUL prints as one
+                       character like every other control. */
                     if (bodytxt) {
                         const char *b = bodytxt;
+                        const char *bend = bodytxt + bodyn;
                         wn = snprintf(why + wi, sizeof why - (size_t)wi, " body=");
                         wi += wn < 0 ? 0 : (wn >= (int)sizeof why - wi ? (int)sizeof why - wi - 1 : wn);
-                        for (; *b && wi < (int)sizeof why - 2; b++, wi++)
+                        for (; b < bend && wi < (int)sizeof why - 2; b++, wi++)
                             why[wi] = (*b < 0x20 || *b > 0x7E || *b == '"' || *b == '\\') ? '.' : *b;
                     }
                     why[wi] = 0;

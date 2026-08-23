@@ -82,9 +82,11 @@
      WHY THE DOCUMENT IS `array<uint8>` AND NOT THE TWO SHAPES IT REPLACES. The old envelope carried a document
      EITHER as a JS string (content.js ships a serialized DOM) OR as bytes (a child navigable's document is
      safeFetch's response body), and the untrusted frame ran a UTF-8 encode on the first. `qjs_init` takes ONE
-     thing — a NUL-terminated byte sequence it `strlen`s — so the wire says one thing, the encode happens once
-     in the zone that already holds the characters, and the NUL assertion bridge.js makes over those bytes now
-     covers BOTH shapes: a string document containing U+0000 used to truncate the parse with nothing to say so.
+     thing — a byte sequence and its LENGTH — so the wire says one thing and the encode happens once, in the
+     zone that already holds the characters. The LENGTH is what makes `array<uint8>` the honest declaration
+     rather than a spelling of a C string: a document may contain a 0x00 (HTML §13.2.3.5 "Preprocessing the
+     input stream" defines its handling rather than forbidding it), and both zones used to assert that away —
+     the wire carried the count and the C entry threw it out for a `strlen`.
      NO PARAMETER IS TRANSFERRED, and that is now a property of the TYPE rather than a caveat at a call site.
      mojo.js builds the transfer list from the declared types — that is what makes `handle<message_pipe>` a real
      pipe pass — and Mojo's `array<uint8>` is a COPIED byte sequence; the type for bytes that MOVE is
@@ -117,9 +119,10 @@
      brevity: it is ONE contract taken by two operations (root this agent at a document / add a document to the
      agent already running), so a change to what a document arrives with must reach both. */
   var DOCUMENT = { name: "document", type: "array<uint8>",
-    why: "the document's BYTES, which is what qjs_init/qjs_join take (a NUL-terminated pointer they strlen) " +
-         "and what HTML §13.2.3.2's encoding sniffing is defined over — the algorithm the engine owes, and " +
-         "this zone owes it the bytes for. A string here is a zone that ran a decode it does not own" };
+    why: "the document's BYTES, which is what qjs_init/qjs_join take (a pointer and a LENGTH — a document " +
+         "may contain a 0x00 and the tokenizer has a rule for it per state) and what HTML §13.2.3.2's " +
+         "encoding sniffing is defined over — the algorithm the engine owes, and this zone owes it the bytes " +
+         "for. A string here is a zone that ran a decode it does not own" };
   var DOCUMENT_URL = { name: "url", type: "string",
     why: "§4.4's document ADDRESS and not its origin: the engine derives the origin from the address itself " +
          "(§4.7's serialization, its own url.c), so the principal and the address are one fact from one place. " +
