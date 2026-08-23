@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node test-ast.js:*)"
+      "Bash(node test-ast.js:*)",
+      "mcp__Claude_Code_Remote__add_repo",
+      "Bash(git checkout *)",
+      "Bash(rm -rf .git .github .travis.yml benchmarks examples images packaging test utils wasm pvs_studio.sh single.pl)"
     ]
   }
 }
