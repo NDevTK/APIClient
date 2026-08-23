@@ -117,7 +117,20 @@ void dom_attr_attach(lxb_dom_element_t *el, lxb_dom_attr_t *a, lxb_dom_attr_t *b
     if (a->prev) a->prev->next = a; else el->first_attr = a;
     if (a->next) a->next->prev = a; else el->last_attr = a;
     a->owner = el;                                    /* step 2: the attribute's element */
-    if (doc->node_cb->insert != NULL) doc->node_cb->insert(lxb_dom_interface_node(a));
+    /* §4.9 "HANDLE ATTRIBUTE CHANGES" FOR AN APPEND — the same edge `lxb_dom_element_attr_append` fires, fired
+       here because this component IS that append for the paths lexbor's own entry cannot serve (an insert
+       BEFORE a given attribute). The value is passed as the pair the callback is defined over rather than as
+       the Attr, because v3's attribute-mutation callback never sees the node.
+       IT PASSES THE REAL NAMESPACE, which lexbor's own call site does not: `lxb_dom_element_attr_append` hands
+       `LXB_NS__UNDEF` unconditionally, and §4.9's attribute change steps are defined over the attribute's
+       namespace. Answering that correctly here costs nothing and the alternative is seeding a wrong value into
+       a parameter the spec names. */
+    if (doc->attr_mutation->append != NULL) {
+        (void) doc->attr_mutation->append(el, a->node.local_name, NULL, 0,
+                                          a->value ? a->value->data : NULL,
+                                          a->value ? a->value->length : 0,
+                                          a->node.ns);
+    }
 }
 
 /* §4.9 "REMOVE AN ATTRIBUTE" STEPS 2 AND 3 — unlink it from its element's list, and set its element to null.

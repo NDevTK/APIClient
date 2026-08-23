@@ -44,8 +44,9 @@
  * built, which the callback is not handed". The element is the wrong thing to want. Every adoption is
  * `lxb_dom_attr_set_value_wo_copy` at html/tree.c's ONE call site, and it is followed — after the MathML/SVG
  * `before_append_attr` rename, which never touches `value` — by `lxb_dom_element_attr_append`, which calls
- * `doc->node_cb->insert` on the Attr with the token's pointer already in `attr->value->data`. That callback is
- * lexbor's own per-document extension point (`lxb_dom_document_node_cb_t`, default all-NULL), so this component
+ * `doc->attr_mutation->append` with the token's pointer already in `attr->value->data` and handed straight
+ * through as the callback's `value`. That callback is lexbor's own per-document extension point
+ * (`lxb_dom_document_attr_mutation_cb_t`, default all-NULL), so this component
  * installs one and CLAIMS the matching token attribute there: the DOM has taken these bytes, so the token's
  * field is cleared. What is left over at token-done is therefore EXACTLY what nothing owns, for every insertion
  * mode, every ignored token, every void element popped in the same step, every foster-parented element, every
@@ -169,15 +170,23 @@ lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t
    document that has one this component did not install on was parsed by a call this engine does not own. */
 bool html_parse_owns_tokens_of(const lxb_dom_document_t *doc);
 
-/* THE OTHER HALF OF THE OWNERSHIP — install the node callback that watches adoption. Called from
+/* THE OTHER HALF OF THE OWNERSHIP — install the attribute callback that watches adoption. Called from
    `dom_document_create` on the document `dom_document_of_nodes` resolves, because that is the one the DOM
    READS it off: `lxb_dom_element_attr_append` takes `lxb_dom_interface_node(element)->owner_document`, and
-   `lxb_dom_document_init` stamps every node with `lxb_dom_document_owner(document)` while resetting the
-   INHERITED document's own `node_cb` to lexbor's all-NULL default. That reset is why §13.4's temporary
-   fragment document cannot carry this itself and does not have to: its elements and its Attrs are stamped with
-   the REAL document, so the callback the append finds is the real one's.
+   `lxb_dom_document_init` stamps every node of an OWNED document with the owner rather than with the document
+   being built. That stamp is why §13.4's temporary fragment document does not have to carry this itself: its
+   elements and its Attrs name the REAL document, so the table the append reads is the real one's, whatever the
+   fragment document's own field says.
+   AND IT NO LONGER SAYS "EMPTY". An owned document used to be handed lexbor's all-NULL default, because the
+   default was assigned before the owner branch; it is now assigned INSIDE that branch from `owner->mutation`
+   and `owner->attr_mutation`, so a fragment document INHERITS this component's table. That is a widening of
+   what `html_parse_owns_token_values_of` answers true for, and it widens toward the truth — the documents it
+   newly admits are exactly the ones whose appends were already reaching this callback through the owner stamp,
+   so the predicate now agrees with the dispatch instead of understating it.
+   `lxb_dom_document_set_default_node_cb` is NOT the way back to the default: it resets `mutation` and leaves
+   `attr_mutation` — the half this component installs on — untouched.
    It refuses to overwrite a callback table that is neither lexbor's default nor this one, because a second
-   component wanting `insert` needs the two composed rather than one of them silently dropped. */
+   component wanting `append` needs the two composed rather than one of them silently dropped. */
 void html_parse_own_token_values(lxb_dom_document_t *doc);
 
 /* Whether `doc` carries that callback — asked by the token-done wrapper about the document being built into,

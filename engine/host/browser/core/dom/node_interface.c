@@ -287,10 +287,11 @@ lxb_html_document_t *dom_document_create(void)
     doc->destroy_interface = dom_node_interface_destroy;
     /* AND ITS PARSES' TOKEN ATTRIBUTE VALUES HAVE AN OWNER — see core/html/html_parse.h. It goes on the same
        resolved document as the dispatcher above and for the identical reason: `lxb_dom_element_attr_append`
-       reads `node_cb` off `lxb_dom_interface_node(element)->owner_document`, so the field the DOM reads is the
-       owner's and installing on an inherited struct would write the one pointer nothing reads. That is also
-       what covers §13.4's fragment parse, whose temporary document `lxb_dom_document_init` resets to lexbor's
-       empty table while stamping every element and Attr it makes with this one. */
+       reads `attr_mutation` off `lxb_dom_interface_node(element)->owner_document`, so the field the DOM reads
+       is the owner's and installing on an inherited struct would write the one pointer nothing reads. That is
+       also what covers §13.4's fragment parse, whose temporary document stamps every element and Attr it makes
+       with this one — and which now INHERITS this table rather than being reset to lexbor's empty one, so the
+       field agrees with the stamp instead of contradicting it. */
     html_parse_own_token_values(doc);
     /* AND THE ARENAS ARE THE AGENT'S, from here rather than from the first adopt — see core/dom/node_heap.h.
        Here, because it is the only moment the document has none of its own bytes yet, and because a document

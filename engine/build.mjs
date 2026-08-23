@@ -346,7 +346,7 @@ mkdirSync(EXT_QJS, { recursive: true });
 /* PINNED, and provisioned here. Lexbor's C API moves between releases — a container that cloned its default
    branch instead got a css_declaration_list_parse with a different arity and the build died in the CSSOM. The
    version is part of the build, so it is stated in the build rather than in whoever's shell history. */
-const LEXBOR_TAG = "v2.7.0";
+const LEXBOR_TAG = "v3.0.0";
 const LEXBOR_DIR = join(WORK, "lexbor-src");
 if (!existsSync(join(LEXBOR_DIR, "source", "lexbor"))) {
   console.log("[build] lexbor " + LEXBOR_TAG + " not present — cloning it");

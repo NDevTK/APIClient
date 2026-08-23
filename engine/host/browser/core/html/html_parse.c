@@ -26,32 +26,45 @@ static lxb_html_tokenizer_token_f g_lxb_token_done;
    itself for the duration of one call, with the previous value restored on the way out, so a nested parse
    (§13.4's fragment parse reached from inside a token, which lexbor does not do today because it executes no
    script during tree construction) is exact rather than a case that silently claims the wrong token's bytes.
-   The callback cannot be handed a context: `lxb_dom_node_cb_insert_f` takes the node and nothing else. */
+   The callback cannot be handed a context: `lxb_dom_element_attr_change_f` takes the attribute's element, its
+   name and its bytes, and nothing else. */
 static lxb_html_token_t *g_token_in_construction;
 
-/* THE ADOPTION, WATCHED. `lxb_dom_element_attr_append` calls this with the Attr AFTER
-   `lxb_dom_attr_set_value_wo_copy` has already stored the token's own allocation in `attr->value->data`, so a
-   pointer match is the DOM taking ownership of those bytes — recorded by CLEARING the token's field, which is
-   the same statement `lxb_dom_attr_interface_destroy` makes from the other side when it frees exactly that
-   pointer into `doc->text`. Everything left on the token at token-done is then, by construction, unowned.
+/* THE ADOPTION, WATCHED. `lxb_dom_element_attr_append` calls this AFTER `lxb_dom_attr_set_value_wo_copy` has
+   already stored the token's own allocation in `attr->value->data`, and hands that exact pointer over as
+   `value` — so a pointer match is the DOM taking ownership of those bytes, recorded by CLEARING the token's
+   field, which is the same statement `lxb_dom_attr_interface_destroy` makes from the other side when it frees
+   exactly that pointer into `doc->text`. Everything left on the token at token-done is then, by construction,
+   unowned.
    IT MATCHES ON THE POINTER AND NOTHING ELSE. An Attr whose value is a COPY — `append_attributes_from_element`
    clones name and value for the adoption agency's fake tokens, and every `setAttribute` allocates its own —
-   names an address no live token attribute holds, so it falls through without a case of its own. */
-static lxb_status_t html_parse_node_inserted(lxb_dom_node_t *node)
+   names an address no live token attribute holds, so it falls through without a case of its own.
+   IT IS THE APPEND AND NOT THE CHANGE. `lxb_dom_attr_set_value` is the only caller of `attr_mutation->change`
+   and it MEMCPYs its input into a fresh `doc->text` allocation before firing, so a token's bytes can never be
+   what a change reports; `lxb_dom_attr_set_value_wo_copy`, which is what tree construction uses and what does
+   hold the token's pointer, fires nothing at all. Append is therefore the one edge those bytes cross, which is
+   why the other three members of the table stay NULL — see the table below. */
+static lxb_status_t html_parse_attr_appended(lxb_dom_element_t *element,
+                                             lxb_dom_attr_id_t local_name,
+                                             const lxb_char_t *old_value, size_t old_len,
+                                             const lxb_char_t *value, size_t value_len,
+                                             lxb_ns_id_t ns)
 {
-    lxb_dom_attr_t *attr;
     lxb_html_token_attr_t *ta;
 
-    DCHECK(node != NULL, "the DOM reported the insertion of no node");
-    if (node->type != LXB_DOM_NODE_TYPE_ATTRIBUTE || g_token_in_construction == NULL)
-        return LXB_STATUS_OK;
-    attr = lxb_dom_interface_attr(node);
-    if (attr->value == NULL || attr->value->data == NULL)
+    (void) local_name; (void) ns;
+    DCHECK(element != NULL, "the DOM reported an attribute append onto no element");
+    DCHECK(old_value == NULL && old_len == 0,
+           "an attribute APPEND reported a previous value — an append is §4.9's \"append an attribute\", which "
+           "puts an attribute that was on no element onto one, so there is nothing it could replace; a "
+           "non-NULL old value means these bytes came from \"change an attribute\" and the table below wired "
+           "the wrong member");
+    if (g_token_in_construction == NULL || value == NULL)
         return LXB_STATUS_OK;
     for (ta = g_token_in_construction->attr_first; ta != NULL; ta = ta->next) {
-        if (ta->value != attr->value->data)
+        if (ta->value != value)
             continue;
-        DCHECK(ta->value_size == attr->value->length,
+        DCHECK(ta->value_size == value_len,
                "an Attr took a token attribute's exact allocation and recorded a different length for it — "
                "`lxb_dom_attr_set_value_wo_copy` is handed `token_attr->value` and `token_attr->value_size` "
                "together, so the two disagreeing means something rewrote one of them in between and the bytes "
@@ -68,32 +81,36 @@ static lxb_status_t html_parse_node_inserted(lxb_dom_node_t *node)
     return LXB_STATUS_OK;
 }
 
-/* INSERT ONLY. `remove`, `destroy` and `set_value` stay lexbor's NULL because this component's question is
+/* APPEND ONLY. `change`, `remove` and `replace` stay lexbor's NULL because this component's question is
    asked exactly once per allocation — at the instant ownership moves — and a table that answered more would be
-   a second place the same fact is decided. */
-static const lxb_dom_document_node_cb_t g_node_cb = {
-    .insert = html_parse_node_inserted, .remove = NULL, .destroy = NULL, .set_value = NULL
+   a second place the same fact is decided.
+   THE NODE-MUTATION TABLE IS LEFT ALONE ENTIRELY. Attributes are not nodes to lexbor's mutation callbacks any
+   more: `lxb_dom_element_attr_append` reaches `attr_mutation`, while `mutation->inserted` is now a TREE edge
+   that fires over shadow-including descendants for every element §13.2.6 inserts. Wiring this component there
+   would put a per-subtree walk on the hot parse path to be told about nodes it has no question about. */
+static const lxb_dom_document_attr_mutation_cb_t g_attr_cb = {
+    .change = NULL, .append = html_parse_attr_appended, .remove = NULL, .replace = NULL
 };
 
 void html_parse_own_token_values(lxb_dom_document_t *doc)
 {
     DCHECK(doc != NULL, "no document was given ownership of its parses' token attribute values");
-    DCHECK(doc->node_cb != NULL,
-           "a document reached this install with no node-callback table at all — `lxb_dom_document_init` "
+    DCHECK(doc->attr_mutation != NULL,
+           "a document reached this install with no attribute-mutation table at all — `lxb_dom_document_init` "
            "points every document at one before anything else, so a NULL means these bytes are not a document");
-    DCHECK(doc->node_cb == &g_node_cb ||
-           (doc->node_cb->insert == NULL && doc->node_cb->remove == NULL &&
-            doc->node_cb->destroy == NULL && doc->node_cb->set_value == NULL),
-           "a document already carries a node-callback table that is neither lexbor's empty default nor this "
-           "one — installing over it would silently drop whatever that component watches; COMPOSE the two "
+    DCHECK(doc->attr_mutation == &g_attr_cb ||
+           (doc->attr_mutation->change == NULL && doc->attr_mutation->append == NULL &&
+            doc->attr_mutation->remove == NULL && doc->attr_mutation->replace == NULL),
+           "a document already carries an attribute-mutation table that is neither lexbor's empty default nor "
+           "this one — installing over it would silently drop whatever that component watches; COMPOSE the two "
            "here instead, naming both");
-    doc->node_cb = &g_node_cb;
+    doc->attr_mutation = &g_attr_cb;
 }
 
 bool html_parse_owns_token_values_of(const lxb_dom_document_t *doc)
 {
     DCHECK(doc != NULL, "the token-value ownership question was asked of no document");
-    return doc->node_cb == &g_node_cb;
+    return doc->attr_mutation == &g_attr_cb;
 }
 
 /* A CONSUMED TOKEN, RELEASED. Every attribute value still on it is an allocation out of the arena
@@ -118,7 +135,7 @@ static void html_parse_release_token(lxb_html_tokenizer_t *tkz, lxb_html_token_t
     dt = tree->document->dom_document.doctype;
 
     for (attr = token->attr_first; attr != NULL; attr = attr->next) {
-        /* NO VALUE, NO ALLOCATION — or one the DOM has taken, which html_parse_node_inserted records the same
+        /* NO VALUE, NO ALLOCATION — or one the DOM has taken, which html_parse_attr_appended records the same
            way, because they are the same statement: this field is non-NULL exactly while these bytes are the
            token's. `lxb_html_tokenizer_state_set_value_m` is the only thing that fills it, and it runs only
            where §13.2.5 reads a quoted or unquoted attribute string — so a bare `<br>` and `<!doctype html>`
@@ -268,6 +285,29 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
            "a document that has already been parsed is being parsed again — lexbor cleans it first and that "
            "clean empties the AGENT's two DOM arenas, so every node of every other document in this instance "
            "would be returned to the allocator with its tree still naming it; parse into a new document");
+    /* AND IT BUILDS A DOCUMENT FROM NOTHING, WHICH IS THE UNSTATED ARGUMENT EVERY PARSE IN THIS ENGINE RESTS ON.
+       HTML §13.2.6 "Tree construction" does not reach the DOM through solver/dom_cow.h's chokepoint, so not one
+       node a parse builds is captured into the running flow's delta — lexbor inserts through
+       `lxb_html_tree_insert_node`, which is `lxb_inline` in `html/tree.h` and calls the `_wo_events` primitives,
+       and its character tokens do not reach a mutator at all: `lxb_html_tree_insert_character_for_data` appends
+       into the PREVIOUS Text node's own `char_data.data` with `lexbor_str_append`, so that write has no
+       interception point of any kind, in any lexbor version.
+       THAT IS SOUND ONLY BECAUSE THE TREE IS ONE NO OTHER FLOW CAN REACH. Every caller here creates the document
+       immediately before parsing into it and wraps it immediately after, so at this line the target has no
+       children and nothing in the agent names it — its nodes are flow-private in exactly the sense
+       solver/dom_cow.h's private-tree entries declare, which is why they may be built raw. Open a parse on a
+       document that already HAS a tree and the same insertions become shared-baseline writes belonging to no
+       flow: one flow's markup visible to every sibling and unapplied on every context switch.
+       SO THIS IS THE LINE §8.4.3 `document.write` ARRIVES AT FROM THE OTHER END. Its step 9 needs a live parser
+       on the ACTIVE document — a document whose tree is the page's — and this assert is what says that cannot
+       be had by opening one here. It is checkable rather than argued: the emptiness is the reachability. */
+    DCHECK(lxb_dom_interface_node(document)->first_child == NULL,
+           "an HTML parse was opened on a document that already has a tree — §13.2.6 tree construction inserts "
+           "through lexbor's own `_wo_events` primitives and appends character data straight into a Text node's "
+           "storage, so NOTHING it does is captured into the running flow's DOM delta, and that is only "
+           "harmless while the document is one no other flow can observe. Route §13.2.6's insertions through "
+           "solver/dom_cow.h's chokepoint (dom_cow_append_child / dom_cow_insert_before, and a character-data "
+           "capture for the token merge) before parsing into a tree the page already holds");
     doc = lxb_dom_interface_document(document);
     if (doc->parser == NULL) {
         /* THE CREATION LEXBOR WOULD HAVE MADE, MADE HERE. `lxb_html_document_parser_prepare` is static and
