@@ -4070,7 +4070,28 @@ static int flow_step(JSContext *ctx, Flow *f) {
         g_step_unit = "resume-parked-continuation";
         /* Resuming a parked continuation is progress ONLY if the flow can still get somewhere: a flow blocked
            on the host resumes into the same wait, so reporting progress spins it against the park. */
-        if (JS_ResumeParkedFlow(JS_GetRuntime(ctx))) return flow_blocked(f) ? FLOW_STEP_OWED : 0;
+        /* AND ITS COMPLETION IS TAKEN HERE, which is the ONE place it can be. A parked continuation is the LATE
+           half of a job this flow queued: flow_run_one_job reports the throw of a job that finished inside its
+           own call, and the half that PARKED — which is every job long enough to be preempted, and since a step
+           machine offers a park at every re-entry that is most of them — had no reporting path at all. So an
+           uncaught throw out of one was dropped twice over: never recorded as this page's error, and never
+           taken out of `rt->current_exception`, which is per-RUNTIME. This engine interleaves flows, so what
+           found it next was the first evaluation of whichever flow the scheduler chose — another flow's
+           timeline receiving a completion §6.2.4 says belongs to this one. §8.1.7.5's report hook is the same
+           one a script and a job already use, because it is the same event. */
+        {
+            JSValue pcv = JS_UNDEFINED;
+            if (JS_ResumeParkedFlow(JS_GetRuntime(ctx), &pcv)) {
+                if (JS_IsException(pcv)) {
+                    JSValue e = JS_GetException(ctx);
+                    result_page_error_value(ctx, e);
+                    JS_FreeValue(ctx, e);
+                }
+                JS_FreeValue(ctx, pcv);
+                return flow_blocked(f) ? FLOW_STEP_OWED : 0;
+            }
+            JS_FreeValue(ctx, pcv);
+        }
         if (!f->frame) {
             const char *body;
             /* WHICH KIND the program about to be compiled is — only a page <script> must parse. */
