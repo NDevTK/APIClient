@@ -287,11 +287,16 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
            "would be returned to the allocator with its tree still naming it; parse into a new document");
     /* AND IT BUILDS A DOCUMENT FROM NOTHING, WHICH IS THE UNSTATED ARGUMENT EVERY PARSE IN THIS ENGINE RESTS ON.
        HTML §13.2.6 "Tree construction" does not reach the DOM through solver/dom_cow.h's chokepoint, so not one
-       node a parse builds is captured into the running flow's delta — lexbor inserts through
-       `lxb_html_tree_insert_node`, which is `lxb_inline` in `html/tree.h` and calls the `_wo_events` primitives,
-       and its character tokens do not reach a mutator at all: `lxb_html_tree_insert_character_for_data` appends
-       into the PREVIOUS Text node's own `char_data.data` with `lexbor_str_append`, so that write has no
-       interception point of any kind, in any lexbor version.
+       node a parse builds is captured into the running flow's delta. FIRING A CALLBACK IS NOT A CAPTURE, and
+       the distinction is the whole of this paragraph now that lexbor fires one: `lxb_html_tree_insert_node`
+       (`lxb_inline` in `html/tree.h`) reaches `lxb_dom_node_insert_child` for the CHILD position, so §13.2.6's
+       ordinary insertion does run `->mutation->inserted` — over every shadow-including descendant
+       (`dom/interfaces/node.c`), and nothing this engine registers there records a delta entry. The other four
+       shapes do not even reach it: the FOSTER-PARENTED insert is still `lxb_dom_node_insert_before_wo_events`
+       one line above; §13.2.6.4.1's DOCTYPE is a raw `_wo_events` append; §13.2.6.4.7's adoption agency
+       reparents through six raw `_wo_events` calls in `html/tree.c`; and a character token does not reach a
+       mutator at all — `lxb_html_tree_insert_character_for_data` appends into the PREVIOUS Text node's own
+       `char_data.data` with `lexbor_str_append`, which has no interception point in any lexbor version.
        THAT IS SOUND ONLY BECAUSE THE TREE IS ONE NO OTHER FLOW CAN REACH. Every caller here creates the document
        immediately before parsing into it and wraps it immediately after, so at this line the target has no
        children and nothing in the agent names it — its nodes are flow-private in exactly the sense
@@ -302,9 +307,9 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
        on the ACTIVE document — a document whose tree is the page's — and this assert is what says that cannot
        be had by opening one here. It is checkable rather than argued: the emptiness is the reachability. */
     DCHECK(lxb_dom_interface_node(document)->first_child == NULL,
-           "an HTML parse was opened on a document that already has a tree — §13.2.6 tree construction inserts "
-           "through lexbor's own `_wo_events` primitives and appends character data straight into a Text node's "
-           "storage, so NOTHING it does is captured into the running flow's DOM delta, and that is only "
+           "an HTML parse was opened on a document that already has a tree — §13.2.6 tree construction reaches "
+           "the DOM without one call to solver/dom_cow.h, so NOTHING it does is captured into the running "
+           "flow's DOM delta, and that is only "
            "harmless while the document is one no other flow can observe. Route §13.2.6's insertions through "
            "solver/dom_cow.h's chokepoint (dom_cow_append_child / dom_cow_insert_before, and a character-data "
            "capture for the token merge) before parsing into a tree the page already holds");

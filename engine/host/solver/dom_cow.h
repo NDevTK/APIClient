@@ -64,7 +64,29 @@ uint64_t dom_cow_version(void);
    every browser component and found no bypass today: the raw insert/remove/destroy mutators appear only in
    dom_cow.c, and the raw attribute mutators only in attr_list.c, the declared raw layer beneath this one, whose
    single exported entry is the documented parse boundary. That is a measurement of one moment, not a property
-   of the build — the first component to reach past this file will do so silently. */
+   of the build — the first component to reach past this file will do so silently.
+   AND THE AUDIT'S SCOPE IS THE ENGINE'S OWN COMPONENTS, WHICH IS NOT EVERY WRITER OF THIS TREE. HTML §13.2.6
+   "Tree construction" runs INSIDE lexbor and writes the document without one call to this file. A grep of
+   `engine/host/browser` cannot see it, and it is the reason core/html/html_parse.c's parse entry now ASSERTS
+   that a parse target is a tree no other flow can reach: that unreachability, not any capture, is what makes
+   every parse in this engine sound today, and a LIVE parser on the ACTIVE document (§8.4.3 `document.write`)
+   breaks it by construction.
+   AND LEXBOR'S OWN MUTATION CALLBACKS DO NOT CLOSE IT — a callback that FIRES is not a write that is CAPTURED,
+   and the shapes differ in a way that matters here rather than pedantically:
+     - `->mutation->inserted` fires AFTER the link, which is FINE for an insert: a kind-1 entry holds only the
+       node and reads its position at unapply time, so a linked node is exactly what it needs. But it is
+       invoked over every SHADOW-INCLUDING DESCENDANT of the inserted subtree, and an entry per descendant is
+       wrong twice — N entries for one write, and an unapply that detaches a descendant whose ancestor has
+       already gone records a position inside a detached tree. The arrivals are root-first pre-order, so the
+       top node is the first of a burst; the callback carries no burst identity to say so, and the only
+       set-free way to tell is to test each arrival's ancestry against the entry just pushed.
+     - `->mutation->removed` fires AFTER `lxb_dom_node_remove_wo_events`, which NULLs `parent`, `next` and
+       `prev`. It is handed `(node, old_parent)` — so the parent survives and THE OLD NEXT SIBLING DOES NOT. A
+       kind-2 entry built from it restores the node as its parent's LAST child instead of at the index the
+       baseline had. That is not a gap to fill, it is the wrong shape: the position has to be read BEFORE the
+       unlink, which is what dom_cow_remove_child does and what no after-the-fact hook can.
+   Those callbacks are DOM §4.2.3's insertion/removing STEPS, which this file already routes through
+   dom_cow_set_tree_hook. They are the right home for the steps and they are not the capture. */
 /* VALUE AND TAINT ARE ONE WRITE, and the identity that keys both is resolved HERE. They were two calls every
    caller made in agreement over a key each computed for itself: a caller that made one and not the other left a
    stale taint on a fresh value or dropped the provenance of a stored source, and `toggleAttribute(name, true)`
