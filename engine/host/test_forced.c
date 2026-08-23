@@ -1249,6 +1249,15 @@ static const char *HTML =
     "function orphanIdentity(o){ var n = o;"
     " while (n != null && n !== Object.prototype) { n = Object.getPrototypeOf(n); }"
     " fetch('/api/orphan/identity'); }"
+    /* AND AN ORPHAN THAT PUTS ITS UNKNOWN THROUGH A COERCE-THEN-COMPUTE BUILTIN, which is the SECOND thing a
+       real library does with an argument it was handed: every hand-rolled base64 / UTF-16 / hash decoder in a
+       bundle is `String.fromCharCode(x.y)`. §22.1.2.1 step 2.a is `ℝ(? ToUint16(next))` and §7.1.11 step 1 is
+       §7.1.4 ToNumber, while the declaration's own coercion is §7.1.1 ToPrimitive — which over an unknown is
+       the identity — so the unknown reached the conversion boundary that owes C a real double and the whole
+       instance aborted. The claim is the endpoint AFTER the call, because an abort emits none: reaching it says
+       the coercion produced a value the string concatenation could carry rather than a crash. */
+    "function orphanCharCode(e){ var s = String.fromCharCode(e.charCode);"
+    " fetch('/api/orphan/charcode?c=' + s); }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
        still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
@@ -4152,6 +4161,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the request is interesting — reaching it at all is the claim, because spelling that operand aborted the
        instance and an abort emits NO endpoints, so this row and every row above it went dark together. */
     int orphan_ident  = strstr(js, "\"/api/orphan/identity\"") != NULL;
+    /* AND THE FIFTH: the driven body put its unknown through a coerce-then-compute builtin and survived it.
+       Same shape as the row above — the request is uninteresting and reaching it is the claim — but a
+       different mechanism: this one is §7.1.4 ToNumber over unknown input inside a C body, which aborted the
+       instance and took every row here down with it. */
+    int orphan_ccode  = strstr(js, "\"/api/orphan/charcode\"") != NULL;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
        API-value learning, through the Response the shipped fetch component actually hands back. */
@@ -4780,6 +4794,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-gate", orphan_gate, "orphanNeverCalled", SESS_EXPLORE },
         { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE },
         { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE },
+        { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
