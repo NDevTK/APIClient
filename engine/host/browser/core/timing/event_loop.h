@@ -16,13 +16,13 @@
  * clock it never advanced. §Time-travel-resume's razor calls that a CAP: a resume that is not byte-identical.
  *
  * SO THE RECORD IS A HEAP OBJECT, whose property writes the per-flow COW delta already captures — the same
- * mechanism §8.9's map of animation frame callbacks and §9.4.2's port message queue use, for the same reason
+ * mechanism §8.12 Animation frames's map of animation frame callbacks and §9.4.2's port message queue use, for the same reason
  * CLAUDE.md gives: platform data a flow queues is a JS value, never malloc'd C. It is built at agent init,
  * which is pre-boot, so it is BASELINE and every flow's writes to it are captured rather than shared.
  *
  * IT IS PER-AGENT AND NOT PER-REALM, which is the other half of the answer. §8.1.7 gives one event loop to a
  * similar-origin window agent, and a document and its same-origin iframe are ordered by that ONE loop: a
- * per-realm clock would order the parent's timers against the child's by nothing at all. §8.6's map of active
+ * per-realm clock would order the parent's timers against the child's by nothing at all. §8.7 Timers's map of active
  * timers is the opposite — HTML puts one on every global — so the two live in different places on purpose. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_EVENT_LOOP_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_EVENT_LOOP_H
@@ -49,7 +49,7 @@ double event_loop_last_render(JSContext *ctx);
 void   event_loop_set_last_render(JSContext *ctx, double when);
 
 /* THE INSERTION ORDER OF A TASK, allocated by the loop rather than by a source, because it is what orders two
-   sources' tasks that become due at the SAME moment — and because a per-source counter cannot: §8.6's map of
+   sources' tasks that become due at the SAME moment — and because a per-source counter cannot: §8.7 Timers's map of
    active timers is per-global, so two same-origin documents each hand out handle 1 and a tie between them
    would be decided by nothing. `_peek` answers the next number without allocating it, which is what makes "an
    entry this flow can see was queued on this flow's own timeline" an assertable statement. */

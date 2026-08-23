@@ -1,4 +1,4 @@
-/* ANIMATION FRAMES — HTML §8.9. See animation_frame.h for why the map is a heap object and why the
+/* ANIMATION FRAMES — HTML §8.12 Animation frames. See animation_frame.h for why the map is a heap object and why the
    snapshot-then-recheck is the algorithm rather than an optimisation. */
 #include <string.h>
 
@@ -8,7 +8,7 @@
 #include "core/realm.h"
 #include "core/rendering/animation_frame.h"
 
-/* THE PER-REALM STORE. §8.9 gives every Window "a map of animation frame callbacks" and "an animation frame
+/* THE PER-REALM STORE. §8.12 Animation frames gives every Window "a map of animation frame callbacks" and "an animation frame
    callback identifier", and both are per-Window rather than per-agent — a child navigable's rAF handles are
    its own, and a member installed once answers with the realm it was DEFINED in unless the state is reached
    through the realm. The slot holds ONE object for the realm's whole life and is never replaced: what
@@ -24,10 +24,10 @@ static JSValue af_store(JSContext *ctx)
 {
     JSValue st;
 
-    DCHECK(g_ready, "a Window's map of animation frame callbacks was reached before §8.9 was declared");
+    DCHECK(g_ready, "a Window's map of animation frame callbacks was reached before §8.12 Animation frames was declared");
     st = realm_value_get(ctx, g_slot);
     DCHECK(JS_IsObject(st),
-           "a realm answered §8.9's map of animation frame callbacks with no map — every Window is given one "
+           "a realm answered §8.12 Animation frames's map of animation frame callbacks with no map — every Window is given one "
            "at creation, so this realm never ran animation_frame_install and its `requestAnimationFrame` "
            "would register into nothing");
     return st;
@@ -41,7 +41,7 @@ static JSValue af_queue(JSContext *ctx)
     JSValue st = af_store(ctx), q = JS_GetProperty(ctx, st, g_atom_queue);
 
     JS_FreeValue(ctx, st);
-    DCHECK(JS_IsArray(q), "§8.9's map of animation frame callbacks lost its entry list");
+    DCHECK(JS_IsArray(q), "§8.12 Animation frames's map of animation frame callbacks lost its entry list");
     return q;
 }
 
@@ -84,7 +84,7 @@ JSValue animation_frame_take(JSContext *ctx, uint32_t i)
     JSValue q = af_queue(ctx), e, cb;
 
     DCHECK(i < af_len(ctx, q),
-           "§8.9's walk asked for an entry past the snapshot it took — the map only ever GROWS during a run, "
+           "§8.12 Animation frames's walk asked for an entry past the snapshot it took — the map only ever GROWS during a run, "
            "so an index inside the snapshot cannot fall off the end");
     e = JS_GetPropertyUint32(ctx, q, i);
     if (!JS_IsObject(e)) {   /* step 3's re-check: cancelled by an earlier callback of THIS frame */
@@ -94,7 +94,7 @@ JSValue animation_frame_take(JSContext *ctx, uint32_t i)
     }
     cb = JS_GetPropertyUint32(ctx, e, 1);
     DCHECK(JS_IsFunction(ctx, cb),
-           "§8.9's map held an entry whose callback is not callable — the IDL's FrameRequestCallback brand "
+           "§8.12 Animation frames's map held an entry whose callback is not callable — the IDL's FrameRequestCallback brand "
            "check is what puts one there, so nothing else can have");
     /* "remove callbacks[handle]" — BEFORE the invoke, which is what makes a callback that re-registers itself
        get a NEW handle rather than resurrecting the one being run. */
@@ -109,14 +109,14 @@ void animation_frame_run_end(JSContext *ctx, uint32_t consumed)
     JSValue q = af_queue(ctx);
     uint32_t n = af_len(ctx, q), i;
 
-    DCHECK(consumed <= n, "§8.9's walk consumed more entries than the map ever held");
+    DCHECK(consumed <= n, "§8.12 Animation frames's walk consumed more entries than the map ever held");
     for (i = consumed; i < n; i++)
         JS_SetPropertyUint32(ctx, q, i - consumed, JS_GetPropertyUint32(ctx, q, i));
     JS_SetPropertyStr(ctx, q, "length", JS_NewUint32(ctx, n - consumed));
     JS_FreeValue(ctx, q);
 }
 
-/* HTML §8.9: `unsigned long requestAnimationFrame(FrameRequestCallback callback)`.
+/* HTML §8.12 Animation frames: `unsigned long requestAnimationFrame(FrameRequestCallback callback)`.
    1. Let target be this Window. 2. Let handle be target's animation frame callback identifier, incremented.
    3. Set callbacks[handle] to callback. 4. Return handle. No page code runs here: the callback's brand check
    is the declaration's (IDL_CALLBACK), so by the time this body runs there is nothing left to coerce. */
@@ -137,7 +137,7 @@ static JSValue js_request_animation_frame(JSContext *ctx, JSValueConst this_val,
     nv = JS_GetProperty(ctx, st, g_atom_next);
     JS_ToUint32(ctx, &handle, nv);
     JS_FreeValue(ctx, nv);
-    DCHECK(handle >= 1, "§8.9's animation frame callback identifier started below 1 — 0 is the handle a page "
+    DCHECK(handle >= 1, "§8.12 Animation frames's animation frame callback identifier started below 1 — 0 is the handle a page "
                         "gets back for nothing, and `cancelAnimationFrame(0)` must name no entry");
     JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
     JS_FreeValue(ctx, st);
@@ -153,7 +153,7 @@ static JSValue js_request_animation_frame(JSContext *ctx, JSValueConst this_val,
     return JS_NewUint32(ctx, handle);
 }
 
-/* HTML §8.9: `undefined cancelAnimationFrame(unsigned long handle)` — "remove callbacks[handle]". A handle
+/* HTML §8.12 Animation frames: `undefined cancelAnimationFrame(unsigned long handle)` — "remove callbacks[handle]". A handle
    that names nothing does nothing, which is why there is no throw here and no report: a page cancelling a
    frame it already ran is ordinary code. */
 static JSValue js_cancel_animation_frame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
@@ -192,14 +192,14 @@ void animation_frame_init(JSContext *ctx)
     static const IdlArgType REQUEST_ARGS[1] = { IDL_CALLBACK };
     static const IdlArgType CANCEL_ARGS[1] = { IDL_UNSIGNED_LONG };
 
-    DCHECK(!g_ready, "animation_frame_init ran twice — §8.9's members are declared once per agent");
+    DCHECK(!g_ready, "animation_frame_init ran twice — §8.12 Animation frames's members are declared once per agent");
     g_id_request = idl_method_id(ctx, REQUEST_ARGS, 1, js_request_animation_frame, 0);
     g_id_cancel = idl_method_id(ctx, CANCEL_ARGS, 1, js_cancel_animation_frame, 0);
     g_atom_queue = JS_NewAtom(ctx, "animationFrameCallbacks");
     g_atom_next = JS_NewAtom(ctx, "animationFrameCallbackIdentifier");
     CHECK(g_atom_queue != JS_ATOM_NULL && g_atom_next != JS_ATOM_NULL,
           "animation frames: the map's own keys could not be interned");
-    g_slot = realm_value_declare(ctx, "§8.9 map of animation frame callbacks");
+    g_slot = realm_value_declare(ctx, "§8.12 Animation frames map of animation frame callbacks");
     g_ready = 1;
     realm_declare_intrinsic(animation_frame_install_map);
 }
@@ -211,7 +211,7 @@ void animation_frame_install_map(JSContext *ctx)
 {
     JSValue st;
 
-    DCHECK(g_ready, "a realm asked for §8.9's map before the interface was declared");
+    DCHECK(g_ready, "a realm asked for §8.12 Animation frames's map before the interface was declared");
     /* Running twice in one realm is asserted by realm_value_set, which is where the first value is standing. */
     st = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(st), "animation frames: this Window's map could not be allocated");
@@ -220,13 +220,13 @@ void animation_frame_install_map(JSContext *ctx)
         CHECK(!JS_IsException(q), "animation frames: this Window's entry list could not be allocated");
         JS_SetProperty(ctx, st, g_atom_queue, q);
     }
-    JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, 1));   /* §8.9: handles start at 1 */
+    JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, 1));   /* §8.12 Animation frames: handles start at 1 */
     realm_value_set(ctx, g_slot, st);
 }
 
 void animation_frame_install(JSContext *ctx, JSValueConst global)
 {
-    DCHECK(g_ready, "§8.9's members were installed before they were declared");
+    DCHECK(g_ready, "§8.12 Animation frames's members were installed before they were declared");
     idl_install_method(ctx, (JSValue)global, "requestAnimationFrame", 1, g_id_request);
     idl_install_method(ctx, (JSValue)global, "cancelAnimationFrame", 1, g_id_cancel);
 }

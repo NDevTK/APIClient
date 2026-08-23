@@ -196,7 +196,7 @@ void page_reveal_install_proto(JSContext *ctx)
     JS_SetClassProto(ctx, g_class, proto);
 
     /* THE DOCUMENT'S OWN RECORD, built with the realm so it belongs to the pre-boot BASELINE — the same reason
-       §8.9's map is built here. Created inside a flow instead it would be that flow's private object and every
+       §8.12 Animation frames's map is built here. Created inside a flow instead it would be that flow's private object and every
        sibling would read a `has been revealed` nobody wrote. */
     rec = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(rec), "§7.4.6.3's record could not be allocated");

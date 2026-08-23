@@ -2,7 +2,7 @@
  *
  * WHY IT EXISTS AND WHAT WAS BLOCKED ON IT. Three algorithms in this engine invoke the page's code with the
  * instruction "report the exception" and then CONTINUE: DOM §2.9's inner invoke step 2.11 (a listener that
- * throws must not stop the walk), HTML §8.9's animation-frame callback, and RESIZE OBSERVER §3.4.6's loop
+ * throws must not stop the walk), HTML §8.12 Animation frames's animation-frame callback, and RESIZE OBSERVER §3.4.6's loop
  * error. None of them could, because "report an exception" fires an `error` event at the global carrying an
  * ErrorEvent and there was no ErrorEvent — so rendering.c carried a DFAIL naming this file, and event_target.c
  * let a throwing listener tear the whole dispatch down. One interface, three callers.

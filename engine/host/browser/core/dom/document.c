@@ -1492,7 +1492,7 @@ void document_set_url(JSContext *ctx, const char *url)
    and §8.1.7.3 step 3's render-blocked test both read the readiness, so `document.readyState = "complete"` let
    a page skip its own DOMContentLoaded and unblock its rendering.
  *
- * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the same shape §8.9's map of animation frame callbacks and
+ * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the same shape §8.12 Animation frames's map of animation frame callbacks and
  * §7.4.6.3's has-been-revealed use, and for the same two reasons: the record is unreachable from the page, so
  * nothing can write the readiness but this component; and its `stage` is an ordinary property write, so the
  * heap COW captures it and one arm of a fork advances its lifecycle without touching its sibling's.
@@ -2659,7 +2659,7 @@ void document_install_proto(JSContext *ctx)
     autofocus_install_document(ctx);
     JS_SetClassProto(ctx, g_document_class, proto);
     /* THIS REALM'S DOCUMENT READINESS, built with the realm so it belongs to the pre-boot BASELINE — the same
-       reason §8.9's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,
+       reason §8.12 Animation frames's map and §7.4.6.3's flag are built here. It exists before this realm has a Document at all,
        which is right: "loading" is what a Document that has not been installed yet would answer anyway, and
        the lifecycle walk only ever reaches a realm through its materialized navigable. */
     {

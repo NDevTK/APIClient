@@ -823,10 +823,10 @@ static JSValue js_timeout_fini(JSContext *ctx, void *st, bool take_result)
 /* §3.2 STEP 3's COMPLETION STEPS — "queue a global task on the timer task source given global to signal abort
  * given signal and a new TimeoutError DOMException". A machine, because signalling abort RUNS THE PAGE'S CODE:
  * the signal's abort algorithms and then its `abort` listeners, with every dependent signal taking the reason
- * first. HTML §8.6's timer_after performs it at the expiry, on the same task source the page's own timers are
+ * first. HTML §8.7 Timers's timer_after performs it at the expiry, on the same task source the page's own timers are
  * on, so a timeout signal is ordered against them the way a browser orders it.
  *
- * THE SIGNAL IS CAPTURED, NOT PASSED. §8.6 performs the completion steps with no arguments — it has none to
+ * THE SIGNAL IS CAPTURED, NOT PASSED. §8.7 Timers performs the completion steps with no arguments — it has none to
  * give — so the one thing this needs travels as closure data, which is what JS_NewStepClosure is for. */
 #define TIMEOUT_FIRE_STAGES(X) \
     X(TIMEOUT_FIRE_RUN, "DOM §3.2 AbortSignal.timeout step 3's queued task (signal abort on the timeout " \
@@ -911,7 +911,7 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
        dependent signal taking the reason first. Without it `AbortSignal.timeout(0).addEventListener('abort',f)`
        never ran f, a fetch's abort algorithm never shut the request down, and `AbortSignal.any([c.signal,
        timeout])` had one arm that could not fire.
-       THE SIGNAL TRAVELS AS CLOSURE DATA because §8.6 performs the completion steps with no arguments. */
+       THE SIGNAL TRAVELS AS CLOSURE DATA because §8.7 Timers performs the completion steps with no arguments. */
     if (g_timeout_fire_stepid < 0)
         g_timeout_fire_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_timeout_fire_def);
     {

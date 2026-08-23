@@ -10,7 +10,7 @@
 
 /* THE OPERATION AS A REQUEST, because step 6.2 FIRES AN EVENT and firing one runs the page's code.
  *
- * Three algorithms invoke a callback with "report" and CONTINUE: DOM §2.9 inner invoke step 2.11, HTML §8.9's
+ * Three algorithms invoke a callback with "report" and CONTINUE: DOM §2.9 inner invoke step 2.11, HTML §8.12 Animation frames's
  * animation-frame callback, and RESIZE OBSERVER §3.4.6's loop error. Each is already a step machine, so the
  * work record is the CALLING machine's — it visits and releases it, exactly as abort.h's AbortSignalWork is
  * the caller's. `cb` needs FOUR slots because event_target_fire_run's buffer is [this, fn, target, event].

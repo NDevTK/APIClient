@@ -11,7 +11,7 @@
  * on an animating one. A rendering loop that only ever woke for animation callbacks would be a loop the whole
  * of §8.1.7.3's ordering could never be measured against.
  *
- * `has been revealed` IS PER-FLOW STATE, held as a property of a baseline object exactly as §8.9's map is: one
+ * `has been revealed` IS PER-FLOW STATE, held as a property of a baseline object exactly as §8.12 Animation frames's map is: one
  * arm of a fork may have reached its first frame while its sibling has not, and a parked flow resumes owed the
  * reveal it was owed. A C-side boolean would be one document's answer for every flow at once.
  *

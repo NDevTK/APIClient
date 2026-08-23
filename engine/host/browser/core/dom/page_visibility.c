@@ -30,7 +30,7 @@
  * gets nothing from a getter that answers the same string for ever. A constant makes the read honest and the
  * WRITE impossible, and the write is half the feature.
  *
- * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape document.c's readiness and §8.9's animation-frame map
+ * IT LIVES IN THIS REALM'S OWN BASELINE RECORD, the shape document.c's readiness and §8.12 Animation frames's animation-frame map
  * already use, for the two reasons stated there: the record is unreachable from the page, so nothing but this
  * component can write the state; and `state` is an ordinary property write, so the heap COW captures it and one
  * arm of a fork can background its document without touching its sibling's.

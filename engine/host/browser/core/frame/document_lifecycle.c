@@ -569,7 +569,7 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         /* STEP 18's UNLOADING DOCUMENT CLEANUP STEPS. The WebSocket, WebTransport and EventSource loops iterate
            sets that are EMPTY BY CONSTRUCTION — this engine has none of those three interfaces, so "for each"
            runs zero times, exactly as §7.5.10's worker loops do. What remains is the salvageable-false branch's
-           second half: "clear window's map of active timers", and it is THIS window's — §8.6 gives every
+           second half: "clear window's map of active timers", and it is THIS window's — §8.7 Timers gives every
            global its own map, and core/timing/timer.c now keeps one per realm, so clearing it takes nothing
            from a same-origin popup this document opened. */
         timer_clear_map(cctx);

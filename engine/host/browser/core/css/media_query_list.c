@@ -212,7 +212,7 @@ static JSValue js_ev_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 
 /* This document's list, OWNED. A per-realm baseline Array: its mutations are property writes the heap COW
    already captures, so a MediaQueryList created by one arm of a fork does not exist for its sibling — which is
-   the same reason §8.9's map of animation frame callbacks is one. */
+   the same reason §8.12 Animation frames's map of animation frame callbacks is one. */
 static JSValue mql_collection(JSContext *ctx)
 {
     JSValue arr;
@@ -405,7 +405,7 @@ void media_query_list_install_proto(JSContext *ctx)
 
     /* THE DOCUMENT's COLLECTION, built with the realm so it belongs to the pre-boot BASELINE. Created inside a
        flow instead it would be that flow's private array and every sibling would walk a collection nobody
-       wrote — the same reason §8.9's map is built here. */
+       wrote — the same reason §8.12 Animation frames's map is built here. */
     arr = JS_NewArray(ctx);
     CHECK(!JS_IsException(arr), "§4.2's collection of MediaQueryList objects could not be allocated");
     realm_value_set(ctx, g_slot, arr);

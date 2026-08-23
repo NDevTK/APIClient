@@ -49,7 +49,7 @@
  * §4.4 step 6, which is shadow_root_clone_onto below, and `serializable`, `delegatesFocus`, `clonable`, `mode`
  * and `slot assignment` are ALL read by HTML §13.3 step 4.2, which writes them back out as the
  * `<template shadowrootmode>` §13.2.6.4.4 reads. HTML §8.5's `partial interface ShadowRoot` — `innerHTML`,
- * `getHTML`, `setHTMLUnsafe`, `setHTML` — is installed below, the last of them over HTML §8.6's sanitizer. */
+ * `getHTML`, `setHTMLUnsafe`, `setHTML` — is installed below, the last of them over HTML §8.7 Timers's sanitizer. */
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -693,8 +693,8 @@ void shadow_root_init(JSContext *ctx)
        target is not an element — one line of difference, expressed as a magic on element.c's one parse machine
        rather than as a second parse that can drift from it.
        `getHTML` is that component's own declaration, installed on both prototypes.
-       `setHTML` — the SAFE member — is the SAME machine with §8.6.4's `safe` true: what it filters with is
-       §8.6's sanitizer, and its own declaration is element.c's for the reason setHTMLUnsafe's is. */
+       `setHTML` — the SAFE member — is the SAME machine with §8.8 Microtask queuing's `safe` true: what it filters with is
+       §8.7 Timers's sanitizer, and its own declaration is element.c's for the reason setHTMLUnsafe's is. */
     g_id_inner_get = idl_getter_id_step(ctx, fragment_serializer_decl(), FRAGMENT_SERIALIZE_CHILDREN);
     g_id_inner_set = idl_setter_id_step(ctx, IDL_DOMSTRING, true, element_set_html_decl(),
                                         SHADOW_ROOT_SET_INNER_HTML);

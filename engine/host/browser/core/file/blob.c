@@ -742,8 +742,8 @@ void blob_init(JSContext *ctx)
     if (g_blob_rt == rt)
         return;
     g_blob_rt = rt;
-    /* §8's STORE, BUILT AT AGENT INIT, which is pre-boot and therefore BASELINE — the same rule §8.6's map of
-       active timers and §8.9's map of animation frame callbacks are built under. Built lazily on the first
+    /* §8's STORE, BUILT AT AGENT INIT, which is pre-boot and therefore BASELINE — the same rule §8.7 Timers's map of
+       active timers and §8.12 Animation frames's map of animation frame callbacks are built under. Built lazily on the first
        `createObjectURL` instead, it would belong to whichever FLOW minted the first URL and every sibling
        would be registering into an object created inside another flow's delta. */
     g_atom_urls = JS_NewAtom(ctx, "blobUrlStore");

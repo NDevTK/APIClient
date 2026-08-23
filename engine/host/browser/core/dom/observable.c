@@ -351,7 +351,7 @@ void obs_emit_enter(JSContext *ctx, JSObsState *s, int which, JSValue value, int
 
 /* HTML §8.1.4.6 "report an exception", returning to `ret`. `err` is CONSUMED. The record is reset at every
    entry rather than once per machine: one walk reports once per throwing callback. The ALGORITHM belongs to
-   core/events/report_exception.c — DOM §2.9's throwing listener and HTML §8.9's animation-frame callback reach
+   core/events/report_exception.c — DOM §2.9's throwing listener and HTML §8.12 Animation frames's animation-frame callback reach
    the same one, and this is its fourth caller. */
 void obs_report_enter(JSContext *ctx, JSObsState *s, JSValue err, int ret)
 {

@@ -605,7 +605,7 @@ static const PlatformComponent PLATFORM[] = {
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },
     { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
-    /* §8.9's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
+    /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame },
     { "page_reveal",         d_page_reveal,         i_page_reveal },
     { "viewport",            d_viewport,            NULL },

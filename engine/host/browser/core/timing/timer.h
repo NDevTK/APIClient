@@ -4,7 +4,7 @@
 #include "quickjs.h"
 
 /* Installs setTimeout/clearTimeout/setInterval/clearInterval and queueMicrotask on the global. */
-/* THE AGENT'S HALF: §8.6's four members, DECLARED once, and the per-realm MAP OF ACTIVE TIMERS this registers
+/* THE AGENT'S HALF: §8.7 Timers's four members, DECLARED once, and the per-realm MAP OF ACTIVE TIMERS this registers
    as a realm intrinsic. A declaration builds one pool entry per member; the per-realm install puts that same
    member on each realm's global and gives that global its own map. */
 void timer_init(JSContext *ctx);
@@ -17,12 +17,12 @@ void timer_install(JSContext *ctx, JSValueConst global);
 void timer_free(JSRuntime *rt);
 
 /* HTML §7.5.9 step 18's "clear window's map of active timers" — the unloading document's global, and only
-   that one. It is a per-global map (§8.6), so clearing one document's takes nothing from a same-origin popup's.
-   §8.6's timer identifier is deliberately NOT reset: the global is being destroyed, so nothing will ask it. */
+   that one. It is a per-global map (§8.7 Timers), so clearing one document's takes nothing from a same-origin popup's.
+   §8.7 Timers's timer identifier is deliberately NOT reset: the global is being destroyed, so nothing will ask it. */
 void timer_clear_map(JSContext *ctx);
 
 /* THE EARLIEST EXPIRY ON THIS EVENT LOOP, or -1 when no timer is set — across every fully active document of
-   the agent, because §8.6 gives every global its own map and §8.1.7 runs them all on ONE task source.
+   the agent, because §8.7 Timers gives every global its own map and §8.1.7 runs them all on ONE task source.
    It answers for the RUNNING FLOW: the maps are per-flow COW state, so what is in the heap when this is asked
    is exactly the flow's own timers. The clock the answer is a moment on lives in core/timing/event_loop.h —
    §8.1.7.3's rendering task source becomes due at moments on that same clock, so the two are compared rather
@@ -34,7 +34,7 @@ double timer_next_due(JSContext *ctx);
    naming that register here would make the browser half depend on the scheduler, and through it on the whole
    solver, exactly as fetch.h says of its own provider. A host that registers none has not built the capability,
    and a page that uses one crashes naming it rather than silently dropping the handler.
-   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS — the realm the string is compiled in, which §8.6 says is the
+   `doc` NAMES WHICH DOCUMENT'S PROGRAM IT IS — the realm the string is compiled in, which §8.7 Timers says is the
    entry global object's: a `setTimeout("x = 1")` scheduled by an iframe's script defines `x` on THAT
    document's Window. The queue is the scheduler's and it keys the realm off the document (solver/flow.h), so
    the fact travels with the source instead of being re-derived from whichever realm the scheduler is rooted
@@ -52,13 +52,13 @@ void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src));
    Returns 1 when a timer fired, so the driver knows it has work again; 0 when there is none. */
 int timer_run_due(JSContext *ctx);
 
-/* HTML §8.6's RUN STEPS AFTER A TIMEOUT, for an ENGINE algorithm rather than a page callback — what
+/* HTML §8.7 Timers's RUN STEPS AFTER A TIMEOUT, for an ENGINE algorithm rather than a page callback — what
    `AbortSignal.timeout()` step 3 performs, and what every other specification that says "run steps after a
    timeout" needs. `steps` is a CALLABLE the caller minted (a step-machine function object is the usual one),
-   because §8.6 performs the steps at the expiry and an engine algorithm that runs page code — signalling
+   because §8.7 Timers performs the steps at the expiry and an engine algorithm that runs page code — signalling
    abort runs the page's abort algorithms and fires an event — has to be a flow when it does.
    It is the SAME timer source the page's timers are on, so the engine's own scheduled work is ordered against
-   them by the one clock, and it goes in the map of the global `ctx` names. Answers §8.6's timerKey, which
+   them by the one clock, and it goes in the map of the global `ctx` names. Answers §8.7 Timers's timerKey, which
    timer_cancel takes — in that same global. */
 int  timer_after(JSContext *ctx, double ms, JSValueConst steps);
 void timer_cancel(JSContext *ctx, int key);

@@ -146,7 +146,7 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "changed, in the order they were created, oldest first), one MediaQueryList per rest")         \
     X(UR_FRAMES, "HTML §8.1.7.3 update the rendering step 14 (for each doc: run the animation frame callbacks " \
                  "with the relative high resolution time given frameTimestamp and doc's relevant global "       \
-                 "object — HTML §8.9), one callback per "                                                      \
+                 "object — HTML §8.12 Animation frames), one callback per "                                                      \
                  "rest")                                                                                       \
     X(UR_FOCUS,  "HTML §8.1.7.3 update the rendering step 17, the FOCUS FIXUP RULE (for each doc: if doc's "    \
                  "focused area is no longer a focusable area, run HTML §6.6.4's focusing steps for doc's "      \
@@ -172,7 +172,7 @@ typedef struct JSUpdateRendering {
     double    frame_ts;     /* step 1 */
     double    layout_start; /* step 15's unsafeStyleAndLayoutStartTime */
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
-    uint32_t  nframe, k;    /* §8.9 step 2's key snapshot for the current doc, and step 3's cursor */
+    uint32_t  nframe, k;    /* §8.12 Animation frames step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
     uint32_t  nobs, ob;     /* §3.2.10 step 1's observer list for the current doc, and step 2's cursor */
     uint8_t   obsnapped;    /* that list has been counted for docs[i] */
@@ -185,7 +185,7 @@ typedef struct JSUpdateRendering {
        a stage leaves its loop only with the request finished, which is what makes it also the flag that says
        whether a resume is landing inside the step's call or at the top of its walk. */
     uint8_t   cphase;
-    uint8_t   snapped;      /* §8.9 step 2 has been taken for docs[i] */
+    uint8_t   snapped;      /* §8.12 Animation frames step 2 has been taken for docs[i] */
     uint8_t   msnapped;     /* §4.2's collection snapshot has been taken for docs[i] */
     bool      not_canceled;
     /* §8.1.4.6's REPORT AN EXCEPTION, for a callback that threw. The work record is THIS machine's, the way
@@ -341,7 +341,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
     JSContext *docctx;
     int r, k;
 
-    /* THE PAGE'S CODE THREW, AND THAT IS NOT THIS TASK'S COMPLETION. §8.9 invokes an animation frame callback
+    /* THE PAGE'S CODE THREW, AND THAT IS NOT THIS TASK'S COMPLETION. §8.12 Animation frames invokes an animation frame callback
        with "report" and §2.9 says the same of a listener: the exception is REPORTED and the walk CONTINUES. So
        this machine DECLARES catches_abrupt and the throw arrives here as a value instead of tearing the
        machine down — which is what used to happen, and it cost more than it looked like: steps 15 through 23
@@ -387,7 +387,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
             s->cphase = 0;
             JS_FreeValue(ctx, s->fn);
             s->fn = JS_UNDEFINED;
-            s->k++;                      /* §8.9 removed the callback before invoking it: on to the next */
+            s->k++;                      /* §8.12 Animation frames removed the callback before invoking it: on to the next */
         } else if (s->hdr.stage == UR_AUTO) {
             /* AN ABRUPT COMPLETION HERE IS THIS ENGINE'S, NOT THE PAGE'S, for UR_FOCUS's reason one arm down:
                §6.6.7 states no step that throws, and a `focus` listener's own exception is REPORTED inside
@@ -621,7 +621,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
 
     if (s->hdr.stage == UR_FRAMES) {
         /* STEP 14: "For each doc of docs: run the animation frame callbacks for doc, passing the relative high
-           resolution time of frameTimestamp." HTML §8.9's own three steps are the inner loop. */
+           resolution time of frameTimestamp." HTML §8.12 Animation frames's own three steps are the inner loop. */
         for (;;) {
             if (s->i >= s->ndocs) {
                 /* STEP 15: unsafeStyleAndLayoutStartTime. It is the moment step 20's "record rendering time"
@@ -645,7 +645,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 break;
             }
             docctx = doc_realm(ctx, s);
-            if (!s->snapped) {                       /* §8.9 step 2: the keys, snapshotted */
+            if (!s->snapped) {                       /* §8.12 Animation frames step 2: the keys, snapshotted */
                 s->nframe = animation_frame_snapshot(docctx);
                 s->k = 0;
                 s->snapped = 1;
@@ -657,7 +657,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 continue;
             }
             if (s->cphase == 0 && JS_IsUndefined(s->fn)) {
-                s->fn = animation_frame_take(docctx, s->k);   /* §8.9 step 3, including its re-check */
+                s->fn = animation_frame_take(docctx, s->k);   /* §8.12 Animation frames step 3, including its re-check */
                 if (JS_IsUndefined(s->fn)) { s->k++; continue; }
             }
             {
@@ -675,7 +675,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                    in the machine's own realm would measure every child document's frame from the top-level
                    traversable's origin, which is the defect §3.7 exists to prevent one link up.
                    Web IDL §3.12 invokes a callback with thisArg UNDEFINED when none is given, which is what
-                   §8.9 gives; a sloppy callback still sees the global because that substitution is the
+                   §8.12 Animation frames gives; a sloppy callback still sees the global because that substitution is the
                    language's, and a strict one must see undefined. */
                 JSValue now = JS_NewFloat64(docctx, hr_time_relative(docctx, s->frame_ts)), out;
                 JSValueConst argv[1];
@@ -685,7 +685,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                                   &out, out_cb, out_argc);
                 JS_FreeValue(docctx, now);
                 if (r > 0) return r;                 /* parked on the page's animation callback */
-                /* §8.9 invokes with "report": the callback's return value is discarded. */
+                /* §8.12 Animation frames invokes with "report": the callback's return value is discarded. */
                 JS_FreeValue(docctx, out);
             }
             cb_result = JS_UNDEFINED;
@@ -786,7 +786,7 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
 
 static const JSTrampStepDef js_update_rendering_def = {
     sizeof(JSUpdateRendering), js_update_rendering_step, js_update_rendering_fini, 0,
-    .catches_abrupt = 1,   /* §8.9 step 3 and §2.9 invoke the page's code with "report": a throw is a VALUE */
+    .catches_abrupt = 1,   /* §8.12 Animation frames step 3 and §2.9 invoke the page's code with "report": a throw is a VALUE */
     .visit = js_update_rendering_visit,
     .algorithm = "HTML §8.1.7.3 update the rendering — the rendering task source's task",
     .steps = UPDATE_RENDERING_STEPS

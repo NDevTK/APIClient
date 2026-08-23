@@ -1,5 +1,5 @@
 /* THE EVENT LOOP'S OWN STATE — HTML §8.1.7. See event_loop.h for why it is a heap record and not three
-   statics, and why it is per-agent while §8.6's map of active timers is per-global. */
+   statics, and why it is per-agent while §8.7 Timers's map of active timers is per-global. */
 #include "check.h"
 #include "quickjs.h"
 #include "core/timing/event_loop.h"
@@ -42,7 +42,7 @@ void event_loop_init(JSContext *ctx)
     g_atom_seq = JS_NewAtom(ctx, "taskInsertionOrder");
     CHECK(g_atom_now != JS_ATOM_NULL && g_atom_render != JS_ATOM_NULL && g_atom_seq != JS_ATOM_NULL,
           "event loop: the record's own keys could not be interned");
-    /* NULL-PROTOTYPED, like §8.9's map: this is the loop's own storage and never the page's object, so it
+    /* NULL-PROTOTYPED, like §8.12 Animation frames's map: this is the loop's own storage and never the page's object, so it
        carries no members a page could have replaced. */
     g_rec = JS_NewObjectProto(ctx, JS_NULL);
     CHECK(!JS_IsException(g_rec), "event loop: the loop's own state could not be allocated");

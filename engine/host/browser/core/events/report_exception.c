@@ -1,7 +1,7 @@
 /* HTML §8.1.4.6 "REPORT AN EXCEPTION" — the algorithm three callers needed and none of them could reach.
  *
  * DOM §2.9's inner invoke step 2.11 says a listener that throws has its exception REPORTED and the walk
- * CONTINUES. HTML §8.9 says the same of an animation-frame callback, and RESIZE OBSERVER §3.4.6's "deliver
+ * CONTINUES. HTML §8.12 Animation frames says the same of an animation-frame callback, and RESIZE OBSERVER §3.4.6's "deliver
  * resize loop error" is the identical fire. Without this component each of those had exactly two options —
  * unwind the machine (which skips the rest of the algorithm and swallows the exception with nothing anywhere
  * to say a page threw) or swallow it silently — and rendering.c carried a DFAIL naming this file rather than

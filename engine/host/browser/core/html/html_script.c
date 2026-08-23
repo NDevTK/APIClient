@@ -74,7 +74,7 @@ void html_script_free(JSRuntime *rt)
 }
 
 /* IS THIS NODE A `script` ELEMENT? The INTERNED TAG ID and the pair of namespaces a `script` can be in, which
-   is the same composite test §8.6.4 step 3 makes a few hundred lines away in element.c — HTML's `script` and
+   is the same composite test §8.8 Microtask queuing step 3 makes a few hundred lines away in element.c — HTML's `script` and
    SVG's are both script elements, and lexbor's own `lxb_html_tree_node_is` answers only for the first because
    it hardcodes the HTML namespace. It replaces a memcmp over the QUALIFIED name, which is the same set by
    accident (a prefixed `foo:script` does not match six bytes) and says nothing about why. */

@@ -21,7 +21,7 @@
  * event exists.
  *
  * PER WINDOW MEANS PER REALM, AND THE RECORD TIME-TRAVELS. The timestamps are a Window's, so they live in this
- * realm's own baseline record (realm.h's per-realm value), the shape §6.2's visibility state and §8.9's
+ * realm's own baseline record (realm.h's per-realm value), the shape §6.2's visibility state and §8.12 Animation frames's
  * animation-frame map already use: the record is unreachable from the page so nothing but this component can
  * write it, and each field is an ordinary property write, so the heap COW captures it and one forked arm can
  * consume an activation without touching its sibling's.
