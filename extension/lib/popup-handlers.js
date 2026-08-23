@@ -20,24 +20,76 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
     }
 
     case "GET_FRAMES": {
-      // Authoritative frame tree from the BROWSER: chrome.webNavigation.getAllFrames
-      // returns each live frame's documentId + url + frameType. frameType is the
-      // only trustworthy "is this the main frame" signal — a fenced frame is reported
-      // as "fenced_frame", so it CANNOT impersonate the outermost frame (which a
-      // self-reported isTop could). Each frame's AUTHORITATIVE origin comes from the
-      // DURABLE _docOrigins map by documentId (survives buffer reclamation after
-      // review); frameId is Chrome's routing id for tabs.sendMessage, not an identity.
-      let _wnFrames = null;
-      try { _wnFrames = await swRpc("webNavigation.getAllFrames", { tabId }); }
-      catch (e) { console.debug("[GET_FRAMES] getAllFrames failed:", e && e.message || e); }
-      const out = (_wnFrames || []).map((f) => ({
-        frameId: f.frameId,
-        documentId: f.documentId || null,
-        url: f.url,
-        origin: _originForDoc(f.documentId),
-        isMain: f.frameType === "outermost_frame",
-      }));
-      sendResponse(out.length ? out : [{ frameId: 0, documentId: null, url: "", origin: "", isMain: true }]);
+      /* THE BROWSER ANSWERS THREE DIFFERENT THINGS AND THIS HANDLER USED TO ANSWER ONE FABRICATED THING.
+         chrome/common/extensions/api/web_navigation.json declares getAllFrames' result `"optional": true`,
+         "A list of frames in the given tab, null if the specified tab ID is invalid", and every item's
+         `documentId` as a NON-optional string (only `parentDocumentId` is optional). So the producer speaks:
+           • null            — THE TAB ID IS INVALID (it went away between the popup's tabs.query and this call);
+           • []              — the tab resolves and holds NO web document webNavigation reports (a chrome://
+                               page, the New Tab page, an extension page — MEASURED: an extension page
+                               answers exactly [], not an error);
+           • [frame, …]      — the frames, each carrying a real documentId.
+         What stood here collapsed all three into a MANUFACTURED frame:
+           `catch { console.debug }` → `_wnFrames || []` → `out.length ? out : [{documentId:null,url:"",…}]`,
+         plus `f.documentId || null` defaulting a field the IDL marks non-optional. The fabricated frame is
+         CLAUDE.md's named defect exactly — a plausible datum indistinguishable from a measurement — and its
+         whole observable effect was measured in the rendered popup: with no web document in the tab the
+         Request Context stayed visible and read "Credentials: waiting for document…" and the Send button
+         "Waiting for the page's document to be ready…", FOREVER, because nothing was coming. The browser had
+         already answered definitively; this handler turned that answer into a pending state. It also defeated
+         popup.js's own `frames.length > 0` assert, which the fabrication satisfied — the assert asserted that
+         the fabricator had run.
+         frameType stays the only trustworthy "is this the main frame" signal — a fenced frame reports
+         "fenced_frame", so it CANNOT impersonate the outermost frame (a self-reported isTop could). Each
+         frame's AUTHORITATIVE origin comes from the DURABLE _docOrigins map by documentId (it survives buffer
+         reclamation after review); frameId is Chrome's routing id for tabs.sendMessage, never an identity.
+         NO try/catch: the SW is this extension's own service worker and a sendMessage to it STARTS it, so a
+         rejection is that relay broken, not a state — it must be loud here, at its origin, rather than become
+         a frame list. (Checked before blaming it: the reported "swRpc failed — the MV3 service worker was not
+         running" never happened; getAllFrames answered, with the real documentId, on every measurement.) */
+      DCHECK(typeof tabId === "number",
+             "GET_FRAMES was asked for a frame tree without a numeric tabId — the popup sends the tab its " +
+             "own tabs.query answered with, so anything else is that query broken and webNavigation would " +
+             "be asked about a tab nobody named");
+      const _wnFrames = await swRpc("webNavigation.getAllFrames", { tabId });
+      if (_wnFrames === null || _wnFrames === undefined) {
+        // The IDL's own words for this: "null if the specified tab ID is invalid". A POSITIVE fact about the
+        // TAB — never flattened into a statement about its frames. (`undefined` cannot survive the structured
+        // clone in swRpc's {ok,result} envelope, so it arrives as null; both spellings mean the one thing.)
+        sendResponse({ tabResolved: false, frames: [] });
+        return;
+      }
+      DCHECK(Array.isArray(_wnFrames),
+             "webNavigation.getAllFrames answered with neither an array nor null — its IDL declares exactly " +
+             "those two (`optional` array, null for an invalid tab id), so a third shape is the swRpc relay " +
+             "corrupting the reply and every document identity below would be built out of it");
+      sendResponse({
+        tabResolved: true,
+        frames: _wnFrames.map((f) => {
+          DCHECK(typeof f.documentId === "string" && f.documentId.length > 0,
+                 "a frame the browser reported carries no documentId — web_navigation.json declares it a " +
+                 "non-optional string, and it is the ONLY stable per-document identity this zone keys on, so " +
+                 "without it the popup cannot name the document it is looking at and would show the global " +
+                 "moat as if it were this page's");
+          DCHECK(typeof f.frameId === "number",
+                 "a frame the browser reported carries no numeric frameId — it is Chrome's routing id for " +
+                 "tabs.sendMessage, so a send would be routed at nothing");
+          DCHECK(typeof f.url === "string",
+                 "a frame the browser reported carries no url string — the frame picker labels the frame " +
+                 "with it and lib/popup-discovery.js reads it as the pinned document's ADDRESS");
+          DCHECK(f.frameType === "outermost_frame" || f.frameType === "fenced_frame" || f.frameType === "sub_frame",
+                 "a frame the browser reported carries a frameType outside extensionTypes.FrameType (`" +
+                 f.frameType + "`) — isMain is decided by it precisely because a fenced frame must not be " +
+                 "able to impersonate the outermost one, and an unknown value would silently answer 'not main'");
+          return {
+            frameId: f.frameId,
+            documentId: f.documentId,
+            url: f.url,
+            origin: _originForDoc(f.documentId),
+            isMain: f.frameType === "outermost_frame",
+          };
+        }),
+      });
       return;
     }
 

@@ -51,9 +51,22 @@ async function loadDiscoveryChanges() {
 // which of them this document is entitled to probe.
 function _discPageUrl() {
   const docId = currentDocumentId();
-  if (!docId) return null;
+  if (!docId) return null;   // no document is pinned — a real state, and the caller's own empty-panel case
+  /* NEITHER HALF OF `(f && f.url) || null` CAN BE ABSENT, AND BOTH WERE DEFAULTED. currentDocumentId() returns
+     a documentId only for a frame that IS in availableFrames (that membership is the whole readiness test), so
+     the find cannot miss; and lib/popup-handlers.js asserts every frame's `url` as the string webNavigation's
+     IDL declares non-optional. What the two defaults produced was the failure named in popup.js's loadState:
+     a null page url makes this panel say "no endpoint of this service was learned here" about a document that
+     learned one — a lookup miss rendered as a fact about the page. */
   const f = availableFrames.find((x) => x.documentId === docId);
-  return (f && f.url) || null;
+  DCHECK(!!f, "the pinned documentId is not in the frame list it was validated against — currentDocumentId() " +
+              "answers non-null only for a frame present in availableFrames, so the two disagreeing means the " +
+              "list changed under this render and the discovery panel would disown this document's endpoints");
+  DCHECK(typeof f.url === "string" && f.url.length > 0,
+         "the pinned document's frame carries no url — GET_FRAMES asserts webNavigation's non-optional url " +
+         "string on every frame, so its absence here is that reply rebuilt somewhere in between, and this " +
+         "panel would report the document as having learned nothing");
+  return f.url;
 }
 function _discServices(pageUrl) {
   const out = new Map();   // service -> { hostname, endpointKeys: [] }

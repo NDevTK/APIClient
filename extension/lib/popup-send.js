@@ -198,9 +198,36 @@ function renderFrameSelector() {
   const originEl = document.getElementById("send-principal-origin");
   if (!row || !sel) return;
 
-  // No frames reported yet (no content script) \u2014 hide the whole context.
+  /* AN EMPTY FRAME LIST IS THE BROWSER'S ANSWER, SAID IN WORDS. It is not "no frames reported yet (no content
+     script)" \u2014 the comment that stood here named a producer this list has never come from; the frames come
+     from webNavigation, which does not need a content script and does not report progressively. Nor is it
+     reachable-but-meaningless: lib/popup-handlers.js used to fabricate a one-element frame whenever the
+     browser reported none, so this branch was DEAD and the popup instead took the `!currentDocumentId()`
+     branch below and displayed "Credentials: waiting for document\u2026" over a tab where nothing was coming.
+     Now the two states arrive distinguished and each is stated: `tabResolved === false` is "the browser does
+     not resolve this tab id" (it closed under us), and an empty list under `tabResolved === true` is "this tab
+     holds no web document" \u2014 a chrome:// page, the New Tab page, an extension page. Neither is a wait. The
+     row STAYS VISIBLE saying so, because hiding it is what let the user read the panels below as a page. */
   if (availableFrames.length === 0) {
-    row.classList.add("hidden");
+    DCHECK(tabResolved !== null,
+           "the frame picker is rendering before GET_FRAMES has answered once \u2014 render() runs after " +
+           "loadState() has assigned both halves of that reply, so a null here is that order broken and this " +
+           "panel would have to guess which of the browser's two answers it is looking at");
+    row.classList.remove("hidden");
+    sel.classList.add("hidden");
+    if (originEl) {
+      originEl.classList.add("opaque");
+      originEl.textContent = tabResolved
+        ? "No web document in this tab \u2014 nothing to analyse or send from."
+        : "This tab no longer exists \u2014 the browser does not resolve it.";
+      originEl.title = tabResolved
+        ? "chrome.webNavigation reports no frame for this tab: it is a chrome:// page, the New Tab page or an "
+          + "extension page, not a web document. The panels below show the CUMULATIVE cross-site moat, not this tab."
+        : "chrome.webNavigation answered null for this tab id (its IDL: \u201cnull if the specified tab ID is "
+          + "invalid\u201d) \u2014 the tab closed between the popup asking which tab it is over and this lookup.";
+      originEl.style.cursor = "";
+      originEl.onclick = null;
+    }
     renderServiceOriginHint();
     _refreshSendEnabled();
     return;
@@ -289,8 +316,18 @@ function renderServiceOriginHint() {
   // `pageUrls` from older brain versions can be malformed; the fallback is to
   // treat them as non-matching, which is the correct hint behavior. The catches
   // stay bare here precisely because surfacing them would spam on every popup
-  // open. The OUTER availableFrames read is the only path where a throw means
-  // a real popup state bug (availableFrames should always be an array).
+  // open.
+  /* THE availableFrames READ IS NOT ONE OF THEM AND ITS try/catch IS DELETED. Its own comment said a throw
+     there "means a real popup state bug", and then caught it and warned — a swallow whose stated reason was
+     that it must never fire. `.find` on a value that is not an array is exactly that bug, so it is asserted
+     instead: popup.js declares availableFrames as `[]` and loadState assigns it only what GET_FRAMES'
+     asserted `frames` array holds, so a non-array here is that chain broken and the hint would silently
+     answer "" — which reads as "opaque origin" and shows the cross-origin warning about a page whose origin
+     the browser had already reported. */
+  DCHECK(Array.isArray(availableFrames),
+         "the popup's frame list is not an array — popup.js declares it [] and assigns it only the frames " +
+         "GET_FRAMES asserted, so anything else means the origin shown for this document was built out of " +
+         "something the browser never said");
   // The current document's origin is the AUTHORITATIVE browser origin GET_FRAMES
   // reports (from _docOrigins) for the MAIN frame — never derived from the tab url:
   // a document url can't be mapped to an origin (about:blank/sandboxed give the
@@ -300,12 +337,8 @@ function renderServiceOriginHint() {
   // (fail-safe). The pageUrls compared below are the service's RECORDED page urls
   // (historical "seen at"), a display heuristic — not the live principal.
   var tabOrigin = "";
-  try {
-    var _mainF = availableFrames.find(function (f) { return f && f.isMain; }) || availableFrames[0];
-    if (_mainF && typeof _mainF.origin === "string" && _mainF.origin.indexOf("://") > 0) tabOrigin = _mainF.origin;
-  } catch (e) {
-    console.warn("[popup:renderServiceOriginHint] availableFrames read threw:", e && e.message || e);
-  }
+  var _mainF = availableFrames.find(function (f) { return f && f.isMain; }) || availableFrames[0];
+  if (_mainF && typeof _mainF.origin === "string" && _mainF.origin.indexOf("://") > 0) tabOrigin = _mainF.origin;
   var matchesCurrentTab = false;
   if (tabOrigin) for (var i = 0; i < pageUrls.length; i++) {
     if (pageUrls[i] && URL.canParse(pageUrls[i]) && new URL(pageUrls[i]).origin === tabOrigin) {

@@ -157,6 +157,39 @@ async function getPopupPage(browser) {
     // what the user would see.
     await sleep(800);
   }
+  /* A REAL ACTION POPUP IS NOT A TAB, AND THIS ONE IS — WHICH IS THE WHOLE ANSWER TO "WHICH PAGE AM I
+     LOOKING AT". popup.js asks `chrome.tabs.query({active:true, currentWindow:true})` at DOMContentLoaded.
+     From a toolbar popup that answers the WEB PAGE under it, because the popup owns no tab. From the popup
+     opened as a tab here it answers THE POPUP'S OWN TAB — and chrome.webNavigation reports no frame for a
+     chrome-extension:// page, so every popup measurement this harness has ever taken was about a tab holding
+     no web document. That is not a small skew: it produced a whole reported product defect ("the crash notice
+     renders for no page, ever") whose real subject was this function. MEASURED, load 3.68: driving the popup
+     unchanged gave documentId null and analysisRun null; setting currentTabId to the page's tab and calling
+     loadState() on the SAME build gave the real documentId and analysisRun "complete".
+     So the arrangement is made faithful rather than described: activate the web tab, then RELOAD the popup so
+     its DOMContentLoaded query runs while that tab is the active one (a background reload does not steal the
+     activation back). Then ASSERT the popup captured it — a harness that silently drives the wrong tab
+     teaches the next reader that the tab was never load-bearing, and this one already taught that once. */
+  const webPage = (await browser.pages()).find(p => /^https?:/i.test(p.url()));
+  if (!webPage) return popup;   // no web page open: the popup IS over no web document, and that is the truth
+  // Checked before it is fixed, so repeated `popup` commands neither reload the view out from under a
+  // measurement nor cost a second init pass.
+  const capturedTab = () => popup.evaluate(async () => {
+    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return { captured: currentTabId, active: t ? { id: t.id, url: t.url } : null };
+  });
+  let seen = await capturedTab();
+  if (!seen.active || seen.captured !== seen.active.id || !/^https?:/i.test(seen.active.url || "")) {
+    await webPage.bringToFront();
+    await popup.reload({ waitUntil: "domcontentloaded", timeout: 10000 });
+    await sleep(800);
+    seen = await capturedTab();
+  }
+  if (!seen.active || seen.captured !== seen.active.id || !/^https?:/i.test(seen.active.url || "")) {
+    throw new Error("harness could not seat the popup over the web page the way a toolbar popup sits over it: "
+      + "popup captured tabId=" + seen.captured + ", active tab is " + JSON.stringify(seen.active)
+      + " — every per-document panel would be measured against the wrong tab, so refusing to drive it");
+  }
   return popup;
 }
 

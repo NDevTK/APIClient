@@ -79,7 +79,19 @@ let globalRequestLog = [];
 // oldest trimmed at the cap.
 function _pushGlobalLog(entry, tabId, documentId, frameId) {
   entry.tabId = tabId != null ? tabId : null;
-  entry.documentId = documentId || null;
+  /* THE ENTRY'S DOCUMENT IDENTITY IS ASSERTED, NOT DEFAULTED. `documentId || null` stood here, and every one
+     of this function's eight call sites is downstream of handleContentMessage's fail-closed check, which
+     already refuses a content message carrying no sender.documentId. So the default could only ever have
+     fired for a caller that bypassed that check — and the value it would have written is the one thing this
+     entry must not carry: lib/serialize.js slices the per-document requestLog with
+     `r.documentId === tab.documentId`, so a null here silently files a real captured request under no
+     document, where the page that made it can never show it again. */
+  DCHECK(typeof documentId === "string" && documentId.length > 0,
+         "a captured request is being filed on the global log with no documentId — it is the ONLY key the " +
+         "per-document request log is sliced by, and handleContentMessage refuses a content message without " +
+         "one, so a caller reaching here without it has bypassed that gate and this entry would belong to " +
+         "no page");
+  entry.documentId = documentId;
   if (entry.frameId == null) entry.frameId = frameId != null ? frameId : 0;
   globalRequestLog.unshift(entry);
   while (globalRequestLog.length > MAX_REQUEST_LOG_ENTRIES) globalRequestLog.pop();

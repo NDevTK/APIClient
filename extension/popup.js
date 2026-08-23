@@ -77,6 +77,13 @@ let lastSendResult = null; // Last rendered response for re-render after rename
 let gqlState = { ops: [], batched: false, activeIdx: 0 }; // GraphQL operation state
 let currentFrameId = 0; // Target frame for sending (0 = main frame)
 let availableFrames = []; // Cached frame list for current tab
+/* WHETHER THE BROWSER RESOLVES THIS TAB AT ALL, which is NOT the question `availableFrames.length` answers.
+   lib/popup-handlers.js reports the two facts separately because webNavigation reports them separately (an
+   invalid tab id is null; a tab holding no web document is []), and an empty frame list means opposite things
+   under them: "this tab is a chrome:// / New Tab / extension page" versus "this tab is gone". `null` here is
+   the third state and the only one that is about US — GET_FRAMES has not answered yet in this popup's life —
+   which is why it is not a boolean defaulting to either answer. */
+let tabResolved = null;   // null = not asked yet; true/false = the browser's own answer
 // ── Send target: PINNED to a documentId (the "pin to documentid" model) ───────
 // The send target is a specific documentId, NOT the reused frameId. A navigation
 // that swaps a frame's document therefore can't silently retarget a send: the
@@ -146,9 +153,21 @@ function _refreshSendEnabled() {
   const target = (currentReplayRequest && currentReplayRequest.documentId) || currentDocumentId();
   const settling = Date.now() < _navBlockUntil;
   b.disabled = _sendInProgress || _pinStale || !target || settling;
+  /* "WAITING FOR THE PAGE'S DOCUMENT TO BE READY…" IS TRUE OF EXACTLY ONE OF THE THREE WAYS THERE IS NO
+     TARGET, and it used to be said for all three. Two of them are the browser's own settled answers — this
+     tab holds no web document, or this tab id no longer resolves — and under those nothing is coming, so the
+     tooltip promised a readiness that would never arrive. It is the same fabricated-pending state the frame
+     picker showed, one element over; leaving it would have kept half the surface lying. `tabResolved === null`
+     is the third and only real wait: GET_FRAMES has not answered once yet in this popup's life, which is
+     reachable here because the navigation settle calls this before loadState returns. */
+  const noFrameTreeYet = tabResolved === null;
+  const noDocumentInTab = !noFrameTreeYet && availableFrames.length === 0;
   b.title = _sendInProgress ? "Sending…"
           : _pinStale ? "Document changed origin — re-select to send"
-          : !target ? "Waiting for the page's document to be ready…"
+          : !target ? (noFrameTreeYet ? "Waiting for the browser's frame tree…"
+                     : noDocumentInTab ? (tabResolved ? "No web document in this tab — there is nothing to send from."
+                                                      : "This tab no longer exists — the browser does not resolve it.")
+                     : "Waiting for the page's document to be ready…")
           : settling ? "Document just changed — settling…"
           : "";
 }
@@ -798,28 +817,31 @@ document.addEventListener("DOMContentLoaded", async () => {
 async function loadState() {
   // Fetch available frames FIRST so currentDocumentId() can resolve the selected
   // frame's documentId for the per-document GET_STATE below.
-  /* THE FRAME TREE IS THE BROWSER'S ANSWER AND IT IS NEVER EMPTY. lib/popup-handlers.js's GET_FRAMES maps
-     chrome.webNavigation.getAllFrames and, when that answered nothing, sends a one-element list describing the
-     outermost frame — so `|| []` and the `catch { availableFrames = [] }` beside it were two defaults over one
-     reply that cannot be empty. What they produced was not "no frames": `_discPageUrl` reads this list to find
-     the pinned document's ADDRESS, and with an empty list it answers null, which makes the discovery panel say
-     "no endpoint of this service was learned here" about a document that learned one. A transport failure
-     rendered as a fact about the page.
-     The catch stays because the rejection is real — the background document is not there to broadcast to —
-     and it keeps the empty list, which every reader already treats as "no document is pinned". An invariant
-     abort travels on through it (check.js RETHROW_FATAL), and a reply that ARRIVES in the wrong shape is the
-     assert's, not the catch's. */
-  try {
-    const frames = await chrome.runtime.sendMessage({ type: "GET_FRAMES", tabId: currentTabId });
-    DCHECK(Array.isArray(frames) && frames.length > 0,
-           "GET_FRAMES answered with something that is not a non-empty array — the handler substitutes a " +
-           "one-element outermost-frame list when webNavigation reports nothing, so an empty or absent one " +
-           "is that handler broken and this view would report the pinned document as having no address");
-    availableFrames = frames;
-  } catch (e) {
-    RETHROW_FATAL(e);
-    availableFrames = [];
-  }
+  /* THE FRAME TREE IS THE BROWSER'S ANSWER AND AN EMPTY ONE IS NOW A FACT, NOT A FAILURE. The assert here
+     used to be `frames.length > 0`, justified by lib/popup-handlers.js substituting a one-element outermost
+     frame "when webNavigation reports nothing" — so what it actually asserted was that the SUBSTITUTION had
+     run. It could never fire: the fabricated frame satisfied it, carrying `documentId: null`, and that null
+     is what made `currentDocumentId()` answer null and every per-document panel render its empty state as a
+     fact about the page. With the fabrication deleted the reply carries the browser's own two answers, and
+     BOTH are asserted here rather than defaulted.
+     The `catch { availableFrames = [] }` goes with it, and for the same reason it was kept: the rejection IS
+     real — the offscreen document is not there to answer — but `[]` is no longer a spare value to park that
+     in. It now MEANS "the browser resolves this tab and it holds no web document", which the view says in
+     words, so writing it on a transport failure would re-collapse the two facts the handler was just fixed to
+     separate. A rejection therefore propagates: it is the same statement the GET_STATE assert below makes one
+     line down, and a popup that cannot reach the trusted zone must paint nothing rather than paint a page. */
+  const frameTree = await chrome.runtime.sendMessage({ type: "GET_FRAMES", tabId: currentTabId });
+  DCHECK(frameTree && typeof frameTree === "object" && typeof frameTree.tabResolved === "boolean"
+         && Array.isArray(frameTree.frames),
+         "GET_FRAMES did not answer with a {tabResolved, frames} record — lib/popup-handlers.js builds one on " +
+         "every path off webNavigation's own two answers, so another shape is that handler broken and this " +
+         "view would have no way to tell 'this tab holds no web document' from 'the tab is gone'");
+  DCHECK(frameTree.tabResolved || frameTree.frames.length === 0,
+         "GET_FRAMES reported frames for a tab id the browser does not resolve — the frames come FROM that " +
+         "resolution, so the two disagreeing means the record was assembled from something other than one " +
+         "getAllFrames answer");
+  tabResolved = frameTree.tabResolved;
+  availableFrames = frameTree.frames;
   _resolvePin();   // validate/advance the pinned send-target against the live frame tree
   tabData = await chrome.runtime.sendMessage({
     type: "GET_STATE",
