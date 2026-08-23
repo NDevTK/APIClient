@@ -285,14 +285,27 @@ static uint32_t g_sess_doc;
    the things this engine asks it for — §8.1.4.2's fetch and, for a module, the record's identity — must be the
    same answer. Resolving it per seed instead would ask the question again mid-session, under whichever flow's
    delta happened to be applied, so a `<base href>` one timeline wrote would silently re-point another
-   timeline's bundle. `body` is an INLINE program's text and `url` is an EXTERNAL row's address; EXACTLY ONE of
-   the two is set (asserted at the build), and a `src` that does not encoding-parse becomes NO ROW AT ALL —
+   timeline's bundle.
+   `body` AND `url` ARE TWO INDEPENDENT ITEMS OF ONE SCRIPT, NOT TWO SPELLINGS OF ONE. HTML §8.1.4.1 "Scripts"
+   says so of the base URL field itself: "Null or a base URL used for resolving module specifiers. When
+   non-null, this will either be the URL from which the script was obtained, for external scripts, or the
+   document base URL of the containing document, for inline scripts." So `body` answers HAVE I GOT THE SOURCE
+   TEXT (NULL until a reply carries it, which is what parks a flow on the row) and `url` answers WHERE DID THE
+   BYTES COME FROM (NULL for a `<script>` with no `src`, whose base URL §4.12.1.1 takes from the document).
+   A row with BOTH is the ordinary end state of an external script — §8.1.4.2 "Fetching scripts": "Let script
+   be the result of creating a classic script given sourceText, settingsObject, response's URL, options,
+   mutedErrors, and url" — and it is what a host that already holds the response hands over. An exactly-one-of
+   invariant stood here and it was WRONG in exactly that case: it read "the source has not arrived yet" as "the
+   script has no address", so the address of every pre-fetched external script was DROPPED at this build and
+   the program compiled under its DOCUMENT's name. For a module that name is the module map KEY, so a document
+   with two `<script type=module src>` had one module.
+   A row that is NEITHER is not a row: a `src` that does not encoding-parse becomes NO ROW AT ALL —
    §4.12.1.1's "if url is failure … fire an event named error at el, and return" means that element runs no
    script, so there is nothing for the sequence to hold. Both strings are this table's own: it is built in
    engine_sched_begin and freed in engine_session_close, which is the one place a session ends. */
 typedef struct RootScript {
-    char *body;          /* an inline program's source text, or NULL for an external row */
-    char *url;           /* §4.12.1.1's encoding-parsed address, or NULL for an inline row */
+    char *body;          /* this row's SOURCE TEXT, or NULL while the flow is still owed it */
+    char *url;           /* §4.12.1.1's encoding-parsed address, or NULL for a `<script>` with no `src` */
     ScriptType type;     /* which of §8.1.4.4 "Calling scripts"'s two algorithms evaluates it */
     /* THE `script` ELEMENT THE ROW IS THE PROGRAM OF — §4.12.1.1's "execute the script element" is a switch on
        EL, and its "classic" arm sets that document's HTML §3.1.7 `currentScript` to it for the whole of the
@@ -2856,11 +2869,16 @@ static void engine_queue(uint32_t doc, const char *body, DynKind kind, ScriptTyp
 /* A DOCUMENT'S SCRIPT INVENTORY, SEEDED AS THE ROWS OF ONE FLOW'S SEQUENCE — the ONE thing that turns a
    document's <script> elements into work items, used by the root document's seeding (flow_set_seed_hook) and
    by a joined document's boot flow, because those are the same operation about two documents.
-   §4.12.1's ORDER IS THE SEQUENCE'S ORDER, and both halves are positions in it: an INLINE script is a program
-   queued in place, an EXTERNAL one is a DYN_SCRIPT_SRC row queued in place holding its address until the reply
-   fills it and stopping the flow there. `urls` are already §4.12.1.1's encoding-parsed addresses — the
-   resolution is the CALLER's because it belongs to the document whose elements these are, and it is computed
-   once per element rather than once per flow.
+   §4.12.1's ORDER IS THE SEQUENCE'S ORDER, and both halves are positions in it: a row whose SOURCE TEXT is
+   here is a program queued in place, a row that is still owed its bytes is a DYN_SCRIPT_SRC row queued in
+   place holding its address until the reply fills it and stopping the flow there. `urls` are already
+   §4.12.1.1's encoding-parsed addresses — the resolution is the CALLER's because it belongs to the document
+   whose elements these are, and it is computed once per element rather than once per flow.
+   WHICH OF THE TWO A ROW IS, IS ASKED OF ITS BODY AND NOT OF ITS ADDRESS. They are the two independent items
+   HTML §8.1.4.1 "Scripts" gives a script — source text, and "a base URL … either the URL from which the script
+   was obtained, for external scripts, or the document base URL of the containing document, for inline
+   scripts" — so a host that already holds an external script's response hands over a row with BOTH, and that
+   row is a program AT its own address.
    A ROW THAT IS NEITHER IS NOT A ROW. §4.12.1.1: "If url is failure, then queue an element task on the DOM
    manipulation task source given el to fire an event named error at el, and return" — that element runs no
    script, so it takes no position. What is still owed is the error event, which needs a task on the document
@@ -2880,10 +2898,11 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                "a script table holds a row whose type executes nothing — §4.12.1.1's null type, an import map "
                "and a set of speculation rules are registered or ignored rather than evaluated, so "
                "document_exec_scripts drops all three before they become rows");
-        DCHECK((rows[i].body != NULL) != (rows[i].url != NULL),
-               "a script table row is neither an inline body nor an external address, or is both — §4.12.1.1 "
-               "makes it exactly one, and a row that is both would run its inline text under an address its "
-               "bytes did not come from");
+        DCHECK(rows[i].body != NULL || rows[i].url != NULL,
+               "a script table row holds neither source text nor an address — §4.12.1.1's \"if url is failure "
+               "… fire an event named error at el, and return\" means such an element runs no script and takes "
+               "no position, so a row that is nothing would park the flow on nothing for the rest of the "
+               "session");
         /* THE POSITION A ROW IS QUEUED AT IS THE POSITION IT IS ADDRESSED AT, which is the whole point of the
            one sequence: `i` is this element's place in §4.12.1's document order and the cursor indexes the same
            table, so the two cannot come apart. Asserted per row rather than described once. */
@@ -2896,8 +2915,16 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            NULL IS A STATEMENT AND NOT A HOLE — a host driving a SYNTHESIZED program list (wpt_runner.c's
            harness prologue and epilogue) has rows no `<script>` produced, and §3.1.7's answer while one of
            those runs is null, which is the truth about a document that is not executing a script element. */
-        if (rows[i].body) engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, NULL, NULL,
-                                            DYN_POS_APPEND, rows[i].el);
+        /* …AND SO DOES THE ADDRESS, WHEN THE ROW HAS BOTH. A row whose source text is already here is a
+           PROGRAM (DYN_PAGE_SCRIPT), and §8.1.4.2 "Fetching scripts" says what its base URL is — "creating a
+           classic script given sourceText, settingsObject, response's URL, …" — so the address rides into the
+           row's own address column and flow_dyn_url answers it at the compile. Passing NULL here is what made
+           every pre-fetched external script compile under its document's name, which for a module is the
+           module map key: §8.1.4.2's own note, "the base URL for the module script is set to the response
+           URL … used for URL resolution". A row with only an address is still the DYN_SCRIPT_SRC shape, whose
+           body IS its URL until flow_drain_pending moves it across. */
+        if (rows[i].body) engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
+                                            NULL, DYN_POS_APPEND, rows[i].el);
         else engine_queue_into(f, doc, rows[i].url, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL, DYN_POS_APPEND,
                                rows[i].el);
     }
@@ -4517,14 +4544,18 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
           "engine: OOM building the root document's script table — every flow of this document is seeded from "
           "it, so without it the document's own bundle would silently not run in any timeline");
     for (int i = 0; i < n; i++) {
-        /* EXACTLY ONE OF THE TWO, asserted at the row rather than at the read. document_exec_scripts states that
-           an entry is inline (a body) or external (an address) and never both or neither; a row that is neither
-           parks the flow on nothing for the rest of the session, and a row that is both would have its inline
-           text run under an address it did not come from. */
-        DCHECK((bodies[i] != NULL) != (srcs[i] != NULL),
-               "a row of the root document's script inventory is neither an inline body nor an external "
-               "address, or is both — document_exec_scripts states exactly one of the two for every executable "
-               "entry, and the seed picks which of §8.1.4.4's algorithms runs it from that");
+        /* A ROW IS SOMETHING, asserted at the row rather than at the read. The two columns are INDEPENDENT
+           facts about one script and not two spellings of one — see RootScript — so what cannot happen is a
+           row that is NEITHER: it would park the flow on nothing for the rest of the session. BOTH is the
+           ordinary shape of an external script whose response the host already holds, and the exactly-one-of
+           invariant that stood here rejected it: document_scripts.h's own contract says of an external entry
+           that `bodies[i]` is "NULL until the host supplies it", and a host that supplies it was aborting the
+           engine on the row it had just filled. */
+        DCHECK(bodies[i] != NULL || srcs[i] != NULL,
+               "a row of the root document's script inventory holds neither source text nor an address — "
+               "§4.12.1.1's \"if url is failure … fire an event named error at el, and return\" means such an "
+               "element runs no script and takes no position, so a row that is nothing is a row the seed would "
+               "park a flow on and never fill");
         DCHECK(script_type_executes(types[i]),
                "a row of the root document's script inventory holds a type that executes nothing — an import "
                "map and a set of speculation rules are registered rather than run and §4.12.1.1's null type "
@@ -4539,6 +4570,17 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            a document that is not executing a script element, and not a hole this line fills. */
         g_root_scripts[g_root_n].el = els ? els[i] : NULL;
         g_root_scripts[g_root_n].type = types[i];
+        /* THE ADDRESS FIRST, AND FOR EVERY ROW THAT HAS ONE — including a row that also has its source text.
+           §4.12.1.1's OWN NEXT STEP for a `src` that does not encoding-parse — "If url is failure, then queue
+           an element task on the DOM manipulation task source given el to fire an event named error at el, and
+           return" — so that element runs NO script and therefore takes NO position in the sequence, whether or
+           not somebody handed bytes over for it: the only reason a host could hold those bytes is that it
+           fetched the address this parse has just refused. Resolved BEFORE the body is copied so that refusal
+           costs nothing. What is still owed is that error event, which needs a task on this document. */
+        if (srcs[i]) {
+            g_root_scripts[g_root_n].url = script_src_absolute(ctx, srcs[i], strlen(srcs[i]));
+            if (!g_root_scripts[g_root_n].url) continue;
+        }
         if (bodies[i]) {
             /* COPIED RATHER THAN BORROWED, because this table outlives the call and is read every time a flow
                of this document is created — which is throughout the session, not only at its start. The host's
@@ -4546,18 +4588,8 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                later seeding whatever that free left behind. */
             g_root_scripts[g_root_n].body = strdup(bodies[i]);
             CHECK(g_root_scripts[g_root_n].body,
-                  "engine: OOM copying an inline program of the root document into its seed table");
-            g_root_n++;
-            continue;
+                  "engine: OOM copying a program of the root document into its seed table");
         }
-        /* §4.12.1.1's OWN NEXT STEP for a `src` that does not encoding-parse — "If url is failure, then queue
-           an element task on the DOM manipulation task source given el to fire an event named error at el, and
-           return" — so that element runs NO script and therefore takes NO position in the sequence. It used to
-           become a row with a NULL address that every flow's compile then had to step past; the standard says
-           there is nothing there, so there is nothing there. What is still owed is that error event, which
-           needs a task on this document rather than anything here. */
-        g_root_scripts[g_root_n].url = script_src_absolute(ctx, srcs[i], strlen(srcs[i]));
-        if (!g_root_scripts[g_root_n].url) continue;
         g_root_n++;
     }
     /* AND EVERY FLOW OF THIS DOCUMENT IS SEEDED FROM IT — installed BEFORE the frontier is seeded below,
@@ -4700,10 +4732,11 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                "and a set of speculation rules are registered rather than run and §4.12.1.1's null type runs "
                "nothing at all, so document_exec_scripts drops all three before they become rows and a fourth "
                "answer here means the types column was never written for this row");
-        DCHECK((bodies[i] != NULL) != (srcs[i] != NULL),
-               "a joined document's script inventory holds an entry that is neither an inline body nor an "
-               "external address, or is both — document_exec_scripts states exactly one of the two for every "
-               "executable entry");
+        DCHECK(bodies[i] != NULL || srcs[i] != NULL,
+               "a joined document's script inventory holds an entry with neither source text nor an address — "
+               "§4.12.1.1's \"if url is failure … fire an event named error at el, and return\" means such an "
+               "element runs no script and takes no position, so a row that is nothing is one this document's "
+               "boot flow would park on and never fill");
         /* AND THE ELEMENT, borrowed from the tree the host handed over — §4.12.1.1's "execute the script
            element" is a switch on EL, and a joined document's `currentScript` is as observable as the root's. */
         DCHECK(els[i] != NULL,
@@ -4711,12 +4744,18 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                "element of one parsed tree");
         rows[rown].el = els[i];
         rows[rown].type = types[i];
-        if (bodies[i]) { rows[rown].body = bodies[i]; rown++; continue; }
-        /* §4.12.1.1's OWN NEXT STEP for a `src` that does not parse — "fire an event named error at el, and
+        /* THE ADDRESS FIRST, AND FOR EVERY ROW THAT HAS ONE — the same shape as the root document's build and
+           for the same reason: source text and base URL are two independent items of one script (§8.1.4.1
+           "Scripts"), so a row a host handed over WITH its response still carries the address §8.1.4.2 makes
+           that script's base URL.
+           §4.12.1.1's OWN NEXT STEP for a `src` that does not parse — "fire an event named error at el, and
            return" — so the element runs no script and takes no position. It is the standard's answer and not a
            skip: what is still owed is that error event, which needs a task on this document. */
-        rows[rown].url = script_src_absolute(cctx, srcs[i], strlen(srcs[i]));
-        if (!rows[rown].url) continue;
+        if (srcs[i]) {
+            rows[rown].url = script_src_absolute(cctx, srcs[i], strlen(srcs[i]));
+            if (!rows[rown].url) continue;
+        }
+        rows[rown].body = bodies[i];
         rown++;
     }
     engine_seed_scripts(f, doc, rows, rown);

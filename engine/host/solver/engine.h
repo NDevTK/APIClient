@@ -294,7 +294,10 @@ void engine_set_provider(int (*provide)(JSContext *ctx));
    MODULE is linked and evaluated (JS_FlowEvalModule) and completes with a PROMISE. The scheduler cannot
    recover the kind from the body — `await` at the top level is a SyntaxError in one and legal in the other,
    which is exactly the difference that has to arrive from the element. The array is BORROWED for the life of
-   the session, like `bodies` and `srcs`. */
+   the session, like `bodies` and `srcs`.
+   `bodies[i]` and `srcs[i]` are the TWO INDEPENDENT ITEMS core/loader/document_scripts.h states — source text,
+   and the address §8.1.4.1 "Scripts" makes the script's base URL — so a host that has already fetched an
+   external entry passes BOTH and the row runs as a program AT its own address. Only NEITHER is refused. */
 /* `els[i]` is entry i's `script` ELEMENT (core/loader/document_scripts.h), BORROWED for the life of the
    session like the three columns beside it. It is what HTML §4.12.1.1 "Processing model"'s "execute the script
    element" is a switch ON, and what its "classic" arm sets §3.1.7's `currentScript` to for the whole of the run

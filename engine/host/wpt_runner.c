@@ -1123,27 +1123,46 @@ static void wpt_page_error(const char *msg)
    which of §8.1.4.4's two algorithms the scheduler runs this body through. A DOCUMENT test takes it from the
    <script> element it came from; everything this runner supplies itself (the prologue, the epilogue, the
    driver's META scripts and a `.any.js` test) is a CLASSIC script, which is a statement about those programs
-   rather than a default. */
-static char **g_prog_bodies, **g_prog_srcs;
+   rather than a default.
+   THE NAME AND THE ADDRESS ARE TWO COLUMNS, AND THIS RUNNER HAD ONE. `name` is what this host calls a program
+   when it looks for one (wpt_insert_report finds the harness by it) and `address` is HTML §8.1.4.1 "Scripts"'s
+   base URL — "the URL from which the script was obtained, for external scripts, or the document base URL of
+   the containing document, for inline scripts" — which the engine resolves and hands to §8.1.4.4 as the
+   script's base and, for a module, as its module map key. One column carried both, so EVERY program of every
+   run was handed the engine as a row with source text AND an address, `<wpt-prologue>` included; the seed's
+   invariant that a row is source-text-or-address (solver/engine.c) then aborted on the FIRST ROW OF EVERY
+   TEST FILE IN THE CORPUS. A synthesized program has NO address — no bytes came from one — and saying
+   otherwise would key a module map by a string that is not a URL. */
+static char **g_prog_bodies, **g_prog_names, **g_prog_srcs;
 static ScriptType *g_prog_types;
 static int    g_prog_n, g_prog_cap;
 
-static void wpt_program(char *body, const char *name, ScriptType type)
+static void wpt_program(char *body, const char *name, const char *address, ScriptType type)
 {
+    /* AN ADDRESS IS A URL OR IT IS ABSENT. This runner's own programs are named `<wpt-…>`, and that spelling
+       reaching the address column is exactly the conflation this pair of columns exists to make impossible —
+       the engine would resolve it as a `src`, hand it to §8.1.4.4 as the script's base URL, and for a module
+       key the module map by it. */
+    DCHECK(address == NULL || address[0] != '<',
+           "a program synthesized by this runner was given an ADDRESS — no bytes came from one, so the name "
+           "this host calls it by has been passed as the base URL §8.1.4.1 says a script is obtained from");
     if (g_prog_n == g_prog_cap) {
         int cap = g_prog_cap ? g_prog_cap * 2 : 8;
         char **b = realloc(g_prog_bodies, (size_t)cap * sizeof *b);
+        char **nm = realloc(g_prog_names, (size_t)cap * sizeof *nm);
         char **u = realloc(g_prog_srcs, (size_t)cap * sizeof *u);
         ScriptType *t = realloc(g_prog_types, (size_t)cap * sizeof *t);
-        CHECK(b != NULL && u != NULL && t != NULL,
+        CHECK(b != NULL && nm != NULL && u != NULL && t != NULL,
               "wpt: OOM building this document's program sequence — a dropped program "
               "is a document that runs something other than what it was served");
-        g_prog_bodies = b; g_prog_srcs = u; g_prog_types = t; g_prog_cap = cap;
+        g_prog_bodies = b; g_prog_names = nm; g_prog_srcs = u; g_prog_types = t; g_prog_cap = cap;
     }
     g_prog_bodies[g_prog_n] = body;
-    g_prog_srcs[g_prog_n] = strdup(name);
+    g_prog_names[g_prog_n] = strdup(name);
+    g_prog_srcs[g_prog_n] = address ? strdup(address) : NULL;
     g_prog_types[g_prog_n] = type;
-    CHECK(body != NULL && g_prog_srcs[g_prog_n] != NULL, "wpt: OOM naming a program");
+    CHECK(body != NULL && g_prog_names[g_prog_n] != NULL && (!address || g_prog_srcs[g_prog_n] != NULL),
+          "wpt: OOM naming a program");
     g_prog_n++;
 }
 
@@ -1161,9 +1180,12 @@ static void wpt_insert_report(void)
     size_t m = sizeof TAIL - 1;
     int at = -1, k;
 
+    /* ASKED OF THE NAME COLUMN, WHICH IS THE ONE EVERY PROGRAM HAS. The address column is NULL for a program
+       no address supplied it, so a search there would silently skip the driver's own META scripts — and the
+       `.any.js` harness this position is defined against is exactly one of those. */
     for (k = 0; k < g_prog_n; k++) {
-        size_t n = strlen(g_prog_srcs[k]);
-        if (n >= m && !strcmp(g_prog_srcs[k] + n - m, TAIL)) { at = k + 1; break; }
+        size_t n = strlen(g_prog_names[k]);
+        if (n >= m && !strcmp(g_prog_names[k] + n - m, TAIL)) { at = k + 1; break; }
     }
     if (at < 0) {
         fprintf(report_out(), "@WPTERR %s: no %s among this document's programs, so the runner's report hook "
@@ -1171,15 +1193,17 @@ static void wpt_insert_report(void)
                 g_test_url, TAIL);
         return;
     }
-    wpt_program(strdup(WPT_REPORT), "<wpt-report>", SCRIPT_TYPE_CLASSIC);
-    {   /* appended, then rotated into place — one slot, three parallel arrays */
-        char *body = g_prog_bodies[g_prog_n - 1], *src = g_prog_srcs[g_prog_n - 1];
+    wpt_program(strdup(WPT_REPORT), "<wpt-report>", /*address*/NULL, SCRIPT_TYPE_CLASSIC);
+    {   /* appended, then rotated into place — one slot, four parallel arrays */
+        char *body = g_prog_bodies[g_prog_n - 1], *nm = g_prog_names[g_prog_n - 1];
+        char *src = g_prog_srcs[g_prog_n - 1];
         ScriptType t = g_prog_types[g_prog_n - 1];
         size_t move = (size_t)(g_prog_n - 1 - at);
         memmove(g_prog_bodies + at + 1, g_prog_bodies + at, move * sizeof *g_prog_bodies);
+        memmove(g_prog_names + at + 1, g_prog_names + at, move * sizeof *g_prog_names);
         memmove(g_prog_srcs + at + 1, g_prog_srcs + at, move * sizeof *g_prog_srcs);
         memmove(g_prog_types + at + 1, g_prog_types + at, move * sizeof *g_prog_types);
-        g_prog_bodies[at] = body; g_prog_srcs[at] = src; g_prog_types[at] = t;
+        g_prog_bodies[at] = body; g_prog_names[at] = nm; g_prog_srcs[at] = src; g_prog_types[at] = t;
     }
 }
 
@@ -1831,7 +1855,14 @@ int main(int argc, char **argv)
                cannot say which POST body a corpus handler is being asked to echo.) */
             DocScripts ds = document_exec_scripts(g_wpt_dom);
             for (i = 0; i < ds.n; i++) {
-                if (ds.bodies[i]) { wpt_program(strdup(ds.bodies[i]), g_test_url, ds.types[i]); continue; }
+                /* AN INLINE `<script>` HAS NO ADDRESS — §4.12.1.1: "If el does not have a src content
+                   attribute: Let base URL be el's node document's document base URL." The engine reads a NULL
+                   address as exactly that, so naming the document here would be a second copy of a fact the
+                   document already answers. */
+                if (ds.bodies[i]) {
+                    wpt_program(strdup(ds.bodies[i]), g_test_url, /*address*/NULL, ds.types[i]);
+                    continue;
+                }
                 if (!ds.srcs[i]) continue;
                 {
                     size_t len = 0;
@@ -1844,12 +1875,17 @@ int main(int argc, char **argv)
                                 g_test_url, ds.srcs[i]);
                         continue;
                     }
-                    wpt_program(body, ds.srcs[i], ds.types[i]);
+                    /* AND AN EXTERNAL ONE'S ADDRESS IS ITS OWN — §8.1.4.2 "Fetching scripts" creates the
+                       script with "response's URL" as its base, and for a module that address is additionally
+                       the module map key, so two `<script type=module src>` of one document are two modules.
+                       The raw `src` attribute goes over as-is: §4.12.1.1's encoding-parse is relative to el's
+                       node document, and the engine holds that document's realm. */
+                    wpt_program(body, ds.srcs[i], ds.srcs[i], ds.types[i]);
                 }
             }
             doc_scripts_free(&ds);
         } else {
-            wpt_program(strdup(WPT_PROLOGUE), "<wpt-prologue>", SCRIPT_TYPE_CLASSIC);
+            wpt_program(strdup(WPT_PROLOGUE), "<wpt-prologue>", /*address*/NULL, SCRIPT_TYPE_CLASSIC);
             /* THE HARNESS AND THE META SCRIPTS ARE PROGRAM INPUTS THE DRIVER RESOLVED, so they come from the
                paths it named; a `.sub.js` among them was fetched and substituted by the driver before it
                handed the path over. The TEST is not one of those — it is the run's ADDRESS — so it comes from
@@ -1858,7 +1894,12 @@ int main(int argc, char **argv)
                 size_t len = 0;
                 char *src = read_file(argv[i], &len);
                 if (!src) { fprintf(report_out(), "@WPTERR %s: cannot read\n", argv[i]); failed = 1; break; }
-                wpt_program(src, argv[i], SCRIPT_TYPE_CLASSIC);
+                /* NO ADDRESS: the driver handed this runner a PATH ON DISK and these bytes were read from it,
+                   not obtained from a URL. §8.1.4.1's base URL is "the URL from which the script was
+                   obtained", and there is none — so the document's own address answers, which is what a
+                   generated `.any.html` gives a same-directory helper anyway. Naming a corpus URL these bytes
+                   did not come from would be a fabricated address. */
+                wpt_program(src, argv[i], /*address*/NULL, SCRIPT_TYPE_CLASSIC);
             }
             /* AND THE TEST ITSELF IS FETCHED, exactly as a document test is, because the reason is the same
                and it is not a reason about markup: a `.sub.` file is a TEMPLATE, and wptserve substitutes
@@ -1871,7 +1912,10 @@ int main(int argc, char **argv)
                 size_t len = 0;
                 char *src = wpt_get(g_test_url, &len);
                 CHECK(src != NULL, "wpt: the corpus server did not serve the test file");
-                wpt_program(src, g_test_url, SCRIPT_TYPE_CLASSIC);
+                /* AND THIS ONE DOES HAVE AN ADDRESS: these bytes came off the corpus server at g_test_url, so
+                   that is §8.1.4.1's "URL from which the script was obtained" and what a relative
+                   `import('./helper.js')` inside the test resolves against. */
+                wpt_program(src, g_test_url, g_test_url, SCRIPT_TYPE_CLASSIC);
             }
         }
         /* THE REPORT AND THE EPILOGUE ARE PROGRAMS OF THIS DOCUMENT LIKE THE REST, and they are two rather than
@@ -1880,7 +1924,7 @@ int main(int argc, char **argv)
            can only be the last thing that runs. */
         if (!failed) {
             wpt_insert_report();
-            wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", SCRIPT_TYPE_CLASSIC);
+            wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", /*address*/NULL, SCRIPT_TYPE_CLASSIC);
         }
     }
 
@@ -1934,8 +1978,9 @@ int main(int argc, char **argv)
        frontier's own teardown asserts about from the other end. */
     {
         int k;
-        for (k = 0; k < g_prog_n; k++) { free(g_prog_bodies[k]); free(g_prog_srcs[k]); }
+        for (k = 0; k < g_prog_n; k++) { free(g_prog_bodies[k]); free(g_prog_names[k]); free(g_prog_srcs[k]); }
         free(g_prog_bodies);
+        free(g_prog_names);
         free(g_prog_srcs);
         free(g_prog_types);
         while (g_owed_n) wpt_owed_forget(g_owed_n - 1);

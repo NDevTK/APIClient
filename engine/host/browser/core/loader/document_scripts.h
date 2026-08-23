@@ -32,7 +32,16 @@ unsigned document_bundle_id(lxb_html_document_t *dom);
 /* The document's OWN executable scripts IN THE ORDER THE DOCUMENT RUNS THEM, each its own program body — NEVER
    concatenated (that would leak per-<script> let/const scope and cannot represent scripts loaded later). Entry i
    is EITHER inline (bodies[i] is its text, srcs[i] NULL) OR external (srcs[i] is its URL, bodies[i] NULL until
-   the host supplies it). External scripts used to be skipped outright, with a comment calling the fetch "later"
+   the host supplies it).
+   THE TWO COLUMNS ARE INDEPENDENT AND THAT LAST CLAUSE IS WHY. `bodies[i]` answers HAVE I GOT THE SOURCE TEXT
+   and `srcs[i]` answers WHERE DID THE BYTES COME FROM — HTML §8.1.4.1 "Scripts" gives a script both, its base
+   URL being "either the URL from which the script was obtained, for external scripts, or the document base URL
+   of the containing document, for inline scripts" — so a host that fetches an external entry into `bodies[i]`
+   MUST leave `srcs[i]` standing beside it: that address is what §8.1.4.2 "Fetching scripts" makes the script's
+   base URL ("creating a classic script given sourceText, settingsObject, response's URL, …") and, for a
+   module, its module map key. A consumer that read the EITHER/OR as exclusive rejected exactly that row.
+   What no entry may be is NEITHER — §4.12.1.1's failed encoding-parse takes the element out of the sequence
+   altogether. External scripts used to be skipped outright, with a comment calling the fetch "later"
    — which meant a real page's own bundle, always a <script src>, was never run at all: the engine explored
    whatever inline glue the page happened to have and reported that as the page's surface. They occupy their
    POSITION here because classic scripts run in that order, and an external one between two inline ones must not
