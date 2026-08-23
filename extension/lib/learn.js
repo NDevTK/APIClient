@@ -79,16 +79,14 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // otherwise be misattributed to the script's host. Using THIS document's url
   // (not the tab's top-page url) keeps an iframe's relative fetches on its own
   // origin. Fall back to scriptUrl only when the document url isn't available.
-  const isDynamic = /^\$\{|^\(dynamic\)|^\{[a-zA-Z]/.test(callSite.url);
-  let csUrl = null;
-  if (!isDynamic) {
-    try {
-      const _baseForRel = (tab && tab.url) ? tab.url : scriptUrl;
-      csUrl = /^https?:\/\//i.test(callSite.url)
-        ? new URL(callSite.url)
-        : new URL(callSite.url, _baseForRel);
-    } catch (_) { return _NOT_LEARNABLE; }
-  }
+  /* WHICH URL COMPONENTS THE CODE DETERMINED — lib/callsite-url.js, the one parser of endpoint.c's address
+     template. The regex that stood here was this file's copy of lib/merge.js's, and the two had to agree by
+     hand about what "dynamic" meant. A parse failure is no longer swallowed into _NOT_LEARNABLE: an address
+     whose origin is fully literal and still does not parse is a request Fetch §5.4 says the page's own
+     fetch() would have thrown a TypeError on, so it crashes where it is born rather than removing the call
+     site from the surface with nothing to say it went. */
+  const _addr = astCallSiteAddress(callSite.url, (tab && tab.url) ? tab.url : scriptUrl);
+  const csUrl = _addr.originKnown ? _addr.url : null;
 
   // Classification at AST-time is an OPEN question — we don't have a
   // response body to magic-byte-sniff, and request shape alone (GET
@@ -104,7 +102,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
   // prefix clustering against siblings on the same host. If a shared
   // path prefix of >=2 segments exists, promote to a prefix-based bucket
   // AND migrate matching siblings so the service groups as one.
-  let grouping = csUrl ? classifyInterface(csUrl) : { rule: "ast-dynamic", matched: "dynamic URL" };
+  let grouping = csUrl ? classifyInterface(csUrl) : { rule: "ast-dynamic", matched: "origin is a shape: " + _addr.host };
   if (csUrl && grouping.rule === "hostname-fallback") {
     const refined = refineByObservedPrefix(tab, csUrl, grouping.name);
     if (refined) {
@@ -123,8 +121,13 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
         kind: "discovery#restDescription",
         name: interfaceName,
         title: `${interfaceName} (Learned)`,
-        rootUrl: csUrl ? csUrl.origin + "/" : "https://" + interfaceName + "/",
-        baseUrl: csUrl ? csUrl.origin + "/" : "https://" + interfaceName + "/",
+        /* THE ORIGIN, AND NOTHING FABRICATED WHERE THERE ISN'T ONE. `"https://" + interfaceName + "/"` stood
+           on both lines and wrote a scheme the code never determined onto a bucket whose whole defining fact
+           is that its origin is unknown — a plausible absolute URL that no fetch of this page resolves to.
+           A shape origin's root IS the shape (URL §4.7: the origin is scheme+host+port, and here none of the
+           three was computed); lib/discovery.js already asks URL.canParse before deriving a basePath from it. */
+        rootUrl: csUrl ? csUrl.origin + "/" : _addr.host,
+        baseUrl: csUrl ? csUrl.origin + "/" : _addr.host,
         resources: { learned: { methods: {} } },
         schemas: {},
       },

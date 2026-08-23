@@ -62,6 +62,10 @@
      lib/req2proto.js's error probe and build a virtual document out of what the rejection described. Loaded
      before lib/response-decode.js, which triggers both halves off a captured exchange. -->
 <script src="lib/discovery-probe.js"></script>
+<!-- THE @H ADDRESS TEMPLATE's grammar: which URL components a fetch call site's address actually determined,
+     and which of them the code left as a shape. lib/learn.js and lib/merge.js each answered that with their
+     own copy of one regex over three spellings, so it is one file that both read, loaded before both. -->
+<script src="lib/callsite-url.js"></script>
 <script src="lib/learn.js"></script>
 <script src="lib/response-decode.js"></script>
 <script src="lib/encode.js"></script>

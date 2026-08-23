@@ -6,8 +6,6 @@
 function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
   for (var r = 0; r < results.length; r++) {
     var analysis = results[r];
-    var sourceHost = "";
-    try { sourceHost = new URL(analysis.sourceUrl).hostname; } catch (_) {}
 
     /* NO probeResults RELAY OFF THE ENGINE RESULT. `tab.probeResults` is written by the two systems that
        actually probe — lib/req2proto.js through lib/discovery-probe.js and lib/response-decode.js — and the
@@ -56,104 +54,82 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
       DCHECK(callSite && typeof callSite === "object", "a fetchCallSites entry is not an object — endpoint.c emits one JSON object per deduped endpoint");
       DCHECK(typeof callSite.method === "string" && callSite.method, "a fetchCallSites entry carries no method — endpoint_record takes it as a required argument, so an absent one is the @H serializer broken");
       DCHECK(Array.isArray(callSite.params), "a fetchCallSites entry carries no params array — endpoint.c writes \"params\":[…] for every endpoint (empty when the request carried no templated path segment, no query and no readable body), so its absence is the whole parameter surface arriving as nothing");
-      try {
-        // Structural @T candidate (url:null — unreached site, value
-        // unresolved): surfaced via focusedView/structuralCandidates, not
-        // a learnable endpoint. Skip before new URL(null) fabricates a
-        // "/null" path.
-        if (callSite.url == null || callSite.url === "") continue;
-        // Skip data:/blob:/about: URLs — those are inline content, not
-        // API endpoints. Registering them as services produces empty-
-        // host records with garbled paths (the URL parser reads the
-        // scheme as origin="null" and path starts mid-string).
-        if (/^(data|blob|about|javascript):/i.test(callSite.url)) continue;
+      // Structural @T candidate (url:null — unreached site, value
+      // unresolved): surfaced via focusedView/structuralCandidates, not
+      // a learnable endpoint. Skip before new URL(null) fabricates a
+      // "/null" path.
+      if (callSite.url == null || callSite.url === "") continue;
+      // Skip data:/blob:/about: URLs — those are inline content, not
+      // API endpoints. Registering them as services produces empty-
+      // host records with garbled paths (the URL parser reads the
+      // scheme as origin="null" and path starts mid-string).
+      if (/^(data|blob|about|javascript):/i.test(callSite.url)) continue;
 
-        var isDynamic = /^\$\{|^\(dynamic\)|^\{[a-zA-Z]/.test(callSite.url);
-        var csUrl = null;
-        var interfaceName = null;
+      /* WHAT THE CODE DETERMINED ABOUT THIS ADDRESS — lib/callsite-url.js, over endpoint.c's own template
+         grammar rather than over a regex guessing at three spellings of "dynamic". A relative address resolves
+         against the PAGE's origin at runtime, NOT the script's host: `fetch('/svc/shreddit/graphql')` in a
+         bundle served from www.redditstatic.com hits www.reddit.com, so the base is the tab's page url and
+         only falls back to the analysis sourceUrl when this merge has no page url at all.
+         AN UNDETERMINED ORIGIN IS A POSITIVE STATEMENT AND IS REGISTERED LIKE ANY OTHER ENDPOINT. What stood
+         here read `csUrl.pathname` off the null the "dynamic" branch had just assigned, and the TypeError went
+         to the console.debug below: EVERY call site whose address begins with a shape was dropped between the
+         engine and the moat, which on a real corpus is most of them. §@H makes a domain-annotated shape a
+         first-class output — the engine must never INVENT a value it only knows the shape of — so a shape
+         standing where the origin would be is exactly the record this tool exists to emit. It is filed under
+         that shape, never under the script's host, which is a different address the code never computed. */
+      var _addr = astCallSiteAddress(callSite.url, (tab && tab.url) ? tab.url : analysis.sourceUrl);
+      var interfaceName = _addr.originKnown ? extractInterfaceName(_addr.url) : _addr.host;
 
-        if (isDynamic) {
-          if (!sourceHost) continue;
-          interfaceName = sourceHost;
-        } else if (/^https?:\/\//i.test(callSite.url)) {
-          csUrl = new URL(callSite.url);
-          interfaceName = extractInterfaceName(csUrl);
+      var _learned = learnFromAstCallSite(tab, interfaceName, callSite, analysis.sourceUrl);
+      DCHECK(_learned && typeof _learned === "object" && "entry" in _learned && "method" in _learned,
+             "learnFromAstCallSite did not answer with its {entry, method} pair — both halves are read " +
+             "below and a missing one silently files this endpoint under the wrong service or drops the " +
+             "path-param examples it just learned");
+      // Refine interfaceName for endpoint registration if the call site
+      // got promoted to a prefix bucket via observed-prefix clustering.
+      if (_learned.entry && _learned.entry.doc && _learned.entry.doc.name) {
+        interfaceName = _learned.entry.doc.name;
+      }
+
+      // Register endpoint for popup display — separate concern from
+      // method registration (endpoint list shows "what fetches exist
+      // on this page," method list shows "what API endpoints we know").
+      /* ONE KEY SHAPE FOR BOTH KINDS OF ADDRESS: method + host + path, where `host` is the origin as far as
+         the code determined it. The "dynamic" arm keyed on the bundle id and the CALL-SITE INDEX `fc`, which
+         is not an identity at all — it renumbers whenever the engine's emission order moves, so the same
+         endpoint re-registered under a new key on every run and two runs never deduped. A shape is a stable
+         name, so the shape-origin records dedup exactly like the literal ones. */
+      var epKey = "AST " + callSite.method + " " + _addr.host + _addr.path;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
+      // DEDUP by STRUCTURAL identity: the SAME endpoint driven with opaque-POSITIONAL args ({arg0}, from
+      // __hostDrive's JS-side drive) and with NAMED args ({id}, from the grind's declared-name drive) yields
+      // TWO keys for ONE endpoint (verified: spa_gated 5 raw / 4 distinct). Collapse {..} path-param segments
+      // to a structural key; on collision keep the DECLARED-name record over the positional one. Only
+      // {placeholder} segments normalize, so genuinely-distinct endpoints (differing elsewhere) never merge.
+      // The stored KEY stays the raw path, so probe/replay of the surviving record are unaffected.
+      if (!tab._epNorm) tab._epNorm = new Map();
+      var _structKey = "AST " + callSite.method + " " + _addr.host + _addr.path.replace(/\{[^}]*\}/g, "{}");
+      var _posRe = /\{arg\d+\}/;
+      var _priorKey = tab._epNorm.get(_structKey);
+      if (_priorKey && _priorKey !== epKey && tab.endpoints.has(_priorKey)) {
+        if (_posRe.test(_priorKey) && !_posRe.test(epKey)) {
+          tab.endpoints.delete(_priorKey); tab._epNorm.set(_structKey, epKey);   // prior positional, new declared -> upgrade (add epKey below)
         } else {
-          // A relative fetch URL resolves against the PAGE's origin at
-          // runtime, NOT the script's host. Using analysis.sourceUrl as
-          // the base misattributes cross-origin-hosted scripts: e.g.
-          // `fetch('/svc/shreddit/graphql')` in a script served from
-          // www.redditstatic.com actually hits www.reddit.com (the
-          // page origin). Prefer the tab's page URL when available.
-          var _csMeta = tab;
-          var _csBaseForRel = (_csMeta && _csMeta.url) ? _csMeta.url : analysis.sourceUrl;
-          csUrl = new URL(callSite.url, _csBaseForRel);
-          interfaceName = extractInterfaceName(csUrl);
+          epKey = _priorKey;   // keep prior (declared/equal); has() below is true -> skip add, no dup
         }
-
-        var _learned = learnFromAstCallSite(tab, interfaceName, callSite, analysis.sourceUrl);
-        DCHECK(_learned && typeof _learned === "object" && "entry" in _learned && "method" in _learned,
-               "learnFromAstCallSite did not answer with its {entry, method} pair — both halves are read " +
-               "below and a missing one silently files this endpoint under the wrong service or drops the " +
-               "path-param examples it just learned");
-        // Refine interfaceName for endpoint registration if the call site
-        // got promoted to a prefix bucket via observed-prefix clustering.
-        if (_learned.entry && _learned.entry.doc && _learned.entry.doc.name) {
-          interfaceName = _learned.entry.doc.name;
-        }
-
-        // Register endpoint for popup display — separate concern from
-        // method registration (endpoint list shows "what fetches exist
-        // on this page," method list shows "what API endpoints we know").
-        var bundleId = analysis.sourceUrl ? analysis.sourceUrl.replace(/^https?:\/\//, "").slice(-60) : "";
-        // __feUrlShape renders an opaque path segment as {id}; the worker's
-        // ep() emits that, but new URL() (csUrl) re-encodes the braces to
-        // %7B/%7D. Decode so the learned endpoint path keeps the OpenAPI
-        // template ({id}) instead of %7Bid%7D — used for BOTH the dedup key
-        // and the stored path so they stay consistent.
-        var _csPath = _decHoles(csUrl.pathname);
-        /* THE DYNAMIC KEY NO LONGER NAMES A FUNCTION, because nothing has ever named one. This term read
-           `callSite.enclosingFunction || "anon"`, and endpoint.c emits no such field — every dynamic endpoint
-           this project has keyed since the engine took over @H has been keyed on the literal "anon", so the
-           term distinguished nothing while reading like the one thing that would tell two dynamic sites in
-           one bundle apart. The index `fc` is what actually separates them. (Keys already carrying " anon "
-           in a persisted store do not match the new shape and re-register once, which is correct: they are
-           records of an identity that was never real.) */
-        var epKey = isDynamic
-          ? "AST DYN " + bundleId + " " + callSite.method + " " + fc
-          : "AST " + callSite.method + " " + csUrl.hostname + _csPath;   // include HOST: an endpoint is method+host+path. Path-only collapsed same-path endpoints across DIFFERENT hosts (and across sites in the cumulative store) → lost the moat's "many sites per session" surface. Mirrors the network key (method + hostname + pathname).
-        // DEDUP by STRUCTURAL identity: the SAME endpoint driven with opaque-POSITIONAL args ({arg0}, from
-        // __hostDrive's JS-side drive) and with NAMED args ({id}, from the grind's declared-name drive) yields
-        // TWO keys for ONE endpoint (verified: spa_gated 5 raw / 4 distinct). Collapse {..} path-param segments
-        // to a structural key; on collision keep the DECLARED-name record over the positional one. Only
-        // {placeholder} segments normalize, so genuinely-distinct endpoints (differing elsewhere) never merge.
-        // The stored KEY stays the raw path, so probe/replay of the surviving record are unaffected.
-        if (!isDynamic) {
-          if (!tab._epNorm) tab._epNorm = new Map();
-          var _structKey = "AST " + callSite.method + " " + csUrl.hostname + _csPath.replace(/\{[^}]*\}/g, "{}");
-          var _posRe = /\{arg\d+\}/;
-          var _priorKey = tab._epNorm.get(_structKey);
-          if (_priorKey && _priorKey !== epKey && tab.endpoints.has(_priorKey)) {
-            if (_posRe.test(_priorKey) && !_posRe.test(epKey)) {
-              tab.endpoints.delete(_priorKey); tab._epNorm.set(_structKey, epKey);   // prior positional, new declared -> upgrade (add epKey below)
-            } else {
-              epKey = _priorKey;   // keep prior (declared/equal); has() below is true -> skip add, no dup
-            }
-          } else {
-            tab._epNorm.set(_structKey, epKey);
-          }
-        }
-        if (!tab.endpoints.has(epKey)) {
-          var _epMeta = tab;
-          tab.endpoints.set(epKey, {
+      } else {
+        tab._epNorm.set(_structKey, epKey);
+      }
+      if (!tab.endpoints.has(epKey)) {
+        var _epMeta = tab;
+        tab.endpoints.set(epKey, {
             // new URL().href percent-encodes shape holes ({} -> %7B%7D); decode so the endpoint URL keeps
-            // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded via _csPath).
-            url: isDynamic ? callSite.url : _decHoles(csUrl.href),
+            // the canonical `{}` param placeholder the dedup/UI recognize (path is already decoded).
+            url: _addr.originKnown ? _decHoles(_addr.url.href) : callSite.url,
             method: callSite.method,
-            host: isDynamic ? sourceHost : csUrl.hostname,
-            path: isDynamic ? callSite.url : _csPath,
+            host: _addr.host,
+            path: _addr.path,
             service: interfaceName,
-            source: isDynamic ? "ast_dynamic" : "ast_analysis",
+            source: _addr.originKnown ? "ast_analysis" : "ast_shape_origin",
             pageUrl: _epMeta ? _epMeta.url : null,
             /* AST-captured required headers (the SET the bundle attached at the host edge, per-header
                literal/opaque) — transport metadata the Send panel shows so the endpoint is actually usable.
@@ -192,18 +168,17 @@ function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
                body, and it needs a reader in lib/send.js first — that file projects only the ten fields this
                `endpoints.set` writes, deliberately.) */
             firstSeen: Date.now(),
-          });
-          newEndpoints++;
-        }
-      } catch (mergeErr) {
-        /* AN INVARIANT ABORT TRAVELS ON THROUGH THIS CATCH. It has a real job — one malformed call site must
-           not cost the other N-1 their registration — but everything it wraps calls into lib/learn.js,
-           lib/grouping.js and lib/schema.js, every one of which DCHECKs its own contract, and a DCHECK is a
-           THROW on this side (extension/check.js). Without this line the loudest assertion in the zone
-           degraded to a console.debug and the run continued as if that endpoint were merely malformed. */
-        RETHROW_FATAL(mergeErr);
-        console.debug("[AST:merge] Error processing fetch site %d (%s %s): %s", fc, callSite.method, callSite.url, mergeErr.message || mergeErr);
+        });
+        newEndpoints++;
       }
+      /* THE CATCH THAT STOOD HERE IS DELETED, AND IT IS WHY THIS DEFECT WAS INVISIBLE FOR A WHOLE CORPUS.
+         Its stated job was that one malformed call site must not cost the other N-1 their registration, and
+         RETHROW_FATAL already carried every DCHECK straight through it — so the ONLY throws it still swallowed
+         were the unanticipated ones, which is exactly the class that cost the moat every endpoint on 30 real
+         sites: a TypeError off a null the branch above had assigned, printed to console.debug, and the record
+         gone with nothing anywhere reporting it as gone. §Offensive programming has no "handled as merely
+         malformed" state — a call site is either a record this zone can build or an engine↔JS contract that
+         must crash where it breaks. There is no third answer to keep a catch for. */
     }
     if (analysis.fetchCallSites.length) {
       console.debug("[AST:merge] Fetch sites: %d call sites processed, %d endpoints registered",
