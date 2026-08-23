@@ -65,14 +65,23 @@ function askJson(cwd, argv) {
    both columns matter: a staged edit and an unstaged one are equally not-in-HEAD, which is the only question
    this file asks. An untracked `.c` under the cone is in the cone too — the walk that builds a gate's source
    list reads the DIRECTORY, so a file no revision contains still gets compiled. */
+/* TWO FACTS, KEPT APART: the paths that DIFFER, and whether the question could be PUT AT ALL. This function
+   used to return the failed ask as though it were a differing path, and the verdict downstream then counted it
+   and announced "THE COMPILED CONE IS DIRTY — 2 path(s) below differ from that revision" about a tree it had
+   never managed to inspect. That is this file's own header defeated inside its own body — "a run that could
+   not ask git and a run that asked and got an answer must not read alike" — and the collapse is the worse
+   direction, because the false verdict is the CONFIDENT one: it names a count, so it reads as a measurement.
+   IT IS NOT HYPOTHETICAL AND IT FIRES ON THE RECIPE §Testing ASKS FOR. A frozen snapshot exported with
+   `git archive` has no `.git` at all, so every ask fails and a gate run from the very snapshot the rule
+   prescribes reported the snapshot as dirty — the one arrangement in which the cone is guaranteed clean. */
 function dirtyIn(cwd, cone) {
   /* AN EMPTY PATHSPEC IS THE WHOLE REPOSITORY, which is the widest possible wrong answer wearing the shape of
      a right one: a cone naming only the submodule would report every edit anyone made anywhere as a reason to
      distrust this gate's number. An empty cone has nothing to be dirty. */
-  if (!cone.length) return [];
+  if (!cone.length) return { lines: [], unasked: [] };
   const out = ask(cwd, "status", "--porcelain", "--", ...cone);
-  if (out.startsWith("<git ")) return [out];
-  return out.split("\n").map((l) => l.trimEnd()).filter(Boolean);
+  if (out.startsWith("<git ")) return { lines: [], unasked: [out] };
+  return { lines: out.split("\n").map((l) => l.trimEnd()).filter(Boolean), unasked: [] };
 }
 
 /* A REVISION THAT CANNOT COMPILE ITSELF IS NOT A MEASURABLE REVISION, and that is a question about the
@@ -202,8 +211,12 @@ const stampPath = (artifact) => artifact + STAMP_SUFFIX;
 export function stampArtifact(artifact, cone) {
   const rev = gateRevision(cone);
   writeFileSync(stampPath(artifact), JSON.stringify(
+    /* `unasked` IS STAMPED BESIDE `dirty` FOR THE SAME REASON THE VERDICT PRINTS THEM APART. A build whose
+       tree could not be asked has an empty `dirty`, and a later reader comparing only that field would read
+       the artifact as built from a clean revision — the strongest claim this file can make, derived from the
+       one state in which it knows nothing. */
     { head: rev.head, branch: rev.branch, qjsHead: rev.qjsHead, qjsPinned: rev.qjsPinned,
-      dirty: rev.dirty, cone, at: new Date().toISOString() }, null, 1));
+      dirty: rev.dirty, unasked: rev.unasked, cone, at: new Date().toISOString() }, null, 1));
   return rev;
 }
 
@@ -285,6 +298,8 @@ function stalerThan(artifact, cone) {
 export function gateRevision(cone, artifact = null) {
   const superDirty = dirtyIn(ROOT, cone.filter((p) => p !== SUBMODULE_PATH));
   const wantsQjs = cone.includes(SUBMODULE_PATH);
+  const qjsDirty = wantsQjs ? dirtyIn(QJS, ["."]) : { lines: [], unasked: [] };
+  const inQjs = (l) => l + "   (in " + SUBMODULE_PATH + ")";
   const stamp = artifact ? readStamp(artifact) : null;
   return {
     head: ask(ROOT, "rev-parse", "HEAD"),
@@ -293,8 +308,11 @@ export function gateRevision(cone, artifact = null) {
        incident this file was written for is the gap between them. */
     qjsPinned: wantsQjs ? ask(ROOT, "rev-parse", "HEAD:" + SUBMODULE_PATH) : null,
     qjsHead: wantsQjs ? ask(QJS, "rev-parse", "HEAD") : null,
-    dirty: [...superDirty, ...(wantsQjs ? dirtyIn(QJS, ["."]).map((l) => l + "   (in " + SUBMODULE_PATH + ")")
-                                        : [])],
+    dirty: [...superDirty.lines, ...qjsDirty.lines.map(inQjs)],
+    /* THE QUESTION THAT COULD NOT BE PUT, carried beside the answer and never folded into it. A reader must be
+       able to tell "this cone differs from its revision" from "this gate does not know whether it does", and
+       only the first of those is a statement about the tree. */
+    unasked: [...superDirty.unasked, ...qjsDirty.unasked.map(inQjs)],
     artifact,
     /* THE STAMP IS THE ANSWER AND THE MTIME IS THE FALLBACK — asked in that order, and only ONE of the two is
        ever carried, so a reader cannot mistake which kind of answer arrived. */
@@ -324,11 +342,25 @@ export function revisionLines(rev) {
              `${short(rev.qjsHead)} and ${short(rev.head)} pins ${short(rev.qjsPinned)}. The program measured ` +
              `below is NOT the program this superproject revision describes, and a fix committed against ` +
              `either half alone will read as absent in the other.`);
-  if (rev.dirty.length) {
+  /* THE ORDER IS THE POINT: a gate that could not ask has no dirty finding to report, and printing the CLEAN
+     line for it would be the original defect inverted — an unasked question answered in the reassuring
+     direction instead of the alarming one. Both directions are the same error, so neither branch may run. */
+  if (rev.unasked.length) {
+    out.push(`[rev] THE CONE'S STATE COULD NOT BE ASKED — git did not answer for ${rev.unasked.length} of the ` +
+             `paths below, so this gate does not know whether the sources it compiled match the revision ` +
+             `above. That is NOT a finding that they differ and NOT a finding that they agree: the number ` +
+             `below is unattributable either way until the ask succeeds.`);
+    for (const l of rev.unasked) out.push(`[rev]   ${l}`);
+    out.push(`[rev] a snapshot made with \`git archive\` carries no \`.git\`, so every ask fails here and the ` +
+             `one arrangement whose cone is guaranteed clean reports as unknown. Freeze with a repository ` +
+             `instead — \`git clone --shared <root> <dir> && git -C <dir> checkout --detach <rev>\`, plus the ` +
+             `same for \`${SUBMODULE_PATH}\` at \`<rev>:${SUBMODULE_PATH}\` — which leaves the gate able to ` +
+             `answer this question about itself.`);
+  } else if (rev.dirty.length) {
     out.push(`[rev] THE COMPILED CONE IS DIRTY — ${rev.dirty.length} path(s) below differ from that revision, ` +
              `so this run measures a tree NO REVISION CONTAINS and the number cannot be quoted against a ` +
-             `commit. Run it from a frozen snapshot (CLAUDE.md §Testing: \`git worktree add --detach\` plus a ` +
-             `worktree of the submodule at \`HEAD:${SUBMODULE_PATH}\`).`);
+             `commit. Run it from a frozen snapshot: \`git clone --shared <root> <dir> && git -C <dir> ` +
+             `checkout --detach <rev>\`, plus the same for \`${SUBMODULE_PATH}\` at \`<rev>:${SUBMODULE_PATH}\`.`);
     for (const l of rev.dirty) out.push(`[rev]   ${l}`);
   } else {
     /* A POSITIVE STATEMENT, not an absence. "Clean" is the finding that makes the head above quotable, and a
@@ -350,7 +382,17 @@ export function revisionLines(rev) {
   }
   if (rev.stamp) {
     const s = rev.stamp;
-    if (s.dirty && s.dirty.length) {
+    if (s.unasked && s.unasked.length) {
+      /* THE STAMP'S OWN UNKNOWN, ASKED FIRST for the same reason the tree's is: a build whose tree could not
+         be asked stamped an EMPTY `dirty`, so every branch below would read it as the clean case and compare
+         revisions that were never established. An artifact stamped before this field existed has no `unasked`
+         key at all, which is the ordinary case and correctly falls through — absence here is age, not a
+         negative answer, and it is the `dirty` comparison below that then carries the weaker claim. */
+      out.push(`[rev] THE ARTIFACT'S TREE COULD NOT BE ASKED WHEN IT WAS BUILT — ${rev.artifact} was stamped ` +
+               `${s.at} at ${short(s.head)} with ${s.unasked.length} unanswered ask(s), so whether it was ` +
+               `built from a clean revision was never established and the head it names is unconfirmed.`);
+      for (const l of s.unasked) out.push(`[rev]   built-with ${l}`);
+    } else if (s.dirty && s.dirty.length) {
       /* THE STRONGEST OF THE THREE ANSWERS, and the only one no timestamp could ever give: the build was made
          from a tree that no revision contains, so there is nothing to compare it TO. */
       out.push(`[rev] THE ARTIFACT WAS BUILT FROM A DIRTY TREE — ${rev.artifact} was stamped ${s.at} at ` +
@@ -413,5 +455,11 @@ export function revisionMoved(before) {
   if (now.dirty.join("\n") !== before.dirty.join("\n"))
     return "the compiled cone was edited under this run — the sources that were linked are not the sources " +
            "on disk now, so `git diff` will not show the program this number is about";
+  /* ASKED SEPARATELY, because a run that could ask at the start and not at the end learned something real —
+     the repository moved out from under it — and folding that into the `dirty` comparison would have made it
+     look like an edit, which is a different remedy. */
+  if (now.unasked.join("\n") !== before.unasked.join("\n"))
+    return "git answered about the compiled cone at one end of this run and not the other, so whether the " +
+           "sources moved under it is now unknowable rather than merely unknown";
   return null;
 }
