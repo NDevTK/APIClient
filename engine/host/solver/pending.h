@@ -115,6 +115,7 @@
     X(HAVE_VALUE, "haveValue", PEND_SHARE)   \
     X(KIND,       "kind",      PEND_SHARE)   \
     X(SCRIPT_I,   "scriptI",   PEND_SHARE)   \
+    X(SCRIPT_TYPE, "scriptType", PEND_SHARE) \
     X(REQ,        "req",       PEND_SHARE)   \
     X(OP,         "op",        PEND_SHARE)   \
     X(METHOD,     "method",    PEND_SHARE)   \

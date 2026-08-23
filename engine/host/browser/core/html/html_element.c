@@ -19,9 +19,13 @@
  * built — is written once in element.c and here. An interface with no reflections is still an entry, because
  * `instanceof` is observable even when the member list is not.
  *
- * WHAT IS HONESTLY ABSENT. CSSOM VIEW §7's `partial interface HTMLElement` — offsetParent, offsetTop,
- * offsetLeft, offsetWidth, offsetHeight — is not here; the IDL audit names its members. `getBoundingClientRect`
- * has LEFT that list: it is §6's, it is on Element.prototype (core/dom/element_view.c), and every interface in
+ * WHAT IS HONESTLY ABSENT. CSSOM VIEW §7's `partial interface HTMLElement` has LEFT this list: offsetParent,
+ * offsetTop, offsetLeft, offsetWidth and offsetHeight are real members of core/html/html_element_view.c,
+ * installed on the prototype this file builds. What remains of §7 is its SIXTH member, `scrollParent`, and it
+ * is absent for one named reason rather than for want of a layout — its walk terminates by returning "the
+ * scrollingElement for the element's document", and CSSOM VIEW §5's `scrollingElement` does not exist in this
+ * engine. The IDL audit names it. `getBoundingClientRect` left the list before that: it is §6's, it is on
+ * Element.prototype (core/dom/element_view.c), and every interface in
  * the table below inherits it. §4.8.11's media elements no longer belong on that list either — HTMLMediaElement
  * is a real state machine over a modelled device (core/html/media_element.c), and this file's table names it as
  * the PARENT of the two interfaces whose IDL inherits from it. A tag whose interface this table does not list
@@ -55,6 +59,7 @@
 #include "core/html/html_form.h"
 #include "core/html/dom_string_map.h"
 #include "core/html/global_attributes.h"
+#include "core/html/html_element_view.h"
 #include "core/html/declarative_shadow.h"
 
 static JSClassID g_html_class;      /* HTMLElement.prototype's per-realm slot */
@@ -559,6 +564,11 @@ void html_element_install_protos(JSContext *ctx)
        §6.6.4's processing model. They were one body returning undefined; they are now the real algorithms,
        which move the document's focused area and fire the page's focus handlers (core/html/focus.c). */
     focus_install_html_members(ctx, html_p);
+    /* CSSOM VIEW §7's `partial interface HTMLElement` — the offset family, installed on THIS realm's prototype
+       like every other member. It is per realm because its answers are: every used value it reports bottoms out
+       in CSS 2.1 §10.1's initial containing block, which is 300 CSS pixels wide in a child navigable and 1280
+       in the top-level traversable, and a C member runs in the realm that DEFINED it. */
+    html_element_view_install(ctx, html_p);
     JS_SetClassProto(ctx, g_html_class, JS_DupValue(ctx, html_p));
 
     /* §4.8.11's `interface HTMLMediaElement : HTMLElement`, built BEFORE the per-tag loop because the two

@@ -112,4 +112,24 @@ void html_script_install(JSContext *ctx, JSValueConst proto);
 void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                               const char *val);
 
+/* HTML §4.12.1.1 "Processing model", the src step: "Let url be the result of encoding-parsing a URL given src,
+ * RELATIVE TO EL'S NODE DOCUMENT" — §4.4's API base URL, which for an element in a child navigable's document
+ * is THAT document's and not the creator's. `ctx` is the node document's realm.
+ *
+ * NULL IS THE STANDARD'S OWN NEXT STEP and not an error code: "if url is failure, then queue an element task on
+ * the DOM manipulation task source given el to fire an event named error at el, and RETURN" — so the element
+ * runs no script, and what is still owed at every caller is that error event, which needs a task on the
+ * document. A non-NULL answer is malloc'd and OWNED BY THE CALLER.
+ *
+ * ONE COPY, HERE, because there are FOUR ways a `<script src>` reaches a loader in this engine — an element a
+ * SCRIPT inserted (this file's html_script_prepare), a child navigable's parsed Document
+ * (core/frame/navigable.c), a document joined to this agent (solver/engine.c's engine_join_document) and the
+ * SESSION document's own inventory (solver/engine.c's engine_sched_begin, read by both the flow's fetch park
+ * and the module compile's map key). Three of them had grown their own identical private copy of these lines,
+ * which is three places for a step the standard states once to drift; the fourth had no copy at all, and that
+ * is the defect this became a component to fix — the session document's sequence carried `src` as the RAW
+ * ATTRIBUTE, so a page's own external module was named by its document and every real site shipping
+ * `<script type=module src>` was unanalysable. */
+char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len);
+
 #endif

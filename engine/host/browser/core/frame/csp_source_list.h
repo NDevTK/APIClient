@@ -25,14 +25,28 @@
  * included, is IGNORED BY THE ALGORITHM. So the answer is total over every policy the web sends, with nothing
  * left to model and nothing left to crash on.
  *
- * The one step of §6.7.3.3 that can still let inline content run once §6.7.3.2 has said no is its
- * 'strict-dynamic' clause, and it requires an element that is NOT parser-inserted. Injected markup is always
- * parser-inserted — that is what innerHTML and document.write produce — and a javascript: navigation has no
- * element at all, so no sink class in this engine can reach it. The clause becomes reachable the day a sink
- * assigns to `.text` on a script element the PAGE created, and it arrives with that sink. */
+ * AND §6.7.3.3 IS HERE BECAUSE THE ENGINE STOPPED ASKING ONLY THE ATTACKER'S QUESTION. This file used to
+ * carry, in place of this paragraph, an argument that §6.7.3.3's remaining arms were unreachable: its nonce
+ * arm needs an element carrying a `nonce` the page's own policy lists, its hash arms need the source to hash
+ * to a listed digest, and its 'strict-dynamic' arm needs an element that is not parser-inserted — none of
+ * which INJECTED content can have. Every word of that is still true and it answered the wrong question the
+ * moment a BROWSER component asked. HTML §4.2.6's update a style block runs §4.2.3 upon the page's OWN
+ * `<style>` element with its own child text content, and `<style nonce=…>` under `style-src 'nonce-…'` is one
+ * of the two shapes modern CSP is actually written in — so answering it from §6.7.3.2 alone refuses a sheet
+ * every browser applies, and the whole cascade below it resolves from a document real Chrome does not have.
+ * §6.7.3.2 is therefore no longer the answer; it is §6.7.3.3's FIRST STEP, and the caller decides nothing.
+ *
+ * WHAT IS STILL NOT BUILT IS ONE PRIMITIVE AND IT CRASHES BY NAME: §6.7.3.3 step 5.2.2 needs SHA-256/384/512
+ * over the source, and this engine has no digest of any kind (`SubtleCrypto` is a string in
+ * browser/platform_names.h and nothing else). A hash-source in a governing directive therefore DFAILs rather
+ * than answering "Does Not Match", because that answer is indistinguishable from a computed one and is wrong
+ * for exactly the page whose own inline block the hash was published for. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FRAME_CSP_SOURCE_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_FRAME_CSP_SOURCE_LIST_H
 #include <stdbool.h>
+#include <stddef.h>
+
+#include <lexbor/dom/dom.h>
 
 #include "core/frame/csp_directive_list.h"
 #include "core/url/url.h"
@@ -59,10 +73,37 @@ bool csp_source_is_hash(CspToken expression);
    are part of the keyword-source production and not punctuation around it. */
 bool csp_source_list_contains(const CspDirective *directive, const char *keyword);
 
-/* §6.7.3.2 "does a source list allow all inline behavior for type?" — true for "Allows". This is the whole of
-   what decides whether an INJECTED inline handler, script block or javascript: URL executes; see the header
-   note above for why the rest of §6.7.3.3 cannot change that answer for content an attacker supplies. */
+/* §6.7.3.2 "does a source list allow all inline behavior for type?" — true for "Allows". It is §6.7.3.3's
+   step 1 and is exposed beside it because it is the one arm of that algorithm that reads NOTHING but the list:
+   a fixture can state `'unsafe-inline' 'strict-dynamic'` against it with no element and no source to build. */
 bool csp_source_list_allows_all_inline(const CspDirective *directive, CspInlineType type);
+
+/* §6.7.3.1 "Is element nonceable?" — "Nonceable" if a nonce-source expression can match `element`.
+   NULL IS AN ELEMENT-SHAPED ANSWER AND NOT A HOLE: §4.2.4 runs the inline check "upon null" for a javascript:
+   navigation, and the solver asks about markup that has not been inserted anywhere, so both arrive here with
+   no element. Step 1 already answers them — a thing with no `nonce` attribute is "Not Nonceable" — so the
+   null case needs no branch of its own and gets none.
+   §6.7.3.1's step 3, "if element had a duplicate-attribute parse error during tokenization", is NOT
+   implemented and cannot be: it needs an HTML tokenizer hook the standard's own note (whatwg/html Issue
+   #3257) says does not exist, and Lexbor records no such error on the element. Its absence makes this engine
+   MORE permissive than Chrome for malformed markup that repeats an attribute — the mitigation §7.2.1
+   dangling markup attacks names, not a policy decision — and it is stated here rather than asserted because
+   the condition is not observable from a parsed tree, so there is nothing a DCHECK could read. */
+bool csp_element_is_nonceable(const lxb_dom_element_t *element);
+
+/* §6.7.3.3 "Does element match source list for type and source?" — the WHOLE of what decides whether inline
+ * content of a given type runs, and the algorithm every directive's §6.1.x inline check ends in.
+ *
+ * `element` may be NULL — see csp_element_is_nonceable. `source` is §6.7.3.3's source string: the element's
+ * child text content for "script"/"style", the attribute's value for the two attribute types, and the URL for
+ * "navigation". It is BORROWED, is not NUL-terminated, and is the ONLY input to the hash arm.
+ *
+ * IT TAKES BYTES AND NOT A JS STRING, because §6.7.3.3 step 5.1 is "UTF-8 encode the result of JavaScript
+ * string converting on source" and every caller in this engine already holds UTF-8: Lexbor's text content and
+ * attribute values are UTF-8, and so is a serialized URL. A caller holding a JSValue converts at its own site,
+ * where the realm that owns the string is in scope. */
+CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_dom_element_t *element,
+                                       CspInlineType type, const char *source, size_t source_len);
 
 /* §6.7.2.7 "does url match source list in origin with redirect count?" — the whole of what decides whether a
  * REQUEST may be made, and the algorithm every fetch directive's pre-request check ends in.

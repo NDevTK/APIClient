@@ -354,14 +354,16 @@ void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *cop
  * The loaded code is more PROGRAM OF THE INJECTING FLOW: it joins that flow's script sequence, so it runs under
  * the delta, the pins and the position in the BFS of the world that injected it, and a sibling that never took
  * the branch never sees it. */
-static char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len);
-
 void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
     size_t n_len = 0;
     const lxb_char_t *src;
     ScriptSchedule sched;
+    /* THE ELEMENT'S TYPE OUTLIVES THE STEPS THAT COMPUTE IT, because §4.12.1.1 asks it TWICE: once to decide
+       whether anything runs at all, and again at "execute the script element", whose whole body is a switch on
+       it. It was scoped to the first question while only the first question existed. */
+    ScriptType st;
     JSValue t;
 
     if (!script_is(n)) return;
@@ -373,22 +375,17 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
        both since it was written. One element, one question: `script_block_type` is that question, and the two
        halves of §4.12.1 must not disagree about what a `type` attribute means. */
     {
-        ScriptType st = script_block_type(el);
+        st = script_block_type(el);
         /* HTML's null and the two data types: "No script is executed." An import map and a set of speculation
            rules are REGISTERED on the relevant global rather than evaluated, which is a capability this engine
            does not have — and their absence is honest, because neither runs code. */
         if (!script_type_executes(st)) return;
-        /* A MODULE cannot travel this route yet, and running it as a classic script is the exact defect the
-           document-scan half was just fixed for — it would come back a SyntaxError on the page's own `import`.
-           The route is engine_queue_script, whose entries the scheduler reads as DYN_PAGE_SCRIPT and compiles
-           with §8.1.3.3's CLASSIC entry; carrying MODULE means the flow's dynamic sequence carries a ScriptType
-           beside each body the way the document's sequence now does (solver/engine.h's `types`), and the
-           compile in flow_step then routes it to JS_FlowEvalModule exactly as it routes a document module. */
-        DCHECK(st != SCRIPT_TYPE_MODULE,
-               "a `<script type=module>` was inserted into the tree and this half can only queue a CLASSIC "
-               "program — give the flow's dynamic script sequence a ScriptType per entry (engine_queue_script "
-               "and solver/flow.h's dyn arrays), the way the document's sequence carries one, so flow_step "
-               "routes it to §8.1.3.3's module entry instead of compiling the page's `import` as a script");
+        /* A MODULE TRAVELS THIS ROUTE NOW, and the row is what carries it: the flow's dynamic sequence has a
+           ScriptType per entry (solver/flow.h's `dyn_type`), so flow_step evaluates an injected
+           `<script type=module>` with §8.1.4.4 "Calling scripts"'s run-a-module-script rather than handing the
+           page's own `import` to the classic entry and taking a SyntaxError back from a parser that is fine.
+           The DCHECK that stood here aborted the whole engine on that markup — one of three, with
+           core/frame/navigable.c's and solver/engine.c's engine_join_document, all three naming that column. */
         /* §4.12.1's LAST STEPS, asked of the same element by the same function the document scan asks — one
            element, one classification. PARSER-INSERTED IS FALSE HERE and that is a fact about this entry rather
            than a default: a fragment parse's scripts are already started and returned at step 1 above, and a
@@ -430,23 +427,28 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
            order as soon as possible` is what `s.async = false` puts an element in, and §4.12.1's own steps for
            it are "if scripts[0] is not el, then abort" — the element holds its place against the others, so it
            takes a slot in the flow's sequence and the flow stops there until the reply fills it. */
-        if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u);
+        if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u, st);
         else {
             DCHECK(sched == SCRIPT_SCHED_IN_ORDER_ASAP,
                    "an injected external script was scheduled somewhere other than the two `as soon as "
                    "possible` destinations — §4.12.1 reaches the when-parsed list and the pending "
                    "parsing-blocking script only for an element with a non-null parser document, and every "
                    "element that reaches this half was inserted by page code");
-            engine_queue_docscript_url(document_doc(ctx), u);
+            engine_queue_docscript_url(document_doc(ctx), u, st);
         }
         free(u);
         return;
     }
-    /* No src: the element's own text IS the program, and it runs on insertion. */
-    DCHECK(sched == SCRIPT_SCHED_IMMEDIATE,
-           "an inline injected script is scheduled somewhere other than its own insertion point — §4.12.1 owes "
-           "no fetch for a classic script whose source it already has, so its tail ends at `immediately execute "
-           "the script element`, and the one inline element that goes elsewhere is a MODULE, rejected above");
+    /* No src: the element's own text IS the program. WHERE it runs is the schedule's answer and the two
+       answers are different spec steps — §4.12.1.1 reaches `immediately execute the script element` only for
+       what falls past "If el's type is `classic` and el has a src attribute, or el's type is `module`", so an
+       inline CLASSIC script runs at the slot after the program that inserted it and an inline MODULE joins one
+       of the two `as soon as possible` destinations and takes a POSITION in the sequence. A module has a graph
+       to LOAD before its result exists, which is exactly why the standard does not run it in place. */
+    DCHECK(sched == SCRIPT_SCHED_IMMEDIATE || st == SCRIPT_TYPE_MODULE,
+           "an inline injected CLASSIC script is scheduled somewhere other than its own insertion point — "
+           "§4.12.1.1 owes no fetch for a classic script whose source it already has, so its tail ends at "
+           "`immediately execute the script element` and only a module leaves by another door");
     {
         lxb_char_t *txt = lxb_dom_node_text_content(n, &n_len);
         if (txt) {
@@ -459,18 +461,24 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el)
                the TAIL — the position of the `as soon as possible` destinations this element is explicitly not
                in — so an injected <script> ran after every remaining program of the document instead of
                before the next statement of the code that injected it. */
-            if (n_len) engine_queue_script_immediate(document_doc(ctx), (const char *)txt);
+            /* AN INLINE MODULE TAKES A POSITION INSTEAD — see the schedule note above. Both `as soon as
+               possible` destinations an injected module reaches hold their elements in order, or in the SET's
+               case have no position at all (§13.2.7 waits for the set only before the load event), so the tail
+               of this flow's sequence is a correct place for both. */
+            if (n_len) {
+                if (st == SCRIPT_TYPE_MODULE) engine_queue_element_script(document_doc(ctx),
+                                                                          (const char *)txt, st);
+                else                          engine_queue_script_immediate(document_doc(ctx),
+                                                                            (const char *)txt);
+            }
             lxb_dom_document_destroy_text(n->owner_document, txt);
         }
     }
 }
 
-/* §4.12.1's "encoding-parsing a URL given src, RELATIVE TO EL'S NODE DOCUMENT" — §4.4's API base URL, which for
-   an element inserted into a child navigable's document is THAT document's and not the creator's. Answers
-   malloc'd, or NULL for the standard's own "return" branch: a `src` that does not parse runs no script. The
-   same three lines core/frame/navigable.c resolves its document's own `<script src>` with, here because a
-   SCRIPT-inserted element reaches the loader by the other of §4.12.1's two halves. */
-static char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len)
+/* HTML §4.12.1.1 Processing model — see html_script.h, which is where this step is now stated once for every
+   caller. It used to be three identical private copies, one per way a `<script src>` reaches a loader. */
+char *script_src_absolute(JSContext *ctx, const char *src, size_t src_len)
 {
     UrlRecord base, rec;
     const char *base_url = document_base_url(ctx);

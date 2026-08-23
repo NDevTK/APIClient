@@ -116,6 +116,11 @@ void csp_list_free(CspList *list);
    a capital in it would match nothing while looking like it should. */
 bool csp_token_is(CspToken token, const char *ascii_lowercase);
 
+/* THE PREDICATE THAT ASSERTION IS MADE OF, exported because §6.7.3.1's substring test in csp_source_list.c
+   folds a haystack against a literal the same way and must assert the same thing about it. One reading of
+   "this literal is already lowercase", for the same reason there is one reading of the grammar. */
+bool csp_is_ascii_lowercase(const char *s);
+
 /* "policy contains a directive whose name is `name`", the containment test §2.2.1, §4.4.1 and §6.8.4 all use.
    Returns the directive or NULL. `name` must be ASCII lowercase. */
 const CspDirective *csp_policy_directive(const CspPolicy *policy, const char *name);

@@ -94,6 +94,21 @@ CssPx css_px_min(CssPx a, CssPx b)
     return css_px_combine(a, b, a.px < b.px ? a.px : b.px);
 }
 
+CssPx css_px_mul(CssPx a, CssPx b)
+{
+    return css_px_combine(a, b, a.px * b.px);
+}
+
+CssPx css_px_div(CssPx a, CssPx b)
+{
+    DCHECK(b.px != 0.0,
+           "a quotient of two lengths was taken with a ZERO divisor. Every algorithm that divides here states "
+           "the non-zero branch itself — Intersection Observer §3.2.10 step 12 divides only 'if targetArea is "
+           "non-zero' and answers 1 or 0 otherwise — so a zero arriving means the caller skipped its own "
+           "branch rather than that this operation needs one");
+    return css_px_combine(a, b, a.px / b.px);
+}
+
 /* CSS Values §6.2's ABSOLUTE UNITS, each as the spec's own definition of it in CSS pixels: "1in = 96px" is the
    anchor and the other five are exact fractions of the inch (1cm = 96/2.54, 1mm = 96/25.4, 1Q = 96/101.6,
    1pt = 96/72, 1pc = 16). Nothing here is a device measurement, which is why §Headless does not reach it. */
@@ -143,6 +158,31 @@ static bool css_len_is_viewport_variant(const char *unit)
 {
     if (unit[0] != 's' && unit[0] != 'l' && unit[0] != 'd') return false;
     return css_len_is_viewport(unit + 1);
+}
+
+/* §6.2's SEVEN ABSOLUTE UNITS, ASKED FROM OUTSIDE THE COMPUTED-VALUE CHAIN — see css_length.h for who asks and
+   why it is not `css_length_parse`. The unit is compared ASCII-case-insensitively because a CSS unit identifier
+   is, and the table's own spellings are lowercase; the comparison is written over a length rather than over a
+   NUL, because a tokenizer hands its caller a span and copying it to ask this would be the copy that then has
+   to be freed on every failure path. */
+bool css_length_absolute_px(const char *unit, size_t unit_len, double n, double *px)
+{
+    unsigned i;
+    size_t k;
+
+    DCHECK(unit != NULL || unit_len == 0, "an absolute-unit test was handed a NULL span with a non-zero length");
+    DCHECK(px != NULL, "an absolute-unit test was handed nowhere to write the length it converts");
+    for (i = 0; i < CSS_LEN_N(CSS_ABSOLUTE); i++) {
+        const char *u = CSS_ABSOLUTE[i].unit;
+
+        if (strlen(u) != unit_len) continue;
+        for (k = 0; k < unit_len; k++)
+            if (tolower((unsigned char)unit[k]) != u[k]) break;
+        if (k < unit_len) continue;
+        *px = n * CSS_ABSOLUTE[i].px;
+        return true;
+    }
+    return false;
 }
 
 /* §6.1.2's VIEWPORT-PERCENTAGE LENGTHS, absolutized: "the viewport-percentage lengths are relative to the size

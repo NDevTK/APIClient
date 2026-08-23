@@ -28,7 +28,7 @@ static bool csp_ws(char c)
     return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
 }
 
-static bool csp_is_ascii_lowercase(const char *s)
+bool csp_is_ascii_lowercase(const char *s)
 {
     size_t i;
 

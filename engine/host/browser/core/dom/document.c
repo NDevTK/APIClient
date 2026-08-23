@@ -12,6 +12,7 @@
  * an element the document HAS is a lie the page cannot detect and this engine would report a surface it never
  * reached; a ReferenceError names the component to write. The DOM is parsed and sitting in `dom` — this
  * component holds it precisely so Element can be grown against it. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -89,6 +90,7 @@ static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRI
 #include "core/dom/node_iterator.h"
 #include "core/dom/tree_walker.h"
 #include "core/dom/range.h"
+#include "core/dom/selection.h"        /* Selection API §2's per-document selection, §4.1's getSelection */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* THE DOCUMENT'S OWN STATE, HELD ON THE REALM THAT IS THIS DOCUMENT — not on the file.
@@ -147,7 +149,22 @@ typedef struct Document {
     /* §4.5's `[SameObject] readonly attribute DOMImplementation implementation`. SameObject is what makes this
        a field rather than a fresh object per read: a page holds `document.implementation` and compares it. */
     JSValue              impl;
-    char                 url[2048]; /* the document's ADDRESS — §4.5's `document.URL`, and NOT its base URL */
+    /* SELECTION API §2's UNIQUE SELECTION: "Every document with a browsing context has a unique selection
+       associated with it … This one selection must be shared by all the content of the document (though not by
+       nested documents)". A field for the same reason `impl` is one, and a stronger one: §3's whole state is on
+       that object, so a fresh one per read would forget every range the page set. UNDEFINED for a document
+       with NO browsing context, which is §4.1's "must return null otherwise" — the one place the two states
+       differ, and the reason this is built by document_install and not by doc_rec_new. */
+    JSValue              selection;
+    /* THE DOCUMENT'S ADDRESS — DOM §4.5 Interface Document's `URL`, and NOT its base URL. An INTERNED string
+       this record owns (doc_addr_intern), never a buffer: DOM §4.5 states "Each document has an associated
+       encoding …, content type …, URL (a URL) …" and "The URL and documentURI getter steps are to return
+       this's URL, serialized", and a URL record's serialization has no length a fixed array could be sized
+       against. It was `char[2048]`, so a longer address was snprintf'd to a PREFIX and every base-URL
+       resolution in the page then resolved against that prefix with nothing able to notice.
+       NEVER NULL, and the empty string is this engine's "no address": a realm whose install returned before
+       it had one, which several readers below test for by exactly that. */
+    const char          *url;
     /* HTML §2.4.3's DOCUMENT BASE URL IS NOT THE ADDRESS, and this record used to hold only the address and
      * answer both questions with it — so every relative URL in a page shipping `<base href="/app/v2/">`
      * resolved against the wrong path, silently, with nothing in the engine able to notice.
@@ -165,15 +182,23 @@ typedef struct Document {
      * which is the design rather than an accident: reading through it is what would make this a lifetime
      * problem, and there is no read.
      *
-     * ONE STRUCT BECAUSE IT IS ONE COW CAPTURE. Both are POD — an element POINTER and two byte arrays, no
-     * JSValue anywhere — which is exactly what solver/cow.h reserves cow_capture_host_state's raw byte capture
-     * for, and the same latch `url` above already is. A flow that appends a `<base href>` changes where every
-     * subsequent URL in ITS world resolves and in no sibling's. */
+     * ONE STRUCT BECAUSE IT IS §2.4.3's ONE ANSWER, NOT BECAUSE IT IS ONE CAPTURE — it used to be the latter
+     * and the two byte arrays that made it so are gone. Each field is now a POINTER, so each is a POD SCALAR
+     * captured on its own (solver/cow.h reserves the byte arm for a scalar latch, and a 4 KB struct through it
+     * is the record-as-bytes that arm's assert names). `frozen_el` and `frozen` are ONE FACT and are captured
+     * as two entries, which is not a weaker statement: a delta unapplies wholly, so both pointers go back
+     * together or neither does. A flow that appends a `<base href>` changes where every subsequent URL in ITS
+     * world resolves and in no sibling's. */
     struct {
         lxb_dom_element_t *frozen_el;
-        char               frozen[2048];
-        char               about[2048];   /* the empty string IS §7.4's null — a URL is never empty */
+        const char        *frozen;   /* NULL exactly when `frozen_el` is — the pair is one fact */
+        const char        *about;    /* NULL IS §7.4's null about base URL */
     } base;
+    /* EVERY ADDRESS THIS RECORD HAS EVER HELD — see doc_addr_intern. The three fields above point INTO this
+       list and nowhere else, and nothing in it is freed before the record is. */
+    char               **addrs;
+    int                  n_addrs;
+    int                  cap_addrs;
     char                 content_type[32];   /* §4.5 contentType — what this document was created as */
     /* HTML §3.1.1's "Each Document has an encoding (an encoding), used for the document's character encoding"
        — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
@@ -214,6 +239,97 @@ static Document *doc_here(JSContext *ctx)
     return d;
 }
 
+/* ---- THE RECORD'S ADDRESSES: ONE PRODUCER, ONE RELEASE, AND NOTHING FREED IN BETWEEN ---------------------
+ *
+ * A Document's URL, its frozen base URL and its about base URL are each a URL record's SERIALIZATION, so none
+ * of them has a length a fixed buffer could be sized against. Each is an allocated string this record owns.
+ *
+ * AND AN ADDRESS IS NEVER FREED ON A CHANGE, WHICH IS WHAT MAKES THE POINTER A LEGAL COW LATCH. The address is
+ * per-flow state: a flow that ran `history.pushState(s, "", "/b")` captured the OLD pointer as its baseline,
+ * and a context switch writes those eight bytes straight back. Freeing on the change would leave that entry
+ * naming storage something else now occupies — so a change NEVER FREES, and the old string stays reachable
+ * from this list for as long as the record does. That is also why the capture may be the pointer at all: the
+ * entry's target (`&d->url`) already points INTO the record, so the entry is only valid while the record
+ * lives, and every string this list holds lives exactly that long.
+ *
+ * WHAT BOUNDS IT is the record's life, not a cap: a Document holds one string per DISTINCT address it has ever
+ * had, and doc_rec_release frees all of them, once each, because this is the only producer and every slot it
+ * adds is a fresh allocation. DISTINCT is what makes that a small number rather than a per-write one: §4.2.3
+ * re-freezes a base URL on every situation that could have changed which element is first in tree order, so
+ * the same serialization is re-stated constantly, and a string these bytes already name is the string to
+ * return. That is sound because an address is IMMUTABLE once interned — two fields naming one string cannot
+ * disagree, and a delta entry naming it is writing back a pointer that still means what it meant.
+ * The alternative — refcounting a string by the delta entries naming it — is a new COW entry kind for owned
+ * strings, and it buys back only the addresses of a document that outlives its own navigations, which the
+ * record's life already bounds. */
+static const char *doc_addr_intern(Document *d, const char *s)
+{
+    char *copy;
+    int i;
+
+    DCHECK(s != NULL, "a Document address was interned from nothing — the ABSENCE of one of these three URLs "
+                      "is a NULL field, which is the fact §2.4.3's steps test, and never a string to store");
+    for (i = 0; i < d->n_addrs; i++)
+        if (strcmp(d->addrs[i], s) == 0) return d->addrs[i];
+    if (d->n_addrs == d->cap_addrs) {
+        int cap = d->cap_addrs ? d->cap_addrs * 2 : 4;
+        char **g = realloc(d->addrs, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "document: OOM recording a Document address — an address this record stops owning is "
+                         "one a parked flow's delta still names, so the next context switch would write a "
+                         "dangling pointer into the field every base-URL resolution reads");
+        d->addrs = g;
+        d->cap_addrs = cap;
+    }
+    copy = strdup(s);
+    CHECK(copy != NULL, "document: OOM copying a Document address");
+    d->addrs[d->n_addrs++] = copy;
+    return copy;
+}
+
+/* IS THIS POINTER ONE OF THIS RECORD'S OWN ADDRESSES — the two-sided half of the intern above, and the reason
+   the release can free every slot without asking whether some field still points at it. A field holding a
+   BORROWED pointer is the bug this makes impossible to write: it would outlive its lender, and the record's
+   release would either miss it or free storage it never owned. Linear, and it runs at address WRITES only. */
+static int doc_addr_owned(const Document *d, const char *p)
+{
+    int i;
+
+    for (i = 0; i < d->n_addrs; i++)
+        if (d->addrs[i] == p) return 1;
+    return 0;
+}
+
+/* EVERY ADDRESS THIS RECORD EVER HELD, GIVEN BACK — from doc_rec_release, the ONE place a record dies. The
+   slots are distinct by construction: the intern is the only producer, it returns an EXISTING slot rather than
+   re-adding one, and every slot it does add is a fresh allocation. So freeing the whole list frees each
+   address exactly once even when two fields name the same string; the NULL-out is what makes a second pass
+   over a slot visible instead of a double free. */
+static void doc_addrs_free(Document *d)
+{
+    int i;
+
+    DCHECK(d->n_addrs <= d->cap_addrs, "a Document's address list counts more entries than it has room for");
+    DCHECK(d->url == NULL || doc_addr_owned(d, d->url),
+           "a Document's ADDRESS was not one this record interned — the release is about to free the list and "
+           "not this pointer, so the field named storage with a second owner or no owner at all");
+    DCHECK(d->base.frozen == NULL || doc_addr_owned(d, d->base.frozen),
+           "a Document's FROZEN BASE URL was not one this record interned");
+    DCHECK(d->base.about == NULL || doc_addr_owned(d, d->base.about),
+           "a Document's ABOUT BASE URL was not one this record interned");
+    for (i = 0; i < d->n_addrs; i++) {
+        DCHECK(d->addrs[i] != NULL, "a Document's address list holds an empty slot — every slot is written "
+                                    "once by the intern and cleared only here, so an empty one has been freed "
+                                    "already and this pass would free it twice");
+        free(d->addrs[i]);
+        d->addrs[i] = NULL;
+    }
+    free(d->addrs);
+    d->addrs = NULL;
+    d->n_addrs = d->cap_addrs = 0;
+    d->url = d->base.frozen = d->base.about = NULL;
+}
+
 /* ---- THE RECORD'S COUNTED REFERENCES: ONE LIST, TWO CONSUMERS ------------------------------------------- */
 
 /* A Document record is malloc'd C, so the four references it holds are invisible to every walk the runtime
@@ -234,6 +350,7 @@ typedef void DocRefFn(JSContext *ctx, JSValue *pv, void *arg);
 static void doc_rec_refs(Document *d, DocRefFn *fn, void *arg)
 {
     fn(d->realm, &d->impl, arg);
+    fn(d->realm, &d->selection, arg);
     fn(d->realm, &d->proxy, arg);
     fn(d->realm, &d->win_obj, arg);
     fn(d->realm, &d->doc_obj, arg);
@@ -1176,9 +1293,9 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
                       "no way to answer");
     /* STEPS 1 AND 2 read the document's ABOUT BASE URL, and both require it to be non-null: step 1 ASSERTS it
        for an iframe srcdoc document, step 2 tests it for a document whose URL matches about:blank. A null one
-       (the empty string here) therefore cannot reach either, so the parse those steps need is performed only
+       (a NULL pointer here) therefore cannot reach either, so the parse those steps need is performed only
        when there is an about base URL to return — which for a document created from a response is never. */
-    if (d->base.about[0]) {
+    if (d->base.about) {
         UrlRecord u;
         bool about;
 
@@ -1220,8 +1337,8 @@ const char *document_base_url_of(const lxb_dom_document_t *dom)
        that has an href attribute, in tree order" — which is the element this record names, kept in step by
        §4.2.3's own situations (core/html/html_base_element.c). */
     if (!d->base.frozen_el) return document_fallback_base_url_of(dom);
-    DCHECK(d->base.frozen[0] != '\0',
-           "a document names a base element whose FROZEN BASE URL is the empty string — §4.2.3's set the "
+    DCHECK(d->base.frozen != NULL && d->base.frozen[0] != '\0',
+           "a document names a base element whose FROZEN BASE URL is absent or empty — §4.2.3's set the "
            "frozen base URL ends in either a serialized URL record or the document's fallback base URL, and "
            "neither is empty, so this pair was written by something that is not that algorithm");
     return d->base.frozen;
@@ -1272,19 +1389,23 @@ void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el
     DCHECK(url == NULL || url[0] != '\0',
            "§4.2.3's frozen base URL was set to the empty string — the algorithm ends in either a serialized "
            "URL record or the document's fallback base URL, and neither is ever empty");
-    DCHECK(url == NULL || strlen(url) < sizeof d->base.frozen,
-           "a frozen base URL is longer than the record can hold — it is a fixed buffer here, exactly as the "
-           "document's address is, so a longer one would be silently truncated and every relative URL in the "
-           "page would resolve against a prefix. BUILD IT: make both an allocated string, released with the "
-           "record and never freed on a change (a parked flow's captured bytes still name the old one)");
     DCHECK(JS_IsObject(d->doc_obj),
            "§4.2.3's frozen base URL was set before the document's `document` object existed — the object is "
-           "what owns the bytes the flow's delta captures, so there would be nothing to keep them alive for a "
-           "parked flow");
-    cow_capture_host_state(d->realm, d->doc_obj, &d->base, sizeof d->base);
+           "what owns the storage the flow's delta captures, so there would be nothing to keep the address "
+           "alive for a parked flow");
+    /* TWO SCALAR CAPTURES FOR ONE FACT — see the field. Each is a POINTER-sized latch, which is what the byte
+       arm is for; the pair reverts together because a delta unapplies wholly. */
+    cow_capture_host_state(d->realm, d->doc_obj, &d->base.frozen_el, sizeof d->base.frozen_el);
+    cow_capture_host_state(d->realm, d->doc_obj, &d->base.frozen, sizeof d->base.frozen);
     d->base.frozen_el = el;
-    if (url) snprintf(d->base.frozen, sizeof d->base.frozen, "%s", url);
-    else     d->base.frozen[0] = '\0';
+    /* THE OLD FROZEN URL IS NOT FREED — a flow that captured it above has an entry naming it, and §4.2.3's own
+       situations re-freeze on every tree change, so this is the field that changes most. It stays on the
+       record's address list until the record dies. */
+    d->base.frozen = url ? doc_addr_intern(d, url) : NULL;
+    DCHECK((d->base.frozen_el == NULL) == (d->base.frozen == NULL),
+           "§4.2.3's frozen base URL and the element it belongs to disagree about whether this document has "
+           "one — they are captured as two entries and reverted as one fact, so a document holding half the "
+           "pair has had one of them written outside this setter");
 }
 
 /* §7.4's ABOUT BASE URL, which "create a new browsing context and document" gives the initial `about:blank` as
@@ -1302,7 +1423,7 @@ void document_set_about_base_url(JSContext *ctx, const char *url)
     DCHECK(url != NULL && url[0] != '\0',
            "§7.4's about base URL was set to nothing — a null one is the ABSENCE of this call, which is what "
            "every Document created from a response has, rather than a value to write");
-    DCHECK(d->base.about[0] == '\0',
+    DCHECK(d->base.about == NULL,
            "§7.4's about base URL was written twice for one Document — it is a CREATION item, decided by the "
            "operation that made the Document and fixed for its life, so a second writer is a second answer to "
            "which document created this one");
@@ -1311,12 +1432,10 @@ void document_set_about_base_url(JSContext *ctx, const char *url)
            "freezes AGAINST the fallback base URL, which this call changes, so that element is frozen to an "
            "answer this Document never had. Set the about base URL where the Document is CREATED, before its "
            "tree is walked, rather than after");
-    DCHECK(strlen(url) < sizeof d->base.about,
-           "an about base URL is longer than the record can hold — see document_set_frozen_base_url's twin");
     DCHECK(JS_IsObject(d->doc_obj),
            "§7.4's about base URL was set before the document's `document` object existed");
-    cow_capture_host_state(ctx, d->doc_obj, &d->base, sizeof d->base);
-    snprintf(d->base.about, sizeof d->base.about, "%s", url);
+    cow_capture_host_state(ctx, d->doc_obj, &d->base.about, sizeof d->base.about);
+    d->base.about = doc_addr_intern(d, url);
 }
 
 /* HTML §3.1.1's "the encoding" of this realm's active document — see document.h. ONE component owns what a
@@ -1332,20 +1451,20 @@ int document_encoding(JSContext *ctx)
     return d->encoding;
 }
 
-/* HTML's SET THE URL — "set document's URL to url", which §7.4.4's URL and history update steps step 8
- * performs and which is the only way a Document's address changes without a new Document.
+/* HTML §2.4.3 "Document base URLs" — SET THE URL, step 1: "Set document's URL to url". It is the only way a
+ * Document's address changes without a new Document, and §7.4.4's URL and history update steps perform it.
  *
- * IT IS PER-FLOW, AND THE CAPTURE IS THE POD ONE ON PURPOSE. A flow that called `history.pushState(s, "",
- * "/b")` is the only flow whose `location.pathname` is `/b`; a sibling arm that never pushed still reads the
- * address it forked at, and a parked flow resumes onto its own. The captured bytes are the ADDRESS ALONE and
- * not the record: solver/cow.h reserves the raw byte capture for a POD LATCH precisely because a memcpy of a
- * JSValue makes a reference it does not count, and this record holds four of them — and `next_created` and
- * `inert_template` are chain POINTERS, which is the other half of that rule (a context switch would revert the
- * pointer and leave the documents reachable from nothing). `url` is a plain char array with neither, so a byte
- * copy of it is a complete description of what it is.
+ * IT IS PER-FLOW, AND WHAT IS CAPTURED IS THE POINTER. A flow that called `history.pushState(s, "", "/b")` is
+ * the only flow whose `location.pathname` is `/b`; a sibling arm that never pushed still reads the address it
+ * forked at, and a parked flow resumes onto its own. Eight bytes is a POD SCALAR, which is exactly what
+ * solver/cow.h reserves the byte arm for — a memcpy of a JSValue makes a reference nothing counts, and this
+ * record holds four of them, so the record itself may never go through that arm. The 2 KB array that used to
+ * sit here went through it whole and tripped that arm's own assert.
  *
- * THE OWNER IS THE `document` OBJECT, which is what holds these bytes alive for a parked flow that still names
- * them — the same contract every other host-record capture in this engine states. */
+ * THE UNAPPLY IS SOUND BECAUSE NOTHING FREES THE OLD STRING: the entry writes the old pointer back and the
+ * string it names is still on this record's address list. THE OWNER IS THE `document` OBJECT, which is what
+ * holds the record's storage alive for a parked flow that still names it — the same contract every other
+ * host-record capture in this engine states. */
 void document_set_url(JSContext *ctx, const char *url)
 {
     Document *d = doc_here(ctx);
@@ -1354,16 +1473,15 @@ void document_set_url(JSContext *ctx, const char *url)
            "a Document's URL was set to nothing — every caller of this has already parsed and serialized a URL "
            "record, and an empty address is what a document with no browsing context has rather than something "
            "an algorithm assigns");
-    DCHECK(strlen(url) < sizeof d->url,
-           "a Document's URL is longer than the record can hold — the address is a fixed buffer here, so a URL "
-           "past it would be silently truncated and every base-URL resolution against it would be wrong. BUILD "
-           "IT: make the record's address an allocated string, released with the record and never freed on a "
-           "change (a parked flow's captured bytes still name the old one)");
     DCHECK(JS_IsObject(d->doc_obj),
-           "a Document's URL was set before its `document` object existed — the object is what owns the bytes "
-           "the flow's delta captures, so there would be nothing to keep them alive for a parked flow");
-    cow_capture_host_state(ctx, d->doc_obj, d->url, sizeof d->url);
-    snprintf(d->url, sizeof d->url, "%s", url);
+           "a Document's URL was set before its `document` object existed — the object is what owns the "
+           "storage the flow's delta captures, so there would be nothing to keep the address alive for a "
+           "parked flow");
+    cow_capture_host_state(ctx, d->doc_obj, &d->url, sizeof d->url);
+    d->url = doc_addr_intern(d, url);
+    DCHECK(doc_addr_owned(d, d->url),
+           "a Document's address is not one this record interned — the delta captured the POINTER, so the "
+           "field may only ever name storage this record owns and releases");
 }
 
 /* HTML §3.1.5's CURRENT DOCUMENT READINESS, which is the internal slot and NOT the member. `readyState` is a
@@ -2390,6 +2508,25 @@ uint32_t document_doc(JSContext *ctx) { return doc_here(ctx)->doc; }
 
 JSValueConst document_object(JSContext *ctx) { return doc_here(ctx)->doc_obj; }
 
+/* SELECTION API §4.1's getSelection — see document.h. The RECEIVER decides which document, because a realm can
+   hold several and only the active one has a browsing context. */
+JSValue document_selection(JSContext *ctx, JSValueConst doc)
+{
+    Document *d = doc_receiver(ctx, doc);
+
+    if (!d) return JS_EXCEPTION;
+    /* "…if this has an associated browsing context, and it must return null otherwise." The record states the
+       browsing context as the presence of the Window it was installed with, and the selection is built by the
+       same line — so the two can never disagree, which this asserts rather than testing one and trusting the
+       other. */
+    DCHECK(JS_IsUndefined(d->selection) == JS_IsUndefined(d->win_obj),
+           "a Document has a browsing context and no selection, or a selection and no browsing context — "
+           "Selection API §2 gives one to exactly the documents that have one, and document_install is the "
+           "single line that builds both");
+    if (JS_IsUndefined(d->selection)) return JS_NULL;
+    return JS_DupValue(ctx, d->selection);
+}
+
 /* DOCUMENT.PROTOTYPE, and the Document as a real NODE. §4.4 `interface Document : Node`, and it was neither —
    a plain JS_NewObject with the members copied onto it. So `document.nodeType` was undefined,
    `document.appendChild` was not a function, `document.contains(el)` (which is how a page asks whether a node
@@ -2437,6 +2574,12 @@ void document_init(JSContext *ctx)
     slot_init(ctx);                /* §4.2.2's slots, which only exist inside a §4.8 tree */
     document_type_init(ctx);       /* §4.6, before the parser's doctype is wrapped as a bare Node */
     dom_implementation_init(ctx);  /* §4.5.1, which every document's record builds one of */
+    /* SELECTION API §3, whose §2 state every document's record builds one of, and whose §4.1 `getSelection` is
+       installed from document_install_proto below — so its declaration is paired with it HERE for the reason
+       page_visibility_init's and focus_init's are. AFTER element_init's row of core/platform.c's list, which
+       is what declares §5.5's class this brands `addRange` against; selection_init asserts that from its own
+       side rather than trusting the row order. */
+    selection_init(ctx);
     /* §6.2's visibility state is a DOCUMENT's, and page_visibility_install already runs from
        document_install_proto below — so its declaration is paired with it HERE rather than copied into each
        host's own init list, which is the hand-picked list CLAUDE.md warns about: three hosts each declaring
@@ -2498,6 +2641,9 @@ void document_install_proto(JSContext *ctx)
     /* HTML §6.6.6's `activeElement` (DocumentOrShadowRoot) and `hasFocus()`, and this realm's INITIAL FOCUSED
        AREA — the viewport, built with the realm so it is baseline rather than whichever flow read first. */
     focus_install_document_members(ctx, proto);
+    /* SELECTION API §4.1's `Selection? getSelection()`. Installed by the component that owns the algorithm and
+       the state, exactly as §6.6's two members above are. */
+    selection_install_document_members(ctx, proto);
     /* HTML §6.6.7's per-document autofocus candidates and processed flag, built with the realm so an element
        inserted by the FIRST flow to run does not find a list that flow created. */
     autofocus_install_document(ctx);
@@ -2564,7 +2710,13 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     d->win_obj = JS_UNDEFINED;
     d->proxy = JS_UNDEFINED;
     d->impl = JS_UNDEFINED;
-    snprintf(d->url, sizeof d->url, "%s", url ? url : "");
+    /* Selection API §2 gives a selection to a document WITH A BROWSING CONTEXT, so it is document_install that
+       builds one and every other document keeps this — which §4.1's getSelection reads as its "must return
+       null otherwise" rather than as a hole a first read would fill. */
+    d->selection = JS_UNDEFINED;
+    /* THE RECORD'S FIRST ADDRESS. A NULL one is a Document install that has no address to give — the empty
+       string is what this engine's readers test for, so it is stored as one rather than left NULL. */
+    d->url = doc_addr_intern(d, url ? url : "");
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
     /* §3.1.1's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
        and one decode of them — so this is the real answer rather than an initial value waiting to be
@@ -2587,6 +2739,7 @@ static void doc_rec_release(Document *d)
        document, and a DOMImplementation the page kept outlives this record. */
     dom_implementation_detach(ctx, d->impl);
     doc_rec_refs(d, doc_ref_release, NULL);   /* the ONE list — see doc_rec_refs */
+    doc_addrs_free(d);   /* every address this record ever held — see doc_addr_intern */
     policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
     if (d->dom)
         lxb_dom_interface_document(d->dom)->user = NULL;
@@ -2816,6 +2969,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     doc = node_wrap(ctx, lxb_dom_interface_node(dom));
     CHECK(JS_IsObject(doc), "the Document wrapper allocation failed");
     d->impl = dom_implementation_new(ctx, doc);   /* §4.5's [SameObject], built WITH the document */
+    /* SELECTION API §2's UNIQUE SELECTION, built WITH the document for the reason §6.6's focused-area record
+       is built with the realm: a selection minted on the first `getSelection()` would be minted INSIDE
+       whichever flow happened to read first, and would be that flow's object rather than the baseline every
+       flow forks from. This line is the pre-boot baseline. Only THIS install builds one — document_new's
+       documents have no browsing context, which is §4.1's null. */
+    d->selection = selection_new(ctx, doc);
 
     /* `URL`, `documentURI`, `documentElement`, `body` and `head` were SET HERE, as data properties on this one
        object. Every one of them is now an accessor on Document.prototype computed from the receiver's tree —
@@ -2881,6 +3040,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
     node_iterator_install(ctx, global);     /* §6.1 NodeIterator */
     tree_walker_install(ctx, global);       /* §6.2 TreeWalker */
     range_install(ctx, global);             /* §5.3 AbstractRange, §5.4 StaticRange, §5.5 Range */
+    selection_install(ctx, global);         /* Selection API §3 Selection — its interface object */
     collections_install(ctx, global);       /* §4.2.10 NodeList, §4.2.11 HTMLCollection */
     mutation_observer_install(ctx, global); /* §4.3.1 MutationObserver, §4.3.3 MutationRecord */
     attr_install(ctx, global);              /* §4.9.1/§4.9.2 NamedNodeMap and Attr */
@@ -3069,6 +3229,7 @@ void document_agent_free(JSRuntime *rt)
     autofocus_free();
     focus_free();
     page_visibility_free();
+    selection_free();
     dom_implementation_free();
     document_type_free();
     slot_free(rt);

@@ -988,7 +988,8 @@ enum { IDL_UNI_ASK = 0, IDL_UNI_STRING, IDL_UNI_SEQUENCE };
    here on its way back INTO the sequence still has to hand that answer to the cursor. Returns >0 (the caller
    returns it), 0 with *pout set, or -1 with a throw live. */
 static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, JSValue *pin,
-                             IdlArgType *pout, JSValue **out_cb, int *out_argc)
+                             IdlArgType *pout, IdlArgType seq_arm, IdlArgType flat_arm,
+                             JSValue **out_cb, int *out_argc)
 {
     /* Step 11 asks its whole question of an OBJECT; every other value reaches step 15 without a read. */
     if (s->uni_phase == IDL_UNI_ASK && !JS_IsObject(v))
@@ -1030,8 +1031,12 @@ static int idl_union_seq_arm(JSContext *ctx, JSIdlArgsState *s, JSValueConst v, 
         }
     }
     DCHECK(s->uni_phase == IDL_UNI_STRING || s->uni_phase == IDL_UNI_SEQUENCE,
-           "a `(DOMString or sequence<DOMString>)` position resumed at an arm this union never parks in");
-    *pout = (s->uni_phase == IDL_UNI_SEQUENCE) ? IDL_SEQUENCE_DOMSTRING : IDL_DOMSTRING;
+           "a `(T or sequence<T>)` position resumed at an arm this union never parks in");
+    /* WHICH TWO TYPES THE TWO OUTCOMES ARE is the only thing each union states for itself; §3.2.25 step 11.2's
+       read above is the ALGORITHM's and is stated once. `IDL_UNI_STRING` names the FLAT arm rather than a
+       string one — the phase is "there was no @@iterator", which is the same fact for every union of this
+       shape — and the two DOMSTRING spellings kept the old name honest only while there was one such union. */
+    *pout = (s->uni_phase == IDL_UNI_SEQUENCE) ? seq_arm : flat_arm;
     return 0;
 }
 
@@ -1544,8 +1549,19 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 *slot = JS_NULL;
                 goto placed;
             }
-            r = idl_union_seq_arm(ctx, s, a, &cb_result, &t, out_cb, out_argc);
+            r = idl_union_seq_arm(ctx, s, a, &cb_result, &t, IDL_SEQUENCE_DOMSTRING, IDL_DOMSTRING,
+                                  out_cb, out_argc);
             if (r > 0) return r;   /* parked ON THE ARM's read; the resume finds the arm already chosen */
+            if (r < 0) return JS_STEP_ABRUPT;
+        }
+
+        /* §3.2.25 over `(double or sequence<double>)` — the same step 11.2 read, the same park, two other arms.
+           Resolved AFTER the concolic pass-through above for the reason every union here is: unknown external
+           input IS an object, and asking it for @@iterator would read a property off an attacker's value. */
+        if (t == IDL_DOUBLE_OR_SEQUENCE) {
+            r = idl_union_seq_arm(ctx, s, a, &cb_result, &t, IDL_SEQUENCE_DOUBLE, IDL_DOUBLE,
+                                  out_cb, out_argc);
+            if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
         }
 
@@ -1649,10 +1665,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         s->dict_v = JS_NULL;
                         mt = IDL_ANY;
                     } else {
-                        r = idl_union_seq_arm(ctx, s, s->dict_v, &cb_result, &mt, out_cb, out_argc);
+                        r = idl_union_seq_arm(ctx, s, s->dict_v, &cb_result, &mt,
+                                              IDL_SEQUENCE_DOMSTRING, IDL_DOMSTRING, out_cb, out_argc);
                         if (r > 0) return r;   /* parked ON THIS MEMBER's arm; the resume finds it chosen */
                         if (r < 0) return JS_STEP_ABRUPT;
                     }
+                }
+                /* §3.2.25 over `(double or sequence<double>)` ON A DICTIONARY MEMBER — Intersection Observer
+                   §2.4's `threshold`. The same step 11.2 read, resolved here so the @@iterator access parks on
+                   the MEMBER it is on rather than after every later member of the same dictionary was read. */
+                if (mt == IDL_DOUBLE_OR_SEQUENCE) {
+                    r = idl_union_seq_arm(ctx, s, s->dict_v, &cb_result, &mt,
+                                          IDL_SEQUENCE_DOUBLE, IDL_DOUBLE, out_cb, out_argc);
+                    if (r > 0) return r;
+                    if (r < 0) return JS_STEP_ABRUPT;
                 }
                 if (mt == IDL_SEQUENCE_STRING_OR_DICT) {
                     /* §3.2.21 whose element type is §3.2.25's `(DOMString or D)` — the conversion that NESTS,
@@ -1681,7 +1707,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     s->dict_v = seq;
                 }
                 else if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE ||
-                         mt == IDL_SEQUENCE_OBJECT) {
+                         mt == IDL_SEQUENCE_OBJECT || mt == IDL_SEQUENCE_DOUBLE) {
                     /* §3.2.21 over a dictionary member. A value that is not an Object is a TypeError before
                        anything is read, exactly as it is in argument position — the check is on the TYPE and
                        not on iterability, so `{attributeFilter: "id"}` throws even though a string iterates.
@@ -1744,6 +1770,25 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         }
                         DCHECK(s->seq_phase == 2, "a dictionary member's sequence resumed at a phase it never "
                                                   "parks in");
+                        /* §3.2.7 `double`'s element conversion — ToNumber is the page's `valueOf`, so it is a
+                           request and its own rest point, and the RESTRICTED type refuses a non-finite result
+                           here rather than leaving it for the algorithm that reads the list. */
+                        if (mt == IDL_SEQUENCE_DOUBLE) {
+                            double d = 0.0;
+
+                            r = step_todouble_run(ctx, &s->hdr, s->seq.value, cb_result, &d, out_cb, out_argc);
+                            cb_result = JS_UNDEFINED;
+                            if (r > 0) return r;
+                            if (r < 0) return JS_STEP_ABRUPT;
+                            if (!isfinite(d)) {
+                                JS_ThrowTypeError(ctx, "an element of dictionary member `%s` is not a finite "
+                                                  "double", dm->name);
+                                return JS_STEP_ABRUPT;
+                            }
+                            JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_NewFloat64(ctx, d));
+                            s->seq_phase = 1;
+                            continue;
+                        }
                         r = step_tostring_run(ctx, &s->hdr, s->seq.value, cb_result, &str, out_cb, out_argc);
                         cb_result = JS_UNDEFINED;
                         if (r > 0) return r;
@@ -1784,6 +1829,30 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                                       "idl_iface_brand states it once for a dictionary whose interface-typed "
                                       "members are all one interface");
                     if (!idl_is_iface(s->dict_v, want)) {
+                        JS_ThrowTypeError(ctx, "dictionary member `%s` does not implement the declared "
+                                          "interface", dm->name);
+                        return JS_STEP_ABRUPT;
+                    }
+                }
+                else if (mt == IDL_INTERFACE_NULLABLE) {
+                    /* §3.2.15 Interface types UNDER §3.2.20 Nullable types' RULE, on a dictionary member. null and undefined are the
+                       IDL null and nothing is branded; what survives takes the brand AND the declaration's
+                       narrowing, which is what lets a member state a union of two interface types the way
+                       Intersection Observer §2.4's `(Element or Document)? root` does: both arms are Nodes to
+                       this engine's class system, so the class is the brand and the narrowing is the union.
+                       (An undefined member never reaches here — the absent-member rewrite above turns it into
+                       IDL_ANY before any conversion runs — so the null this branch sees is the page's own.)
+                       IT HAD NO BRANCH AT ALL and therefore crossed unconverted, which is the silent kind of
+                       gap: `{root: 5}` would have reached a body that then asked node_of for a node. */
+                    JSClassID want = dm->iface ? dm->iface : m->iface;
+
+                    DCHECK(want != 0, "a dictionary declared a nullable interface-typed member with no class "
+                                      "to brand against — IdlDictMember::iface states it per member, and "
+                                      "idl_iface_brand states it once per declaration");
+                    if (JS_IsNull(s->dict_v)) {
+                        /* the IDL null; nothing to brand */
+                    } else if (!idl_is_iface(s->dict_v, want) ||
+                               (m->iface_narrow && !m->iface_narrow(s->dict_v))) {
                         JS_ThrowTypeError(ctx, "dictionary member `%s` does not implement the declared "
                                           "interface", dm->name);
                         return JS_STEP_ABRUPT;
@@ -1861,7 +1930,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            — in which case the cursor was already planted on the method the union read and `seq_phase` is
            already 1, so the setup below is skipped and nothing reads @@iterator twice. */
         if (t == IDL_SEQUENCE_BLOBPART || t == IDL_SEQUENCE_INTERFACE || t == IDL_SEQUENCE_OBJECT ||
-            t == IDL_SEQUENCE_DOMSTRING) {
+            t == IDL_SEQUENCE_DOMSTRING || t == IDL_SEQUENCE_DOUBLE) {
             if (!JS_IsObject(a)) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "the sequence argument is not an object");
@@ -1919,6 +1988,27 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                         continue;
                     }
                     s->seq_phase = 2;
+                }
+                /* §3.2.7 `double` AS AN ELEMENT CONVERSION — ToNumber, which is the page's `valueOf`, so it
+                   is a request and its own rest point exactly as the ToString arm below is. The RESTRICTED
+                   type's refusal of a non-finite value belongs here and not to whichever algorithm reads the
+                   list: `sequence<double>` is what the IDL declares, and `[Infinity]` is a TypeError before
+                   any step of the caller runs. */
+                if (t == IDL_SEQUENCE_DOUBLE) {
+                    double d = 0.0;
+
+                    DCHECK(s->seq_phase == 2, "the sequence conversion resumed at a phase it never parks in");
+                    r = step_todouble_run(ctx, &s->hdr, s->seq.value, cb_result, &d, out_cb, out_argc);
+                    cb_result = JS_UNDEFINED;
+                    if (r > 0) return r;
+                    if (r < 0) return JS_STEP_ABRUPT;
+                    if (!isfinite(d)) {
+                        JS_ThrowTypeError(ctx, "an element of argument %d is not a finite double", s->i + 1);
+                        return JS_STEP_ABRUPT;
+                    }
+                    JS_SetPropertyUint32(ctx, s->seq_list, s->seq_n++, JS_NewFloat64(ctx, d));
+                    s->seq_phase = 1;
+                    continue;
                 }
                 {
                     JSValue str = JS_UNDEFINED;

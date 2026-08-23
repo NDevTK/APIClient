@@ -12,15 +12,14 @@
  * capture in abstract_range_of is what makes a shared registry answer per flow — a removal performed by one
  * flow moves the boundary points on THAT flow's timeline and a sibling's range is untouched.
  *
- * WHAT IS HERE AND WHAT IS HONESTLY ABSENT. Everything §5.5 states over boundary points is here: the
- * constructor, the six setters, collapse, selectNode, selectNodeContents, commonAncestorContainer,
- * compareBoundaryPoints, isPointInRange, comparePoint, intersectsNode, cloneRange, detach and the stringifier.
- * The five members that MOVE CONTENT — deleteContents, extractContents, cloneContents, insertNode and
- * surroundContents — are ABSENT, and absent rather than stubbed because each of them is stated in terms of DOM
- * §4.10's "replace data" and "split", neither of which this engine has: CharacterData carries `data` and
- * `length` and no mutation members at all. A deleteContents that removed whole nodes and left the partially
- * contained Text alone would be a lie a page cannot detect. The forcing function is the page's own TypeError,
- * and the thing to build first is §4.10. */
+ * EVERY MEMBER §5.5 DECLARES IS HERE, the five that MOVE CONTENT included. This paragraph used to say those
+ * five were absent because §4.10's "replace data" and "split" did not exist; both exist, all five are
+ * installed below, and the prose outlived the absence it described — which is worse than no prose, because it
+ * reads as authoritative and sends the next reader to build what is already built.
+ *
+ * TWO OF THE MACHINES ARE EXPORTED (range.h): Selection API §3 defines its stringifier and its
+ * `deleteFromDocument()` as these very algorithms performed on the range a selection is associated with, so
+ * the walk is shared and only the receiver differs. Nothing here knows what a Selection is. */
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
@@ -323,6 +322,23 @@ JSValue range_new_at(JSContext *ctx, JSValueConst node)
     return range_new(ctx, node, 0, node, 0);
 }
 
+JSValue range_new_bp(JSContext *ctx, JSValueConst snode, uint32_t soff, JSValueConst enode, uint32_t eoff)
+{
+    lxb_dom_node_t *sn = node_of(snode), *en = node_of(enode);
+
+    DCHECK(sn != NULL && en != NULL, "a live range was asked for at a boundary point that is not a node");
+    DCHECK(node_root(sn) == node_root(en),
+           "a live range was asked for across two trees — §5.2's position is undefined between them, so every "
+           "caller that mints a range decides which point is first and cannot have done so here");
+    DCHECK(boundary_position(sn, soff, en, eoff) != BP_AFTER,
+           "a live range was asked for with its start AFTER its end — §5.5's invariant is that it never is, "
+           "and every §5.5 setter maintains it by moving the other point; a caller stating two points states "
+           "them in order");
+    return range_new(ctx, snode, soff, enode, eoff);
+}
+
+JSClassID range_class_id(void) { return g_range_class; }
+
 /* `new Range()` — §5.5: "set this's start and end to (current global object's associated Document, 0)". */
 static JSValue js_range_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
@@ -544,16 +560,10 @@ static JSValue js_range_common_ancestor(JSContext *ctx, JSValueConst this_val, i
     X(RSTR_WALK, "DOM §5.5 stringification step 4 (the data of every contained Text node, one node per step)") \
     X(RSTR_TAIL, "DOM §5.5 stringification steps 5-6 (the end Text node's head, and the result)")
 enum { IDL_STEP_STAGE_BASE(RSTR_STAGES) RSTR_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const RSTR_STEPS[] = { RSTR_STAGES(JS_STEP_STAGE_LABEL) NULL };
-
-typedef struct RangeStrState {
-    char *buf;
-    size_t len, cap;
-    lxb_dom_node_t *cursor, *root;
-} RangeStrState;
+const char *const RANGE_STR_STEPS[] = { RSTR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 /* WHAT THIS MACHINE OWNS: one plain buffer holding no references. The node pointers are the document's. */
-static void rstr_visit(JSContext *ctx, void *st, JSStepVisit *v)
+void range_str_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     RangeStrState *s = st;
     v->buf(ctx, (void **)&s->buf, s->cap);
@@ -623,18 +633,14 @@ static bool range_contains(const RangeBounds *b, lxb_dom_node_t *n)
     return bp_contains(bounds_start(b), b->start_off, bounds_end(b), b->end_off, n);
 }
 
-static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+int range_str_step(JSContext *ctx, JSStepHdr *hdr, RangeStrState *s, RangeBounds *b, JSValue *presult)
 {
-    RangeStrState *s = st;
-    RangeBounds *b = range_here(ctx, hdr->this_val);
     lxb_dom_node_t *sn, *en;
     const char *p;
     size_t len;
 
-    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);
-    if (!b) return JS_STEP_ABRUPT;
+    DCHECK(b != NULL, "§5.5's stringification stepped with no bounds — the caller resolves the subject before "
+                      "every step and an unresolvable one is its own abrupt, not this machine's");
     sn = bounds_start(b);
     en = bounds_end(b);
     DCHECK(sn != NULL && en != NULL, "a live range's boundary point is not a node");
@@ -684,9 +690,21 @@ static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
     return JS_STEP_DONE;
 }
 
-/* No release: the accumulator is rstr_visit's and the teardown discharges that one list. */
-static const IdlStepDecl RANGE_TO_STRING = { js_range_to_string, sizeof(RangeStrState), rstr_visit, NULL,
-                                             "DOM §5.5 Range stringification behavior", RSTR_STEPS };
+/* §5.5's OWN member: the subject is the receiver. */
+static int js_range_to_string(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    RangeBounds *b = range_here(ctx, hdr->this_val);
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    if (!b) return JS_STEP_ABRUPT;
+    return range_str_step(ctx, hdr, st, b, presult);
+}
+
+/* No release: the accumulator is range_str_visit's and the teardown discharges that one list. */
+static const IdlStepDecl RANGE_TO_STRING = { js_range_to_string, sizeof(RangeStrState), range_str_visit, NULL,
+                                             "DOM §5.5 Range stringification behavior", RANGE_STR_STEPS };
 
 /* ---- §5.5's CONTENT-MOVING MEMBERS ----------------------------------------------------------------------
  *
@@ -1149,32 +1167,20 @@ static const IdlStepDecl RANGE_EXTRACT = { rx_step, sizeof(RxState), rx_visit, N
     X(RD_REMOVE,  "DOM §5.5 deleteContents step 10 (remove each collected node, one per step)") \
     X(RD_TAIL,    "DOM §5.5 deleteContents step 11 (the end node's head)")
 enum { IDL_STEP_STAGE_BASE(RD_STAGES) RD_STAGES(JS_STEP_STAGE_ENUM) };
-static const char *const RD_STEPS[] = { RD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+const char *const RANGE_DEL_STEPS[] = { RD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-typedef struct RdState {
-    lxb_dom_node_t  *sn, *en;
-    uint32_t         so, eo;
-    lxb_dom_node_t  *cursor, *root;
-    lxb_dom_node_t **list;
-    int              n, cap, i;
-} RdState;
+typedef struct RangeDelState RdState;
 
-static void rd_visit(JSContext *ctx, void *st, JSStepVisit *v)
+void range_del_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     RdState *s = st;
     v->buf(ctx, (void **)&s->list, sizeof(lxb_dom_node_t *) * (size_t)s->cap);
 }
 
-static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
-                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+int range_del_step(JSContext *ctx, JSStepHdr *hdr, RangeDelState *s, RangeBounds *b, JSValue *presult)
 {
-    RdState *s = st;
-    RangeBounds *b;
-
-    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
-    JS_FreeValue(ctx, cb_result);
-    b = range_here(ctx, hdr->this_val);
-    if (!b) return JS_STEP_ABRUPT;
+    DCHECK(b != NULL, "§5.5's deleteContents stepped with no bounds — the caller resolves the subject before "
+                      "every step and an unresolvable one is its own abrupt, not this machine's");
 
     switch (hdr->stage) {
     case RD_ENTER:
@@ -1245,9 +1251,22 @@ static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     }
 }
 
-/* No release: the removal list is rd_visit's, discharged with the rest. */
-static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), rd_visit, NULL,
-                                          "DOM §5.5 Range.deleteContents()", RD_STEPS };
+/* §5.5's OWN member: the subject is the receiver. */
+static int rd_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    RangeBounds *b;
+
+    (void)argc; (void)argv; (void)out_cb; (void)out_argc;
+    JS_FreeValue(ctx, cb_result);
+    b = range_here(ctx, hdr->this_val);
+    if (!b) return JS_STEP_ABRUPT;
+    return range_del_step(ctx, hdr, st, b, presult);
+}
+
+/* No release: the removal list is range_del_visit's, discharged with the rest. */
+static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), range_del_visit, NULL,
+                                          "DOM §5.5 Range.deleteContents()", RANGE_DEL_STEPS };
 
 /* ---- insertNode ----------------------------------------------------------------------------------------- */
 

@@ -2,6 +2,7 @@
 #include "solver/pending.h"
 #include "solver/cow.h"   /* the register is the SCHEDULER's bookkeeping: no delta may capture a write here */
 #include "check.h"
+#include "core/loader/script_type.h"   /* PEND_SCRIPT_TYPE's "nothing yet": §4.12.1.1's null type */
 
 #include <string.h>
 
@@ -259,6 +260,11 @@ JSValue pending_push(JSValue *reg, int kind)
     pend_put(e, PEND_HAVE_VALUE, JS_FALSE);
     pend_put(e, PEND_KIND, JS_NewInt32(pend_ctx(), kind));
     pend_put(e, PEND_SCRIPT_I, JS_NewInt32(pend_ctx(), -1));
+    /* WHICH OF HTML §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS THE REPLY WILL BE RUN WITH — §4.12.1.1's
+       null type is the default because it is this field's "nothing yet" and NOT a hole a reader fills in:
+       `script_type_executes` answers false for it, so a park that owes a PROGRAM and never wrote its
+       element's type crashes at the drain instead of quietly evaluating a module as a classic script. */
+    pend_put(e, PEND_SCRIPT_TYPE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE));
     pend_put(e, PEND_REQ, JS_NewInt64(pend_ctx(), 0));
     pend_put(e, PEND_OP, JS_NULL);
     pend_put(e, PEND_METHOD, JS_NULL);

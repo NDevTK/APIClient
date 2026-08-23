@@ -210,7 +210,11 @@ struct SinkClass {
     const char       *name;      /* the display name a report and a parked entry carry */
     const char      **vectors;   /* the FIXED breakouts of a SINGLE-CONTEXT sink, NULL where `derive` builds them */
     int               derive;    /* SINK_DERIVE_* — which parser reads this sink's OWN output for its context */
-    PolicyScriptKind  policy;    /* which of CSP's four script questions a fired breakout turns on */
+    /* The `CspInlineType` (CSP §4.2.3's `type`) a fired breakout turns on, or -1 — which is not "unknown" but
+       the positive statement that this sink is governed by no INLINE check at all: `eval` is §4.4.1's question
+       about string compilation, which has no element, no type and no §6.8.2 mapping. Same shape and same
+       reason as the `tt` column below. */
+    int               policy;
     int               tt;        /* the TrustedTypeKind gating this sink, or -1 — the spec makes it no TT sink */
     /* WHETHER A FIRED BREAKOUT BECOMES A QUEUED PROGRAM OF THE FLOW, or is run by the sink itself. It is a
        fact about the CLASS and it decides whether `fires` is a number this search can have at all: an eval
@@ -223,9 +227,11 @@ struct SinkClass {
     const char       *fires_on;  /* what makes the fired breakout RUN, from the oracle above */
 };
 static const SinkClass SINKS[] = {
-    [SINK_EVAL] = { "eval",      NULL,      SINK_DERIVE_JS,   POLICY_EVAL,           TRUSTED_TYPE_SCRIPT, 0, "sink-evaluates" },
-    [SINK_HTML] = { "innerHTML", NULL,      SINK_DERIVE_HTML, POLICY_INLINE_HANDLER, TRUSTED_TYPE_HTML,   1, "parse-insert"   },
-    [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, POLICY_JAVASCRIPT_URL, -1,                  1,                  "navigation"     },
+    [SINK_EVAL] = { "eval",      NULL,      SINK_DERIVE_JS,   -1,                          TRUSTED_TYPE_SCRIPT, 0, "sink-evaluates" },
+    [SINK_HTML] = { "innerHTML", NULL,      SINK_DERIVE_HTML, CSP_INLINE_SCRIPT_ATTRIBUTE, TRUSTED_TYPE_HTML,   1, "parse-insert"   },
+    /* §6.8.2 maps the inline type "navigation" to `script-src-elem`, NOT to `script-src-attr` — so
+       `script-src 'unsafe-inline'; script-src-attr 'none'` must NOT block a javascript: URL. */
+    [SINK_URL]  = { "location",  CANDS_URL, SINK_DERIVE_NONE, CSP_INLINE_NAVIGATION,       -1,                  1, "navigation"     },
 };
 #define SINK_CLASS_N ((int)(sizeof SINKS / sizeof SINKS[0]))
 
@@ -965,9 +971,21 @@ char *solve_json_array(JSContext *ctx) {
            is a false positive a reader cannot tell from a real one; reporting nothing would hide a sink that IS
            real. So the finding stays, and it CARRIES what blocks it — "sink REAL, CSP blocks", which is the
            standard's own distinction and the only one that survives being read by someone else. */
-        if (!policy_allows(pc, sc->policy)) {
-            json_buf_puts(&b, ",\"cspBlocks\":");
-            json_buf_str(&b, policy_container_csp(pc));
+        /* THE PoC IS THE `source` §6.7.3.3 IS ASKED ABOUT, and the ELEMENT IS NULL because this breakout has
+           been inserted nowhere — the same shape §4.2.4 uses when it runs the inline check "upon null" for a
+           javascript: navigation. That NULL is what keeps the nonce arm out of the answer, which is correct:
+           attacker markup cannot carry a nonce the page's own policy lists. */
+        {
+            const char *poc = g_sinks[i].poc;
+            int allowed = sc->policy < 0
+                              ? policy_allows_string_compilation(pc)
+                              : policy_allows_inline(pc, (CspInlineType)sc->policy, NULL, poc,
+                                                     poc ? strlen(poc) : 0);
+
+            if (!allowed) {
+                json_buf_puts(&b, ",\"cspBlocks\":");
+                json_buf_str(&b, policy_container_csp(pc));
+            }
         }
         /* AND THE SAME RULE ONE ALGORITHM EARLIER. Under `require-trusted-types-for 'script'` an innerHTML
            assignment THROWS before the markup is ever parsed, so the model's breakout is real and the write

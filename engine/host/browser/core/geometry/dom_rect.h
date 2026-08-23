@@ -48,6 +48,17 @@ JSValue dom_rect_new(JSContext *ctx, double x, double y, double width, double he
    page. CONSUMES the four values; each must be a Number or unknown external input. */
 JSValue dom_rect_new_values(JSContext *ctx, JSValue x, JSValue y, JSValue width, JSValue height);
 
+/* THE SAME STEPS PRODUCING A `DOMRectReadOnly` — the BASE interface, which is a different interface and not a
+   flag on this one: it has no setters at all, so a rectangle handed out as one cannot be written back by the
+   page. WHICH of the two an algorithm returns is stated by the IDL of the member returning it, and the two
+   entries above answer `DOMRect` because their callers' IDLs say so (CSSOM VIEW §6's `getBoundingClientRect`
+   and `getClientRects`). Intersection Observer §2.3 declares all three of an entry's rectangles
+   `DOMRectReadOnly`, which is what this entry is for — a page holding an entry must not be able to rewrite the
+   geometry the engine reported, and returning the mutable interface would also answer
+   `entry.boundingClientRect instanceof DOMRect` true where every browser answers false.
+   CONSUMES the four values on the same terms as the entry above. */
+JSValue dom_rect_readonly_new_values(JSContext *ctx, JSValue x, JSValue y, JSValue width, JSValue height);
+
 /* Is `v` a DOMRect or a DOMRectReadOnly — §4's DOMRectList asserts what it was handed, since its indexed getter
    and its `item` both declare `DOMRect?` as the type they answer. */
 bool dom_rect_is(JSValueConst v);

@@ -136,8 +136,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                     the string where it stands), "parse-insert" (an auto-firing handler in markup, at insertion,
                     no interaction), "navigation" (a `javascript:` URL, when the navigation happens). ALWAYS
                     present — a PoC that does not say how it fires is not reproducible.
-     `cspBlocks`    the page's serialized CSP, present only when it kills THIS vector. Absent = policy_allows
-                    said yes.
+     `cspBlocks`    the page's serialized CSP, present only when it kills THIS vector. Absent = CSP §4.2.3's
+                    inline check (or §4.4.1's, for `eval`) said Allowed.
      `trustedTypes` the CSP sink GROUP required at this sink, present only when the document requires one — the
                     assignment throws before the markup is parsed. Absent = no requirement applies, which
                     covers both "the document requires none" and "the standard makes this no TT sink".

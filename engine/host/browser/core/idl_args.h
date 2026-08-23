@@ -119,6 +119,20 @@ typedef enum {
        argument-position sequence does, rather than being walked from a body after every later member was
        already read. */
     IDL_SEQUENCE_DOMSTRING,
+    /* `sequence<double>` — §3.2.21 Sequences' iterator-protocol conversion with §3.2.7 `double` as the
+       element type.
+       Intersection Observer §2.4's `threshold` is the first, reached as the arm of the union below.
+       BOTH HALVES RUN THE PAGE'S CODE, which is what makes it a declared type rather than a body's walk: the
+       protocol is the page's at every pull, and §3.2.7's element conversion is ToNumber, which is the page's
+       `valueOf` — so `{threshold: [{valueOf(){ … }}]}` parks TWICE per element, once on the pull and once on
+       the coercion. Both are the same cursor every other sequence uses, so the walk rests on the element it is
+       on at whatever depth it is at.
+       §3.2.7 `double` REJECTS A NON-FINITE VALUE (it is the RESTRICTED type — §3.2.8 is `unrestricted
+       double`), so NaN and the two infinities are a
+       TypeError, and that check belongs to the element type rather than to whichever algorithm reads the list
+       afterwards. (Intersection Observer §3.2.1 step 6's own RangeError for a value outside [0, 1] is that
+       ALGORITHM's and stays there — a different error for a different question.) */
+    IDL_SEQUENCE_DOUBLE,
     /* `(DOMString or sequence<DOMString>)` — §3.2.25's union, and the FIRST declared type whose ARM IS CHOSEN
        BY THE PAGE'S OWN CODE. Every other union in this list is decided by a brand test or by `JS_IsObject`,
        neither of which reads anything; this one's step 11.2 is `? GetMethod(V, %Symbol.iterator%)` — one
@@ -145,6 +159,19 @@ typedef enum {
        conversion parks on the member it is on rather than being walked from a body after every later member of
        the same dictionary was already read. */
     IDL_DOMSTRING_OR_SEQUENCE_NULLABLE,
+    /* `(double or sequence<double>)` — §3.2.25 Union types over the union Intersection Observer §2.4's
+       `threshold`
+       declares, and its arm is chosen by exactly the read the two rows above are chosen by: §3.2.25 step 11.2's
+       `? GetMethod(V, %Symbol.iterator%)`. Nothing in this union names a dictionary, an interface, an `object`,
+       a buffer source or a callback, so steps 4 through 11 pass it straight to step 12.2 against step 14 — an
+       Object with a CALLABLE @@iterator takes the sequence, and EVERYTHING else takes the numeric arm and is
+       ToNumber'd. An Object with no @@iterator included, and null, and a string: `{threshold: null}` is
+       therefore the number 0 (ToNumber(null)) and passes §3.2.1's range check, while `{threshold: "x"}` is NaN
+       and §3.2.7's restricted `double` refuses it as a TypeError.
+       IT SHARES THE ARM RESOLVER WITH THE STRING UNION rather than restating step 11.2, because the step is the
+       union algorithm's and not the arm list's — a second copy is the second answer that reads @@iterator with
+       a different notion of GetMethod. What each union states is only WHICH TWO TYPES its two outcomes are. */
+    IDL_DOUBLE_OR_SEQUENCE,
     /* `sequence<T>` where T is an INTERFACE type — §3.2.21's iterator-protocol conversion with §3.2.15's brand
        test as the element conversion. HTML §8.5's `GetHTMLOptions.shadowRoots` is `sequence<ShadowRoot>` and is
        the first, and it is the same reason IDL_SEQUENCE_DOMSTRING is a declared type rather than a body's walk:

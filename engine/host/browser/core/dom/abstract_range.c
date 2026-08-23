@@ -161,6 +161,32 @@ static void static_range_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *m
     if (b) range_bounds_mark(rt, b, mark_func);
 }
 
+JSValue static_range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSValueConst enode, uint32_t eoff)
+{
+    JSValue obj, proto = JS_GetClassProto(ctx, g_static_class);
+    lxb_dom_node_t *sn = node_of(snode), *en = node_of(enode);
+    RangeBounds *b;
+
+    DCHECK(!JS_IsNull(proto), "a StaticRange was built in a realm with no StaticRange.prototype");
+    DCHECK(sn != NULL && en != NULL, "§5.4 was asked for a static range at a boundary point that is not a node");
+    /* STEP 1, as the assertion it is for a caller that did not get its nodes from the page. */
+    DCHECK(sn->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE && sn->type != LXB_DOM_NODE_TYPE_ATTRIBUTE &&
+           en->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE && en->type != LXB_DOM_NODE_TYPE_ATTRIBUTE,
+           "§5.4 step 1 refuses a DocumentType or an Attr as a boundary point, and this caller states points "
+           "the tree gave it — so reaching here means an algorithm walked into one");
+    obj = JS_NewObjectProtoClass(ctx, proto, g_static_class);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(obj)) return obj;
+    b = calloc(1, sizeof(*b));
+    CHECK(b != NULL, "the StaticRange record allocation failed");
+    b->start_node = JS_DupValue(ctx, snode);
+    b->end_node = JS_DupValue(ctx, enode);
+    b->start_off = soff;
+    b->end_off = eoff;
+    JS_SetOpaque(obj, b);
+    return obj;
+}
+
 /* `new StaticRange(init)` — §5.4. The dictionary arrived converted, so its four members are a Node, a number,
    a Node and a number and nothing here runs the page's code. */
 static JSValue js_static_range_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,

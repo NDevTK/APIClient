@@ -150,41 +150,46 @@ void html_style_element_update(lxb_dom_element_t *el)
         }
     }
 
-    /* STEP 5 — "if the Should element's inline behavior be blocked by Content Security Policy? algorithm
-       returns Blocked when executed upon the style element, style, and the style element's child text content,
-       then return."
-       core/frame/policy_container.c parses the SCRIPT-governing directives only, so there is no `style-src` /
-       `style-src-elem` / `default-src` question to ask. A document with no policy at all provably answers
-       Allowed, so the gap can only produce a wrong answer for a document that HAS one — which is exactly what
-       this asserts, at the step that would then be skipping a block real Chrome performs. */
-    DCHECK(policy_container_csp(document_policy(realm)) == NULL,
-           "§4.2.6's update a style block reached step 5 for a document that CARRIES a Content Security "
-           "Policy, and this engine cannot ask whether the policy blocks an inline style: "
-           "core/frame/policy_container.c's PolicyScriptKind models POLICY_INLINE_SCRIPT, "
-           "POLICY_INLINE_HANDLER, POLICY_JAVASCRIPT_URL and POLICY_EVAL and nothing for `style-src`. So this "
-           "creates a style sheet a real browser would refuse, and every value the cascade resolves from it is "
-           "wrong. Add the style directives to that parser and ask policy_allows here");
-
-    /* STEP 6 — "create a CSS style sheet with the following properties". Every one of them is §4.2.6's own
-       table: the owner node is the element, the location, parent CSS style sheet and owner CSS rule are null
-       (an embedded sheet has no first request, no parent and no @import that pulled it in), and the disabled
-       flag is left at its default. The media and the title are references to the element's ATTRIBUTES rather
-       than copies of them, which is why neither is passed: the sheet reads them off the owner node. */
-    sheet = css_style_sheet_create(realm, wrap, JS_NULL, JS_NULL, JS_NULL);
-    if (JS_IsException(sheet)) {
-        JS_FreeValue(realm, sheet);
-        JS_FreeValue(realm, wrap);
-        return;
-    }
-    /* THE CSS RULES, which §4.2.6's table leaves "uninitialized" and its own note says should presumably be the
-       element's child text content (whatwg/html issue #2997). It has to be: the same section requires that
-       "the style rules must be immediately made available to script", and every engine parses the child text
-       content here. `lxb_dom_node_text_content` is the DESCENDANT text, which for a conforming `<style>` is its
-       one text child and for a non-conforming one is what a browser reads too. */
+    /* THE CHILD TEXT CONTENT, read ONCE and BEFORE step 5 rather than inside step 6, because both steps are
+       about the same bytes: step 5 hands them to CSP as §6.7.3.3's `source` (which is what a hash-source is
+       computed over) and step 6 parses them as the sheet's rules. `lxb_dom_node_text_content` is the
+       DESCENDANT text, which for a conforming `<style>` is its one text child and for a non-conforming one is
+       what a browser reads too. It allocates, so every exit below frees it. */
     {
         size_t clen = 0;
         lxb_char_t *content = lxb_dom_node_text_content(n, &clen);
 
+        /* STEP 5 — "if the Should element's inline behavior be blocked by Content Security Policy? algorithm
+           returns Blocked when executed upon the style element, style, and the style element's child text
+           content, then return." That is CSP §4.2.3 "Should element's inline type behavior be blocked by
+           Content Security Policy?" with type "style", which §6.8.2 maps to `style-src-elem` and §6.8.3 falls
+           back through `style-src` to `default-src`.
+           THE ELEMENT IS PASSED, NOT JUST THE POLICY, and it is what makes `<style nonce=…>` work: §6.7.3.3's
+           nonce arm applies to inline STYLE exactly as it applies to inline script, so a policy of
+           `style-src 'nonce-abc'` allows this element and refuses the identical `<style>` beside it. */
+        if (!policy_allows_inline(document_policy(realm), CSP_INLINE_STYLE, el, (const char *)content, clen)) {
+            if (content) lxb_dom_document_destroy_text(n->owner_document, content);
+            JS_FreeValue(realm, wrap);
+            return;
+        }
+
+        /* STEP 6 — "create a CSS style sheet with the following properties". Every one of them is §4.2.6's own
+           table: the owner node is the element, the location, parent CSS style sheet and owner CSS rule are
+           null (an embedded sheet has no first request, no parent and no @import that pulled it in), and the
+           disabled flag is left at its default. The media and the title are references to the element's
+           ATTRIBUTES rather than copies of them, which is why neither is passed: the sheet reads them off the
+           owner node. */
+        sheet = css_style_sheet_create(realm, wrap, JS_NULL, JS_NULL, JS_NULL);
+        if (JS_IsException(sheet)) {
+            if (content) lxb_dom_document_destroy_text(n->owner_document, content);
+            JS_FreeValue(realm, sheet);
+            JS_FreeValue(realm, wrap);
+            return;
+        }
+        /* THE CSS RULES, which §4.2.6's table leaves "uninitialized" and its own note says should presumably be
+           the element's child text content (whatwg/html issue #2997). It has to be: the same section requires
+           that "the style rules must be immediately made available to script", and every engine parses the
+           child text content here. */
         if (content) {
             css_style_sheet_set_rules_from_text(realm, sheet, (const char *)content, clen);
             lxb_dom_document_destroy_text(n->owner_document, content);

@@ -9,7 +9,7 @@
 #define ENGINE_HOST_SOLVER_ENGINE_H
 
 #include "core/fetch/fetch.h"
-#include "core/loader/script_type.h"   /* which of §8.1.3.3's two algorithms runs entry i — see `types` below */
+#include "core/loader/script_type.h"   /* which of §8.1.4.4's two algorithms runs entry i — see `types` below */
 #include "quickjs.h"
 
 /* Run the page's scripts as one code flow: each script `bodies[i]` is its OWN program (JS_FlowNew — faithful
@@ -51,15 +51,37 @@ typedef enum { DYN_POS_APPEND, DYN_POS_IMMEDIATE } DynPos;
    document this agent has.
    EVERY ONE OF THOSE THREE IS A TASK, so this entry is DYN_POS_APPEND and cannot be asked for anything else:
    a lazy chunk's reply, a §8.6 string handler and a document's own sequence each run when the sequence reaches
-   them. The one script source that is NOT a task has its own entry below. */
+   them. The one script source that is NOT a task has its own entry below.
+   AND EVERY ONE OF THEM IS A CLASSIC SCRIPT, which is HTML §8.1.4.4 "Calling scripts"'s answer for a program
+   with no `<script>` element behind it rather than a default this entry picks: §8.6's string handler is
+   evaluated as a classic script and a lazy chunk's reply is the body an already-running program asked for. A
+   row that DOES have an element behind it states which of §8.1.4.4's two algorithms runs it — the entry below
+   this one. */
 void engine_queue_script(uint32_t doc, const char *body);
+/* …AND THE ROW A `<script>` ELEMENT PUT THERE, at the same position and carrying one more fact. HTML §4.12.1.1
+   "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type — "classic" runs the
+   classic script, "module" runs the module script — so the row carries `stype` and flow_step routes it to
+   §8.1.4.4's run-a-classic-script or run-a-module-script. Three seams reach it, and they are the three ways a
+   Document of this agent that is NOT the session's gets its inline programs: a child navigable's
+   (core/frame/navigable.c), a joined one's (engine_join_document) and an element page code INSERTED
+   (core/html/html_script.c). Each of those aborted outright on `<script type=module>` before this existed.
+   THE TAIL IS ITS POSITION, and that is §4.12.1.1's own answer for every destination a module or an external
+   script reaches: the when-parsed list and the in-order-as-soon-as-possible list hold their elements in order,
+   and the as-soon-as-possible SET has no position at all (§13.2.7 waits for it only before the load event). The
+   one destination that is not the tail is `immediately execute the script element`, which §4.12.1.1 reaches
+   only for an inline CLASSIC script — the entry below. */
+void engine_queue_element_script(uint32_t doc, const char *body, ScriptType stype);
 /* …AND THE ONE THAT IS NOT. HTML §4.12.1.1 "Processing model": an inline classic script whose element a page
    INSERTED reaches the end of "prepare the script element" — "Otherwise, immediately execute the script
    element el, even if other scripts are already executing" — and "execute the script element" then runs the
    classic script right there. So it takes the slot AFTER the program that inserted it rather than the tail,
    and nothing the sequence already holds may run in between. Separate from engine_queue_script rather than a
    flag on it, because the two are different spec steps and the four callers of that one must not be able to
-   pick this by accident. */
+   pick this by accident.
+   THE TYPE IS CLASSIC AND IS NOT A PARAMETER: §4.12.1.1 reaches this step only for what falls past "If el's
+   type is `classic` and el has a src attribute, or el's type is `module`", so every module — inline or not —
+   has already gone to one of the three lists by then. An inline module has a graph to LOAD before its result
+   exists, which is why the standard does not run it in place. */
 void engine_queue_script_immediate(uint32_t doc, const char *body);
 /* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
    script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
@@ -69,8 +91,13 @@ void engine_queue_script_immediate(uint32_t doc, const char *body);
    their replies and run in ARRIVAL order, which is why an inline script after a `<script src>` used to abort.
    `url` is already resolved: §4.4's API base URL belongs to the document whose element it is, so only the
    caller can resolve it. The ASAP SET does not come here — it has no position, so it parks with
-   engine_pending_script_url and runs when its reply drains. */
-void engine_queue_docscript_url(uint32_t doc, const char *url);
+   engine_pending_script_url and runs when its reply drains.
+   `stype` IS THE ELEMENT'S, and it survives the reply: §8.1.4.2 "Fetching scripts" decodes a module's bytes as
+   UTF-8 whatever the response says and a classic script's through the response's charset label, and §8.1.4.4
+   then runs the source with the matching one of its two algorithms. The row keeps its ADDRESS across that
+   replacement too — §8.1.4.2 creates the script with the RESPONSE'S URL, which is the base a nested
+   `import('./chunk.js')` resolves against and, for a module, the module map KEY. */
+void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
    never fires. A page script that does not compile still asserts.
@@ -99,8 +126,11 @@ void engine_queue_javascript_url(uint32_t doc, const char *body);
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
    and a member of §4.12.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7
    waits for it only before the load event, so arrival order is a correct order). An element whose position
-   §4.12.1 does fix takes a slot instead: engine_queue_docscript_url. */
-void engine_pending_script_url(JSContext *ctx, const char *url);
+   §4.12.1 does fix takes a slot instead: engine_queue_docscript_url.
+   `stype` travels with the park for the reason it travels with the row above: the reply is a PROGRAM, and
+   §4.12.1.1's "execute the script element" switches on the element's type to decide which of §8.1.4.4's two
+   algorithms runs it. `<script type=module src>` injected by page code is how a modern bundle loads a chunk. */
+void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype);
 /* Park the running flow on a document's OWN external <script src> at sequence position `script_i`: the scripts
    §4.12.1 orders run in that order, so the flow waits there and the reply fills the slot. WHOSE slot follows from
    the position: inside the SESSION document's static sequence it is that document's, shared by every flow parked

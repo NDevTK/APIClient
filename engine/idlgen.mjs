@@ -94,6 +94,9 @@ const INTERFACES = {
   AbortSignal:         ["core/dom/abort.c", "core/events/event_target.c"],
   AbortController:      "core/dom/abort.c",
   IntersectionObserver: "core/intersection_observer/intersection_observer.c",
+  /* INTERSECTION OBSERVER §2.3. Its own component, in the same directory: it is its own interface with its own
+     constructor and its own dictionary, and the rectangles on it belong to Geometry Interfaces §3 again. */
+  IntersectionObserverEntry: "core/intersection_observer/intersection_observer_entry.c",
   MutationObserver:     "core/dom/mutation_observer.c",
   ResizeObserver:       "core/resize_observer/resize_observer.c",
   PerformanceObserver:  "core/timing/performance_observer.c",
@@ -243,7 +246,12 @@ const INTERFACES = {
                            member of the WindowOrWorkerGlobalScope mixin Window includes — installed with the
                            component that builds the object it answers with, the same rule navigation.c's
                            entry above states. */
-                        "core/indexeddb/indexed_db.c"],
+                        "core/indexeddb/indexed_db.c",
+                        /* HTML §12.2.2's `sessionStorage` and §12.2.3's `localStorage` — the WindowSessionStorage
+                           and WindowLocalStorage mixins Window includes. They are installed by the component
+                           that owns their algorithm rather than by the Window they hang off, the same rule
+                           `navigation` and `indexedDB` above state. */
+                        "core/storage/window_storage.c"],
   Navigator:            "core/frame/navigator.c",
   /* CSSOM VIEW §12. Its own seven attributes are its file's; the three event handler IDL attributes it
      declares (`onresize`, `onscroll`, `onscrollend`) and the three members it INHERITS from EventTarget come
@@ -392,6 +400,10 @@ const INTERFACES = {
   AbstractRange:        "core/dom/abstract_range.c",
   StaticRange:          "core/dom/abstract_range.c",
   Range:               ["core/dom/range.c", "core/dom/abstract_range.c"],
+  /* SELECTION API §3. It inherits nothing, so its row names only its own file — the two members it shares
+     with DOM §5.5 (its stringifier and deleteFromDocument) are §5.5's WALK reached through a body declared
+     here, not members installed by range.c on this prototype. */
+  Selection:           "core/dom/selection.c",
   NodeList:            "core/dom/collections.c",
   HTMLCollection:      "core/dom/collections.c",
   /* GEOMETRY INTERFACES §3 and §4. DOMRect's file list is its own alone because it IS its own: the eight
@@ -679,7 +691,12 @@ let totalMissing = 0;
  * Every entry is checked from BOTH sides at each run: an interface here whose component EXISTS is reported as
  * a stale declaration, exactly as a member exclusion is. */
 const UNBUILT = {
-  IntersectionObserver: "no layout, so no intersection to compute — rendering.c's realm_awaits names it",
+  /* IntersectionObserver's row is GONE, and its reason was the stale-DFAIL failure this file's own two-sided
+     check exists to catch: it said "no layout, so no intersection to compute", which was true about the spec
+     and false about this tree. core/layout/{block_flow,used_value,flow_position}.c compute used values and
+     place in-flow block-level boxes, CSSOM VIEW §6's get-the-bounding-box is written in
+     core/dom/element_view.c, and every branch that still lacks a layout crashes there naming its own section.
+     What was left to build was the DELIVERY seam, not the geometry. */
   ResizeObserver:       "no layout, so no box to observe — rendering.c's realm_awaits names it",
   PerformanceObserver:  "no performance timeline to observe — rendering.c's realm_awaits names it",
   Notification:         "no notification surface; nothing in the tree constructs one",

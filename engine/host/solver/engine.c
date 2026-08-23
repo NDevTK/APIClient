@@ -12,8 +12,8 @@
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
 #include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
-#include "core/url/url.h"        /* §4.4's API base URL: what a joined document's own `<script src>` resolves against */
-#include "core/html/html_script.h"   /* …and §4.12.1.1's encoding-parse of `src` against it, stated once there */
+#include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src` against §4.4's API base URL — the ONE
+                                        statement of it, and the only thing this file needed core/url/url.h for */
 #include "core/loader/script_fetch.h"   /* HTML §8.1.4.2: where a fetched body becomes a script's source text */
 #include "core/frame/window_message.h"   /* the receiving half of a routed `windowproxy.post` */
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
@@ -150,14 +150,23 @@ void engine_pending_docscript(JSContext *ctx, const char *url, int script_i) {
    an injected script's does. A script whose position IS fixed takes a slot instead (engine_queue_docscript_url),
    and the second caller this used to have, which registered a joined document's own <script src> against a flow
    that was not running, went with that. */
-void engine_pending_script_url(JSContext *ctx, const char *url) {
+/* …AND IT CARRIES THE ELEMENT'S TYPE, because the reply is a PROGRAM and §4.12.1.1's "execute the script
+   element" switches on that type. It used to be decoded and evaluated as CLASSIC unconditionally, which was a
+   restatement of the gap this park sat behind rather than a fact about these entries: `<script type=module src>`
+   injected by page code is how a modern bundle loads a chunk, and it was the shape that aborted. */
+void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype) {
     Flow *f = flow_running();
     JSValue e;
     DCHECK(f != NULL, "a <script src> was parked on outside a running flow");
     DCHECK(url != NULL && *url, "a <script src> was parked on with no URL");
+    DCHECK(script_type_executes(stype),
+           "a <script src> was parked on for an element whose type executes nothing — §4.12.1.1 fires an error "
+           "event at an `importmap` or `speculationrules` element with a `src` and returns without fetching, "
+           "so no such element ever reaches a park");
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT);
     pending_set(e, PEND_URL, JS_NewString(ctx, url));
-    /* §8.1.4.2's classic script, as at the docscript park above. */
+    pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
+    /* §8.1.4.2's fetch, whose decode and whose evaluation entry the type above decides. */
     pending_set(e, PEND_METHOD, JS_NewString(ctx, "GET"));
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
        chokepoint was entered with is that tree's document — the reply is compiled there rather than in
@@ -262,7 +271,7 @@ static char **g_sess_srcs;
    failure … fire an event named error at el, and return", so that element runs no script. Allocated in
    engine_sched_begin and freed in engine_session_close, which is the one place a session ends. */
 static char **g_sess_urls;
-/* …AND WHICH OF §8.1.3.3'S TWO ALGORITHMS EACH ENTRY IS. It travels with the sequence rather than being asked
+/* …AND WHICH OF §8.1.4.4 "Calling scripts"'S TWO ALGORITHMS EACH ENTRY IS. It travels with the sequence rather than being asked
    of the body because the body cannot answer: `await` at the top level parses in a module and is a SyntaxError
    in a classic script, so a scheduler that guessed would report the page's own module as a broken program.
    Read by flow_step at the compile, and only for `script_i < g_sess_n` — every DYNAMIC entry a flow adds is a
@@ -1770,6 +1779,12 @@ static char *reply_source_text(JSContext *ctx, JSValueConst reply, ScriptType st
            "body — build the queue over a LENGTH so a source with a NUL in it runs whole rather than " \
            "truncated at it, exactly as navigable.c's javascript: URL states for the same queue")
 
+/* A REPLY THAT IS A PROGRAM JOINS THE SEQUENCE, which is why the drain below reaches the queue that is
+   defined past it. Declared rather than moved: the queue belongs beside the other queue entry points and
+   the drain belongs beside the register it walks. */
+static void engine_queue(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
+                         DynPos pos);
+
 static int flow_drain_pending(JSContext *ctx, Flow *f) {
     int n = 0, i = 0;
     while (i < pending_count(f->pending)) {
@@ -1821,14 +1836,32 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                    "an external document script replied for a sequence position that is not awaiting one — the "
                    "slot holds a program already, so this reply is a second answer to one request and the "
                    "program it overwrites would never run");
-            /* AN EXTERNAL SCRIPT OF ONE OF THESE DOCUMENTS IS A CLASSIC SCRIPT, which is a statement about these
-               entries rather than a default: the two seams that queue them (core/frame/navigable.c and
-               engine_join_document) reject a `<script type=module>` outright, because §8.1.3.3's module entry
-               needs a ScriptType the queue does not yet carry. The encoding is the ENTRY's document's. */
-            src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(f->dyn_doc[di]), &src_n);
+            /* WHICH OF §8.1.4.2 "Fetching scripts"'S TWO DECODES RUNS IS THE ROW'S OWN ANSWER. It used to be
+               hardcoded CLASSIC here, and that was only ever true because the two seams that queue these rows
+               (core/frame/navigable.c and engine_join_document) ABORTED on a `<script type=module>` rather than
+               queue one — so the hardcode was a restatement of a gap, not a fact about these entries. With the
+               row carrying its type, a module's bytes are UTF-8 whatever the response says and a classic
+               script's go through the response's charset label. The encoding realm is the ENTRY's document's. */
+            DCHECK(script_type_executes((ScriptType)f->dyn_type[di]),
+                   "an external document script replied for a row whose type executes nothing — only a "
+                   "`<script>` element of an executing type ever becomes a DYN_SCRIPT_SRC row, so this row's "
+                   "type column was written by something that is not one of the two seams that queue them");
+            src = reply_source_text(ctx, pv, (ScriptType)f->dyn_type[di], doc_realm(f->dyn_doc[di]), &src_n);
             CHECK(src, "engine: OOM storing an external document script");
             REPLY_SOURCE_WHOLE(src, src_n);
-            free(f->dyn[di]);
+            /* THE ADDRESS MOVES RATHER THAN BEING FREED, and this is the ONE moment at which it can: the row's
+               body IS the URL until this line, and everything the address decides happens after it. §8.1.4.2
+               creates the script with the RESPONSE'S URL as its base — "let script be the result of creating a
+               classic script given sourceText, settingsObject, response's URL, options, mutedErrors, and url" —
+               so a nested `import('./chunk.js')` inside a bundle served from `/assets/app.js` resolves to
+               `/assets/chunk.js`, and for a MODULE that address is additionally the module map KEY. Freed here
+               instead, two `<script type=module src>` of one document were named by the document they share and
+               were therefore ONE module: the second found the first's record and evaluated nothing. */
+            DCHECK(f->dyn_url[di] == NULL,
+                   "an external document script's row already held an address before its reply arrived — the "
+                   "row's body is its URL until this drain moves it, so a second one means the row was queued "
+                   "with an address column it may not have or a reply was drained into it twice");
+            f->dyn_url[di] = f->dyn[di];   /* ownership moves out of the body column */
             f->dyn[di] = src;
             f->dyn_cand[di] = DYN_PAGE_SCRIPT;
         } else if (kind == FLOW_PENDING_DOCSCRIPT) {
@@ -1860,10 +1893,33 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                the element was inserted into — the park recorded it — so the encoding that decodes these bytes is
                that document's and not the session's. */
             uint32_t doc = (uint32_t)pending_get_int(p, PEND_DOC);
+            ScriptType st = (ScriptType)pending_get_int(p, PEND_SCRIPT_TYPE);
+            JSValue uv = pending_get(p, PEND_URL);
+            const char *u;
             size_t src_n = 0;
-            char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(doc), &src_n);
+            char *src;
+            DCHECK(script_type_executes(st),
+                   "an injected <script src> replied for a park carrying a type that executes nothing — the "
+                   "park writes the element's type and §4.12.1.1 fetches for exactly the two that run, so a "
+                   "third answer means this record was pushed by something that is not that park");
+            /* THE STRING AND NOT WHATEVER COERCES TO ONE: `JS_ToCString` answers "undefined" for an absent
+               field, and an address of "undefined" is a base URL the parser would accept and every nested
+               specifier would then resolve against. The park writes a real string, so a record without one is
+               a record something else pushed. */
+            DCHECK(JS_IsString(uv),
+                   "an injected <script src> replied for a park with no address — the park writes the resolved "
+                   "URL and the reply is matched on it, so a record without one names no script and the "
+                   "program below would be created with its document's base URL as its own");
+            u = JS_ToCString(ctx, uv);
+            CHECK(u != NULL, "engine: OOM reading an injected script's address off its park");
+            src = reply_source_text(ctx, pv, st, doc_realm(doc), &src_n);
             REPLY_SOURCE_WHOLE(src, src_n);
-            engine_queue_script(doc, src);
+            /* §8.1.4.2's created script is based on the RESPONSE'S URL, so the program carries the address its
+               bytes came from — the base a nested `import('./chunk.js')` resolves against and, for a module,
+               the module map key that keeps two injected chunks two modules. */
+            engine_queue(doc, src, DYN_PAGE_SCRIPT, st, u, DYN_POS_APPEND);
+            JS_FreeCString(ctx, u);
+            JS_FreeValue(ctx, uv);
             free(src);
         } else if (kind == FLOW_PENDING_MODULE) {
             /* the reply is a MODULE's SOURCE: settle the load's promise with the text, and the import's own
@@ -2165,6 +2221,17 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            finish site; the sibling inheriting bodies without knowing which are candidates would re-arm the
            page-script assert on a dead breakout it inherited. */
         sib->dyn_cand = malloc((size_t)parent->dyn_n); CHECK(sib->dyn_cand, "engine: OOM fork dyn flags");
+        /* AND SO DOES WHICH OF §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS RUNS EACH, by the same sentence: an
+           arm that inherited a `<script type=module>`'s body without its type would hand the module to the
+           classic entry and take the page's own `import` back as a SyntaxError — on one arm and not the other,
+           from one element. */
+        sib->dyn_type = malloc((size_t)parent->dyn_n); CHECK(sib->dyn_type, "engine: OOM fork dyn script types");
+        /* AND THE ADDRESS EACH PROGRAM'S BYTES CAME FROM, by the same sentence: it is §8.1.4.2's created-script
+           base URL and a module row's MODULE MAP KEY, so an arm that inherited a bundle without it would
+           resolve that bundle's nested `import('./chunk.js')` against the document instead of against the
+           bundle, and register the module under a name it shares with every other module of that document. */
+        sib->dyn_url = malloc((size_t)parent->dyn_n * sizeof(char *));
+        CHECK(sib->dyn_url, "engine: OOM fork dyn script addresses");
         /* AND SO DOES THE DOCUMENT EACH BELONGS TO, by the same sentence: an arm that inherited the bodies
            without them would compile a child navigable's script in the session's realm and define that
            document's globals on the creator's Window. */
@@ -2182,22 +2249,29 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
            reaction on one arm and not on the other, from one insertion. */
         sib->dyn_pos = malloc((size_t)parent->dyn_n);
         CHECK(sib->dyn_pos, "engine: OOM fork dyn positions");
-        /* THE FIVE ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
+        /* THE SEVEN ARRAYS ARE ONE TABLE WITH ONE LENGTH, asserted rather than defaulted past. This read used to
            be `parent->dyn_cand ? parent->dyn_cand[i] : 0`, and a zero there is DYN_PAGE_SCRIPT — a real kind
            belonging to a real entry — so a parent whose flags were somehow absent handed the arm a queue of
-           page scripts. The five are allocated, grown and freed together, which makes the `? :` a claim about
+           page scripts. The seven are allocated, grown and freed together, which makes the `? :` a claim about
            a state this file makes impossible; now the arm CRASHES where that state would be born instead of
            compiling a candidate as a page script, or an ADDRESS (DYN_SCRIPT_SRC) as a program. */
-        DCHECK(parent->dyn_cand != NULL && parent->dyn_doc != NULL && parent->dyn_token != NULL &&
-               parent->dyn_pos != NULL,
-               "a flow holds queued programs with no kind, document, token or position column — the five "
-               "arrays are one table and are allocated together, so the arm would inherit bodies whose kind, "
-               "realm, waiting peer or place against the microtask checkpoint are lost");
+        DCHECK(parent->dyn_cand != NULL && parent->dyn_type != NULL && parent->dyn_url != NULL &&
+               parent->dyn_doc != NULL && parent->dyn_token != NULL && parent->dyn_pos != NULL,
+               "a flow holds queued programs with no kind, script type, address, document, token or position "
+               "column — the seven arrays are one table and are allocated together, so the arm would inherit "
+               "bodies whose kind, evaluation algorithm, resolution base, realm, waiting peer or place against "
+               "the microtask checkpoint are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
             sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
             sib->dyn_cand[i] = parent->dyn_cand[i];
+            sib->dyn_type[i] = parent->dyn_type[i];
             sib->dyn_doc[i] = parent->dyn_doc[i];
             sib->dyn_pos[i] = parent->dyn_pos[i];
+            sib->dyn_url[i] = NULL;
+            if (parent->dyn_url[i]) {
+                sib->dyn_url[i] = strdup(parent->dyn_url[i]);
+                CHECK(sib->dyn_url[i], "engine: OOM forking an external script's address");
+            }
             sib->dyn_token[i] = NULL;
             if (parent->dyn_token[i]) {
                 sib->dyn_token[i] = strdup(parent->dyn_token[i]);
@@ -2549,7 +2623,13 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
    caused program takes is a step of the SPEC of the operation that caused it, so only the caller knows it, and
    a queue that appended by default gave every one of them the same answer — the tail — including the two the
    spec runs before anything else in the sequence. */
-static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind, char *token, DynPos pos) {
+/* AND WHICH OF §8.1.4.4's TWO ALGORITHMS EVALUATES IT, AND THE ADDRESS ITS BYTES CAME FROM, for the same
+   reason again: both are facts about the ELEMENT (or about the absence of one), which only the caller has.
+   `stype` is SCRIPT_TYPE_CLASSIC for every row that is not an element's — a `setTimeout` string, a
+   `javascript:` URL, a lazy chunk, a cross-agent operation's program — and that is §8.1.4.4's answer for those
+   rather than a default. `url` is NULL for an INLINE row, whose base URL §4.12.1.1 states as the document's. */
+static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind, ScriptType stype,
+                              const char *url, char *token, DynPos pos) {
     int at;
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
        queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
@@ -2574,14 +2654,33 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
            "a queued program's kind and its rendezvous token disagree — a cross-agent operation's row must "
            "carry the token of the peer waiting on its completion, and no other kind may carry one, because "
            "only that kind's completion is ever read as an answer");
+    /* THE SEQUENCE HOLDS ONLY EXECUTABLE PROGRAMS, asserted at the ONE site that creates a row rather than at
+       the compile that would then have to pick an algorithm for a program that has none. §4.12.1.1's null type
+       and its two data types run nothing at all, so an import map or a set of speculation rules never becomes
+       a row — document_exec_scripts and html_script_prepare both drop them before they reach here. */
+    DCHECK(script_type_executes(stype),
+           "a program was queued with a script type that does not execute — §4.12.1.1's null type, an import "
+           "map and a set of speculation rules are registered or ignored rather than evaluated, so none of "
+           "them is a program, and §8.1.4.4 has no entry to run this row with");
+    /* AN ADDRESS BELONGS TO A ROW WHOSE BYTES CAME FROM ONE. §8.1.4.2 creates a script based on the RESPONSE'S
+       URL, so a row that was fetched has one and a row the page wrote inline does not — and §4.12.1.1 answers
+       the inline case from the document instead ("let base URL be el's node document's document base URL"),
+       which is what the compile reads when this column is NULL. A DYN_SCRIPT_SRC row is the one shape that is
+       an address and not yet a program, so its address is its own body until the reply arrives. */
+    DCHECK(kind != DYN_SCRIPT_SRC || url == NULL,
+           "an entry holding a script's ADDRESS was queued with a second address beside it — the row IS the "
+           "URL until flow_drain_pending replaces it with the source text, and that drain is what moves it "
+           "into the address column, so a caller writing both is naming one script two ways");
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
         f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_cand = realloc(f->dyn_cand, (size_t)f->dyn_cap);
+        f->dyn_type = realloc(f->dyn_type, (size_t)f->dyn_cap);
+        f->dyn_url = realloc(f->dyn_url, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_doc = realloc(f->dyn_doc, (size_t)f->dyn_cap * sizeof(uint32_t));
         f->dyn_token = realloc(f->dyn_token, (size_t)f->dyn_cap * sizeof(char *));
         f->dyn_pos = realloc(f->dyn_pos, (size_t)f->dyn_cap);
-        CHECK(f->dyn && f->dyn_cand && f->dyn_doc && f->dyn_token && f->dyn_pos,
+        CHECK(f->dyn && f->dyn_cand && f->dyn_type && f->dyn_url && f->dyn_doc && f->dyn_token && f->dyn_pos,
               "engine: OOM dynamic-script queue");
     }
     at = f->dyn_n;
@@ -2602,11 +2701,13 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         /* THE ONE POSITION THIS REPRESENTATION CANNOT NAME, and it is a capability rather than a bad call. The
            cursor walks the SESSION document's static sequence [0, g_sess_n) and only then this flow's own rows,
            so there is no slot between document script i and i+1 for a program script i caused: a page that
-           `eval`s or injects a <script> from anything but its LAST <script> has nowhere to put it. Every part
-           of the fix is already asked for three times over — html_script.c, engine_join_document above and
-           core/frame/navigable.c each DFAIL for a ScriptType column on this queue — so build the ONE sequence:
-           give the dyn table its `type` and `src` columns and seed every flow with the document's own scripts
-           as rows, at which point g_sess_bodies/g_sess_types/g_sess_srcs and this offset all go away. */
+           `eval`s or injects a <script> from anything but its LAST <script> has nowhere to put it. HALF THE
+           FIX IS NOW BUILT and this is the half that is left: the dyn table HAS its `type` and `url` columns
+           (flow.h's `dyn_type`, `dyn_url`), which is what the three DCHECKs that used to sit in html_script.c,
+           engine_join_document above and core/frame/navigable.c were asking for — every one of them aborted on
+           `<script type=module>` and all three are gone. What remains is to SEED every flow with the session
+           document's own scripts as rows of that same table, at which point g_sess_bodies/g_sess_types/
+           g_sess_srcs/g_sess_urls and this offset all go away and the position below is expressible. */
         /* BOTH BOUNDS ARE `CHECK`, AND THAT IS THE RELEASE RULE RATHER THAN AN EXCEPTION TO IT. A DCHECK
            vanishes in release, and what these two guard is the INDEX of the write below — a negative or
            past-the-end slot is a memmove and four stores outside the arrays, which is the data integrity CHECK
@@ -2616,8 +2717,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         CHECK(at >= 0,
               "a program must run IMMEDIATELY at a slot inside the session document's own script sequence, "
               "which this queue cannot address — the flow's rows begin only after that sequence ends. Give "
-              "the flow ONE sequence: the document's scripts as rows of the dyn table with the ScriptType and "
-              "src columns three DFAILs in this engine already ask for, and this offset disappears with them");
+              "the flow ONE sequence: the session document's scripts as rows of the dyn table, which already "
+              "carries the ScriptType and address columns those rows need, and this offset disappears");
         CHECK(at <= f->dyn_n,
               "a program's IMMEDIATE slot is past the end of the flow's own queue — the cursor names the row "
               "the flow is at, so the slot after it is at most one past the last row, and a larger index "
@@ -2638,12 +2739,17 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         size_t tail = (size_t)(f->dyn_n - at);
         memmove(&f->dyn[at + 1],       &f->dyn[at],       tail * sizeof(char *));
         memmove(&f->dyn_cand[at + 1],  &f->dyn_cand[at],  tail);
+        memmove(&f->dyn_type[at + 1],  &f->dyn_type[at],  tail);
+        memmove(&f->dyn_url[at + 1],   &f->dyn_url[at],   tail * sizeof(char *));
         memmove(&f->dyn_doc[at + 1],   &f->dyn_doc[at],   tail * sizeof(uint32_t));
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
         memmove(&f->dyn_pos[at + 1],   &f->dyn_pos[at],   tail);
     }
     f->dyn[at] = strdup(body); CHECK(f->dyn[at], "engine: OOM dynamic-script body");
     f->dyn_cand[at] = (unsigned char)kind;
+    f->dyn_type[at] = (unsigned char)stype;
+    f->dyn_url[at] = NULL;
+    if (url) { f->dyn_url[at] = strdup(url); CHECK(f->dyn_url[at], "engine: OOM queued script address"); }
     f->dyn_doc[at] = doc;
     f->dyn_token[at] = token;   /* MOVED: one allocation from engine_perform to flow_answer_perform */
     /* THE POSITION IS KEPT, NOT CONSUMED. `at` says where the row went; this says WHY, and the microtask
@@ -2653,11 +2759,12 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
     f->dyn_n++;
 }
 
-static void engine_queue(uint32_t doc, const char *body, DynKind kind, DynPos pos) {
+static void engine_queue(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
+                         DynPos pos) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
                       "frontier and there is no member to give it to, so it would be dropped without a trace");
-    engine_queue_into(f, doc, body, kind, NULL, pos);
+    engine_queue_into(f, doc, body, kind, stype, url, NULL, pos);
 }
 
 /* WHICH KIND THE PROGRAM AT `script_i` IS, asked at the two places that need it — the compile and the resume.
@@ -2678,9 +2785,53 @@ static uint32_t flow_dyn_doc(const Flow *f, int n) {
     return f->dyn_doc[f->script_i - n];
 }
 
-/* EVERY SOURCE THAT REACHES THIS ONE IS A TASK — a lazy chunk's reply, a §8.6 string handler, a document's own
-   sequence — so the tail IS its position, and the entry cannot be asked for another (engine.h's DynPos). */
-void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, body, DYN_PAGE_SCRIPT, DYN_POS_APPEND); }
+/* AND WHICH OF §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS EVALUATES IT, re-derived from the same cursor for
+   the same reason. The SESSION document's static half answers from its own types column (g_sess_types); the
+   dyn half answers from the row, which is what a `<script type=module>` of a CHILD navigable, a JOINED
+   document or an INJECTED element now has and did not before. */
+static ScriptType flow_dyn_type(const Flow *f, int n) {
+    if (f->script_i < n) return g_sess_types[f->script_i];
+    if (f->script_i - n >= f->dyn_n) return SCRIPT_TYPE_CLASSIC;
+    return (ScriptType)f->dyn_type[f->script_i - n];
+}
+
+/* AND THE ADDRESS ITS BYTES CAME FROM — §8.1.4.2 "Fetching scripts"'s created-script base URL, and a module
+   row's module map key. NULL for an INLINE row and for a cursor past the end of the sequence, which is
+   §4.12.1.1's "let base URL be el's node document's document base URL" and is read as that by the compile. */
+static const char *flow_dyn_url(const Flow *f, int n) {
+    if (f->script_i < n) return g_sess_srcs[f->script_i] ? g_sess_urls[f->script_i] : NULL;
+    if (f->script_i - n >= f->dyn_n) return NULL;
+    return f->dyn_url[f->script_i - n];
+}
+
+/* EVERY SOURCE THAT REACHES THIS ONE IS A TASK — a lazy chunk's reply, a §8.6 string handler — so the tail IS
+   its position, and the entry cannot be asked for another (engine.h's DynPos).
+   AND EVERY ONE OF THEM IS A CLASSIC SCRIPT, which is §8.1.4.4's answer for a program that has no `<script>`
+   element behind it rather than a default this entry happens to pick: §8.6's string handler is evaluated as a
+   classic script, and a lazy chunk's reply is the body an already-running program asked for. An entry that DOES
+   have an element behind it says which of the two algorithms runs it — engine_queue_element_script below. */
+void engine_queue_script(uint32_t doc, const char *body) {
+    engine_queue(doc, body, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
+}
+
+/* …AND THE ROW A `<script>` ELEMENT PUT THERE, which is the same position and one more fact: HTML §4.12.1.1
+   "Processing model"'s "execute the script element" ends in a switch on the ELEMENT's type, so the row carries
+   it and flow_step routes to §8.1.4.4 "Calling scripts"'s run-a-classic-script or run-a-module-script
+   accordingly. Three seams reach it and they are the three ways a Document of this agent that is NOT the
+   session's gets its inline programs: a child navigable's (core/frame/navigable.c), a joined one's
+   (engine_join_document) and an element page code INSERTED (core/html/html_script.c). Each of those used to
+   ABORT on `<script type=module>` — a DCHECK apiece, all three naming this column — because the only route was
+   the classic entry above and the page's own `import` would have come back a SyntaxError.
+   THE TAIL IS ITS POSITION and that is §4.12.1.1's own answer for every destination an element with a MODULE
+   type or a `src` reaches: the `list of scripts that will execute when the document has finished parsing` and
+   the `list of scripts that will execute in order as soon as possible` both hold their elements in order, and
+   the `set of scripts that will execute as soon as possible` has no position at all (§13.2.7 waits for it only
+   before the load event), so arrival order is a correct order for it. The ONE destination that is not the tail
+   is `immediately execute the script element`, which §4.12.1.1 reaches only for an inline CLASSIC script and
+   which has its own entry below. */
+void engine_queue_element_script(uint32_t doc, const char *body, ScriptType stype) {
+    engine_queue(doc, body, DYN_PAGE_SCRIPT, stype, NULL, DYN_POS_APPEND);
+}
 
 /* …AND THE ONE SCRIPT SOURCE THAT IS NOT A TASK. HTML §4.12.1.1 "Processing model" ends "prepare the script
    element" with "Otherwise, immediately execute the script element el, even if other scripts are already
@@ -2688,8 +2839,13 @@ void engine_queue_script(uint32_t doc, const char *body) { engine_queue(doc, bod
    and everything the sequence already holds runs after it. This engine had the classification (html_script.c
    computes SCRIPT_SCHED_IMMEDIATE and its own DCHECK names this very step) and then queued the result at the
    tail, which is the position of the one destination §4.12.1 says it does NOT take. */
+/* THE TYPE IS CLASSIC AND IS NOT A PARAMETER, because §4.12.1.1 reaches this step for no other: "If el's type
+   is `classic` and el has a src attribute, OR el's type is `module`" sends every module — inline or not — to
+   one of the three lists above, and only what falls past that switch reaches "Otherwise, immediately execute
+   the script element el". An inline module has a graph to load before its result exists, which is exactly why
+   the standard does not run it here. */
 void engine_queue_script_immediate(uint32_t doc, const char *body) {
-    engine_queue(doc, body, DYN_PAGE_SCRIPT, DYN_POS_IMMEDIATE);
+    engine_queue(doc, body, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_IMMEDIATE);
 }
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
@@ -2697,8 +2853,11 @@ void engine_queue_script_immediate(uint32_t doc, const char *body) {
    APPEND, and that is §4.12.1's own answer rather than a default: this entry is the `list of scripts that will
    execute in order as soon as possible`, whose elements hold their places against one another, so a new one
    goes behind the ones already there. */
-void engine_queue_docscript_url(uint32_t doc, const char *url) {
-    engine_queue(doc, url, DYN_SCRIPT_SRC, DYN_POS_APPEND);
+void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype) {
+    /* THE ADDRESS IS THE ROW'S BODY, NOT ITS ADDRESS COLUMN — the row IS the URL until the reply replaces it
+       with the source text, and flow_drain_pending is what MOVES it into the address column at that moment.
+       Writing both here would name one script two ways and engine_queue_into asserts against it. */
+    engine_queue(doc, url, DYN_SCRIPT_SRC, stype, NULL, DYN_POS_APPEND);
 }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
@@ -2712,7 +2871,9 @@ void engine_queue_docscript_url(uint32_t doc, const char *url) {
 /* AND `pos` IS THE SINK'S OWN SEMANTICS — see engine.h. An eval sink's code is ECMAScript §19.2.1.1
    PerformEval, which evaluates the body inside the call expression; a markup sink's auto-firing handler and a
    URL sink's `javascript:` navigation are tasks. The caller knows which sink fired, so the caller says. */
-void engine_queue_candidate(const char *body, DynPos pos) { engine_queue(g_sess_doc, body, DYN_CANDIDATE, pos); }
+void engine_queue_candidate(const char *body, DynPos pos) {
+    engine_queue(g_sess_doc, body, DYN_CANDIDATE, SCRIPT_TYPE_CLASSIC, NULL, pos);
+}
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, steps 6-7 — "let script be the result of creating a classic
    script given scriptSource … let evaluationStatus be the result of running the classic script script". The
@@ -2726,7 +2887,9 @@ void engine_queue_candidate(const char *body, DynPos pos) { engine_queue(g_sess_
    navigation and traversal task source given navigable's active window to navigate to a javascript: URL". The
    evaluation this row runs is therefore a TASK, and it takes the tail like every other one. */
 void engine_queue_javascript_url(uint32_t doc, const char *body) {
-    engine_queue(doc, body, DYN_JAVASCRIPT_URL, DYN_POS_APPEND);
+    /* CLASSIC, and §7.4.2.3.2 step 6 says so in as many words — "let script be the result of creating a CLASSIC
+       script given scriptSource" — so there is nothing here to parameterise. */
+    engine_queue(doc, body, DYN_JAVASCRIPT_URL, SCRIPT_TYPE_CLASSIC, NULL, DYN_POS_APPEND);
 }
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
@@ -2788,7 +2951,8 @@ static void flow_perform(JSContext *ctx, Flow *f)
     {
         char *own = strdup(token);
         CHECK(own != NULL, "engine: OOM moving a cross-agent operation's rendezvous token onto its program");
-        engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, own, DYN_POS_APPEND);
+        engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, SCRIPT_TYPE_CLASSIC,
+                          NULL, own, DYN_POS_APPEND);
     }
     remote_op_free(op);
     JS_FreeCString(ctx, record);
@@ -3014,7 +3178,8 @@ static long g_jobs_q, g_jobs_run;
 long engine_jobs_queued(void) { return g_jobs_q; }
 long engine_jobs_run(void) { return g_jobs_run; }
 
-static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task) {
+static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
+                              JSTaskHandle handle) {
     Flow *f = flow_running();
     g_jobs_q++;
     /* THERE IS NO GLOBAL DRAIN. Declining here hands the job to quickjs's global list, and nothing in this
@@ -3027,8 +3192,40 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
     if (!f) return 0;
     DCHECK(ctx != NULL, "a job was enqueued with no realm — §7.5.10 step 7 removes a destroyed document's tasks "
                         "by comparing this, so a job without one outlives its document");
-    flow_job_push(ctx, f, fn, argc, argv, is_task);
+    /* THE NAME ARRIVES WITH THE JOB AND IS RECORDED, never defaulted: the host that takes ownership is the only
+       thing that can find this callback again, so a record that dropped it is a task no tracker can remove and
+       a `toggle` event that fires twice. Every runtime enqueue path allocates one (js_enqueue asserts it), so a
+       job arriving here without one is the runtime's own contract broken and not a shape to tolerate. */
+    DCHECK(handle != JS_TASK_HANDLE_NONE,
+           "a job reached the scheduler under the never-issued handle — quickjs mints one at every enqueue and "
+           "carries it across the baseline handover, so a job without a name has come from a path that does "
+           "not, and nothing could ever take it back off this flow's queue");
+    flow_job_push(ctx, f, fn, argc, argv, is_task, handle);
     return 1;   /* host owns it */
+}
+
+/* THE THIRD PART OF THAT OWNERSHIP (installed as JS_SetJobRemoveHook): HTML §4.11.4 "The dialog element"'s
+   "Remove element's dialog toggle task tracker's task from its task queue" — §4.11.1 "The details element"
+   and §6.12 "The popover attribute" hold the same tracker and the same sentence — for a job THIS scheduler
+   took. quickjs's own two queues and its baseline list are walked by JS_RemoveQueuedTask before this is asked;
+   what this scheduler holds is what nothing else can reach.
+   IT IS THE RUNNING FLOW'S QUEUE AND CANNOT BE A GLOBAL SEARCH. A fork gives every arm its own Array naming
+   the SAME records, so after a branch N flows hold N queued copies of ONE handle — N timelines' copies of one
+   queued task, each of which the corresponding arm's own tracker names. Sweeping every flow would delete a
+   sibling's task out of the sibling's timeline on the strength of a removal made in this one, which is exactly
+   the shared-state bug the per-flow queues exist to make impossible; §7.5.10's drop walks every flow instead
+   because its key is the DOCUMENT, and a destroyed document is destroyed in every timeline at once.
+   FINDING NOTHING IS ORDINARY — the task already ran, is running now (a `toggle` listener that closes the
+   dialog again asks for the removal of the very task dispatching it), or went with its document. */
+static int engine_remove_job(JSTaskHandle handle) {
+    Flow *f = flow_running();
+
+    DCHECK(f != NULL,
+           "a queued task was removed by name with no flow running — a tracker's removal is made by state that "
+           "only ever changes inside a flow, so a caller here is a platform edge reaching for a queue that "
+           "belongs to a timeline it is not in");
+    if (!f) return 0;   /* release path under the assert: nothing this hook can honestly reach */
+    return flow_job_remove(f, handle);
 }
 
 /* THE OTHER HALF OF engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 step 7, for the jobs this
@@ -3147,7 +3344,7 @@ static int  g_deepest = -1;
    i-1, and says nothing about how many programs the document has left to run. */
 static int  g_completed = -1;
 
-/* HTML §8.1.3.3 "run a module script", step 6: "If preventErrorReporting is false, then upon rejection of
+/* HTML §8.1.4.4 "Calling scripts", "run a module script" step 8: "If preventErrorReporting is false, then upon rejection of
  * evaluationPromise with reason, report an exception given by reason for script's settings object's global
  * object." A module completes as a PROMISE — that is the whole difference between running a module script and
  * running a classic one, and it is why a top-level `await` is observable — so its failure is not a completion
@@ -3181,10 +3378,10 @@ static void module_report_rejection(JSContext *ctx, JSValueConst eval_promise) {
           "module that threw is silently delivered as an unhandled rejection instead of a page error");
     derived = JS_PerformPromiseThen(ctx, eval_promise, JS_UNDEFINED, on_rejected);
     CHECK(!JS_IsException(derived),
-          "HTML §8.1.3.3 step 6's rejection reaction could not be attached to a module script's evaluation "
+          "HTML §8.1.4.4 \"Calling scripts\" step 8's rejection reaction could not be attached to a module "
           "promise — the module's own failure would then have no reader at all");
     /* The derived promise has no reader BY CONSTRUCTION: the handler returns undefined, so it fulfils, and a
-       fulfilled promise nobody reads is not an event. It is freed rather than kept because §8.1.3.3 returns
+       fulfilled promise nobody reads is not an event. It is freed rather than kept because §8.1.4.4 returns
        evaluationPromise to its caller and this one is only the capability PerformPromiseThen must produce. */
     JS_FreeValue(ctx, derived);
     JS_FreeValue(ctx, on_rejected);
@@ -3223,13 +3420,19 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             const char *body;
             /* WHICH KIND the program about to be compiled is — only a page <script> must parse. */
             DynKind kind = DYN_PAGE_SCRIPT;
-            /* AND WHICH OF §8.1.3.3'S TWO ALGORITHMS RUNS IT. CLASSIC is the answer for every entry a FLOW
-               added, and that is a statement about those entries rather than a default waiting to be
-               overridden: §7.4.2.3.2's `javascript:` URL evaluates a classic script, a lazy chunk and a
-               `setTimeout` string are classic scripts, and a cross-agent operation's program is this engine's
-               own classic text. Only the DOCUMENT's own sequence has an element behind it, so only it can say
-               MODULE — which is why the row below is the one place this is read. */
-            ScriptType stype = SCRIPT_TYPE_CLASSIC;
+            /* AND WHICH OF §8.1.4.4 "Calling scripts"'S TWO ALGORITHMS RUNS IT — run a classic script, or run
+               a module script. CLASSIC is the answer for every entry a FLOW added, and that is a statement
+               about those entries rather than a default waiting to be overridden: §7.4.2.3.2's `javascript:`
+               URL evaluates a classic script, a lazy chunk and a `setTimeout` string are classic scripts, and a
+               cross-agent operation's program is this engine's own classic text.
+               IT IS THE ROW THAT ANSWERS, NOT THE HALF OF THE SEQUENCE THE CURSOR IS IN. This used to read the
+               session document's types column in one branch and stay CLASSIC everywhere else, which was
+               correct only while the DOCUMENTS THAT ARE NOT THE SESSION'S had no way to state a type at all —
+               and the way they said so was to abort: three DCHECKs, one per seam, on `<script type=module>`.
+               A child navigable's Document, a joined one and an INJECTED element each put their element's type
+               on the row now (flow.h's `dyn_type`), so this is one question with one answer for every position
+               in the sequence. */
+            ScriptType stype = flow_dyn_type(f, n);
             /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
                enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
                becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
@@ -3260,7 +3463,6 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
             }
             if (f->script_i < n) {
                 body = bodies[f->script_i];
-                stype = g_sess_types[f->script_i];
                 /* THE SEQUENCE HOLDS ONLY EXECUTABLE SCRIPTS. document_exec_scripts drops an import map and a
                    data block before either becomes a row, so a row whose type is neither of the two that
                    execute is a producer that filled the array with something it never scanned — and the
@@ -3427,22 +3629,30 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                per-document. */
             const char *prog_name = document_base_url(prog_ctx);
             /* …AND AN EXTERNAL ONE'S NAME IS ITS OWN ADDRESS, which is a different question with a different
-               answer and was being given this one. §4.12.1.1 hands its resolved `url` to §8.1.4.2, and both
-               algorithms there — "fetch a classic script" and "fetch an external module script graph" — create a
-               script whose BASE URL is that url rather than the document's. It decides answers in both of
-               §8.1.3.3's entries: a nested `import('./chunk.js')` inside a bundle served from `/assets/app.js`
-               is `/assets/chunk.js` and not `/chunk.js`, and for a MODULE the name is additionally the module
-               map KEY — so two `<script type=module src>` in one document, named by the address they share,
-               are ONE module, and the second one's graph finds the first one's record and evaluates nothing.
-               A modern app with several module entry points therefore loses all but one of them. */
-            if (f->script_i < n && g_sess_srcs[f->script_i]) {
-                DCHECK(g_sess_urls[f->script_i] != NULL,
+               answer and was being given this one. §4.12.1.1 hands its resolved `url` to §8.1.4.2 "Fetching
+               scripts" — "Fetch a classic script given url, …" and "Fetch an external module script graph given
+               url, …" — and what that section creates is a script based on the address the bytes came FROM:
+               "let script be the result of creating a classic script given sourceText, settingsObject,
+               RESPONSE'S URL, options, mutedErrors, and url". Never the document's.
+               It decides answers in both of §8.1.4.4's entries: a nested `import('./chunk.js')` inside a bundle
+               served from `/assets/app.js` is `/assets/chunk.js` and not `/chunk.js`, and for a MODULE the name
+               is additionally the module map KEY — so two `<script type=module src>` in one document, named by
+               the address they share, are ONE module, and the second one's graph finds the first one's record
+               and evaluates nothing. A modern app with several module entry points loses all but one of them.
+               AND IT IS ASKED OF THE ROW, for the reason the type above is: the session document was not the
+               only document of this agent with external scripts, it was only the one whose external scripts had
+               anywhere to keep their address. A child navigable's and a joined document's rows carried theirs
+               in the BODY column and lost it the moment the reply overwrote it, so every one of those bundles
+               compiled under its document's name — one module map key shared by the lot. */
+            {
+                const char *ext = flow_dyn_url(f, n);
+                DCHECK(!(f->script_i < n && g_sess_srcs[f->script_i]) || ext != NULL,
                        "an EXTERNAL document script reached the compile with no resolved address — §4.12.1.1's "
                        "failure branch runs no script at all, so the wait above steps the sequence past such a "
                        "row and only a row whose `src` encoding-parsed can arrive here with a body");
-                prog_name = g_sess_urls[f->script_i];
+                if (ext) prog_name = ext;
             }
-            /* A MODULE IS A DIFFERENT ALGORITHM, NOT A FLAG — §8.1.3.3 has two entries and this is where they
+            /* A MODULE IS A DIFFERENT ALGORITHM, NOT A FLAG — §8.1.4.4 has two entries and this is where they
                part. A CLASSIC script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler
                resumes, and it completes with a VALUE. A MODULE is a graph: it is linked and evaluated, its body
                is an async function on the flow machinery's own seam (so a top-level `await` and a loop
@@ -3459,7 +3669,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    is the base the loader registers each fetched dependency under. */
                 ev = JS_FlowEvalModule(prog_ctx, body, strlen(body), prog_name, 0);
                 started = !JS_IsException(ev);
-                if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.3.3 step 6 */
+                if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
                 f->frame = JS_FlowNew(prog_ctx, body, strlen(body), prog_name, 0);   /* classic non-strict global */
@@ -3500,7 +3710,7 @@ static int flow_step(JSContext *ctx, Flow *f, char **bodies, int n) {
                    no navigation — `<a href="javascript:{{{">` is a link that does nothing, not an engine bug. A
                    PAGE script that does not compile is a different thing entirely and still asserts. */
                 /* FOR A MODULE THIS IS THE COMPILE AND ONLY THE COMPILE. It used to name linking too, and that
-                   stopped being true when loading became its own phase: §8.1.3.3's module entry now LOADS the
+                   stopped being true when loading became its own phase: §8.1.4.4's module entry now LOADS the
                    graph (16.2.1.6.1.1, asynchronous — the host fetches each specifier) and links it only upon
                    that load's fulfilment, so a graph that fails to load or to link REJECTS the evaluation
                    promise and is reported by module_report_rejection, exactly as HTML's "set moduleScript's
@@ -3826,6 +4036,7 @@ static void engine_session_close(void) {
     reclaim_uninstall(JS_GetRuntime(g_sess_ctx));
     JS_SetJobEnqueueHook(NULL);
     JS_SetJobDropHook(NULL);
+    JS_SetJobRemoveHook(NULL);
     JS_SetFlowControlHooks(&FC_OFF);
     /* THE SESSION'S GENERATION ENDS HERE, and it is the LIVE stamp that is cleared rather than the scheduler's
        saved copy, because this runs INSIDE the slice: the bracket below saves whatever the slice leaves, so
@@ -4047,7 +4258,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
         DCHECK((bodies[i] != NULL) != (srcs[i] != NULL),
                "a row of the session document's script sequence is neither an inline body nor an external "
                "address, or is both — document_exec_scripts states exactly one of the two for every executable "
-               "entry, and the compile below picks which of §8.1.3.3's algorithms runs it from that");
+               "entry, and the compile below picks which of §8.1.4.4's algorithms runs it from that");
         if (!srcs[i]) continue;   /* an inline script has no src to encoding-parse */
         g_sess_urls[i] = script_src_absolute(ctx, srcs[i], strlen(srcs[i]));
     }
@@ -4107,6 +4318,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     JS_SetFlowControlHooks(forking ? &FC_EXPLORE : &FC_VERIFY);   /* preempt ALWAYS on; fork only when exploring */
     JS_SetJobEnqueueHook(engine_enqueue_job);   /* ASYNC-AS-FLOW: reactions route to the enqueuing flow's queue */
     JS_SetJobDropHook(engine_drop_jobs);        /* …and §7.5.10 step 7 takes them back off it */
+    JS_SetJobRemoveHook(engine_remove_job);     /* …and a toggle task tracker takes ONE back off, by name */
     /* THE FRONTIER IS THE ENGINE'S RESERVE, and this is what lets an allocator spend it. Installed with the
        session because that is exactly when there is a frontier to page: a refusal asks engine_reclaim_tail,
        which sells the lowest-weight member to the cold tier and answers "retry".
@@ -4169,18 +4381,19 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
     f = flow_add(g_sess_ctx, JS_UNDEFINED, WORLD_NONE);
     f->script_i = g_sess_n;
     for (i = 0; i < n; i++) {
-        /* §8.1.3.3'S TWO ALGORITHMS, and only one of them has a route from a queued program: the dynamic
-           sequence carries no ScriptType, so a module body on it would be compiled by the CLASSIC entry and
-           this document's own `import` would come back a SyntaxError from a parser that is perfectly correct.
-           The same gap core/frame/navigable.c names for a child navigable's Document, reached here by the
-           other of the two ways a Document of this agent comes into existence. */
-        DCHECK(types[i] != SCRIPT_TYPE_MODULE,
-               "a joined document carries a `<script type=module>` and this seam can only queue a CLASSIC "
-               "program — give the flow's dynamic script sequence a ScriptType per entry (engine_queue_script "
-               "and solver/flow.h's dyn arrays), the way the document's own sequence carries one, so flow_step "
-               "routes it to §8.1.3.3's module entry");
+        /* §8.1.4.4 "Calling scripts"'S TWO ALGORITHMS, AND BOTH NOW HAVE A ROUTE. The row carries the
+           element's type (solver/flow.h's `dyn_type`), so flow_step evaluates a `<script type=module>` of this
+           document with run-a-module-script instead of handing the page's own `import` to the classic entry and
+           taking a SyntaxError back from a parser that is perfectly correct. The DCHECK that stood here — one
+           of three, with core/frame/navigable.c's and core/html/html_script.c's — aborted the whole engine on a
+           joined document that had one, and it is the column below that it was asking for. */
+        DCHECK(script_type_executes(types[i]),
+               "a joined document's script inventory holds a row whose type executes nothing — an import map "
+               "and a set of speculation rules are registered rather than run and §4.12.1.1's null type runs "
+               "nothing at all, so document_exec_scripts drops all three before they become rows and a fourth "
+               "answer here means the types column was never written for this row");
         if (bodies[i]) {
-            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT, NULL, DYN_POS_APPEND);
+            engine_queue_into(f, doc, bodies[i], DYN_PAGE_SCRIPT, types[i], NULL, NULL, DYN_POS_APPEND);
             continue;
         }
         DCHECK(srcs[i] != NULL,
@@ -4198,8 +4411,11 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
                return" — so the element runs no script. It is the standard's answer and not a skip: what is
                still owed is that error event, which needs a task on this document rather than anything here. */
             if (!abs_url) continue;
-            /* AT ITS POSITION, holding only its address until the reply fills it — see DYN_SCRIPT_SRC. */
-            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC, NULL, DYN_POS_APPEND);
+            /* AT ITS POSITION, holding only its address until the reply fills it — see DYN_SCRIPT_SRC. The
+               row keeps the element's type across that replacement, which is what decides whether §8.1.4.2
+               decoded the bytes as UTF-8 or through the response's charset label, and which of §8.1.4.4's two
+               algorithms then runs the source it produced. */
+            engine_queue_into(f, doc, abs_url, DYN_SCRIPT_SRC, types[i], NULL, NULL, DYN_POS_APPEND);
             free(abs_url);
         }
     }

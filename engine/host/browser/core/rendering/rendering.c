@@ -19,6 +19,7 @@
 #include "core/html/focus.h"
 #include "core/css/media_query_list.h"
 #include "core/dom/page_visibility.h"
+#include "core/intersection_observer/intersection_observer.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
@@ -63,16 +64,22 @@ static int    g_ready;
  *
  * STEP 7 IS NO LONGER ONE OF THEM. Its producer — §6.6's focus model, and the FocusEvent its focusing steps
  * fire — landed, this assertion fired at exactly this place in the order, and the step it named was built:
- * core/html/autofocus.c is HTML §6.6.7, and UR_AUTO below is the step that flushes it. */
+ * core/html/autofocus.c is HTML §6.6.7, and UR_AUTO below is the step that flushes it. NEITHER IS STEP 19:
+ * Intersection Observer landed, the DCHECK that named it fired here, and UR_INTERSECT below is that step. */
 
 /* Does this document give §8.1.7.3 anything to do? Step 4 removes a doc "for which the user agent believes
    updating the rendering would have no visible effect AND whose map of animation frame callbacks is empty" —
    a document that has never been revealed has a visible effect pending by definition, so the two clauses are
-   these two. Asked of the doc's OWN realm, because both pieces of state are per-Window. */
+   these two. Asked of the doc's OWN realm, because both pieces of state are per-Window.
+   INTERSECTION OBSERVER §3.4.2 ADDS ONE TERM TO THIS STEP BY NAME, and it is not decoration: it says the
+   "Unnecessary rendering" step "should be modified to add an additional requirement for skipping the rendering
+   update — the document does NOT HAVE PENDING INITIAL IntersectionObserver TARGETS". Without it a document
+   whose only pending work is an observation is removed here, no frame is ever queued for it, and step 19 is
+   written and UNREACHABLE — which is what CSSOM VIEW §4.2's own term one line up already exists to prevent. */
 static bool doc_has_rendering_work(JSContext *docctx)
 {
     return page_reveal_pending(docctx) || animation_frame_pending(docctx)
-        || media_query_list_pending(docctx);
+        || media_query_list_pending(docctx) || intersection_observer_pending(docctx);
 }
 
 /* Steps 2-5, as ONE walk, and the fusion is the spec's rather than a shortcut: step 2 collects the fully
@@ -145,9 +152,13 @@ static JSValue rendering_collect_docs(JSContext *ctx)
                  "focused area is no longer a focusable area, run HTML §6.6.4's focusing steps for doc's "      \
                  "viewport — which fires `blur` and `focusout` down the old focus chain and `focus` and "       \
                  "`focusin` up the new one), one document per rest")                                           \
-    X(UR_PAINT,  "HTML §8.1.7.3 update the rendering steps 19-23 (run the update intersection observations "    \
-                 "steps; record rendering time; mark paint timing; update the rendering or user interface; "    \
-                 "process top layer removals)")
+    X(UR_INTERSECT, "HTML §8.1.7.3 update the rendering step 19 (for each doc: run the UPDATE INTERSECTION "   \
+                 "OBSERVATIONS steps — INTERSECTION OBSERVER §3.2.10 computes each target's intersection "     \
+                 "rectangle, decides its threshold index and QUEUES an IntersectionObserverEntry, which "      \
+                 "QUEUES A TASK on the IntersectionObserver task source; the callbacks run from that task and " \
+                 "NOT from this step), one OBSERVER per rest")                                                 \
+    X(UR_PAINT,  "HTML §8.1.7.3 update the rendering steps 20-23 (record rendering time; mark paint timing; "  \
+                 "update the rendering or user interface; process top layer removals)")
 enum { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const UPDATE_RENDERING_STEPS[] = { UPDATE_RENDERING_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -163,6 +174,8 @@ typedef struct JSUpdateRendering {
     uint32_t  ndocs, i;     /* the cursor every "for each doc of docs" step shares */
     uint32_t  nframe, k;    /* §8.9 step 2's key snapshot for the current doc, and step 3's cursor */
     uint32_t  nmedia, m;    /* §4.2's collection snapshot for the current doc, and its cursor */
+    uint32_t  nobs, ob;     /* §3.2.10 step 1's observer list for the current doc, and step 2's cursor */
+    uint8_t   obsnapped;    /* that list has been counted for docs[i] */
     uint8_t   fphase;       /* the fire request steps 6, 8 and 10 park on */
     /* WHICH OF STEP 8's TWO FIRES docs[i] is on — CSSOM VIEW §13.1 is two ordered conditions over two
        different targets, the Window and its VisualViewport, and each fire runs the page's listeners. So it is a
@@ -295,19 +308,17 @@ static void step_18(JSContext *docctx)
                 "written");
 }
 
-/* Steps 19 to 23. Step 19 is the one it is easiest to get backwards and the one SPEC_STEPS.md flags: the
-   update intersection observations steps run NO author callbacks — they compute geometry, QUEUE an
-   IntersectionObserverEntry and QUEUE A TASK on the IntersectionObserver task source, and the observer's
-   callback is invoked from THAT later task (§3.2.5 step 3.5). That is the opposite of ResizeObserver in step
-   16, and swapping them changes observable ordering. */
-static void steps_19_to_23(JSContext *docctx)
+/* STEP 19 IS WRITTEN — it is UR_INTERSECT, below, and its assertion is GONE rather than relaxed. It named
+   INTERSECTION OBSERVER "§3.2.2" for the update intersection observations steps, and §3.2.2 is OBSERVE A
+   TARGET ELEMENT; the steps it described are §3.2.10, and they are now run there. The thing it was easiest to
+   get backwards is the part that survived the check: those steps run NO author callbacks — they compute
+   geometry, QUEUE an IntersectionObserverEntry (§3.2.6) and QUEUE A TASK on the IntersectionObserver task
+   source (§3.2.4), and the observer's callback is invoked from THAT later task (§3.2.5 step 3.5). That is the
+   opposite of ResizeObserver in step 16, and swapping them changes observable ordering.
+
+   Steps 20 to 23. */
+static void steps_20_to_23(JSContext *docctx)
 {
-    realm_awaits(docctx, "IntersectionObserver",
-                "update the rendering step 19 runs the UPDATE INTERSECTION OBSERVATIONS steps (INTERSECTION "
-                "OBSERVER §3.2.2): compute each target's intersection rectangle, decide its threshold index "
-                "and QUEUE an IntersectionObserverEntry, which QUEUES A TASK on the IntersectionObserver task "
-                "source — the callbacks run from that task and NOT from this step. This build now has "
-                "IntersectionObserver, so step 19 must be written that way round");
     realm_awaits(docctx, "PerformanceObserver",
                 "update the rendering steps 20 and 21 RECORD RENDERING TIME and MARK PAINT TIMING, which queue "
                 "performance entries — this build now has a performance timeline to queue them on, so both "
@@ -431,8 +442,8 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
            in every JSValue slot, and the report's teardown frees exactly what it holds. */
         report_exception_work_start(&s->rep);
         s->reporting = 0;
-        s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = 0;
-        s->fphase = s->cphase = s->snapped = s->msnapped = 0;
+        s->i = s->ndocs = s->nframe = s->k = s->nmedia = s->m = s->nobs = s->ob = 0;
+        s->fphase = s->cphase = s->snapped = s->msnapped = s->obsnapped = 0;
         STEP_GOTO(s->hdr.stage, UR_REVEAL, &s->cphase, &s->fphase, NULL);
         /* STEP 1: frameTimestamp is the event loop's LAST RENDER OPPORTUNITY TIME — the moment the in-parallel
            loop recorded when it decided there was one, not the moment this task happens to run. */
@@ -700,7 +711,8 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
                 for (s->i = 0; s->i < s->ndocs; s->i++)
                     step_18(doc_realm(ctx, s));
                 s->i = 0;
-                STEP_GOTO(s->hdr.stage, UR_PAINT, &s->cphase, &s->fphase, NULL);
+                s->obsnapped = 0;
+                STEP_GOTO(s->hdr.stage, UR_INTERSECT, &s->cphase, &s->fphase, NULL);
                 break;
             }
             docctx = doc_realm(ctx, s);
@@ -719,11 +731,55 @@ static int js_update_rendering_step(JSContext *ctx, void *st, JSValue cb_result,
         }
     }
 
+    if (s->hdr.stage == UR_INTERSECT) {
+        /* STEP 19: "For each doc of docs, run the UPDATE INTERSECTION OBSERVATIONS steps for doc, passing in
+           the relative high resolution time given now and doc's relevant global object as the timestamp."
+           WHAT THE HTML TEXT CALLS `now` IS BOUND NOWHERE IN THIS ALGORITHM — the twenty-three steps bind
+           `frameTimestamp` (step 1, the event loop's last render opportunity time) and
+           `unsafeStyleAndLayoutStartTime` (step 15) and no `now` at all, which is checkable against the
+           standard's own text and is an editorial defect in it rather than a value this engine is failing to
+           produce. `frameTimestamp` is the moment passed: it is the one frame moment the algorithm binds and
+           the one step 14 passes to the animation frame callbacks, so an entry's `time` and a rAF callback's
+           argument name the same frame — which is what a bundle that measures both expects.
+           THE CONVERSION IS NOT MADE HERE. §2.3 makes an entry's `time` relative to the time origin of "the
+           global object associated with the IntersectionObserver INSTANCE", which is the observer's own realm
+           and not `doc`'s — those differ for the ordinary case of an implicit-root observer constructed inside
+           an iframe, whose root is the top-level browsing context's document. So the UNSAFE moment is handed
+           over and §3.2.6 converts it against the realm that owns the entry.
+           ONE OBSERVER PER REST, and not because author code runs — these steps run none, which is the whole
+           point of the stage sitting here and not inside step 16's shape. It is because the walk is O(the
+           page's observers x their targets) and every one of those is geometry: a machine that walks a
+           structure of the PAGE'S SIZE has to be able to rest, and step 2 is the granularity §3.2.10 itself
+           iterates at. */
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        for (;;) {
+            if (s->i >= s->ndocs) {
+                s->i = 0;
+                STEP_GOTO(s->hdr.stage, UR_PAINT, &s->cphase, &s->fphase, NULL);
+                break;
+            }
+            docctx = doc_realm(ctx, s);
+            if (!s->obsnapped) {
+                s->nobs = intersection_observer_count(docctx);
+                s->ob = 0;
+                s->obsnapped = 1;
+            }
+            if (s->ob >= s->nobs) {
+                s->obsnapped = 0;
+                s->i++;
+                continue;
+            }
+            intersection_observer_update(docctx, s->ob++, s->frame_ts);
+            return JS_STEP_YIELD;
+        }
+    }
+
     DCHECK(s->hdr.stage == UR_PAINT,
            "update the rendering resumed into a stage §8.1.7.3 does not have");
-    /* STEPS 19-23 */
+    /* STEPS 20-23 */
     for (s->i = 0; s->i < s->ndocs; s->i++)
-        steps_19_to_23(doc_realm(ctx, s));
+        steps_20_to_23(doc_realm(ctx, s));
     JS_FreeValue(ctx, cb_result);
     return JS_STEP_DONE;
 }

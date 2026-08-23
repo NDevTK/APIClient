@@ -93,6 +93,13 @@ bool document_fully_active(JSContext *ctx);
    exactly this object out of the child's realm — the two documents are one agent, so it is a pointer and not
    a message. */
 JSValueConst document_object(JSContext *ctx);
+/* SELECTION API §4.1's `Selection? getSelection()` FOR ONE DOCUMENT — "the selection associated with this if
+   this has an associated browsing context, and … null otherwise". The receiver names the document, because a
+   realm holds several (a createHTMLDocument, a DOMParser parse, an XHR responseXML) and only its ACTIVE one
+   has a browsing context. §2's selection is per DOCUMENT, so it is this record's field and not a realm value;
+   the algorithm and the object are core/dom/selection.c's. `doc` must be a Document wrapper — a receiver that
+   is not one is Web IDL §3.7.5's TypeError, thrown here. OWNED. */
+JSValue document_selection(JSContext *ctx, JSValueConst doc);
 /* HTML §8.1.5.1's API BASE URL of this realm — "return the current BASE URL of window's associated Document",
    which HTML §2.4.2's parse a URL resolves every relative reference against. It is §2.4.3's DOCUMENT BASE URL
    and NOT the document's address: this header used to say the address, the code used to return it, and both

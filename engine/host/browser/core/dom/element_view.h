@@ -20,12 +20,17 @@
  *   them css-sizing §5's border box and CSS 2 §8.1's PADDING and BORDER EDGES. A POSITION is a coordinate in
  *   another box's space, so it needs §9.4.1's flow layout to PLACE a box inside the containing block §10.1
  *   gives it — the extent chain answers a rectangle's width and says nothing about where anything sits — and
- *   core/layout/flow_position.h is the component that owns it. That component answers exactly ONE box today,
- *   the ROOT ELEMENT, which is §10.1's own first case (its containing block is the initial containing block,
- *   "anchored at the canvas origin") reduced by §9.4.1's two placement rules and §8.3.1's "margins of the root
- *   element's box do not collapse" to the root's own two used margins. Every other box crashes there naming
- *   its own section, and the non-root block-level one names the SAME in-flow child walk §10.6.3's
- *   content-based height is waiting on — one subproblem, two members.
+ *   core/layout/flow_position.h is the component that owns it. WHAT STOOD HERE SAID THAT COMPONENT "ANSWERS
+ *   EXACTLY ONE BOX TODAY, THE ROOT ELEMENT", and that has been false since the in-flow child walk landed: the
+ *   root is §10.1's first case (its containing block is the initial containing block, "anchored at the canvas
+ *   origin", reduced by §9.4.1's two placement rules and §8.3.1's "margins of the root element's box do not
+ *   collapse" to the root's own two used margins) and it is the BASE CASE of an induction that now runs —
+ *   every in-flow block-level box is placed at its containing block's origin plus §8.1's leading border and
+ *   padding plus core/layout/block_flow.h's stack of the preceding siblings' used heights with §8.3.1's
+ *   collapsing between them. That was the one subproblem §10.6.3's content-based height was waiting on too,
+ *   and building it built both. What still crashes there is named per box and not per component: a float is
+ *   §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, and an inline box is
+ *   §9.4.2's line boxes.
  *   SO §6 SPLITS EXACTLY THERE, and each member's own text says which side it is on. `clientTop`/`clientLeft`
  *   are neither — §6 defines them as a COMPUTED VALUE, core/css/css_computed_value.h's `border-*-width`, and
  *   not as a geometry at all. `clientWidth`/`clientHeight` ask for "the unscaled width of the PADDING EDGE",
@@ -37,9 +42,14 @@
  *   a position, which is the one way this component could go wrong now that it has one.
  *   THE EXTENTS ARE NO LONGER BLOCKED ON THE SAME THING THE POSITIONS ARE, and that is what separated the two
  *   queues: a `width: auto` box is CSS 2.1 §10.3.3's constraint equation, which used_value.c now solves against
- *   §10.1's containing block down to the ICB at its base, so `clientWidth` answers for an ordinary box. What a
- *   POSITION still needs is §9.4 placing each box inside that rectangle — a different section, and the one
- *   every member below that crashes is waiting on.
+ *   §10.1's containing block down to the ICB at its base, so `clientWidth` answers for an ordinary box. THE
+ *   POSITIONS HAVE SINCE CAUGHT UP for the ordinary box as well (§9.4.1's stacking, above), which is why the
+ *   §6 members that still crash here name a rectangle over a SUBTREE or a term the cascade never carried
+ *   rather than "there is no layout": `scrollWidth` wants the right-most margin edge of every descendant's box,
+ *   and `getClientRects()` wants step 3's transforms APPLIED. CSSOM VIEW §7's offset family is the measure of
+ *   how far that is: core/html/html_element_view.c reports `offsetWidth` and `offsetTop` for an ordinary box
+ *   out of these same two components, because §7's own text says UNSCALED and IGNORING TRANSFORMS where §6's
+ *   step 3 says apply them.
  *
  * THOSE ARE TWO DIFFERENT ANSWERS AND THE SPEC ASKS THEM SEPARATELY, which is the whole reason this component
  * can answer anything at all. §6's algorithms use box EXISTENCE as a gate and then, in several branches, route
@@ -138,6 +148,7 @@
 #include <stdbool.h>
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
+#include "core/css/css_length.h"
 
 /* Declared once per AGENT — the two settable attributes' setter ids. Called from element_init, so no host has a
    line to remember. */
@@ -166,5 +177,49 @@ bool element_view_has_box(const lxb_dom_node_t *n);
    `[NewObject]` in the relevant realm of `this`, which for an element is the realm of its node document, so a
    child navigable's rectangles are instances of the CHILD's DOMRect however the call was written. */
 JSValue element_view_client_rects(lxb_dom_element_t *el);
+
+/* §6's GET THE BOUNDING BOX AS THE INTERNAL ALGORITHM, answering in css_length.h's vocabulary rather than as a
+ * DOMRect — `out` is filled with x, y, width and height in CLIENT COORDINATES, in that order.
+ *
+ * IT IS A SECOND ENTRY AND NOT A SECOND ANSWER, and the reason it exists is the reason `CssPx` exists. A caller
+ * that must COMPARE two rectangles has to do it on the EXAMPLES, in C, with the environment facts still
+ * attached: Intersection Observer §3.2.10 takes a rectangle's area (step 9), intersects two of them (its step 8
+ * calls §3.2.7) and divides one area by another (step 12), and every one of those is a C comparison that must
+ * not fork and must not lose the domain either. A rectangle handed over as a DOMRect has already crossed
+ * viewport.h's seam — its numbers are the page's, and asking C for `rect.width` back would either branch on
+ * unknown external input or throw the fact set away. So the rectangle stops here for an engine-internal caller
+ * and is minted only where it becomes an entry's `boundingClientRect`.
+ *
+ * The FOUR NUMBERS are the same derivation `getBoundingClientRect` reports; see element_view.c for which of §6's
+ * steps each road takes and which of them crash. `el` must be an element. */
+void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4]);
+
+/* §6's CONVERSION OF A REAL LENGTH TO THE `long` ITS IDL DECLARES — the rounding derived in element_view.c and
+   the mint through viewport.h's one seam, in one function because CSSOM VIEW §7's `offsetTop`, `offsetLeft`,
+   `offsetWidth` and `offsetHeight` report the same kind of value through the same type. The rule is
+   ROUND-TO-NEAREST with ties going UP (`floor(px + 0.5)`), for the reason element_view.c derives at length: the
+   members are MEASUREMENTS, and nearest is the only one of the three conversions whose error is bounded by half
+   a CSS pixel in both directions.
+   THE TIE-BREAK IS OBSERVABLE HERE AND IS NOT IN §6, which is why it is stated rather than asserted away. §6's
+   six extents are distances between parallel edges and cannot be negative, so round-half-up and
+   round-half-away-from-zero are the same function on every value they can take — `ev_length_long` asserts
+   exactly that. §7's `offsetTop` CAN be negative (a box above its offsetParent's top padding edge, which a
+   negative margin puts there), so the two separate at −2.5 and one of them has to be chosen: it is this one,
+   because it is the rule this engine already had and a second rounding rule for the same question is the
+   defect §per-realm names — one fact answered from two places.
+   `px` carries the environment fact it derives from (css_length.h) and the domain rides the answer. */
+JSValue element_view_length_long(JSContext *ctx, CssPx px);
+
+/* §6's step-3 FRAGMENT COUNT — how many box fragments an element's principal box generates, which is one
+   question and two crashes. §6's `getClientRects()` returns one DOMRect per fragment; §7's `offsetWidth` and
+   `offsetHeight` return "the unscaled width of the axis-aligned bounding box of the border boxes of ALL
+   FRAGMENTS generated by the element's principal box". Both are blocked by the same two absences and each
+   names its own section's text, so the DERIVATION is stated once here and the DFAILs stay with their callers. */
+typedef enum {
+    ELEMENT_VIEW_FRAGMENTS_ONE = 0,   /* the principal box is not split: one border box, one rectangle */
+    ELEMENT_VIEW_FRAGMENTS_LINE_BOXES,/* an inline box: one fragment per line box of §9.4.2's inline context */
+    ELEMENT_VIEW_FRAGMENTS_TABLE      /* `table`/`inline-table`: §6's own table-box-plus-caption-box pair */
+} ElementViewFragments;
+ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el);
 
 #endif

@@ -48,6 +48,7 @@
 #include "core/frame/bar_prop.h"
 #include "core/html/html_iframe.h"
 #include "core/html/focus.h"
+#include "core/dom/selection.h"
 #include "core/frame/window_proxy.h"
 #include "core/events/event_target.h"
 #include "core/dom/collections.h"
@@ -598,6 +599,10 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_method(ctx, g, "close", 0, g_id_close);
     /* §6.6.6's `Window.focus()` — its OWN algorithm, installed by the component that owns §6.6.4's steps. */
     focus_install_window_members(ctx, g);
+    /* Selection API §4.2's `Selection? getSelection()`, installed by the component that owns it for the same
+       reason. §4.2 defines it as §4.1's member invoked on `this's Window.document`, so it is not a second
+       algorithm and the two cannot answer differently. */
+    selection_install_window_members(ctx, g);
     idl_install_method(ctx, g, "blur",  0, g_id_blur);
     idl_install_method(ctx, g, "stop",  0, g_id_stop);
 

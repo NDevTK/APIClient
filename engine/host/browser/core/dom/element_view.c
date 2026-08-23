@@ -161,16 +161,31 @@ static JSValue ev_long(JSContext *ctx, double v)
    viewport's domain (css_length.h) — `document.body.clientWidth < 768` is the same responsive gate as
    `innerWidth < 768` and a bare integer there deletes the mobile arm. §6's `long` is the EXAMPLE the concolic
    carries, minted through viewport.h's one seam, which hands back the plain integer for a box whose size the
-   author's own declarations determined. */
+   author's own declarations determined.
+   THE CONVERSION IS EXPORTED AND THE NON-NEGATIVITY IS NOT, which is the whole of the split between the two
+   functions below. The rounding rule and the mint are the same question §7's four offset members ask, so they
+   are stated once; the assertion that the tie-break cannot be reached belongs to §6's own six extents, which
+   are distances between parallel edges of one box. §7's `offsetTop` is a COORDINATE DIFFERENCE and can be
+   negative, so it takes the shared conversion without this assert and the tie-break becomes a stated choice
+   (element_view.h) rather than an unreachable one. */
+JSValue element_view_length_long(JSContext *ctx, CssPx px)
+{
+    DCHECK(isfinite(px.px),
+           "a CSSOM VIEW length member declared `long` was handed a length that is not FINITE — every operand "
+           "of every used value in this engine is a finite number of CSS pixels, so an infinity or a NaN here "
+           "is a derivation that lost an operand rather than a value to convert");
+    return viewport_env_derived(px, ev_long(ctx, floor(px.px + 0.5)));
+}
+
 static JSValue ev_length_long(JSContext *ctx, CssPx px)
 {
-    DCHECK(isfinite(px.px) && px.px >= 0.0,
-           "a CSSOM VIEW §6 length member was handed a length that is not a NON-NEGATIVE FINITE one. A padding "
-           "edge is a content box floored at zero (css-sizing §5) plus two paddings CSS 2.1 §8.4 forbids to be "
-           "negative, and a border width is a non-negative <length> css-values §6 snapped towards zero, so a "
-           "negative or non-finite one is a derivation that lost an operand — and it would also make this "
-           "conversion's tie-break observable, which the derivation above says it is not");
-    return viewport_env_derived(px, ev_long(ctx, floor(px.px + 0.5)));
+    DCHECK(px.px >= 0.0,
+           "a CSSOM VIEW §6 length member was handed a NEGATIVE length. A padding edge is a content box floored "
+           "at zero (css-sizing §5) plus two paddings CSS 2.1 §8.4 forbids to be negative, and a border width "
+           "is a non-negative <length> css-values §6 snapped towards zero, so a negative one is a derivation "
+           "that lost an operand — and it would also make this conversion's tie-break observable, which the "
+           "derivation above says it is not for THIS section's members");
+    return element_view_length_long(ctx, px);
 }
 
 /* A `long` member that reports the VIEWPORT: the modelled geometry as the EXAMPLE of a concolic, minted
@@ -511,7 +526,7 @@ static JSValue ev_client_px(JSContext *ctx, CssPx v)
    (core/layout/flow_position.h), and the two are asked in that order because the extent is the position's own
    operand: §9.4.1 stacks a box below its preceding siblings' heights, so a component that cannot measure a box
    cannot place the next one either, and the crash the extent raises is the earlier subproblem. */
-static JSValue ev_border_area(const EvTarget *t)
+static void ev_border_area_px(const EvTarget *t, CssPx out[4])
 {
     lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
     CssPx w = used_value_border_edge_px(el, false);
@@ -533,8 +548,21 @@ static JSValue ev_border_area(const EvTarget *t)
           "ancestor's");
     /* A RELEASE BUILD CANNOT BUILD THE COMPUTED VALUE, so it answers the identity transform — the case this
        engine does model, exactly as every other §6 member here answers past its own DFAIL. */
-    return dom_rect_new_values(t->rctx, ev_client_px(t->rctx, x), ev_client_px(t->rctx, y),
-                               ev_client_px(t->rctx, w), ev_client_px(t->rctx, h));
+    out[0] = x; out[1] = y; out[2] = w; out[3] = h;
+}
+
+/* THE SAME RECTANGLE, MINTED. The four numbers stop here in css_length.h's vocabulary and cross to the page
+   through viewport.h's one seam, which is why the derivation above answers a `CssPx[4]` and this answers a
+   DOMRect: a caller that has to COMPARE two rectangles (Intersection Observer §3.2.10 steps 9 to 12) must do it
+   on the examples, in C, with the environment facts still attached, and a caller that has to hand one to the
+   page must mint it. Two callers, one derivation, no second answer. */
+static JSValue ev_border_area(const EvTarget *t)
+{
+    CssPx b[4];
+
+    ev_border_area_px(t, b);
+    return dom_rect_new_values(t->rctx, ev_client_px(t->rctx, b[0]), ev_client_px(t->rctx, b[1]),
+                               ev_client_px(t->rctx, b[2]), ev_client_px(t->rctx, b[3]));
 }
 
 /* §6's step 2's own question — "if the element HAS AN ASSOCIATED SVG LAYOUT BOX". The OUTERMOST `svg` element
@@ -555,16 +583,29 @@ static bool ev_has_svg_layout_box(const lxb_dom_node_t *n)
    `table` or `inline-table` is step 3's own second constraint: "include both the table box and the caption box,
    if any, but not the anonymous container box". A fragmentation context would be a third, and there is none —
    this engine has no multicol and no pages, so the principal box of every other element is one fragment and
-   that is a derivation rather than an assumption. */
-static void ev_require_single_fragment(const EvTarget *t)
+   that is a derivation rather than an assumption.
+   IT IS EXPORTED BECAUSE §7's `offsetWidth`/`offsetHeight` ASK THE SAME QUESTION — "all fragments generated by
+   the element's principal box" — and would otherwise carry a second copy of this derivation, free to disagree
+   with this one about which boxes are split. The two sections' CRASHES stay apart, because their texts do. */
+ElementViewFragments element_view_fragment_kind(lxb_dom_element_t *el)
 {
-    char *d = css_computed_value(lxb_dom_interface_element(t->node), "display");
-    bool inl = d != NULL && strcmp(d, "inline") == 0;
-    bool table = d != NULL && (strcmp(d, "table") == 0 || strcmp(d, "inline-table") == 0);
+    char *d = css_computed_value(el, "display");
+    bool inl, table;
 
     DCHECK(d != NULL, "the cascade produced no computed `display` for an element");
+    inl = strcmp(d, "inline") == 0;
+    table = strcmp(d, "table") == 0 || strcmp(d, "inline-table") == 0;
     free(d);
-    if (inl)
+    if (inl) return ELEMENT_VIEW_FRAGMENTS_LINE_BOXES;
+    if (table) return ELEMENT_VIEW_FRAGMENTS_TABLE;
+    return ELEMENT_VIEW_FRAGMENTS_ONE;
+}
+
+static void ev_require_single_fragment(const EvTarget *t)
+{
+    ElementViewFragments kind = element_view_fragment_kind(lxb_dom_interface_element(t->node));
+
+    if (kind == ELEMENT_VIEW_FRAGMENTS_LINE_BOXES)
         DFAIL("CSSOM VIEW §6's getClientRects() step 3 returns one DOMRect PER BOX FRAGMENT, and an INLINE box "
               "has one fragment per LINE BOX it spans — which is the whole reason this member answers a list "
               "rather than a rectangle. CSS 2 §9.4.2 'Inline formatting contexts' is what produces them: "
@@ -574,7 +615,7 @@ static void ev_require_single_fragment(const EvTarget *t)
               "defines — which is the same capability §9's Range members need for a Text node's rectangles and "
               "the same one CSS 2 §10.6.3's line-box arm needs for a content-based height. BUILD the font "
               "metrics, then §9.4.2's line boxes over them");
-    if (table)
+    if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
         DFAIL("CSSOM VIEW §6's getClientRects() step 3's SECOND CONSTRAINT: an element whose computed `display` "
               "is `table` or `inline-table` contributes 'both the TABLE BOX and the CAPTION BOX, if any, but "
               "not the anonymous container box' — two fragments out of a box structure CSS 2 §17.2's anonymous "
@@ -629,6 +670,36 @@ JSValue element_view_client_rects(lxb_dom_element_t *el)
     DCHECK(el != NULL, "§6's getClientRects() was invoked as an internal algorithm with no element");
     ev_target_of_element(el, &t);
     return ev_client_rects(t.rctx, &t);
+}
+
+/* §6's GET THE BOUNDING BOX, ANSWERED IN css_length.h's VOCABULARY — the entry a caller takes when the
+   rectangle is an OPERAND rather than a result. See element_view.h.
+   IT IS THE SAME FOUR STEPS `ev_bounding_rect` performs and it takes the same two roads, which is the only way
+   this can be a second ENTRY without being a second ANSWER: step 1's list is empty exactly when the element has
+   no associated box, so step 2's "a DOMRect whose x, y, width and height members are zero" is reached by the
+   one predicate element_view.h states and not by counting a list that was built to be counted; and a list of
+   one is what steps 3 and 4 both answer with, which is the derivation `ev_bounding_rect` writes out. What is
+   deliberately NOT reachable here is that function's multi-fragment crash — the two gates below fire first, for
+   the only two ways §6 says a list of more than one arises, so a caller of this entry meets the earlier
+   subproblem by its own name rather than the later one by a count. */
+void element_view_bounding_box_px(lxb_dom_element_t *el, CssPx out[4])
+{
+    EvTarget t;
+
+    DCHECK(el != NULL, "§6's get-the-bounding-box was invoked as an internal algorithm with no element");
+    ev_target_of_element(el, &t);
+    if (!t.has_box) {                       /* steps 1 and 2 */
+        out[0] = out[1] = out[2] = out[3] = css_px(0.0);
+        return;
+    }
+    if (ev_has_svg_layout_box(t.node))      /* step 2 of getClientRects, which step 1 called */
+        DFAIL("CSSOM VIEW §6's getClientRects() step 2: an element with an associated SVG LAYOUT BOX answers "
+              "with a single DOMRect describing 'the bounding box of the element AS DEFINED BY THE SVG "
+              "SPECIFICATION', which is SVG 2's own object bounding box and not a special case of CSS 2 §8.1's "
+              "border box. This engine lays out no SVG at all. BUILD SVG 2's bounding box beside the CSS one, "
+              "in its own component");
+    ev_require_single_fragment(&t);
+    ev_border_area_px(&t, out);
 }
 
 /* §6's GET THE BOUNDING BOX steps. Step 1 is the call above; step 2 is the answer for an element that generates

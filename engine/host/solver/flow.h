@@ -196,7 +196,7 @@ typedef struct Flow {
        there was a `perform_doc` beside the token on the flow saying the same thing, and this is the field that
        already said it. Parallel to `dyn` for the reason
        `dyn_cand` is — a field added to the queue is an obligation at every clone, free and finish site, and the
-       four arrays are allocated, copied and freed together so one that got a field the others did not cannot
+       seven arrays are allocated, copied and freed together so one that got a field the others did not cannot
        stay unnoticed. */
     uint32_t *dyn_doc;
     /* AND THE RENDEZVOUS TOKEN OF THE PEER PARKED ON IT, for the one kind of row that OWES AN ANSWER. A
@@ -217,6 +217,31 @@ typedef struct Flow {
        simply produces no Document. Kept as a parallel array so the page-script assert stays fully armed inside a
        candidate flow, which still loads real chunks. */
     unsigned char *dyn_cand;
+    /* AND WHICH OF HTML §8.1.4.4 "Calling scripts"'s TWO ALGORITHMS RUNS IT (a ScriptType, core/loader/
+       document_scripts.h). §4.12.1.1 "Processing model"'s "execute the script element" ends in a switch on the
+       ELEMENT's type — "classic" runs the classic script, "module" runs the module script — and a queue with no
+       column for it could only ever answer one of the two. The consequence was not a subtlety: three separate
+       seams (core/frame/navigable.c's child-navigable Document, engine.c's engine_join_document, and
+       core/html/html_script.c's INJECTED element) each aborted outright on `<script type=module>` rather than
+       compile a module as a classic program, which would have come back a SyntaxError from a parser that is
+       perfectly correct. This column is what those three asserts were asking to exist.
+       CLASSIC IS A STATEMENT ABOUT A ROW, NOT A DEFAULT: a `setTimeout` string, a `javascript:` URL, a lazy
+       chunk and a cross-agent operation's program are classic scripts because that is what §8.1.4.4 evaluates
+       them as. Only a row an ELEMENT put there can say MODULE, which is why the two entry points that take one
+       (engine_queue_element_script / engine_queue_docscript_url) are the only ones with the parameter. */
+    unsigned char *dyn_type;
+    /* AND THE ADDRESS ITS BYTES CAME FROM — HTML §8.1.4.2 "Fetching scripts": "let script be the result of
+       creating a classic script given sourceText, settingsObject, RESPONSE'S URL, options, mutedErrors, and
+       url". NULL for an INLINE row, whose base URL §4.12.1.1 states as "el's node document's document base
+       URL" and which the compile therefore reads from the document instead.
+       IT CANNOT BE THE BODY COLUMN, because that column is where the address LIVED and the reply DESTROYS it: a
+       DYN_SCRIPT_SRC row holds its URL in `dyn` only until flow_drain_pending replaces it with the source text.
+       Everything the address decides is needed after that moment — a nested `import('./chunk.js')` inside a
+       bundle served from `/assets/app.js` resolves to `/assets/chunk.js`, and for a MODULE the address is
+       additionally the module map KEY, so two `<script type=module src>` of one document named by their
+       document rather than by themselves are ONE module and the second evaluates nothing. Parallel to
+       `dyn_cand` for the reason stated there — the seven arrays are allocated, copied and freed together. */
+    char **dyn_url;
     /* AND WHETHER EACH ROW IS A TASK OR THE SYNCHRONOUS TAIL OF THE PROGRAM THAT CAUSED IT (a DynPos,
        engine.h). The position a row was queued at is not consumed by the insertion — it is a fact the row
        KEEPS, because the MICROTASK CHECKPOINT is placed against it. HTML §8.1.4.4 "Calling scripts" performs
@@ -227,7 +252,7 @@ typedef struct Flow {
        row is a task and the checkpoint falls BEFORE it. Position alone cannot say which: an immediate row and
        an appended one both land at the cursor when the queue was empty, so without this column the two are the
        same row and one of the two orderings is silently wrong. Parallel to `dyn_cand` for the reason stated
-       there — the five arrays are allocated, copied and freed together. */
+       there — the seven arrays are allocated, copied and freed together. */
     unsigned char *dyn_pos;
     void *delta;           /* this flow's isolated HEAP COW delta (CowDelta*), applied while running */
     void *dom; int dom_n, dom_cap;   /* this flow's isolated DOM COW delta HEAD buffer (dom_cow), swapped with the
@@ -396,6 +421,20 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
  *     running left every job of it holding a dangling key the next §7.5.10 walk would compare against.
  *   - WHETHER IT IS A TASK, which is not a label: the event loop performs a microtask checkpoint between one
  *     task and the next, so a task may not run while this flow still holds a microtask.
+ *   - ITS HANDLE — the name the RUNTIME issued at the enqueue (quickjs.h's JSTaskHandle), which is the only
+ *     thing that can find this record again. HTML's toggle task trackers (§4.11.4 "The dialog element" step 1
+ *     of queue a dialog toggle event task: "Remove element's dialog toggle task tracker's task from its task
+ *     queue"; §4.11.1 "The details element" holds the same tracker) coalesce N transitions in one turn into
+ *     ONE event by taking the still-queued task back off the queue, and a queue whose entries have no identity
+ *     cannot obey that sentence. HELD AS A JS NUMBER, which is exact for every handle a runtime can issue:
+ *     js_task_handle_new DCHECKs the monotone counter never reaches 2^53 precisely because the OTHER end of
+ *     this name is an element's tracker slot, and a slot is a JS value. So the record and the tracker speak
+ *     one representation with no conversion between them that could round. The alternatives were weighed and
+ *     are worse for reasons that are not taste: a STRING allocates at every push and compares by content at
+ *     every walk, for a value that is an integer; a TWO-WORD PAIR adds a split/join rule to every reader of
+ *     the record to cover a range the runtime asserts is unreachable — a rule with no reachable input is a
+ *     rule nothing can exercise. JS_TASK_HANDLE_NONE is the never-issued value and is what a record pushed by
+ *     something other than the runtime's enqueue path honestly carries; it names nothing, so nothing finds it.
  *   - WHERE THE WORK CAME FROM. A job the replaying program causes is regenerated by the replay; a job caused
  *     by something OUTSIDE it is not, and the only such job in this engine is the one a routed cross-document
  *     delivery becomes (engine.c's flow_deliver, which brackets the conversion with flow_job_external_begin /
@@ -408,8 +447,11 @@ int  flow_job_pending(const Flow *f);
 /* DOES IT STILL HOLD A MICROTASK? The checkpoint is over exactly when it does not — a task on the queue is the
    NEXT turn of the event loop and not part of this checkpoint, which is the same distinction the pick makes. */
 int  flow_job_microtask(const Flow *f);
-/* APPEND, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues. */
-void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task);
+/* APPEND, with `argv` dup'd into the record. `task` picks which of HTML §8.1.7 "Event loops"' two queues.
+   `handle` is the name the runtime issued for this callback (see the record's HANDLE bullet above), carried
+   into the record because the host that TOOK the job is then the only thing that can find it again. */
+void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
+                   JSTaskHandle handle);
 /* THE PICK, WHICH IS HTML §8.1.7.3 "Processing model"'s MICROTASK CHECKPOINT AND NOT A FIFO POP — the
    oldest microtask if there is one, else the oldest task. Removed from the queue and returned OWNED; a plain
    FIFO ran `setTimeout(f, 0)` in the middle of a promise chain, which is the one ordering the event loop
@@ -422,6 +464,17 @@ JSValue flow_job_run(JSContext *ctx, JSValueConst entry);
    enqueuing realm is `realm`, WITHOUT running it.
    Returns how many went. */
 int  flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm);
+/* THE OTHER REMOVAL — BY NAME rather than by document, for ONE flow: take the job called `handle` off this
+   flow's queue WITHOUT running it, and answer whether one was there (0 or 1). This is quickjs.h's
+   JSJobRemoveHook for a host that took ownership of the job, and the one it exists for is HTML §4.11.4 "The
+   dialog element"'s "Remove element's dialog toggle task tracker's task from its task queue".
+   FINDING NOTHING IS AN ORDINARY ANSWER and the reason the name is a monotone integer nobody re-issues: the
+   task may already have run, may be the one running right now, or may have gone with its document — a handle
+   outlives what it names, so 0 is what "already run" means and is never an error.
+   IT IS ASKED OF ONE FLOW, AND THAT IS A DESIGN STATEMENT rather than a convenience — see the caller in
+   engine.c: a fork gives each arm its own Array naming the SAME records, so after a branch two flows hold two
+   queued copies of one handle. Each arm's tracker names the copy in its own timeline. */
+int  flow_job_remove(Flow *f, JSTaskHandle handle);
 /* THE ARM'S OWN QUEUE — a new Array naming the parent's RECORDS. The array is per-flow (each arm runs its jobs
    at its own rate under its own delta); the records are shared, because none of them ever changes. */
 JSValue flow_job_fork(JSContext *ctx, const Flow *parent);
@@ -491,6 +544,21 @@ typedef struct {
     long unrun;        /* members with cpu == 0 — never charged for the thread, or emitted since they last
                           were. flow_pick's own definition of an unrun flow, read here rather than restated. */
     int64_t svc_max;   /* the largest service notch in the frontier — who is actually consuming the thread */
+    /* …AND THE OTHER END OF IT, WHICH IS THE ONLY NUMBER IN THIS STRUCT THAT CAN ANSWER "IS THE AGING TERM
+       MEASURING THIS FLOW OR THE WHOLE FRONTIER". `svc_max` alone reads identically for a single monopolizer on
+       an otherwise-idle frontier and for a frontier every member of which has burned the same thread time, and
+       those take opposite actions: the first is the case the aging term was priced for, the second is one where
+       every member is being charged for work the frontier as a whole did. The FLOOR is what separates them, and
+       it is also the virtual time a from-baseline flow now arrives at (flow.c's flow_arrive_at_virtual_time), so
+       `svc_max - svc_min` is the SPREAD of service the ranking is actually made of.
+       THE THREE WEIGHTS BELOW CANNOT ANSWER IT, which is a correction to what this file claimed. It said of
+       `w_top`/`w_min`/`cand_w_max` that "these three numbers are what will show that" — and they cannot, by the
+       arithmetic of the function they are readings of: raise EVERY member's service by the same amount and all
+       three fall by exactly `delta * FLOW_SERVICE_US * FLOW_AGE_RATE`, so every gap among them is unchanged and
+       the triple is blind to precisely the quantity in question. A claim about a measurement that the
+       measurement cannot make is the stale-DFAIL shape wearing a number, so it is replaced by the row that
+       makes it. */
+    int64_t svc_min;
 
     /* THE @S CANDIDATE SESSIONS, ASKED DIRECTLY, because the first reading of this census had to INFER them
      * and the inference was three fields long: `val_zero` counts members that inherited nothing, `unrun`
@@ -553,9 +621,18 @@ typedef struct {
      * others; `served * FLOW_SERVICE_US * FLOW_AGE_RATE` is a statement about this flow alone, so the depth at
      * which a member sinks does not move with what the rest of the frontier consumed. Ten notches on a frontier
      * whose busiest member has burned 489 is scored on the same scale as 489 on a quiet one. The primitive that
-     * fixes it is already named in this file and already used at the fork — start-time fair queueing's VIRTUAL
-     * TIME, "a continuation of an active flow enters at that flow's virtual time, never at the system's". The
-     * fork uses it; the aging term does not use it at all. These three numbers are what will show that. */
+     * fixes it is start-time fair queueing's VIRTUAL TIME, "a continuation of an active flow enters at that
+     * flow's virtual time, never at the system's".
+     * HALF OF IT IS BUILT AND THE HALF IS THE ENTRY, NOT THE TERM. flow.c's flow_arrive_at_virtual_time applies
+     * SFQ's `max{v(t), F_prev}` to the three from-baseline entries that were placing a newcomer at virtual time
+     * ZERO — ahead of the whole backlog — so a flow can no longer promote the documents and candidate sessions
+     * it CREATES above every member already waiting. What is still absolute is the aging term itself, and the
+     * consequence is at LEVEL-1 rather than here: `engine_top_weight` is this function's value with no frame of
+     * reference, so a document's best flow falls by one point per second of unproductive CPU without bound while
+     * a document that boots today enters at 1.0. Nothing but an EMISSION ever raises a weight, and a document
+     * that cannot win the Level-1 pick cannot emit, so the crossing at `(reward + 1)` seconds is a RATCHET: past
+     * it a mature document is outranked by every page that arrives afterwards, permanently, for as long as the
+     * pool keeps being fed. That is what `svc_min` above is for — the frame of reference, measured. */
     double w_top;         /* flow_best's weight — what holds the front of the queue */
     double w_min;         /* the lowest weight in the frontier — the other end of the same order */
     double cand_w_max;    /* the best weight any @S candidate can offer against `w_top` */

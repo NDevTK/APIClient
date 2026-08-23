@@ -48,6 +48,15 @@ void abstract_range_claim_class(JSClassID cls);
    what makes one flow's `setStart` invisible to a sibling. */
 RangeBounds *abstract_range_of(JSValueConst v);
 
+/* §5.4's "a new StaticRange" REACHED FROM C, with its four boundary-point components already decided. §5.4's
+   own constructor is `new StaticRange(init)` and runs a dictionary conversion before it gets here; an
+   algorithm of another standard that says "a new StaticRange whose start node is …" — Selection API §3's
+   `getComposedRanges()` step 6 is the first — has no dictionary and must not build one to be read back.
+   STEP 1's InvalidNodeTypeError is NOT re-asked: it is a check on the ARGUMENTS the page supplied, and a
+   caller reaching here states boundary points the tree gave it, which this asserts instead. The two nodes are
+   WRAPPERS and are BORROWED. OWNED. */
+JSValue static_range_new(JSContext *ctx, JSValueConst snode, uint32_t soff, JSValueConst enode, uint32_t eoff);
+
 void abstract_range_init(JSContext *ctx);
 /* §5.3's and §5.4's INTERFACE PROTOTYPE OBJECTS for one realm — declared into core/realm.h's list. */
 void abstract_range_install_protos(JSContext *ctx);

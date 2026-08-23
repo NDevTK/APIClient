@@ -1108,7 +1108,7 @@ static void wpt_page_error(const char *msg)
    leak per-<script> let/const bindings between two files the page kept apart. The scheduler BORROWS the arrays
    for the life of the session, so they outlive every statement that builds them and are freed with the run;
    `body` is taken (owned here from this point), `name` is copied, and `type` is HTML §4.12.1's script type —
-   which of §8.1.3.3's two algorithms the scheduler runs this body through. A DOCUMENT test takes it from the
+   which of §8.1.4.4's two algorithms the scheduler runs this body through. A DOCUMENT test takes it from the
    <script> element it came from; everything this runner supplies itself (the prologue, the epilogue, the
    driver's META scripts and a `.any.js` test) is a CLASSIC script, which is a statement about those programs
    rather than a default. */

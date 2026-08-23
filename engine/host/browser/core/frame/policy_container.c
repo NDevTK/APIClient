@@ -39,11 +39,11 @@
  * and was not one; it was naming a question this file had invented. CSP's own §6.7.3.2 decides whether inline
  * content runs by classifying a source list with exactly three tests and IGNORING every other expression, so
  * the real algorithm is total over every policy the web sends. The model those questions are now asked of is
- * core/frame/csp_directive_list.h (§2.2/§2.3) and core/frame/csp_source_list.h (§2.3.1/§6.7.3.2/§6.7.2), and
- * what is left here is HTML's container and the questions asked OF a container: §S's four about inline content
- * and `eval`, and CSP §4.1.2's about a URL — Fetch's main fetch step 7. The last one is here rather than in a
- * file of its own because it is the SAME walk over the same list with a different question per policy, and
- * because §2.2's "a second policy can only narrow" is then stated once. */
+ * core/frame/csp_directive_list.h (§2.2/§2.3) and core/frame/csp_source_list.h (§2.3.1/§6.7.3/§6.7.2), and
+ * what is left here is HTML's container and the questions asked OF a container: §4.2.3's about inline content
+ * of a type, §4.4.1's about string compilation, and CSP §4.1.2's about a URL — Fetch's main fetch step 7. All
+ * three are here rather than in files of their own because they are the SAME walk over the same list with a
+ * different question per policy, and because §2.2's "a second policy can only narrow" is then stated once. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -151,22 +151,6 @@ SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list
     return out;
 }
 
-/* §4.2.3's `type` for one of §S's three INLINE questions. `eval` is not an inline check at all — §4.4.1 asks a
-   source list a different question entirely — so it is not in this mapping and reaching here with it is a bug
-   in the caller rather than a type the standard omits. */
-static CspInlineType inline_type_of(PolicyScriptKind kind)
-{
-    switch (kind) {
-    case POLICY_INLINE_SCRIPT:  return CSP_INLINE_SCRIPT;
-    case POLICY_INLINE_HANDLER: return CSP_INLINE_SCRIPT_ATTRIBUTE;
-    case POLICY_JAVASCRIPT_URL: return CSP_INLINE_NAVIGATION;
-    case POLICY_EVAL:           break;
-    }
-    DFAIL("a script kind with no §4.2.3 inline type was routed to the inline check — `eval` is §4.4.1's "
-          "question about a source list and has no element, no type and no §6.8.2 mapping");
-    return CSP_INLINE_SCRIPT;
-}
-
 /* §4.4.1's EnsureCSPDoesNotBlockStringCompilation, for ONE policy. Its directive lookup is written out in the
    algorithm itself and is NOT §6.8's fallback machinery: "if policy contains a directive whose name is
    script-src, set source-list to that directive's value; otherwise if policy contains default-src, that one."
@@ -177,7 +161,7 @@ static CspInlineType inline_type_of(PolicyScriptKind kind)
    engine, so no value can be one. That is the same step-is-decided-not-skipped reading core/html/
    trusted_types.c already relies on for §3.4 step 1, and it is why an eval sink under
    `require-trusted-types-for 'script'` is reported through the trusted-types answer rather than this one. */
-static bool policy_allows_eval(const CspPolicy *policy)
+static bool policy_permits_compilation(const CspPolicy *policy)
 {
     const CspDirective *d = csp_policy_directive(policy, "script-src");
 
@@ -187,14 +171,18 @@ static bool policy_allows_eval(const CspPolicy *policy)
     return csp_source_list_contains(d, "'unsafe-eval'");
 }
 
-/* §4.2.3 (and §4.2.4's javascript: half) for ONE policy: find the directive §6.8.4 says executes, then ask
-   §6.7.3.2 whether its source list allows all inline behavior of this type.
-   THE REST OF §6.7.3.3 CANNOT CHANGE THIS ANSWER for content an attacker supplies, and each of its remaining
-   arms is decided rather than skipped: its nonce arm needs the injected element to carry a `nonce` attribute
-   whose value the page's own policy lists, its hash arms need the injected source to hash to a listed digest,
-   and its 'strict-dynamic' arm needs an element that is NOT parser-inserted — which injected markup never is,
-   and which a javascript: navigation has no element for at all. */
-static bool policy_allows_inline(const CspPolicy *policy, CspInlineType type)
+/* §4.2.3's INNER LOOP FOR ONE POLICY, and the collapse of it is an identity rather than a shortcut — the same
+   one policy_blocks_request makes below, read on the inline side. §4.2.3 runs every directive's INLINE CHECK
+   in turn; the SEVEN directives that HAVE one — default-src (§6.1.3.3), script-src (§6.1.10.3),
+   script-src-elem (§6.1.11.3), script-src-attr (§6.1.12.1), style-src (§6.1.13.3), style-src-elem (§6.1.14.3)
+   and style-src-attr (§6.1.15.1) — each open with the SAME two lines: take §6.8.2's effective directive name
+   for the type, and return "Allowed" unless §6.8.4 says THIS directive is the one that executes for that
+   name. The six granular ones then end in the SAME §6.7.3.3, and default-src's delegates to whichever of them
+   §6.8.2 named "using this directive's value", which is the same thing done from the other side. §6.8.4
+   answers Yes for at most one directive of a policy, and csp_policy_governing_directive is that walk. Every
+   other directive defines no inline check, so §4.2.3 leaves its result untouched for them. */
+static bool policy_permits_inline(const CspPolicy *policy, CspInlineType type,
+                                  const lxb_dom_element_t *element, const char *source, size_t source_len)
 {
     const CspDirective *d =
         csp_policy_governing_directive(policy, csp_effective_directive_for_inline_checks(type));
@@ -202,27 +190,32 @@ static bool policy_allows_inline(const CspPolicy *policy, CspInlineType type)
     /* A policy that carries no directive governing this check says NOTHING about it: `img-src 'none'` alone
        blocks no handler. §4.2.3's loop leaves its result at "Allowed". */
     if (!d) return true;
-    return csp_source_list_allows_all_inline(d, type);
+    return csp_element_match_source_list(d, element, type, source, source_len) == CSP_MATCHES;
 }
 
-bool policy_allows(const PolicyContainer *p, PolicyScriptKind kind)
+/* THE ONE WALK, ASKED ONE OF TWO QUESTIONS. §2.2: the policies in a list are enforced INDEPENDENTLY, so
+   content runs only if EVERY one permits it — the opposite quantifier from core/html/trusted_types.c's
+   question over the same list, and for the same reason: a second policy can only narrow. A document with no
+   policy allows everything, which is the overwhelmingly common case and is what "no Content-Security-Policy
+   header" means. */
+bool policy_allows_inline(const PolicyContainer *p, CspInlineType type, const lxb_dom_element_t *element,
+                          const char *source, size_t source_len)
 {
     size_t i;
 
-    /* A document with no policy allows everything, which is the overwhelmingly common case and is what "no
-       Content-Security-Policy header" means. */
-    if (!p)
-        return true;
-    /* CSP §2.2: the policies in a list are enforced INDEPENDENTLY, so content runs only if EVERY one permits
-       it — the opposite quantifier from core/html/trusted_types.c's question over the same list, and for the
-       same reason: a second policy can only narrow. */
-    for (i = 0; i < p->csp.n_policies; i++) {
-        const CspPolicy *pol = &p->csp.policies[i];
-        bool allowed = kind == POLICY_EVAL ? policy_allows_eval(pol)
-                                           : policy_allows_inline(pol, inline_type_of(kind));
-        if (!allowed)
-            return false;
-    }
+    if (!p) return true;
+    for (i = 0; i < p->csp.n_policies; i++)
+        if (!policy_permits_inline(&p->csp.policies[i], type, element, source, source_len)) return false;
+    return true;
+}
+
+bool policy_allows_string_compilation(const PolicyContainer *p)
+{
+    size_t i;
+
+    if (!p) return true;
+    for (i = 0; i < p->csp.n_policies; i++)
+        if (!policy_permits_compilation(&p->csp.policies[i])) return false;
     return true;
 }
 
@@ -294,7 +287,7 @@ CspRequestVerdict policy_should_block_request(const PolicyContainer *p, const Ur
         return CSP_REQUEST_ALLOWED;
     /* §4.1.2 step 3: for each policy. This build parses only ENFORCE policies (see csp_directive_list.h), so
        the step's "if policy's disposition is report, skip" is vacuous rather than skipped.
-       THE QUANTIFIER IS THE SAME ONE `policy_allows` RUNS, from the other end: §4.1.2 sets result to Blocked
+       THE QUANTIFIER IS THE SAME ONE `policy_allows_inline` RUNS, from the other end: §4.1.2 sets result to Blocked
        if ANY policy is violated, which is "allowed only if EVERY policy permits it". */
     for (i = 0; i < p->csp.n_policies; i++)
         if (policy_blocks_request(&p->csp.policies[i], url, effective, p->csp.self_origin, redirect_count))

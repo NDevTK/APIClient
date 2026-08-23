@@ -1748,7 +1748,7 @@ static void trusted_types_selftest(void)
     CHECK(trusted_types_required_by("script-src 'self'; require-trusted-types-for 'script'", TRUSTED_TYPE_SCRIPT),
           "a directive after another in the same policy must still be read");
     /* And POLICIES are `,`-delimited, enforced independently — so ANY of them requiring trusted types requires
-       them, which is the opposite quantifier from policy_allows and the one a copy of that loop would get
+       them, which is the opposite quantifier from policy_allows_inline and the one a copy of that loop would get
        wrong. */
     CHECK(trusted_types_required_by("default-src 'none', require-trusted-types-for 'script'",
                                     TRUSTED_TYPE_SCRIPT_URL),
@@ -1990,6 +1990,15 @@ static void csp_url_matching_selftest(void)
     }
 }
 
+/* §4.2.3 asked with NO ELEMENT and an EMPTY SOURCE — the shape §4.2.4 uses when it runs the inline check
+   "upon null" for a javascript: navigation, and the shape the solver asks about markup it has not inserted
+   anywhere. Every assertion below that turns on a TYPE and a source LIST goes through it, so the few that
+   carry a real element stay visibly different from the many that cannot. */
+static bool csp_ok(const PolicyContainer *p, CspInlineType type)
+{
+    return policy_allows_inline(p, type, NULL, "", 0);
+}
+
 static void policy_container_selftest(void)
 {
     PolicyContainer *none, *self_only, *inline_ok, *nonced, *evals, *child;
@@ -2001,25 +2010,25 @@ static void policy_container_selftest(void)
     none = policy_container_new(NULL, self_origin, NULL);
     /* No policy is not an empty policy: a document with no Content-Security-Policy permits everything, which
        is the overwhelmingly common case and the one a wrong default would mis-report on every page. */
-    CHECK(policy_allows(none, POLICY_INLINE_HANDLER), "no policy must permit an inline handler");
-    CHECK(policy_allows(none, POLICY_EVAL), "no policy must permit eval");
+    CHECK(csp_ok(none, CSP_INLINE_SCRIPT_ATTRIBUTE), "no policy must permit an inline handler");
+    CHECK(policy_allows_string_compilation(none), "no policy must permit eval");
 
     self_only = policy_container_new("script-src 'self'", self_origin, NULL);
     /* §S's own example: an inline onerror is DEAD under `script-src 'self'`, and so is a javascript: URL. A
        host source never permits inline execution — that is what 'unsafe-inline' is for. */
-    CHECK(!policy_allows(self_only, POLICY_INLINE_HANDLER), "'self' must not permit an inline handler");
-    CHECK(!policy_allows(self_only, POLICY_JAVASCRIPT_URL), "'self' must not permit a javascript: URL");
-    CHECK(!policy_allows(self_only, POLICY_EVAL), "'self' must not permit eval");
+    CHECK(!csp_ok(self_only, CSP_INLINE_SCRIPT_ATTRIBUTE), "'self' must not permit an inline handler");
+    CHECK(!csp_ok(self_only, CSP_INLINE_NAVIGATION), "'self' must not permit a javascript: URL");
+    CHECK(!policy_allows_string_compilation(self_only), "'self' must not permit eval");
 
     inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", self_origin, NULL);
-    CHECK(policy_allows(inline_ok, POLICY_INLINE_HANDLER), "'unsafe-inline' must permit an inline handler");
-    CHECK(!policy_allows(inline_ok, POLICY_EVAL), "'unsafe-inline' must not permit eval");
+    CHECK(csp_ok(inline_ok, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-inline' must permit an inline handler");
+    CHECK(!policy_allows_string_compilation(inline_ok), "'unsafe-inline' must not permit eval");
 
     /* CSP §6.1: a nonce source makes 'unsafe-inline' be IGNORED — the rule that makes adding a nonce to a
        legacy policy actually tighten it rather than widen it. A handler can carry no nonce, so it stays dead. */
     nonced = policy_container_new("script-src 'unsafe-inline' 'nonce-abc'", self_origin, NULL);
-    CHECK(!policy_allows(nonced, POLICY_INLINE_SCRIPT), "a nonce source must make 'unsafe-inline' ignored");
-    CHECK(!policy_allows(nonced, POLICY_INLINE_HANDLER), "a handler carries no nonce, so it stays blocked");
+    CHECK(!csp_ok(nonced, CSP_INLINE_SCRIPT), "a nonce source must make 'unsafe-inline' ignored");
+    CHECK(!csp_ok(nonced, CSP_INLINE_SCRIPT_ATTRIBUTE), "a handler carries no nonce, so it stays blocked");
 
     /* CSP §6.1: a present `script-src` REPLACES `default-src` for scripts rather than adding to it. The first
        version of this parser OR'd every script-governing directive's sources into one flag set, and this is
@@ -2027,7 +2036,7 @@ static void policy_container_selftest(void)
        a `script-src` that does not carry it. */
     {
         PolicyContainer *overridden = policy_container_new("default-src 'unsafe-inline'; script-src 'self'", self_origin, NULL);
-        CHECK(!policy_allows(overridden, POLICY_INLINE_HANDLER),
+        CHECK(!csp_ok(overridden, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a present script-src must REPLACE default-src for scripts, not inherit its 'unsafe-inline'");
         policy_container_free(overridden);
     }
@@ -2041,12 +2050,12 @@ static void policy_container_selftest(void)
     {
         PolicyContainer *granular =
             policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", self_origin, NULL);
-        CHECK(!policy_allows(granular, POLICY_INLINE_HANDLER), "script-src-attr 'none' must kill a handler");
-        CHECK(policy_allows(granular, POLICY_JAVASCRIPT_URL),
+        CHECK(!csp_ok(granular, CSP_INLINE_SCRIPT_ATTRIBUTE), "script-src-attr 'none' must kill a handler");
+        CHECK(csp_ok(granular, CSP_INLINE_NAVIGATION),
               "§6.8.2 maps a `navigation` inline check to script-src-elem, so script-src-attr must not touch it");
-        CHECK(policy_allows(granular, POLICY_INLINE_SCRIPT),
+        CHECK(csp_ok(granular, CSP_INLINE_SCRIPT),
               "script-src-attr must not govern a script ELEMENT — that is script-src-elem's fallback to script-src");
-        CHECK(policy_allows(granular, POLICY_EVAL), "eval has no granular form and reads script-src");
+        CHECK(policy_allows_string_compilation(granular), "eval has no granular form and reads script-src");
         policy_container_free(granular);
     }
     /* ...and the same policy with the granular form that DOES govern a navigation kills it, which is what
@@ -2054,9 +2063,9 @@ static void policy_container_selftest(void)
     {
         PolicyContainer *elem =
             policy_container_new("script-src 'unsafe-inline'; script-src-elem 'none'", self_origin, NULL);
-        CHECK(!policy_allows(elem, POLICY_JAVASCRIPT_URL), "script-src-elem 'none' must kill a javascript: URL");
-        CHECK(!policy_allows(elem, POLICY_INLINE_SCRIPT), "script-src-elem 'none' must kill a script element");
-        CHECK(policy_allows(elem, POLICY_INLINE_HANDLER), "script-src-elem must not govern an event handler");
+        CHECK(!csp_ok(elem, CSP_INLINE_NAVIGATION), "script-src-elem 'none' must kill a javascript: URL");
+        CHECK(!csp_ok(elem, CSP_INLINE_SCRIPT), "script-src-elem 'none' must kill a script element");
+        CHECK(csp_ok(elem, CSP_INLINE_SCRIPT_ATTRIBUTE), "script-src-elem must not govern an event handler");
         policy_container_free(elem);
     }
     /* §6.7.3.2's OTHER two overrides of 'unsafe-inline', neither of which this file could answer before: a
@@ -2066,8 +2075,15 @@ static void policy_container_selftest(void)
     {
         PolicyContainer *hashed =
             policy_container_new("script-src 'unsafe-inline' 'sha256-YWJj'", self_origin, NULL);
-        CHECK(!policy_allows(hashed, POLICY_INLINE_SCRIPT), "a hash source must make 'unsafe-inline' ignored");
-        CHECK(!policy_allows(hashed, POLICY_INLINE_HANDLER),
+        /* The SCRIPT-ATTRIBUTE type is the one this can assert, and the reason is §6.7.3.3's own step 5: its
+           hash arm runs only when the type is "script" or "style" or the list carries 'unsafe-hashes', so a
+           handler never reaches a digest and the answer is decided by §6.7.3.2 alone.
+           THE `CSP_INLINE_SCRIPT` LINE THAT STOOD BESIDE THIS ONE IS DELETED RATHER THAN KEPT AS A PASSING
+           ASSERTION, because it was right by accident: it asserted "Blocked" while the engine computed that
+           from the hash merely being PRESENT, and the true answer is "Blocked unless sha256(source) is YWJj".
+           §6.7.3.3 now reaches for the digest and DFAILs, which is the honest state — see
+           csp_source_list.c's step 5.2.2. */
+        CHECK(!csp_ok(hashed, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a hash source overrides 'unsafe-inline' for the WHOLE directive, handlers included");
         policy_container_free(hashed);
     }
@@ -2076,16 +2092,52 @@ static void policy_container_selftest(void)
            an unrecognised expression, which §6.7.3.2 IGNORES rather than treats as an override. The two lines
            differ by the digest length alone and must not agree. */
         PolicyContainer *not_a_hash = policy_container_new("script-src 'unsafe-inline' 'sha1-YWJj'", self_origin, NULL);
-        CHECK(policy_allows(not_a_hash, POLICY_INLINE_SCRIPT),
+        CHECK(csp_ok(not_a_hash, CSP_INLINE_SCRIPT),
               "an expression outside the grammar must be ignored by §6.7.3.2, not read as a hash source");
         policy_container_free(not_a_hash);
     }
     {
         PolicyContainer *strict = policy_container_new("script-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL);
-        CHECK(!policy_allows(strict, POLICY_INLINE_SCRIPT), "'strict-dynamic' must override 'unsafe-inline'");
-        CHECK(!policy_allows(strict, POLICY_JAVASCRIPT_URL),
+        CHECK(!csp_ok(strict, CSP_INLINE_SCRIPT), "'strict-dynamic' must override 'unsafe-inline'");
+        CHECK(!csp_ok(strict, CSP_INLINE_NAVIGATION),
               "'strict-dynamic' covers the navigation type as well as script and script attribute");
         policy_container_free(strict);
+    }
+    /* ...AND THE SAME EXPRESSION OVER A STYLE DIRECTIVE MUST NOT OVERRIDE ANYTHING. §6.7.3.2's second test
+       names three types — "script", "script attribute", "navigation" — and its own note says 'strict-dynamic'
+       does not apply to other resource types. These two lines differ from the two above by the DIRECTIVE and
+       the TYPE alone and must not agree; a copy of the script arm that forgot the type would silently refuse
+       every page that pairs a style directive with 'strict-dynamic', which strict CSPs routinely do. */
+    {
+        PolicyContainer *sd = policy_container_new("style-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL);
+        CHECK(csp_ok(sd, CSP_INLINE_STYLE), "'strict-dynamic' must not touch inline style");
+        CHECK(csp_ok(sd, CSP_INLINE_STYLE_ATTRIBUTE), "nor a style attribute");
+        policy_container_free(sd);
+    }
+    /* THE STYLE HALF OF §6.8.2 AND §6.8.3, which is the whole reason core/html/html_style_element.c can now
+       run §4.2.6 step 5 at all. `style-src-elem` governs the ELEMENT, `style-src-attr` the ATTRIBUTE, both
+       fall back through `style-src` and then `default-src`, and no script directive reaches either. */
+    {
+        PolicyContainer *d = policy_container_new("default-src 'unsafe-inline'", self_origin, NULL);
+        PolicyContainer *g = policy_container_new("default-src 'unsafe-inline'; style-src-attr 'none'",
+                                                 self_origin, NULL);
+        PolicyContainer *s = policy_container_new("default-src 'unsafe-inline'; style-src 'none'",
+                                                 self_origin, NULL);
+        PolicyContainer *k = policy_container_new("script-src 'none'; style-src 'unsafe-inline'",
+                                                 self_origin, NULL);
+
+        CHECK(csp_ok(d, CSP_INLINE_STYLE) && csp_ok(d, CSP_INLINE_STYLE_ATTRIBUTE),
+              "§6.8.3 falls back to default-src for both style types when no style directive is present");
+        CHECK(csp_ok(g, CSP_INLINE_STYLE), "style-src-attr must not govern a style ELEMENT");
+        CHECK(!csp_ok(g, CSP_INLINE_STYLE_ATTRIBUTE), "…which is exactly what it does govern");
+        CHECK(!csp_ok(s, CSP_INLINE_STYLE) && !csp_ok(s, CSP_INLINE_STYLE_ATTRIBUTE),
+              "a present style-src REPLACES default-src for both style types rather than adding to it");
+        CHECK(csp_ok(k, CSP_INLINE_STYLE), "a script directive must not reach a style check");
+        CHECK(!csp_ok(k, CSP_INLINE_SCRIPT), "…and the same policy still kills the script it names");
+        policy_container_free(d);
+        policy_container_free(g);
+        policy_container_free(s);
+        policy_container_free(k);
     }
     /* HOST AND SCHEME SOURCES ARE NOT AN INLINE ANSWER AT ALL — §6.7.3.2 never looks at them — so a policy
        made of them permits exactly what its keywords permit. This is the shape almost every real policy has,
@@ -2093,22 +2145,22 @@ static void policy_container_selftest(void)
     {
         PolicyContainer *hosts =
             policy_container_new("script-src https: https://*.example.com:443/a/b 'unsafe-inline'", self_origin, NULL);
-        CHECK(policy_allows(hosts, POLICY_INLINE_HANDLER),
+        CHECK(csp_ok(hosts, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "host and scheme sources are invisible to §6.7.3.2, so 'unsafe-inline' still allows all inline");
-        CHECK(!policy_allows(hosts, POLICY_EVAL), "and none of them is 'unsafe-eval'");
+        CHECK(!policy_allows_string_compilation(hosts), "and none of them is 'unsafe-eval'");
         policy_container_free(hosts);
     }
     /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
     {
         PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", self_origin, NULL);
-        CHECK(policy_allows(dup, POLICY_INLINE_HANDLER), "a repeated directive in one policy must be ignored");
+        CHECK(csp_ok(dup, CSP_INLINE_SCRIPT_ATTRIBUTE), "a repeated directive in one policy must be ignored");
         policy_container_free(dup);
     }
     /* ...and §2.2.1 lowercases the name before that containment test, so the repeat is a repeat however it is
        spelled — `script-SRC 'none'` and `ScRiPt-sRc 'none'` are the standard's own example of equivalence. */
     {
         PolicyContainer *cased = policy_container_new("SCRIPT-SRC 'unsafe-inline'; script-src 'none'", self_origin, NULL);
-        CHECK(policy_allows(cased, POLICY_INLINE_HANDLER),
+        CHECK(csp_ok(cased, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a directive name is matched ASCII case-insensitively, so the second one is the ignored repeat");
         policy_container_free(cased);
     }
@@ -2116,27 +2168,27 @@ static void policy_container_selftest(void)
        as two POLICIES must intersect instead. These two lines differ by one character and must not agree. */
     {
         PolicyContainer *list = policy_container_new("script-src 'unsafe-inline', script-src 'self'", self_origin, NULL);
-        CHECK(!policy_allows(list, POLICY_INLINE_HANDLER),
+        CHECK(!csp_ok(list, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "policies in a list are enforced independently — a second policy can only NARROW");
         policy_container_free(list);
     }
     /* A policy that governs no script directive forbids nothing about scripts. */
     {
         PolicyContainer *unrelated = policy_container_new("img-src 'none'; frame-ancestors 'none'", self_origin, NULL);
-        CHECK(policy_allows(unrelated, POLICY_INLINE_HANDLER), "img-src must not block a handler");
-        CHECK(policy_allows(unrelated, POLICY_EVAL), "frame-ancestors must not block eval");
+        CHECK(csp_ok(unrelated, CSP_INLINE_SCRIPT_ATTRIBUTE), "img-src must not block a handler");
+        CHECK(policy_allows_string_compilation(unrelated), "frame-ancestors must not block eval");
         policy_container_free(unrelated);
     }
 
     evals = policy_container_new("script-src 'unsafe-eval'", self_origin, NULL);
-    CHECK(policy_allows(evals, POLICY_EVAL), "'unsafe-eval' must permit eval");
-    CHECK(!policy_allows(evals, POLICY_INLINE_HANDLER), "'unsafe-eval' must not permit an inline handler");
+    CHECK(policy_allows_string_compilation(evals), "'unsafe-eval' must permit eval");
+    CHECK(!csp_ok(evals, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-eval' must not permit an inline handler");
 
     /* §7.4: the initial about:blank's container is a CLONE of its creator's — which is the whole of how a
        same-origin popup or iframe with no URL inherits CSP, and it is a deep copy so the child's answers do
        not move when the parent is navigated. */
     child = policy_container_clone(self_only);
-    CHECK(!policy_allows(child, POLICY_INLINE_HANDLER), "a cloned container must carry the creator's policy");
+    CHECK(!csp_ok(child, CSP_INLINE_SCRIPT_ATTRIBUTE), "a cloned container must carry the creator's policy");
     CHECK(policy_container_csp(child) != NULL &&
           policy_container_csp(child) != policy_container_csp(self_only),
           "a cloned container must own its own copy of the policy text");
@@ -2147,6 +2199,77 @@ static void policy_container_selftest(void)
     policy_container_free(nonced);
     policy_container_free(evals);
     policy_container_free(child);
+}
+
+/* §6.7.3.1 "Is element nonceable?" AND §6.7.3.3's NONCE ARM — the half of the inline check that cannot be
+ * asked without an element, and the half that decides whether the page's OWN content runs.
+ *
+ * IT IS THE CASE THAT TURNS AN ABORT INTO A WRONG ANSWER IF IT IS GOT WRONG. §6.7.3.2 alone answers "Blocked"
+ * for every nonce-bearing policy, which is right for injected content and refuses a `<style nonce=…>` real
+ * Chrome applies — so the whole cascade below it would then resolve from a document no browser has. */
+static void csp_element_matching_selftest(void)
+{
+    static const char *SRC =
+        "<html><head>"
+        "<style nonce=abc>p{color:red}</style>"
+        "<style>p{color:blue}</style>"
+        "</head><body></body></html>";
+    lxb_html_document_t *dom = dom_document_create();
+    lxb_dom_element_t *nonced = NULL, *bare = NULL;
+    lxb_dom_node_t *child;
+    const Origin *self_origin = origin_parse("https://x.test");
+    const char *S = "p{color:red}";
+    size_t slen = strlen(S);
+
+    html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    /* The two `<style>` elements are the head's only element children, in source order and with no whitespace
+       text between them — which is why the fixture is written on one line. */
+    for (child = lxb_dom_interface_node(lxb_html_document_head_element(dom))->first_child; child;
+         child = child->next) {
+        if (child->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (!nonced) nonced = lxb_dom_interface_element(child);
+        else if (!bare) bare = lxb_dom_interface_element(child);
+    }
+    CHECK(nonced != NULL && bare != NULL, "the fixture's two <style> elements were not both parsed into head");
+
+    /* §6.7.3.1 steps 1 and 4: presence of a `nonce` attribute is the whole question for a non-script element. */
+    CHECK(csp_element_is_nonceable(nonced), "a <style nonce=abc> is Nonceable");
+    CHECK(!csp_element_is_nonceable(bare), "a <style> with no nonce attribute is Not Nonceable");
+    CHECK(!csp_element_is_nonceable(NULL),
+          "§4.2.4 runs the inline check upon NULL, and step 1 answers it without a branch of its own");
+
+    {
+        PolicyContainer *pol = policy_container_new("style-src 'nonce-abc'", self_origin, NULL);
+        PolicyContainer *other = policy_container_new("style-src 'nonce-xyz'", self_origin, NULL);
+        PolicyContainer *cased = policy_container_new("style-src 'NONCE-abc'", self_origin, NULL);
+        PolicyContainer *upper = policy_container_new("style-src 'nonce-ABC'", self_origin, NULL);
+
+        /* THE POINT OF THE WHOLE CHANGE: the nonced element runs and the identical element beside it does
+           not, under one policy, decided by the element rather than by the policy alone. */
+        CHECK(policy_allows_inline(pol, CSP_INLINE_STYLE, nonced, S, slen),
+              "<style nonce=abc> under style-src 'nonce-abc' must be ALLOWED — §6.7.3.3's nonce arm");
+        CHECK(!policy_allows_inline(pol, CSP_INLINE_STYLE, bare, S, slen),
+              "…and the <style> beside it, with no nonce, must be Blocked by the same policy");
+        CHECK(!policy_allows_inline(pol, CSP_INLINE_STYLE, NULL, S, slen),
+              "…and so must an injected one, which has no element at all");
+        CHECK(!policy_allows_inline(other, CSP_INLINE_STYLE, nonced, S, slen),
+              "a nonce that does not match must not admit the element");
+        /* §2.3.1's ABNF literal `'nonce-` is CASE-INSENSITIVE (RFC 5234 §2.3) and its base64-value is NOT:
+           the value is data, not a keyword. These two lines differ only in which half is capitalised. */
+        CHECK(policy_allows_inline(cased, CSP_INLINE_STYLE, nonced, S, slen),
+              "the nonce-source PREFIX is matched ASCII case-insensitively");
+        CHECK(!policy_allows_inline(upper, CSP_INLINE_STYLE, nonced, S, slen),
+              "…while the base64-value is compared exactly, so 'nonce-ABC' must not admit a nonce of abc");
+        /* §6.7.3.3's own note: "Nonces only apply to inline script and inline style, not to attributes of
+           either element or to javascript: navigations." The element is the same one. */
+        CHECK(!policy_allows_inline(pol, CSP_INLINE_STYLE_ATTRIBUTE, nonced, S, slen),
+              "a nonce on the element must not admit a STYLE ATTRIBUTE — §6.7.3.3 step 2 excludes the type");
+        policy_container_free(pol);
+        policy_container_free(other);
+        policy_container_free(cased);
+        policy_container_free(upper);
+    }
+    dom_document_destroy(dom);
 }
 
 /* WHAT MAKES THE CONTAINER LOAD-BEARING, which the parser test above does not reach: the parse can be perfect
@@ -2172,17 +2295,17 @@ static void document_policy_selftest(void)
     html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
     p = document_policy_new(dom, NULL, self_origin);
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
-    CHECK(!policy_allows(p, POLICY_INLINE_HANDLER),
+    CHECK(!csp_ok(p, CSP_INLINE_SCRIPT_ATTRIBUTE),
           "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
           "permits, and a scan that let the last one win would report a live handler on a page that blocks it");
-    CHECK(!policy_allows(p, POLICY_EVAL), "neither meta policy carries 'unsafe-eval'");
+    CHECK(!policy_allows_string_compilation(p), "neither meta policy carries 'unsafe-eval'");
 
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = dom_document_create();
     html_parse_document(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
     empty = document_policy_new(plain, NULL, self_origin);
-    CHECK(policy_allows(empty, POLICY_INLINE_HANDLER), "a document with no meta CSP must permit everything");
+    CHECK(csp_ok(empty, CSP_INLINE_SCRIPT_ATTRIBUTE), "a document with no meta CSP must permit everything");
 
     {
         /* §7.2.6's OTHER HALF. The response header and the `<meta>` policies are ONE LIST and every policy in
@@ -2191,9 +2314,9 @@ static void document_policy_selftest(void)
            reported a live inline handler that the real response kills. */
         PolicyContainer *hdr = document_policy_new(plain, "script-src 'self'", self_origin);
         PolicyContainer *both = document_policy_new(dom, "default-src 'unsafe-inline'", self_origin);
-        CHECK(!policy_allows(hdr, POLICY_INLINE_HANDLER),
+        CHECK(!csp_ok(hdr, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a header-borne policy must be enforced on a document whose tree declares none");
-        CHECK(!policy_allows(both, POLICY_INLINE_HANDLER),
+        CHECK(!csp_ok(both, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "the header and the meta policies are ONE LIST — a permissive header cannot widen a narrow meta");
         policy_container_free(hdr);
         policy_container_free(both);
@@ -2338,11 +2461,21 @@ static JSValue tf_job_count(JSContext *ctx, int argc, JSValueConst *argv)
     return JS_NewInt32(ctx, 1000 + argc);
 }
 
+/* THE FIXTURE MINTS THE NAMES, because these pushes do not come through quickjs's enqueue and so no runtime
+   counter has issued one for them. Monotone and never reused, which is the only property a handle has: this
+   file is the whole population of pushers here, so one counter is exactly the runtime's guarantee. */
+static JSTaskHandle g_tf_handle;
+
+static JSTaskHandle tf_handle_new(void)
+{
+    return ++g_tf_handle;
+}
+
 static void tf_job_push_int(JSContext *ctx, Flow *f, int n, int task)
 {
     JSValue v = JS_NewInt32(ctx, n);
 
-    flow_job_push(ctx, f, tf_job_note, 1, (JSValueConst *)&v, task);
+    flow_job_push(ctx, f, tf_job_note, 1, (JSValueConst *)&v, task, tf_handle_new());
     JS_FreeValue(ctx, v);
 }
 
@@ -2419,7 +2552,7 @@ static void flow_job_selftest(JSContext *ctx)
 
     /* A SECOND CALLEE, AND A RECORD WITH NO ARGUMENTS AT ALL. The callee is named by an ordinal into a table
        this session mints on first sight, so two distinct callees must not collapse onto one name. */
-    flow_job_push(ctx, &a, tf_job_count, 0, NULL, 0);
+    flow_job_push(ctx, &a, tf_job_count, 0, NULL, 0, tf_handle_new());
     e = flow_job_take(ctx, &a);
     r = flow_job_run(ctx, e);
     {
@@ -2443,6 +2576,41 @@ static void flow_job_selftest(JSContext *ctx)
     CHECK(flow_job_drop_realm(ctx, &a, ctx) == 0,
           "a second drop of the same realm found more — the walk is not seeing all of the queue");
 
+    /* REMOVAL BY NAME, AND THE FORK'S TWO COPIES OF ONE HANDLE. HTML §4.11.4 "The dialog element", step 1 of
+       queue a dialog toggle event task — "Remove element's dialog toggle task tracker's task from its task
+       queue" — is why a record carries the name the enqueue issued. The property exercised here is the one
+       that makes the hook ask the RUNNING flow alone: an arm names the SAME records, and each arm's tracker
+       names its own copy, so a removal made in one timeline must leave the other's task queued. */
+    {
+        Flow c;
+        JSTaskHandle h_keep = tf_handle_new(), h_go = tf_handle_new();
+        JSValue v20 = JS_NewInt32(ctx, 20), v21 = JS_NewInt32(ctx, 21);
+
+        memset(&c, 0, sizeof c); c.jobs = JS_UNDEFINED;
+        flow_job_push(ctx, &a, tf_job_note, 1, (JSValueConst *)&v20, 1, h_keep);
+        flow_job_push(ctx, &a, tf_job_note, 1, (JSValueConst *)&v21, 1, h_go);
+        JS_FreeValue(ctx, v20);
+        JS_FreeValue(ctx, v21);
+        c.jobs = flow_job_fork(ctx, &a);
+        CHECK(flow_job_remove(&a, h_go) == 1 && flow_job_pending(&a) == 1,
+              "a queued task named by its handle was not taken off the queue — a toggle task tracker then "
+              "cannot coalesce two transitions into one event, and the second `toggle` fires carrying a state "
+              "the element has already left");
+        CHECK(flow_job_remove(&a, h_go) == 0,
+              "removing an already-removed task answered anything but 0 — a handle outlives what it names, so "
+              "finding nothing is the ordinary answer and is what a monotone id nobody re-issues is for");
+        CHECK(flow_job_pending(&c) == 2,
+              "a removal in one timeline took the ARM's copy of the task as well — the two copies are two "
+              "timelines' jobs wearing one name, and a hook that swept every flow would delete a sibling's");
+        CHECK(flow_job_remove(&c, h_go) == 1 && flow_job_remove(&c, h_keep) == 1 && flow_job_pending(&c) == 0,
+              "the arm could not remove the copies it holds under the same two names");
+        g_tf_job_n = 0;
+        tf_job_run_all(ctx, &a);
+        CHECK(g_tf_job_n == 1 && g_tf_job_seen[0] == 20,
+              "the removal took the wrong record off the queue — the handle names one job and only one");
+        JS_FreeValue(ctx, c.jobs); c.jobs = JS_UNDEFINED;
+    }
+
     /* AN ARGUMENT LIST LONGER THAN THE VECTOR flow_job_run KEEPS ON THE STACK — `setTimeout(f, a, b, …)`
        queues the callee plus every extra argument, so this is a shape the page reaches and the only branch in
        the run path the cases above do not. The record carries them all and the callee must see exactly them:
@@ -2452,7 +2620,7 @@ static void flow_job_selftest(JSContext *ctx)
         int i;
 
         for (i = 0; i < 12; i++) many[i] = JS_NewInt32(ctx, i);
-        flow_job_push(ctx, &a, tf_job_count, 12, (JSValueConst *)many, 0);
+        flow_job_push(ctx, &a, tf_job_count, 12, (JSValueConst *)many, 0, tf_handle_new());
         for (i = 0; i < 12; i++) JS_FreeValue(ctx, many[i]);
         e = flow_job_take(ctx, &a);
         r = flow_job_run(ctx, e);
@@ -4438,6 +4606,7 @@ int main(int argc, char **argv) {
     JSRuntime *rt;
     trusted_types_selftest();
     policy_container_selftest();
+    csp_element_matching_selftest();
     csp_url_matching_selftest();
     document_policy_selftest();
     rt = JS_NewRuntime();

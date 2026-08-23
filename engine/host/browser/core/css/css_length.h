@@ -81,6 +81,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_LENGTH_H
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "quickjs.h"
 
@@ -139,6 +140,31 @@ CssPx css_px_scale(CssPx a, double k);
    is a function of both viewport axes and not of whichever one is smaller at 1280 x 720. */
 CssPx css_px_max(CssPx a, CssPx b);
 CssPx css_px_min(CssPx a, CssPx b);
+/* A PRODUCT AND A QUOTIENT OF TWO OPERANDS, each carrying BOTH their facts. What a `CssPx` carries is a NUMBER
+   and the environment provenance of that number, and the two operations that leave the dimension of a length
+   are exactly the two Intersection Observer §3.2.10 states: its steps 9 and 10 take a rectangle's AREA (a
+   product of two extents) and its step 12 takes a RATIO of two areas. Both stay in this vocabulary rather than
+   collapsing to a bare double, because a bundle writes `if (entry.intersectionRatio > 0.5)` and a ratio derived
+   from the initial containing block is the same environment question `innerWidth < 768` is — dropping the set
+   at the multiplication would delete the arm the other viewport takes, exactly as `css_px_max` returning the
+   winner whole would.
+   THE QUOTIENT'S DIVISOR IS NEVER ZERO AT ANY CALLER, which is the divisor's own algorithm asserting it rather
+   than this one guessing: §3.2.10 step 12 divides only in the branch where `targetArea` is non-zero, and its
+   other branch answers 1 or 0 without dividing. Asserted here so a future caller cannot arrive without having
+   made that branch. */
+CssPx css_px_mul(CssPx a, CssPx b);
+CssPx css_px_div(CssPx a, CssPx b);
+
+/* CSS Values §6.2's ABSOLUTE LENGTH UNITS, as the ONE question a caller outside the computed-value chain has to
+   ask: is `unit` one of them, and what is `n` of them in CSS pixels? Intersection Observer §2.2's "parse a
+   margin" is that caller — its step 5.1 is "if token is an ABSOLUTE LENGTH dimension token, replace it with an
+   equivalent pixel length", and its step 5.3 is "otherwise, return failure", so a `2em` there is a SyntaxError
+   rather than the crash `css_length_parse` owes a font-relative unit it cannot absolutize. That is a different
+   question from the one `css_length_parse` answers and it must not be asked by copying the table: §6.2's seven
+   ratios are one fact, and a second copy is the second answer that is always subtly wrong.
+   `unit` is the dimension token's own unit text and need not be NUL-terminated or lowercased; `unit_len` is its
+   byte length. Answers false for every other unit, writing nothing. */
+bool css_length_absolute_px(const char *unit, size_t unit_len, double n, double *px);
 
 typedef enum {
     CSS_LENGTH_ABSOLUTE = 0,   /* an absolute `<length>`; `px` carries it in CSS pixels */

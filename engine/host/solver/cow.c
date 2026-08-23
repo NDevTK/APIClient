@@ -1113,8 +1113,24 @@ CowDelta *cow_delta_fork(JSContext *ctx, CowDelta *src) {
     /* ONLY THE RUNNING DELTA PUBLISHES ITS THRESHOLD. JS_SetFlowForkGen sets what the capture hook compares
        against, which is a statement about the flow the heap is showing; a parked segment saying it would make
        the running flow capture by somebody else's fork point. */
-    if (applied) JS_SetFlowForkGen(src->fork_gen);
-    JS_FlowBumpGen();
+    /* AND ONLY THE RUNNING DELTA MOVES THE STAMP, for the same reason and with a sharper consequence than the
+       line above. The bump exists to make objects created AFTER A BRANCH strictly-higher than the branch's
+       generation; a fork of a delta the heap is NOT showing is not a branch in anybody's instruction stream —
+       it is the world registry materializing a foreign world's segment (solver/world.c), and the objects
+       created after it belong to whichever flow is running, whose own threshold this fork did not touch. So
+       the bump was inert there in the direction it was written for, and LOAD-BEARING in the other: it is the
+       global stamp, so raising it in HOST TIME un-baselines everything the host creates next. That is exactly
+       the defect main.c's `JS_FlowGen() == 0` assert describes at the qjs_step boundary — "with the stamp still
+       up those objects carry the running flow's generation, so JS_ObjFlowGen(obj) > d->fork_gen skips them in
+       every delta forked before" — reached from the one direction that assert cannot see, because it runs
+       BEFORE the host entries and a routed delivery materializes its segment AFTER it.
+       MEASURED, not argued: test_forced.c's world_registry_selftest materializes four peer segments before
+       platform_agent_init, so the WHOLE platform declaration — every prototype, every interface object, every
+       component's agent-lifetime JS state — was built at generation 2 with the boot delta's fork_gen at 0, and
+       therefore capturable by nothing. It is invisible for a prototype (no flow writes one) and silent
+       corruption for any component whose shared baseline state is a JS object; core/storage/storage_shed.c is
+       the first such component and its own baseline assert is what fired. */
+    if (applied) { JS_SetFlowForkGen(src->fork_gen); JS_FlowBumpGen(); }
     d->base = src->base;
     if (src->n == 0) {                  /* nothing to freeze: the sibling just takes a reference on the chain */
         if (d->base) d->base->refcount++;

@@ -46,6 +46,7 @@
 #include "core/frame/window_message.h"
 #include "core/frame/window_proxy.h"
 #include "core/geometry/dom_rect.h"
+#include "core/intersection_observer/intersection_observer.h"
 #include "core/geometry/dom_rect_list.h"
 #include "core/html/dom_string_list.h"
 #include "core/html/domparser.h"
@@ -73,6 +74,9 @@
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
 #include "core/rendering/rendering.h"
+#include "core/storage/storage.h"
+#include "core/storage/storage_shed.h"
+#include "core/storage/window_storage.h"
 #include "core/streams/queuing_strategy.h"
 #include "core/streams/readable_stream.h"
 #include "core/streams/transform_stream.h"
@@ -127,6 +131,9 @@ static void d_fs_handle(JSContext *c, const PlatformAgent *a) { (void)a; fs_hand
 static void d_storage_manager(JSContext *c, const PlatformAgent *a) { (void)a; storage_manager_init(c); }
 static void d_fs_access(JSContext *c, const PlatformAgent *a) { (void)a; file_system_access_init(c); }
 static void d_file_picker(JSContext *c, const PlatformAgent *a) { (void)a; file_picker_init(c); }
+static void d_storage_shed(JSContext *c, const PlatformAgent *a) { (void)a; storage_shed_init(c); }
+static void d_storage(JSContext *c, const PlatformAgent *a) { (void)a; storage_init(c); }
+static void d_window_storage(JSContext *c, const PlatformAgent *a) { (void)a; window_storage_init(c); }
 static void d_idb_key_range(JSContext *c, const PlatformAgent *a) { (void)a; idb_key_range_init(c); }
 static void d_idb_record(JSContext *c, const PlatformAgent *a) { (void)a; idb_record_init(c); }
 static void d_indexed_db(JSContext *c, const PlatformAgent *a) { (void)a; indexed_db_init(c); }
@@ -176,6 +183,7 @@ static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect
 static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
 static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
+static void d_intersection_observer(JSContext *c, const PlatformAgent *a) { (void)a; intersection_observer_init(c); }
 static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_init(c); }
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
@@ -242,6 +250,14 @@ static void r_fs_writable(JSRuntime *rt) { fs_writable_free(rt); }
 static void r_fs_handle(JSRuntime *rt) { (void)rt; fs_handle_free(); }
 static void r_fs_access(JSRuntime *rt) { (void)rt; file_system_access_free(); }
 static void r_file_picker(JSRuntime *rt) { (void)rt; file_picker_free(); }
+/* STORAGE §4.3's TWO SHEDS ARE THE AGENT'S, and that is the same argument §2.1's set of databases
+   makes two rows down: storage is keyed by ORIGIN, §Security makes an instance an origin-keyed agent
+   cluster, so the shed a same-origin child navigable reaches is THIS one rather than a second. What a C
+   static holds for the agent is freed against the runtime here. §12.2.1's slot Symbol and §12.2.2's
+   per-Document holder Symbol are runtime-lifetime values of the same kind. */
+static void r_storage_shed(JSRuntime *rt) { storage_shed_free(rt); }
+static void r_storage(JSRuntime *rt) { storage_free(rt); }
+static void r_window_storage(JSRuntime *rt) { window_storage_free(rt); }
 /* THE TWO DELIVERY CALLEES AND §9.5's BUS, found by the same reading and leaked by the same host. Each of these
    components mints ONE function object for the whole agent — the task callee a queued delivery runs through —
    and §9.5's registry of open channels is a live Array beside it; the walk named both callees as
@@ -336,6 +352,7 @@ static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
 static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_document(JSRuntime *rt) { document_agent_free(rt); }
 static void r_element(JSRuntime *rt) { element_free(rt); }
+static void r_intersection_observer(JSRuntime *rt) { intersection_observer_free(rt); }
 static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
@@ -377,6 +394,7 @@ static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (
 static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
 static void i_dom_rect(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
+static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_dom_string_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_string_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
@@ -452,6 +470,17 @@ static const PlatformComponent PLATFORM[] = {
        installs in declaration order. */
     { "file_system_access",  d_fs_access,           NULL,        r_fs_access },
     { "file_picker",         d_file_picker,         NULL,        r_file_picker },
+    /* WEB STORAGE — Storage §4's model, then HTML §12.2.1's interface over it, then §12.2.2's and
+       §12.2.3's two Window getters, in that order because each reads the one before it. The model is
+       first for a second reason its own file states: its shed, shelf, bucket and bottles are built HERE,
+       at the pre-boot COW baseline, so every flow shares one map object and each flow's writes to it are
+       captured — built lazily on the first read they would be created inside whichever flow asked first
+       and each arm of a fork would get a private localStorage. Neither of the last two rows has a
+       document half: §12.2.1's prototype and interface object are per-REALM (§3.7), and the two getters
+       go on each realm's own global, so both install through core/realm.h. */
+    { "storage_shed",        d_storage_shed,        NULL,        r_storage_shed },
+    { "storage",             d_storage,             NULL,        r_storage },
+    { "window_storage",      d_window_storage,      NULL,        r_window_storage },
     /* HTML §2.6.5's DOMStringList, BEFORE the standard that is currently its only consumer — Indexed Database
        §4.4, §4.5 and §4.10 each answer with one, and core/realm.h runs the per-realm installs in DECLARATION
        order, so its prototype must be in a realm before any member below can build a list in it. It is an HTML
@@ -578,6 +607,12 @@ static const PlatformComponent PLATFORM[] = {
     { "dom_rect",            d_dom_rect,            i_dom_rect,  r_dom_rect },
     { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
     { "element",             d_element,             NULL,        r_element },
+    /* INTERSECTION OBSERVER, AFTER `element` and after the two GEOMETRY rows. After element because its
+       declaration brands both `observe(Element target)` and §2.4's `(Element or Document)? root` against the
+       Node class, which element_init is what creates (through node_init); after DOMRect because every entry it
+       queues carries three of them, minted in the observed element's own realm. Its own prototype chains to
+       Object.prototype, so no earlier row is required for that half. */
+    { "intersection_observer", d_intersection_observer, i_intersection_observer, r_intersection_observer },
     { "html_iframe",         d_iframe,              NULL,        r_iframe },
     /* RFC 6265 §5.3's COOKIE STORE, before the component whose §3.1.4 members read it. It is the first row with
        a RELEASE, and the reason is the reason it is a row at all: the store is the USER AGENT's by the
@@ -650,6 +685,18 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "AbortController",       "abort" },
     { "DOMRect",               "dom_rect" },
     { "DOMRectList",           "dom_rect_list" },
+    { "IntersectionObserver",  "intersection_observer" },
+    { "IntersectionObserverEntry", "intersection_observer" },
+    /* WEB STORAGE's three names. §12.2.1's interface object, and §12.2.2's and §12.2.3's two Window members —
+       and those two are the reason this row matters more than most: BOTH are on browser/platform_names.h, so
+       the absent-global seam declines to mint a concolic for either, and a `window.localStorage` that resolves
+       to nothing answers `undefined` rather than throwing. An install that silently stopped happening would
+       therefore restore EXACTLY the silent defect this component was built to end — a `&&` taking its else arm
+       with nothing to say so — which is what this probe now refuses. `storage_shed` has no witness because it
+       installs nothing: Storage §4's model is state, not surface. */
+    { "Storage",               "storage" },
+    { "localStorage",          "window_storage" },
+    { "sessionStorage",        "window_storage" },
     { "DOMStringList",         "dom_string_list" },
     { "IDBKeyRange",           "idb_key_range" },
     { "indexedDB",             "indexed_db" },
@@ -746,6 +793,25 @@ void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
 
     DCHECK(ctx != NULL, "the platform was declared into no realm");
     DCHECK(agent != NULL, "the platform was declared with no agent facts");
+    /* THE DECLARATION PASS BUILDS THE BROWSER'S BASELINE, so it runs at the BASELINE STAMP — and that is a
+       precondition of THIS call rather than of any one component, which is the whole reason it is asserted
+       here. Everything below allocates: every interface prototype, every interface object, every component's
+       agent-lifetime JS state. An object created while the flow stamp is up carries that generation, and
+       cow.c's capture test is `JS_ObjFlowGen(obj) > d->fork_gen` — the first flow's delta is calloc'd with
+       fork_gen 0 and the first slice opens at generation 1, so anything stamped above 0 is skipped by EVERY
+       delta and a later write to it by any flow is recorded nowhere. It is the same fact main.c asserts on the
+       way OUT of qjs_step, said on the way IN to the platform.
+       IT IS SILENT FOR MOST COMPONENTS AND SILENT-AND-WRONG FOR THE REST, which is why one component's own
+       assert is not enough: nothing writes a prototype, so a mis-stamped one never shows; a component whose
+       SHARED BASELINE STATE is a JS object (core/storage/storage_shed.c's sheds are the first) silently stops
+       being shared across a fork instead. A host that reaches here with the stamp up is a host that forked a
+       COW delta in its own time (solver/world.c's segment materialization is the way in) — the bump belongs
+       to the slice bracket that owns the stamp, and cow_delta_fork now makes it. */
+    DCHECK(JS_FlowGen() == 0,
+           "the platform declaration pass began with the FLOW STAMP UP — every object this browser's baseline "
+           "is made of would be stamped as belonging to a flow, and cow.c's `JS_ObjFlowGen(obj) > fork_gen` "
+           "then skips it in every delta, so a component holding shared state in a JS object silently stops "
+           "sharing it across a fork; whatever this host did before this call left a generation raised");
     DCHECK(agent->origin != NULL && *agent->origin,
            "an agent was brought up with no PRINCIPAL — §9.5's named bus is keyed by it and §7.2.1 decides "
            "remoteness by it, so an agent without one cannot answer either question");

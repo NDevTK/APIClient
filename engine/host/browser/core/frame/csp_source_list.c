@@ -149,6 +149,163 @@ bool csp_source_list_allows_all_inline(const CspDirective *directive, CspInlineT
     return allow_all_inline;
 }
 
+/* ---- §6.7.3's ELEMENT MATCHING -------------------------------------------------------------------------- */
+
+/* "contains an ASCII case-insensitive match for" over raw bytes — §6.7.3.1's own phrasing, and the only string
+   relation it needs. `needle` must be ASCII lowercase, asserted for the reason csp_token_is asserts it. */
+static bool csp_bytes_contain_ci(const lxb_char_t *hay, size_t n, const char *needle)
+{
+    size_t k = strlen(needle), i, j;
+
+    DCHECK(csp_is_ascii_lowercase(needle),
+           "§6.7.3.1's substring test was given a literal that is not ASCII lowercase — the fold is applied to "
+           "the HAYSTACK only, so a capital here matches nothing while reading as if it must");
+    if (n < k) return false;
+    for (i = 0; i + k <= n; i++) {
+        for (j = 0; j < k; j++) {
+            char c = (char)hay[i + j];
+
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (c != needle[j]) break;
+        }
+        if (j == k) return true;
+    }
+    return false;
+}
+
+/* "element is a script element" — HTML's `script`, which SVG's same-named element is not (that is
+   SVGScriptElement, a different interface with its own standard), so the namespace is part of the question. */
+static bool csp_is_script_element(const lxb_dom_element_t *element)
+{
+    const lxb_dom_node_t *n = lxb_dom_interface_node((lxb_dom_element_t *)element);
+    size_t len = 0;
+    const lxb_char_t *name;
+
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT || n->ns != LXB_NS_HTML) return false;
+    name = lxb_dom_element_local_name((lxb_dom_element_t *)element, &len);
+    return name && len == 6 && memcmp(name, "script", 6) == 0;
+}
+
+bool csp_element_is_nonceable(const lxb_dom_element_t *element)
+{
+    lxb_dom_element_t *el = (lxb_dom_element_t *)element;
+    lxb_dom_attr_t *a;
+
+    /* STEP 1 — "if element does not have an attribute named nonce, return Not Nonceable", which is also the
+       whole of the answer for the two callers that have no element at all (§4.2.4's javascript: navigation
+       runs the inline check "upon null", and an injected breakout has not been inserted anywhere). PRESENCE,
+       not a non-empty value: `<style nonce="">` has the attribute and is Nonceable, and it then matches no
+       nonce-source because §2.3.1's base64-value needs at least one character. */
+    if (!el) return false;
+    if (!lxb_dom_element_has_attribute(el, (const lxb_char_t *)"nonce", 5)) return false;
+
+    /* STEP 2 — the mitigation §7.2.1 dangling markup attacks names, and it is script-only in the standard: an injected
+       `<img src=x onerror=…  <script` swallows the following markup into an ATTRIBUTE, which is how an
+       attacker steals a legitimate element's nonce without ever reading it. Both the attribute's NAME and its
+       VALUE are searched, because the swallowed bytes can land in either. */
+    if (csp_is_script_element(el)) {
+        for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
+            size_t len = 0;
+            const lxb_char_t *s = lxb_dom_attr_qualified_name(a, &len);
+
+            if (s && (csp_bytes_contain_ci(s, len, "<script") || csp_bytes_contain_ci(s, len, "<style")))
+                return false;
+            len = 0;
+            s = lxb_dom_attr_value(a, &len);
+            if (s && (csp_bytes_contain_ci(s, len, "<script") || csp_bytes_contain_ci(s, len, "<style")))
+                return false;
+        }
+    }
+    /* STEP 3 is the duplicate-attribute parse error, which is not implemented and is not implementable from a
+       parsed tree — see csp_source_list.h. STEP 4: */
+    return true;
+}
+
+CspMatch csp_element_match_source_list(const CspDirective *directive, const lxb_dom_element_t *element,
+                                       CspInlineType type, const char *source, size_t source_len)
+{
+    bool unsafe_hashes = false;
+    size_t i;
+
+    DCHECK(directive != NULL, "§6.7.3.3 was asked about a source list that does not exist — a policy with no "
+                              "governing directive says NOTHING about this check, which is the CALLER's answer "
+                              "to give (§6.8.4 decides it) and is not a list that matches nothing");
+    DCHECK(source != NULL || source_len == 0,
+           "§6.7.3.3 was given a length with no source bytes — its step 5 hashes exactly these bytes, so a "
+           "caller that has no source has an empty one and states that with a zero length");
+
+    /* STEP 1 — §6.7.3.2. */
+    if (csp_source_list_allows_all_inline(directive, type))
+        return CSP_MATCHES;
+
+    /* STEP 2 — THE NONCE ARM, and the standard's own note says exactly how far it reaches: "Nonces only apply
+       to inline script and inline style, not to attributes of either element or to javascript: navigations."
+       That is why the two attribute types and "navigation" are excluded here and not by the caller. */
+    if ((type == CSP_INLINE_SCRIPT || type == CSP_INLINE_STYLE) && csp_element_is_nonceable(element)) {
+        size_t nlen = 0;
+        const lxb_char_t *nonce = lxb_dom_element_get_attribute((lxb_dom_element_t *)element,
+                                                                (const lxb_char_t *)"nonce", 5, &nlen);
+
+        for (i = 0; i < directive->n_value; i++) {
+            CspToken e = directive->value[i];
+
+            if (!csp_source_is_nonce(e)) continue;
+            /* The base64-value part: everything between the opening `'nonce-` (7 bytes, matched ASCII
+               case-insensitively above) and the closing quote. §6.7.2.3 compares nonces AS STRINGS and never
+               decodes them, and this comparison is CASE-SENSITIVE — a base64 value is data, not a keyword,
+               and folding it would let `'nonce-ABC'` admit an element carrying `abc`. */
+            if (nonce && e.n - 8 == nlen && memcmp(e.p + 7, nonce, nlen) == 0)
+                return CSP_MATCHES;
+        }
+    }
+
+    /* STEPS 3-4 — the 'unsafe-hashes' flag, which is what extends the hash arm below to event handlers, style
+       attributes and javascript: URLs. */
+    for (i = 0; i < directive->n_value; i++) {
+        if (csp_token_is(directive->value[i], "'unsafe-hashes'")) {
+            unsafe_hashes = true;
+            break;
+        }
+    }
+
+    /* STEP 5 — the hash arm and 'strict-dynamic'. Step 5.1's "UTF-8 encode the result of JavaScript string
+       converting on source" is a no-op on the bytes this engine holds: Lexbor's text content, its attribute
+       values and a serialized URL are all already UTF-8. */
+    if (type == CSP_INLINE_SCRIPT || type == CSP_INLINE_STYLE || unsafe_hashes) {
+        for (i = 0; i < directive->n_value; i++) {
+            CspToken e = directive->value[i];
+
+            /* STEP 5.2.1 — 'strict-dynamic' matches for "script" alone, and only for an element that is NOT
+               parser-inserted. This engine has no parser-inserted association at all: core/html/html_script.h
+               says so by name, and its `parser document` is the half that would carry it. So this arm cannot
+               be ANSWERED for a script element, and answering it "Does Not Match" would report a script real
+               Chrome runs as blocked. Every other type falls through, which is the standard's answer and not
+               a gap — 'strict-dynamic' does not apply to style. */
+            if (csp_token_is(e, "'strict-dynamic'")) {
+                DCHECK(!(type == CSP_INLINE_SCRIPT && element != NULL),
+                       "§6.7.3.3 step 5.2.1 reached a real script element under 'strict-dynamic' and this "
+                       "engine cannot say whether that element is PARSER-INSERTED — HTML §4.12.1.1 processing "
+                       "model's `parser document` is not built (core/html/html_script.h names it as the "
+                       "missing half of §13.2.6.4.4's stamp). Build it there, then answer Matches for an "
+                       "element whose parser document is null");
+                continue;
+            }
+            /* STEP 5.2.2 — the DIGEST, which is the one primitive this file cannot fake. `csp_source_is_hash`
+               recognises the grammar and nothing in this engine can evaluate it. */
+            if (csp_source_is_hash(e)) {
+                DFAIL("§6.7.3.3 step 5.2.2 reached a hash-source in a governing directive and this engine has "
+                      "no message digest — it must base64-encode SHA-256, SHA-384 or SHA-512 (chosen by the "
+                      "expression's hash-algorithm part) over the source bytes and compare it against the "
+                      "expression's base64-value with '-' mapped to '+' and '_' to '/'. `SubtleCrypto` is a "
+                      "string in browser/platform_names.h and nothing else, so BIND a digest (host edge or "
+                      "engine intrinsic) rather than hand-rolling one here. Answering Does Not Match instead "
+                      "reports the page's OWN inline block — the one the hash was published for — as blocked");
+            }
+        }
+    }
+    return CSP_DOES_NOT_MATCH;
+}
+
 /* ---- §2.3.1's scheme-source / host-source, DECOMPOSED --------------------------------------------------- */
 
 /* RFC 3986 §3.1: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ). */

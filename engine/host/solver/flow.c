@@ -379,9 +379,11 @@ void flow_release(JSContext *ctx, Flow *f) {
     dom_base_release(f->dom_base); f->dom_base = NULL;
     decide_blob_free(f->dec_blob); f->dec_blob = NULL;
     concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
-    for (int k = 0; k < f->dyn_n; k++) { free(f->dyn[k]); free(f->dyn_token[k]); }
+    for (int k = 0; k < f->dyn_n; k++) { free(f->dyn[k]); free(f->dyn_token[k]); free(f->dyn_url[k]); }
     free(f->dyn); f->dyn = NULL;
     free(f->dyn_cand); f->dyn_cand = NULL;
+    free(f->dyn_type); f->dyn_type = NULL;
+    free(f->dyn_url); f->dyn_url = NULL;
     free(f->dyn_doc); f->dyn_doc = NULL;
     free(f->dyn_token); f->dyn_token = NULL;
     free(f->dyn_pos); f->dyn_pos = NULL;
@@ -602,6 +604,63 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     return f;
 }
 
+/* THE ARRIVAL RULE — START-TIME FAIR QUEUEING'S `max{v(t), F_prev}`, APPLIED TO THE ENTRIES THAT WERE MISSING IT.
+ *
+ * flow_fork_inherit already states this rule and already obeys it: "a continuation of an active flow enters at
+ * that flow's virtual time, never at the system's, or any flow can reset its own virtual clock by splitting."
+ * That sentence is about a FORK because a fork was the only entry anybody had looked at. It is a statement about
+ * ENTERING, and the other three ways a flow enters this frontier were all entering at virtual time ZERO:
+ *
+ *   - engine_join_document's boot flow (engine.c) — a Document the browser handed this agent mid-run,
+ *   - solve.c's candidate session — one per @S search the run seeds, and
+ *   - cold.c's park_flow_add — one per recipe the tier rebuilds.
+ *
+ * A flow at `cpu == 0` carries the FULL optimism bonus, so its weight is its reward + 1.0, and 1.0 is strictly
+ * above every flow that has consumed a single quantum (bonus <= 0.5 against 0.012 of aging). So each of those
+ * three minted a member at the very front of the queue, ahead of the entire backlog, no matter how long that
+ * backlog had been waiting — which is the exact defect flow_fork_inherit was written to close, arriving through
+ * the doors it did not cover. It is worst at the first of them, because that one is reachable from the PAGE: a
+ * document that creates same-origin navigables mints a boot flow per document, so a page can promote work it
+ * MANUFACTURES above every flow already on the frontier, without the manufacturing flow paying anything for it.
+ * Inheritance closes that for `f(){g()}` and left it open for `open()`.
+ *
+ * v(t) IS THE SERVICE OF THE FLOW IN SERVICE, which is SFQ's own definition and is O(1) — not a minimum over the
+ * frontier, which would be O(n) inside a function the pick already calls n times. When nothing is running there
+ * is no busy period to enter and v(0) is 0, which is why the first flow of a session, and every recipe the cold
+ * tier rebuilds before the first step, still enter at 0 exactly as they did.
+ *
+ * IT CANNOT INVERT A PAIR THAT ALREADY EXISTS. Every weight in the frontier is untouched; the only thing that
+ * changes is where a NEW member is placed among them, so no existing ordering decision can be reversed by this
+ * and the monopolizer assertion in flow_pick is unweakened (its `unrun` population — the boot flow, a rebuilt
+ * recipe, and any flow that has just emitted — all still stand at `cpu == 0`).
+ *
+ * `born` MOVES WITH `cpu` BECAUSE IT IS THE SAME QUANTITY: what this flow was handed rather than what it burned.
+ * A from-baseline flow's node is a ROOT, so nothing is charged upward when it departs — but `cpu - born` is also
+ * what acct_charge_departed asserts is non-negative and what the census would read as this flow's own service,
+ * and a `born` left at 0 beside a `cpu` of v says this flow burned v microseconds it never saw. */
+static void flow_arrive_at_virtual_time(Flow *f) {
+    DCHECK(f->cpu == 0 && f->born == 0,
+           "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
+           "both terms, so a caller that wrote either first has ranked this flow at a virtual time nobody "
+           "chose and this assignment throws that away");
+    if (!g_running) return;   /* SFQ's v(0): no busy period to enter, so the frontier's clock is still at zero */
+    DCHECK(flow_is_member(g_running),
+           "the flow holding the thread is not a member of the frontier, so the virtual time a newcomer would "
+           "enter at is a tag belonging to no queue — a newcomer placed against it is placed against nothing");
+    f->cpu  = g_running->cpu;
+    f->born = g_running->cpu;
+    /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED. A newcomer may tie with the flow in service — that is what
+       "enters at the system's virtual time" means, and flow_pick's STRICT comparison is what then leaves the
+       thread where it is — but it may never be worth MORE, because the only way to be worth more than the flow
+       in service without having earned it is the reset this rule exists to forbid. It is not a tautology: it
+       fires the moment a term enters flow_weight that this assignment does not carry, which is the same shape
+       flow_fork_inherit's own equality guards at the other entry. */
+    DCHECK(flow_weight(f) <= flow_weight(g_running),
+           "a flow arriving from the baseline outranks the flow that is running — it entered the queue ahead of "
+           "a member that has been served, so a page can promote the documents and candidate sessions it "
+           "creates above the whole backlog by creating them");
+}
+
 Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
     /* THE WORLD IS MINTED HERE so no flow can exist without one. A fork passes the world it BRANCHED AT and the
        child records the edge, which is what lets another instance materialize this flow's segment by forking
@@ -610,7 +669,16 @@ Flow *flow_add(JSContext *ctx, JSValueConst fn, WorldId parent) {
        child of the same name (engine_sibling_assemble), so the branch retires its own world and the two arms
        are siblings rather than ancestor-and-descendant — which is what makes "do these two senders contradict?"
        answerable at a peer. */
-    return flow_new(ctx, fn, world_is_none(parent) ? world_mint() : world_mint_child(parent));
+    int from_baseline = world_is_none(parent);
+    Flow *f = flow_new(ctx, fn, from_baseline ? world_mint() : world_mint_child(parent));
+    /* AND WHERE IT ENTERS THE QUEUE, decided by the SAME predicate that decides where it enters the world tree,
+       because they are one question asked twice: a flow standing on another flow's decisions is a continuation
+       and takes that flow's account (flow_fork_inherit, at the fork), and a flow standing on nobody's arrives
+       at the frontier's virtual time. `parent` is the only thing that tells the two apart, so the arrival is
+       decided here rather than at each of the three from-baseline call sites, none of which knew it was making
+       a ranking decision at all. */
+    if (from_baseline) flow_arrive_at_virtual_time(f);
+    return f;
 }
 
 /* BLOCKED = holding an unanswered synchronous host request. Scanned rather than counted because a counter is
@@ -748,7 +816,7 @@ static int job_fn_id(JSJobFunc *fn) {
 
 /* THE RECORD'S LAYOUT, stated once. The header is fixed-width and the arguments follow it, so `argc` is a
    length subtraction and never a stored count that can disagree with what is there. */
-enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HDR };
+enum { JOB_FN = 0, JOB_TASK, JOB_EXTERNAL, JOB_GLOBAL, JOB_HANDLE, JOB_HDR };
 
 /* THE PROVENANCE BRACKET — see flow.h. A static rather than a field on the flow because it is a property of
    the CONVERSION in flight, not of the timeline: exactly one can be open, which is what the asserts say. */
@@ -803,6 +871,39 @@ static int job_field_int(JSValueConst e, int field) {
     return n;
 }
 
+/* THE HANDLE FIELD, READ BACK — a SECOND accessor rather than a widened job_field_int, because the two fields
+   have different shapes and the assert is the point: a header int is a small integer and must be one, while a
+   handle is an integer VALUE that leaves the small-integer tag behind at 2^31 and is still exact. Both tags are
+   accepted and integrality is what is asserted, so a handle that failed to round-trip crashes here rather than
+   naming a different queued task at the removal. That is the same silent wrong answer js_task_handle_new's
+   ceiling assert refuses at the issuing end, asserted again at this end, which is the one that USES it. */
+static JSTaskHandle job_field_handle(JSValueConst e, int field) {
+    JSValue v = JS_GetPropertyUint32(pending_ctx(), e, (uint32_t)field);
+    JSTaskHandle h;
+
+    if (JS_VALUE_GET_TAG(v) == JS_TAG_INT) {
+        int n = JS_VALUE_GET_INT(v);
+
+        DCHECK(n >= 0, "a job record's handle is negative — handles come from one monotone runtime counter "
+                       "that starts at 1, so this record was written by something other than flow_job_push");
+        h = (JSTaskHandle)n;
+    } else {
+        double d;
+
+        DCHECK(JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(v)),
+               "a job record's handle is not a number — the header is written whole at the push, so one that "
+               "is not there is a record something other than this file built");
+        d = JS_VALUE_GET_FLOAT64(v);
+        DCHECK(d >= 0 && d < 9007199254740992.0 && d == (double)(uint64_t)d,
+               "a job record's handle is not an exact integer below 2^53 — a handle names at most one queued "
+               "callback and that is only true while the number round-trips, so a removal made with this one "
+               "would take some other timeline's task off the queue instead of finding none");
+        h = (JSTaskHandle)d;
+    }
+    JS_FreeValue(pending_ctx(), v);
+    return h;
+}
+
 int flow_job_microtask(const Flow *f) {
     int n = flow_job_pending(f), i;
 
@@ -816,7 +917,8 @@ int flow_job_microtask(const Flow *f) {
     return 0;
 }
 
-void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task) {
+void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueConst *argv, int task,
+                   JSTaskHandle handle) {
     JSValue e;
     int i;
 
@@ -835,6 +937,10 @@ void flow_job_push(JSContext *ctx, Flow *f, JSJobFunc *fn, int argc, JSValueCons
        document's jobs are then found by comparing two objects rather than two pointers, one of which used to
        be able to be freed underneath the comparison. */
     JS_SetPropertyUint32(ctx, e, JOB_GLOBAL, JS_GetGlobalObject(ctx));
+    /* THE NAME THE RUNTIME ISSUED — see flow.h's HANDLE bullet for why it is a JS number and not a string or a
+       word pair. JS_NewInt64 keeps the small-integer tag for the first 2^31 handles and widens to a float64
+       past it; both are exact below 2^53, which js_task_handle_new asserts is the whole range. */
+    JS_SetPropertyUint32(ctx, e, JOB_HANDLE, JS_NewInt64(ctx, (int64_t)handle));
     for (i = 0; i < argc; i++)
         JS_SetPropertyUint32(ctx, e, (uint32_t)(JOB_HDR + i), JS_DupValue(ctx, argv[i]));
     if (!JS_IsObject(f->jobs)) {
@@ -928,6 +1034,42 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
     cow_engine_write_end();
     JS_FreeValue(ctx, global);
     return n - keep;
+}
+
+/* REMOVE ONE JOB BY NAME — see flow.h. The same forward-compacting pass as flow_job_drop_realm with the other
+   predicate, deliberately not folded into it behind a mode flag: the two questions have different answers about
+   how many entries may match ("every job of this document" versus "the one job called this"), and that
+   difference is the assert below.
+   THE CONTEXT IS THE QUEUE'S OWN. JSJobRemoveHook names a job by identity and by nothing else — there is no
+   realm in the question, because a handle is issued by one runtime counter and is not a fact about a document —
+   so the caller has none to hand down, and this is the same context every reader in this block already uses. */
+int flow_job_remove(Flow *f, JSTaskHandle handle) {
+    JSContext *ctx = pending_ctx();
+    int n = flow_job_pending(f), keep = 0, found = 0, i;
+
+    DCHECK(handle != JS_TASK_HANDLE_NONE,
+           "a queued job was asked for by the never-issued handle — a record that never went through the "
+           "runtime's enqueue carries exactly that, so this would match work no tracker ever named");
+    if (n == 0) return 0;
+    cow_engine_write_begin();
+    for (i = 0; i < n; i++) {
+        JSValue e = job_entry(f, i);
+
+        /* EVERY entry is compared, including after a hit, because the count is what the assert is made of. */
+        if (job_field_handle(e, JOB_HANDLE) == handle) {
+            found++;
+            JS_FreeValue(ctx, e);
+            continue;
+        }
+        JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)keep++, e);
+    }
+    JS_SetPropertyStr(ctx, f->jobs, "length", JS_NewInt32(ctx, keep));
+    cow_engine_write_end();
+    DCHECK(found <= 1,
+           "one handle named two jobs on ONE flow's queue — handles come from a single monotone runtime "
+           "counter and are never reused, and a fork gives an arm its own Array naming each record once, so "
+           "this is two entries wearing one name and the tracker's removal just took the wrong task");
+    return found;
 }
 
 JSValue flow_job_fork(JSContext *ctx, const Flow *parent) {
@@ -1103,9 +1245,25 @@ double flow_weight(const Flow *f) {
    AND THE `cpu` IT IS COMPARED AGAINST IS THE CHAIN'S, not one flow's — a walker whose arms burn the document and
    depart carries their service (FlowAcct), which is what makes this assertion able to catch the walk at all. Read
    against the walker's own sliver it was an identity that held for a family monopolising the thread for hours.
+
+   THE `+ 1.0` IS GONE AND IT WAS A MILLION MICROSECONDS OF SLACK IN THE ONE GUARD THIS FILE HAS. Derive the bound
+   from flow_weight rather than from the sentence about it: if any candidate is unrun, its weight is its own
+   reward + 1.0 and hence at least 1.0, so the MAXIMUM the pick returns is at least 1.0 too. Write that out for
+   the picked flow — `val + 1/(1+s) − s*Q*RATE >= 1` — and since `1/(1+s) <= 1` it forces `s*Q*RATE <= val`,
+   i.e. `s <= val / (Q*RATE)`, i.e. `cpu < val/RATE + Q`. That is this expression with no `+ 1.0` in it, and the
+   extra point the old form allowed was a whole second of unpriced thread time per member: at val 0 the true
+   bound is ONE QUANTUM and the old one was 1.012 SECONDS, eighty-four times looser than the arithmetic it
+   claimed to be a consequence of.
+   AND THE COMMENT AT THE ASSERTION IS CORRECTED WITH IT. It says this "FIRES on the tree this replaced" — true
+   of a tree whose aging was one unit per scheduler STEP, where cpu could reach millions while the weight stayed
+   high, and false of this one: the derivation above is an identity under the current formula, so it can only
+   fire on an EDIT that breaks the derivation (a clamped or capped aging term, an optimism term without a
+   ceiling of 1, a reward that grows with the CPU it is weighed against). That is still exactly what the guard
+   is for and it is now tight enough to catch one, but it is not a thing that fires on today's tree and saying
+   so was the stale-DFAIL shape wearing an assertion.
    `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
 static inline int64_t flow_cpu_to_sink(const Flow *f) {
-    return (int64_t)((f->val + 1.0) / FLOW_AGE_RATE) + FLOW_SERVICE_US;
+    return (int64_t)(f->val / FLOW_AGE_RATE) + FLOW_SERVICE_US;
 }
 
 /* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
@@ -1211,11 +1369,13 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     }
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
        without emitting sinks below productive+unrun flows". This is the one line in the engine that decides
-       which flow runs, so it is where the claim is either true or a comment. It is not a tautology dressed as a
-       check: it FIRES on the tree this replaced, where the charge was one unit per scheduler step and the walk
-       above was re-picked at every iteration for 227 seconds with unrun siblings waiting. It fires again on any
-       future edit that clamps the aging term, caps it, or lets the reward grow with the CPU it is weighed
-       against — which is exactly the shape a "fix" for the thrash this quantum handles would take. */
+       which flow runs, so it is where the claim is either true or a comment. WHAT IT CATCHES IS AN EDIT TO
+       flow_weight, not a state of today's frontier: the bound is DERIVED from that function (see
+       flow_cpu_to_sink), so under the formula as it stands it is an identity, and it fires the moment an edit
+       breaks the derivation — a clamped or capped aging term, an optimism term whose ceiling is no longer 1, a
+       reward allowed to grow with the CPU it is weighed against. Each of those is exactly the shape a "fix" for
+       the thrash this quantum handles would take, and each would let the walk this rate was priced against be
+       re-picked for 227 seconds with unrun siblings waiting, which is what it did on the tree this replaced. */
     DCHECK(worst || !best || !unrun || best->cpu < flow_cpu_to_sink(best),
            "the WFQ re-picked a flow whose fork chain has burned more thread time since its last emit than its "
            "entire accumulated reward is worth, while a never-run flow was waiting — the aging term is no longer "
@@ -1241,7 +1401,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->members = g_flows_n;
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
-    out->svc_max = 0;
+    out->svc_max = out->svc_min = 0;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
     out->dec_max = 0;
@@ -1271,6 +1431,11 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->val > f->val_born) out->self_emit++;
         if (f->cpu == 0) out->unrun++;
         if (s > out->svc_max) out->svc_max = s;
+        /* THE FLOOR, TAKEN OVER EVERY MEMBER AND NOT ONLY THE SERVED ONES — see flow.h. A frontier holding one
+           never-run flow reads 0 here and that is the answer, not a hole in it: the aging term is then charging
+           the rest of the frontier against a member that has burned nothing, which is exactly the case the term
+           was priced for. It is `svc_max` read the other way, so it shares its scan and its unit. */
+        if (i == 0 || s < out->svc_min) out->svc_min = s;
         if (i == 0 || w < out->w_min) out->w_min = w;
         /* AND THE SAME QUESTIONS ASKED OF THE CANDIDATES ALONE — see flow.h. `cand_src` is what a candidate
            session IS (the substitution it carries), and engine.c copies it to a sibling, so this counts the
@@ -1371,7 +1536,8 @@ void flow_remove(JSContext *ctx, Flow *f) {
            "a flow was removed still holding queued jobs, pending host replies, unstarted cross-agent "
            "operations or routed cross-document messages — each is a work item on the one frontier, and the "
            "WFQ may never drop one");
-    DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_doc == NULL && f->dyn_token == NULL &&
+    DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_type == NULL && f->dyn_url == NULL &&
+           f->dyn_doc == NULL && f->dyn_token == NULL &&
            f->dyn_pos == NULL && f->dec_blob == NULL && f->pin_blob == NULL,
            "a flow was removed with its lazily-loaded chunk bodies or its suspended decision/pin blobs still "
            "attached — the flow's own allocations, freed by nothing else");

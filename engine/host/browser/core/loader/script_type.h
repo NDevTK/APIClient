@@ -3,7 +3,7 @@
  * The script block's type string decides which of four algorithms an element's content is: a classic script, a
  * module script, an import map, or a set of speculation rules. It is a fact about the ELEMENT, computed before
  * anything is fetched or created, and everything downstream branches on it — §8.1.3.1's "creating a classic
- * script" vs "creating a module script", then §8.1.3.3's "run a classic script" (which produces a COMPLETION)
+ * script" vs "creating a module script", then §8.1.4.4 "Calling scripts"'s "run a classic script" (a COMPLETION)
  * vs "run a module script" (Evaluate(), which produces a PROMISE, which is why a top-level `await` is
  * observable at all).
  *

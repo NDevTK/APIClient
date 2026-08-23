@@ -205,6 +205,12 @@ JSValue dom_rect_new_values(JSContext *ctx, JSValue x, JSValue y, JSValue width,
                     dr_value(ctx, width), dr_value(ctx, height));
 }
 
+JSValue dom_rect_readonly_new_values(JSContext *ctx, JSValue x, JSValue y, JSValue width, JSValue height)
+{
+    return dr_alloc(ctx, DR_READONLY, dr_value(ctx, x), dr_value(ctx, y),
+                    dr_value(ctx, width), dr_value(ctx, height));
+}
+
 /* `DOMRectReadOnly(x, y, width, height)` and `DOMRect(x, y, width, height)` — one body, because §3 gives them
    the same three steps and the interface is the magic. */
 static JSValue js_dr_ctor(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)

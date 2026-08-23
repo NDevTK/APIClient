@@ -45,7 +45,7 @@ static const char *tt_sink_group(TrustedTypeKind expected)
 }
 
 /* §4.2.3 over a parsed CSP list. The policies are enforced INDEPENDENTLY, so trusted types are required as
-   soon as ANY policy requires them — the opposite quantifier from policy_allows over the same list, and for
+   soon as ANY policy requires them — the opposite quantifier from policy_allows_inline over the same list, for
    the same reason: a second policy can only narrow.
    A NULL list is a document with no Content-Security-Policy, which requires nothing; a directive with NO VALUE
    covers no group, because the value IS the set of groups it covers. */

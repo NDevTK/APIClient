@@ -14,6 +14,7 @@
 #include "core/dom/document.h"
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
+#include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
@@ -221,29 +222,6 @@ static int script_sched_pass(ScriptSchedule s)
     return SCRIPT_PASS_PARSE_POSITION;
 }
 
-/* §4.12.1's "encoding-parsing a URL given src, relative to el's node document", which for §4.4's API base URL is
-   THIS document's and not its creator's: `<script src=app.js>` in a frame at `/app/child.html` is `/app/app.js`,
-   and resolving it against whichever document performed the navigation is how a child's own bundle comes to be
-   fetched from the parent's directory. NULL is §4.12.1's own branch for a `src` that does not parse — "return",
-   so the element runs no script; what is still owed there is the error event it fires at the element, which
-   needs a task on this document. Owned by the caller. */
-static char *script_src_absolute(JSContext *cctx, const char *src)
-{
-    UrlRecord base, rec;
-    const char *base_url = document_base_url(cctx);
-    bool have_base;
-    char *abs_url = NULL;
-
-    url_record_init(&base);
-    have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
-    url_record_init(&rec);
-    if (url_parse(&rec, src, strlen(src), have_base ? &base : NULL))
-        abs_url = url_serialize(&rec, false);
-    url_record_free(&rec);
-    url_record_free(&base);
-    return abs_url;
-}
-
 /* A DOCUMENT'S OWN SCRIPTS ARE PROGRAMS OF THE ONE FRONTIER, AND SEEDING THEM IS THE DOCUMENT'S OWN BEHAVIOUR
  * RATHER THAN A HOST EDGE. §7.11's create-and-initialize-a-Document ends by handing the response's bytes to the
  * parser, and what the parser does with a `<script>` is §4.12.1 — so a Document this agent built out of a
@@ -289,36 +267,51 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
         char *abs_url;
 
         if (script_sched_pass(ds.sched[i]) != pass) continue;
-        /* §8.1.4.4's TWO ALGORITHMS, and only one of them has a route. The same gap html_script.c names for an
-           INJECTED `<script type=module>`: the flow's dynamic sequence carries no ScriptType, so a module body
-           on it would be compiled by the CLASSIC entry and the child's own `import` would come back a
-           SyntaxError from a parser that is perfectly correct. */
-        DCHECK(ds.types[i] != SCRIPT_TYPE_MODULE,
-               "a child navigable's Document carries a `<script type=module>` and this seam can only queue a "
-               "CLASSIC program — give the flow's dynamic script sequence a ScriptType per entry "
-               "(engine_queue_script and solver/flow.h's dyn arrays), the way the document's own sequence "
-               "carries one, so flow_step routes it to §8.1.4.4's run-a-module-script");
+        /* §8.1.4.4 "Calling scripts"'S TWO ALGORITHMS, AND BOTH NOW HAVE A ROUTE. The row carries the
+           element's type (solver/flow.h's `dyn_type`), so this document's `<script type=module>` reaches
+           run-a-module-script instead of being handed to the CLASSIC entry, where the child's own `import`
+           would have come back a SyntaxError from a parser that is perfectly correct. The DCHECK that stood
+           here aborted the whole engine on any child navigable whose document had one — one of three, with
+           engine_join_document's and core/html/html_script.c's, all three naming this column. */
+        DCHECK(script_type_executes(ds.types[i]),
+               "a document's script inventory holds a row whose type executes nothing — document_exec_scripts "
+               "drops an import map, a set of speculation rules and §4.12.1.1's null type before any of them "
+               "becomes a row, so a fourth answer here means the types column was never written for this row");
         if (ds.bodies[i]) {
-            /* An inline entry is §4.12.1's `immediately execute the script element`: its result is already
-               available, so it joins no queue and runs where it stands. The only other schedule an inline entry
-               of an executing type reaches is an inline MODULE's, rejected above. */
-            DCHECK(ds.sched[i] == SCRIPT_SCHED_IMMEDIATE,
-                   "an inline entry of a document's script inventory is scheduled somewhere other than its own "
-                   "parse position — §4.12.1 reaches `immediately execute the script element` for exactly the "
-                   "elements whose result is already available");
-            engine_queue_script(doc, ds.bodies[i]);
+            /* WHERE AN INLINE ENTRY LANDS IS ITS SCHEDULE'S ANSWER, AND THE TWO ANSWERS ARE DIFFERENT SPEC
+               STEPS. §4.12.1.1 "Processing model" reaches `immediately execute the script element` only for
+               what falls past "If el's type is `classic` and el has a src attribute, or el's type is
+               `module`" — so an inline CLASSIC script runs where it stands, and an inline MODULE is appended
+               to the `list of scripts that will execute when the document has finished parsing` (every element
+               of this scan is parser-inserted) and takes a POSITION in the sequence instead. Not one call with
+               a flag: the standard runs them at two different times, and a module has a graph to LOAD before
+               its result exists, which is exactly why the standard does not run it in place. */
+            if (ds.sched[i] == SCRIPT_SCHED_IMMEDIATE) {
+                DCHECK(ds.types[i] == SCRIPT_TYPE_CLASSIC,
+                       "an inline entry of a document's script inventory reached `immediately execute the "
+                       "script element` with a type other than classic — §4.12.1.1 sends every module to one "
+                       "of the three lists before that step, so the schedule and the type disagree about one "
+                       "element");
+                engine_queue_script(doc, ds.bodies[i]);
+            } else {
+                DCHECK(ds.types[i] == SCRIPT_TYPE_MODULE,
+                       "an inline entry of a document's script inventory is scheduled somewhere other than its "
+                       "own parse position and is not a module — §4.12.1.1 owes no fetch for a classic script "
+                       "whose source it already has, so nothing else can reach a list from an inline row");
+                engine_queue_element_script(doc, ds.bodies[i], ds.types[i]);
+            }
             continue;
         }
         DCHECK(ds.srcs[i] != NULL,
                "a document's script inventory holds an entry that is neither an inline body nor an external "
                "address — document_exec_scripts states one of the two for every executable entry");
-        abs_url = script_src_absolute(cctx, ds.srcs[i]);
+        abs_url = script_src_absolute(cctx, ds.srcs[i], strlen(ds.srcs[i]));
         if (!abs_url) continue;
         /* THE SET PARKS AND THE ORDERED PASSES TAKE A SLOT — the whole difference between having a position and
            not needing one. A parked reply becomes a program of this flow whenever it drains, which is the
            arrival order a SET is entitled to; a slot holds the sequence at this script until its reply fills it. */
-        if (pass == SCRIPT_PASS_ASAP) engine_pending_script_url(cctx, abs_url);
-        else                          engine_queue_docscript_url(doc, abs_url);
+        if (pass == SCRIPT_PASS_ASAP) engine_pending_script_url(cctx, abs_url, ds.types[i]);
+        else                          engine_queue_docscript_url(doc, abs_url, ds.types[i]);
         free(abs_url);
     }
     doc_scripts_free(&ds);
