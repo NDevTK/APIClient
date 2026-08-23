@@ -115,6 +115,82 @@ static CssPx fp_edge_before(lxb_dom_element_t *el, bool vertical)
     return css_px_add(b.px, used_value_px(el, vertical ? "padding-top" : "padding-left"));
 }
 
+/* WHICH BOX TYPES §9.4.1 PLACES, asked HERE and not left to whichever component this one calls next. The two
+ * rules §9.4.1 states — "boxes are laid out one after the other, vertically, beginning at the top of a
+ * containing block" and "each box's left outer edge touches the left edge of the containing block" — are
+ * written about a BLOCK-LEVEL box in a block formatting context, and they say nothing whatever about a box of
+ * any other type. This used to test the one value `inline`, on the reading that everything else this engine
+ * could compute a `display` for was block-level; core/css/css_style_declaration.c's UA sheet now answers
+ * `inline-block` for `input`, `button`, `select`, `textarea` and `marquee` and the eight table-internal types
+ * for a table's own children, so that reading is gone and the rest would have fallen through to the two rules
+ * below and come out with an x and a y for a box neither rule describes.
+ *
+ * A CRASH TWO COMPONENTS AWAY IS NOT THE SAME ASSERT. Every one of these does still abort today — the walk in
+ * core/layout/block_flow.c classifies the same child and refuses it — but that is a crash at the box's PARENT,
+ * naming the parent's height walk, for a question that was asked about the CHILD's position. The invariant
+ * belongs where it is born (CLAUDE.md §Offensive programming), and it is the only thing standing between a
+ * release build and a coordinate computed from the wrong rule.
+ *
+ * §9.4.1 IS NOT ASKED ABOUT A BOX THAT DOES NOT EXIST, which is the caller's own first step (flow_position.h),
+ * so `none` and `contents` are a DCHECK rather than an arm: reaching here with either means the predicate that
+ * decides box existence and this one disagree. */
+static void fp_require_placeable(lxb_dom_element_t *el)
+{
+    static const char *const TABLE_INTERNAL[] = {
+        "table-row-group", "table-header-group", "table-footer-group", "table-row",
+        "table-cell", "table-column-group", "table-column", "table-caption",
+    };
+    char *d = css_computed_value(el, "display");
+    bool table_internal = false, inline_level;
+    unsigned i;
+
+    DCHECK(d != NULL, "the cascade produced no computed `display` for an element whose box is being placed");
+    if (d == NULL) return;
+    DCHECK(strcmp(d, "none") != 0 && strcmp(d, "contents") != 0,
+           "CSS 2 §9.4.1's placement was asked for an element that GENERATES NO BOX — css-display §3.1 gives "
+           "`contents` no box of its own and `none` no box at all, and core/dom/element_view.h's one box "
+           "predicate reads exactly those two values. The caller's own step establishes the box exists before "
+           "asking where it is, so this is that predicate and this test disagreeing");
+    for (i = 0; i < sizeof(TABLE_INTERNAL) / sizeof(TABLE_INTERNAL[0]); i++)
+        if (strcmp(d, TABLE_INTERNAL[i]) == 0) table_internal = true;
+    inline_level = strcmp(d, "inline") == 0 || strcmp(d, "inline-block") == 0 ||
+                   strcmp(d, "inline-table") == 0 || strcmp(d, "inline-flex") == 0 ||
+                   strcmp(d, "inline-grid") == 0;
+    /* THE STRING IS RELEASED BEFORE EITHER CRASH AND NEITHER CRASH READS IT AGAIN. `DFAIL` is compiled out in
+       release, so a `free` beside one is a `free` the release build FALLS THROUGH — freeing inside the loop and
+       carrying on comparing would be a use-after-free there, and freeing in each arm would be a double free at
+       the end. The classification is decided first, the buffer is released once, and the two arms then hold
+       nothing. */
+    free(d);
+    if (table_internal)
+        DFAIL("this box is TABLE-INTERNAL, and CSS 2.1 §17.5 'Visual layout of table contents' positions it "
+              "rather than §9.4.1: a row group, a row, a cell, a column, a column group and a caption are laid "
+              "out inside the TABLE's own grid of rows and columns, so a cell's position is the accumulated "
+              "widths of the columns before it and the accumulated heights of the rows above it, and neither "
+              "is a distance §9.4.1's two rules can produce. It needs the box structure §17.2.1 'Anonymous "
+              "table objects' generates — the row groups, rows and cells a UA inserts around whatever the "
+              "author wrote — and then §17.5.2's and §17.5.3's algorithms over it, which core/layout/"
+              "used_value.c already crashes for when a table's EXTENT is asked. BUILD §17.2.1, then §17.5");
+    if (inline_level)
+        DFAIL("this box is INLINE-LEVEL, so CSS 2 §9.4.2 'Inline formatting contexts' places it and §9.4.1 "
+              "does not: 'boxes are laid out horizontally, one after the other, beginning at the top of a "
+              "containing block', and the line box that results is as tall as the boxes in it. CSS 2.1 §9.2.2 "
+              "'Inline-level elements and inline boxes' is what puts `inline-block` and `inline-table` here "
+              "beside `inline` — they are ATOMIC inline-level boxes, which 'participate in their inline "
+              "formatting context as a single opaque box', so their CONTENTS are laid out differently and "
+              "their POSITION is a position on a line box exactly as an inline box's is. css-display §2's "
+              "`inline flex` and `inline grid` are the same case one level up. So this needs line breaking, "
+              "which needs the text measured with a real font — and the same fact is why an inline element can "
+              "be SEVERAL fragments and therefore several rectangles. BUILD the inline formatting context: the "
+              "font metrics first, then §9.4.2's line boxes over them");
+    /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
+       what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
+       'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`
+       and inline-level for `display: inline-table`, so the wrapper's own origin is §9.4.1's and what §17.5
+       owns is everything INSIDE it — which is the arm above, plus the `table-caption` §17.4 renders as a
+       normal block box inside the table WRAPPER box and therefore not over this containing-block chain. */
+}
+
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
@@ -142,13 +218,7 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
               "core/layout/used_value.c crashes on for want of an intrinsic size, so the extent and the "
               "position are blocked on two different components. BUILD §9.5.1's float placement over the line "
               "boxes it interacts with");
-    if (fp_computed_is(el, "display", "inline"))
-        DFAIL("CSS 2 §9.4.2 'Inline formatting contexts' places an INLINE box, and it places it on a LINE BOX: "
-              "'boxes are laid out horizontally, one after the other, beginning at the top of a containing "
-              "block', and the line box that results is as tall as the boxes in it. So an inline box's position "
-              "needs line breaking, which needs the text measured with a real font — and the same fact is why "
-              "an inline element can be SEVERAL fragments and therefore several rectangles. BUILD the inline "
-              "formatting context: the font metrics first, then §9.4.2's line boxes over them");
+    fp_require_placeable(el);
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,
        "anchored at the canvas origin", so both of §9.4.1's rules reduce to this box's own two margins.

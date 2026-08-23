@@ -1229,22 +1229,109 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
 }
 
 /* LAYER 4 — the UA DEFAULT. A headless run still has a user-agent stylesheet, and `display` is the property a
-   bundle actually branches on. Modelling it is the difference between answering the spec's value and shrugging;
-   what is NOT here — the rest of html.css — is honestly absent and reads as the property's initial value. */
+ * bundle actually branches on. Modelling it is the difference between answering the spec's value and shrugging;
+ * what is NOT here — the rest of html.css — is honestly absent and reads as the property's initial value.
+ *
+ * A TAG THIS TABLE DOES NOT NAME IS `inline`, WHICH IS WHY A MISSING ROW IS NOT A MISSING ANSWER BUT A WRONG
+ * ONE, AND WHY IT IS SILENT. `cssd_ua_value`'s last line is the UA sheet's own default, so an element the
+ * table forgets does not reach a crash and does not read as unset — it reads as a real value that three
+ * components then act on. core/dom/element_view.c's `clientWidth`/`clientHeight` step 1 is "if the element has
+ * no associated box OR IF THE BOX IS INLINE, return zero", so a forgotten row makes those members answer 0 for
+ * an element whose padding edge this engine can compute; `element_view_fragment_kind` reads `inline` as ONE
+ * FRAGMENT PER LINE BOX, so `offsetWidth`, `offsetHeight` and `getClientRects` abort naming CSS 2 §9.4.2's
+ * inline formatting context for an element that has no inline formatting context to wait on; and
+ * core/layout/block_flow.c's child classification refuses to lay out any block container holding one. A zero
+ * that a page compares against is CLAUDE.md §Architecture's plausible datum, and this is where it is born.
+ *
+ * EVERY ROW IS TRANSCRIBED FROM HTML'S RENDERING SECTION, BY NUMBER AND TITLE, AND `display` ONLY — the rest of
+ * each rule's declarations are the honest absence above. The sections are:
+ *   §15.3.1  Hidden elements                    — the fourteen-element `display: none` rule
+ *   §15.3.2  The page                           — `html, body { display: block }`
+ *   §15.3.3  Flow content                       — the block-level flow rule, and `slot { display: contents }`
+ *   §15.3.6  Sections and headings              — `article, aside, :heading, hgroup, nav, section`
+ *   §15.3.7  Lists                              — `dir, dd, dl, dt, menu, ol, ul`, and `li { display: list-item }`
+ *   §15.3.8  Tables                             — the nine table box types
+ *   §15.3.10 Form controls                      — `input, button { display: inline-block }`
+ *   §15.3.12 The fieldset and legend elements   — `fieldset { display: block }`
+ *   §15.5.5  The details and summary elements   — `details, summary { display: block }`
+ *   §15.5.13 The marquee element                — `marquee { display: inline-block }`
+ *   §15.5.16 The select element                 — `select { display: inline-block }`, `option`, `optgroup`
+ *   §15.5.17 The textarea element               — its prose, "expected to render as an 'inline-block' box"
+ * §15.3.6 selects the headings with `:heading` rather than by name; the six elements that pseudo-class matches
+ * in an HTML document are the six named here, and there is no seventh element for a row to be missing.
+ *
+ * WHAT A TYPE-SELECTOR TABLE CANNOT EXPRESS IS NAMED RATHER THAN APPROXIMATED, and each one is a rule whose
+ * SELECTOR is not a tag: §15.5.5's `details > summary:first-of-type { display: list-item }` gives the FIRST
+ * summary of a details a marker, which the row below reads as plain `block` — the two are both block-level
+ * block containers and differ in the marker box alone, so the deviation is in the marker and not in the box
+ * type, and closing it needs a structural selector this layer does not evaluate. `:heading(n)`'s font sizes and
+ * margins, §15.3.3's margins and §15.3.7's list-style rules are the same absence stated once above.
+ *
+ * AND §15.3.4's `ruby { display: ruby }` / `rt { display: ruby-text }` ARE DELIBERATELY ABSENT, which is the
+ * one place adding a row would make this engine WORSE rather than more complete, and the test is the one this
+ * whole comment is about. Every consumer of a computed `display` reads `inline` as a box it declines to
+ * measure — core/dom/element_view.c's step 1 answers zero, its fragment count aborts naming §9.4.2 — while
+ * `ruby` and `ruby-text` are box types NO consumer has an arm for: core/layout/used_value.c's `uv_box_kind`
+ * would classify one as BLOCK FLOW and hand CSS 2.1 §10.3.3's constraint equation a box §10 does not describe,
+ * so `clientWidth` would stop being zero and start being a real number computed for the wrong box. A wrong
+ * number is worse than the wrong-but-declined answer it replaces. These two rows land in the same diff that
+ * gives CSS Ruby a box type in `uv_box_kind` and in `element_view_fragment_kind`.
+ *
+ * THE `@namespace "http://www.w3.org/1999/xhtml"` AT THE HEAD OF EVERY ONE OF THOSE RULES IS NOT HONOURED HERE
+ * and the lookup is by LOCAL NAME alone. It is a real divergence and it is stated rather than assumed away: an
+ * SVG `<title>` and an SVG `<style>` take the HTML rows above, which happens to be the answer SVG's own UA
+ * sheet gives them, and no row added here collides with an SVG or MathML local name. Honouring it means adding
+ * the SVG UA sheet in the same diff — a namespace test alone would take `display: none` AWAY from those two
+ * and generate a box for them, which is strictly worse than the divergence it removes. */
 static const struct { const char *tag; const char *prop; const char *value; } UA_DEFAULT[] = {
+    /* §15.3.2 The page */
     { "html", "display", "block" },  { "body", "display", "block" },
-    { "div", "display", "block" },   { "p", "display", "block" },
+    /* §15.3.3 Flow content: `address, blockquote, center, dialog, div, figure, figcaption, footer, form,
+       header, hr, legend, listing, main, p, plaintext, pre, search, xmp { display: block }`. `dialog` is here
+       for the box it has when it is OPEN; `dialog:not([open])` is an attribute selector and is applied with
+       the other attribute-conditional rules below. */
+    { "address", "display", "block" }, { "blockquote", "display", "block" },
+    { "center", "display", "block" }, { "dialog", "display", "block" },
+    { "div", "display", "block" },   { "figure", "display", "block" },
+    { "figcaption", "display", "block" }, { "footer", "display", "block" },
+    { "form", "display", "block" },  { "header", "display", "block" },
+    { "hr", "display", "block" },    { "legend", "display", "block" },
+    { "listing", "display", "block" }, { "main", "display", "block" },
+    { "p", "display", "block" },     { "plaintext", "display", "block" },
+    { "pre", "display", "block" },   { "search", "display", "block" },
+    { "xmp", "display", "block" },
+    /* §15.3.3's `slot { display: contents }` — a box type, and the one in this table that generates NO box:
+       css-display §3.1 keeps the element's children and drops its own box, which core/dom/element_view.c's one
+       box predicate and core/css/css_computed_value.c's box-parent walk both already read. */
+    { "slot", "display", "contents" },
+    /* §15.3.6 Sections and headings */
+    { "article", "display", "block" }, { "aside", "display", "block" },
     { "h1", "display", "block" },    { "h2", "display", "block" },
     { "h3", "display", "block" },    { "h4", "display", "block" },
     { "h5", "display", "block" },    { "h6", "display", "block" },
-    { "ul", "display", "block" },    { "ol", "display", "block" },
-    { "li", "display", "list-item" },{ "form", "display", "block" },
-    { "header", "display", "block" },{ "footer", "display", "block" },
-    { "section", "display", "block" }, { "article", "display", "block" },
-    { "nav", "display", "block" },   { "aside", "display", "block" },
-    { "main", "display", "block" },  { "figure", "display", "block" },
-    { "table", "display", "table" }, { "tr", "display", "table-row" },
+    { "hgroup", "display", "block" }, { "nav", "display", "block" },
+    { "section", "display", "block" },
+    /* §15.3.7 Lists */
+    { "dir", "display", "block" },   { "dd", "display", "block" },
+    { "dl", "display", "block" },    { "dt", "display", "block" },
+    { "menu", "display", "block" },  { "ol", "display", "block" },
+    { "ul", "display", "block" },    { "li", "display", "list-item" },
+    /* §15.3.8 Tables — all nine box types, because a `<tbody>` reading `inline` is not a table this engine
+       cannot lay out, it is a box CSS 2 §9.2 says exists nowhere in a table. */
+    { "table", "display", "table" }, { "caption", "display", "table-caption" },
+    { "colgroup", "display", "table-column-group" }, { "col", "display", "table-column" },
+    { "thead", "display", "table-header-group" }, { "tbody", "display", "table-row-group" },
+    { "tfoot", "display", "table-footer-group" }, { "tr", "display", "table-row" },
     { "td", "display", "table-cell" }, { "th", "display", "table-cell" },
+    /* §15.3.10 Form controls, §15.3.12 The fieldset and legend elements, and §15.5's widget sections. An
+       `<input>` is the single most measured element on the web and `input.clientWidth` was zero for every one
+       of them. */
+    { "input", "display", "inline-block" }, { "button", "display", "inline-block" },
+    { "fieldset", "display", "block" },
+    { "details", "display", "block" }, { "summary", "display", "block" },
+    { "marquee", "display", "inline-block" },
+    { "select", "display", "inline-block" }, { "textarea", "display", "inline-block" },
+    { "option", "display", "block" }, { "optgroup", "display", "block" },
     /* §15.3.1's FIRST RULE, entire: `area, base, basefont, datalist, head, link, meta, noembed, noframes,
        param, rp, script, style, template, title { display: none }`. Seven of the fourteen used to be here and
        seven were not, which is not a smaller stylesheet — it is a `<datalist>` this engine says generates a
@@ -1257,6 +1344,14 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "rp", "display", "none" },     { "script", "display", "none" },
     { "style", "display", "none" },  { "template", "display", "none" },
     { "title", "display", "none" },
+    /* §15.3.1's LAST RULE, `@media (scripting) { noscript { display: none !important } }`. It is here as an
+       ordinary row and not among the conditional rules below because its condition is not about the ELEMENT:
+       core/css/media_query.c answers `scripting` with `enabled`, on the ground that this engine runs the
+       page's scripts in the document's own realm, so the media query is true for every document this table can
+       be asked about. Its `!important` is carried by cssd_ua_important_display — a `<noscript>` whose contents
+       the parser took as TEXT because scripting is enabled is exactly the element an author rule must not be
+       able to make visible. */
+    { "noscript", "display", "none" },
 };
 
 /* §15.3.1's `hidden` RULES, which are ATTRIBUTE selectors and therefore outrank every type selector in the
@@ -1268,41 +1363,144 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
    rule that outranks it, so a page's own `[hidden] { display: block }` did nothing.
      [hidden]:not([hidden=until-found i]):not(embed) { display: none }
      embed[hidden] { display: inline; height: 0; width: 0 } */
+/* An attribute selector's `i` FLAG, over a raw attribute value: Selectors §6.3's ASCII case-insensitive match.
+   `want` is lowercase ASCII and NUL-terminated; `v`/`vlen` are the attribute's own bytes and are neither. It is
+   a function because four of the rules above and below carry the flag and each hand-rolled copy is one more
+   place `type=HIDDEN` can be read as a different value than `type=hidden`. */
+static bool cssd_attr_is_ascii_ci(const lxb_char_t *v, size_t vlen, const char *want)
+{
+    size_t i, n = strlen(want);
+
+    if (v == NULL || vlen != n) return false;
+    for (i = 0; i < n; i++)
+        if ((char)tolower((unsigned char)v[i]) != want[i]) return false;
+    return true;
+}
+
 static const char *cssd_ua_hidden(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
 {
     size_t vlen = 0;
     const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"hidden", 6, &vlen);
-    static const char UNTIL_FOUND[] = "until-found";
-    size_t i;
 
     if (!v) return NULL;
     if (taglen == 5 && memcmp(tag, "embed", 5) == 0) return "inline";
-    if (vlen == sizeof(UNTIL_FOUND) - 1) {
-        for (i = 0; i < vlen; i++)
-            if ((char)tolower((unsigned char)v[i]) != UNTIL_FOUND[i]) break;
-        if (i == vlen) return NULL;   /* `until-found` sets content-visibility, and the box stays */
-    }
+    /* `until-found` sets content-visibility, and the box stays */
+    if (cssd_attr_is_ascii_ci(v, vlen, "until-found")) return NULL;
     return "none";
 }
 
-static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name)
+/* THE OTHER TWO UA RULES WHOSE SELECTOR IS AN ATTRIBUTE AND WHOSE PROPERTY IS `display`, each one a box an
+ * element HAS OR HAS NOT depending on a content attribute, which is why neither can be a row of the type-name
+ * table above and why leaving them out is a box that should not exist rather than a value that is missing:
+ *
+ *   §15.3.1 Hidden elements: `input[type=hidden i] { display: none !important }`. Its IMPORTANCE is part of the
+ *   rule and is reported, not dropped — CSS Cascade §6.3 puts an important user-agent declaration above every
+ *   author declaration, which is the whole point of writing it that way: a page's own `input { display: block }`
+ *   must not give a hidden input a box. Reported through `*important` for that reason and because the value is
+ *   the same `none` the normal rules produce, so the flag is the only thing that carries the difference.
+ *
+ *   §15.3.3 Flow content: `dialog:not([open]) { display: none }`, at NORMAL importance, which is why a page
+ *   CAN show a closed dialog with its own rule and is a real difference from the line above.
+ *
+ * WHAT IS DELIBERATELY NOT HERE: §15.3.3's `[popover]:not(:popover-open):not(dialog[open]) { display: none }`
+ * and `dialog:popover-open { display: block }`. Both turn on the POPOVER VISIBILITY STATE, which is an
+ * element's own state and not an attribute — there is no attribute to read it off, so a rule written from the
+ * `popover` attribute alone would hide every popover that a page had shown. Build the popover state machine
+ * (HTML §6.12 "The popover attribute") and these two rules land beside the two above. */
+static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen,
+                                               bool *important)
+{
+    size_t vlen = 0;
+    const lxb_char_t *v;
+    const char *hidden;
+
+    /* §6.3's TOP BAND FIRST — "important user agent declarations" — because these three rules can all match one
+       element and the order they are asked in IS the cascade between them. `<input type=hidden hidden>` matches
+       this rule AND the `[hidden]` rule below, both with the value `none`, and only the IMPORTANCE tells them
+       apart: asked the other way round the answer would be a normal declaration a page's own
+       `input { display: block !important }` outranks. */
+    if (taglen == 5 && memcmp(tag, "input", 5) == 0) {
+        v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"type", 4, &vlen);
+        if (cssd_attr_is_ascii_ci(v, vlen, "hidden")) { *important = true; return "none"; }
+    }
+    /* Then the two NORMAL rules, in §6.1's Specificity order, which is the criterion left once the band ties:
+       `[hidden]:not([hidden=until-found i]):not(embed)` is (0,2,1) and `dialog:not([open])` is (0,1,1). They
+       agree on `none` wherever both match, so the order is not observable today — it is the order the spec
+       gives, written down so that it stays right when a third rule joins them. */
+    hidden = cssd_ua_hidden(el, tag, taglen);
+    if (hidden) return hidden;
+    if (taglen == 6 && memcmp(tag, "dialog", 6) == 0) {
+        v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"open", 4, &vlen);
+        if (v == NULL) return "none";
+    }
+    return NULL;
+}
+
+/* THE UA DECLARATION for `name` on `el`, and its §6.3 IMPORTANCE. `*important` is written on EVERY path,
+   including the ones that answer nothing, because the caller passes it straight into the cascade and a flag it
+   did not write would carry whatever the last resolution left there — the failure mode being an ordinary
+   `display: block` that outranks the page's own rule. */
+static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name, bool *important)
 {
     size_t n = 0;
     const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
     unsigned i;
 
+    DCHECK(important != NULL,
+           "a UA declaration was resolved with nowhere to report its IMPORTANCE. Two of HTML §15.3.1's display "
+           "rules are `!important` and CSS Cascade §6.3 puts an important user-agent declaration above every "
+           "author one, so a caller that cannot receive the flag would cascade `input[type=hidden]` as a "
+           "normal declaration a page's own rule outranks");
+    *important = false;
     if (!tag) return NULL;
     if (strcmp(name, "display") == 0) {
-        const char *h = cssd_ua_hidden(el, tag, n);
+        const char *h = cssd_ua_display_conditional(el, tag, n, important);
+
         if (h) return h;
+        DCHECK(!*important,
+               "an attribute-conditional UA rule reported IMPORTANCE and no value — the flag is written only "
+               "beside the declaration it belongs to, so one without the other is a rule that set it and then "
+               "fell through");
     }
     for (i = 0; i < sizeof(UA_DEFAULT) / sizeof(UA_DEFAULT[0]); i++)
         if (strlen(UA_DEFAULT[i].tag) == n && memcmp(UA_DEFAULT[i].tag, tag, n) == 0 &&
-            strcmp(UA_DEFAULT[i].prop, name) == 0)
+            strcmp(UA_DEFAULT[i].prop, name) == 0) {
+            /* §15.3.1's `noscript` rule is `!important` inside `@media (scripting)`; the row carries the value
+               and this carries the half of the rule a `{tag, prop, value}` triple has no column for. */
+            *important = strcmp(UA_DEFAULT[i].tag, "noscript") == 0 && strcmp(name, "display") == 0;
             return UA_DEFAULT[i].value;
+        }
     /* Every element the table does not name is `display: inline`, which is the UA sheet's own default. */
     if (strcmp(name, "display") == 0) return "inline";
     return NULL;
+}
+
+/* THE TABLE'S OWN INVARIANT, asserted once per instance beside the shorthand table's. ONE `{tag, prop}` PAIR
+   HAS ONE ROW: the lookup above is a linear scan that stops at the first match, so a second row for a pair is a
+   declaration that can never be read and a disagreement nothing would report — which is how a `display` for one
+   element ends up depending on where in the file somebody added it. Every value is non-empty for the same
+   reason `cssd_ua_value`'s last line exists: an empty string is a value the cascade would carry, not an absent
+   declaration. */
+static void cssd_ua_table_check(void)
+{
+#if APICLIENT_DEV
+    unsigned i, j;
+
+    for (i = 0; i < sizeof(UA_DEFAULT) / sizeof(UA_DEFAULT[0]); i++) {
+        DCHECK(UA_DEFAULT[i].tag != NULL && UA_DEFAULT[i].tag[0] != '\0' &&
+                   UA_DEFAULT[i].prop != NULL && UA_DEFAULT[i].prop[0] != '\0' &&
+                   UA_DEFAULT[i].value != NULL && UA_DEFAULT[i].value[0] != '\0',
+               "a row of the UA default stylesheet has an empty tag, property or value — a row is a whole "
+               "declaration from HTML's rendering section and an empty half of one is a rule nobody wrote");
+        for (j = 0; j < i; j++)
+            DCHECK(strcmp(UA_DEFAULT[i].tag, UA_DEFAULT[j].tag) != 0 ||
+                       strcmp(UA_DEFAULT[i].prop, UA_DEFAULT[j].prop) != 0,
+                   "the UA default stylesheet declares one property TWICE for one element name. The lookup "
+                   "stops at the first row, so the second is a declaration that can never win and never be "
+                   "reported — which is the shape a transcription error from HTML's rendering section takes "
+                   "when two of its sections name the same element");
+    }
+#endif
 }
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY DOES NOT CARRY. An initial value is a fact about the PROPERTY, stated
@@ -1398,7 +1596,7 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
     CssCascade *cascade;
     const char *ua;
     uint32_t seq = 0;
-    bool important = false;
+    bool important = false, ua_important = false;
     char *v, *out;
 
     DCHECK(g_ready, "the cascade was resolved before cssom_init built the CSS parser it parses every layer "
@@ -1440,8 +1638,12 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
         css_cascade_add(cascade, CSS_ORIGIN_PRESENTATIONAL_HINT, false, false, NULL, 0, ++seq, v);
         free(v);
     }
-    ua = cssd_ua_value(el, name);
-    if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, false, false, NULL, 0, ++seq, ua);
+    /* §6.2's USER-AGENT ORIGIN, with §6.3's IMPORTANCE carried rather than assumed normal: two of HTML §15.3.1's
+       `display` rules are `!important`, and "important user agent declarations" is the TOP band of §6.3's list
+       — above important author declarations — so a flag dropped here is a page's own rule silently giving a
+       box to an element the UA sheet says has none. */
+    ua = cssd_ua_value(el, name, &ua_important);
+    if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, ua_important, false, NULL, 0, ++seq, ua);
     /* §6.4.3's order is a fact about the WHOLE document's layers, so it is sealed once every sheet has been
        walked and before the first index is read. Nothing below declares a layer. */
     css_layer_order_seal(order);
@@ -2349,6 +2551,9 @@ void cssom_init(JSContext *ctx)
        in both directions and the cascade walks it in one, so a row that disagrees with itself is a wrong
        string and a wrong computed value at once. */
     css_shorthand_init();
+    /* The UA stylesheet's own invariants, for the same reason: it is scanned first-match-wins, so a duplicated
+       row is a declaration that can never be reported and a transcription error nothing else would surface. */
+    cssd_ua_table_check();
     g_parser = lxb_css_parser_create();
     CHECK(g_parser != NULL && lxb_css_parser_init(g_parser, NULL) == LXB_STATUS_OK,
           "the CSS parser could not be created");
