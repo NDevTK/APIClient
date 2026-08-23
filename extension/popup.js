@@ -994,6 +994,21 @@ function renderDeepStatus() {
          "while running this page would vanish from the only surface that shows them");
   const rerrs = tabData.resolverErrors;
   let html = "";
+  /* THE RUN THIS PAGE'S FINDINGS CAME OUT OF, SAID FIRST, because it decides how to read everything else on
+     the screen. A crashed engine's findings are REAL — it recorded them before it died and the moat has them
+     — but the run is not a complete analysis of the page, and nothing must be able to read the panels below
+     as one. The three states are three different facts and none of them is defaulted: `null` is "no run has
+     returned for this document yet" (the popup opened over a page still being explored, or over one the
+     engine never ran), which is not the same as a run that returned having found nothing. */
+  DCHECK(tabData.analysisRun === null || typeof tabData.analysisRun === "string",
+         "GET_STATE answered without an analysisRun field — serializeTabData writes it on every path " +
+         "(lib/serialize.js), so its absence is that serializer broken and a page whose engine crashed would " +
+         "render exactly like one that was analysed and found clean");
+  if (tabData.analysisRun === "crashed") {
+    html += `<div class="deep-row"><span class="deep-label"><strong>The engine crashed while analysing this `
+          + `page.</strong> What is shown below is what it had already learned when it died — a PARTIAL `
+          + `result, not a clean bill. See the engine run record for the abort.</span></div>`;
+  }
   if (rerrs.length) {
     const rows = rerrs.map((r) => {
       DCHECK(typeof r.context === "string" && typeof r.message === "string",
@@ -1001,7 +1016,10 @@ function renderDeepStatus() {
              "strings on every entry it builds, so a row missing one is that relay broken");
       return `<div class="deep-row" title="${esc(r.message)}"><span class="deep-label">${esc(r.context + ": " + r.message.slice(0, 140))}</span></div>`;
     }).join("");
-    html = `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
+    /* APPENDED, NOT ASSIGNED. `html =` here silently dropped whatever section had been built above it — which
+       was nothing while this was the first section, and was the crashed-run notice the moment one existed.
+       A section that overwrites the panel instead of adding to it is a defect waiting for the next section. */
+    html += `<details class="deep-cross-tab"><summary>Analyzer gaps — reached-but-unresolved / host-model (${rerrs.length})</summary>${rows}</details>`;
   }
   // The two sections are INDEPENDENT. A document with no page errors is the ordinary case and still has a run
   // record worth showing; gating the run record on `rerrs.length` would hide it for exactly the pages that

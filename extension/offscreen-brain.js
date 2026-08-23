@@ -107,10 +107,13 @@ function _scheduleEvictSweep() {   // name kept: lib/merge.js posts here at the 
 function _reclaimReviewedDocs() {
   var n = 0;
   state.docs.forEach(function (doc, documentId) {
-    /* Reviewed = its forced-exec run has RETURNED (`_astResults`/`_astError` are written by the ONE analysis
-       when its engine finalizes). `_reclaimed` is what keeps this from re-running over the same document on
-       every later merge — it is the reclaim's own record, not a second answer to "did the run return". */
-    if (doc._reclaimed || !(doc._astResults || doc._astError)) return;
+    /* Reviewed = its forced-exec run has RETURNED (`_astRun`/`_astError` are written by the ONE analysis when
+       its engine finalizes). `_reclaimed` is what keeps this from re-running over the same document on every
+       later merge — it is the reclaim's own record, not a second answer to "did the run return".
+       IT ASKED `_astResults` AND THAT IS NO LONGER THE SAME QUESTION: the incremental merge writes a snapshot
+       into that slot while the engine is still exploring, so reading it here would free the page source of a
+       document whose run is mid-flight. `_astRun` is the outcome and is written once, at the return. */
+    if (doc._reclaimed || !(doc._astRun || doc._astError)) return;
     _reclaimReviewedDoc(documentId, doc);
     n++;
   });
@@ -338,6 +341,7 @@ function _clearDocLearning() {
     doc._reclaimed = false;
     delete doc._responseHeaders;
     delete doc._astResults;
+    delete doc._astRun;
     delete doc._astError;
     delete doc._securityFindings;
     delete doc._resolverErrors;
@@ -381,26 +385,75 @@ function _emptyDocView() {
   };
 }
 
-/* Merge ONE global-frontier advance (a background exploration of some ORIGIN's parked residue) into the
-   cumulative moat. Keyed by its OWN sourceUrl via a transient view -> globalStore only (the origin's
-   page may not be open), the same gone-doc path _mergeDeepResult uses. This is how the host-level WFQ
-   arbiter's cross-site/cross-session learning reaches the real netdiff --unused surface. */
-function _mergeFrontierResult(sourceUrl, result) {
+/* Merge ONE engine advance — a mid-run snapshot of a live document, or the whole output of an engine with no
+   live caller (a child navigable the engine announced, a rehydrated cold recipe) — into the moat AND into the
+   documents it belongs to.
+
+   THE DOCUMENTS ARE NAMED BY THE CALLER AND ARE NOT DERIVED FROM THE URL. This took a sourceUrl alone, so it
+   had nothing to merge into and built an `_emptyDocView()` — whose own comment says "anything that WRITES to
+   one and does not itself merge it is writing into an object that is discarded on return". It DID merge it,
+   to globalStore, and that is exactly half the job: the cumulative moat learned every incremental endpoint and
+   the DOCUMENT that learned it never did. Measured on a mirrored vuejs.org: globalStore held
+   `GET media.bitterbrains.com/banners` while the document reporting on that same page carried an empty
+   endpoints map and an empty `_astResults`, so the per-page view a user reads said the page was clean.
+   `documentId` is the ONLY document key in this zone (a tab holds many documents; a (tab,frame) pair is
+   reused across navigations at a DIFFERENT origin), so the name is carried across the seam rather than
+   re-derived from an address that names no document.
+   AN EMPTY LIST IS A POSITIVE STATEMENT: this engine has no live caller, its findings are the moat's alone,
+   and the transient view is then the right target because there is no document to be wrong about. */
+function _mergeFrontierResult(sourceUrl, documentIds, result) {
   // The engine↔JS contract guarantees a result OBJECT (never null) — a null here is a should-never-happen
   // in the engine's own output, not a case to `if(!result)return`-past.
   DCHECK(result && typeof result === "object", "_mergeFrontierResult: engine produced a non-object frontier result");
   if (!result) return;   // release: the DCHECK is stripped, tolerate the impossible-in-dev case (don't crash the user)
+  DCHECK(Array.isArray(documentIds),
+         "_mergeFrontierResult was not told which documents this advance belongs to — the empty list is how " +
+         "an engine with no live caller says so, and an absent one is the bridge's half of this edge broken: " +
+         "every finding would merge to the cumulative moat and no document would report having learned it");
+  /* WHAT THIS RECORD IS. `_run` rides every analysis bridge.js builds, and a merge that could not tell a
+     mid-run snapshot from a finished run from a crashed one could not label what it stores either. */
+  DCHECK(result._run === "partial" || result._run === "complete" || result._run === "crashed",
+         "an engine advance reached the merge without a run outcome (`" + result._run + "`) — bridge.js writes " +
+         "`_run` on every analysis it builds, so its absence is that seam broken and a crashed run's findings " +
+         "would be stored as a completed page's");
   try {
     // Merge on EITHER surface: an XSS-only page carries verified @S PoCs with no endpoints. Gating on
     // fetchCallSites alone dropped every incremental sink (they only surface here now, not just at teardown).
-    var hasEps = result.fetchCallSites && result.fetchCallSites.length;
-    var hasSinks = result.securitySinks && result.securitySinks.length;
-    if (!hasEps && !hasSinks) return;   // legitimately empty (a page with nothing learned yet) — not an invariant break
-    var view = _emptyDocView();
-    view.url = sourceUrl || ""; view.tabUrl = sourceUrl || "";
+    /* NOT `result.fetchCallSites && …`: bridge.js asserts both arrays on every document it relays, so the
+       `&&` was a defaulted read of a guaranteed field — and what it produced when the producer stopped
+       writing one was a quiet return, i.e. a page reported as having learned nothing. */
+    DCHECK(Array.isArray(result.fetchCallSites) && Array.isArray(result.securitySinks),
+           "an engine advance reached the merge without its two finding arrays — every endpoint and every @S " +
+           "record travels in them, so a missing one is bridge.js's relay broken and this advance would " +
+           "silently merge as an empty one");
+    if (!result.fetchCallSites.length && !result.securitySinks.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
     result.sourceUrl = sourceUrl || result.sourceUrl || "";
-    mergeASTResultsIntoVDD(view, [result], null, true);
-    mergeToGlobal(view);
+    if (!documentIds.length) {
+      var view = _emptyDocView();
+      view.url = sourceUrl || ""; view.tabUrl = sourceUrl || "";
+      mergeASTResultsIntoVDD(view, [result]);
+      mergeToGlobal(view);
+      return;
+    }
+    for (var _di = 0; _di < documentIds.length; _di++) {
+      /* REGISTERED BEFORE THE ENGINE WAS SEATED. `_dispatchDocument` calls getDoc off the browser's own facts
+         and only then dispatches, and a reclaimed document keeps its entry (only its page source is freed),
+         so a miss here is that registration broken — not a document that legitimately went away — and
+         merging into a view nobody holds is what this function was doing wrong in the first place. */
+      var doc = state.docs.get(documentIds[_di]);
+      DCHECK(!!doc,
+             "an engine advance names a document this zone has no record of (" + documentIds[_di] + ") — the " +
+             "analysis is dispatched only after the document is registered, so its findings would have " +
+             "nowhere to go and the page would report as clean");
+      if (!doc) continue;   // release
+      /* THE SNAPSHOT THE DOCUMENT REPORTS. Each partial carries the run's GROWING accumulated findings, so
+         the newest one supersedes the previous rather than adding to it — `_astResults` holds the most
+         complete snapshot this run has produced, which is what makes it a real answer for a run that later
+         dies. The terminal record only replaces it when it carries a document of its own. */
+      doc._astResults = [result];
+      mergeASTResultsIntoVDD(doc, [result]);
+      mergeToGlobal(doc);
+    }
   } catch (e) {
     // A merge THROW is a real bug (malformed engine output / a broken merge invariant). DEV: surface it LOUD
     // at the origin, never log-and-continue — that swallow is the exact defensive robustness this forbids.
@@ -415,11 +468,20 @@ function _mergeFrontierResult(sourceUrl, result) {
    the background while new tabs are learned promptly via the review queue. */
 // The bridge's ONE host pool advances cold parked recipes itself (admit rehydrates the highest-value ones
 // when live work drains). A cold engine finalizing calls back here so its facts merge to the GLOBAL moat.
-self.onFrontierAdvance = function (sourceUrl, result) {
+self.onFrontierAdvance = function (sourceUrl, documentIds, result) {
   // Do NOT wrap in a swallowing catch — that would silence the _mergeFrontierResult DCHECK (a broken engine↔JS
   // contract must crash LOUD in dev). notifyPopup is a UI side-effect whose own failure is non-fatal, isolated.
-  _mergeFrontierResult(sourceUrl, result);
-  try { notifyPopup(null); } catch (e) { if (self.APICLIENT_DEV) throw e; }
+  _mergeFrontierResult(sourceUrl, documentIds, result);
+  /* THE POPUP IS TOLD WHICH DOCUMENT MOVED. `notifyPopup(null)` broadcast a tab-less update for advances that
+     belong to real documents, and the popup's own listener re-loads on any update, so this is not a fix for a
+     missed render — it is the same rule as above one layer out: a message about a document that does not name
+     it is a message nothing can attribute. A cold recipe genuinely has none, and null says so. */
+  var _tabId = null;
+  for (var _i = 0; _i < documentIds.length && _tabId === null; _i++) {
+    var _d = state.docs.get(documentIds[_i]);
+    if (_d) _tabId = _d.tabId;
+  }
+  try { notifyPopup(_tabId); } catch (e) { if (self.APICLIENT_DEV) throw e; }
 };
 function _driveGlobalFrontierBurst() {   // idle nudge: kick the ONE pool to re-check the cold frontier
   if (typeof self.kickHostPool !== "function") return;   // optional edge (bridge may not be up yet) — an ABSENCE, not an error
@@ -800,13 +862,38 @@ async function _dispatchDocument(docKey) {
   console.debug("[AST] tab=%d: %d fetchSites, %d secSinks, %d pageErrors", tabId,
     analysis.fetchCallSites.length, analysis.securitySinks.length, analysis.resolverErrors.length);
 
+  /* WHAT THIS RUN WAS, ON THE DOCUMENT ITSELF. `_engineCrashed` was written twice in bridge.js and read
+     nowhere, so a crashed run reached this document as a plausible empty analysis: `_astError` is null (the
+     dispatch succeeded), the arrays are the host's own empties, and every surface downstream then reported a
+     page that had been analysed and found clean. It is `_run` now, it is written on every arm of every
+     producer, and this is where it becomes a fact about the DOCUMENT — read by the reclaim sweep below, by
+     lib/serialize.js, and by the popup, which says so in words.
+     THE RECLAIM GATE MOVED HERE WITH IT. It asked `_astResults || _astError` — "has this run returned" — and
+     `_astResults` is now also written by the incremental merge while the run is still going, which would have
+     freed a running document's page source. `_astRun` is the terminal fact and is written exactly once. */
+  DCHECK(analysis._run === "complete" || analysis._run === "crashed" || analysis._run === "nothing-to-run",
+         "the analysis for this document carried no run outcome (`" + analysis._run + "`) — bridge.js writes " +
+         "`_run` on every record it builds, so its absence is that seam broken and a crashed run would be " +
+         "recorded here as a completed analysis of a page that has nothing to find");
+  tab._astRun = analysis._run;
   /* MERGED UNCONDITIONALLY. A `hasFindings` gate stood here and RETURNED before all four lines below when the
      engine emitted no endpoint and no sink — so `tab._astResults` was never written, and the reclaim sweep
      reads exactly that slot to decide a document's run has returned. A page with nothing to find therefore
      held its page source forever, and the one case that produces no symptom is again the one that was broken.
-     "The engine found nothing" is a RESULT and is recorded as one. */
-  tab._astResults = [analysis];
-  mergeASTResultsIntoVDD(tab, [analysis], tabId);
+     "The engine found nothing" is a RESULT and is recorded as one.
+     A RECORD THAT CARRIES NO DOCUMENT DOES NOT REPLACE ONE THAT DOES. A crash record and a page with nothing
+     to run are made of the host's own empty arrays — they are not an observation of a page — and overwriting
+     the last real snapshot with them is precisely how a run that learned an endpoint came to report none.
+     "The engine found nothing" and "the engine died" are both recorded, in `_astRun`; only the first of them
+     is a finding set.
+     A CRASH RECORD THAT DID CARRY OBSERVATIONS STILL REPLACES, and it is not the same test written twice: an
+     instance that aborts between printing a snapshot and this zone consuming it hands over that snapshot,
+     which is strictly newer than the last one merged (each is the run's growing accumulation and the merged
+     ones are consumed as they go), so it is the most complete answer this run has. What must not replace is
+     an EMPTY record — the host's own empties, which are not an observation of anything. */
+  if (analysis._run === "complete" || analysis.fetchCallSites.length || analysis.securitySinks.length)
+    tab._astResults = [analysis];
+  mergeASTResultsIntoVDD(tab, [analysis]);
   mergeToGlobal(tab);
   notifyPopup(tabId);
 

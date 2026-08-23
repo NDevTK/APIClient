@@ -3,7 +3,13 @@
 // (methods, params, schemas, findings). Extracted from the offscreen-brain.js monolith (one problem per file);
 // loaded before it, resolves learnFromAstCallSite (lib/learn.js) + grouping/schema at call-time.
 
-function mergeASTResultsIntoVDD(tab, results, tabId, isPartial) {
+/* TWO PARAMETERS ARE GONE AND NEITHER WAS EVER READ. `tabId` was passed by every caller and used by no line
+   in this file — the DocView it merges into carries its own `tabId`, so the argument was a second copy of a
+   fact the first argument already states, and a caller passing the wrong one would have been believed by
+   nothing. `isPartial` was worse: the incremental merge passed `true` and this function had no idea what a
+   partial was, so the one caller that tried to label its record as a snapshot was talking to nobody. The
+   label is real now and travels ON the record, as `_run`, where every consumer can read it. */
+function mergeASTResultsIntoVDD(tab, results) {
   for (var r = 0; r < results.length; r++) {
     var analysis = results[r];
 

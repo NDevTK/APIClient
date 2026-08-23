@@ -52,13 +52,18 @@ hook('[offscreen]', off);
    model; `_astResults` is the analysis bridge.js built out of the engine's @RESULT. Nothing here defaults a
    producer's field with `|| x` where the producer is the engine — the arrays below are the ones bridge.js
    asserts field-for-field before it stores them; the `||` guards are for a doc the brain minted but the
-   engine has not answered for yet, which is a state this probe must be able to SEE rather than crash on. */
+   engine has not answered for yet, which is a state this probe must be able to SEE rather than crash on.
+   `answered` READS `_astRun`, NOT `_astResults`: the incremental merge writes a snapshot into `_astResults`
+   while the engine is still exploring, so that slot no longer answers "has this run returned" — and `run`
+   beside it is what the run WAS, so a page whose findings came out of a crashed engine can never be counted
+   as a completed analysis of the same page. */
 const PROBE = `(() => ({
   runs: (self._engineLog || []).slice(),
   crashes: self._engineCrashOccurred || 0,
   docs: [...state.docs.values()].map(d => ({
     url: d.url || '',
-    answered: !!(d._astResults || d._astError),
+    answered: !!(d._astRun || d._astError),
+    run: d._astRun === undefined ? null : d._astRun,
     astError: d._astError ? String(d._astError).slice(0,300) : null,
     sites: (d._astResults || []).flatMap(a => (a.fetchCallSites || []).map(x => (x.method||'?') + ' ' + (x.url||''))),
     sinks: (d._astResults || []).reduce((n,a) => n + ((a.securitySinks||[]).length), 0),

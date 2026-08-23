@@ -48,12 +48,31 @@ const hasHole = (s) => astAddressHasHole(s || "");
    @H/@Q/@HDR/@BODY parsing, NO host identity/dedup (all DELETED, the engine owns it like a browser).
    @E lines (host-side protocol errors) are still surfaced so a zero-result never fails silently.
 
-   `expectResult` IS THE CONTRACT, STATED BY THE CALLER. A finalize and a partial snapshot both READ the one
-   result document the engine builds, so its absence there is a broken engine↔JS contract; a CRASH record has
-   no document by construction (the instance aborted before it could answer), and that is the only caller that
-   passes false. Without the parameter the two cases were indistinguishable and the missing document took the
-   `|| {}` path below — which is how an engine that answered nothing at all became a successful analysis
-   reporting no endpoints and no sinks. */
+   `outcome` IS THE CONTRACT, STATED BY THE CALLER, AND IT TRAVELS ON THE RESULT AS `_run`. It used to be the
+   boolean `expectResult` — "must there be a result document?" — and one bit was answering two different
+   questions, which is how both of them came out wrong. A finalize and a partial snapshot both READ the one
+   result document the engine builds, so its absence there is a broken engine↔JS contract; a CRASH record and
+   a document with nothing to run have none by construction, and those two are NOT the same thing. Inferring
+   the label from "is there a document" made a page with no scripts log as an ENGINE CRASH, and made a crash
+   that happened to leave an unconsumed partial behind log as a COMPLETE run with counters. So the caller says
+   which of the four it is, once, and every consumer downstream reads the same word:
+
+     "partial"        — a mid-run snapshot (qjs_emit_partial). A document is required. The findings are REAL
+                        observations of the running page; the run has not ended.
+     "complete"       — the run ended and the engine answered with its result document. A document is required.
+     "crashed"        — the instance aborted. There is usually no document; there IS one when the abort landed
+                        after a partial was printed and before this zone consumed it, and that document is
+                        still result.c's composition and is asserted like any other.
+     "nothing-to-run" — no HTML and no code, so no engine ran. No document, and NOT a crash.
+
+   WHAT A CRASH INVALIDATES IS THE RUN, NOT THE OBSERVATIONS. The findings this function carries were composed
+   by the engine BEFORE the abort, out of an already-deduped record, and they are already in the cumulative
+   moat (streamPartial merges every snapshot as it takes it — see `_engineCrashed`'s deletion at engineFinalize
+   for what the old "we discard them all" comment was claiming while that ran). Deleting them here does not
+   un-observe them; it only hides them from the DOCUMENT that learned them, which is a false clean bill on the
+   one surface a user reads. What the crash does invalidate is every claim of COMPLETENESS: the cost counters
+   (which is why the log record still carries none), the park residue, and this run's right to overwrite the
+   cross-session frontier entry. Those are gated on `_run`, at their own sites. */
 /* WHAT THE ENGINE GUARANTEES IN THAT DOCUMENT — solver/result.c's composition, field for field. Asserted at
    the seam rather than trusted, because every one of these is read below and a missing one becomes an EMPTY
    FINDING SET reported to the user as a clean page. The sibling fields the brain reads that the engine does
@@ -91,7 +110,11 @@ function assertResultDocument(r) {
          "reads exactly like a fully-explored document, so every flow the engine paged out would be dropped " +
          "here and the cross-session frontier would silently restart from the boot flow on every visit");
 }
-function linesToAnalysis(lines, msg, expectResult) {
+const RUN_OUTCOMES = ["partial", "complete", "crashed", "nothing-to-run"];
+function linesToAnalysis(lines, msg, outcome) {
+  DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
+         "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
+         "on `_run`, so a word none of them knows is a run whose completeness nothing can judge");
   let result = null;
   const extraErrors = [];
   let resumed = 0;
@@ -121,17 +144,23 @@ function linesToAnalysis(lines, msg, expectResult) {
      shape the rule forbids: a malformed (here, ABSENT) engine answer defaulted into a plausible one, and the
      plausible one is "this page has no API surface and no XSS" — a wrong FINDING shown to the user rather than
      a crash. The default survives only as the release path under the assert. */
-  DCHECK(!expectResult || result !== null,
+  const mustHaveDocument = (outcome === "partial" || outcome === "complete");
+  DCHECK(!mustHaveDocument || result !== null,
          "an engine session produced no @RESULT document at all — the one result document is what every " +
          "finding for this page travels in, and reporting its absence as an empty page is a false clean bill");
-  if (expectResult && result) assertResultDocument(result);
+  /* AND A DOCUMENT THAT IS THERE IS CHECKED WHETHER OR NOT ONE WAS REQUIRED. This asked `expectResult &&
+     result`, so the one document that arrives on a path that did not demand it — a crashed instance's
+     unconsumed partial — was the only one relayed unasserted, and its fields were then read below. The
+     question "must there be one" is the caller's; the question "is this one result.c's composition" is the
+     document's own and has one answer. */
+  if (result) assertResultDocument(result);
   /* THE TWO CASES ARE WRITTEN AS TWO CASES. `result = result || {}` merged them into one, and everything after
      it then had to read a document that might not be there — which is where each `|| 0` and `|| []` below came
      from, one per field, each individually reasonable and collectively the defaulting the rule forbids. With
      the absent case handled ONCE, on its own arm, every read on the present arm is a read off a document
      `assertResultDocument` has already checked field for field, so a default beside it can only ever hide that
      assert being wrong. There are none left. */
-  const m = result
+  const m = (outcome !== "crashed" && result)
     /* THE SCHEDULER'S OWN COUNTERS, so fairness/deep-preemption is OBSERVABLE (a real signal that the single
        BFS context-switches rather than running FIFO) — and they are the fields solver/result.c ACTUALLY emits.
        NOT wrapped in a swallowing try/catch: every value here is a number off a document asserted above. */
@@ -147,12 +176,15 @@ function linesToAnalysis(lines, msg, expectResult) {
            page that was analysed and was clean. */
         endpoints: result.fetchCallSites.length, sinks: result.securitySinks.length,
         park: result._park.length, resumed: resumed, url: (msg && msg.sourceUrl) || "" }
-    /* A CRASH RECORD HAS NO DOCUMENT BY CONSTRUCTION, and the honest report of that is the ABSENCE, not seven
-       zeroes. Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real
-       run that explored nothing, which is a finding. `crashed` is the field that keeps the two apart, and the
-       counters are simply not present: nothing may compute a rate, a delta or a total out of a run that never
-       reported one. This arm is reachable only where the caller passed expectResult=false; the DCHECK above is
-       what makes any other path here a crash rather than a silent second producer of empty runs. */
+    /* A CRASHED RUN REPORTS NO COUNTERS, and the honest report of that is the ABSENCE, not seven zeroes.
+       Zeroes here read as "the engine ran and did nothing" — indistinguishable in the log from a real run that
+       explored nothing, which is a finding. `crashed` is the field that keeps the two apart, and the counters
+       are simply not present: nothing may compute a rate, a delta or a total out of a run that never reported
+       one. THE ARM IS NOW CHOSEN BY THE OUTCOME AND NOT BY WHETHER A DOCUMENT ARRIVED, which is the same
+       distinction one level down: a crash that left an unconsumed partial behind used to take the arm ABOVE
+       and log as a complete run with a full set of counters, because the only question asked was "is there a
+       document". Its findings still travel (they are on the returned analysis, labelled `_run:"crashed"`);
+       what does not travel is a COST record for a run that did not finish. */
     : { crashed: true, resumed: resumed, url: (msg && msg.sourceUrl) || "" };
   // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
   // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
@@ -163,8 +195,15 @@ function linesToAnalysis(lines, msg, expectResult) {
   /* THE ARRAY IS DECLARED AT LOAD (top of this file), not created on first use: `self._engineLog = self._engineLog || []`
      is the defaulting shape, and here it defaulted the one thing a reader wants to distinguish — an empty log
      because nothing has run from an absent log because this file never loaded. */
-  self._engineLog.push(m);
-  if (self._engineLog.length > 200) self._engineLog.shift();
+  /* AND A DOCUMENT WITH NOTHING TO RUN PRODUCES NO RECORD, because no engine ran. It used to produce a
+     `crashed:true` row — the popup rendered "the engine crashed" for a page whose only fault was carrying no
+     script — which is the mirror of the defect this seam is being fixed for: a false statement about a run
+     in the one place a reader looks for what the runs did. An absent row and a row of zeroes are different
+     facts, and so are an absent row and a crash row. */
+  if (outcome !== "nothing-to-run") {
+    self._engineLog.push(m);
+    if (self._engineLog.length > 200) self._engineLog.shift();
+  }
   /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once: there is no engine answer to default, so
      every field is the host's own empty and the engine's `_park` is absent rather than zero. The engine's own
      protocol errors still travel, because @E and @WHY are emitted on their own lines and do not ride the
@@ -202,6 +241,13 @@ function linesToAnalysis(lines, msg, expectResult) {
        `globalStore.probeResults`, which never crossed this boundary. */
     sourceUrl: (msg && msg.sourceUrl) || "",
     _park: engineDoc._park,
+    /* WHAT THIS ANALYSIS IS A RECORD OF, CARRIED WITH IT. Every consumer of an analysis has to be able to tell
+       a snapshot of a running page from a finished run, and both of those from a run that died — and until
+       this field there was nothing on the object that said so. `_engineCrashed` was set on the crash arm and
+       READ NOWHERE, which is the §FIELD-A-CONSUMER-DEFAULTS defect pointed the other way: the writer looked
+       live, so the discard it announced looked enforced. Written on EVERY arm, never absent, so a consumer
+       asserts it rather than defaulting a missing one to "fine". */
+    _run: outcome,
   };
 }
 
@@ -1971,8 +2017,9 @@ async function engineFinalize(eng) {
      result with no document in it at all, which `result || {}` then turned into a successful analysis
      reporting no endpoints and no sinks. It is asked BEFORE teardown, because the document is built out of
      the context teardown frees, and it is the same call qjs_emit_partial makes.
-     A CRASHED instance is not asked: its memory is what aborted, every finding in it is discarded below, and
-     re-entering it would only produce a second abort. */
+     A CRASHED instance is not asked: its memory is what aborted, so re-entering it would only produce a
+     second abort. What it had already PRINTED is a different thing from what it still holds — the lines are
+     in this zone's buffer, and the last unconsumed snapshot among them is read below like any other. */
   if (!eng._crashed) {
     let json = null;
     /* AN ENGINE ABORT IS A RECORDED OUTCOME AND A HOST INVARIANT FAILURE IS NOT, which every catch around an
@@ -2010,23 +2057,31 @@ async function engineFinalize(eng) {
     catch (e) { RETHROW_FATAL(e); engineCrash(eng, "teardown", e); }
   }
   eng.r.destroy();
-  const result = linesToAnalysis(eng.lines, eng.msg, !eng._crashed);
+  /* THE DISCARD THAT STOOD HERE WAS NEVER A DISCARD, AND ITS COMMENT SAID OTHERWISE IN SO MANY WORDS: "nothing
+     downstream (cache, popup, moat) ever consumes a crashed engine's output". It does. `streamPartial` merges
+     every 750 ms snapshot into the cumulative moat as it takes it, so by the time an instance aborts, every
+     endpoint and every @S sink it had emitted is ALREADY in globalStore — the four lines below could not
+     un-observe them, and un-merging is not a thing this zone can do anyway (a merged endpoint has no owner to
+     give it back to). What they actually did was hide those findings from the DOCUMENT that learned them: the
+     brain writes `tab._astResults = [analysis]` off this record, so a page that learned a real endpoint and
+     then crashed reported `fetchCallSites: []` — a false clean bill on the one surface a user reads, produced
+     by the code that was trying to be careful. MEASURED on a mirrored vuejs.org: globalStore held
+     `GET media.bitterbrains.com/banners` while its own document reported no endpoints and no sinks.
+     THE FINDINGS STAY AND THE RUN IS LABELLED. `_run` is on the record from linesToAnalysis, on every arm, so
+     the completeness claims a crash DOES invalidate are refused where each of them is made: no cost counters
+     in the run log (above), no frontier write (finish), and a per-document crash marker the popup renders. */
+  const result = linesToAnalysis(eng.lines, eng.msg, eng._crashed ? "crashed" : "complete");
   result._fkey = eng.fkey; result._prior = eng.prior;   // engine-computed key + parked entry -> persisted below
-  if (eng._crashed) {
-    // NEVER BUILD ON AN UNCERTAIN ARCHITECTURE. A WASM abort means this engine crashed — every finding it
-    // produced is from a crashed (untrustworthy) instance, so DISCARD them all. The result is a pure FAILURE:
-    // only the crash marker + the error, so the crash is impossible to overlook and nothing downstream (cache,
-    // popup, moat) ever consumes a crashed engine's output. Experimental stage: fail hard, then fix the ROOT.
-    result._engineCrashed = true;
-    result.fetchCallSites = []; result.securitySinks = []; result._park = []; result._prior = null;
-  }
   return result;
 }
 /* A WASM Aborted() is the engine CRASHING — a should-never-happen. It stays scoped to this engine (one page's
    crash must not throw and kill the whole multi-engine scheduler serving the user's other tabs), but it must
-   be IMPOSSIBLE to overlook: a LOUD console.error banner + a persistent batch flag + total discard of the
-   engine's findings (engineFinalize). NOT a quiet @E buried in resolverErrors — that is how the g_optaint
-   teardown leak hid for so long. Experimental stage: a crash halts trust in that engine, never softened. */
+   be IMPOSSIBLE to overlook: a LOUD console.error banner, a persistent batch flag, a `_run:"crashed"` record
+   on the analysis every consumer reads, and no completeness claim anywhere (no counters, no frontier write).
+   NOT a quiet @E buried in resolverErrors — that is how the g_optaint teardown leak hid for so long.
+   WHAT IS NOT DISCARDED IS WHAT THE ENGINE ALREADY OBSERVED — see engineFinalize for why the discard this
+   comment used to claim was never one. A crash halts trust in the RUN, not in the endpoints it recorded
+   before it died and already merged. */
 function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abort path (create/step/teardown) routes here — no crash is ever quiet
   /* TWO SWALLOWING CATCHES ARE GONE FROM THESE TWO LINES, and with them the `|| 0` that made the counter
      create itself. Neither operation can throw — an increment of a declared number and a console write — so
@@ -2035,7 +2090,7 @@ function crashBanner(stage, m) {   // LOUD + a persistent batch flag; EVERY abor
      The counter is declared at load beside _engineLog, so a reader can tell "no engine has crashed" from
      "bridge.js is not in this zone". */
   self._engineCrashOccurred++;
-  console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, findings DISCARDED, NOT swallowed ====\n" + m + "\n");
+  console.error("\n==== ENGINE CRASH (" + stage + ") — WASM ABORTED, run marked crashed, NOT swallowed ====\n" + m + "\n");
 }
 // The C-side CHECK/DCHECK emits its @WHY/@E ROOT line (phase/cond/at/reason) to stderr -> sink -> the frame's
 // line buffer IMMEDIATELY before abort(). A bare emscripten Aborted() message ("native code called abort()") is
@@ -2062,8 +2117,9 @@ function engineCrash(eng, stage, e) {
   eng.lines.push('@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(err) + "}");
   crashBanner(stage, err);
 }
-// A crash BEFORE the engine object exists (creation/boot abort). Same rule: LOUD, findings discarded,
-// marked _engineCrashed — never a quiet "degenerate result" the reviewer reads as a boring empty page.
+// A crash BEFORE the engine object exists (creation/boot abort). LOUD, and `_run:"crashed"` — never a quiet
+// "degenerate result" the reviewer reads as a boring empty page. There are no findings to discard here: the
+// instance aborted before it ran a line of the page, which is the one crash that genuinely has nothing to say.
 /* THE BANNER IS NO LONGER PART OF THIS FUNCTION, and the split is what one aborted boot costs: `crashBanner`
    increments the crash COUNT, and a reservation may have several documents attached to it (a RESHIP
    re-delivery, a sub-frame, a second arrival that joined it while it booted), each of which needs its OWN
@@ -2073,10 +2129,10 @@ function engineCrash(eng, stage, e) {
 function crashRecord(stage, m, msg) {
   /* NO RESULT DOCUMENT IS EXPECTED HERE, and this is the only caller that may say so: the instance aborted
      before it could answer, so its absence is the crash rather than a broken contract. */
-  const r = linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, false);
-  r._engineCrashed = true;
-  r.fetchCallSites = []; r.securitySinks = []; r._park = []; r._prior = null;
-  return r;
+  /* The empties are `linesToAnalysis`'s own, on the arm that has no document to read — not four assignments
+     over a record it just built, which is how the two producers of a crash record drifted apart in the first
+     place. `_run:"crashed"` is what every consumer reads; there is no second marker beside it. */
+  return linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, "crashed");
 }
 
 /* MACROTASK yield (worker/offscreen). Between engine quanta the host MUST return to the event loop with a
@@ -2247,6 +2303,35 @@ let _hostDriving = false;
    against a number rather than against a suspicion. */
 const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0,
                         evicted: 0, rehydrated: 0 };
+/* WHICH LIVE DOCUMENTS THESE FINDINGS BELONG TO. The merge in the trusted zone used to be handed a sourceUrl
+   and nothing else, so it had no document to merge INTO and built a throwaway view instead — a producer whose
+   consumer was an object discarded on return, which is exactly the shape `_emptyDocView`'s own comment
+   forbids. A sourceUrl cannot stand in for the identity: `documentId` is the ONLY document key in this system
+   (a tab holds many documents and a (tab,frame) pair is reused across navigations at a DIFFERENT origin), so
+   the name has to be carried, not re-derived.
+   THE LIST IS THE WAITERS, WHICH IS THE SAME SET THE TERMINAL RESULT IS RESOLVED TO — one instance holds one
+   agent cluster and several browser documents can join it (a same-origin sub-frame, a re-delivery), and every
+   one of them is answered with the same finalized analysis, so a snapshot of the run belongs to all of them
+   too. EMPTY IS A POSITIVE STATEMENT AND NOT AN ABSENCE: a child navigable the engine announced and a
+   rehydrated cold recipe have no live caller by construction (`_cold`), and their findings are the moat's
+   alone. */
+function engineLiveDocumentIds(eng) {
+  DCHECK(eng._cold === (eng._resolvers.length === 0),
+         "an instance disagrees with itself about whether it has a live caller — `_cold` is declared at " +
+         "engineCreate and the waiter list is what finalize resolves, so a cold engine holding a waiter " +
+         "would answer a document nobody is running, and a live one holding none would merge this page's " +
+         "findings to the moat alone and report the document that asked for them as clean. The one way a " +
+         "LIVE engine loses its waiters is hostClear, which also drops it from the pool and destroys its " +
+         "frame — so this firing says an engine that was dropped is still being driven, and the fix is at " +
+         "the round that kept driving it, not here");
+  return eng._resolvers.map((w) => {
+    DCHECK(w.msg && w.msg.documentId,
+           "a live caller waiting on this instance carries no documentId — astDispatch asserts the browser's " +
+           "name for every document it seats, so a waiter without one is a page whose findings have nowhere " +
+           "to be merged and would be reported as analysed and empty");
+    return String(w.msg.documentId);
+  });
+}
 const _hostOps = {
   weight: engineWeight,
   /* THE VALUE YIELD FLOOR — run until outranked by the runner-up. The `try {} catch (_) {}` around it is gone
@@ -2326,11 +2411,14 @@ const _hostOps = {
     DCHECK(idx >= 0, "qjs_emit_partial produced no @RESULT line — it prints the one result document every time " +
                      "it is called, so its absence is this zone's own capture of the engine's output failing");
     if (idx < 0) return;   // release
-    const partial = linesToAnalysis([eng.lines[idx]], eng.msg, true);   // parse only the snapshot line
+    const partial = linesToAnalysis([eng.lines[idx]], eng.msg, "partial");   // parse only the snapshot line
     eng.lines.splice(idx, 1);                                           // consume it
     // Merge on EITHER surface: an XSS-only page (verified @S PoCs, no endpoints) must surface incrementally
     // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
-    const hasWork = partial.fetchCallSites.length || (partial.securitySinks && partial.securitySinks.length);
+    /* `securitySinks` IS ASSERTED ON EVERY DOCUMENT THIS SEAM PRODUCES (assertResultDocument), so the
+       `partial.securitySinks &&` that stood beside this one was a defaulted read of a guaranteed field — the
+       shape that turns a producer that stopped writing it into a page with no sinks. */
+    const hasWork = partial.fetchCallSites.length || partial.securitySinks.length;
     if (!hasWork) return;
     /* THE MERGE CALLBACK IS THE OTHER HALF OF THIS EDGE. `typeof … === "function"` guarding the call meant a
        zone that had not installed it dropped every incremental finding silently; offscreen-brain.js installs
@@ -2338,7 +2426,7 @@ const _hostOps = {
     DCHECK(typeof self.onFrontierAdvance === "function",
            "the trusted zone has no onFrontierAdvance to merge an engine's findings into — every incremental " +
            "finding this engine emits has nowhere to go");
-    self.onFrontierAdvance(eng.msg.sourceUrl, partial);
+    self.onFrontierAdvance(eng.msg.sourceUrl, engineLiveDocumentIds(eng), partial);
   },
   step: async (eng) => {
     let st;
@@ -2555,7 +2643,15 @@ const _hostOps = {
            "document would be reported as analysed and empty");
     const i = _pool.indexOf(eng); if (i >= 0) _pool.splice(i, 1);
     const result = await engineFinalize(eng);
-    if (eng.persist && result._fkey) {   // persist into the GLOBAL frontier (cross-session cold tier)
+    /* A CRASHED RUN DOES NOT WRITE THE CROSS-SESSION FRONTIER, AND THIS IS THE READER `_engineCrashed` NEVER
+       HAD. The park recipes are a claim that these flows can be resumed — out of the heap that just aborted —
+       and the counters beside them (`emit`, `visits`) are a claim about a run that finished. Worse in the
+       direction that has no symptom: a crashed run's `_park` is empty, `frontierPut` DELETES an entry whose
+       recipe string is empty, so persisting a crash would erase the residue a PREVIOUS session parked for
+       this origin — findings and flows nobody in this session ever measured, dropped by a run that died.
+       Skipping the write leaves that entry exactly as it was, which is the honest state: this run has nothing
+       to say about what is resumable. */
+    if (eng.persist && result._fkey && result._run === "complete") {   // persist into the GLOBAL frontier (cross-session cold tier)
       const prior = result._prior;
       await frontierPut(result._fkey, {
         /* THE TOP-LEVEL CREATION URL IS PART OF THE RECIPE, because a resumed flow must resume into the same
@@ -2588,7 +2684,7 @@ const _hostOps = {
       DCHECK(typeof self.onFrontierAdvance === "function",
              "the trusted zone has no onFrontierAdvance to merge a finalized engine's findings into — a child " +
              "document's and a resumed frontier's entire output has nowhere to go");
-      self.onFrontierAdvance(eng.msg.sourceUrl, result);
+      self.onFrontierAdvance(eng.msg.sourceUrl, engineLiveDocumentIds(eng), result);
     }
     /* EVERY CALLER WAITING ON THIS DOCUMENT IS ANSWERED, not just the first. A cold/child engine has no
        caller at all, which is why the list is allowed to be empty and the merge above is what its findings
@@ -2847,7 +2943,7 @@ self.astDispatch = async function astDispatch(msg) {
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page
     // NOTHING TO RUN, so no engine runs and there is no result document to expect — this is the one analysis
     // that legitimately has none, and it says so rather than sharing the absent-document path with a real run.
-    if (!html && !code) return { success: true, result: linesToAnalysis([], msg, false) };
+    if (!html && !code) return { success: true, result: linesToAnalysis([], msg, "nothing-to-run") };
 
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every
        other open document by value-of-information — no run-to-completion, no recency monopoly. The per-doc

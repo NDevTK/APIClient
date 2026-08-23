@@ -246,6 +246,23 @@ function serializeTabData(tab) {
        this document and recorded nothing that went wrong" — a real finding, not a hole. It is written that
        way rather than `|| []` so that a malformed one still crashes instead of being flattened into the
        same empty list. */
+    /* WHAT THIS DOCUMENT'S ENGINE RUN WAS, WHICH IS THE ONLY THING THAT MAKES THE FINDINGS BELOW READABLE.
+       A run that CRASHED has still learned everything it emitted before it died — those endpoints and sinks
+       are in the maps above, merged as the engine streamed them — and the one thing that must never happen is
+       for that page to read as a completed clean analysis. `null` is the positive statement "no run has
+       returned for this document yet" (it is also what an unknown document gets, through _emptyDocView),
+       which is a different fact from "a run returned and crashed" and from "a run returned complete", and the
+       popup says all three in words. NOT defaulted to a plausible "complete": offscreen-brain.js writes
+       `_astRun` off bridge.js's `_run` on every terminal path, so a value outside the set is that chain
+       broken, and the shape it would break into is exactly the false clean bill this field exists to stop. */
+    analysisRun: (function () {
+      if (tab._astRun === undefined) return null;   // no engine run has returned for this document
+      DCHECK(tab._astRun === "complete" || tab._astRun === "crashed" || tab._astRun === "nothing-to-run",
+             "a DocView's _astRun is present but is not a run outcome this seam speaks (`" + tab._astRun +
+             "`) — offscreen-brain.js writes it straight off the analysis's `_run`, so anything else is that " +
+             "relay broken and a crashed run would render as a page that was analysed and found clean");
+      return tab._astRun;
+    })(),
     resolverErrors: (function () {
       if (tab._resolverErrors === undefined) return [];   // the engine recorded no page error for this document
       DCHECK(Array.isArray(tab._resolverErrors),
