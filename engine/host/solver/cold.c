@@ -356,6 +356,56 @@ static void park_rec_world(const char *vector)
     park_hex(vector);
 }
 
+/* A DRIVEN ORPHAN'S FUNCTION — the one thing about such a flow that a decision vector cannot reproduce, written
+ * immediately AFTER the 'f' or 'c' record of the flow it belongs to and bound to it by POSITION, exactly as an
+ * unmade delivery is.
+ *
+ * WHY IT IS NOT A RECORD KIND, which is the shape this looks like it should be. Being a driven orphan is not an
+ * ALTERNATIVE to being an exploration flow or an @S candidate session — it is a fact ABOUT one. An orphan drive
+ * forked inside a candidate session carries both identities at once (engine_sibling_assemble copies each), so a
+ * third arm of park_kind_of's choice would have had to pick one of two things the engine legitimately holds
+ * together, and whichever it picked the other would be silently gone. A field bound by position composes: an
+ * orphan drive of an ordinary flow is 'f' then 'o', an orphan drive inside a candidate session is 'c' then 'o',
+ * and the reader binds each to the flow it last rebuilt.
+ *
+ * WHAT THE LOCATOR IS AND WHY IT IS NOT A POSITION. Neither name a session already has survives it: the
+ * function object is a live heap reference, and the index of the take that produced it is a fact about one heap
+ * at one instant. quickjs's JS_OrphanHash composes what the BUNDLE determines instead — the script, the
+ * position in that script, and the body's own text — which is stable across sessions for the reason the whole
+ * tier rests on: the same bytes compile the same way. An older sketch of this record carried a hash of the
+ * SOURCE TEXT alone, and that is the one composition that does not work: a minified bundle repeats
+ * `function(e){return e.default}` dozens of times, so the name would have identified a SET and the resume would
+ * have driven whichever member of it the heap walk met first.
+ *
+ * SIXTEEN LOWER-CASE HEX DIGITS, FIXED WIDTH AND SEPARATOR-FREE — the same self-delimiting property that makes
+ * a decision slot nine characters, and for the same reason: the field is the whole record, so a reader that
+ * finds a different width is holding a document another writer produced and refuses it rather than reading a
+ * short name as a valid one. Written like park_rec_cand's text fields and not through park_rec, whose charset
+ * is the digit grammar and does not admit the hex letters 'a' through 'd'. */
+static void park_rec_orphan(const Flow *f)
+{
+    static const char H[] = "0123456789abcdef";
+    char rec[17];
+    int d;
+
+    DCHECK(f->orphan,
+           "the cold tier was asked to name the function of a flow that is not a driven orphan — the record "
+           "would tell a later session to call something this flow never called");
+    /* THE LOCATOR EXISTS, asserted where it is written rather than trusted from where it was stamped.
+       engine_orphan_fork stamps it at the one point a drive is created and a fork inherits it with the mark, so
+       a drive without one is a third path into being an orphan that nobody has named — and the record it would
+       write is sixteen zeros, which is a perfectly valid name for a body that does not exist. */
+    DCHECK(f->orphan_hash != 0,
+           "a driven orphan was parked with no function locator — its record would name a body no session can "
+           "find, so the resumed drive would wait for a function that is never handed to it and finish having "
+           "called nothing, which is precisely the silent drop this record exists to prevent");
+    for (d = 0; d < 16; d++) rec[d] = H[(f->orphan_hash >> (60 - 4 * d)) & 15u];
+    rec[16] = 0;
+    park_open_rec();
+    park_str("o");
+    park_str(rec);
+}
+
 /* AN UNMADE ROUTED DELIVERY — one record per [record, senderOrigin] pair still on the flow's queue, written
    immediately AFTER the 'f' or 'c' record of the flow that holds it and belonging to it. A message a peer sent
    is the one work item on this frontier that NO REPLAY can re-derive: the asking side of a host request
@@ -517,6 +567,10 @@ void cold_park_preview(ColdPreview *out)
         case PARK_KIND_FLOW:  out->flows++;  break;
         }
         if (deep) out->deep++;
+        /* AND THE DRIVES AMONG THEM, which is a row of its own for the reason park_rec_orphan gives: it is not
+           a KIND, so it is not counted by the switch above and a host reading only the two kinds would be
+           shown a residue one record per drive smaller than the one it is about to be handed. */
+        if (f->orphan) out->orphans++;
     }
     /* AND THE ROW THAT IS NOT A MEMBER OF THE FRONTIER. A foreign segment belongs to a PEER's flow, so no walk
        of this registry can find it and the host would otherwise be shown a residue smaller than the one it is
@@ -595,27 +649,6 @@ void cold_park_flow(Flow *f)
        zone asks again. So: retract a STARTED operation as well — its program's partial work is exactly what a
        replay throws away for every other program (cold.h), and its completion has not been sent — or state why
        a half-run peer program is different from every other suspended frame this tier regenerates. */
-    /* AND A DRIVEN ORPHAN, WHOSE WORK IS NOT IN ITS RECIPE. Every recipe this tier writes is (decision vector,
-       reward) and a resume re-runs the DOCUMENT under it — which reproduces every other flow exactly, and
-       reproduces this one not at all: the whole point of an orphan drive is that re-running the document is
-       what never calls this function. Written as a PARK_KIND_FLOW it would come back next session as a document
-       replay carrying an orphan's rank, and the drive would be gone with nothing anywhere to say so — the
-       silent drop §scheduler's razor forbids, wearing a plausible flow.
-       WHAT THE RECIPE STILL NEEDS is a locator for the FUNCTION, and a positional one will not do: collection
-       order is a fact about one heap at one instant. The old implementation had the right shape for it and
-       nothing else of it survives — a hash of the function's own SOURCE TEXT (`JS_OrphanHash`, deleted with the
-       rest at 1dd6bbe4), which is stable across sessions because the same bundle compiles the same bytes. So:
-       add an 'o' record kind carrying that hash beside the decision vector, have the resumed flow re-run the
-       document as it already does, and at the point flow_step takes orphans have it drive the one whose hash
-       matches rather than taking a fresh one — or say what makes a call frame different from every other
-       suspended frame this tier regenerates from a replay. */
-    DCHECK(!f->orphan,
-           "a DRIVEN ORPHAN was written to the park document — its recipe is a decision vector and a resume "
-           "re-runs the document under it, which is exactly the run that never calls this function, so it "
-           "would come back as an ordinary document replay wearing this flow's rank and the drive would be "
-           "silently gone. Give the recipe a locator for the function itself — a hash of its SOURCE TEXT, "
-           "which is stable across sessions where a collection index is not — and have the resumed flow drive "
-           "the orphan that matches instead of taking a fresh one");
     DCHECK(!flow_owes_answer(f),
            "a flow holding a STARTED cross-agent operation was parked — its program is mid-run with the zone's "
            "rendezvous token on the row, and the token may not be written into the recipe (it is the zone's "
@@ -689,6 +722,26 @@ void cold_park_flow(Flow *f)
         park_rec(rec);
         g_parked_census.flows++;
         break;
+    }
+    /* …AND WHICH FUNCTION THIS FLOW IS DRIVING, if it is driving one. See park_rec_orphan for why this is a
+       field bound by position and not a third arm of the choice above.
+       THE LOCATOR NAMES THE FUNCTION THE FLOW ACTUALLY HOLDS, checked here rather than assumed from the stamp:
+       this is the one place both halves of the pair are in one hand, and the failure it catches is the whole
+       failure mode of the record — a name that does not match its function resumes a drive of the WRONG body
+       under this flow's recorded arms, which runs, emits, and is wrong in a way nothing downstream can see.
+       Asked only of a drive that HAS its function: a resumed one that has not yet been handed one carries the
+       locator alone, which is exactly the state this record exists to create. */
+    if (f->orphan) {
+        DCHECK(!JS_IsUndefined(f->fn) || f->orphan_want,
+               "a driven orphan holds no function and is not waiting for one — those are the only two states a "
+               "drive has, so this flow lost its function while still claiming to be driving it and its record "
+               "would name a body nothing in this session is calling");
+        DCHECK(JS_IsUndefined(f->fn) || JS_OrphanHash(pending_ctx(), f->fn) == f->orphan_hash,
+               "a driven orphan's recorded locator does not name the function it is driving — the record about "
+               "to be written would send a later session to a different body and run this flow's recorded path "
+               "through code that never took it");
+        park_rec_orphan(f);
+        g_parked_census.orphans++;
     }
     /* …AND THE MESSAGES THIS TIMELINE WAS HANDED AND HAS NOT DELIVERED, immediately after its own record and
        in queue order, because the reader binds each to the flow it last rebuilt. Written for BOTH kinds: a
@@ -778,6 +831,7 @@ void cold_park(void)
     DCHECK(after.flows - before.flows == would.flows &&
            after.cands - before.cands == would.cands &&
            after.worlds - before.worlds == would.worlds &&
+           after.orphans - before.orphans == would.orphans &&
            deep_written == would.deep,
            "the park wrote a different residue from the one its own preview described — the host evicted this "
            "engine on the strength of that description, so whatever it is storing is not what it was told it "
@@ -1075,6 +1129,49 @@ void cold_resume(JSContext *ctx, const char *recipes)
             flow_deliver_push(ctx, last_flow, record, origin);
             free(record);
             free(origin);
+        } else if (kind == 'o') {
+            /* THE FUNCTION A DRIVEN ORPHAN WAS DRIVING, put back on the flow it belonged to — which is the flow
+               written immediately before it, the same binding an unmade delivery uses and for the same reason.
+               THE FLOW IS NOT DRIVING IT YET, and cannot be: this document's own scripts have not run, so the
+               closure does not exist in this heap at all. What is installed is the WAIT. The flow replays the
+               document exactly as an 'f' does — which is what re-creates the closure and what consumes its
+               recorded arms — and at the point its work runs out, which is the point the drive stood at in the
+               session that recorded it, engine_orphan_fork hands it the body this locator names and it builds
+               its own call. That ordering is the whole reason this is a wait and not a call: adopting earlier
+               would put the call in front of programs the replay still owes and consume their arms with it.
+               NOTHING HERE MAKES THE FUNCTION APPEAR, and that is the honest part. A bundle that changed under
+               the residue no longer contains this body, the claim is never met, and the flow finishes having
+               driven nothing — which is what a resumed flow re-deriving from CURRENT sources means when the
+               source is the code itself. The pair of numbers the engine reports (`orphanClaims` against
+               `orphanClaimsMet`) is what makes that visible instead of silent. */
+            uint64_t hash = 0;
+            int d;
+
+            DCHECK(last_flow != NULL,
+                   "a park document holds an orphan locator before any flow — an 'o' record belongs to the flow "
+                   "written immediately before it, so one at the head of the document names nothing and would "
+                   "attach a drive to whichever flow happened to come next");
+            DCHECK(end - q == 16,
+                   "a parked orphan locator is not sixteen hex digits — the name is fixed width and is the "
+                   "whole record precisely so a short one cannot be read as a valid name, so this document was "
+                   "not written by this engine's park");
+            for (d = 0; d < 16; d++) {
+                int hv = park_hexval(q[d]);
+                DCHECK(hv >= 0,
+                       "a parked orphan locator is not lower-case hex — this file wrote it and nothing else "
+                       "may, so the name would send this drive to a body no session ever recorded");
+                hash = (hash << 4) | (uint64_t)hv;
+            }
+            DCHECK(!last_flow->orphan,
+                   "two orphan locators were written for one flow — a flow drives ONE function, so the second "
+                   "would silently replace the first and the drive the residue was saved for would be gone");
+            DCHECK(hash != 0,
+                   "a parked orphan locator is all zeroes — no body hashes to the value this file uses to mean "
+                   "'not a drive', so this record names nothing and the flow would wait for ever");
+            last_flow->orphan = 1;
+            last_flow->orphan_hash = hash;
+            last_flow->orphan_want = 1;
+            g_resumed.orphans++;
         } else if (kind == 'c') {
             /* AN @S CANDIDATE SESSION COMES BACK AS ITS SUBSTITUTION AND ITS PATH — see park_rec_cand for what
                crosses and, just as load-bearing, which two candidate fields deliberately do not. Everything the
@@ -1161,7 +1258,8 @@ void cold_resume(JSContext *ctx, const char *recipes)
                the letter is named in the abort so a reader is told which capability wrote it rather than being
                told the document is corrupt. */
             DFAIL("a park record names a kind this grammar does not have — the recipe holds a GENERATION ('g'), "
-                  "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f'), @S CANDIDATE SESSIONS ('c') and "
+                  "FOREIGN WORLD SEGMENTS ('w'), SEGMENTS ('s'), FLOWS ('f'), @S CANDIDATE SESSIONS ('c'), "
+                  "ORPHAN FUNCTION LOCATORS ('o') and "
                   "UNMADE ROUTED DELIVERIES ('m') and nothing else. A 'd' record "
                   "is a DISCOVERY PROBE written by a session in which the engine seeded its own document "
                   "fetches; that flow kind no longer exists, so this residue predates the change or came from "
@@ -1211,6 +1309,14 @@ void cold_resume(JSContext *ctx, const char *recipes)
     DCHECK(g_resumed.flows + g_resumed.cands == flows,
            "the rebuild's per-kind census does not add up to the flows it landed — a record kind produced a "
            "flow without counting itself, so a host asking which arms of the grammar ran is told one did not");
+    /* THE ORPHAN LOCATORS ARE DELIBERATELY OUTSIDE THAT SUM, because an 'o' record does not produce a flow —
+       it is a FIELD of the flow written before it, so it can only ever be a subset of them. Stated rather than
+       folded in: a reader who saw the two counters side by side and added all three would be asserting that a
+       document with a drive in it rebuilt one flow too many. */
+    DCHECK(g_resumed.orphans <= flows,
+           "the rebuild read more orphan locators than it rebuilt flows — an 'o' record names the flow before "
+           "it, so more of them than there are flows means at least one was bound to a flow that already had "
+           "one and a drive the residue was saved for is gone");
     printf("@RESUMED %ld\n", flows);
     fflush(stdout);
 }

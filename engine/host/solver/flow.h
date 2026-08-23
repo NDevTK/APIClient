@@ -136,10 +136,32 @@ typedef struct Flow {
        ITS WORK IS NOT IN ITS RECIPE. Every other flow's recipe is (decision vector, reward) and a resume
        re-runs the DOCUMENT under it, which reproduces the flow — but re-running the document is precisely what
        never calls this function, so a resumed orphan flow would be a document replay wearing an orphan's rank
-       and the drive would be silently gone. cold.c refuses to write one rather than write a lie, and names
-       what the recipe still needs. Inherited by a fork, because an arm of an orphan drive is the same drive
-       continued and is no more replayable than its parent. */
+       and the drive would be silently gone. What closes that is the FUNCTION LOCATOR below: the recipe carries
+       the decision vector like every other flow's AND a name for the function, and the resumed flow drives the
+       body that name matches instead of taking a fresh one. Inherited by a fork, because an arm of an orphan
+       drive is the same drive continued and is no more replayable than its parent. */
     int orphan;
+    /* WHERE THAT FUNCTION IS, WRITTEN AS SOMETHING A LATER SESSION CAN FIND — quickjs's JS_OrphanHash of the
+       script the body was compiled from, its position in that script, and its own source text. `fn` above is a
+       live heap reference and dies with the session; this is what crosses the tier, so it is stamped when the
+       drive is created and carried unchanged by every arm of it. 0 for a flow that is not a driven orphan,
+       which is the one value the hash is never asked to mean and is asserted as such at the park. */
+    uint64_t orphan_hash;
+    /* IS THIS DRIVE STILL WAITING FOR ITS FUNCTION — set only by the cold tier's rebuild, because a drive with
+       no call frame is the one thing only a resume can produce. A resumed session's heap does not hold the
+       function at the instant the residue lands: the closure is created by the DOCUMENT'S OWN REPLAY, and it
+       becomes reachable at the moment some flow takes it as an orphan. Until then this flow replays the
+       document like any other member, and the two states it passes through are told apart by `fn` itself,
+       which is what `fn` means: UNDEFINED while it is still waiting, and the re-taken function once one has
+       been handed to it. The flow then builds its own call frame — in its OWN timeline, never in the timeline
+       of whichever flow happened to take it, because the receiver and the arguments are concolic objects and an
+       object minted under another flow's stamp is that flow's private state for the rest of the session. */
+    int orphan_want;
+    /* AND HOW MANY UNKNOWNS THAT CALL HAS TO SUPPLY — the callee's own declared formal parameter count, handed
+       over by the take beside the function. Live state and NOT part of the recipe: it is a fact about the body
+       this session compiled, so the session that resumes reads it off the take rather than trusting a number
+       an older one wrote down. Meaningful only while `orphan_want` is set and `fn` is a function. */
+    int orphan_argc;
 
     /* HAS THIS FLOW'S RECIPE BEEN WRITTEN TO THE PARK DOCUMENT? A paged flow is not a dropped one — that is the
        whole claim the cold tier makes — and it is a fact about THIS FLOW rather than about the session. It used

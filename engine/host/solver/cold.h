@@ -101,8 +101,8 @@ void cold_census(ColdCensus *out);
  * THE SHARING SURVIVES THE TIER. A recipe per flow, written in full, would flatten the prefix every fork
  * shares — the quadratic decide.c deleted from RAM, re-created on the way to disk, and allocated at the one
  * moment RAM pressure asked for relief. So the park writes each frozen SEGMENT once and names it by a
- * park-local ordinal; a flow's own record is that ordinal plus its accumulated reward. Three record kinds, all
- * plain text, and none may contain the ';' the host joins them with:
+ * park-local ordinal; a flow's own record is that ordinal plus its accumulated reward. Every record is plain
+ * text and none may contain the ';' the host joins them with:
  *
  *     g<generation>               THE WORLD-NAME GENERATION this residue was written under, and the FIRST
  *                                 record in the document because everything after it is named under the one
@@ -166,6 +166,30 @@ void cold_census(ColdCensus *out);
  *                                 does not detect — so every emit of the search aborted on solve.c's own
  *                                 assert, and a release build rendered "nothing carries these bytes" over a
  *                                 payload whose delivery the ended session knew exactly.
+ *     o<locator-hex>              WHICH FUNCTION A DRIVEN ORPHAN IS DRIVING — sixteen lower-case hex digits,
+ *                                 quickjs's JS_OrphanHash of the script the body was compiled from, the
+ *                                 position in that script, and the body's own source text. It belongs to the
+ *                                 flow record IMMEDIATELY BEFORE IT, the same positional binding an unmade
+ *                                 delivery uses, and it is a FIELD rather than a KIND on purpose: being a
+ *                                 driven orphan is not an alternative to being a flow or a candidate but a
+ *                                 fact about one, and an orphan drive forked inside an @S candidate session is
+ *                                 both at once. So an ordinary drive is 'f' then 'o' and a candidate's drive
+ *                                 is 'c' then 'o', where a third KIND would have had to discard one of two
+ *                                 identities the engine legitimately holds together.
+ *                                 IT IS THE ONE THING A DECISION VECTOR CANNOT REPRODUCE. Every other flow's
+ *                                 recipe is (path, reward) and a resume RE-RUNS THE DOCUMENT under it, which
+ *                                 reproduces the flow — and re-running the document is exactly the run that
+ *                                 never calls an uncalled function. The resumed flow therefore replays like
+ *                                 any other (which is what re-creates the closure and consumes the recorded
+ *                                 arms) and, at the point its work runs out — the point the drive stood at in
+ *                                 the session that recorded it — is handed the body this locator names and
+ *                                 builds its own call. Fixed width and separator-free for a decision slot's
+ *                                 reason: the field is the whole record, so a different width is another
+ *                                 writer's document and is refused rather than read as a shorter name. A hash
+ *                                 of the SOURCE TEXT ALONE is the one composition that does not work — a
+ *                                 minified bundle repeats one-line bodies dozens of times, so the name would
+ *                                 identify a SET and the resume would drive whichever member the heap walk met
+ *                                 first.
  *
  * Ordinals are dense and ascending in EMISSION order, and a base is always emitted before anything that names
  * it, so the rebuild is one forward pass with nothing to patch up.
@@ -227,6 +251,12 @@ typedef struct {
        kind here and not a constant like 'g' because there are as many as this instance answered peers, and
        zero is a real and different answer: an instance that never answered anything. */
     long worlds;
+    /* 'o': the function locators — one per flow that is a DRIVEN ORPHAN. Not a kind and so not part of
+       flows+cands: it is a field of the record before it, which is why it is counted separately rather than
+       added to either. Zero is a real answer and a loud one on a large bundle — it means this park is carrying
+       no forced invocation at all, so the next session inherits the document's explored paths and none of its
+       uncalled code. */
+    long orphans;
 } ColdParked;
 void cold_parked(ColdParked *out);
 
@@ -269,6 +299,10 @@ typedef struct {
        the one it was told about. It is also the only row a whole-frontier park writes and a partial one does
        not, which is what makes cold_park's two-sided check able to say so. */
     long worlds;
+    /* AND THE DRIVES AMONG THE MEMBERS — the 'o' records a park taken now would write. It is here for the
+       preview's whole contract: the host decides to evict on the strength of this description, so a row the
+       description leaves out is a record the residue turns out to hold. */
+    long orphans;
 } ColdPreview;
 void cold_park_preview(ColdPreview *out);
 
@@ -304,6 +338,15 @@ typedef struct {
     long flows;    /* 'f': exploration flows */
     long cands;    /* 'c': @S candidate sessions, each carrying a hex source and payload */
     long worlds;   /* 'w': foreign world segments re-materialized from the vectors that first built them */
+    /* 'o': the drives this rebuild inherited — flows waiting to be handed back the function they were driving.
+       It is a SUBSET of `flows`+`cands` and never a summand of them, because an 'o' record names the flow
+       before it rather than producing one. It is also the first half of the round trip's only observable: the
+       engine reports it against how many of those waits a take SATISFIED and how many waiting flows FINISHED
+       never having been handed a body (`orphanClaims`/`orphanClaimsMet`/`orphanClaimsUnmet`). The last is the
+       verdict — ZERO on a document whose bytes did not change between two sessions — and the middle one may
+       legitimately exceed this count, because a waiting drive forks arms while it replays and every arm of it
+       is the same drive of the same body. */
+    long orphans;
 } ColdResumed;
 void cold_resumed(ColdResumed *out);
 

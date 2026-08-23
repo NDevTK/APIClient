@@ -2239,6 +2239,22 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        parent is and the cold tier must refuse it for the same reason. A sibling that lost the mark would be
        written out as an ordinary flow and come back next session as a document replay that calls nothing. */
     sib->orphan = parent->orphan;
+    /* AND THE NAME OF THE FUNCTION IT IS THE DRIVE OF, by the same sentence: the arm's recipe has to say which
+       body to re-take, and it is the same body. An arm that inherited the MARK without the LOCATOR would be
+       written out as a drive of nothing and refused at the park by the assert that says a drive has a name. */
+    sib->orphan_hash = parent->orphan_hash;
+    /* AND SO DOES THE WAIT, WHICH IS NOT OBVIOUS AND IS THE HALF THAT BREAKS IF IT IS LEFT OUT. A resumed drive
+       does not begin as a call: it REPLAYS THE DOCUMENT first, exactly like the flow record it is written
+       beside, and a replay branches. So a flow that is still waiting for its function forks arms while it
+       waits, and each arm is the same drive of the same body — an arm that inherited the MARK and the LOCATOR
+       without the WAIT would be a drive that never builds a call and never says so, and the park would then
+       write an 'o' for it and assert against a `fn` it does not have.
+       ONE FUNCTION SERVES ANY NUMBER OF THEM. What the take consumes is the `entered` BIT, not the function
+       object, so N arms of one drive each call it; that is also what the original session did — one function,
+       N flows whose frames were clones of one call. `fn` itself is carried by flow_add_unseeded above, and
+       `orphan_argc` is a fact about that same body. */
+    sib->orphan_want = parent->orphan_want;
+    sib->orphan_argc = parent->orphan_argc;
     /* A FIELD ADDED TO THE CANDIDATE IDENTITY IS AN OBLIGATION HERE, and this is what says so — the same shape
        as the queued job's realm below, and for the same reason: the three fields are copied out one by one
        precisely so a fourth is visible, which is exactly how these three came to be missing. */
@@ -2599,12 +2615,20 @@ static void engine_orphan_record(JSContext *ctx, JSValueConst fn, int arg_count,
     t->n = 1;
 }
 
-/* HOW MANY ORPHANS THIS DOCUMENT HAS DRIVEN, which is also each one's NAME. The source identity of an orphan's
-   k'th argument must be unique across the session — two orphans sharing one identity would have their gate
-   tokens accumulated into one another's constraint, which is the aliasing the per-argument identity above
-   exists to prevent, one level up. An ordinal is the only thing available that is unique: a function's `name`
-   is empty for half of a minified bundle and duplicated across the rest. Reported in the result document so a
-   run can say how much of the page's code was reached by nothing but this. */
+/* HOW MANY ORPHANS THIS DOCUMENT HAS DRIVEN. Reported in the result document so a run can say how much of the
+   page's code was reached by nothing but forced invocation.
+   IT IS NO LONGER EACH DRIVE'S NAME, and that is the correction this comment carries. It used to be: an
+   argument's source identity was `{orphan<ordinal>.arg0}`, chosen because an ordinal was the only thing
+   available that was unique (a function's `name` is empty for half of a minified bundle and duplicated across
+   the rest). An ordinal is unique WITHIN a session and means nothing across one — and the moment a drive's
+   recipe crossed the tier that became the difference between reproducing the drive and reproducing its PATH.
+   decide.c's replay compares the QUESTION each recorded arm answers, and a question is composed from the source
+   identities in it, so a resumed drive of the same body under a different ordinal asks a different question at
+   its very first branch: every arm the drive recorded inside the function is discarded as a divergence and the
+   body is re-explored from there. The LOCATOR is unique per body and stable across sessions, so it is what
+   names the unknowns now, and the recorded arms line up. Two drives of one body share the name, which is
+   correct rather than the aliasing the ordinal was avoiding: they are the same call of the same function with
+   the same unknowns, and a fork already shares its parent's argument objects. */
 static long g_orphans_driven;
 /* AND THE GENERATION AT WHICH THIS DOCUMENT LAST WALKED THE HEAP. Creating a function object is the only event
    that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the
@@ -2613,16 +2637,144 @@ static long g_orphans_driven;
    the only direction it can be wrong (a 2^32 wrap) costs one redundant walk. */
 static uint32_t g_orphan_gen_seen;
 static int      g_orphan_gen_valid;
+/* THE ROUND TRIP'S TWO NUMBERS. How many waits a take has SATISFIED, and how many waiting flows FINISHED
+   without ever being handed a body. The third, how many were rebuilt, is the cold tier's own
+   (cold_resumed().orphans) and is not restated here.
+   THE UNMET COUNT IS THE OBSERVABLE, and it is counted at the finish rather than derived from the other two
+   because the other two do not subtract: a waiting drive forks arms while it replays, so more flows can be
+   satisfied than there were records, and a difference of counts would report that healthy multiplicity as a
+   loss. A drive that finished still waiting is the loss, exactly, with nothing else in it — the bundle no
+   longer holds the body its recipe named, or the locator does not name what it was written for. On a document
+   whose bytes did not change between two sessions it is ZERO, and nothing else in the run would say so: a
+   resumed frontier whose most expensive members drive nothing looks identical to one that worked. */
+static long g_orphan_claims_met, g_orphan_claims_unmet;
+/* …AND WHETHER ANY CLAIM IS STILL OPEN. It is a LATCH set by a walk that found none, not a counter maintained
+   at every site that could clear one: a claimant can also leave the frontier by being finished or paged, and a
+   counter would then have to be decremented at flow_remove, at flow_release and at the park — three obligations
+   for a fact one walk answers exactly. The walk is O(members) and runs once per orphan TAKEN, only in a session
+   that resumed drives at all, and it stops for good the first time it finds the frontier holds none. */
+static int g_orphan_claims_closed;
+
+/* HAND THIS BODY TO EVERY RESUMED DRIVE THAT WAS WAITING FOR IT, and answer how many there were.
+   EVERY ONE OF THEM AND NOT THE FIRST. What a take consumes is the `entered` BIT; the function object itself
+   is not consumed by being called, and the session that recorded these flows had exactly this shape — ONE
+   function and N flows whose frames were clones of one call of it. Handing it to the first claimant and
+   leaving the rest waiting would starve every arm of a drive but one, which is the same silent drop as
+   dropping the record.
+   IT IS A WALK OF THE FRONTIER AND NOT A TABLE KEYED BY HASH, for the reason cold.c gives about its own
+   deleted pointer-keyed index one level over: the value would be a `Flow *`, a flow leaves the frontier by
+   several different doors, and an entry that outlives its flow answers a later take with a dangling pointer.
+   The registry is the one structure that cannot be stale about which flows exist, so it is what is asked. */
+static int engine_orphan_route(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash) {
+    Flow *fl;
+    int i, open = 0, n = 0;
+
+    for (i = 0; (fl = flow_at(i)) != NULL; i++) {
+        if (!fl->orphan_want || !JS_IsUndefined(fl->fn)) continue;
+        open++;
+        if (fl->orphan_hash != hash) continue;
+        DCHECK(fl->orphan,
+               "a flow is waiting for an orphan's body without being marked as a drive — the three fields are "
+               "one identity, written together by the cold tier's rebuild, so this flow was assembled by "
+               "something that set part of it");
+        /* IT BUILDS THE CALL ITSELF, LATER, IN ITS OWN TIMELINE. Only the function crosses here, because the
+           receiver and the arguments are concolic OBJECTS: minted under this flow's stamp they would be this
+           flow's private state for the rest of the session, so no delta would ever capture the claimant's
+           writes to them and no rewind would restore them. */
+        fl->fn = JS_DupValue(ctx, fn);
+        fl->orphan_argc = argc;
+        n++;
+    }
+    /* THE LATCH, SET BY THE WALK ITSELF. Only cold_resume opens a claim and it runs once, before any flow is
+       picked, so a frontier that holds none holds none for the rest of the session. `open` is counted before
+       this pass satisfies anything, so a pass that satisfies the last of them latches on the NEXT take. */
+    if (!open) g_orphan_claims_closed = 1;
+    g_orphan_claims_met += n;
+    return n;
+}
+
+/* THE CALL A DRIVEN ORPHAN IS. Mints one concolic per declared parameter and one for the receiver — an orphan's
+ * arguments are unknown external input by definition, since nothing in the page ever supplied any — and returns
+ * the flow base that calls `fn` with them.
+ * IT RUNS IN THE TIMELINE OF THE FLOW THAT WILL DRIVE IT, which is why it is a function rather than two copies:
+ * the receiver and every argument are objects, so they are stamped with the running flow's generation and are
+ * that flow's private state for the rest of the session. Minting them under one flow and handing them to
+ * another would put a second flow's writes into the first flow's private set, where no delta captures them and
+ * no rewind restores them.
+ * THE UNKNOWNS ARE NAMED BY THE BODY'S LOCATOR, not by an ordinal — see g_orphans_driven for why that changed
+ * and what it costs to get wrong: the name is part of every question this call's branches ask, and a question
+ * asked under a name the recording session did not use is a divergence at the drive's first branch. */
+static JSValue *engine_orphan_call(JSContext *ctx, JSValueConst fn, int argc, uint64_t hash) {
+    JSValue *args = NULL, self, *base;
+    char id[64];
+    int k;
+
+    DCHECK(hash != 0, "a driven orphan's call was minted with no locator — every unknown it supplies would be "
+                      "named after a body that does not exist, and two drives of two different functions would "
+                      "then share one identity");
+    if (argc > 0) {
+        args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
+        CHECK(args, "engine: OOM minting a driven orphan's arguments");
+    }
+    for (k = 0; k < argc; k++) {
+        snprintf(id, sizeof id, "{orphan%016llx.arg%d}", (unsigned long long)hash, k);
+        args[k] = concolic_new(ctx, id, id, JS_UNDEFINED);
+    }
+    snprintf(id, sizeof id, "{orphan%016llx.this}", (unsigned long long)hash);
+    self = concolic_new(ctx, id, id, JS_UNDEFINED);
+
+    base = JS_FlowNewCall(ctx, fn, self, argc, (JSValueConst *)args);
+    CHECK(base != NULL, "engine: a driven orphan's call frame could not be allocated — the bit that made "
+                        "this function an orphan is already consumed, so there is no second chance at it");
+    /* JS_FlowNewCall dup'd the receiver and every argument into the frame; the mints are ours to release. */
+    JS_FreeValue(ctx, self);
+    for (k = 0; k < argc; k++) JS_FreeValue(ctx, args[k]);
+    free(args);
+    return base;
+}
+
+/* THE THREE THINGS AN ORPHAN STEP CAN DO, all of them PROGRESS and all of them distinct work: it seeds a fresh
+   drive of a body nothing has called, it hands a body back to the drives a park recorded for it, or it builds
+   the call of a drive that has been handed one. 0 is "there was nothing to take", which is what lets the
+   caller finish. */
+#define ORPHAN_STEP_SEEDED   1
+#define ORPHAN_STEP_ROUTED   2
+#define ORPHAN_STEP_RESUMED  3
 
 static int engine_orphan_fork(JSContext *ctx, Flow *f) {
     OrphanTake t = { JS_UNDEFINED, 0, 0 };
     uint32_t gen = JS_OrphanGen(JS_GetRuntime(ctx));
-    long ord;
-    int argc, k;
-    JSValue *args = NULL, self;
+    uint64_t hash;
     JSValue *base;
     Flow *sib;
-    char id[64];
+
+    /* A RESUMED DRIVE THAT HAS ITS FUNCTION BACK BUILDS ITS OWN CALL, and it builds it HERE rather than at the
+     * moment it was handed one. This is the point at which a flow has nothing left to run, which is where the
+     * drive belonged in the session that recorded it — so the recorded arms the replay has been consuming run
+     * out exactly here, and the arms the CALL then takes are the next ones in the same chain. Adopting earlier
+     * would put the call in front of programs the flow had still to replay and consume their arms with it.
+     * IT IS THIS FLOW AND NOT A SIBLING. The recipe named ONE flow, the reward on it is the drive's, and the
+     * decision chain under it is the drive's path; seeding a sibling here would leave this flow standing on an
+     * orphan's chain with nothing to run and hand the work to a member with no record behind it. */
+    if (f->orphan_want && !JS_IsUndefined(f->fn)) {
+        DCHECK(f->orphan && f->orphan_hash != 0,
+               "a flow is waiting to adopt an orphan without being one — `orphan_want` is written only by the "
+               "cold tier's rebuild and only beside the mark and the locator, so this flow was assembled by "
+               "something that set one third of an identity");
+        DCHECK(flow_running() == f,
+               "a resumed orphan drive built its call frame while another flow was switched in — the receiver "
+               "and every argument are objects stamped with the running flow's generation, so they would be a "
+               "stranger's private state for the rest of the session and no delta would capture the writes");
+        g_orphans_driven++;
+        base = engine_orphan_call(ctx, f->fn, f->orphan_argc, f->orphan_hash);
+        f->frame = base;
+        /* THE WAIT IS OVER AND IT IS NOT COUNTED AGAIN HERE. `orphanClaimsMet` counts HAND-OVERS BY A TAKE,
+           which is the event the round trip is about; an arm that inherited the function from a waiting parent
+           reaches this line too, and counting frames built would add those to a number compared against the
+           records. */
+        f->orphan_want = 0;
+        return ORPHAN_STEP_RESUMED;
+    }
 
     if (g_orphan_gen_valid && gen == g_orphan_gen_seen) return 0;
     /* THE MEMO IS RECORDED ONLY BY AN EMPTY WALK, and that is what the take taking ONE changes about it. It
@@ -2649,31 +2801,48 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
            "nothing left to run, which is the only point at which 'nothing called this function' is a fact, and "
            "a live frame means the flow was still going to call something");
 
-    ord = g_orphans_driven++;
-    argc = t.argc;
-    if (argc > 0) {
-        args = (JSValue *)malloc((size_t)argc * sizeof(JSValue));
-        CHECK(args, "engine: OOM minting a driven orphan's arguments");
-    }
-    for (k = 0; k < argc; k++) {
-        snprintf(id, sizeof id, "{orphan%ld.arg%d}", ord, k);
-        args[k] = concolic_new(ctx, id, id, JS_UNDEFINED);
-    }
-    snprintf(id, sizeof id, "{orphan%ld.this}", ord);
-    self = concolic_new(ctx, id, id, JS_UNDEFINED);
+    /* WHAT THIS BODY IS CALLED ACROSS SESSIONS, computed once per body because a body is taken once. It is
+       needed unconditionally — every drive this session creates has to be parkable, and the locator IS its
+       recipe — and the routing below is the second reader of the same number rather than a reason to compute
+       it. Its cost is one pass over one function's source text, so the whole session pays one pass over the
+       bundle. */
+    hash = JS_OrphanHash(ctx, t.fn);
 
-    base = JS_FlowNewCall(ctx, t.fn, self, argc, (JSValueConst *)args);
-    CHECK(base != NULL, "engine: a driven orphan's call frame could not be allocated — the bit that made "
-                        "this function an orphan is already consumed, so there is no second chance at it");
+    /* AND WHETHER A DRIVE THIS SESSION INHERITED WAS WAITING FOR EXACTLY THIS BODY. The recorded flow carries
+     * the path, the rank and the arms; what it could not carry is the function, because a heap reference dies
+     * with the session that held it. So the take routes: the function goes to the flow whose recipe named it,
+     * and that flow builds the call in its own timeline at its own next turn (the branch at the top).
+     * WITHOUT THIS THE RECIPE IS NEARLY INERT, and that is the whole reason it exists rather than each claimant
+     * taking its own. Every flow that runs out of work reaches this line, so a resumed frontier of thousands of
+     * members races for the same heap: the first arrival takes the body a claimant was recorded for and drives
+     * it from a fresh path, and the claimant — whose recorded arms are the gates that made that function
+     * reachable in the first place — finds nothing left to take and finishes having driven nothing. The
+     * function would still be driven and the WORK would not look lost, which is exactly what makes it the kind
+     * of loss nothing reports.
+     * IT IS SKIPPED ENTIRELY WHEN NO CLAIM CAN BE OPEN, so a session with no residue pays one comparison. */
+    if (!g_orphan_claims_closed && engine_orphan_route(ctx, t.fn, t.argc, hash)) {
+        /* NO FRESH DRIVE IS SEEDED BESIDE THEM. The body is being driven — by flows standing on the recorded
+           paths that made it reachable, which is strictly more than a fresh drive from the baseline would
+           reach — and a sibling assembled here as well would be a second timeline calling the same function
+           for the same reason, ranked with the discovering flow's account and standing on nothing. */
+        JS_FreeValue(ctx, t.fn);
+        return ORPHAN_STEP_ROUTED;   /* progress exactly as seeding one is */
+    }
+
+    g_orphans_driven++;
+    base = engine_orphan_call(ctx, t.fn, t.argc, hash);
     sib = engine_sibling_assemble(ctx, f, base, decide_fork_same_path(), concolic_pins_suspend());
     sib->orphan = 1;
     /* AND THE FUNCTION IT RE-DRIVES, which is what flow.h says `fn` IS and what nothing had put there:
        every flow_add in this engine passed JS_UNDEFINED, so the field's comment described a flow kind that
-       did not exist. It is the handle the park's missing 'o' record needs to name this drive (cold.c), and
-       it is what makes a walk of the frontier able to say which functions are being driven at all. The
-       assembly dup'd the PARENT's (undefined), so that reference is given back here. */
+       did not exist. It is what makes a walk of the frontier able to say which functions are being driven at
+       all. The assembly dup'd the PARENT's (undefined), so that reference is given back here. */
     JS_FreeValue(ctx, sib->fn);
     sib->fn = JS_DupValue(ctx, t.fn);
+    /* …AND THE NAME THAT OUTLIVES IT, which is what the park writes and what a later session finds this same
+       body by. Stamped HERE, at the one place a drive is created, so no drive can exist without one; an arm of
+       it inherits the field with the mark (engine_sibling_assemble). */
+    sib->orphan_hash = hash;
     /* WHERE IT ENTERS THE QUEUE, ASSERTED AT THE ONE ENTRY THAT MANUFACTURES ITS OWN WORK. An orphan drive is
        work this timeline CREATES, so it is exactly the shape flow.c's arrival rule exists for: a flow that
        could enter at virtual time zero would carry the full optimism bonus and stand ahead of the entire
@@ -2693,12 +2862,21 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
            "ranked against a clock nobody chose, and a page with many uncalled functions can then promote the "
            "work it manufactures above every flow already waiting");
 
-    /* JS_FlowNewCall dup'd the receiver and every argument into the frame; the mints are ours to release. */
-    JS_FreeValue(ctx, self);
-    for (k = 0; k < argc; k++) JS_FreeValue(ctx, args[k]);
-    free(args);
-    JS_FreeValue(ctx, t.fn);
-    return 1;
+    JS_FreeValue(ctx, t.fn);   /* the take's reference; the sibling holds its own dup */
+    return ORPHAN_STEP_SEEDED;
+}
+
+/* WHAT THAT STEP JUST DID, for the seam assertion — which can say a step ran too long but not what it was
+   doing, so a label naming one of three unrelated things is not the localisation it exists to be. */
+static const char *engine_orphan_unit(int r) {
+    switch (r) {
+    case ORPHAN_STEP_SEEDED:  return "seed-one-orphan-flow";
+    case ORPHAN_STEP_ROUTED:  return "hand-a-parked-drive-its-function";
+    case ORPHAN_STEP_RESUMED: return "resume-a-parked-orphan-drive";
+    }
+    DFAIL("the orphan step reported an outcome it does not have — the caller returns PROGRESS on anything "
+          "non-zero, so a fourth outcome is a step whose work nothing in the run can name");
+    return NULL;
 }
 
 
@@ -3413,6 +3591,14 @@ static long g_jobs_q, g_jobs_run;
 long engine_jobs_queued(void) { return g_jobs_q; }
 long engine_jobs_run(void) { return g_jobs_run; }
 
+void engine_orphan_claims(long *met, long *unmet) {
+    DCHECK(met != NULL && unmet != NULL,
+           "the orphan round trip was asked for one of its two numbers — the pair is the statement, because a "
+           "session that satisfied many waits and lost one has a nonzero count on both");
+    *met = g_orphan_claims_met;
+    *unmet = g_orphan_claims_unmet;
+}
+
 static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
                               JSTaskHandle handle) {
     Flow *f = flow_running();
@@ -3670,6 +3856,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
                on the row now (flow.h's `dyn_type`), so this is one question with one answer for every position
                in the sequence. */
             ScriptType stype = flow_dyn_type(f);
+            /* WHICH OF THE ORPHAN STEP'S THREE OUTCOMES HAPPENED — held so the branch can name its own work
+               rather than labelling three unrelated things with the name of one of them. */
+            int orphan_step;
             /* THE ROUTED DELIVERIES THIS FLOW HAS BEEN HANDED, and they are first because the task each one
                enqueues is what every branch below then finds on the queue. ONE PER STEP, oldest first: each
                becomes a §9.3.3 task at the receiving Window and the step returns, so the tasks are enqueued in
@@ -3803,7 +3992,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                flows minted inside a single step with no suspend point on it — the stretch engine_sched_step's
                seam assertion aborts on, and did. The unit's name said `drive-orphans`, which is why that abort
                reads as an orphan DRIVER: there has never been one, and this is a seed. */
-            else if (engine_orphan_fork(ctx, f)) { g_step_unit = "seed-one-orphan-flow"; return 0; }
+            else if ((orphan_step = engine_orphan_fork(ctx, f)) != 0) {
+                g_step_unit = engine_orphan_unit(orphan_step); return 0; }
             else {
                 /* A FLOW MAY NOT FINISH HOLDING WORK. Every branch above claims to have offered its queue a
                    turn, so reaching here with a job still on it means one of them returned first and the job
@@ -3817,6 +4007,15 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    means. The flow keeps its snapshot, its delta and its rank and is out of the pick until the
                    host has something for it. */
                 if (g_referenced) return FLOW_STEP_OWED;
+                /* …AND A RESUMED DRIVE THAT NEVER GOT ITS BODY BACK SAYS SO ON ITS WAY OUT. The line above it
+                   has just established that this document holds no untaken orphan, so the body this flow's
+                   recipe named is not in this session's heap: the bundle moved under the residue, or the
+                   locator does not name what it was written for. That is a legitimate outcome and NOT a
+                   should-never-happen — §Time-travel has a resumed flow re-deriving from CURRENT sources, and
+                   the code itself is one — so it is COUNTED rather than asserted, at the one place it can be
+                   distinguished from a drive that ran. Without the count a residue whose every drive missed
+                   looks exactly like one whose every drive landed. */
+                if (f->orphan_want && JS_IsUndefined(f->fn)) g_orphan_claims_unmet++;
                 return 1;   /* all scripts + chunks + microtask jobs + live fetches + load listeners done */
             }
             g_step_unit = "compile-program";
@@ -5640,7 +5839,9 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                whole frontier because a frozen segment is referenced by every flow forked below it. */
             {
                 ColdCensus c;
+                ColdResumed resumed;
                 cold_census(&c);
+                cold_resumed(&resumed);
                 /* `owed` BESIDE `blocked`, because the two answer different questions and the GAP between them
                    is the diagnostic. `blocked` asks each flow's REGISTER whether the host owes it anything;
                    `owed` counts the flows that have told the SCHEDULER they cannot progress, which is what the
@@ -5670,6 +5871,18 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                    frontier. A page with a large bundle and a zero here is one whose uncalled surface is not
                    being reached at all, which is the headline capability failing silently — see
                    engine_orphan_fork. */
+                /* AND THE THREE ORPHAN-CLAIM ROWS BESIDE IT, because `orphans` counts what this session
+                   STARTED and says nothing about what it INHERITED. A park writes an 'o' record per drive it is
+                   holding; a resume rebuilds one flow per record, each waiting for a body the document's own
+                   replay has to re-create. `orphanClaims` is how many were rebuilt, `orphanClaimsMet` how many
+                   waits a take satisfied, and `orphanClaimsUnmet` how many waiting flows FINISHED never having
+                   been handed one.
+                   THE LAST IS THE VERDICT AND THE FIRST TWO ARE CONTEXT. Met can legitimately EXCEED the
+                   records, because a waiting drive forks arms while it replays and every arm of it is the same
+                   drive of the same body; so met-minus-claims is not a loss and must not be read as one.
+                   Unmet is the loss, exactly: on a document whose bytes did not change between two sessions it
+                   is ZERO, and a resumed frontier whose most expensive members drive nothing is otherwise
+                   indistinguishable from one that worked. */
                 /* AND `hostAnswersLate`/`pagedReqs` BESIDE THEM, because a REFUSAL nobody can see is a drop.
                    The first counts the answers that arrived after this session closed and were refused rather
                    than written onto a flow that can never run again; the second is how many synchronous
@@ -5678,6 +5891,7 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                    by, and neither decides anything. */
                 printf("@COLD {\"flows\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                        "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"orphans\":%ld,"
+                       "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                        "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
@@ -5686,7 +5900,9 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                       g_finished, g_deepest, g_completed, g_orphans_driven, g_host_asked, g_host_answered,
+                       g_finished, g_deepest, g_completed, g_orphans_driven,
+                       resumed.orphans, g_orphan_claims_met, g_orphan_claims_unmet,
+                       g_host_asked, g_host_answered,
                        g_host_answers_late, g_paged_reqs,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
@@ -5911,6 +6127,11 @@ void solver_agent_free(JSContext *ctx)
        walked. Both are single words: the release is what makes them a session's rather than a process's. */
     g_orphans_driven = 0;
     g_orphan_gen_seen = 0; g_orphan_gen_valid = 0;
+    /* …AND THE ROUND TRIP'S THREE NUMBERS BESIDE THEM, for the same sentence: what an inherited drive did with
+       its recipe is a fact about ONE session's residue, and the latch is a fact about ONE frontier's members.
+       A second session that kept any of them would report the first session's round trip as its own and would
+       skip the routing walk on a frontier that has just been rebuilt with claims in it. */
+    g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
     attr_shadow_free(ctx);
     solve_free();
     endpoint_free();

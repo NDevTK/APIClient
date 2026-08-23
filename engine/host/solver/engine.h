@@ -588,6 +588,17 @@ int  engine_switch_count(void);
 long engine_jobs_queued(void);
 long engine_jobs_run(void);
 
+/* THE ORPHAN ROUND TRIP'S TWO NUMBERS — how many waits for a parked drive's function a TAKE satisfied this
+   session, and how many waiting drives FINISHED never having been handed one. The third, how many were rebuilt,
+   belongs to the cold tier and is asked of it (ColdResumed's `orphans`).
+   THE SECOND IS THE VERDICT. A recipe for a driven orphan carries a cross-session NAME for the function, and a
+   name that round-trips as text while naming nothing produces a frontier of drives that call nothing — which
+   emits no findings, crashes nowhere, and is indistinguishable from a document with no uncalled code in it.
+   Zero unmet on a document whose bytes did not change is the whole of the claim this feature makes.
+   `met` MAY EXCEED THE RECORDS and that is not a fault: a waiting drive forks arms while it replays the
+   document, and every arm of it is the same drive of the same body. */
+void engine_orphan_claims(long *met, long *unmet);
+
 /* WHO COUNTS THE DOM'S WRAPPERS. The scheduler's diagnostic line reports the identity map's size, and that map
    is the DOM's — so the DOM registers the counter rather than the solver naming node.h and dragging lexbor in
    behind it. */
