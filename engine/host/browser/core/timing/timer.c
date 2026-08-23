@@ -84,6 +84,7 @@
 #include "solver/engine.h"
 #include "solver/concolic.h"   /* §8.7 Timers's handler may be unknown external input, which crosses the IDL as itself */
 #include "solver/solve.h"      /* …and an unknown handler string is the @S JS-context sink */
+#include "solver/decide.h"     /* …and an unknown `timeout` makes §8.7 step 4 and its ORDER two forks, not two guesses */
 
 /* ONE ENTRY OF §8.7 Timers's MAP, as an Array — the shape §8.12 Animation frames's map of animation frame callbacks uses, for the
    reason CLAUDE.md gives: platform data a flow queues is a JS value, so the collector owns it, the COW delta
@@ -139,11 +140,135 @@ static double timer_entry_num(JSContext *ctx, JSValueConst e, int field)
     JSValue v = JS_GetPropertyUint32(ctx, e, (uint32_t)field);
     double d = 0;
 
+    DCHECK(field != TE_WHEN, "an entry's EXPIRY was read as a number — it is the one field of the entry that "
+                             "can be unknown external input, so it is read through timer_entry_when");
     DCHECK(JS_IsNumber(v), "an entry of §8.7 Timers's map of active timers lost one of its numeric fields — the "
-                           "handle, the expiry, the period and the insertion order are all written at the set");
+                           "handle, the period and the insertion order are all written at the set");
     JS_ToFloat64(ctx, &d, v);
     JS_FreeValue(ctx, v);
     return d;
+}
+
+/* THE EXPIRY, WHICH IS THE ONE FIELD OF AN ENTRY THAT MAY BE UNKNOWN — read as a VALUE and never as a double.
+ *
+ * §8.7's `run steps after a timeout` step 3 is "Set global's map of active timers[timerKey] to startTime plus
+ * milliseconds", and `milliseconds` reaches this component from a page that may have written
+ * `setTimeout(f, someUnknown)` — an orphan's argument, a reply field, an attacker source. A `long` conversion
+ * cannot refuse it (§3.2.4.5 runs ConvertToInt(V, 32, "signed"), which is TOTAL without [EnforceRange]: NaN and
+ * both infinities become +0 and everything else is folded modulo 2**32), and §Solver forbids picking a number
+ * for it — so the SUM is unknown too, and it is written and read as the value it is. OWNED. */
+static JSValue timer_entry_when(JSContext *ctx, JSValueConst e)
+{
+    JSValue v = JS_GetPropertyUint32(ctx, e, TE_WHEN);
+
+    DCHECK(JS_IsNumber(v) || concolic_is(v),
+           "an entry of §8.7 Timers's map of active timers holds an expiry that is neither a moment on the "
+           "event loop's clock nor unknown external input — every writer here writes one of the two");
+    return v;
+}
+
+/* §8.7 step 3's PLUS, run by the ENGINE. `start` is the current high resolution time and `ms` is the converted
+   `timeout`; where `ms` is unknown the sum is ECMAScript §13.15.3's `+` over an unknown operand, so the result
+   carries the operand's provenance AND — when it has one — the real arithmetic on its example. Composing a
+   number here instead would be the invention §Solver forbids, and carrying a bare label instead of running the
+   operator would be the recorded transform-expression §Re-execution forbids. OWNED. */
+static JSValue timer_expiry(JSContext *ctx, double start, JSValueConst ms)
+{
+    JSValue sp[2];
+
+    if (!concolic_is(ms)) {
+        double d = 0;
+        DCHECK(JS_IsNumber(ms), "§8.7's `timeout` reached the expiry neither a number nor unknown external "
+                                "input — §3.2.4.5's conversion is the declaration's and answers one of the two");
+        JS_ToFloat64(ctx, &d, ms);
+        return JS_NewFloat64(ctx, start + d);
+    }
+    sp[0] = JS_NewFloat64(ctx, start);
+    sp[1] = JS_DupValue(ctx, ms);
+    /* The hook's stack effect is js_add_slow's: both operands freed, the result placed in sp[-2]. */
+    if (!concolic_add_hook(ctx, sp + 2, JS_CONCOLIC_ADD_PLUS))
+        DFAIL("§13.15.3's `+` declined an operand this component has already established is UNKNOWN — the "
+              "concolic value semantics are not installed in this host, so every operator over an unknown "
+              "falls through to the ordinary-object path and the next coercion throws out of an expression "
+              "the page never wrote (solver/concolic.h: concolic_install_hooks)");
+    return sp[0];
+}
+
+/* HOW TWO ENTRIES ARE ORDERED ON THE TIMER TASK SOURCE, AND A FORK WHERE EITHER EXPIRY IS UNKNOWN.
+ *
+ * HTML §8.7's `run steps after a timeout` states the order as a comparison of the two invocations' expiries:
+ * "Wait until any invocations of this algorithm that had the same global and orderingIdentifier, that started
+ * before this one, and whose milliseconds is less than or equal to this one's, have completed." That is a
+ * comparison the ENGINE makes, never one the page wrote — so where an operand is unknown it is not a value to
+ * guess at but a QUESTION WITH TWO REAL ANSWERS, and both of them are programs the page can produce. It FORKS:
+ * this flow takes one order and a sibling flow takes the other, on the one frontier, exactly as `if (x < 700)`
+ * does. Clamping the unknown to a number instead would both invent a value the code never computed AND silently
+ * choose one of the two orders, which is the half of that mistake nothing downstream could ever report.
+ *
+ * TWO QUESTIONS AND NOT ONE, because §8.7's own key has two components. `<` decides the order; `==` is what the
+ * INSERTION ORDER then breaks, and the insertion numbers are concrete on both sides (§8.1.7's counter hands out
+ * a real number at every set), so the tie-break inside that arm is decided rather than forked. Folding the two
+ * into a single `<=` would put "equal, and set first" into whichever arm the fold happened to pick, and that is
+ * the case the tie-break exists for. */
+enum { TIMER_REL_BEFORE = 0, TIMER_REL_SAME };
+
+static int timer_rel(JSContext *ctx, JSValueConst a, JSValueConst b, int q)
+{
+    JSValue pred;
+    int d;
+
+    DCHECK(q == TIMER_REL_BEFORE || q == TIMER_REL_SAME,
+           "the timer task source was asked a relation that is neither of the two its order is composed of");
+    if (!concolic_is(a) && !concolic_is(b)) {
+        double x = 0, y = 0;
+        JS_ToFloat64(ctx, &x, a);
+        JS_ToFloat64(ctx, &y, b);
+        return q == TIMER_REL_BEFORE ? x < y : x == y;
+    }
+    /* The relation is NAMED by the spec clause it comes from, which is what tells the two asks apart in this
+       flow's constraint — see solver/concolic.h's concolic_new_rel for why the name and not an opcode. */
+    pred = concolic_new_rel(ctx,
+                            q == TIMER_REL_BEFORE
+                              ? "HTML §8.7 run steps after a timeout: milliseconds <"
+                              : "HTML §8.7 run steps after a timeout: milliseconds ==",
+                            a, b);
+    d = solver_decide(ctx, pred);
+    JS_FreeValue(ctx, pred);
+    DCHECK(d >= 0,
+           "the timer task source's ORDER was asked over an unknown expiry and the solver answered that the "
+           "value is not unknown — solver_decide answers -1 for an ordinary value and for a flow that is not "
+           "running, and the timer source's order is only ever decided from inside a flow's own step");
+    DCHECK(SOLVER_ARM(d) == 0 || SOLVER_ARM(d) == 1,
+           "a two-armed decision answered with an arm that is neither of them");
+    /* THE ARM IS RIGHT AND THE SIBLING HAS NOWHERE TO BE BUILT, WHICH IS A FACT ABOUT WHERE THIS IS ASKED
+       RATHER THAN ABOUT THE QUESTION. solver_decide prepares the other arm's decision and pin blobs and returns
+       the FORKED bit, and every consumer of that bit is an ACTIVATION: the interpreter's branch_arm_fork
+       snapshots the frame at the `if`, and a step machine's JS_STEP_FORK snapshots the machine at its ask. This
+       ask has neither. §8.1.7's choice of which task source runs next is made in the scheduler's idle branch —
+       the flow is switched in, so the delta and the constraint are the right ones, but there is no pc, no
+       operand stack and no coroutine state to clone, so nothing consumes the prepared blobs and the NEXT fork
+       anywhere in the agent trips engine_prepare_fork's "a sibling's snapshot state was prepared while a
+       PREVIOUS one was still unconsumed". Measured: 20 documents of one WPT area aborted there, three layers
+       from here, with nothing in the message about timers.
+       WHAT TO BUILD IS THE SCHEDULER'S OWN VALUE FORK, and solver/decide.h already names it and says why it is
+       a different mechanism: "A flow forks over a VALUE as well as over a predicate... Nothing about that is a
+       branch — the asking program asked no question it could have answered two ways, so there is no slot to
+       record and the sibling's path is its parent's, unchanged" (decide_fork_same_path, assembled by
+       engine.c's flow_answer_fork). The event loop's choice of next task IS that shape exactly: no program
+       asked it, so the sibling has no resume point to snapshot and instead stands on the parent's path and
+       re-reaches this walk, where its recorded arm replays. Build that seam, ask it here instead of
+       solver_decide, and the two-arm order is complete.
+       DO NOT reach for the other repair — deciding the order from the unknown's EXAMPLE, or from whichever
+       entry the walk happened to reach first. Both delete an arm, and the deleted arm is a real program: it is
+       the order in which the page's other timer runs second. */
+    if (SOLVER_FORKED(d))
+        DFAIL("§8.1.7 chose between two timer expiries where one is UNKNOWN, and the fork it needs cannot be "
+              "built here: the choice is made in the scheduler's idle branch, which has no activation to "
+              "snapshot, so solver_decide's prepared sibling is stranded and the next fork in the agent trips "
+              "engine_prepare_fork. Build the scheduler's VALUE fork (solver/decide.h decide_fork_same_path + "
+              "engine.c flow_answer_fork — a sibling that stands on its parent's path and re-reaches this "
+              "walk) and ask that here instead of the interpreter's branch fork");
+    return SOLVER_ARM(d) == 1;
 }
 
 /* THE EARLIEST ENTRY OF ONE GLOBAL's MAP: least expiry, ties broken by the order it was set. Returns its index,
@@ -155,19 +280,23 @@ static double timer_entry_num(JSContext *ctx, JSValueConst e, int field)
  * timeline carries a number this flow never allocated. That is the exact statement of "a timer set by one flow
  * is not visible to another", and it is what fires if either half of the pair is ever moved back out of the
  * heap while the other stays in it. */
-static int timer_earliest_in(JSContext *ctx, double *pwhen, double *pseq)
+/* `*pwhen` is the running best expiry — JS_UNDEFINED on entry, OWNED by the caller on return. */
+static int timer_earliest_in(JSContext *ctx, JSValue *pwhen, double *pseq)
 {
     JSValue q = timer_map(ctx);
     uint32_t i, n = arr_len(ctx, q);
     double seq_next = event_loop_task_seq_peek(ctx);
     int best = -1;
 
+    DCHECK(JS_IsUndefined(*pwhen),
+           "the timer walk was handed a running best it did not allocate — the expiry it carries is an owned "
+           "value, so a caller that starts it at anything else leaks the one it was already holding");
     for (i = 0; i < n; i++) {
-        JSValue e = JS_GetPropertyUint32(ctx, q, i);
-        double when, seq;
+        JSValue e = JS_GetPropertyUint32(ctx, q, i), when;
+        double seq;
 
         if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }   /* a free slot */
-        when = timer_entry_num(ctx, e, TE_WHEN);
+        when = timer_entry_when(ctx, e);
         seq = timer_entry_num(ctx, e, TE_SEQ);
         JS_FreeValue(ctx, e);
         DCHECK(seq < seq_next,
@@ -176,10 +305,14 @@ static int timer_earliest_in(JSContext *ctx, double *pwhen, double *pseq)
                "COW delta, so an entry another flow's timeline queued cannot be visible here. One of the two "
                "is being answered from outside the delta, and the effect is flow A's setTimeout firing in flow "
                "B's job queue under B's heap");
-        if (best < 0 || when < *pwhen || (when == *pwhen && seq < *pseq)) {
+        if (best < 0 || timer_rel(ctx, when, *pwhen, TIMER_REL_BEFORE)
+                     || (timer_rel(ctx, when, *pwhen, TIMER_REL_SAME) && seq < *pseq)) {
+            JS_FreeValue(ctx, *pwhen);
             best = (int)i;
             *pwhen = when;
             *pseq = seq;
+        } else {
+            JS_FreeValue(ctx, when);
         }
     }
     JS_FreeValue(ctx, q);
@@ -192,26 +325,33 @@ static int timer_earliest_in(JSContext *ctx, double *pwhen, double *pseq)
    `setTimeout(g, 100)`, which is what one event loop MEANS. The walk is navigable.c's because the tree is;
    `docctx` is the realm the task is queued on, which is the global whose map holds it and not whichever realm
    happened to drive the loop. */
-static JSContext *timer_earliest(JSContext *ctx, int *pidx, double *pwhen, double *pseq)
+/* `*pwhen` is JS_UNDEFINED on entry and OWNED by the caller on return, whatever the answer. */
+static JSContext *timer_earliest(JSContext *ctx, int *pidx, JSValue *pwhen, double *pseq)
 {
     JSValue all = navigable_tree_order(ctx);
     uint32_t i, n = arr_len(ctx, all);
     JSContext *best = NULL;
 
+    DCHECK(JS_IsUndefined(*pwhen),
+           "the event loop's timer walk was handed a running best it did not allocate — see timer_earliest_in");
     for (i = 0; i < n; i++) {
-        JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
+        JSValue proxy = JS_GetPropertyUint32(ctx, all, i), when = JS_UNDEFINED;
         JSContext *docctx = window_proxy_realm(ctx, proxy);
-        double when = 0, seq = 0;
+        double seq = 0;
         int idx;
 
         DCHECK(docctx != NULL, "a navigable in this agent's tree order answered with no realm — the walk "
                                "reports only materialized ones, and a materialized navigable has a realm");
         idx = timer_earliest_in(docctx, &when, &seq);
-        if (idx >= 0 && (!best || when < *pwhen || (when == *pwhen && seq < *pseq))) {
+        if (idx >= 0 && (!best || timer_rel(ctx, when, *pwhen, TIMER_REL_BEFORE)
+                              || (timer_rel(ctx, when, *pwhen, TIMER_REL_SAME) && seq < *pseq))) {
+            JS_FreeValue(ctx, *pwhen);
             best = docctx;
             *pidx = idx;
             *pwhen = when;
             *pseq = seq;
+        } else {
+            JS_FreeValue(ctx, when);
         }
         JS_FreeValue(ctx, proxy);
     }
@@ -219,14 +359,30 @@ static JSContext *timer_earliest(JSContext *ctx, int *pidx, double *pwhen, doubl
     return best;
 }
 
-/* THE CLOCK IS THE EVENT LOOP'S — see event_loop.h. §8.1.7.3's rendering task source becomes due at moments on
-   the same clock, so the two are compared rather than raced, and the comparison needs both halves askable. */
-double timer_next_due(JSContext *ctx)
+/* IS THE TIMER SOURCE'S NEXT TASK DUE BEFORE `moment`? — §8.1.7.3 step 2.1's own question, asked as a question.
+ *
+ * IT HANDED OUT THE MOMENT AND THAT WAS THE WRONG SHAPE. This answered `double`, and its one caller
+ * (core/rendering/rendering.c) compared the number against the next frame — which works exactly while every
+ * expiry is a number, and a `setTimeout(f, someUnknown)` makes one that is not. A moment nothing computed has no
+ * double to hand over, and inventing one here would decide the frame-versus-timer order for the whole program
+ * from inside an accessor. The COMPARISON is the thing both sides want, it is the only use the moment was ever
+ * put to, and asked here it forks (timer_rel) exactly as any other order over an unknown does. The clock the
+ * moments live on is the event loop's — see core/timing/event_loop.h.
+ * Returns 0 when no timer is set at all, which is the same answer as "not before" and is right for both: the
+ * rendering opportunity proceeds either way. */
+int timer_due_before(JSContext *ctx, double moment)
 {
-    double when = 0, seq = 0;
-    int idx = -1;
+    JSValue when = JS_UNDEFINED, m;
+    double seq = 0;
+    int idx = -1, r;
 
-    return timer_earliest(ctx, &idx, &when, &seq) ? when : -1;
+    if (!timer_earliest(ctx, &idx, &when, &seq))
+        return 0;
+    m = JS_NewFloat64(ctx, moment);
+    r = timer_rel(ctx, when, m, TIMER_REL_BEFORE);
+    JS_FreeValue(ctx, m);
+    JS_FreeValue(ctx, when);
+    return r;
 }
 
 void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src)) { g_script_sink = queue; }
@@ -239,7 +395,11 @@ void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src)) { g_scr
  * names, and it is per-global (two same-origin documents both hand out 1); the insertion order breaks a tie
  * between two globals' entries on the one task source, so it has to be the loop's. Both ride the per-flow
  * delta, which is why two arms of a fork mint the SAME handle for the same source line. */
-static int timer_set(JSContext *ctx, double delay, double every, JSValueConst fn, int argc, JSValueConst *argv)
+/* `delay` IS A VALUE AND NOT A DOUBLE, because §8.7's `timeout` can be unknown external input and the expiry
+   this writes is then unknown too — see timer_expiry. `every` is still a double: an unknown PERIOD is a
+   different question and js_set_timer refuses it at the door, naming why. */
+static int timer_set(JSContext *ctx, JSValueConst delay, double every, JSValueConst fn, int argc,
+                     JSValueConst *argv)
 {
     JSValue st = timer_store(ctx), q, entry, nv;
     uint32_t handle = 0, i, slot, n;
@@ -256,7 +416,7 @@ static int timer_set(JSContext *ctx, double delay, double every, JSValueConst fn
     CHECK(!JS_IsException(entry), "timer: OOM recording a timer — a dropped one is work the page asked for "
                                   "and never gets");
     JS_SetPropertyUint32(ctx, entry, TE_HANDLE, JS_NewUint32(ctx, handle));
-    JS_SetPropertyUint32(ctx, entry, TE_WHEN, JS_NewFloat64(ctx, event_loop_now(ctx) + delay));
+    JS_SetPropertyUint32(ctx, entry, TE_WHEN, timer_expiry(ctx, event_loop_now(ctx), delay));
     JS_SetPropertyUint32(ctx, entry, TE_EVERY, JS_NewFloat64(ctx, every));
     JS_SetPropertyUint32(ctx, entry, TE_SEQ, JS_NewFloat64(ctx, event_loop_task_seq(ctx)));
     JS_SetPropertyUint32(ctx, entry, TE_FN, JS_DupValue(ctx, fn));
@@ -341,14 +501,46 @@ void timer_clear_map(JSContext *ctx)
  * Returns 1 when a timer fired (the driver has work again), 0 when there is none. */
 int timer_run_due(JSContext *ctx)
 {
+    JSValue whenv = JS_UNDEFINED;
     double when = 0, seq = 0, every;
     int idx = -1;
-    JSContext *docctx = timer_earliest(ctx, &idx, &when, &seq);
+    JSContext *docctx = timer_earliest(ctx, &idx, &whenv, &seq);
     JSValue q, e, fn, *args = NULL;
     uint32_t i, n;
 
     if (!docctx)
         return 0;
+
+    /* THE ONE THING AN UNDECIDED MOMENT STILL COSTS, AND IT IS THE CLOCK ITSELF.
+       Everything up to here is answered: the expiry is written as the value §13.15.3's `+` computed, the ORDER
+       against every other entry is a fork whose two arms are two real programs, and the arm that runs a
+       CONCRETE timer while an unknown one waits is complete — that is the arm a document's own work runs in.
+       What is left is the arm that FIRES this one. §8.7's map of active timers holds `startTime plus
+       milliseconds` and this engine's virtual clock jumps there, so firing a timer whose expiry is unknown puts
+       the EVENT LOOP'S CLOCK at an unknown moment — and that is not a fidelity gap to paper over, it is the
+       truth: after a timer with an unknown delay has fired, how much time has passed IS unknown, and
+       `performance.now()` must say so.
+       WHAT TO BUILD IS THE CONCOLIC CLOCK, and it is core/timing/event_loop.c's field rather than this file's:
+       `eventLoopNow` becomes a value, event_loop_now answers one, and event_loop_advance_to takes one. Three
+       sub-questions come with it and none of them is optional — (1) its own MONOTONICITY assert (`when >= now`)
+       is undecidable over an unknown and must be carried by the DECISION that chose this entry rather than
+       re-evaluated, because the fork that picked it is exactly the proof; (2) HR-TIME §4's coarsening
+       (core/timing/hr_time.c: floor to the resolution grid, minus the time origin) becomes a derivation over
+       the unknown, and hr_time_relative's `coarse >= origin` assert has the same problem as (1); (3)
+       core/rendering/rendering.c's `next < now` and its `last render opportunity time` become forks of their
+       own, the second of which asserts `when <= now`. Do NOT reach for a number here: any moment picked is one
+       the code never computed AND a silent choice of one of the two orders, which is the half of the mistake
+       nothing downstream could report.
+       DO NOT clamp, and do not read the example either — this entry reached the front of the queue precisely
+       because a FORK put it there, so an example would answer a question an arm has already decided. */
+    if (concolic_is(whenv))
+        DFAIL("the timer the event loop selected expires at an UNKNOWN moment, so firing it moves §8.1.7's "
+              "virtual clock to a moment no arm has decided. Build the concolic clock in "
+              "core/timing/event_loop.c — see the paragraph at this line for its three sub-questions "
+              "(monotonicity carried by the deciding fork, HR-TIME §4 coarsening as a derivation, and "
+              "core/rendering/rendering.c's frame-versus-timer comparison as a fork)");
+    JS_ToFloat64(docctx, &when, whenv);
+    JS_FreeValue(docctx, whenv);
 
     /* 8.6: the clock advances to this task's expiry — every later timer is measured from here. It is the ONE
        source that is due, so nothing else constrains the move. */
@@ -391,8 +583,9 @@ int timer_run_due(JSContext *ctx)
                "the case whose answer it decides. Step 3 reads the level off the currently running task ("
                "\"if the surrounding agent's event loop's currently running task is a task that was created by "
                "this algorithm, then let nesting level be the task's timer nesting level; otherwise 0\"), the "
-               "task's last step re-runs the WHOLE algorithm for a repeat, and step 15 increments the level for "
-               "the task it queues — so an interval's re-arms walk 1,2,3,... and step 5 (\"if nesting level is "
+               "task's last step re-runs the WHOLE algorithm for a repeat, and steps 10 and 11 (\"Increment "
+               "nestingLevel by one\" / \"Set task's timer nesting level to nestingLevel\") carry it onto the "
+               "task it queues — so an interval's re-arms walk 1,2,3,... and step 5 (\"if nesting level is "
                "greater than 5, and timeout is less than 4, then set timeout to 4\") takes over from the sixth. "
                "The same three steps govern a RECURSIVE `setTimeout(f,0)`, which is the more common spelling and "
                "which this component gets wrong in the same way and cannot assert here: with no clamp its chain "
@@ -432,7 +625,9 @@ int timer_run_due(JSContext *ctx)
 
 static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    double delay = 0;
+    double delay = 0, every;
+    JSValue timeout;
+    int handle;
 
     (void)this_val;
     if (argc < 1)
@@ -450,31 +645,60 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
        global and orderingIdentifier, that started before this one, and whose milliseconds is less than or
        equal to this one's, have completed" — a comparison the ENGINE makes, never one the page wrote. This
        component realises it as (now + timeout, insertion order) on the virtual clock, so what it needs from
-       the value is one number. Answering that from the example is the modelled-value rule: the value stays
-       unknown for control flow, and nothing downstream reads this delay, so there is no fork here to delete. */
-    if (argc >= 2 && !idl_number_of(ctx, IDL_LONG, argv[1], &delay))
-        DFAIL("setTimeout's `timeout` is unknown external input carrying NO EXAMPLE, and HTML §8.7 Timers "
-              "makes the order a function of it: `run steps after a timeout` waits for every earlier "
-              "invocation on this global \"whose milliseconds is less than or equal to this one's\", so with "
-              "no number this entry has no place in the map's order — and picking one INVENTS a value the "
-              "code never computed, which §Solver forbids exactly as it forbids inventing 6 for `x > 5`. "
-              "WHAT TO BUILD IS THE ORDERING FORK, and every seam it needs already exists: TE_WHEN holds the "
-              "unknown rather than a double, timer_earliest_in asks solver_outcome (solver/decide.h) over the "
-              "two entries it is comparing instead of `when < *pwhen`, and event_loop_advance_to takes a "
-              "moment no arm has decided yet. §8.7 step 4 (\"If timeout is less than 0, then set timeout to "
-              "0\") is then a fork over the same value whose TRUE arm is a concrete 0 the SPEC computed, so "
-              "one arm of every such call runs with nothing invented at all.");
-
-    /* §3.2.4.5's own postcondition, which is what the tag test was reaching for and could not state:
-       ConvertToInt takes the integer part modulo 2**32 and folds it into range, so a `long` is ALWAYS an
-       integer in [-2147483648, 2147483647] — NaN and the infinities became +0 inside the conversion. */
-    DCHECK(delay >= -2147483648.0 && delay <= 2147483647.0 && delay == (double)(int32_t)delay,
-           "§3.2.4.5's `long` conversion answered something that is not a long — its result is the integer "
-           "part taken modulo 2**32 and folded into range, so a value outside it, or one with a fraction, "
-           "means this position was never converted by anything");
-    /* §8.7 step 4: "If timeout is less than 0, then set timeout to 0." */
-    if (delay < 0)
-        delay = 0;
+       the value is one number.
+       AN UNKNOWN WITH NO EXAMPLE IS NOT A MISSING NUMBER, IT IS A FORK, and §8.7 states the fork itself. Step
+       4 is "If timeout is less than 0, then set timeout to 0" — a comparison over exactly this value, whose
+       TRUE arm the SPEC then assigns a concrete 0 to. So one arm of every such call runs on a number nothing
+       invented, and the other keeps the unknown and orders by the fork timer_rel makes. This is the
+       concretize-on-pin rule with the spec doing the pinning: `x === 'admin'` concretizes because the code
+       determined the value, and step 4's true arm concretizes because the ALGORITHM determined it. */
+    if (argc >= 2 && !idl_number_of(ctx, IDL_LONG, argv[1], &delay)) {
+        /* §8.7 step 4 over an unknown: both outcomes are feasible (§3.2.4.5's `long` spans
+           [-2147483648, 2147483647] and ConvertToInt is TOTAL, so nothing has excluded either sign), so BOTH
+           arms run — this flow takes one and a sibling is parked for the other. */
+        int d = solver_outcome(ctx, argv[1],
+                               "HTML §8.7 timer initialization steps step 4 (timeout < 0)", 2);
+        DCHECK(d >= 0,
+               "§8.7 step 4 was asked about an unknown `timeout` and the solver answered that the value is "
+               "not unknown, or that no flow is running — a page's `setTimeout` runs inside a flow's own "
+               "step, and idl_number_of has already established the value is unknown external input");
+        DCHECK(SOLVER_ARM(d) == 0 || SOLVER_ARM(d) == 1,
+               "a two-armed decision answered with an arm that is neither of them");
+        /* AND THE SIBLING NEEDS A DECLARATION THIS MEMBER DOES NOT HAVE — the same gap timer_rel names, at the
+           other end of the algorithm. solver_outcome prepares the other arm and returns the FORKED bit, and
+           the only thing that consumes that bit for a C builtin is the interpreter's JS_STEP_FORK driver,
+           which reaches it because the builtin DECLARED ITSELF A STEP MACHINE and yielded its ask. This body is
+           a plain JSCFunction (idl_method_id), so it is already inside its C activation when it asks and there
+           is no machine state to snapshot the other arm at; the prepared blobs are then stranded exactly as
+           they are in timer_rel.
+           WHAT TO BUILD IS THE DECLARATION: §8.7's members become step machines (idl_method_id_step, the entry
+           the synchronous host read already uses), step 4's comparison becomes the machine's outcome ask, and
+           the driver snapshots the flow AT the ask so the sibling re-enters the algorithm holding the other
+           arm. Nothing about the QUESTION changes — the true arm is still the spec's own 0. */
+        if (SOLVER_FORKED(d))
+            DFAIL("§8.7 step 4 forked over an unknown `timeout` and the sibling has nowhere to be built: "
+                  "`setTimeout` is declared as a plain C body (idl_method_id), so it is already inside its "
+                  "activation when it asks and the interpreter's JS_STEP_FORK driver — the one consumer of "
+                  "solver_outcome's FORKED bit for a C builtin — never sees it, leaving the prepared sibling "
+                  "stranded for the next fork in the agent to trip over. Declare §8.7's members as step "
+                  "machines (idl_method_id_step) and make step 4's comparison the machine's outcome ask");
+        if (SOLVER_ARM(d) == 1)
+            timeout = JS_NewFloat64(ctx, 0);   /* step 4's own assignment, on its own arm */
+        else
+            timeout = JS_DupValue(ctx, argv[1]);
+    } else {
+        /* §3.2.4.5's own postcondition, which is what the tag test was reaching for and could not state:
+           ConvertToInt takes the integer part modulo 2**32 and folds it into range, so a `long` is ALWAYS an
+           integer in [-2147483648, 2147483647] — NaN and the infinities became +0 inside the conversion. */
+        DCHECK(delay >= -2147483648.0 && delay <= 2147483647.0 && delay == (double)(int32_t)delay,
+               "§3.2.4.5's `long` conversion answered something that is not a long — its result is the integer "
+               "part taken modulo 2**32 and folded into range, so a value outside it, or one with a fraction, "
+               "means this position was never converted by anything");
+        /* §8.7 step 4: "If timeout is less than 0, then set timeout to 0." */
+        if (delay < 0)
+            delay = 0;
+        timeout = JS_NewFloat64(ctx, delay);
+    }
 
     /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
        known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
@@ -486,6 +710,10 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         const char *src;
         JSValue st, nv;
         uint32_t handle = 0;
+
+        /* §8.7 step 4 ran above, where the spec puts it, and this arm makes no entry for its result to be the
+           expiry of — every exit below is a return, so the converted `timeout` is released once, here. */
+        JS_FreeValue(ctx, timeout);
 
         /* §8.7 Timers's STRING ARM OVER UNKNOWN EXTERNAL INPUT IS A CODE-EXECUTION SINK, NOT A BROKEN INVARIANT.
            The assertion here used to be `JS_IsString(argv[0])`, and it FIRED on `setTimeout(location.hash)`.
@@ -535,8 +763,29 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         return JS_NewInt32(ctx, (int32_t)handle);   /* §8.7 Timers's return type is a `long` */
     }
 
-    return JS_NewInt32(ctx, timer_set(ctx, delay, magic ? delay : -1, argv[0],
-                                      argc > 2 ? argc - 2 : 0, argc > 2 ? argv + 2 : NULL));
+    /* THE PERIOD IS A DOUBLE AND AN UNKNOWN ONE IS A DIFFERENT QUESTION FROM AN UNKNOWN DELAY, which is why it
+       is refused HERE rather than absorbed. A one-shot's unknown expiry is ordered by a fork and is then done
+       with; a REPEAT re-arms from its own period at every fire, and §8.7's task's last step "perform the timer
+       initialization steps AGAIN" runs step 5 on each of those — the clamp that needs the TIMER NESTING LEVEL,
+       which this component does not have and whose absence the re-arm's own assert in timer_run_due already
+       names in full. An unknown period would therefore be re-armed by a rule the engine cannot state, for
+       ever. Build the nesting level first; the two meet at step 5. */
+    if (magic && concolic_is(timeout))
+        DFAIL("`setInterval` was given a PERIOD that is unknown external input, and §8.7's repeat re-runs the "
+              "whole timer initialization steps at every fire — so step 5 (\"If nestingLevel is greater than "
+              "5, and timeout is less than 4, then set timeout to 4\") governs every re-arm and this "
+              "component has no TIMER NESTING LEVEL to evaluate it with. Build the level first (timer_run_due "
+              "carries the whole design in the assert on its re-arm), then this reads it and the re-arm's "
+              "expiry is §8.7's own number over the unknown rather than a rule invented here");
+    /* A one-shot's period is -1 and is never read; a repeat's is the converted `timeout`, which the refusal
+       above has established is a number — so nothing here runs ToNumber over an unknown. */
+    every = -1;
+    if (magic)
+        JS_ToFloat64(ctx, &every, timeout);
+    handle = timer_set(ctx, timeout, every, argv[0],
+                       argc > 2 ? argc - 2 : 0, argc > 2 ? argv + 2 : NULL);
+    JS_FreeValue(ctx, timeout);
+    return JS_NewInt32(ctx, handle);
     /* nothing is queued: the driver asks when the clock may move */
 }
 
@@ -564,7 +813,15 @@ int timer_after(JSContext *ctx, double ms, JSValueConst steps)
     if (!(ms >= 0))
         ms = 0;   /* §8.7 Timers clamps a negative or non-finite timeout to 0, for an engine caller as for a page */
     /* §8.7 Timers's completion steps are performed once; there is no interval form of this. */
-    return timer_set(ctx, ms, -1, steps, 0, NULL);
+    /* AN ENGINE CALLER'S `milliseconds` IS A REAL DOUBLE, which is the difference between this entry and the
+       page's: the caller is an algorithm of this engine and the number is one the engine computed, so there is
+       no unknown here to order by a fork. It crosses into the map as the value every expiry is. */
+    {
+        JSValue msv = JS_NewFloat64(ctx, ms);
+        int key = timer_set(ctx, msv, -1, steps, 0, NULL);
+        JS_FreeValue(ctx, msv);
+        return key;
+    }
 }
 
 /* §8.7 Timers's timerKey, used to cancel — the same clearing `clearTimeout` performs, reached by an engine caller in

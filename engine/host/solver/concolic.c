@@ -818,6 +818,37 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *to
     return pred_new(ctx, op == OPCMP_NE ? "!=" : "==", src, src,
                     concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok);
 }
+/* …AND THE TWIN FOR A RELATION OVER TWO LIVE VALUES, for a browser component whose own algorithm compares two
+ * operands either of which may be unknown (HTML §8.7's timer task source orders one expiry against another).
+ *
+ * IT EXISTS SO THERE IS STILL ONE SPELLER OF THE KEY. The component could not reach concolic_rel_hook: that
+ * entry takes the INTERPRETER'S OWN OPCODE for the operator, which is an identity quickjs never exports, and a
+ * host that invented a number for it would be spelling a second opcode namespace beside the engine's. Nor could
+ * it compose the key itself — decide.c keys a constraint by the value's identity precisely so that the format
+ * lives in one place. So the component states the SPEC RELATION IT IS PERFORMING as the operator's name and
+ * this file composes the identity, exactly as it composes `rel%d` for the interpreter; the two namespaces
+ * cannot collide because concolic_ident_compose writes every field length-prefixed.
+ *
+ * IT PINS NOTHING, and that is the relation's own property rather than a shortcut. §Solver-half: an ordering
+ * narrows a domain and determines no value, and an equality whose other side is also unknown has no concrete
+ * value to pin to — so the pin stays where a pin can be honest, in the equality hook over a source and a
+ * literal token. Both operands are BORROWED. */
+JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValueConst b) {
+    JSValueConst opq;
+
+    DCHECK(op != NULL,
+           "a component asked for a relation over two values without naming the RELATION — the operator is "
+           "half the predicate, so two different comparisons of one pair would compose to one identity and "
+           "the flow's record of either would decide the other");
+    DCHECK(concolic_is(a) || concolic_is(b),
+           "a component asked the solver to relate two values NEITHER of which is unknown — a relation over "
+           "two concrete operands is decided by running it, and minting a predicate for it would put a fork "
+           "in the frontier over a question the engine can already answer");
+    opq = concolic_is(a) ? a : b;
+    return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq),
+                    ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL);
+}
+
 int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     if (!c || c->cmp_op == OPCMP_NONE) return OPCMP_NONE;

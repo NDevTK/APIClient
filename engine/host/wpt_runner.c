@@ -1350,6 +1350,13 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        who reports a page error while the programs are the scheduler's rather than this file's. */
     { static const FetchProvider P = { wpt_owe }; fetch_set_provider(&P); }
     result_set_page_error_hook(wpt_page_error);
+    /* …AND WHO EVALUATES A STRING HANDLER, which is the same kind of edge and was the one this host did not
+       state. HTML §8.7's timer initialization steps compile a DOMString handler as a classic script when the
+       timer fires, and core/timing/timer.c aborts on a string handler with no sink registered — so every
+       `setTimeout("…")` in the corpus took its document down here while the two hosts that DO register it
+       (main.c, test_forced.c) ran the same code correctly. An edge absent from one host is not a weaker host,
+       it is an area this gate publishes a number for without having run it. */
+    timer_set_script_sink(engine_queue_script);
 
     agent.origin = origin;
     agent.top_level_url = top_level_url;

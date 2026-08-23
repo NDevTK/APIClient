@@ -232,6 +232,15 @@ const char *concolic_source_encodes(const char *root);
    the taken arm pins/negates. */
 enum { OPCMP_NONE = 0, OPCMP_EQ = 1, OPCMP_NE = 2 };
 JSValue     concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *tok);  /* a comparison-result bool */
+/* …AND ITS TWIN FOR A RELATION OVER TWO LIVE VALUES, either of which may be unknown — for a browser component
+   whose own algorithm compares two operands (HTML §8.7's timer task source orders one expiry against another,
+   and the expiry of a timer set with unknown external input is unknown). `op` NAMES THE SPEC RELATION being
+   performed, because the interpreter's entry (concolic_rel_hook) takes quickjs's own opcode for the operator
+   and quickjs exports no such number — a component that invented one would be spelling a second opcode
+   namespace. The identity is composed HERE from that name and BOTH operands, so decide.c stays the one speller
+   of a constraint key. The result is a predicate value to hand to solver_decide; it pins nothing (an ordering
+   determines no value, and an equality against an unknown has none to pin to). Operands are BORROWED. */
+JSValue     concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValueConst b);
 /* THE PIN A TAKEN ARM CAN PERFORM, and nothing else — OPCMP_EQ/NE with the source and the concrete token, or
    OPCMP_NONE. An ordering answers NONE because it pins nothing (`x > 5` narrows a domain and determines no
    value; §Solver-half keeps that a domain-annotated shape rather than inventing a 6), and so does an equality

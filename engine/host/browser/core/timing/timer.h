@@ -21,13 +21,17 @@ void timer_free(JSRuntime *rt);
    §8.7 Timers's timer identifier is deliberately NOT reset: the global is being destroyed, so nothing will ask it. */
 void timer_clear_map(JSContext *ctx);
 
-/* THE EARLIEST EXPIRY ON THIS EVENT LOOP, or -1 when no timer is set — across every fully active document of
-   the agent, because §8.7 Timers gives every global its own map and §8.1.7 runs them all on ONE task source.
+/* IS THE TIMER SOURCE'S NEXT TASK DUE BEFORE `moment`? — across every fully active document of the agent,
+   because §8.7 Timers gives every global its own map and §8.1.7 runs them all on ONE task source. 0 when no
+   timer is set at all, which is the same answer as "not before" and is right for both.
    It answers for the RUNNING FLOW: the maps are per-flow COW state, so what is in the heap when this is asked
-   is exactly the flow's own timers. The clock the answer is a moment on lives in core/timing/event_loop.h —
-   §8.1.7.3's rendering task source becomes due at moments on that same clock, so the two are compared rather
-   than raced, and the comparison needs both halves askable. */
-double timer_next_due(JSContext *ctx);
+   is exactly the flow's own timers. The moments live on core/timing/event_loop.h's clock, which is also where
+   §8.1.7.3's rendering task source becomes due, so the two are compared rather than raced.
+   IT IS THE COMPARISON AND NOT THE MOMENT, because an expiry is not always a number. §8.7's `timeout` can be
+   unknown external input (a page's `setTimeout(f, someUnknown)`), and an expiry derived from one has no double
+   to hand out — while the ORDER it takes is a question with two real answers, so asked here it FORKS and both
+   orders run. Handing out a moment forced this component to pick one of them inside an accessor. */
+int timer_due_before(JSContext *ctx, double moment);
 
 /* HTML 8.6: a STRING handler is EVALUATED when the timer fires. Running it is the HOST's — the extension's host
    queues it onto the flow that scheduled it, which is what keeps a `setTimeout("...")` payload explorable — and

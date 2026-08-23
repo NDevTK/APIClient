@@ -825,12 +825,17 @@ int rendering_run_opportunity(JSContext *ctx)
     /* ONE CLOCK, TWO SOURCES. §8.1.7.3 step 2.1 gives the scheduler exactly one freedom — which task queue to
        take a task from — and it is not a freedom to run a task before the moment it becomes due. A timer that
        expires before the next frame is ahead of it on the same clock, so this yields and the timer source
-       runs; the frame is still there to be taken on the next pass, at its own moment. */
-    due = timer_next_due(ctx);
-    if (due >= 0 && due < next)
+       runs; the frame is still there to be taken on the next pass, at its own moment.
+       THE COMPARISON IS ASKED OF THE TIMER SOURCE RATHER THAN COMPUTED FROM A MOMENT IT HANDS OVER. An expiry
+       is not always a number — §8.7's `timeout` can be unknown external input — and where it is not, the order
+       between the two sources is a FORK with two real arms rather than a value to read. Asked there, this
+       caller gets the answer either way; asked here, it would have had a `double` that could not represent one
+       of them. */
+    due = -1;
+    if (timer_due_before(ctx, next))
         return 0;
-    /* The timer source is the other thing due on this clock, and it is not due before `next` — which is the
-       comparison just made, handed to the move rather than made twice. */
+    /* The timer source is the other thing due on this clock and it is NOT due before `next` — which is what
+       the question above established, so nothing is already due to move past and the assert is told so. */
     event_loop_advance_to(ctx, next, due);
     event_loop_set_last_render(ctx, next);           /* step 2 */
 
