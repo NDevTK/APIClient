@@ -465,7 +465,12 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 JS_ThrowTypeError(ctx, "a Request with a GET or HEAD method cannot have a body");
                 return -1;
             }
-            if (body_extract(ctx, &d->body, bv, &mime) < 0) {
+            /* §5.4 step 40 extracts "with keepalive set to request's keepalive", and this Request has none:
+               `keepalive` is a member of RequestInit and of this interface, and neither is installed — which
+               the IDL gap audit reports as ABSENT rather than this line asserting it. `false` is therefore the
+               value every request this constructor builds actually has, and the day the member lands this
+               argument reads it. */
+            if (body_extract(ctx, &d->body, bv, /*keepalive*/ false, &mime) < 0) {
                 free(mime);
                 JS_FreeValue(ctx, bv);
                 return -1;

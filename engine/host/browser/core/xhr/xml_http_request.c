@@ -1916,7 +1916,9 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                this engine has no `(Document or XMLHttpRequestBodyInit)` serializer, so a Document takes the
                union's USVString arm above. That is a fidelity gap in the ARM CHOICE and it is named rather
                than hidden — building it is "serialize a Document", which the DOM half owes. */
-            if (body_extract(ctx, &b, s->body, &mime) < 0) { free(mime); return -1; }
+            /* §3.5.6 step 4 extracts with no keepalive flag — XHR has no such concept, which is exactly what
+               §5.2's `= false` default states for every caller that does not name one. */
+            if (body_extract(ctx, &b, s->body, /*keepalive*/ false, &mime) < 0) { free(mime); return -1; }
             d->request_body = JS_NewStringLen(ctx, b.bytes ? b.bytes : "", b.len);
             s->body_len = (double)b.len;
             body_state_free(JS_GetRuntime(ctx), &b);

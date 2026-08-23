@@ -260,7 +260,11 @@ const INTERFACES = {
                            that owns their algorithm rather than by the Window they hang off, the same rule
                            `navigation` and `indexedDB` above state. */
                         "core/storage/window_storage.c"],
-  Navigator:            "core/frame/navigator.c",
+  /* HTML §8.10.1, plus the `partial interface Navigator`s other standards declare on it. Beacon §2.1's
+     `sendBeacon` is its own component for the reason navigator_beacon.h gives — it is a REQUEST and not a
+     client-identity value — so this row names it beside the interface's own file, the same rule Window's row
+     states for `navigation`, `indexedDB` and the two storages. */
+  Navigator:           ["core/frame/navigator.c", "core/frame/navigator_beacon.c"],
   /* CSSOM VIEW §12. Its own seven attributes are its file's; the three event handler IDL attributes it
      declares (`onresize`, `onscroll`, `onscrollend`) and the three members it INHERITS from EventTarget come
      off the shared component, which is the same rule Node's row states. */

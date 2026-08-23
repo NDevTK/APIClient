@@ -1028,7 +1028,11 @@ static int js_fetch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
                 JS_ThrowTypeError(ctx, "a fetch with a GET or HEAD method cannot have a body");
                 return fetch_reject_pending(ctx, s);
             }
-            if (body_extract(ctx, &s->body, s->binit, &mime) < 0) { free(mime); return fetch_reject_pending(ctx, s); }
+            /* §5.4 step 40's "with keepalive set to request's keepalive" — see the same line in
+               core/fetch/request.c: `keepalive` is a member neither RequestInit nor Request installs here, so
+               the value every request built through this path has is false, and the IDL gap audit is what
+               reports the missing member rather than a comment. */
+            if (body_extract(ctx, &s->body, s->binit, /*keepalive*/ false, &mime) < 0) { free(mime); return fetch_reject_pending(ctx, s); }
             /* §5.4 step 37.4's type: appended only where the init's own headers do not already name one, which
                the fill above has decided — so `fini` appends it after asking the list. */
             JS_FreeValue(ctx, s->body_mime);

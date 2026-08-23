@@ -55,6 +55,7 @@
 #include "solver/concolic.h"
 #include "core/agent_state.h"
 #include "core/frame/navigator.h"
+#include "core/frame/navigator_beacon.h"
 #include "core/html/user_activation.h"
 #include "core/idl_args.h"
 #include "core/permissions/permissions.h"
@@ -128,15 +129,19 @@ static const IdlExposure NAV_EXPOSURE[] = { NAV_MEMBERS(NAV_EXPOSURE_ONE) };
    the mode the four lines above commit to, and asserted per realm by idl_members_excluded. */
 static const char *const NAV_MODE_EXCLUDED[] = { "taintEnabled", "oscpu" };
 
-/* THE CLASS IS THE BRAND. Web IDL §3.7.5's check on every getter is "does esValue have the interface's internal
-   slot", and the one object per realm WEARS the class, so the check is a class-id comparison a page cannot
-   forge. It carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark. */
+/* THE CLASS IS THE BRAND. Web IDL §3.7.6 "Attributes" makes every getter refuse a receiver that "does not
+   implement the interface" before it reads anything, and §3.7.7 "Operations" says the same of every method —
+   and the one object per realm WEARS the class, so the check is a class-id comparison a page cannot forge. It
+   carries no per-object data — the values are the realm's — so it needs no finalizer and no gc_mark.
+   THE NUMBER USED TO BE §3.7.5 HERE AND IN THREE OTHER PLACES, and §3.7.5 is "Constants": a citation that
+   sends the reader to a section saying nothing about receivers reads as authority and is checkable only by
+   someone who fetches the text, which is why a WRONG number is worse than none. */
 static JSClassID g_nav_class;
 static int g_vals_slot = -1;   /* this realm's member VALUES, indexed by the enum above */
 static int g_obj_slot  = -1;   /* this realm's one Navigator */
 static int g_id_java_enabled = -1;
 
-/* WEB IDL §3.7.5's BRAND CHECK. `Navigator.prototype.userAgent` read off a plain object is a TypeError, and a
+/* WEB IDL §3.7.6 "Attributes"' BRAND CHECK. `Navigator.prototype.userAgent` read off a plain object is a TypeError, and a
    page tells that apart from `undefined` — a feature detector that probes the descriptor and applies the getter
    reads the throw as "this is a real interface". It is a real throw and not an assert for exactly that reason. */
 static bool nav_brand(JSContext *ctx, JSValueConst this_val)
@@ -147,6 +152,18 @@ static bool nav_brand(JSContext *ctx, JSValueConst this_val)
     if (JS_GetClassID(this_val) == g_nav_class) return true;
     JS_ThrowTypeError(ctx, "a Navigator member was reached on something that is not a Navigator");
     return false;
+}
+
+/* THE SAME BRAND, ASKED FROM OUTSIDE — see navigator.h. It is the class comparison and nothing else: the
+   THROW belongs to the member, because a partial's member throws its own message and some of them are not
+   plain getters at all. */
+bool navigator_is(JSValueConst v)
+{
+    DCHECK(g_nav_class != 0, "Web IDL §3.7.6/§3.7.7's brand was asked before navigator_init declared the "
+                             "class — a "
+                             "partial interface's member is only reachable through a prototype this "
+                             "component's per-realm install builds, so there is no route here first");
+    return JS_GetClassID(v) == g_nav_class;
 }
 
 /* THE HALF OF "THIS's ..." THIS ENGINE CAN ANSWER, asserted rather than assumed — the same shape, and the same
@@ -269,7 +286,12 @@ static void nav_env(JSContext *ctx, JSValueConst rec, int idx, JSValue example)
     DCHECK(idx >= 0 && idx < NAV_N, "a Navigator environment value was minted for a non-member index");
     DCHECK(strlen(NAV_NAME[idx]) + 11 < sizeof(path), "a Navigator member name longer than any in the IDL");
     snprintf(path, sizeof(path), "navigator.%s", NAV_NAME[idx]);
-    v = concolic_new(ctx, path, path, example);
+    /* THE SEAM, and not concolic_new. §CLAUDE splits the halves exactly here: the browser computes what the
+       spec says the member is, and the SOLVER decides it is also symbolic — so a host that installs the value
+       semantics and NOT the source overlay (the conformance runner does exactly that) gets the plain value
+       back. Minting directly made every environment member of this interface answer an OBJECT there, so
+       `typeof navigator.userAgent` was "object" in the one host whose whole job is measuring fidelity. */
+    v = concolic_source_wrap(ctx, path, path, example);
     CHECK(!JS_IsException(v), "minting a Navigator environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }
@@ -377,6 +399,12 @@ static void navigator_install_realm(JSContext *ctx)
     idl_install_accessor(ctx, proto, "userActivation", js_nav_user_activation, 0, -1);
     idl_install_accessor(ctx, proto, "permissions", js_nav_permissions, 0, -1);
     idl_install_method(ctx, proto, "javaEnabled", 0, g_id_java_enabled);
+    /* BEACON §2.1's `partial interface Navigator` — the OBJECT is HTML's and the MEMBER is that standard's, so
+       its component installs it on the prototype this realm just built. It takes the prototype rather than
+       reading the realm's Navigator back, because §2.1 declares an OPERATION on the interface: a method put on
+       the instance would be an own property of `navigator`, absent from `Navigator.prototype`, and deletable —
+       the four things this file's own header names as what makes an interface an interface. */
+    navigator_beacon_install(ctx, proto);
     idl_members_excluded(ctx, proto, "Navigator", NAV_MODE_EXCLUDED,
                          (int)(sizeof NAV_MODE_EXCLUDED / sizeof NAV_MODE_EXCLUDED[0]),
                          "HTML §8.10.1.1: the user agent supports this partial interface only if the "
@@ -406,7 +434,7 @@ void navigator_init(JSContext *ctx)
 
     DCHECK(g_vals_slot < 0, "navigator_init ran twice — the class and the slots are declared once per AGENT");
     /* THE CLASS IS BOTH THE PER-REALM PROTOTYPE SLOT AND THE BRAND: the one object per realm WEARS it, so
-       §3.7.5's check is a class-id comparison and a page cannot forge one. */
+       §3.7.6/§3.7.7's check is a class-id comparison and a page cannot forge one. */
     JS_NewClassID(JS_GetRuntime(ctx), &g_nav_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_nav_class, &d) == 0,
           "Navigator: the per-realm prototype slot could not be declared");
@@ -419,6 +447,12 @@ void navigator_init(JSContext *ctx)
     agent_state_id("navigator", &g_vals_slot, "§8.10.1's member-values realm slot, and the declaration latch");
     agent_state_id("navigator", &g_obj_slot, "§7.2.5's associated-Navigator realm slot");
     agent_state_id("navigator", &g_id_java_enabled, "§8.10.1's javaEnabled declaration");
+    /* BEACON §2.1's member, declared HERE for the reason Permissions §6's whole component is declared below:
+       a host that has a Navigator has `navigator.sendBeacon`, so a per-host line would be exactly the
+       hand-copied list core/realm.h and core/platform.h exist to abolish. It declares no realm intrinsic of
+       its own — navigator_install_realm installs it — so it is stated before that declaration rather than
+       after it. */
+    navigator_beacon_init(ctx);
     realm_declare_intrinsic(navigator_install_realm);
     /* PERMISSIONS §6.1 IS A PARTIAL INTERFACE OF THIS ONE, so this is where its whole component is declared —
        §3's model, §6.3's PermissionStatus and §6.2's Permissions. Declared AFTER the line above so the
@@ -436,6 +470,9 @@ void navigator_free(void)
     g_vals_slot = -1;
     g_obj_slot = -1;
     g_id_java_enabled = -1;
+    /* BEACON §2.1's member is declared from navigator_init, so it is released from here — the same rule the
+       line below states for Permissions §6, and the same failure if it is not on this list. */
+    navigator_beacon_free();
     /* PERMISSIONS §6's component is declared from navigator_init, so it is released from here — a component
        released from a list its declaration is not on is a component some host frees and another leaks. */
     permissions_free();

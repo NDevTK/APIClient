@@ -21,8 +21,14 @@ void body_state_free(JSRuntime *rt, BodyState *b);
 
 /* §5.2's "extract a body" — the ONE implementation of the BodyInit union, for both interfaces that take one.
    `*out_mime` is the arm's own Content-Type (malloc'd) or NULL for an arm that has none; the caller's remaining
-   job is §5.5's "set it only if the header list has none". Returns -1 with a throw live. */
-int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mime);
+   job is §5.5's "set it only if the header list has none". Returns -1 with a throw live.
+   `keepalive` IS §5.2's OWN OPTIONAL ARGUMENT ("with an optional boolean keepalive (default false)"), and it
+   is a parameter rather than a caller-side test because it decides a step INSIDE one arm: the ReadableStream
+   arm's first step is "If keepalive is true, then throw a TypeError". A caller that tested the brand itself
+   would be a second copy of the union's arm list — the thing this function exists to have exactly one of.
+   Beacon §3 step 6.1 is the one caller that sets it; everything else extracts with the flag unset, which is
+   what `keepalive`'s IDL default already says for a Request that never declared one. */
+int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive, char **out_mime);
 /* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live. */
 int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len);
 

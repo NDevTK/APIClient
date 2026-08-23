@@ -673,7 +673,9 @@ static int js_response_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int a
             if (bad) return -1;
             mime = strdup("application/json");
             CHECK(mime, "response: OOM naming a JSON body's type");
-        } else if (body_extract(ctx, &d->body, body, &mime) < 0) {
+        /* §5.5 step 8.1 extracts with no keepalive flag at all — the flag is a REQUEST's, and a Response is
+           not one, which is what §5.2's `= false` default says for a caller that names none. */
+        } else if (body_extract(ctx, &d->body, body, /*keepalive*/ false, &mime) < 0) {
             free(mime);
             return -1;
         }

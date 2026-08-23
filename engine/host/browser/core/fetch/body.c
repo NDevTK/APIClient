@@ -146,7 +146,7 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
  * The MIME type is the extraction's second output, not the caller's guess: §5.2 gives each arm its own type or
  * none, and the constructor's only job with it is §5.5's "set Content-Type if the header list has none".
  * `*out_mime` is malloc'd, or NULL for an arm with no type. Returns -1 with a throw live. */
-int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mime)
+int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive, char **out_mime)
 {
     const UrlEncodedList *list;
     size_t len = 0;
@@ -205,7 +205,19 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, char **out_mim
            Both slots are read through the INTERNAL operations: `locked` is "[[reader]] is not undefined" and
            `disturbed` is §4.2's flag, so a page that patched `ReadableStream.prototype.locked` cannot decide
            whether its own stream is acceptable as a body. */
+        /* …AND THE ARM'S OTHER REFUSAL, which §5.2 lists FIRST and which is why this function takes the flag:
+           "If keepalive is true, then throw a TypeError." A keepalive request may outlive the environment
+           settings object, and Fetch §4.6's quota is stated over a body whose LENGTH is known — a stream has
+           no length until it is read, so there is nothing for the quota to be computed against. Beacon §3
+           step 6.1 extracts with the flag set, so `navigator.sendBeacon(u, stream)` throws where the page
+           wrote it rather than composing a request out of bytes that do not exist yet. It is checked BEFORE
+           disturbed/locked because that is the order §5.2 lists the two steps in, and a page that hands over
+           an already-locked stream to a keepalive request must see the keepalive TypeError. */
         bool locked = false;
+        if (keepalive) {
+            JS_ThrowTypeError(ctx, "a ReadableStream cannot be the body of a keepalive request");
+            return -1;
+        }
         readable_stream_query(init, NULL, &locked);
         if (locked || readable_stream_disturbed(init)) {
             JS_ThrowTypeError(ctx, "a body cannot be extracted from a ReadableStream that is disturbed or "
