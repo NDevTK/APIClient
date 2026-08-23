@@ -396,9 +396,10 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
      * a different-looking bug elsewhere in this tree:
      *   (1) an ACCESSOR on Object.prototype named for one of these fields makes this function CALL PAGE CODE —
      *       and it is called in the HOST's own time, between two scheduler slices, where a flow may be parked
-     *       and there is no flow base to run anything on. That is the exact state quickjs.c's JS_CallInternal
-     *       entry aborts on ("JS was entered while a flow is PARKED"), reached from a host that never meant to
-     *       run anything at all;
+     *       and there is no flow base to run anything on. That is the exact state quickjs.c's parked-flow
+     *       assert aborts on ("the page's own code was entered while a flow is PARKED"), reached from a host
+     *       that never meant to run anything at all — and an accessor IS page bytecode, so it is caught at the
+     *       bytecode dispatch where that assert now stands rather than at this function's own door;
      *   (2) a FROZEN Object.prototype, or a non-writable data property on it, makes the [[Set]] REFUSE, and
      *       JS_SetPropertyStr refuses by THROWING — leaving a completion standing in the per-runtime exception
      *       slot during the host's own time, which the next flow the scheduler resumes then finds as its own;
