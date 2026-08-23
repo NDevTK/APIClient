@@ -3296,10 +3296,21 @@ static int preempt_hook(int kind) {
        with one outranking the running flow the two thrashed — the hook demanded a yield at every back-edge and
        the loop's pick returned the same flow, so it advanced one back-edge per scheduler iteration. It is the
        SAME question the pick asks (flow.h), which is why it is the same call.
-       THE CACHE MAY LAG A MARK, AND ONLY IN THE HARMLESS DIRECTION. Marks are made during a slice and cleared
-       only at its top, so a cached rival can be one that has SINCE been marked — a yield the loop then declines
-       by re-picking the same flow, at the cost of one iteration. A mark can never make a flow wrongly ELIGIBLE,
-       which is the direction that would cost a yield that mattered. */
+       THE CACHE MAY NOT LAG A MARK, AND THE PARAGRAPH THAT SAID IT COULD IS WHAT HID A REAL DEFECT FOR AS
+       LONG AS IT STOOD. It read: "Marks are made during a slice and cleared only at its top, so a cached rival
+       can be one that has SINCE been marked — a yield the loop then declines by re-picking the same flow, at
+       the cost of one iteration. A mark can never make a flow wrongly ELIGIBLE, which is the direction that
+       would cost a yield that mattered." Both halves were false. Its premise — that clears happen only at the
+       top of a slice — describes a line that had already been DELETED; marks are now cleared by whatever host
+       event answers them, including during a step (flow_drain_pending settles the shared document-script slot
+       for every flow waiting on one address). And its conclusion reasoned about marks being LAID DOWN and
+       never about them being CLEARED, which is precisely the direction it declared impossible: a clear makes a
+       flow ELIGIBLE that the loop's pick could not consider, so the hook's next rescan returns a rival the pick
+       was never shown, and the yield fires against a flow the scheduler chose one step earlier with nothing
+       whatever having changed about it. That aborted the smoke at the value-yield assertion below, which is the
+       assertion doing its job. The fix is at the origin: a mark change IS a ranking change and now raises the
+       frontier generation (flow.c), so this rescan condition covers it and the eligible set the hook ranks
+       against is the same one the pick used. */
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
         Flow *rival = cur ? flow_rival_of(cur) : NULL;
@@ -3328,6 +3339,17 @@ static int preempt_hook(int kind) {
            quantised against a much larger accumulated total — so the weight can move with the arm's own notch
            standing still. Naming it here is what keeps this an assertion about a STATE rather than about a
            formula that has since gained a term, which is precisely the failure it was written to catch.
+           AND THE FIFTH TERM IS NOT A WEIGHT AT ALL — IT IS THE ELIGIBLE SET, which is why counting weight
+           terms could never have found it. This clause list is complete for `flow_weight(cur)`, which is a pure
+           function of `val`, the service notch and the family notch; the comparison it appears in is
+           `best-eligible-OTHER > cur`, and the SET that "eligible" ranges over is a term of that answer exactly
+           as the three weights are. A host-owed mark decides membership of it, and neither laying one nor
+           clearing one raised the frontier generation — so a clear during the running flow's first step handed
+           the rescan above a rival the loop's pick had never been shown, and this fired with all four terms
+           correctly unchanged. It is FIXED AT THE ORIGIN rather than named as a fifth clause here: a mark change
+           now calls frontier_rank_changed() (flow.c), so it arrives through the generation, which is clause one.
+           A fifth clause would have made this assertion pass while the HOOK went on ranking against a set the
+           scheduler had not used — the assertion would have been silenced and the defect kept.
            IT FIRES ON THE TREE THIS FIXES, which is the whole reason it is worth writing. The optimism term
            quantised service with a CEILING, so the first MICROSECOND a flow was ever charged moved its notch
            from 0 to 1 and cost it half the entire bonus — the notch changed, so this assertion would have

@@ -1445,12 +1445,35 @@ void flow_set_host_owed(Flow *f) {
            "answered it. The frontier can then never be fully marked, the STALL is unreachable, and the "
            "scheduler re-asks members it has already asked for as long as the run lasts");
     f->owed_gen = g_owed_gen;
+    /* AND THE RANKING CHANGED, WHICH IS THE THING A MARK IS AND NOBODY SAID SO. §scheduler's value yield fires
+       "the moment a parked flow outranks", and the WFQ's answer is `the best ELIGIBLE flow` — so the eligible
+       SET is as much a term of that answer as any weight is. A mark takes a member out of the pick and a clear
+       puts one back, and neither raised the one signal every consumer of the ranking keys on. Both consumers
+       were wrong in opposite directions and only one of them could say so: the preempt hook caches its rival on
+       this generation, so it kept ranking against a set that no longer existed, and the value-yield assertion
+       snapshots this generation, so it had no way to distinguish "the set changed" from "nothing changed" and
+       aborted the smoke on a yield that was entirely correct. See the assertion in engine.c's preempt_hook.
+       IT GOES IN THE EXISTING GENERATION RATHER THAN A FIFTH CLAUSE BESIDE IT. §scheduler is ONE WFQ policy,
+       and `frontier_rank_changed` is already the one sentence that means "the running flow's claim on the
+       thread may have changed" — a second sentinel tracked in parallel would be a second definition of the
+       same event, free to drift exactly where these two already had. */
+    frontier_rank_changed();
 }
 
 /* THE HOST ANSWERED THIS FLOW — see flow.h for why the clear is per flow and per EVENT. */
 void flow_clear_host_owed(Flow *f) {
     DCHECK(f != NULL, "a host event cleared the mark of no flow at all");
     f->owed_gen = 0;   /* never equal to g_owed_gen, which starts at 1 and only ever moves forward */
+    /* …AND THIS IS THE DIRECTION THAT ACTUALLY BROKE, which is why it is not enough to say "a mark change is a
+       ranking change" at the site above and leave this one implicit. A clear makes a flow ELIGIBLE that the
+       scheduler's last pick could not consider, and the pick and the preempt hook do not run at the same
+       instant: the loop picks the best of the unmarked members, and a clear that lands during that flow's very
+       first step — flow_drain_pending settles the shared document-script slot for every flow waiting on one
+       address — hands the hook a rival the pick was never shown. The hook then yields against a flow the
+       scheduler chose one step earlier, with the frontier generation, the service notch, the family notch and
+       the reward all exactly as they were. That is the pick and the hook answering one state two different
+       ways, it is what the value-yield assertion exists to catch, and it is what it caught. */
+    frontier_rank_changed();
 }
 
 void flow_clear_host_owed_all(void) {
@@ -1462,6 +1485,11 @@ void flow_clear_host_owed_all(void) {
         for (int i = 0; i < g_flows_n; i++) g_flows[i]->owed_gen = 0;
         g_owed_gen = 1;
     }
+    /* THE WHOLE-FRONTIER FORM OF THE SAME STATEMENT — every member of the frontier just became eligible, which
+       is the largest ranking change this engine can make in one call, and it raised nothing. The host reaches
+       this between slices (engine_set_referenced, and the provider's own edges), so the yield request it raises
+       is read at the first opcode of the next slice, which is exactly when the new set first matters. */
+    frontier_rank_changed();
 }
 
 /* THE ONE ORDER, ASKED THROUGH ONE SCAN. Four questions are put to the ranking — who should be running, who
