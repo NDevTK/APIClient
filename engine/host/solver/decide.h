@@ -27,7 +27,31 @@
 #define SOLVER_ARM(r)     ((r) & (SOLVER_FORKED_BIT - 1))
 /* Whether a sibling flow was prepared for the other arm — the interpreter's cue to snapshot-fork the frame. */
 #define SOLVER_FORKED(r)  (((r) & SOLVER_FORKED_BIT) != 0)
-int  solver_decide(JSContext *ctx, JSValueConst cond);
+
+/* `nonforking` — THE ARM THIS SITE'S ALGORITHM TAKES IN A SESSION THAT EXPLORES NOTHING, and it is a PARAMETER
+ * because the answer belongs to the CALLER and to no two callers alike.
+ *
+ * A session declares whether it forks (solver/engine.h's engine_session_forks). The two callers that reach the
+ * seam through the hook TABLE already answer this for themselves, by the table being empty: the interpreter's
+ * `branch` is absent, so the arm is -1 and the ordinary ToBool decides the `if`; the step driver's `outcome` is
+ * absent, so the machine takes outcome 0, which is why every step machine numbers its ordinary completion
+ * there. A browser component asking BY SYMBOL has neither, and there is no answer the SEAM could pick for it:
+ * "is this AbortSignal aborted" and "is this moment before that one" are two different algorithms and a single
+ * choice made here would be right for at most one of them — and picking a timer order at random deletes a
+ * program the page really runs. So the site says, at the ask, what its own algorithm does with one world.
+ *
+ * SOLVER_NO_NONFORKING_ARM IS A POSITIVE STATEMENT: "this question has NO answer with only one world in it."
+ * A site returns it where its operands carry nothing to decide from — and reaching a NEW decision there in a
+ * non-forking session then CRASHES naming the predicate, because the fix is that the site must not be
+ * REACHABLE in such a session (the caller that put an undecidable operand in front of it), never a default the
+ * seam invents. It is also what the interpreter's own hook passes, which costs nothing: that hook is installed
+ * only in a session that forks, so the value is never read.
+ *
+ * IT IS NOT CONSULTED FOR A DECISION THIS FLOW ALREADY HAS. A refined arm (the constraint already answers this
+ * predicate) and a replayed arm (the vector recorded it) are reached first and unchanged, so a candidate
+ * re-fire replaying its recorded path never asks a site for this at all. */
+#define SOLVER_NO_NONFORKING_ARM (-1)
+int  solver_decide(JSContext *ctx, JSValueConst cond, int nonforking);
 
 /* THE SAME DECISION, ASKED BY ENGINE CODE THAT IS RE-REACHED BY RE-RUNNING THE FLOW'S SCHEDULER STEP — and the
  * difference from the call above is not the QUESTION, it is where the sibling comes back.
@@ -35,7 +59,7 @@ int  solver_decide(JSContext *ctx, JSValueConst cond);
  * A prepared fork is only half a sibling: the other half is a RESUME POINT, and every consumer of
  * SOLVER_FORKED_BIT is an activation that owns one — the interpreter's branch fork clones the frame at the
  * `if`, a step machine's JS_STEP_FORK clones the machine at its ask. Engine code running BETWEEN a flow's
- * tasks has no activation at all: HTML §8.1.7.3 "Processing model" step 1 chooses the next task queue "in an
+ * tasks has no activation at all: HTML §8.1.7.3 Processing model step 2.1 chooses the next task queue "in an
  * implementation-defined manner", so the engine's own choice is made with the flow switched in (its delta, its
  * DOM head and its decision state are the right ones) and nothing of it on any stack. That is not a missing
  * resume point, it is a resume point made of the flow's own recorded state: the sibling is assembled with NO
@@ -53,7 +77,7 @@ int  solver_decide(JSContext *ctx, JSValueConst cond);
  * real predicate, so the sibling MUST carry the other arm at the cursor. A sibling given its parent's path
  * unchanged would re-reach this walk with nothing recorded, re-fork, take the same arm as its parent, and mint
  * another sibling exactly like itself — an unbounded chain at one site whose second arm never runs. */
-int  solver_decide_restartable(JSContext *ctx, JSValueConst cond);
+int  solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking);
 
 /* JSFlowControlHooks.outcome — the same decision, asked by a C BUILTIN that has no OP_if to ask it at. `over`
    is the unknown operand its completion depends on, `op` names the operation ("JSON.parse"), `n` is how many

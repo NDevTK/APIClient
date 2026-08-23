@@ -141,6 +141,47 @@ void event_loop_free(JSContext *ctx)
 
 JSValue event_loop_now(JSContext *ctx) { return el_get(ctx, g_atom_now); }
 
+/* THE ORDER THIS CLOCK TAKES IN A SESSION THAT EXPLORES NOTHING — HTML §8.1.7.3 Processing model step 2.1's
+ * own freedom, exercised on the only facts the moments carry.
+ *
+ * A session may declare that it does not fork (a conformance run measuring the browser half against a spec
+ * oracle; §@S's candidate re-fire, which is ONE concrete path). The two arms of this order are then not two
+ * worlds to explore but one world to be in, and the seam will not choose between them — see solver/decide.h.
+ * What this file has to choose from is what a moment IS: a number, or unknown external input carrying the
+ * concrete EXAMPLE the code computed for it (§8.7's `startTime plus milliseconds`, run by
+ * event_loop_moment_plus as the real `+` over the operands' own examples). Where both moments have one, the
+ * order is the REAL comparison on those two numbers — nothing is invented and nothing is picked, it is the
+ * order the page's own values produce, which is exactly the order a real browser puts these tasks in. That is
+ * the same rule as the interpreter's ordinary ToBool and a step machine's outcome 0: with one world available,
+ * take the one the concrete says you are in.
+ *
+ * WHERE A MOMENT HAS NO EXAMPLE THERE IS NO ORDER, AND THIS SAYS SO RATHER THAN INVENTING ONE. An unknown with
+ * no example is a moment NOTHING COMPUTED — its domain is the whole of §3.2.4.5's `long` and both orders are
+ * feasible — so any answer here decides which of the page's two programs runs by nothing at all, and the tie
+ * would not even be §8.1.7's insertion order, which breaks a tie between moments that are EQUAL rather than
+ * unknown. SOLVER_NO_NONFORKING_ARM is the positive statement of that, and the seam crashes on it naming this
+ * relation and both moments. The fix such a crash names is never here: it is whatever put a moment with no
+ * example onto this clock in a session that cannot explore its way out of it. */
+static int el_rel_nonforking(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op)
+{
+    JSValue ea = concolic_is(a) ? concolic_example(ctx, a) : JS_DupValue(ctx, a);
+    JSValue eb = concolic_is(b) ? concolic_example(ctx, b) : JS_DupValue(ctx, b);
+    int r = SOLVER_NO_NONFORKING_ARM;
+
+    if (JS_IsNumber(ea) && JS_IsNumber(eb)) {
+        double x = 0, y = 0;
+
+        JS_ToFloat64(ctx, &x, ea);
+        JS_ToFloat64(ctx, &y, eb);
+        /* `==` and not el_identical: two moments are being compared as NUMBERS here, which is what an example
+           is, and el_identical's first test is a VALUE-identity one that answers a different question. */
+        r = (op == EL_BEFORE) ? (x < y) : (x == y);
+    }
+    JS_FreeValue(ctx, ea);
+    JS_FreeValue(ctx, eb);
+    return r;
+}
+
 /* THE TWO HALVES OF THE ORDER QUESTION — the ask, which forks, and the read, which never does. They share the
    relation's NAME, which is the whole reason the read can discharge what the ask decided. */
 static int el_rel(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op, int ask)
@@ -174,7 +215,7 @@ static int el_rel(JSContext *ctx, JSValueConst a, JSValueConst b, const char *op
     }
     /* THE SEAM BUILDS THE SIBLING BEFORE ANSWERING, so the FORKED bit never comes back here — see decide.h,
        and see event_loop.h for why every caller of the ask is between a flow's tasks and can promise it. */
-    d = solver_decide_restartable(ctx, pred);
+    d = solver_decide_restartable(ctx, pred, el_rel_nonforking(ctx, a, b, op));
     JS_FreeValue(ctx, pred);
     DCHECK(d >= 0,
            "the event loop's clock was asked to order two moments and the solver answered that neither is "

@@ -771,6 +771,55 @@ static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int re
     return 1;
 }
 
+/* THE SAME NEW DECISION IN A SESSION THAT EXPLORES NOTHING — the arm the SITE declared, RECORDED like any
+ * other, and no sibling.
+ *
+ * IT IS THE RECORDING THAT MATTERS AS MUCH AS THE ARM. A non-forking flow is still a flow: its state is
+ * replay(baseline, decision vector), the same @S candidate can be parked and resumed on it, and — the half
+ * that breaks first — a browser component's INVARIANTS read back what its own ask decided (core/timing/
+ * event_loop.h: the monotonicity assert reads event_loop_before_decided rather than re-evaluating, because
+ * over an unknown a comparison is an arm and not a fact). Answer without recording and the ask and the read
+ * become two facts about one question: the walk orders `a` before `b`, the assert asks and is told "not
+ * decided", and the flow stands in no world at all. So this goes through dec_append and through decide_arm's
+ * one constraint statement exactly as a forked arm does; the ONLY thing it does not do is mint a member.
+ *
+ * NOTHING IS DROPPED, WHICH IS WHY THIS IS NOT A CAP. The other arm is not truncated work that a bound threw
+ * away — it is a world the SESSION declared it is not in. A session that explores runs both.
+ *
+ * A SITE WITH NO ANSWER CRASHES HERE, NAMING THE PREDICATE. SOLVER_NO_NONFORKING_ARM says the operands carry
+ * nothing to decide from, and the seam has nothing better: picking 0 or 1 for a two-armed question the site
+ * itself cannot answer is the "pick one and delete a program" this parameter exists to refuse. What the crash
+ * names is the CALLER — whatever put an undecidable operand in front of this site in a session that cannot
+ * explore its way out — and the key names the question so the caller can be found from it.
+ * IT IS A `CHECK` AND NOT A `DCHECK`, WHICH IS A STATEMENT ABOUT WHAT THE VALUE BECOMES. It is appended to the
+ * DECISION VECTOR, which flow.h defines a flow as, which the cold tier writes to disk and a later session
+ * replays as arms — so a build with the assert compiled out would not merely take a wrong arm, it would record
+ * a byte that is not an arm into a path that outlives the session and hand it back to a resume. That is
+ * check.h's data-integrity clause: proceeding is worse than crashing, in every build. */
+static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
+    if (nonforking != 0 && nonforking != 1) {
+        /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (concolic_ident_compose), and
+           this line goes out as JSON with no escaping — so the one thing the reader needs from it, the name of
+           the predicate, is copied through printable-only. Same rule, same reason, as engine.c's C-body fork. */
+        char why[512], name[192];
+        size_t i;
+        for (i = 0; i + 1 < sizeof name && key && key[i]; i++)
+            name[i] = (key[i] >= 0x20 && key[i] < 0x7f && key[i] != '"' && key[i] != '\\') ? key[i] : '.';
+        name[i] = '\0';
+        snprintf(why, sizeof why,
+                 "a NEW decision was reached in a session that explores nothing, and the site that asked it "
+                 "declared no non-forking answer (SOLVER_NO_NONFORKING_ARM) — so there is one world to be in "
+                 "and no way to say which. The seam will not pick: a two-armed question its own site cannot "
+                 "answer is a program deleted at random. Fix the CALLER that put an undecidable operand in "
+                 "front of this site in a non-forking session, not the site. The question was: %s",
+                 key ? name : "(no source identity)");
+        CHECK_FAIL(why);
+    }
+    dec_append(nonforking, asked);
+    g_c++;
+    return nonforking;
+}
+
 /* THE DECISION ITSELF, over a predicate identified by `key` (NULL when the value tested has no identity this
    engine can spell — uncertainty, which keeps both arms). Every caller of this is a place the program's
    control flow turns on unknown input, and there are two of them because a decision is not an OP_if: a
@@ -781,7 +830,10 @@ static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int re
    exists and dec_key_hash for what the name is. The check lives HERE and only here because this is the one
    place a recorded slot is CONSUMED, and an identity that is not compared where it is consumed is a field
    nobody will notice is wrong. */
-static int decide_arm(JSContext *ctx, const char *key, int restartable, int *forked) {
+/* `nonforking` IS THE ASKING SITE'S OWN ANSWER FOR A SESSION THAT EXPLORES NOTHING — see solver/decide.h. It is
+   consulted at exactly one of the three ways a decision is reached, the NEW one, because the other two are
+   answers this flow already has and a session's policy cannot change what it already decided. */
+static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonforking, int *forked) {
     uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
@@ -819,7 +871,14 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int *for
            nothing ever reported it. The mismatch is now a DIVERGENCE rather than an abort: the recorded tail
            is left behind and this branch forks like any other. */
         if (g_c < dec_total()) dec_leave_path();
-        arm = dec_fork_here(ctx, key, asked, restartable, forked);
+        /* AND WHETHER "LIKE ANY OTHER" MEANS A FORK IS THE SESSION'S TO SAY, ASKED HERE AND NOWHERE ELSE. The
+           leave-the-path above happens either way — a recorded tail that answers other questions is unusable
+           to this run whatever the policy is — and only the last statement differs: a session that explores
+           mints the sibling, and one that does not takes the arm the SITE declared and records it. It is not a
+           fallback selecting between two implementations of a decision: there is one decision, and this is
+           what the other arm's absence means. */
+        arm = engine_session_forks() ? dec_fork_here(ctx, key, asked, restartable, forked)
+                                     : dec_answer_here(key, asked, nonforking);
     }
     /* ONE PLACE, ALL THREE ARMS — a replayed arm and a refined one narrow this flow exactly as a forked one
        does, and the fork path used to state it separately (inside dec_fork_here) so that the `!*forked` guard
@@ -834,7 +893,7 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int *for
 
 /* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
    where its sibling comes back, and it is the only thing that differs between them. */
-static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable) {
+static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking) {
     const char *src = NULL, *tok = NULL;
     char *key;
     int op, forked = 0, arm;
@@ -846,7 +905,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable) {
     op = concolic_cmp(cond, &src, &tok);
 
     key = decide_key(cond);
-    arm = decide_arm(ctx, key, restartable, &forked);
+    arm = decide_arm(ctx, key, restartable, nonforking, &forked);
     free(key);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
@@ -860,10 +919,12 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable) {
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 
-int solver_decide(JSContext *ctx, JSValueConst cond) { return decide_branch(ctx, cond, 0); }
+int solver_decide(JSContext *ctx, JSValueConst cond, int nonforking) {
+    return decide_branch(ctx, cond, 0, nonforking);
+}
 
-int solver_decide_restartable(JSContext *ctx, JSValueConst cond) {
-    int r = decide_branch(ctx, cond, 1);
+int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking) {
+    int r = decide_branch(ctx, cond, 1, nonforking);
     DCHECK(r < 0 || !SOLVER_FORKED(r),
            "a restartable branch was told to snapshot a frame — the seam assembles this sibling itself "
            "(there is no activation to clone), so the bit can only mean the seam took the other path and the "
@@ -907,8 +968,14 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
                             "which is sound and is not what a machine declaring a fork expects");
         /* NOT RESTARTABLE, AND THAT IS A STATEMENT ABOUT THE MACHINE RATHER THAN A DEFAULT. An outcome ask
            comes from a C body that is mid-algorithm: re-running the flow's scheduler step would not re-reach
-           it, so its sibling's resume point can only be the step driver's snapshot of the machine. */
-        arm = decide_arm(ctx, key, 0, &forked);
+           it, so its sibling's resume point can only be the step driver's snapshot of the machine.
+           AND NO NON-FORKING ARM, WHICH IS ALSO A STATEMENT AND NOT A HOLE. A machine reaches this entry only
+           through JSFlowControlHooks.outcome, and a session that does not fork installs no such hook — the
+           driver reads the absence and takes outcome 0 itself, which is why every step machine numbers its
+           ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
+           reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
+           crash names the machine's question rather than recording an arm nobody chose. */
+        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, &forked);
         free(key);
         return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }

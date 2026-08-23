@@ -27,6 +27,11 @@
  * the driver snapshots at the ask. Until then a page that branches on an `AbortSignal.timeout()` flag this
  * flow has not already decided aborts HERE rather than stranding a prepared sibling for some later fork
  * elsewhere in the agent to trip over, which is what it did before and why it was never traced to this file.
+ * THAT IS THE FORKING SESSION'S HALF, AND IT IS ONLY HALF. A session may declare that it explores nothing at
+ * all — a conformance run measuring this half against a spec oracle, and §@S's candidate re-fire, which is ONE
+ * concrete path — and there is then no sibling to place and no crash to reach, only a question that must still
+ * be answered. The seam does not pick: it asks this file, at the ask, for the arm §3.2's own model takes with
+ * one world in it (signal_aborted_nonforking, below).
  *
  * THE INTERNAL SLOTS ARE AN OWN PROPERTY UNDER A PRIVATE SYMBOL, for the reason EventTarget's listener map is:
  * a write to them is an ordinary property write, so the per-flow COW delta captures it with no new delta kind.
@@ -134,10 +139,46 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
    sibling was prepared, so a first-time fork onto the true arm returns 257; this compared the raw value against
    1, took the FALSE arm, and left the flow disagreeing with its own decision vector for the rest of the run.
    The header documented the return as "the arm (0/1)", which is why the mistake was available to make. */
+/* WHAT THIS QUESTION ANSWERS IN A SESSION THAT EXPLORES NOTHING — DOM §3.2 Interface AbortSignal's own model,
+ * read for the one world such a session is in.
+ *
+ * §3.2 gives an AbortSignal an "abort reason", "which is initially undefined", and the `aborted` getter steps
+ * "are to return true if this is aborted; otherwise false" — a REAL state machine, written only by §3.2's
+ * "signal abort". This file's header says the same thing from the other side: a controller's signal is never
+ * concolic, because there is no ignorance to model. The ONE flag that is concolic is `AbortSignal.timeout()`'s,
+ * and what is unknown about it is not the machine, it is WHICH MOMENT this program is standing at — so the
+ * value carries the answer for the moment a fast machine is standing at, as its EXAMPLE (JS_FALSE, where it is
+ * minted below).
+ *
+ * SO THE ARM IS THE EXAMPLE'S, AND THAT IS THE SAME RULE THE OTHER TWO SEAMS FOLLOW, not a third one: the
+ * interpreter's non-forking answer is the value's own ordinary truth, and a step machine's outcome 0 is its
+ * ordinary completion. Taking the object's bare truthiness instead would answer ABORTED for a signal nothing
+ * has aborted — `throwIfAborted()` would throw and `reason` would hand back a TimeoutError, in a session whose
+ * whole purpose is to reproduce ONE path the page really takes. A fabricated abort is a different program.
+ *
+ * A NON-CONCOLIC FLAG DECLARES NOTHING, because the seam answers -1 for it before this value is ever read and
+ * the real ToBool decides — which is §3.2's answer exactly. */
+static int signal_aborted_nonforking(JSContext *ctx, JSValueConst flag)
+{
+    JSValue ex;
+    int r;
+
+    if (!concolic_is(flag))
+        return SOLVER_NO_NONFORKING_ARM;
+    ex = concolic_example(ctx, flag);
+    DCHECK(JS_IsBool(ex),
+           "an AbortSignal's `aborted` slot holds unknown input carrying no boolean example — §3.2's flag is a "
+           "real state machine and the one writer that makes it unknown states the moment it is standing at as "
+           "the example, so a slot without one was written by a producer that is not in this file");
+    r = JS_ToBool(ctx, ex);
+    JS_FreeValue(ctx, ex);
+    return r;
+}
+
 static int signal_is_aborted(JSContext *ctx, JSValueConst slots)
 {
     JSValue flag = JS_GetPropertyStr(ctx, slots, "aborted");
-    int d = solver_decide(ctx, flag);
+    int d = solver_decide(ctx, flag, signal_aborted_nonforking(ctx, flag));
     int r;
 
     if (d < 0) {

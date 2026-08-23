@@ -221,6 +221,21 @@ void engine_set_checkpoint_hook(void (*fn)(JSContext *ctx));
  * was still full — 20 documents of one WPT area, with nothing in the message about where the blobs came from. */
 int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const char *asked, int restartable);
 
+/* DOES THIS SESSION FORK AT ALL — the explore/verify bit, asked rather than copied.
+ *
+ * The bit reaches the INTERPRETER and the STEP DRIVER through the flow-control hook table, and each of those
+ * two already has its own answer for a session that installs none: the interpreter's `branch` is absent, so
+ * the arm is -1 and the ordinary ToBool decides; the step driver's `outcome` is absent, so the machine takes
+ * outcome 0, which every step machine numbers as its ordinary completion. A caller that asks the decision seam
+ * BY SYMBOL — a browser component with no OP_if and no machine — consults neither table, so decide.c asks this
+ * and answers with the arm THAT SITE declared (solver/decide.h's `nonforking`).
+ *
+ * IT IS ASKED AND NOT PASSED IN, because a second copy of the bit is a second thing that can disagree with the
+ * hook table, and the disagreement would be invisible: a session whose hooks say verify and whose copy says
+ * explore mints frontier members from inside a verification, which is the exact defect engine_prepare_fork's
+ * own assert names. There is one writer, at the one point a session declares its policy. */
+int engine_session_forks(void);
+
 /* Run the scripts to frontier exhaustion: seed the first flow, bracket each run with the decision state +
    per-flow COW delta, and drain the frontier by WFQ order.
    `recipes` is the PARKED RESIDUE this host stored for the document, or NULL/"" for one with none — the same

@@ -2441,6 +2441,14 @@ static void *g_fork_dec = NULL, *g_fork_pins = NULL;
 static int g_fork_snapshot_owed;
 /* …AND WHETHER THIS SESSION FORKS AT ALL — the explore/verify bit, written beside JS_SetFlowControlHooks. */
 static int g_sess_forking;
+/* AND IT IS READ BY THE SEAM ITSELF, which is what turns the assert below from a report into a mechanism. The
+   hook table carries the policy into the INTERPRETER and into the step driver, and both already have their own
+   non-forking answer for the absence of a hook (-1 then ToBool, and outcome 0). A caller that asks the decision
+   seam BY SYMBOL consults neither, so decide.c has to be able to ask — and it asks HERE, at the one place the
+   session's policy is written, rather than being handed a second copy of the bit that could disagree with the
+   hook table. It is not a routing predicate: it selects no implementation, it answers a question about the
+   session. */
+int engine_session_forks(void) { return g_sess_forking; }
 /* (engine_sibling_assemble is declared above the delivery fork, which is the first of its three callers in
    this file; a second declaration here would be a second place to keep its signature in step.) */
 /* THE HANDOFF IS FILLED AND EMPTIED WITHIN ONE FORK, AND THAT IS ASSERTED HERE RATHER THAN HOPED FOR. Two
@@ -2457,14 +2465,14 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
                       "decision state the last switched-in flow left behind, so they describe no timeline");
     DCHECK(g_sess_forking,
            "a fork was prepared inside a NON-FORKING session — §@S's candidate re-fire is ONE concrete path, "
-           "and the explore/verify bit reaches the interpreter through the hook table, which a C builtin "
-           "asking the decision seam by symbol never consults. That caller has to be given the non-forking "
-           "answer its own site defines, the way the interpreter falls through to ToBool and the step driver "
-           "takes outcome 0");
+           "so no member of the frontier may be minted from inside one. The seam now ASKS the session "
+           "(engine_session_forks) and answers a new question with the arm the SITE declared, so reaching this "
+           "line means the answer was declared and the seam forked anyway — decide_arm's non-forking branch is "
+           "the one that must have been taken");
     if (!g_fork_snapshot_owed) {
         /* NOBODY IS GOING TO CLONE A FRAME, so the sibling's resume point has to be the flow's own state — and
            it is, for exactly one kind of caller: engine code that is re-reached by RE-RUNNING the flow's
-           scheduler step. HTML §8.1.7.3 "Processing model" step 1 makes that choice "in an
+           scheduler step. HTML §8.1.7.3 Processing model step 2.1 makes that choice "in an
            implementation-defined manner", between tasks, with the flow switched in and nothing of it on any
            stack; the sibling is assembled with NO frame and its step re-runs the same walk, where the arm
            recorded for it here replays. Assembled HERE and not stashed, because there is no later moment at
@@ -3214,6 +3222,35 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
     JSValue *base;
     Flow *sib;
 
+    /* A SESSION THAT EXPLORES NOTHING DRIVES NOTHING, AND THAT IS THE SAME SENTENCE engine_prepare_fork'S ASSERT
+     * MAKES — said one mechanism over, where nothing was saying it.
+     *
+     * §scheduler is explicit that a drive of a function the page never called is "just another BFS flow", and
+     * the line below MINTS one: engine_sibling_assemble, over decide_fork_same_path, adds a member to the
+     * frontier. A session declared non-forking is one that must not gain members from inside itself — §@S's
+     * candidate re-fire is ONE concrete path, and a conformance run measuring the browser half against a spec
+     * oracle is measuring a browser, which never invokes a function nobody called. The fork seam is asserted
+     * for exactly this and this path went around it, through a different door onto the same frontier.
+     *
+     * IT IS ALSO WHERE THE ONE UNANSWERABLE ORDER COMES FROM. engine_orphan_call mints each argument and the
+     * receiver with NO EXAMPLE — correctly: nothing in the page ever supplied one, and §Solver forbids
+     * inventing one. Those are the only example-free unknowns a host without the source overlay can hold, so
+     * they are what reaches §8.7's `setTimeout` as a timeout nothing computed, becomes an expiry nothing
+     * computed, and leaves core/timing/event_loop.c's order with two feasible arms and no fact to choose
+     * between them. Not driving them in such a session removes the question rather than answering it wrong.
+     *
+     * A DRIVE THAT IS ALREADY A MEMBER IS THE SAME STATEMENT, NOT AN EXCEPTION. A resumed drive (the branch
+     * below) is a residue record standing on a recorded path, which only a session seeded from recipes can
+     * hold; a non-forking session that held one would be a residue seeded into a session that cannot serve it,
+     * so it is asserted rather than served. */
+    if (!g_sess_forking) {
+        DCHECK(!f->orphan_want,
+               "a flow waiting to adopt an orphan's body is a member of a session that explores nothing — its "
+               "recipe was recorded by a session that forks, and this one can neither drive it nor fork the "
+               "arms its path is made of, so the residue was seeded into a session that cannot serve it");
+        return 0;
+    }
+
     /* A RESUMED DRIVE THAT HAS ITS FUNCTION BACK BUILDS ITS OWN CALL, and it builds it HERE rather than at the
      * moment it was handed one. This is the point at which a flow has nothing left to run, which is where the
      * drive belonged in the session that recorded it — so the recorded arms the replay has been consuming run
@@ -3297,6 +3334,13 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
 
     g_orphans_driven++;
     base = engine_orphan_call(ctx, t.fn, t.argc, hash);
+    /* THE OTHER SIDE OF THE GATE AT THE TOP OF THIS FUNCTION, asserted where the member is actually minted
+       rather than only where the mechanism is entered — the two are separated by a take, a hash and a route,
+       any of which could grow its own way in. */
+    DCHECK(g_sess_forking,
+           "a driven orphan was about to be added to the frontier of a session that explores nothing — the "
+           "gate at the top of this walk returns before the take, so reaching this line means a second entry "
+           "into the drive was built that does not go through it");
     sib = engine_sibling_assemble(ctx, f, base,
                                   decide_fork_same_path("(a function the page never called was driven — no "
                                                         "predicate was asked)"),
@@ -5132,7 +5176,12 @@ static int engine_branch_hook(JSContext *ctx, JSValueConst cond) {
            "decision seam runs no page code, so a second one means something re-entered it and the inner "
            "fork would be built against the outer ask's activation");
     g_fork_snapshot_owed = 1;
-    r = solver_decide(ctx, cond);
+    /* NO NON-FORKING ARM, AND THE TABLE IS WHY. This wrapper is FC_EXPLORE's `branch` and nothing else installs
+       it, so a session that does not fork never reaches this line: the interpreter finds no hook, reads -1, and
+       the ordinary ToBool decides the `if` — which IS the interpreter's non-forking answer, made where the
+       absence is rather than passed down as a value. SOLVER_NO_NONFORKING_ARM states that, so a session that
+       somehow got here with forking off crashes at the seam naming the predicate. */
+    r = solver_decide(ctx, cond, SOLVER_NO_NONFORKING_ARM);
     g_fork_snapshot_owed = 0;
     return r;
 }
