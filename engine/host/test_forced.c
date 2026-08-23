@@ -1609,6 +1609,31 @@ static const char *HTML =
     "setTimeout(function(){ _tk += 'C'; fetch('/api/timerfire?v=' + _tk); }, 0);"
     "Promise.resolve().then(function(){ _tk += 'A'; });"
 
+    /* §8.7's STRING HANDLER, AND STEP 2's IDENTIFIER ACROSS THE TWO ARMS THAT HAND ONE BACK. The three rows
+       above all pass a Function, so the arm of the timer initialization steps that returns a handle WITHOUT
+       making an entry — the one that compiles the handler as a classic script — ran in no test in this tree.
+       `strran` is that program having actually run; `next` is the two arms drawing from ONE per-global
+       counter, which is what makes a handle name at most one timer. A second counter, or an arm that forgets
+       to bump, gives two live timers one identifier and `clearTimeout` then clears the wrong one — a defect
+       with no other symptom, since both calls still return a plausible number. */
+    "var _tsh1 = setTimeout(\"fetch('/api/timerstr?v=strran');\", 0);"
+    "var _tsh2 = setTimeout(function(){ fetch('/api/timerhandle?h=' +"
+    " (_tsh2 === _tsh1 + 1 ? 'next' : 'reused')); }, 0);"
+
+    /* §8.7 STEP 4 OVER AN UNKNOWN `timeout` — "if timeout is less than 0, then set timeout to 0" asked about
+       a value nothing computed, which is a question with two real answers and therefore a FORK.
+       IT IS THE FORK AND NOT THE TIMER THAT IS PROBED, and the `clearTimeout` is what keeps it that way. The
+       arm that keeps the unknown writes an expiry no double can express, and FIRING one moves the event
+       loop's virtual clock to a moment no arm has decided — a capability core/timing/event_loop.c does not
+       have and whose absence timer_run_due names in full. Cleared, both arms reach the same end and what the
+       row asserts is the thing that was missing: that a fork asked from inside §8.7's own algorithm has
+       somewhere to put its sibling. As a plain JSCFunction it had none — the seam crashed at the fork, naming
+       the predicate, so this ONE LINE took the whole document down before any of it ran. `unkdelay` is
+       therefore a row that reads 0 when the members stop being step machines, and it reads 0 by ABORTING. */
+    "var _t4 = setTimeout(function(){ fetch('/api/unkdelay/fired'); }, state.d);"
+    "clearTimeout(_t4);"
+    "fetch('/api/unkdelay?v=' + (typeof _t4 === 'number' ? 'forked' : 'nohandle'));"
+
     /* THE SAME READ FROM INSIDE A JOB. A `.then` handler is a queued reaction, and a cross-document read
        SUSPENDS — so this exercises a step machine that parks on the host while it is the root of a job rather
        than reached from a bytecode frame. Without the scheduler reporting that flow host-owed, it resumes and
@@ -4610,6 +4635,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int xdocjob_tt = (strstr(js, "\"/api/xdocjob\"") && strstr(js, "jobread"));
     /* §8.6 + §8.1.7: the microtask ran first, then the two timers in the order they were set. */
     int timer_tt = (strstr(js, "\"/api/timerfire\"") && strstr(js, "ABC"));
+    /* §8.7's string handler was compiled and RUN as a program, and the handle the two arms hand back comes
+       out of one per-global counter. Two endpoints because the two halves fail independently. */
+    int timerstr_tt = (strstr(js, "\"/api/timerstr\"") && strstr(js, "strran"));
+    int timerhandle_tt = (strstr(js, "\"/api/timerhandle\"") && strstr(js, "next") &&
+                          !strstr(js, "reused"));
+    /* §8.7 step 4 asked about an unknown `timeout`: the fork has a consumer, so the document survives it.
+       A 0 here is an ABORT at the fork seam and not a missing endpoint — see the statement that produces it. */
+    int unkdelay_tt = (strstr(js, "\"/api/unkdelay\"") && strstr(js, "forked"));
     /* §4.8.5: an inserted iframe got a child navigable, its proxy is STABLE across reads, and a read through it
        resolved to the peer's answer. */
     int ifnav_tt = (strstr(js, "\"/api/iframenav\"") && strstr(js, "ifnav"));
@@ -5135,6 +5168,9 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "xdoc-read", xdocread_tt, "/api/xdocread", SESS_EXPLORE },
         { "xdoc-job", xdocjob_tt, "/api/xdocjob", SESS_EXPLORE },
         { "timer-order", timer_tt, "/api/timerfire", SESS_EXPLORE },
+        { "timer-string-handler", timerstr_tt, "/api/timerstr", SESS_EXPLORE },
+        { "timer-handle-counter", timerhandle_tt, "/api/timerhandle", SESS_EXPLORE },
+        { "timer-unknown-delay-fork", unkdelay_tt, "/api/unkdelay", SESS_EXPLORE },
         { "iframe-nav", ifnav_tt, "/api/iframenav", SESS_EXPLORE },
         { "idb-open", idbopen_tt, "/api/idbopen", SESS_EXPLORE },
         { "idb-record", idbrec_tt, "/api/idbrec", SESS_EXPLORE },

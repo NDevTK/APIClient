@@ -73,6 +73,7 @@
  * canonical XSS sink took the document down on an assert against attacker input. */
 #include "check.h"
 #include "quickjs.h"
+#include "quickjs-step.h"      /* §8.7's two SETTERS are step machines: step 4 is a comparison over `timeout` */
 #include "core/agent_state.h"
 #include "core/timing/timer.h"
 #include "core/timing/event_loop.h"
@@ -84,7 +85,8 @@
 #include "solver/engine.h"
 #include "solver/concolic.h"   /* §8.7 Timers's handler may be unknown external input, which crosses the IDL as itself */
 #include "solver/solve.h"      /* …and an unknown handler string is the @S JS-context sink */
-#include "solver/decide.h"     /* …and an unknown `timeout` makes §8.7 step 4 and its ORDER two forks, not two guesses */
+#include "solver/decide.h"     /* …and an unknown expiry makes §8.7's ORDER a fork, not a guess (step 4's is the
+                                  MACHINE's own, through quickjs-step.h's step_fork_run) */
 
 /* ONE ENTRY OF §8.7 Timers's MAP, as an Array — the shape §8.12 Animation frames's map of animation frame callbacks uses, for the
    reason CLAUDE.md gives: platform data a flow queues is a JS value, so the collector owns it, the COW delta
@@ -233,7 +235,7 @@ static int timer_rel(JSContext *ctx, JSValueConst a, JSValueConst b, int q)
                               : "HTML §8.7 run steps after a timeout: milliseconds ==",
                             a, b);
     /* ASKED AS A RESTARTABLE BRANCH, WHICH IS A PROMISE THIS SITE CAN MAKE AND MOST CANNOT. §8.1.7.3
-       "Processing model" step 1 picks the next task queue "in an implementation-defined manner", so this walk
+       "Processing model" step 2.1 picks the next task queue "in an implementation-defined manner", so this walk
        runs BETWEEN a flow's tasks: the flow is switched in — its delta, its DOM head and its decision state
        are the ones an arm inherits — and nothing of it is on any stack. There is therefore no activation for
        the sibling to be cloned from AND none is needed: it is assembled with no frame, and re-entering its
@@ -371,6 +373,30 @@ int timer_due_before(JSContext *ctx, double moment)
 
 void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src)) { g_script_sink = queue; }
 
+/* §8.7 Timers's TIMER IDENTIFIER, out of THIS global's own counter — the timer initialization steps' step 2,
+   "an implementation-defined integer that is greater than zero and does not already exist in global's map of
+   setTimeout and setInterval IDs".
+   ONE SPELLER, because §8.7 hands a handle back on THREE paths and only one of them makes an entry: the
+   function form (timer_set below), and both string forms, which queue a script and leave nothing for
+   `clearTimeout` to find. Three copies of "read the counter, bump it, return the old value" is three places
+   for the bump to go missing, and a missing bump is two live timers sharing one identifier — where
+   `clearTimeout` clears the wrong one and nothing says so.
+   It is an ordinary property write, so the per-flow COW delta captures it: two arms of a fork mint the SAME
+   handle for the same source line, which is what makes a replayed decision vector name the same timer. */
+static uint32_t timer_next_handle(JSContext *ctx)
+{
+    JSValue st = timer_store(ctx), nv = JS_GetProperty(ctx, st, g_atom_next);
+    uint32_t handle = 0;
+
+    JS_ToUint32(ctx, &handle, nv);
+    JS_FreeValue(ctx, nv);
+    DCHECK(handle >= 1, "§8.7 Timers's timer identifier started below 1 — 0 is the handle a page gets back for "
+                        "nothing, and `clearTimeout(0)` must name no entry");
+    JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
+    JS_FreeValue(ctx, st);
+    return handle;
+}
+
 /* SET ONE TIMER in `ctx`'s global's map — §8.7 Timers's shared tail for `setTimeout`, `setInterval` and the engine's
    own "run steps after a timeout". Returns the handle §8.7 Timers gives back.
  *
@@ -385,16 +411,8 @@ void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src)) { g_scr
 static int timer_set(JSContext *ctx, JSValueConst delay, double every, JSValueConst fn, int argc,
                      JSValueConst *argv)
 {
-    JSValue st = timer_store(ctx), q, entry, nv;
-    uint32_t handle = 0, i, slot, n;
-
-    nv = JS_GetProperty(ctx, st, g_atom_next);
-    JS_ToUint32(ctx, &handle, nv);
-    JS_FreeValue(ctx, nv);
-    DCHECK(handle >= 1, "§8.7 Timers's timer identifier started below 1 — 0 is the handle a page gets back for "
-                        "nothing, and `clearTimeout(0)` must name no entry");
-    JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
-    JS_FreeValue(ctx, st);
+    JSValue q, entry;
+    uint32_t handle = timer_next_handle(ctx), i, slot, n;
 
     entry = JS_NewArray(ctx);
     CHECK(!JS_IsException(entry), "timer: OOM recording a timer — a dropped one is work the page asked for "
@@ -607,75 +625,159 @@ int timer_run_due(JSContext *ctx)
     return 1;
 }
 
-static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
-{
-    double delay = 0, every;
+/* HTML §8.7 Timers's TIMER INITIALIZATION STEPS, AS A STEP MACHINE — because step 4 is a COMPARISON and the
+ * value it compares can be unknown external input.
+ *
+ * "If timeout is less than 0, then set timeout to 0" is a question with two real answers whenever the page
+ * wrote `setTimeout(f, someUnknown)`, and §Solver forbids picking one: the false arm keeps the unknown and is
+ * ordered against every other entry by the fork timer_rel makes, while the TRUE arm concretizes to the spec's
+ * own 0 — concretize-on-pin with the ALGORITHM doing the pinning rather than the page's `x === 'admin'`.
+ *
+ * A PLAIN BODY COULD ASK THAT QUESTION AND COULD NOT ANSWER IT, WHICH IS THE WHOLE REASON THIS IS A MACHINE.
+ * A fork prepares a sibling and needs a RESUME POINT for it. An interpreter at an OP_if clones its frame; a
+ * walk between tasks (timer_rel, above) re-reaches its own ask by re-running the flow's scheduler step. A
+ * plain JSCFunction has NEITHER — it is already inside its own C activation — so the seam crashed there,
+ * naming this operation, and the sibling that keeps the unknown could not be built at all. Which meant
+ * timer_rel's concolic arm was unreachable: every OTHER writer of an entry's expiry writes a number
+ * (event_loop_now is a double, timer_after's `milliseconds` is the engine's own, an interval's re-arm is
+ * arithmetic), so the ONE producer of an unknown expiry was the sibling this could not park.
+ * As a machine the driver holds the resume point: step_fork_run snapshots the flow AT the ask, and the sibling
+ * re-enters this body at this stage holding the other arm.
+ *
+ * IT IS A DECLARATION AND NOT A DISPATCH. Nothing asks at a call site which implementation to run — the member
+ * is declared `idl_method_id_step` at timer_init and there is no other body for anything to select against. */
+#define TI_STAGES(X)                                                                                          \
+    X(TI_TIMEOUT,                                                                                             \
+      "HTML §8.7 Timers timer initialization steps step 4 (if timeout is less than 0, then set timeout to 0)") \
+    X(TI_SCHEDULE,                                                                                            \
+      "HTML §8.7 Timers timer initialization steps steps 12-15 (the completion step that queues a global "     \
+      "task on the timer task source, run steps after a timeout given that timeout, and return id)")
+enum { IDL_STEP_STAGE_BASE(TI_STAGES) TI_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TI_STEPS[] = { TI_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THE OPERATION HALF OF THE FORK'S KEY. step_fork_run keeps a BORROWED pointer to it on the header and the
+   driver reads it AFTER this machine has returned, so it must outlive the return — a static literal does, and
+   a stack buffer would dangle exactly where the constraint key is built. It names the SPEC STEP rather than
+   this file, because decide.c keys a predicate by (source identity, operation) and two spellings of one
+   question must compose to one key. */
+static const char TI_STEP4_OP[] = "HTML §8.7 timer initialization steps step 4 (timeout < 0)";
+
+/* WHAT THE MACHINE HOLDS ACROSS THE FORK: step 4's RESULT, which is the only thing the stage below needs and
+   the one thing it must not recompute — recomputing it would re-ask a question this flow has already answered.
+   `placed` is the byte a machine needs and its stage cannot give it (the first stage IS the entry stage, so
+   `stage == TI_TIMEOUT` is true before anything has run): a zeroed JSValue is the INTEGER 0, not undefined
+   (JS_TAG_INT is 0), so a visit walking `timeout` before its stage has written it would hand the fork a real
+   value the page can see. */
+typedef struct {
     JSValue timeout;
-    int handle;
+    uint8_t placed;
+} TimerInitState;
 
-    (void)this_val;
-    if (argc < 1)
-        return JS_ThrowTypeError(ctx, "setTimeout requires a handler");
+static void ti_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    TimerInitState *s = st;
 
-    /* `timeout` is a Web IDL `long`, so §3.2.4.5's ConvertToInt(V, 32, "signed") already ran in the
-       declaration — UNLESS the page passed unknown external input, which crosses an IDL boundary as itself so
-       that opacity survives the coercion. The tag test that stood here asserted the first case and fired on
-       the second: `setTimeout(f, timeout * n)` with an unknown `n` is a page's ordinary arithmetic, and
-       §Offensive names a forced-exec flow meeting opaque input as the exploration surface rather than a
-       broken invariant. idl_number_of answers both — the converted Number for a real value, and for an
-       unknown the SAME §3.2.4.5 conversion run on that value's own EXAMPLE.
-       THE EXAMPLE IS THE ORDERING KEY, AND THAT IS ALL IT IS. HTML §8.7 Timers orders one invocation against
-       another in `run steps after a timeout`: "Wait until any invocations of this algorithm that had the same
-       global and orderingIdentifier, that started before this one, and whose milliseconds is less than or
-       equal to this one's, have completed" — a comparison the ENGINE makes, never one the page wrote. This
-       component realises it as (now + timeout, insertion order) on the virtual clock, so what it needs from
-       the value is one number.
-       AN UNKNOWN WITH NO EXAMPLE IS NOT A MISSING NUMBER, IT IS A FORK, and §8.7 states the fork itself. Step
-       4 is "If timeout is less than 0, then set timeout to 0" — a comparison over exactly this value, whose
-       TRUE arm the SPEC then assigns a concrete 0 to. So one arm of every such call runs on a number nothing
-       invented, and the other keeps the unknown and orders by the fork timer_rel makes. This is the
-       concretize-on-pin rule with the spec doing the pinning: `x === 'admin'` concretizes because the code
-       determined the value, and step 4's true arm concretizes because the ALGORITHM determined it. */
-    if (argc >= 2 && !idl_number_of(ctx, IDL_LONG, argv[1], &delay)) {
-        /* §8.7 step 4 over an unknown: both outcomes are feasible (§3.2.4.5's `long` spans
-           [-2147483648, 2147483647] and ConvertToInt is TOTAL, so nothing has excluded either sign), so BOTH
-           arms run — this flow takes one and a sibling is parked for the other. */
-        int d = solver_outcome(ctx, argv[1],
-                               "HTML §8.7 timer initialization steps step 4 (timeout < 0)", 2);
-        DCHECK(d >= 0,
-               "§8.7 step 4 was asked about an unknown `timeout` and the solver answered that the value is "
-               "not unknown, or that no flow is running — a page's `setTimeout` runs inside a flow's own "
-               "step, and idl_number_of has already established the value is unknown external input");
-        DCHECK(SOLVER_ARM(d) == 0 || SOLVER_ARM(d) == 1,
-               "a two-armed decision answered with an arm that is neither of them");
-        /* AND THE SIBLING NEEDS A DECLARATION THIS MEMBER DOES NOT HAVE, WHICH IS NOT THE GAP timer_rel HAD.
-           That one is asked between tasks and its sibling stands on the flow's own state; this one is asked
-           from inside a plain JSCFunction (idl_method_id) that is already in its C activation, so there is no
-           machine state for the other arm to be snapshotted at and no scheduler step that re-reaches the ask.
-           The seam CRASHES on it, at the fork, naming this operation — which is the forcing function for the
-           declaration: §8.7's members become step machines (idl_method_id_step, the entry the synchronous
-           host read already uses), step 4's comparison becomes the machine's own outcome ask through
-           step_fork_run, and the driver snapshots the flow AT the ask so the sibling re-enters the algorithm
-           holding the other arm. Nothing about the QUESTION changes — the true arm is still the spec's own 0.
-           There is no second DFAIL here for that: a site-local copy of a crash the seam already makes would
-           be unreachable prose claiming to be the mechanism. */
-        if (SOLVER_ARM(d) == 1)
-            timeout = JS_NewFloat64(ctx, 0);   /* step 4's own assignment, on its own arm */
-        else
-            timeout = JS_DupValue(ctx, argv[1]);
-    } else {
-        /* §3.2.4.5's own postcondition, which is what the tag test was reaching for and could not state:
-           ConvertToInt takes the integer part modulo 2**32 and folds it into range, so a `long` is ALWAYS an
-           integer in [-2147483648, 2147483647] — NaN and the infinities became +0 inside the conversion. */
-        DCHECK(delay >= -2147483648.0 && delay <= 2147483647.0 && delay == (double)(int32_t)delay,
-               "§3.2.4.5's `long` conversion answered something that is not a long — its result is the integer "
-               "part taken modulo 2**32 and folded into range, so a value outside it, or one with a fraction, "
-               "means this position was never converted by anything");
-        /* §8.7 step 4: "If timeout is less than 0, then set timeout to 0." */
-        if (delay < 0)
-            delay = 0;
-        timeout = JS_NewFloat64(ctx, delay);
+    if (s->placed)
+        v->val(ctx, &s->timeout);
+}
+
+/* THERE IS NO `release`. Everything this state owns is the one JSValue the visit above names, so the teardown
+   frees it through that ONE list — which is why no arm below frees `s->timeout` on its way out, including the
+   string arm, which reaches a return without ever reading it. A free at one exit is the second ownership list
+   this declaration exists to have only one of, and the arm that forgot it would leak while the arm that had it
+   would double-free the sibling's copy. */
+
+static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                        JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    TimerInitState *s = state;
+    int magic = idl_step_magic(hdr);
+    double every;
+
+    (void)out_cb; (void)out_argc;
+    /* This machine makes no request that delivers a value, so nothing below reads the answer to one. Freed on
+       every entry, above the dispatch, because it belongs to no stage. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    /* §3.6's ARITY CHECK AND STEP 14.2's DEFAULT ARE THE DECLARATION'S, and both are asserted rather than
+       re-derived. `idl_optional_from(1)` makes position 0 required, so `setTimeout()` is a TypeError before
+       this body is entered — the `if (argc < 1) JS_ThrowTypeError` that stood here was a consumer restating
+       its producer's contract. `idl_arg_default(1, IDL_DEFAULT_ZERO)` then guarantees position 1, so an
+       `argc >= 2` test here was a hole that could never be taken.
+       IT IS AN EQUALITY AND NOT A `>=`, so the day §8.7's `any... arguments` tail is declared (see timer_init,
+       which names why it is not) this fires and names the two positions below that assume the count. */
+    DCHECK(argc == 2,
+           "§8.7's `setTimeout`/`setInterval` reached its body with an argument count its declaration does not "
+           "produce — position 0 is required and position 1 carries the IDL's `= 0`, so the count is exactly "
+           "two until the `any... arguments` tail is declared");
+
+    STEP_DISPATCH(TI_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TI_TIMEOUT);
+    {
+        double delay = 0;
+
+        /* `timeout` is a Web IDL `long`, so §3.2.4.5's ConvertToInt(V, 32, "signed") already ran in the
+           declaration — UNLESS the page passed unknown external input, which crosses an IDL boundary as itself
+           so that opacity survives the coercion. The tag test that stood here asserted the first case and fired
+           on the second: `setTimeout(f, timeout * n)` with an unknown `n` is a page's ordinary arithmetic, and
+           §Offensive names a forced-exec flow meeting opaque input as the exploration surface rather than a
+           broken invariant. idl_number_of answers both — the converted Number for a real value, and for an
+           unknown the SAME §3.2.4.5 conversion run on that value's own EXAMPLE.
+           THE EXAMPLE IS THE ORDERING KEY, AND THAT IS ALL IT IS. HTML §8.7 Timers orders one invocation
+           against another in `run steps after a timeout` step 4.2: "Wait until any invocations of this
+           algorithm that had the same global and orderingIdentifier, that started before this one, and whose
+           milliseconds is less than or equal to this one's, have completed" — a comparison the ENGINE makes,
+           never one the page wrote. This component realises it as (now + timeout, insertion order) on the
+           virtual clock, so what it needs from the value is one number.
+           AN UNKNOWN WITH NO EXAMPLE IS NOT A MISSING NUMBER, IT IS A FORK, and §8.7 states the fork itself.
+           Step 4 is "If timeout is less than 0, then set timeout to 0" — a comparison over exactly this value,
+           whose TRUE arm the SPEC then assigns a concrete 0 to. So one arm of every such call runs on a number
+           nothing invented, and the other keeps the unknown and orders by the fork timer_rel makes. This is
+           the concretize-on-pin rule with the spec doing the pinning: `x === 'admin'` concretizes because the
+           code determined the value, and step 4's true arm concretizes because the ALGORITHM determined it. */
+        if (!idl_number_of(ctx, IDL_LONG, argv[1], &delay)) {
+            /* §8.7 step 4 over an unknown: both outcomes are feasible (§3.2.4.5's `long` spans
+               [-2147483648, 2147483647] and ConvertToInt is TOTAL, so nothing has excluded either sign), so
+               BOTH arms run — this flow takes one and the driver snapshots the machine for the other.
+               OUTCOME 0 IS THE FALSE ARM, which is step_fork_run's own rule read against this predicate: a
+               run with no forking policy (the @S candidate re-fire) takes outcome 0, and the ordinary
+               completion of "is this timeout negative" is that it is not. Numbering the spec's ASSIGNMENT
+               first would divert every candidate re-fire onto an arm the page's own value does not take. */
+            int arm = 0, rc = step_fork_run(ctx, hdr, argv[1], TI_STEP4_OP, 2, &arm);
+
+            if (rc)
+                return rc;
+            DCHECK(arm == 0 || arm == 1,
+                   "a two-armed outcome fork answered with an arm that is neither of them");
+            /* The unknown is BORROWED from the machine's own converted-argument vector, which outlives this
+               return and is what the sibling's clone dups — so the arm that keeps it takes its own reference
+               and the vector keeps its. */
+            s->timeout = (arm == 1) ? JS_NewFloat64(ctx, 0)   /* step 4's own assignment, on its own arm */
+                                    : JS_DupValue(ctx, argv[1]);
+        } else {
+            /* §3.2.4.5's own postcondition, which is what the tag test was reaching for and could not state:
+               ConvertToInt takes the integer part modulo 2**32 and folds it into range, so a `long` is ALWAYS
+               an integer in [-2147483648, 2147483647] — NaN and the infinities became +0 in the conversion. */
+            DCHECK(delay >= -2147483648.0 && delay <= 2147483647.0 && delay == (double)(int32_t)delay,
+                   "§3.2.4.5's `long` conversion answered something that is not a long — its result is the "
+                   "integer part taken modulo 2**32 and folded into range, so a value outside it, or one with "
+                   "a fraction, means this position was never converted by anything");
+            /* §8.7 step 4: "If timeout is less than 0, then set timeout to 0." */
+            if (delay < 0)
+                delay = 0;
+            s->timeout = JS_NewFloat64(ctx, delay);
+        }
+        s->placed = 1;
+        STEP_GOTO(hdr->stage, TI_SCHEDULE, NULL);
+        return JS_STEP_YIELD;
     }
+
+    STEP_ARM(TI_SCHEDULE);
+    DCHECK(s->placed,
+           "§8.7's timer initialization steps reached step 12 with no `timeout` — step 4 is the only writer of "
+           "it and the stage before this one is step 4, so an unwritten value means this machine was entered "
+           "at a stage it did not leave");
 
     /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
        known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
@@ -685,14 +787,11 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         /* TimerHandler is `(DOMString or Function)`: the declaration converted the non-callable arm to a
            string already, so this reads one rather than running the page's toString from C. */
         const char *src;
-        JSValue st, nv;
-        uint32_t handle = 0;
 
-        /* §8.7 step 4 ran above, where the spec puts it, and this arm makes no entry for its result to be the
-           expiry of — every exit below is a return, so the converted `timeout` is released once, here. */
-        JS_FreeValue(ctx, timeout);
-
-        /* §8.7 Timers's STRING ARM OVER UNKNOWN EXTERNAL INPUT IS A CODE-EXECUTION SINK, NOT A BROKEN INVARIANT.
+        /* §8.7 step 4 ran at the stage above, where the spec puts it, and this arm makes no entry for its
+           result to be the expiry of — it simply never reads it. Nothing is released here; ti_visit's one list
+           is what discharges the value, on every exit there is.
+           §8.7 Timers's STRING ARM OVER UNKNOWN EXTERNAL INPUT IS A CODE-EXECUTION SINK, NOT A BROKEN INVARIANT.
            The assertion here used to be `JS_IsString(argv[0])`, and it FIRED on `setTimeout(location.hash)`.
            The union's non-callable arm resolves to DOMString, and idl_args.c passes unknown external input
            across the boundary AS ITSELF so that opacity survives the coercion — so a concolic arrives here
@@ -708,20 +807,15 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
            value IS a string, the branch below queues it as §8.7 Timers requires, and a marker in it fires there. */
         if (concolic_is(argv[0])) {
             solve_eval_sink(ctx, argv[0]);
-            st = timer_store(ctx);
-            nv = JS_GetProperty(ctx, st, g_atom_next);
-            JS_ToUint32(ctx, &handle, nv);
-            JS_FreeValue(ctx, nv);
-            JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
-            JS_FreeValue(ctx, st);
-            return JS_NewInt32(ctx, (int32_t)handle);
+            *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(ctx));
+            return JS_STEP_DONE;
         }
         DCHECK(JS_IsString(argv[0]),
                "setTimeout's handler reached the body neither callable, nor a string, nor unknown external "
                "input — the TimerHandler union's conversion is the declaration's, not this body's");
         src = JS_ToCString(ctx, argv[0]);
         if (!src)
-            return JS_EXCEPTION;
+            return JS_STEP_ABRUPT;
         DCHECK(g_script_sink != NULL,
                "setTimeout was given a STRING handler and this host registered no way to evaluate one — HTML "
                "8.6 evaluates it when the timer fires, and dropping it would lose whatever it was going to do");
@@ -731,13 +825,8 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
         JS_FreeCString(ctx, src);
         /* §8.7 Timers still hands back a handle from THIS global's identifier, and it still names no entry — the
            script is queued, and there is nothing left for `clearTimeout` to find. */
-        st = timer_store(ctx);
-        nv = JS_GetProperty(ctx, st, g_atom_next);
-        JS_ToUint32(ctx, &handle, nv);
-        JS_FreeValue(ctx, nv);
-        JS_SetProperty(ctx, st, g_atom_next, JS_NewUint32(ctx, handle + 1));
-        JS_FreeValue(ctx, st);
-        return JS_NewInt32(ctx, (int32_t)handle);   /* §8.7 Timers's return type is a `long` */
+        *presult = JS_NewInt32(ctx, (int32_t)timer_next_handle(ctx));   /* §8.7's return type is a `long` */
+        return JS_STEP_DONE;
     }
 
     /* THE PERIOD IS A DOUBLE AND AN UNKNOWN ONE IS A DIFFERENT QUESTION FROM AN UNKNOWN DELAY, which is why it
@@ -747,7 +836,7 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
        which this component does not have and whose absence the re-arm's own assert in timer_run_due already
        names in full. An unknown period would therefore be re-armed by a rule the engine cannot state, for
        ever. Build the nesting level first; the two meet at step 5. */
-    if (magic && concolic_is(timeout))
+    if (magic && concolic_is(s->timeout))
         DFAIL("`setInterval` was given a PERIOD that is unknown external input, and §8.7's repeat re-runs the "
               "whole timer initialization steps at every fire — so step 5 (\"If nestingLevel is greater than "
               "5, and timeout is less than 4, then set timeout to 4\") governs every re-arm and this "
@@ -758,13 +847,20 @@ static JSValue js_set_timer(JSContext *ctx, JSValueConst this_val, int argc, JSV
        above has established is a number — so nothing here runs ToNumber over an unknown. */
     every = -1;
     if (magic)
-        JS_ToFloat64(ctx, &every, timeout);
-    handle = timer_set(ctx, timeout, every, argv[0],
-                       argc > 2 ? argc - 2 : 0, argc > 2 ? argv + 2 : NULL);
-    JS_FreeValue(ctx, timeout);
-    return JS_NewInt32(ctx, handle);
+        JS_ToFloat64(ctx, &every, s->timeout);
+    /* BORROWED, NOT HANDED OVER: timer_set reads `delay` through timer_expiry, which builds the entry's expiry
+       as a NEW value on both of its paths, so the state keeps owning this one and the teardown releases it.
+       §8.7's `any... arguments` tail is not declared, so there are no extra arguments to pass — see timer_init,
+       which names what declaring it costs. */
+    *presult = JS_NewInt32(ctx, timer_set(ctx, s->timeout, every, argv[0], 0, NULL));
+    return JS_STEP_DONE;
     /* nothing is queued: the driver asks when the clock may move */
 }
+
+static const IdlStepDecl TI_DECL = {
+    js_set_timer, sizeof(TimerInitState), ti_visit, NULL,
+    "HTML §8.7 Timers timer initialization steps", TI_STEPS
+};
 
 /* HTML §8.7 Timers's RUN STEPS AFTER A TIMEOUT — see timer.h. It is the SAME timer source `setTimeout` uses, and
  * that is the whole design: the spec's `milliseconds` are measured on one clock and its ordering clause is
@@ -813,8 +909,17 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
     double id = 0;
 
     (void)this_val; (void)magic;
-    if (argc < 1)
-        return JS_UNDEFINED;   /* §8.7: clearing a handle that names nothing does nothing */
+    /* THE COUNT IS THE DECLARATION'S, exactly as it is for the two setters above. `idl_optional_from(0)` makes
+       every position optional and `idl_arg_default(0, IDL_DEFAULT_ZERO)` places §8.7's `= 0` whether or not
+       the page reached it, so `clearTimeout()` arrives here with ONE argument holding that 0 — and §8.7's step
+       is "remove this's map of setTimeout and setInterval IDs[id]", which for 0 removes nothing because step 2
+       hands out integers "greater than zero". The `if (argc < 1) return` that stood here was a consumer
+       restating its producer's contract; the two answers coincide only because handles start at 1, which is a
+       coincidence a body should not be relying on and an assert is what stops it from starting to. */
+    DCHECK(argc == 1,
+           "§8.7's `clearTimeout`/`clearInterval` reached its body with an argument count its declaration does "
+           "not produce — its one position is optional and carries the IDL's `= 0`, so §3.6 step 14.2 places a "
+           "value at it on every call");
     /* `handle` is a Web IDL `long`, converted by the declaration — or unknown external input crossing as
        itself, whose number is that same §3.2.4.5 conversion run on its example. The tag test that stood here
        asserted against attacker input for the same reason `setTimeout`'s did, and in the same member pair. */
@@ -822,10 +927,14 @@ static JSValue js_clear_timer(JSContext *ctx, JSValueConst this_val, int argc, J
         DFAIL("clearTimeout was given a `handle` that is unknown external input carrying NO EXAMPLE, so it "
               "names no particular entry of §8.7's map of active timers. It cannot clear nothing — a handle "
               "the domain permits is one some arm does clear — and it cannot clear every entry, which is "
-              "every arm at once. WHAT TO BUILD is the fork over WHICH entry the handle names: solver_outcome "
-              "over the value with one completion per live entry plus the one that names none. It is the same "
-              "fork §8.7's ORDERING needs in js_set_timer above and is built with it, because both are the "
-              "one question of what an unknown integer denotes among this global's timers.");
+              "every arm at once. WHAT TO BUILD IS AN N-WAY FORK, which is the one thing that separates it from "
+              "step 4's, now that step 4's is built: this member becomes a step machine beside the two above "
+              "(idl_method_id_step, the same declaration, and its ask is step_fork_run rather than a plain "
+              "solver_outcome) AND the seam learns to prepare more than ONE sibling per ask — solver_outcome's "
+              "own `n == 2` DCHECK names that queue, and step_fork_run's `n` already carries the count. The "
+              "completions are one per live entry of this global's map plus the one that names none. Do the "
+              "seam first: a machine here with a two-armed ask would answer a question with N answers by "
+              "deleting all but one of them, which is the arm-deleting mistake the fork exists to prevent.");
     timer_clear(ctx, (uint32_t)(int32_t)id);
     return JS_UNDEFINED;
 }
@@ -841,20 +950,32 @@ static JSValue js_queue_microtask(JSContext *ctx, JSValueConst this_val, int arg
     return JS_UNDEFINED;
 }
 
-/* HTML 8.6's own IDL, declared rather than approximated:
-     long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)
-     undefined clearTimeout(optional long handle = 0)
-   `handler` is a (DOMString or Function or TrustedScript) union and `timeout` is a long, so BOTH can run the
-   page's code — a toString on the non-callable arm, a valueOf on the delay — and neither is a string.
+/* THE MEMBERS' OWN IDL, declared rather than approximated. It is HTML §8.2 "The WindowOrWorkerGlobalScope
+   mixin" that writes it — §8.7 Timers states the ALGORITHMS and the mixin states the signatures — and this
+   is that block verbatim:
+     typedef (DOMString or Function or TrustedScript) TimerHandler;
+     long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments);
+     undefined clearTimeout(optional long id = 0);
+     long setInterval(TimerHandler handler, optional long timeout = 0, any... arguments);
+     undefined clearInterval(optional long id = 0);
+   `handler` is that three-armed union and `timeout` is a long, so BOTH can run the page's code — a toString on
+   the non-callable arm, a valueOf on the delay — and neither is a string.
    THE `any...` TAIL IS NOT DECLARED, AND IT IS THEREFORE DROPPED — this said the opposite ("a position the
    IDL does not name is passed through as it is") and that is measurably false: a NON-variadic member's
    argument count is min(passed, declared) (idl_args.c), so this body can never see a third position and
    `setTimeout(f, 0, x)` invokes f with no arguments where §8.7 step 9's task invokes it "given arguments".
    Declaring it is not one call to idl_variadic: a variadic member repeats its LAST declared type for the
    tail, which here is IDL_LONG and would coerce every extra argument to a number, so the type list grows a
-   third IDL_ANY entry and the member is declared through idl_method_id_ext with nargs 3 and variadic true.
+   third IDL_ANY entry and `idl_variadic()` is set beside `idl_optional_from` — the flag composes with the STEP
+   declaration below, which the `idl_method_id_ext` this paragraph used to name does not (that entry builds a
+   PLAIN-BODY member, and these two are machines). The body's `argc == 2` assert is what fires the day it lands.
    DECLARED ONCE PER AGENT, installed per realm: a declaration builds a pool entry and a member has ONE, and
-   `idl_optional_from` names the member the LAST declaration made — so it belongs beside it, here. */
+   `idl_optional_from` names the member the LAST declaration made — so it belongs beside it, here.
+   THE TWO SETTERS ARE STEP MACHINES AND THE TWO CLEARERS ARE NOT, and that is a difference in what each
+   ALGORITHM asks rather than a policy: §8.7's step 4 compares `timeout`, which can be unknown external input,
+   so a fork asked there needs the driver's snapshot to resume its sibling from; `clearTimeout`'s own unknown
+   is an N-WAY question its DFAIL names, and declaring it a machine before that fork exists would buy a resume
+   point for a question nothing can yet ask. */
 void timer_init(JSContext *ctx)
 {
     static const IdlArgType SET_TIMER[2] = { IDL_STRING_UNLESS_CALLABLE, IDL_LONG };
@@ -865,10 +986,10 @@ void timer_init(JSContext *ctx)
        §3.6 step 14.2 gives an optional argument whose IDL writes `= …` THAT value, while a position with no
        declared default is ABSENT — so all four members reached their bodies with an undefined where the IDL
        guarantees a number, and each body would have had to invent the 0 its declaration owes it. */
-    g_id_set_timeout = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 0);
+    g_id_set_timeout = idl_method_id_step(ctx, SET_TIMER, 2, NULL, 0, &TI_DECL, 0);
     idl_optional_from(1);
     idl_arg_default(1, IDL_DEFAULT_ZERO, NULL);
-    g_id_set_interval = idl_method_id(ctx, SET_TIMER, 2, js_set_timer, 1);
+    g_id_set_interval = idl_method_id_step(ctx, SET_TIMER, 2, NULL, 0, &TI_DECL, 1);
     idl_optional_from(1);
     idl_arg_default(1, IDL_DEFAULT_ZERO, NULL);
     g_id_clear_timeout = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
