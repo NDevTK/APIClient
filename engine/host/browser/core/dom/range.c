@@ -1270,88 +1270,6 @@ static const IdlStepDecl RANGE_DELETE = { rd_step, sizeof(RdState), range_del_vi
 
 /* ---- insertNode ----------------------------------------------------------------------------------------- */
 
-/* §4.2.3 "ensure pre-insert validity", the whole of it. §5.5's insert step 5 calls it BY NAME with an empty
-   childrenToExclude, and this engine's other insertion sites carry only the ancestor half — so it is written
-   here, over the standard's own list, rather than approximated. Returns 0, or -1 having thrown. */
-static int ensure_pre_insert_validity(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
-                                      lxb_dom_node_t *child)
-{
-    lxb_dom_node_t *c;
-    int elems = 0, texts = 0;
-
-    if (parent->type != LXB_DOM_NODE_TYPE_DOCUMENT && !node_is_document_fragment(parent) &&
-        parent->type != LXB_DOM_NODE_TYPE_ELEMENT)                                            /* STEP 1 */
-        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                    "a node can only be inserted into a Document, DocumentFragment or "
-                                    "Element"), -1;
-    if (node_is_inclusive_ancestor(node, parent))                                             /* STEP 2 */
-        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                    "a node cannot be inserted into its own descendant"), -1;
-    if (child && child->parent != parent)                                                     /* STEP 3 */
-        return JS_ThrowDOMException(ctx, "NotFoundError",
-                                    "the reference child is not a child of the parent"), -1;
-    if (!node_is_document_fragment(node) && node->type != LXB_DOM_NODE_TYPE_DOCUMENT_TYPE &&
-        node->type != LXB_DOM_NODE_TYPE_ELEMENT && !node_is_chardata_kind(node))              /* STEP 4 */
-        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                    "a node of this type cannot be inserted into a tree"), -1;
-    if (parent->type != LXB_DOM_NODE_TYPE_DOCUMENT) {                                         /* STEP 5 */
-        if (node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
-            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                        "a doctype can only be a child of a document"), -1;
-        return 0;
-    }
-    if (node->type == LXB_DOM_NODE_TYPE_TEXT)                                                 /* STEP 6 */
-        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                    "a Text node cannot be a child of a document"), -1;
-    if (node_is_chardata_kind(node)) return 0;                                                /* STEP 7 */
-    if (node_is_document_fragment(node)) {                                                    /* STEP 8 */
-        for (c = node->first_child; c; c = c->next) {
-            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) elems++;
-            else if (c->type == LXB_DOM_NODE_TYPE_TEXT) texts++;
-        }
-        if (elems > 1 || texts)
-            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                        "a document can hold at most one element and no text"), -1;
-        if (!elems) return 0;
-    }
-    if (node_is_document_fragment(node) ||
-        node->type == LXB_DOM_NODE_TYPE_ELEMENT) {                                            /* STEP 9 */
-        for (c = parent->first_child; c; c = c->next)
-            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT)
-                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                            "a document already has an element child"), -1;
-        if (child) {
-            if (child->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
-                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                            "an element cannot be inserted before the doctype"), -1;
-            for (c = child->next; c; c = c->next)
-                if (c->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
-                    return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                                "an element cannot be inserted before the doctype"), -1;
-        }
-        return 0;
-    }
-    DCHECK(node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE, "§4.2.3 step 10 asserts the node is a doctype and "
-                                                          "this one is not — steps 6-9 return for every other "
-                                                          "kind");
-    for (c = parent->first_child; c; c = c->next)                                            /* STEP 11 */
-        if (c->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
-            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                        "a document already has a doctype"), -1;
-    if (child) {
-        for (c = child->prev; c; c = c->prev)
-            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT)
-                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                            "a doctype cannot be inserted after the element"), -1;
-    } else {
-        for (c = parent->first_child; c; c = c->next)
-            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT)
-                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
-                                            "a doctype cannot be appended after the element"), -1;
-    }
-    return 0;
-}
-
 /* §5.5 "insert a node into a live range". No page code and no walk of the page's tree — a fixed number of
    pointer moves — so it is an ordinary declared member rather than a machine. `node` arrives brand-checked. */
 static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *node)
@@ -1373,7 +1291,12 @@ static int range_insert_node(JSContext *ctx, RangeBounds *b, lxb_dom_node_t *nod
         for (ref = sn->first_child; ref && k < b->start_off; ref = ref->next) k++;
     }
     parent = ref ? ref->parent : sn;                                                           /* STEP 5 */
-    if (ensure_pre_insert_validity(ctx, node, parent, ref) < 0) return -1;                     /* STEP 6 */
+    /* STEP 6 names §4.2.3's "ensure pre-insert validity" with an empty childrenToExclude, and it is the ONE
+       entry in node.h — not a second transcription here. The copy that stood in this file had drifted from
+       the algorithm in three places (a plain ancestor test where §4.2.2 says host-including, and steps 6
+       and 8 blind to CDATASection, which §4.12 Interface CDATASection declares `: Text`), which is what two
+       copies do. */
+    if (!node_ensure_pre_insert_valid(ctx, node, parent, ref, NULL)) return -1;                /* STEP 6 */
     if (sn->type == LXB_DOM_NODE_TYPE_TEXT) {                                                  /* STEP 7 */
         ref = node_split_text(ctx, sn, b->start_off);
         if (!ref) return -1;

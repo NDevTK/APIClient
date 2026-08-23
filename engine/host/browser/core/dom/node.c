@@ -741,7 +741,7 @@ static bool node_is_chardata(const lxb_dom_node_t *n);
  * `host.shadowRoot.appendChild(host)` is a cycle a plain parent walk answers `false` for.
  *
  * Returns false HAVING THROWN, so every caller is `if (!…) return JS_EXCEPTION;`. */
-static bool node_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
                                   lxb_dom_node_t *child, lxb_dom_node_t *exclude)
 {
     lxb_dom_node_t *c;
@@ -847,7 +847,7 @@ static bool node_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
    caller: seven members inserted with no validity check at all. */
 bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent, lxb_dom_node_t *child)
 {
-    if (!node_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1, childrenToExclude « » */
+    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, NULL)) return false;   /* STEP 1, childrenToExclude « » */
     /* STEPS 2-3 are node_insert_at's `if (ref == node) ref = node->next`, decided there because the fragment
        arm needs the same adjustment and a caller cannot make it after the fragment has been emptied. */
     node_insert_at(parent, node, child);                                        /* STEP 4 */
@@ -868,7 +868,7 @@ static bool node_replace(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *c
 
     DCHECK(child != NULL, "§4.2.3's replace was asked to replace nothing — `child` is the node the algorithm "
                           "removes and returns, and it is non-nullable in both members stated over this");
-    if (!node_pre_insert_valid(ctx, node, parent, child, child)) return false;   /* STEP 1, « child » */
+    if (!node_ensure_pre_insert_valid(ctx, node, parent, child, child)) return false;   /* STEP 1, « child » */
     ref = child->next;                                                          /* STEP 2 */
     if (ref == node) ref = node->next;                                          /* STEP 3 */
     /* STEPS 4-9. `previousSibling` and `referenceChild` are read off the tree by the scope at the moment the
@@ -951,7 +951,7 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
  *     because §4.2.6 puts `moveBefore` only on the three interfaces that include ParentNode, so there is no
  *     receiver that could fail it; its steps 5.1, 8 and 11 are absent because steps 4 and 5 here have already
  *     rejected every doctype and every fragment those steps are about.
- * So this does NOT go through node_pre_insert_valid, and calling that entry with a `childrenToExclude` of its
+ * So this does NOT go through node_ensure_pre_insert_valid, and calling that entry with a `childrenToExclude` of its
  * own would be the second copy of a check rather than the reuse it looks like: the two algorithms answer
  * different questions and only three of their eleven and six steps coincide.
  *
@@ -1248,7 +1248,7 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
            suppressObservers set and queues ONE tree mutation record naming both lists, and these removals still
            queue one record each. That needs a suppress-ALL scope, which mutation_observer.h's scope does not
            have — it suppresses the ONE child `replace` names. */
-        if (!node_pre_insert_valid(ctx, added, n, NULL, NULL)) return JS_EXCEPTION;
+        if (!node_ensure_pre_insert_valid(ctx, added, n, NULL, NULL)) return JS_EXCEPTION;
         {
             lxb_dom_node_t *c = n->first_child, *next;
             for (; c; c = next) { next = c->next; dom_cow_remove_child(c); }

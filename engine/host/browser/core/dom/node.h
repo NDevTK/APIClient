@@ -192,6 +192,17 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
    rather than throwing. `child` NULL appends. Returns false HAVING THROWN. */
 bool node_pre_insert(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent, lxb_dom_node_t *child);
 
+/* §4.2.3's "ENSURE PRE-INSERT VALIDITY" ON ITS OWN, for the one caller that needs the check WITHOUT the insert:
+   §5.5's "insert a node into a live range" step 6 names it, and then does its own insert around a Text split, a
+   reference-node fixup and a live-range offset. `exclude` is `childrenToExclude` and is the standard's own « »
+   (NULL) or « child »; nothing else. Returns false HAVING THROWN.
+   IT IS EXPORTED SO THERE IS ONE COPY. range.c carried a SECOND full transcription of the eleven steps, and
+   the two had already drifted in three places — its step 2 was the plain ancestor rather than §4.2.2's
+   host-including one, and its steps 6 and 8 tested only `TEXT`, so a CDATASection (which §4.12 Interface
+   CDATASection declares `: Text`) passed both. Two transcriptions of one algorithm is one edit away from two answers. */
+bool node_ensure_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *parent,
+                                  lxb_dom_node_t *child, lxb_dom_node_t *exclude);
+
 /* HTML §4.12.3's TEMPLATE CONTENTS — a `<template>`'s content fragment, or NULL for every other node. It is
    here rather than inside one walk because a `<template>`'s markup is NOT under the element (§4.10: only the
    parser and `t.content` reach the fragment), so EVERY tree walk that means "all of this node's markup" has to
