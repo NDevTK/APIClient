@@ -5808,37 +5808,47 @@ static void file_reader_package_selftest(JSContext *ctx)
         FileReadType type;
         const char  *mime;
         const char  *label;
+        /* THE ANSWER AND ITS LENGTH, AS ONE `WANT(...)` — never two values a reader can disagree about.
+           The length is here at all only because the BinaryString row's answer carries an EMBEDDED NUL, so
+           strlen cannot serve; written as a NUMBER BESIDE the literal it is a value that is true when written
+           and can simply be wrong, and it WAS: `application/octet-stream` is 24 bytes and both rows that
+           substitute it were hand-counted as though it were 23. The row with a real mimeType passed, so the
+           two wrong numbers read as a defect in the empty-mimeType SUBSTITUTION rather than in the fixture.
+           `sizeof(literal) - 1` is computed by the compiler, counts the NUL-carrying row correctly, and
+           cannot be miscounted — so the class of error goes with the numbers. */
         const char  *want;      /* the answer, as its UTF-8 bytes */
         size_t       want_len;
         const char  *why;
     } ROWS[] = {
+#define WANT(s) s, sizeof(s) - 1
         { "TEST", 4, FILE_READ_DATA_URL, "text/plain", NULL,
-          "data:text/plain;base64,VEVTVA==", 31,
+          WANT("data:text/plain;base64,VEVTVA=="),
           "§6.3's DataURL arm uses mimeType when it is not the empty string" },
         { "TEST", 4, FILE_READ_DATA_URL, "", NULL,
-          "data:application/octet-stream;base64,VEVTVA==", 44,
+          WANT("data:application/octet-stream;base64,VEVTVA=="),
           "§6.3's DataURL arm with no media type is the interoperable application/octet-stream (Issue #104)" },
         { "", 0, FILE_READ_DATA_URL, "", NULL,
-          "data:application/octet-stream;base64,", 36,
+          WANT("data:application/octet-stream;base64,"),
           "§6.3's DataURL arm over an empty byte sequence is the header and nothing after it" },
         { UTF8_HELLO, sizeof UTF8_HELLO, FILE_READ_TEXT, "", NULL,
-          "hell\xc3\xb6", 6,
+          WANT("hell\xc3\xb6"),
           "§6.3's Text arm step 4: no label and no charset parameter is UTF-8" },
         { WIN1252_EURO, sizeof WIN1252_EURO, FILE_READ_TEXT, "", "windows-1252",
-          "\xe2\x82\xac", 3,
+          WANT("\xe2\x82\xac"),
           "§6.3's Text arm step 2: the encodingLabel decides, and 0x80 in windows-1252 is U+20AC" },
         { WIN1252_EURO, sizeof WIN1252_EURO, FILE_READ_TEXT, "text/plain;charset=windows-1252", NULL,
-          "\xe2\x82\xac", 3,
+          WANT("\xe2\x82\xac"),
           "§6.3's Text arm step 3: with no label the mimeType's charset parameter decides" },
         { WIN1252_EURO, sizeof WIN1252_EURO, FILE_READ_TEXT, "text/plain;charset=windows-1252", "UTF-8",
-          "\xef\xbf\xbd", 3,
+          WANT("\xef\xbf\xbd"),
           "§6.3's Text arm step 2 beats step 3: an explicit label overrides the type's charset" },
         { UTF16BE_H, sizeof UTF16BE_H, FILE_READ_TEXT, "text/plain;charset=windows-1252", NULL,
-          "h", 1,
+          WANT("h"),
           "Encoding §6.1's decode: the BOM overrules the charset parameter the row above obeyed" },
         { RAW, sizeof RAW, FILE_READ_BINARY_STRING, "", NULL,
-          "\x00" "A\xc3\xbf", 4,
+          WANT("\x00" "A\xc3\xbf"),
           "§6.3's BinaryString arm: every byte is one code unit of equal value, NUL and 0xFF included" },
+#undef WANT
     };
     size_t i;
 
@@ -5851,7 +5861,12 @@ static void file_reader_package_selftest(JSContext *ctx)
         CHECK(!JS_IsException(v), ROWS[i].why);
         got = JS_ToCStringLen(ctx, &n, v);
         CHECK(got != NULL, ROWS[i].why);
-        CHECK(n == ROWS[i].want_len && !memcmp(got, ROWS[i].want, n), ROWS[i].why);
+        /* TWO ASSERTS AND NOT ONE CONJUNCTION. The abort prints the CONDITION, so a length that disagrees and
+           bytes that disagree have to be different sentences or the report cannot say which — and this row's
+           first failure was a wrong length read as wrong bytes, which pointed at the arm instead of at the
+           fixture. Length FIRST, which is also what makes the memcmp below safe to write over `n`. */
+        CHECK(n == ROWS[i].want_len, ROWS[i].why);
+        CHECK(!memcmp(got, ROWS[i].want, n), ROWS[i].why);
         JS_FreeCString(ctx, got);
         JS_FreeValue(ctx, v);
     }
