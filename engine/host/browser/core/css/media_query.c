@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_dimension.h"
 #include "core/css/media_query.h"
 #include "core/dom/document.h"
 #include "core/frame/screen.h"
@@ -879,16 +880,15 @@ static double length_px(const MqValue *v, const MqEnv *e, bool *ok)
     return 0;
 }
 
+/* §4's `resolution` operand as the number `e->dppx` is measured in. The four unit identifiers and the two
+   ratios are CSS Values §7.4's, answered by the component that owns them — this file used to carry its own
+   copy of the same list, which is one fact in two places and is what disagrees about `x`. */
 static double resolution_dppx(const MqValue *v, bool *ok)
 {
-    const char *u = v->unit;
+    double dppx = 0.0;
 
-    *ok = true;
-    if (!strcmp(u, "dppx") || !strcmp(u, "x")) return v->a;
-    if (!strcmp(u, "dpi")) return v->a / 96.0;
-    if (!strcmp(u, "dpcm")) return v->a * 2.54 / 96.0;
-    *ok = false;
-    return 0;
+    *ok = css_resolution_dppx(v->unit, strlen(v->unit), v->a, &dppx);
+    return dppx;
 }
 
 /* The feature's own value, and the comparison operand, both as one comparable number — which is what makes

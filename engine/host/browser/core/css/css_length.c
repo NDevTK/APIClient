@@ -401,9 +401,24 @@ static bool css_len_unit_known(const char *unit)
            css_len_is_viewport(unit) || css_len_is_viewport_variant(unit);
 }
 
+bool css_length_is_length_unit(const char *unit, size_t unit_len)
+{
+    char lower[CSS_LEN_UNIT_MAX];
+    size_t i;
+
+    DCHECK(unit != NULL || unit_len == 0,
+           "§6's unit set was asked about through a NULL span with a non-zero length — a dimension token names "
+           "its unit inside the buffer it was tokenized from, so an absent pointer is a caller that lost it");
+    /* Every unit §6 defines is at most five bytes (`dvmin`), so one that does not fit is not one of them and
+       the copy the comparison needs is never made for it. */
+    if (unit_len == 0 || unit_len >= CSS_LEN_UNIT_MAX) return false;
+    for (i = 0; i < unit_len; i++) lower[i] = (char)tolower((unsigned char)unit[i]);
+    lower[unit_len] = '\0';
+    return css_len_unit_known(lower);
+}
+
 bool css_length_is_length(const char *value)
 {
-    char unit[CSS_LEN_UNIT_MAX];
     const char *p = value;
     char *end = NULL;
 
@@ -417,8 +432,7 @@ bool css_length_is_length(const char *value)
     while (*end != '\0' && isspace((unsigned char)*end)) end++;
     if (*end == '\0') return true;    /* §6's unitless zero; the parse above asserts on a unitless non-zero */
     if (*end == '%') return false;    /* a `<percentage>` is a sibling production, never a `<length>` */
-    if (!css_len_unit_of(end, unit)) return false;
-    return css_len_unit_known(unit);
+    return css_length_is_length_unit(end, strlen(end));
 }
 
 /* CSS Values §6's SNAP A LENGTH AS A LINE WIDTH, in the spec's own three steps, over the DEVICE PIXEL the realm

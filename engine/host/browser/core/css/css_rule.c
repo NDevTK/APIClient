@@ -22,6 +22,7 @@
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_page.h"
 #include "core/css/css_property_syntax.h"
+#include "core/css/css_syntax_match.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_serialize.h"
@@ -921,11 +922,12 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
                                  const char *prelude, const char *block_text)
 {
     CssPropertyNames names = { NULL, 0 };
+    CssSyntaxDefinition def = { NULL, 0, false };
     JSValue obj;
     CssRuleData *r;
     size_t bl;
     char *declared, *syntax = NULL;
-    bool inherits = true, universal = true;
+    bool inherits = true, star;
 
     DCHECK(prelude != NULL && block_text != NULL,
            "a CSSPropertyRule was built without both of the texts it IS — `@property --x {}` declares NOTHING, "
@@ -951,12 +953,23 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
         syntax = css_property_descriptor_syntax(declared, strlen(declared));
         free(declared);
     }
-    if (syntax && !css_property_syntax_definition(syntax, strlen(syntax), &universal)) {
+    if (syntax && !css_property_syntax_definition(syntax, strlen(syntax), &def)) {
         free(syntax);
         syntax = NULL;
-        universal = true;   /* the descriptor is ignored, so §3.1's initial `"*"` — the universal one — stands */
     }
-    DCHECK(universal || syntax != NULL,
+    if (!syntax) {
+        /* The descriptor is absent or ignored, so §3.1's `Initial: "*"` stands — and it stands as a syntax
+           STRING, which is what makes it a definition: it goes through §5.4.2 like any other rather than being
+           hand-built here, so `"*"` is §5.4.1's universal syntax definition for the same reason it is one when
+           a rule writes it out. */
+        star = css_property_syntax_definition("*", 1, &def);
+        DCHECK(star && def.universal,
+               "§5.4.2 refused §3.1's own initial value for the syntax descriptor — `\"*\"` is step 3's lone "
+               "asterisk and IS §5.4.1's universal syntax definition, so this is that step no longer being "
+               "reachable rather than a rule that declared something wrong");
+        (void)star;
+    }
+    DCHECK(def.universal || syntax != NULL,
            "an `@property` rule holds a NON-universal syntax definition with no syntax string behind it — the "
            "only definition this rule can have without one is §3.1's initial `\"*\"`, which IS §5.4.1's "
            "universal syntax definition");
@@ -976,20 +989,29 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
 
     /* §3.3 "The initial-value Descriptor" — `Value: <declaration-value>?`, `Initial: the guaranteed-invalid
        value`, which §6.1 answers as its nullable `initialValue`'s NULL.
-       §3.3's REMAINING CONDITION IS A VALUE PARSE AND THIS BUILD HAS NO PARSER FOR IT: "if specified, the value
-       of the initial-value descriptor must successfully parse according to the rule's syntax descriptor, or
-       else the descriptor is invalid and ignored", and §4.1 spells out that "according to" is two different
-       parses — "<declaration-value>? if syntax definition is the universal syntax definition, and according to
-       syntax definition otherwise". The UNIVERSAL arm is decided by construction: lexbor parsed this body as
-       declarations, so a value that reached this line already IS a `<declaration-value>`. The OTHER arm needs
-       §5's second half — matching a value against the syntax components §5.4.3 produces, which needs the
-       grammars of §5.1's fifteen types — and until that component exists a value declared under a non-universal
-       syntax is stored as declared. That is the one place a CSSPropertyRule can answer something a browser
-       does not, and it is why css_property_syntax.h keeps the components rather than calling itself finished. */
+       ITS CROSS-DESCRIPTOR CONDITION IS A VALUE PARSE AGAINST THE OTHER DESCRIPTOR: "If specified, the value of
+       the initial-value descriptor must successfully parse according to the rule's syntax descriptor, or else
+       the descriptor is invalid and ignored." §4.1 spells out what "according to" means, and it is TWO
+       different parses — "parse initialValue according to <declaration-value>? if syntax definition is the
+       universal syntax definition, and according to syntax definition otherwise".
+       THE UNIVERSAL ARM IS DECIDED BY CONSTRUCTION AND IS NOT A SHORTCUT: lexbor parsed this body as
+       declarations, so a value that reached this line already IS a `<declaration-value>` — the production it
+       would be re-parsed against is the one it came out of. §3.1's initial `"*"` IS the universal definition,
+       so every rule that declares no syntax at all takes this arm too, which is why `initial-value` alone on a
+       rule keeps its value.
+       THE OTHER ARM IS core/css/css_syntax_match.h, over the components §5.4.3 produced. A value that does not
+       match leaves §3.3's initial standing — the guaranteed-invalid value, which §6.1 reports as null — and
+       does NOT invalidate the rule, because §3 says an invalid descriptor is "invalid and ignored" and only
+       the prelude can drop an `@property`. */
     declared = cssom_declared_value(block_text, bl, "initial-value");
     JS_FreeValue(ctx, r->property_initial_value);
-    r->property_initial_value = declared ? JS_NewString(ctx, declared) : JS_NULL;
-    free(declared);
+    r->property_initial_value = JS_NULL;
+    if (declared) {
+        if (def.universal || css_property_syntax_matches(&def, declared, strlen(declared)))
+            r->property_initial_value = JS_NewString(ctx, declared);
+        free(declared);
+    }
+    css_syntax_definition_free(&def);
     return obj;
 }
 

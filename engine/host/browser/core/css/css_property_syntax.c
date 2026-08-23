@@ -1,5 +1,6 @@
 /* CSS Properties and Values API 1 §5.4 "Parsing The Syntax String". See css_property_syntax.h for why this is a
- * component, why it hands out no parsed form, and why a data type name is matched codepoint-wise. */
+ * component, why it hands out §5.4.1's syntax definition but nothing that reads a CSS value, and why a data
+ * type name is matched codepoint-wise. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -146,7 +147,7 @@ static uint32_t syn_consume_escape(SynStream *p)
     return v;
 }
 
-/* CSS Syntax §4.3.11 "consume an ident sequence", appending into `out`. */
+/* CSS Syntax §4.3.12 "Consume an ident sequence", appending into `out`. */
 static void syn_consume_ident(SynStream *p, SynBuf *out)
 {
     for (;;) {
@@ -201,56 +202,93 @@ static bool syn_consume_data_type(SynStream *p, SynBuf *out)
     }
 }
 
-/* §5.4.3 "Consume a Syntax Component". The COMPONENT is not handed out — see the header — so what survives the
-   call is only whether it matched. */
-static bool syn_consume_component(SynStream *p)
+/* APPEND ONE COMPONENT to §5.4.2 step 4's "definition", which that step makes "an initially empty list of
+   syntax components", TAKING OWNERSHIP of `name`. The vector is grown to its
+   exact length rather than doubled: §5.3's combinator is what adds components and a syntax string names a
+   handful of them, so a capacity field would be state to keep correct for no allocation saved. */
+static void syn_def_push(CssSyntaxDefinition *d, char *name, CssSyntaxMultiplier m)
+{
+    CssSyntaxComponent *grown = realloc(d->v, (d->n + 1) * sizeof *d->v);
+
+    CHECK(grown != NULL, "cssom: OOM appending a syntax component to a syntax definition");
+    DCHECK(name != NULL && name[0] != '\0',
+           "§5.4.3 produced a syntax component with no name — both of its arms append at least one code point "
+           "before they can succeed, so an empty name is an arm that returned without building one");
+    d->v = grown;
+    d->v[d->n].name = name;
+    d->v[d->n].multiplier = m;
+    d->n++;
+}
+
+/* §5.4.3 "Consume a Syntax Component", appending the component it produced to `out` — which is §5.4.2 step 5's
+   own second half ("otherwise, append the returned value to definition"), done here because the component's
+   name buffer is owned here and handing it back would be one more transfer to get wrong. */
+static bool syn_consume_component(SynStream *p, CssSyntaxDefinition *out)
 {
     SynBuf name = { NULL, 0, 0 };
+    CssSyntaxMultiplier mult = CSS_SYNTAX_MULT_NONE;
     int c;
-    bool ok = false;
 
     while (syn_is_ws(syn_at(p, 0))) p->i++;         /* "Consume as much whitespace as possible" */
     c = syn_at(p, 0);
     if (c == '<') {
         p->i++;
-        if (!syn_consume_data_type(p, &name)) goto done;
+        if (!syn_consume_data_type(p, &name)) goto fail;
     } else if (syn_is_ident_start(c) || c == '\\') {
         /* "If the stream starts with an ident sequence, reconsume the current input code point from stream then
            consume an ident sequence from stream, and set component's name to the returned value. Otherwise
            return failure." The cursor has not moved, so the reconsume is nothing to undo. */
-        if (!syn_starts_ident(p)) goto done;
+        if (!syn_starts_ident(p)) goto fail;
         syn_consume_ident(p, &name);
         DCHECK(name.s != NULL && name.s[0] != '\0',
                "a syntax component's ident sequence produced nothing — §4.3.9 answered that the stream starts "
-               "with one, and §4.3.11 appends at least the code point that made it say so");
+               "with one, and §4.3.12 appends at least the code point that made it say so");
         /* "If component's name does not parse as a <custom-ident>, return failure." */
-        if (css_custom_ident_excluded(name.s)) goto done;
+        if (css_custom_ident_excluded(name.s)) goto fail;
     } else {
-        goto done;                                  /* "anything else: Return failure." */
+        goto fail;                                  /* "anything else: Return failure." */
     }
     /* "If component's name is a pre-multiplied data type name, return component." — BEFORE the multiplier is
        looked at, which is what makes `<transform-list>#` fail at step 5.4.2's own "anything else" instead. */
-    if (syn_premultiplied(name.s)) { ok = true; goto done; }
+    if (syn_premultiplied(name.s)) goto keep;
     /* §5.2's two, "immediately after the syntax component name being multiplied" — no whitespace is consumed
        first, which is what that sentence is for. */
-    if (syn_at(p, 0) == '+' || syn_at(p, 0) == '#') p->i++;
-    ok = true;
+    if (syn_at(p, 0) == '+') { mult = CSS_SYNTAX_MULT_SPACE; p->i++; }
+    else if (syn_at(p, 0) == '#') { mult = CSS_SYNTAX_MULT_COMMA; p->i++; }
 
-done:
+keep:
+    syn_def_push(out, name.s, mult);                /* TAKES name.s */
+    return true;
+
+fail:
     free(name.s);
-    return ok;
+    return false;
 }
 
-bool css_property_syntax_definition(const char *s, size_t len, bool *puniversal)
+void css_syntax_definition_free(CssSyntaxDefinition *d)
+{
+    size_t i;
+
+    if (!d) return;
+    for (i = 0; i < d->n; i++) free(d->v[i].name);
+    free(d->v);
+    d->v = NULL;
+    d->n = 0;
+    d->universal = false;
+}
+
+bool css_property_syntax_definition(const char *s, size_t len, CssSyntaxDefinition *out)
 {
     SynStream p;
     size_t begin = 0, end = len;
 
     DCHECK(s != NULL, "§5.4.2's consume a syntax definition was called with no string");
-    DCHECK(puniversal != NULL,
+    DCHECK(out != NULL,
            "§5.4.2's two outcomes were asked for through one answer — a list of syntax components and the "
            "UNIVERSAL syntax definition are different definitions, and §3.3 reads exactly that difference");
-    *puniversal = false;
+    out->v = NULL;
+    out->n = 0;
+    out->universal = false;
     /* Step 1: "Strip leading and trailing ASCII whitespace from string." */
     while (begin < end && syn_is_ws((unsigned char)s[begin])) begin++;
     while (end > begin && syn_is_ws((unsigned char)s[end - 1])) end--;
@@ -260,19 +298,32 @@ bool css_property_syntax_definition(const char *s, size_t len, bool *puniversal)
        universal syntax definition." A `*` beside anything else is NOT it — §5.1's note says so outright
        ("therefore, "*" may not be multiplied or combined with anything else") — and it is not a component
        either, so `* | <length>` falls through to step 5 and fails there. */
-    if (end - begin == 1 && s[begin] == '*') { *puniversal = true; return true; }
+    if (end - begin == 1 && s[begin] == '*') { out->universal = true; return true; }
     p.s = s;
     p.len = end;
     p.i = begin;
     for (;;) {
-        /* Step 5: "Consume a syntax component from stream. If failure was returned, return failure". */
-        if (!syn_consume_component(&p)) return false;
+        /* Step 5: "Consume a syntax component from stream. If failure was returned, return failure; otherwise,
+           append the returned value to definition." */
+        if (!syn_consume_component(&p, out)) goto fail;
         /* Step 6: "Consume as much whitespace as possible from stream." */
         while (syn_is_ws(syn_at(&p, 0))) p.i++;
         /* Step 7: "EOF: return definition. U+007C VERTICAL LINE (|): Repeat step 5. Anything else: Return
            failure." */
-        if (syn_at(&p, 0) < 0) return true;
-        if (syn_at(&p, 0) != '|') return false;
+        if (syn_at(&p, 0) < 0) {
+            DCHECK(out->n > 0 && !out->universal,
+                   "§5.4.2 returned a syntax definition that is neither §5.4.1's universal one nor a list of "
+                   "syntax components — step 5 runs at least once before step 7 can be reached, so an empty "
+                   "non-universal definition is a component that was consumed and then not appended");
+            return true;
+        }
+        if (syn_at(&p, 0) != '|') goto fail;
         p.i++;
     }
+
+fail:
+    /* THE PARTIAL DEFINITION IS TORN DOWN HERE and not left for the caller: §5.4.2's failure is not a
+       definition at all, so `<length> | <bogus>` must leave nothing allocated behind its first component. */
+    css_syntax_definition_free(out);
+    return false;
 }
