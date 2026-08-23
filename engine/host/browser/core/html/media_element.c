@@ -285,12 +285,20 @@ static const char *const DEVICE_CONTAINERS[] = {
    `application/octet-stream` with no parameters; "probably" when the container is recognised AND a codecs
    parameter names what is in it (the spec: "a user agent should never return probably for a type that allows
    the codecs parameter if that parameter is not present"); "maybe" otherwise. */
+static bool device_recognises(const char *essence)
+{
+    int i;
+
+    for (i = 0; i < (int)(sizeof(DEVICE_CONTAINERS) / sizeof(DEVICE_CONTAINERS[0])); i++)
+        if (!strcmp(essence, DEVICE_CONTAINERS[i])) return true;
+    return false;
+}
+
 static const char *device_can_play(const char *type)
 {
     MimeType m;
     char *essence;
     const char *answer = "";
-    int i;
 
     mime_type_init(&m);
     if (!mime_type_parse(&m, type, strlen(type))) { mime_type_free(&m); return ""; }
@@ -303,14 +311,27 @@ static const char *device_can_play(const char *type)
         mime_type_free(&m);
         return "";
     }
-    for (i = 0; i < (int)(sizeof(DEVICE_CONTAINERS) / sizeof(DEVICE_CONTAINERS[0])); i++)
-        if (!strcmp(essence, DEVICE_CONTAINERS[i])) {
-            answer = mime_type_parameter(&m, "codecs") ? "probably" : "maybe";
-            break;
-        }
+    if (device_recognises(essence))
+        answer = mime_type_parameter(&m, "codecs") ? "probably" : "maybe";
     free(essence);
     mime_type_free(&m);
     return answer;
+}
+
+/* THE SAME UA CAPABILITY, ASKED BY A SECOND STANDARD — see media_element.h. */
+bool media_device_renders(const MimeType *m)
+{
+    char *essence;
+    bool yes;
+
+    DCHECK(m != NULL && m->type != NULL && m->subtype != NULL,
+           "the modelled media device was asked whether it renders something that is not a MIME type — the "
+           "question is about a resource's TYPE and a half-built record is what §4.4 leaves behind on failure");
+    essence = mime_type_essence(m);
+    CHECK(essence != NULL, "§4.8.11.3: OOM taking a MIME type's essence");
+    yes = device_recognises(essence);
+    free(essence);
+    return yes;
 }
 
 /* §4.8.11.6's ESTABLISH THE MEDIA TIMELINE for the modelled device: the resource is not known to be bounded,

@@ -211,6 +211,53 @@ char *header_list_get(const HeaderList *l, const char *name)
     return out;
 }
 
+/* THE LAST VALUE, UNJOINED — see headers.h. It is a different question from the join above and not a
+   convenience over it: the join produces a string that is a LIST, and the algorithm that wants this one
+   (MIME Sniffing §5.1's supplied MIME type detection) compares its answer byte for byte against four literal
+   `Content-Type` values, which a joined list can never equal. */
+const char *header_list_get_last(const HeaderList *l, const char *name)
+{
+    char *lo = header_lower(name);
+    const char *out = NULL;
+    int i;
+
+    for (i = 0; i < l->n; i++)
+        if (!strcmp(l->e[i].name, lo)) out = l->e[i].value;
+    free(lo);
+    return out;
+}
+
+/* Fetch §3.6 "`X-Content-Type-Options` header"'s DETERMINE NOSNIFF — see headers.h. */
+bool header_list_determine_nosniff(const HeaderList *l)
+{
+    char *v = header_list_get(l, "x-content-type-options");
+    size_t s, e;
+    bool yes;
+
+    if (!v) return false;                        /* step 2: "If values is null, then return false." */
+    /* "getting, DECODING AND SPLITTING": the value list split on U+002C, of which only values[0] is read, with
+       Fetch §2.2's leading and trailing HTTP whitespace removed from it. A substring test over the whole
+       header is a DIFFERENT algorithm — it answers true for `foo, nosniff`, where this answers false. */
+    e = 0;
+    while (v[e] && v[e] != ',') e++;
+    s = 0;
+    while (s < e && (v[s] == 0x09 || v[s] == 0x0A || v[s] == 0x0D || v[s] == 0x20)) s++;
+    while (e > s && (v[e - 1] == 0x09 || v[e - 1] == 0x0A || v[e - 1] == 0x0D || v[e - 1] == 0x20)) e--;
+    /* Step 3's ASCII case-insensitive match, against the seven bytes of `nosniff`. */
+    yes = (e - s == 7);
+    if (yes) {
+        static const char N[] = "nosniff";
+        size_t i;
+        for (i = 0; i < 7; i++) {
+            char c = v[s + i];
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (c != N[i]) { yes = false; break; }
+        }
+    }
+    free(v);
+    return yes;
+}
+
 /* ---- the interface ------------------------------------------------------------------------------------ */
 
 /* §5.1: "A Headers object has an associated GUARD." It is the object's, not the list's — the same header list

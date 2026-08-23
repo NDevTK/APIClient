@@ -196,6 +196,35 @@ const char *mime_type_parameter(const MimeType *m, const char *name)
     return NULL;
 }
 
+/* A DEEP COPY — see mime_type.h. EVERY OWNED FIELD IS DUPLICATED, and the list is the one mime_type_free
+   frees: type, subtype, and each parameter's name AND value. The parameter array is rebuilt at exactly the
+   source's length rather than through mime_param_append, because appending would re-run that function's
+   uniqueness DCHECK over a map §4.4 has already made unique — a copy is not a second set. */
+void mime_type_copy(MimeType *out, const MimeType *src)
+{
+    int i;
+
+    mime_type_init(out);
+    DCHECK(src != NULL && src->type != NULL && src->subtype != NULL,
+           "a MIME type record was copied from something that is not a MIME type — §4.1 says both halves are "
+           "non-empty ASCII strings, and the one record shape that has neither is the initialised-and-empty "
+           "one §4.4 leaves behind on FAILURE, which is the spec's `failure` and not a type to carry");
+    out->type = mime_strdup_lower(src->type, strlen(src->type), false);
+    out->subtype = mime_strdup_lower(src->subtype, strlen(src->subtype), false);
+    if (src->nparams == 0) return;
+    out->params = malloc(sizeof(*out->params) * (size_t)src->nparams);
+    CHECK(out->params != NULL, "MIME: OOM copying a MIME type's parameters");
+    out->cparams = src->nparams;
+    /* `nparams` grows WITH the entries and not ahead of them, so the record is a valid one at every point of
+       this loop: mime_type_free walks exactly `nparams` pairs, and a count written first would name slots
+       holding whatever the allocator last left there. */
+    for (i = 0; i < src->nparams; i++) {
+        out->params[i].name = mime_strdup_lower(src->params[i].name, strlen(src->params[i].name), false);
+        out->params[i].value = mime_strdup_lower(src->params[i].value, strlen(src->params[i].value), false);
+        out->nparams = i + 1;
+    }
+}
+
 /* §4.1's map is ORDERED and its keys are unique, so a set is an append and never a re-order: §4.4 step 11.10
    only sets a key that "does not exist", and §2.2.3's charset carry-over only sets one that does not either. */
 static void mime_param_append(MimeType *m, char *name, char *value)

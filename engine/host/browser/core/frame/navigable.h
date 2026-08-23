@@ -40,6 +40,7 @@
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/url/origin.h"
+#include "core/mime/mime_type.h"   /* §7.4.5's computed type is a MIME type RECORD, not a header value */
 
 /* THE TWO HALVES OF §7.4, AND THEY ARE DECLARED SEPARATELY BECAUSE THEY BELONG TO DIFFERENT OWNERS.
  *
@@ -161,17 +162,30 @@ void navigable_set_realm_builder(RealmBuilder b);
    a parameter and not a read off anything, for the reason `csp_self_origin` beside it is: whose base URL it is
    belongs to the OPERATION (the creator's for a create, the initiator's for a navigation) and never to the
    navigable being filled. */
-/* `content_type` is the RESPONSE's `Content-Type` value, which HTML §7.4.5's "load a document" computes its
-   type from and which therefore decides WHICH parse this Document gets (§7.5.2's HTML, §7.5.3's XML, …). It
-   rides beside `body`/`body_len` because it is a fact about the same response and about nothing else — the
-   navigable cannot answer it, and a builder that guessed it made every XML response an HTML document with no
-   crash and no log. NULL means THERE WAS NO RESPONSE: §7.2's initial `about:blank`, or an address whose fetch
-   failed. That is not "type unknown" — those Documents are HTML by §7.4 — and it is a different fact from a
-   response that carried no `Content-Type` header, which has bytes and no type and does not reach the HTML
-   arm. */
+/* `content_type` is the RESPONSE's `Content-Type` value as Fetch §2.2.2's `get` joined it, and the ONE thing
+   read off it here is HTML §13.2.3.2 "Determining the character encoding"'s transport-layer charset (through
+   Fetch §3.5's legacy extract an encoding). It is NOT what decides which parse this Document gets — that is
+   `computed_type` below, and the two are read by different standards from the same header. It rides beside
+   `body`/`body_len` because it is a fact about the same response and about nothing else: the navigable cannot
+   answer it, and a builder that guessed it would decide a document's encoding from nothing. NULL means THERE
+   WAS NO RESPONSE: §7.2's initial `about:blank`, or an address whose fetch failed. That is not "charset
+   unknown" — those Documents get DOM §4.5's utf-8 default — and it is a different fact from a response that
+   carried no `Content-Type` header, which has bytes and reaches §13.2.3.2's other steps. */
+/* `computed_type` is §7.4.5's "the COMPUTED TYPE of navigationParams's response" — MIME Sniffing §7's answer
+   for this response, computed by the caller because that is where the response is. It is a SEPARATE parameter
+   from `content_type` beside it because the two are different facts read by different algorithms: the header
+   VALUE is what HTML §13.2.3.2 asks for a charset (through Fetch §3.5's legacy extract an encoding), and the
+   COMPUTED type is what decides which parse the Document gets. Deriving the second from the first at the
+   builder is what stood here, and it made a response with no `Content-Type` — the ordinary case for a server
+   handler that sets no header — an untyped one that crashed instead of being sniffed.
+   NULL means THERE WAS NO RESPONSE, in exact step with `body`: §7.2's initial `about:blank` and an address
+   whose fetch failed have nothing to compute a type from and are HTML by §7.4. A response that carried no
+   `Content-Type` HAS bytes and reaches this with a computed type like any other, because §7 always produces
+   one. The pairing is asserted rather than trusted. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *content_type, const char *csp, const char *csp_self_origin,
+                           const char *content_type, const MimeType *computed_type,
+                           const char *csp, const char *csp_self_origin,
                            const char *about_base_url, SandboxFlags sandbox_flags);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */

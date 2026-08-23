@@ -3,6 +3,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LOADER_DOCUMENT_LOAD_TYPE_H
 #define ENGINE_HOST_BROWSER_CORE_LOADER_DOCUMENT_LOAD_TYPE_H
 
+#include "core/mime/mime_type.h"
+
 /* §7.4.5's ARMS, one value per `<dt>` of its "if the type is one of the following types" list, in the order the
    list is written. THE ORDER IS THE SPEC AND NOT AN IMPLEMENTATION DETAIL: `image/svg+xml` is BOTH an XML MIME
    type and a supported image type, and it is the XML arm that claims it because XML is written first — an
@@ -19,14 +21,19 @@ typedef enum {
 } DocumentLoadType;
 
 /* §7.4.5's "Let type be the computed type of navigationParams's response", classified into the arm that loads
-   it. `content_type_value` is the response's `Content-Type` header value as Fetch §2.2's "get" joined it —
-   the same string mime_type_extract takes, and NULL for a header the response did not carry.
-   A RESPONSE WITH NO USABLE TYPE IS `DOC_LOAD_EXTERNAL`, never HTML. That is the whole reason this returns an
-   arm rather than a bool: "I could not tell" and "it is HTML" are different answers, and defaulting the first
-   to the second is what makes an XML document silently answer as an HTML one. mimesniff's SNIFFING is what
-   turns an absent or generic type into a real one and this engine does not run it yet, so the arm an unsniffed
-   response reaches is the one whose crash names that. */
-DocumentLoadType document_load_type_of(const char *content_type_value);
+   it. `computed` IS that computed type — mimesniff §7 "Determining the computed MIME type of a resource"'s
+   answer, which §8.1 "Sniffing in a browsing context" makes the algorithm a navigation runs, produced by
+   core/mime/mime_sniff.h.
+   IT TAKES A RECORD AND NOT A HEADER VALUE, and the difference is the whole algorithm. It used to take the
+   response's `Content-Type` string and run Fetch §2.2.3's extraction on it, which is not what §7.4.5 says:
+   "the computed type" is not the SUPPLIED type, and the gap between them is every response a server labelled
+   nothing, `text/plain`, or `application/unknown` — for which the extraction answers failure or a generic and
+   §7 answers what the BYTES are. A response with no `Content-Type` therefore reached the `Otherwise` arm and
+   its crash, which is why a corpus handler that sets no header aborted the run.
+   NEITHER HALF OF THAT IS SOFTENED BY THE CHANGE: the computed type is never undefined (mime_sniff.h states
+   why), so "I could not tell" no longer exists as an answer, and nothing here defaults to HTML — a computed
+   `application/octet-stream` is still DOC_LOAD_EXTERNAL and still crashes by name. */
+DocumentLoadType document_load_type_of(const MimeType *computed);
 
 /* The §7.5 subsection that loads this arm, number and title, for the crash at a caller that has no loader for
    it. Never NULL — every arm has one, and a caller formatting an arm this does not know has asked the wrong

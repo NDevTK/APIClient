@@ -443,7 +443,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
         /* NO BODY AND THEREFORE NO CONTENT TYPE — this is §7.2's initial `about:blank`, materialized rather
            than loaded, so there is no response for §7.4.5 to compute a type from and §7.4 makes it an HTML
            document outright. The NULL is that statement, not an unknown. */
-        p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL,
+        p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
                                    p->creator_csp, p->creator_csp_self_origin, p->creator_base_url,
                                    p->creation_sandbox_flags);
         p->window = JS_GetGlobalObject(p->realm);

@@ -53,6 +53,22 @@ void  header_list_delete(HeaderList *l, const char *name);
    is not a convenience — it is what makes two `Cross-Origin-Embedder-Policy: require-corp` headers a LIST that
    an ITEM parse rejects, which is the row HTML §7.1.4.1 prints its table for. */
 char *header_list_get(const HeaderList *l, const char *name);
+/* THE VALUE OF THE LAST HEADER WITH THIS NAME, UNJOINED — MIME Sniffing §5.1's "set supplied-type to the value
+   of the LAST `Content-Type` header associated with the resource", which is a DIFFERENT algorithm from Fetch's
+   `get` above and not a shortcut through it. The join makes a string that is a LIST; §5.1 then sets its
+   check-for-apache-bug flag only when the value is EXACTLY one of four literals, and a joined list is never
+   any of them, so passing the join would silently answer a question nobody asked.
+   The returned string is the LIST's own and dies with it — unlike `get`, which mallocs. NULL is "the list has
+   no header with this name", which for §5.1 is a resource whose supplied MIME type is undefined. */
+const char *header_list_get_last(const HeaderList *l, const char *name);
+/* Fetch §3.6 "`X-Content-Type-Options` header"'s DETERMINE NOSNIFF, over a response's header list: "If
+   values[0] is an ASCII case-insensitive match for `nosniff`, then return true." It is here rather than at its
+   caller because it is a question about a HEADER LIST and about nothing else, and because its answer is MIME
+   Sniffing §5's no-sniff flag — the input a second standard's algorithm is stated on, which is exactly the
+   kind of fact that must have one implementation. `extension/lib/safe-fetch.js` states it a second time in
+   JavaScript and that is not this duplicated: SECURITY.md puts the CORB gate in the trusted zone, which shares
+   no code with this sandbox, and the two answer for different responses at different times. */
+bool header_list_determine_nosniff(const HeaderList *l);
 
 /* A RESPONSE'S HEADER LIST, FROM THE ONE FORM IT CAN CROSS AN ABI IN — `name: value`, one per LF-separated
  * line, exactly the HTTP field lines the response delivered.

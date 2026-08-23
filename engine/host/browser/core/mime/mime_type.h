@@ -23,6 +23,15 @@ void mime_type_free(MimeType *m);
    application/octet-stream. `out` is left initialised-and-empty on failure, so the caller frees it either way. */
 bool mime_type_parse(MimeType *out, const char *input, size_t len);
 
+/* A DEEP COPY of a record, parameters and order included. It is here rather than at its caller because the
+   record OWNS three allocations and a field added to it creates an obligation at every clone site — the same
+   list mime_type_free frees, which is why the two are read together. `out` is initialised by this call and the
+   caller frees it; `src` must be a record §4.4 produced (both halves present), because a half-built record is
+   not a MIME type and copying one would carry that state somewhere it cannot be told apart from a real type.
+   ITS CALLER IS §7's MIME type sniffing algorithm (mime_sniff.c), four of whose nine arms answer "the computed
+   MIME type is the supplied MIME type" — an answer the caller owns and the supplied record does not outlive. */
+void mime_type_copy(MimeType *out, const MimeType *src);
+
 /* §4.5 "serialize a MIME type" — the essence, then every parameter in order, quoted where §4.5 quotes.
    Malloc'd; caller frees. This is the only defined STRING form of a record: a field typed as a string that
    holds a MIME type (a `Content-Type` header value, a Blob's type) holds this. */

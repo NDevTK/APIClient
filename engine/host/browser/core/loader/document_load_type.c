@@ -36,46 +36,36 @@
 #include "core/mime/mime_type.h"
 #include "check.h"
 
-DocumentLoadType document_load_type_of(const char *content_type_value)
+DocumentLoadType document_load_type_of(const MimeType *m)
 {
-    MimeType m;
-    DocumentLoadType t;
-    bool ok;
-
-    /* Fetch §2.2.3 "extract a MIME type" is what "the computed type" is built on, and its FAILURE is a real
-       answer rather than an error: a response with no `Content-Type`, or one whose every candidate fails to
-       parse, has no type for §7.4.5 to match and falls to the "Otherwise" arm. mime_type_extract leaves the
-       record initialised-and-empty on failure, so the free below runs either way. */
-    ok = mime_type_extract(&m, content_type_value);
-    if (!ok) {
-        mime_type_free(&m);
-        return DOC_LOAD_EXTERNAL;
-    }
+    /* THE INPUT IS mimesniff §7's COMPUTED type, which is never undefined (core/mime/mime_sniff.h states why),
+       so there is no "could not tell" arm here any more and an empty record is a CALLER that ran something
+       else — Fetch §2.2.3's extraction, say, whose failure is a real answer and is not this one. */
+    DCHECK(m != NULL && m->type != NULL && m->subtype != NULL,
+           "HTML §7.4.5's load-a-document dispatch was handed something that is not a MIME type — its input "
+           "is the COMPUTED type of the response (mimesniff §7), which every arm of that algorithm produces, "
+           "so an empty record here is a caller that skipped the sniff and passed an extraction's failure");
     /* THE ARMS IN §7.4.5's OWN ORDER. See the enum's note on why the order is load-bearing rather than
        stylistic: `image/svg+xml` matches BOTH the XML group and the image group, and the XML arm is written
        first, so an SVG navigation loads an XML document and gets a DOM. */
-    if (mime_type_is_html(&m))                                      t = DOC_LOAD_HTML;
-    else if (mime_type_is_xml(&m))                                  t = DOC_LOAD_XML;
-    else if (mime_type_is_javascript(&m) || mime_type_is_json(&m))  t = DOC_LOAD_TEXT;
+    if (mime_type_is_html(m))                                     return DOC_LOAD_HTML;
+    if (mime_type_is_xml(m))                                      return DOC_LOAD_XML;
+    if (mime_type_is_javascript(m) || mime_type_is_json(m))       return DOC_LOAD_TEXT;
     /* §7.4.5's three LITERAL essences, which are not a mimesniff group and are written out as the list they
        are. They live here rather than in core/mime because they are this algorithm's list: no other algorithm
        groups `text/css` with `text/vtt`, and a group in mime_type.h that only this caller reads would be the
        table that header's first paragraph refuses. */
-    else if (m.type && m.subtype && !strcmp(m.type, "text") &&
-             (!strcmp(m.subtype, "css") || !strcmp(m.subtype, "plain") || !strcmp(m.subtype, "vtt")))
-                                                                    t = DOC_LOAD_TEXT;
-    else if (m.type && m.subtype &&
-             !strcmp(m.type, "multipart") && !strcmp(m.subtype, "x-mixed-replace"))
-                                                                    t = DOC_LOAD_MULTIPART;
+    if (!strcmp(m->type, "text") &&
+        (!strcmp(m->subtype, "css") || !strcmp(m->subtype, "plain") || !strcmp(m->subtype, "vtt")))
+                                                                  return DOC_LOAD_TEXT;
+    if (!strcmp(m->type, "multipart") && !strcmp(m->subtype, "x-mixed-replace"))
+                                                                  return DOC_LOAD_MULTIPART;
     /* §7.4.5's media arm is "a supported image, video, or audio type", and SUPPORTED is the operative word:
        the group is what mimesniff answers, and whether this engine can decode it is a different question that
        core/html/media_element.c owns. Both arms lead to a crash naming §7.5.6 today, so nothing turns on the
        difference yet — and when a decoder exists, the test that narrows this is that one and not this list. */
-    else if (mime_type_is_image(&m) || mime_type_is_audio_or_video(&m))
-                                                                    t = DOC_LOAD_MEDIA;
-    else                                                            t = DOC_LOAD_EXTERNAL;
-    mime_type_free(&m);
-    return t;
+    if (mime_type_is_image(m) || mime_type_is_audio_or_video(m))  return DOC_LOAD_MEDIA;
+    return DOC_LOAD_EXTERNAL;
 }
 
 const char *document_load_type_section(DocumentLoadType t)

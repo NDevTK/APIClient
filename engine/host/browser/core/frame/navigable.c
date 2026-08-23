@@ -20,6 +20,8 @@
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
 #include "core/html/html_encoding_sniff.h"  /* §13.2.3.2: WHICH ENCODING a navigated response's bytes are in */
+#include "core/html/media_element.h"    /* §7 steps 5/7's "supported by the user agent" — the device's own list */
+#include "core/mime/mime_sniff.h"       /* mimesniff §7: WHICH TYPE a navigated response's bytes ARE */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "core/loader/document_load_type.h"  /* §7.4.5's dispatch: WHICH document a response loads as */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
@@ -207,38 +209,57 @@ static bool child_in_this_agent(const Origin *child_origin)
    DOM at all — inside that `<body>`, so `documentElement.textContent` answered `"Dummy XML document\n"` for a
    document containing no such string. No crash, no log, and a tree real enough that every read after it looked
    like a measurement.
-   `content_type` IS THE RESPONSE'S `Content-Type` VALUE, and NULL means THERE WAS NO RESPONSE — §7.4's initial
-   about:blank, or an address whose fetch failed. Those are HTML documents by §7.4 and not by a default: the
-   `EMPTY` skeleton below is the tree §7.4 gives them, and there is no type to compute because there is no
-   response to compute one from. A response that HAS no `Content-Type` is a different fact and reaches
-   document_load_type_of, which does not call it HTML. */
-static lxb_html_document_t *child_document(const char *body, size_t body_len, const char *content_type)
+   `computed_type` IS §7.4.5's COMPUTED TYPE for the response, and NULL means THERE WAS NO RESPONSE — §7.4's
+   initial about:blank, or an address whose fetch failed. Those are HTML documents by §7.4 and not by a
+   default: the `EMPTY` skeleton below is the tree §7.4 gives them, and there is nothing to compute a type
+   from. A response that carried no `Content-Type` is a DIFFERENT fact and does not arrive here as NULL — MIME
+   Sniffing §7 computed a type for it out of its bytes, which is why this function no longer sees a header
+   value at all. */
+static lxb_html_document_t *child_document(const char *body, size_t body_len, const MimeType *computed_type)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom;
     DocumentLoadType load;
 
+    /* THE TWO TRAVEL TOGETHER OR NEITHER DOES. A response is bytes AND a computed type; one without the other
+       is a caller that computed the type from something that is not this response, or that has a response it
+       forgot to sniff — and the second reads as §7.4's initial about:blank, which parses HTML and says
+       nothing. */
+    DCHECK((body != NULL) == (computed_type != NULL),
+           "a child navigable's Document was built from a response with only one of its two halves — MIME "
+           "Sniffing §7's computed type is a fact about the same bytes, so bytes with no type is a load that "
+           "skipped the sniff and a type with no bytes is one computed for another response");
     /* §7.4.5's dispatch, asked BEFORE anything is allocated: a type this engine has no loader for must crash
        naming the loader to build, and doing that after a document exists would leak it. */
     if (body) {
-        load = document_load_type_of(content_type);
+        load = document_load_type_of(computed_type);
         /* THE ARMS THIS ENGINE HAS NOT BUILT CRASH BY NAME, one §7.5 subsection each. CLAUDE.md §Offensive
            programming: a capability that does not exist is honestly ABSENT and the crash is what names it —
            and the alternative here is not "no XML support", it is the silent wrong tree described above.
-           §7.5.3 IS THE ONE WITH ITS DEPENDENCIES ALREADY IN THE TREE: core/xml/xml_name.c owns XML §2.3 [5]
-           `Name` and Namespaces in XML §3 [4] `NCName` / §4 [7] `QName`, and core/xml/xml_ns.c owns §6's scope
-           stack, declaration and expansion (xml_ns_push / xml_ns_declare / xml_ns_expand) with every §3 and §5
-           namespace constraint as a returned error — a scope stack is a thing only a parser drives, which is
-           what those two were built for. What is missing is the GRAMMAR between them: XML §2.8 [22] `prolog`,
+           §7.5.3 IS THE ONE WITH ITS DEPENDENCIES ALREADY IN THE TREE: core/xml/xml_char.c owns XML §2.2 [2]
+           `Char`, §2.3 [3] `S` and §2.11's end-of-line normalization as the reader every production reads its
+           input through, core/xml/xml_name.c owns §2.3 [5] `Name` and Namespaces in XML §3 [4] `NCName` / §4
+           [7] `QName`, and core/xml/xml_ns.c owns §6's scope stack, declaration and expansion (xml_ns_push /
+           xml_ns_declare / xml_ns_expand) with every §3 and §5 namespace constraint as a returned error — a
+           scope stack is a thing only a parser drives, which is what those were built for. What is missing is
+           the GRAMMAR between them: XML §2.8 [22] `prolog`,
            [39] `element` with
            [40] `STag` / [42] `ETag` / [44] `EmptyElemTag`, [43] `content`, §2.5 [15] `Comment`, §2.6 [16] `PI`,
-           §2.7 [18] `CDSect`, §4.1 [66] `CharRef` / [68] `EntityRef` with §4.6's five predefined entities,
-           §3.3.3 attribute-value normalization and §2.11 end-of-line handling — producing a Lexbor tree through
+           §2.7 [18] `CDSect`, §4.1 [66] `CharRef` / [68] `EntityRef` with §4.6's five predefined entities and
+           §3.3.3 attribute-value normalization — producing a Lexbor tree through
            element_create_ns (core/dom/element.h, which does NOT case-fold, unlike lexbor's own entry) and
            dom_attr_write (core/dom/attr_list.h), and reporting well-formedness errors for §8.5.1's
-           `parsererror`. lexbor 2.7.0 ships no `xml` module (its modules are core css dom encoding engine html
-           ns ports punycode selectors style tag unicode url utils), so CLAUDE.md's bind-before-build order has
-           nothing at the "existing Lexbor module" rung and this is a faithful spec port.
+           `parsererror`. Lexbor ships no `xml` module, so CLAUDE.md's bind-before-build order has nothing at
+           the "existing Lexbor module" rung and this is a faithful spec port; the release this tree pins is
+           `engine/build.mjs`'s to state and `ls source/lexbor` in the vendored checkout is the whole of the
+           check, which is why no version number is written here — one was, it named a release this build no
+           longer uses, and a sentence that stays true about the standard while going wrong about this tree is
+           the stale citation CLAUDE.md warns about.
+           AND THE SCRIPTS IN THAT DOCUMENT ARE NOT HTML'S: HTML §14.2 "Parsing XML documents" runs an XML
+           parser with XML scripting support enabled, which sets a `script` element's parser document and
+           clears its force async, and then — at the element's END TAG, after a microtask checkpoint — prepares
+           it. There is no raw-text tokenizer state, so a `<script>` body is ordinary [43] `content` and a
+           `<![CDATA[` inside one is §2.7's CDSect rather than program text.
            core/html/domparser.c's XML arm of HTML §8.5.1 `parseFromString`, and core/xhr/xml_http_request.c's
            XML arm of XHR's "set a document response", stand at this same wall and say so at their own sites —
            checked before this comment claimed it. ONE component serves all three; when it lands, every one of
@@ -408,7 +429,8 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
    `<meta>` policies alone. */
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *content_type, const char *csp, const char *csp_self_origin,
+                           const char *content_type, const MimeType *computed_type,
+                           const char *csp, const char *csp_self_origin,
                            const char *about_base_url, SandboxFlags sandbox_flags)
 {
     lxb_html_document_t *dom;
@@ -455,7 +477,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
         decoded = encoding_decode(body, body_len, encoding, &decoded_len);
         CHECK(decoded != NULL, "navigable: OOM decoding a child navigable's response body");
     }
-    dom = child_document(body ? decoded : NULL, decoded_len, content_type);
+    dom = child_document(body ? decoded : NULL, decoded_len, computed_type);
     free(decoded);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted above. */
@@ -608,7 +630,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
     OpenerPolicy response_coop;
     char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
-    char *resp_ctype = NULL; /* §7.4.5's type is computed from this; same ownership as resp_csp above */
+    /* The JOINED `Content-Type`, which is Fetch §2.2.3's input and therefore §13.2.3.2's; same ownership as
+       resp_csp above. The type §7.4.5 dispatches on is NOT computed from it — see the read below. */
+    char *resp_ctype = NULL;
+    /* MIME Sniffing §5's metadata for this response, and §7's answer. `supplied` and `computed` are records
+       this frame owns and frees on every path; `supplied_defined` is §5.1's "the supplied MIME type is
+       undefined" as a positive statement, because an EMPTY record and an ABSENT one are different facts and
+       §7 step 2 branches on exactly that difference. */
+    MimeType supplied, computed;
+    bool supplied_defined = false, apache_bug = false, no_sniff = false, computed_defined = false;
     bool inherited = false;
     /* §7.1.3.2's `swapGroup`, once its arm has RUN — so the whole of the load below it is skipped. It is not a
        second copy of the predicate's answer: a load that swapped has no Document to create in this heap and no
@@ -623,6 +653,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
+    mime_type_init(&supplied);
+    mime_type_init(&computed);
     memset(&response_headers, 0, sizeof response_headers);
     opener_policy_init(&response_coop);   /* §7.4.5: "Let responseCOOP be a new opener policy" */
     DCHECK(s->hdr.stage == NAV_LOAD_FETCH, "the document-load job resumed at a stage §7.4 does not have");
@@ -679,20 +711,25 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
-        /* §7.4.5's "the COMPUTED TYPE of navigationParams's response", which decides WHICH document this load
-           builds — §7.5.2's HTML, §7.5.3's XML, §7.5.4's text. Read from the SAME header list as the policy
-           above, because that list is the response's own field lines and the type is a fact about the response.
-           NULL WHEN THE RESPONSE CARRIED NO `Content-Type`, and that is passed through as NULL rather than
-           substituted: Fetch §2.2.3's "extract a MIME type" fails on it, §7.4.5 matches none of its arms, and
-           the honest answer is the "Otherwise" arm. Substituting `text/html` here — the shape this code had
-           before there was any dispatch at all — is what made an XML response an HTML document.
-           WHAT IS STILL OWED IS SNIFFING: mimesniff §5.1 "interpreting the resource metadata" is what turns an
-           absent or generic `Content-Type` into a computed type by reading the bytes, and this engine does not
-           run it, so a response with no type reaches the crash rather than being guessed at. It is a named
-           component to build, not a silent default — and it is the LAST such gap on this path now that the
-           decode below is built, so a document that reaches the crash is one whose TYPE, not whose encoding,
-           nothing has computed. */
+        /* THE RESPONSE'S `Content-Type`, TWICE, BECAUSE TWO STANDARDS READ IT DIFFERENTLY AND BOTH ARE RIGHT.
+           Fetch §2.2.2's `get` JOINS every value with ", " and that is what Fetch §2.2.3's "extract a MIME
+           type" takes — the form HTML §13.2.3.2 "Determining the character encoding" needs, since Fetch §3.5's
+           "legacy extract an encoding" runs on the extraction's record. MIME Sniffing §5.1's supplied MIME type
+           detection takes "the value of the LAST `Content-Type` header" UNJOINED, because §5's
+           check-for-apache-bug flag is a byte-exact comparison a joined list can never satisfy. Reading one and
+           calling it the other is how a component ends up answering a question nobody asked. */
         resp_ctype = header_list_get(&response_headers, "content-type");
+        /* §5.1 "Interpreting the resource metadata" — the resource's SUPPLIED MIME type and its
+           check-for-apache-bug flag. Read here, where the header list is, and BEFORE the free below: the value
+           §5.1 takes belongs to the list and dies with it. */
+        supplied_defined = mime_sniff_supplied(&supplied, &apache_bug,
+                                               header_list_get_last(&response_headers, "content-type"));
+        /* §5's NO-SNIFF flag, which Fetch §3.6 "`X-Content-Type-Options` header"'s DETERMINE NOSNIFF answers:
+           "let values be the result of getting, decoding, and splitting `X-Content-Type-Options` from list. If
+           values is null, then return false. If values[0] is an ASCII case-insensitive match for `nosniff`,
+           then return true." values[0] is the FIRST comma-separated value with its HTTP whitespace stripped —
+           a substring test would set the flag for `foo, nosniff`, which is a different algorithm. */
+        no_sniff = header_list_determine_nosniff(&response_headers);
         /* THE RESPONSE'S BYTES, WHICH IS WHAT A DOCUMENT IS PARSED FROM. This was `JS_ToCStringLen` over a
            field the trusted zone had built with Fetch §5.2's `text()` — a UTF-8 decode run before HTML could
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
@@ -704,6 +741,36 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            BYTES AND THE HEADER VALUE, never a string somebody already decoded: reinstating a decode on this
            side would put the answer back out of §13.2.3.2's reach. */
         if (!JS_IsUndefined(bodyv) && !JS_IsNull(bodyv)) body = fetch_body_bytes(ctx, bodyv, &body_len);
+        /* §7.4.5's "Let type be the COMPUTED TYPE of navigationParams's response" — MIME Sniffing §7's MIME
+           type sniffing algorithm, which §8.1 "Sniffing in a browsing context" names as the one a navigation
+           runs. It is computed HERE, where the response is, and travels to the realm builder as a value: it is
+           a fact about this response and about nothing the navigable holds, which is the split CLAUDE.md's
+           "an operation that becomes a work item takes its inputs with it" is about.
+           ONLY WHEN THERE ARE BYTES. A fetch that did not load has no resource to sniff and gets §7.4's
+           initial-about:blank treatment below; that is a different fact from a response that carried no
+           `Content-Type`, which HAS bytes and is exactly what §7 exists to answer for. */
+        if (body) {
+            MimeSniffResource res;
+
+            res.supplied = supplied_defined ? &supplied : NULL;
+            res.apache_bug = apache_bug;
+            res.no_sniff = no_sniff;
+            /* §7 steps 5 and 7's "SUPPORTED BY THE USER AGENT", which core/mime deliberately does not answer:
+               §4.6's groups say what a byte stream IS and what this build can decode is its decoders' fact.
+               An IMAGE type is never supported here — this engine has no image decoder at all, so §7 step 5's
+               set is EMPTY and its pattern matching could not change an answer. An audio-or-video type is
+               supported exactly when the modelled media device renders it, which is the one list §4.8.11.3's
+               canPlayType answers from (core/html/media_element.h). */
+            res.ua_renders_supplied = supplied_defined && !mime_type_is_image(&supplied) &&
+                                      media_device_renders(&supplied);
+            /* §5.2 "Reading the resource header": at most 1445 bytes, which is a bound on WHAT §7 LOOKS AT and
+               not a truncation of the body — the parse below still gets every byte. */
+            res.header = (const unsigned char *)body;
+            res.header_len = body_len < MIME_SNIFF_RESOURCE_HEADER_MAX ? body_len
+                                                                      : MIME_SNIFF_RESOURCE_HEADER_MAX;
+            mime_sniff_computed(&computed, &res);
+            computed_defined = true;
+        }
     }
     /* §7.2.6: the RESPONSE'S policy when it carried one, and otherwise the INHERITED clone — which the job
        carries because whose clone it is belongs to the operation (navigable_load_enqueue). A document made
@@ -832,6 +899,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
         }
         cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, resp_ctype,
+                               computed_defined ? &computed : NULL,
                                csp, inherited ? self_origin : origin_serialized(origin), about_base,
                                final_flags);
         /* §7.5.1's OPENER POLICY ROW for the Document this navigation creates — "opener policy …
@@ -845,6 +913,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     if (inherited) JS_FreeCString(ctx, csp);
     free(resp_csp);
     free(resp_ctype);
+    /* Both records are initialised at the top of this frame and freed unconditionally — §4.4 leaves an empty
+       record behind on failure, so a `free` of one that was never filled is the same operation as a free of
+       one that was, and there is no path out of here that can skip it. */
+    mime_type_free(&supplied);
+    mime_type_free(&computed);
     JS_FreeCString(ctx, field_lines);
     /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
        lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */

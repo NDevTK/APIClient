@@ -7,6 +7,17 @@
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+#include "core/mime/mime_type.h"
+
+/* WHICH TYPES THIS BUILD'S MODELLED MEDIA DEVICE RENDERS — the UA CAPABILITY behind §4.8.11.3's canPlayType,
+ * exported because a SECOND standard asks the same question of the same device and a second list would be a
+ * second answer. MIME Sniffing §7 steps 5 and 7 gate their pattern matching on "an image / audio or video MIME
+ * type SUPPORTED BY THE USER AGENT", and core/mime deliberately does not own that conjunct: §4.6's GROUPS say
+ * what a byte stream IS, and what a build can decode is this component's fact.
+ * It is not canPlayType's answer narrowed to a bool — canPlayType additionally distinguishes "probably" from
+ * "maybe" by the `codecs` parameter, which is a question about how much the device knows and not about whether
+ * it renders the container at all. `m` must be a record §4.4 produced. */
+bool media_device_renders(const MimeType *m);
 
 /* Declared ONCE PER AGENT, from html_element_init — the interfaces, the reflections §4.8.11 puts on
    HTMLMediaElement rather than on the two element interfaces that inherit them, and the step machines. */
