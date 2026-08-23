@@ -353,6 +353,32 @@ if (!existsSync(join(LEXBOR_DIR, "source", "lexbor"))) {
   const r = spawnSync("git", ["clone", "--depth", "1", "--branch", LEXBOR_TAG,
                               "https://github.com/lexbor/lexbor.git", LEXBOR_DIR], { stdio: "inherit" });
   if (r.status !== 0) { console.error("[build] could not clone lexbor " + LEXBOR_TAG); process.exit(1); }
+} else {
+  /* THE PIN IS CHECKED, BECAUSE A PIN NOBODY CHECKS IS A PIN THAT LIES. The clone above runs only when the
+     directory is ABSENT, so on every machine that already had a checkout the tag above was decoration: editing
+     it changed the build's REPORT and not one byte of what compiled. That is this tree's recurring defect in
+     its purest form — a value read from one place and written in another, with nothing asserting they agree —
+     and it is worse in a build than in the engine, because every number a gate then reports is attributed to a
+     revision pair whose second half is wrong.
+     A tag is a NAME and a checkout is a COMMIT, so the two are compared as commits: `git rev-parse <tag>^{}`
+     dereferences an annotated tag to the commit it points at, which is what HEAD can equal. A shallow clone
+     does not have the new tag, so it is fetched before being asked about — and a fetch that fails is fatal
+     rather than a fallback to whatever is on disk, because building the wrong source is the outcome this whole
+     block exists to prevent. */
+  const at = (rev) => spawnSync("git", ["-C", LEXBOR_DIR, "rev-parse", rev + "^{}"],
+                                { encoding: "utf8" }).stdout.trim();
+  if (at("HEAD") !== at(LEXBOR_TAG)) {
+    console.log("[build] lexbor checkout is not " + LEXBOR_TAG + " — moving it");
+    const f = spawnSync("git", ["-C", LEXBOR_DIR, "fetch", "--depth", "1", "origin", "tag", LEXBOR_TAG],
+                        { stdio: "inherit" });
+    if (f.status !== 0) { console.error("[build] could not fetch lexbor " + LEXBOR_TAG); process.exit(1); }
+    const c = spawnSync("git", ["-C", LEXBOR_DIR, "checkout", "--detach", LEXBOR_TAG], { stdio: "inherit" });
+    if (c.status !== 0) { console.error("[build] could not check out lexbor " + LEXBOR_TAG); process.exit(1); }
+    /* The archive is built from these sources and cached by presence alone, so a moved checkout must invalidate
+       it or the link silently keeps the previous version's objects — the same lie one layer down. */
+    const cached = join(WORK, "liblexbor.o");   // LEXBOR_LIB is declared below; this block runs before it
+    if (existsSync(cached)) rmSync(cached);
+  }
 }
 const LEXBOR_SRC = join(LEXBOR_DIR, "source");
 const LEXBOR_LIB = join(WORK, "liblexbor.o");   // relocatable partial-link object (emcc -o .a doesn't archive from .c)
