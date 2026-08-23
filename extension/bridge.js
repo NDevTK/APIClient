@@ -1831,8 +1831,14 @@ async function hostNotice(eng, line) {
     }
     return;
   }
-  /* `remoteop.retracted <token>` — an instance is parking with a question it was asked and never started, and
-     it is handing that question back rather than carrying it. THIS ZONE'S ACTION IS TO FORGET, and that is the
+  /* `remoteop.retracted <token>` — an instance is parking with a question it was asked, and it is handing that
+     question back rather than carrying it. STARTED OR NOT: a half-run answering program's partial work is the
+     parking flow's own COW delta and leaves with it, and what this zone asked for was a CALL rather than a
+     value (HTML §7.2.1.3.5 "CrossOriginGet ( O, P, Receiver )" ends "Return ? Call(getter, Receiver)"), so a
+     call abandoned before it completed has been made zero times and the re-ask below makes it once.
+     ONE NOTICE PER QUESTION, NOT PER HOLDER — the operation was attached to every live timeline of that
+     instance, and the notice is sent by the LAST holder leaving, so a token arriving here is one no timeline
+     over there will answer under again. THIS ZONE'S ACTION IS TO FORGET, and that is the
      whole of it: the suppression below (`_remoteAsked`) exists because `engine_host_requests` deliberately does
      NOT dedupe — two identical questions from two flows are two questions — so without it one operation would
      be performed once per step, each a program with the page's own side effects. The ASKING flow is still
