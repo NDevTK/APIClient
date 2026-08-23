@@ -55,11 +55,16 @@ typedef struct {
     long job_count;          /* queued microtasks/tasks */
     long pend_count;         /* replies the host still owes */
     long pend_bytes;
-    long dyn_bytes;          /* this flow's own lazily-loaded chunk bodies */
     long misc_bytes;         /* the Flow struct, its candidate substitution, a routed record, the blob headers */
 
     /* SHARED rows — counted ONCE for the whole frontier, because a frozen segment is referenced by every flow
        that forked below it. A pager that wrote these per flow would multiply the sharing back out. */
+    /* THE PROGRAM TEXT THIS INSTANCE HOLDS, AND HOW MANY PROGRAMS THAT IS. It was a PER-FLOW row summing
+       `strlen` over each flow's rows, which was the honest number while each flow strdup'd its own copy of
+       every program it held; the bodies are shared now (solver/dyn_body.h), so summing them per flow would
+       report the sharing as if it did not exist — the mistake this block's own sentence names. The count
+       beside the bytes is what says whether a growing number is more programs or bigger ones. */
+    long dyn_bytes, dyn_count;
     long seg_count, seg_entries, seg_bytes;              /* cow.c's frozen heap chain */
     long dom_seg_count, dom_seg_entries, dom_seg_bytes;  /* dom_cow.c's frozen document chain */
     long pin_seg_count, pin_seg_entries, pin_seg_bytes;  /* concolic.c's frozen path constraint */

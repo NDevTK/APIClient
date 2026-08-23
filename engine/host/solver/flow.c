@@ -448,7 +448,11 @@ void flow_release(JSContext *ctx, Flow *f) {
     dom_base_release(f->dom_base); f->dom_base = NULL;
     decide_blob_free(f->dec_blob); f->dec_blob = NULL;
     concolic_pins_blob_free(f->pin_blob); f->pin_blob = NULL;
-    for (int k = 0; k < f->dyn_n; k++) { free(f->dyn[k]); free(f->dyn_token[k]); free(f->dyn_url[k]); }
+    /* THE BODY COLUMN GIVES A REFERENCE BACK, IT DOES NOT FREE. A program's text is shared by every timeline
+       holding that program (solver/dyn_body.h), so what a flow owns is one reference and not the buffer; the
+       last flow to leave is the one that frees it, and which flow that is, is not knowable here. The other two
+       columns are this flow's own strings and are freed. */
+    for (int k = 0; k < f->dyn_n; k++) { dyn_body_unref(f->dyn[k]); free(f->dyn_token[k]); free(f->dyn_url[k]); }
     free(f->dyn); f->dyn = NULL;
     free(f->dyn_cand); f->dyn_cand = NULL;
     free(f->dyn_type); f->dyn_type = NULL;

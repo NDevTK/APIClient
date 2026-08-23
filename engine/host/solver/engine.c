@@ -7,6 +7,7 @@
 #include "solver/result.h"
 #include "solver/solve.h"
 #include "solver/flow.h"
+#include "solver/dyn_body.h"  /* a queued program's SOURCE TEXT — one buffer, every timeline that holds it */
 #include "solver/decide.h"
 #include "solver/concolic.h"
 #include "solver/cow.h"
@@ -304,7 +305,11 @@ static uint32_t g_sess_doc;
    script, so there is nothing for the sequence to hold. Both strings are this table's own: it is built in
    engine_sched_begin and freed in engine_session_close, which is the one place a session ends. */
 typedef struct RootScript {
-    char *body;          /* this row's SOURCE TEXT, or NULL while the flow is still owed it */
+    /* THIS ROW'S SOURCE TEXT, or NULL while the flow is still owed it — and ONE buffer for the whole session,
+       because the table is read once per BASE flow (engine_seed_root_flow is the seed hook, so the boot flow,
+       every cold-resumed replay and every @S candidate session read it) and a document's own bundle is the
+       largest program this engine holds. It was a `char *` the seed strdup'd into every one of them. */
+    DynBody *body;
     char *url;           /* §4.12.1.1's encoding-parsed address, or NULL for a `<script>` with no `src` */
     ScriptType type;     /* which of §8.1.4.4 "Calling scripts"'s two algorithms evaluates it */
     /* THE `script` ELEMENT THE ROW IS THE PROGRAM OF — §4.12.1.1's "execute the script element" is a switch on
@@ -2129,6 +2134,10 @@ static void engine_queue(uint32_t doc, const char *body, DynKind kind, ScriptTyp
 /* …and the same entry for a row an ELEMENT put there — see engine_queue_el below. */
 static void engine_queue_el(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
                             DynPos pos, lxb_dom_element_t *el);
+/* …and the one a caller reaches when it ALREADY holds the decoded text as a shared body, which is every reply
+   that arrives as a program: the drain below adopts the decode and hands it over without a second copy. */
+static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
+                                 DynPos pos, lxb_dom_element_t *el);
 
 static int flow_drain_pending(JSContext *ctx, Flow *f) {
     int n = 0, i = 0;
@@ -2196,20 +2205,36 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             src = reply_source_text(ctx, pv, (ScriptType)f->dyn_type[di], doc_realm(f->dyn_doc[di]), &src_n);
             CHECK(src, "engine: OOM storing an external document script");
             REPLY_SOURCE_WHOLE(src, src_n);
-            /* THE ADDRESS MOVES RATHER THAN BEING FREED, and this is the ONE moment at which it can: the row's
-               body IS the URL until this line, and everything the address decides happens after it. §8.1.4.2
-               creates the script with the RESPONSE'S URL as its base — "let script be the result of creating a
-               classic script given sourceText, settingsObject, response's URL, options, mutedErrors, and url" —
-               so a nested `import('./chunk.js')` inside a bundle served from `/assets/app.js` resolves to
-               `/assets/chunk.js`, and for a MODULE that address is additionally the module map KEY. Freed here
-               instead, two `<script type=module src>` of one document were named by the document they share and
-               were therefore ONE module: the second found the first's record and evaluated nothing. */
+            /* THE ADDRESS IS TAKEN OUT OF THE BODY COLUMN RATHER THAN DISCARDED, and this is the ONE moment at
+               which it can be: the row's body IS the URL until this line, and everything the address decides
+               happens after it. §8.1.4.2 creates the script with the RESPONSE'S URL as its base — "let script
+               be the result of creating a classic script given sourceText, settingsObject, response's URL,
+               options, mutedErrors, and url" — so a nested `import('./chunk.js')` inside a bundle served from
+               `/assets/app.js` resolves to `/assets/chunk.js`, and for a MODULE that address is additionally
+               the module map KEY. Dropped here instead, two `<script type=module src>` of one document were
+               named by the document they share and were therefore ONE module: the second found the first's
+               record and evaluated nothing.
+               IT IS COPIED, WHERE IT USED TO BE A POINTER MOVE. The move was right while the body column was
+               this flow's own `char *`; the text is SHARED now (solver/dyn_body.h), so a fork of a flow parked
+               on this row leaves both arms naming the same address buffer and each drains its own row — what
+               this row keeps has to be its own. An address is tens of bytes; the megabyte is on the line
+               after it, and that one is ADOPTED rather than copied. */
             DCHECK(f->dyn_url[di] == NULL,
                    "an external document script's row already held an address before its reply arrived — the "
-                   "row's body is its URL until this drain moves it, so a second one means the row was queued "
+                   "row's body is its URL until this drain takes it, so a second one means the row was queued "
                    "with an address column it may not have or a reply was drained into it twice");
-            f->dyn_url[di] = f->dyn[di];   /* ownership moves out of the body column */
-            f->dyn[di] = src;
+            {
+                /* THE ROW NAMES A LIVE BODY AT EVERY POINT OF THIS SWAP, which is why the replacement is built
+                   BEFORE the old one is released rather than after: between an unref and the store the column
+                   would hold a pointer whose buffer is gone, and anything that walked this flow's rows in
+                   between — a census, a release, a sale of the frontier's tail — would read it. */
+                DynBody *nb = dyn_body_adopt(src, src_n);   /* the decode above already made this buffer */
+                CHECK(nb, "engine: OOM adopting an external document script's source text");
+                f->dyn_url[di] = strdup(dyn_body_text(f->dyn[di]));
+                CHECK(f->dyn_url[di], "engine: OOM keeping an external script's address as its base URL");
+                dyn_body_unref(f->dyn[di]);
+                f->dyn[di] = nb;
+            }
             f->dyn_cand[di] = DYN_PAGE_SCRIPT;
         } else if (kind == FLOW_PENDING_SCRIPT) {
             /* the reply is PROGRAM: it joins this flow's script sequence, and the one BFS runs it */
@@ -2239,6 +2264,9 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
             u = JS_ToCString(ctx, uv);
             CHECK(u != NULL, "engine: OOM reading an injected script's address off its park");
             src = reply_source_text(ctx, pv, st, doc_realm(doc), &src_n);
+            /* THE SAME `CHECK` THE DOCUMENT-SCRIPT BRANCH ABOVE MAKES, which this branch did not: the decode
+               answers NULL when it cannot allocate, and the very next line is a `strlen` of it. */
+            CHECK(src, "engine: OOM storing an injected script");
             REPLY_SOURCE_WHOLE(src, src_n);
             /* §8.1.4.2's created script is based on the RESPONSE'S URL, so the program carries the address its
                bytes came from — the base a nested `import('./chunk.js')` resolves against and, for a module,
@@ -2248,17 +2276,23 @@ static int flow_drain_pending(JSContext *ctx, Flow *f) {
                    element" runs when the sequence reaches this row, and the element is what it switches on. */
                 JSValue ev = pending_get(p, PEND_SCRIPT_EL);
                 lxb_dom_node_t *en = node_of(ev);
+                /* ADOPTED RATHER THAN COPIED. This queued the decoded text and then freed it, so an injected
+                   chunk cost the instance two of itself for the length of one call; the body is shared now
+                   (solver/dyn_body.h) and the row is its first holder. */
+                DynBody *b;
                 DCHECK(en != NULL && en->type == LXB_DOM_NODE_TYPE_ELEMENT,
                        "an injected <script src> replied for a park carrying no element — the park writes the "
                        "element's wrapper and this is the only reader, so a record without one is a record "
                        "something that is not that park pushed");
-                engine_queue_el(doc, src, DYN_PAGE_SCRIPT, st, u, DYN_POS_APPEND,
-                                lxb_dom_interface_element(en));
+                b = dyn_body_adopt(src, src_n);
+                CHECK(b, "engine: OOM adopting an injected script's source text");
+                engine_queue_el_body(doc, b, DYN_PAGE_SCRIPT, st, u, DYN_POS_APPEND,
+                                     lxb_dom_interface_element(en));
+                dyn_body_unref(b);
                 JS_FreeValue(ctx, ev);
             }
             JS_FreeCString(ctx, u);
             JS_FreeValue(ctx, uv);
-            free(src);
         } else if (kind == FLOW_PENDING_MODULE) {
             /* the reply is a MODULE's SOURCE: settle the load's promise with the text, and the import's own
                reaction compiles, links and continues the flow that wrote `await import(...)`. The promise is
@@ -2663,7 +2697,7 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        document the operation was asked of, which is that row's `dyn_doc`. Copied here instead, the two were a
        second statement of one fact that the queue was already making. */
     if (parent->dyn_n) {              /* inherit the lazy chunks loaded up to the branch */
-        sib->dyn = malloc((size_t)parent->dyn_n * sizeof(char *)); CHECK(sib->dyn, "engine: OOM fork dyn");
+        sib->dyn = malloc((size_t)parent->dyn_n * sizeof(DynBody *)); CHECK(sib->dyn, "engine: OOM fork dyn");
         /* THE FLAGS COME WITH THE BODIES. A field added to the queue is an obligation at every clone, free and
            finish site; the sibling inheriting bodies without knowing which are candidates would re-arm the
            page-script assert on a dead breakout it inherited. */
@@ -2719,7 +2753,14 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
                "bodies whose kind, evaluation algorithm, resolution base, realm, waiting peer or place against "
                "the microtask checkpoint are lost");
         for (int i = 0; i < parent->dyn_n; i++) {
-            sib->dyn[i] = strdup(parent->dyn[i]); CHECK(sib->dyn[i], "engine: OOM fork dyn body");
+            /* THE PROGRAM TEXT IS REFERENCED, NOT COPIED — a program's bytes are the same on every timeline
+               that holds it and no flow can write them (solver/dyn_body.h), so the arm's whole sequence costs
+               `dyn_n` pointers. This line was `strdup`, which made a fork cost O(TOTAL SCRIPT BYTES): measured
+               on a real single-page app whose module bundle is 2.1 MB, that is 2.1 MB per arm of every branch,
+               and the run ended here at `CHECK(sib->dyn[i], "engine: OOM fork dyn body")` with the page's
+               entire learned API surface as nothing. It is the same conversion solver/pending.h records for
+               the register two fields over, on the one column that still paid for every byte. */
+            sib->dyn[i] = dyn_body_ref(parent->dyn[i]);
             sib->dyn_cand[i] = parent->dyn_cand[i];
             sib->dyn_type[i] = parent->dyn_type[i];
             sib->dyn_el[i] = parent->dyn_el[i];
@@ -3308,7 +3349,10 @@ static const char *engine_orphan_unit(int r) {
 /* `el` IS THE `script` ELEMENT THE ROW IS THE PROGRAM OF, or NULL for a row no element caused — see
    solver/flow.h's `dyn_el`, which states why the element is a fact about the ROW rather than something the
    completion could re-derive, and why NULL is a positive statement rather than a hole. */
-static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind kind, ScriptType stype,
+/* `body` IS THE SHARED PROGRAM TEXT AND THIS ENTRY TAKES A REFERENCE ON IT — the caller keeps its own and
+   releases it. That is what makes the row's cost O(1) at every seed and every fork: the bytes belong to the
+   program, not to the timeline holding it (solver/dyn_body.h). */
+static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind, ScriptType stype,
                               const char *url, char *token, DynPos pos, lxb_dom_element_t *el) {
     int at;
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
@@ -3320,7 +3364,11 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
                       "there is no member to give it to, so it would be dropped without a trace");
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
-    if (!body || !f) return;
+    /* THE `if (!body || !f) return;` THAT STOOD HERE IS GONE. It was a silent drop past the two asserts above,
+       and this function's own comment says what that costs: "a document whose scripts vanished here is
+       indistinguishable from a document that had none". Both conditions are established by every caller — the
+       seed asserts its flow, the two running-flow entries assert `flow_running()`, and each entry asserts its
+       body — so what the guard could still do in release was make a program disappear rather than crash. */
     DCHECK(doc != 0, "a program was queued naming no document — the realm it is compiled in is a fact about "
                      "the document it belongs to, and a program with none would be compiled in whichever realm "
                      "the session happens to be rooted at and read that Window's globals as its own");
@@ -3353,7 +3401,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
            "into the address column, so a caller writing both is naming one script two ways");
     if (f->dyn_n >= f->dyn_cap) {
         f->dyn_cap = f->dyn_cap ? f->dyn_cap * 2 : 8;
-        f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(char *));
+        f->dyn = realloc(f->dyn, (size_t)f->dyn_cap * sizeof(DynBody *));
         f->dyn_cand = realloc(f->dyn_cand, (size_t)f->dyn_cap);
         f->dyn_type = realloc(f->dyn_type, (size_t)f->dyn_cap);
         f->dyn_url = realloc(f->dyn_url, (size_t)f->dyn_cap * sizeof(char *));
@@ -3407,7 +3455,7 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
     }
     if (at < f->dyn_n) {
         size_t tail = (size_t)(f->dyn_n - at);
-        memmove(&f->dyn[at + 1],       &f->dyn[at],       tail * sizeof(char *));
+        memmove(&f->dyn[at + 1],       &f->dyn[at],       tail * sizeof(DynBody *));
         memmove(&f->dyn_cand[at + 1],  &f->dyn_cand[at],  tail);
         memmove(&f->dyn_type[at + 1],  &f->dyn_type[at],  tail);
         memmove(&f->dyn_url[at + 1],   &f->dyn_url[at],   tail * sizeof(char *));
@@ -3416,7 +3464,10 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
         memmove(&f->dyn_token[at + 1], &f->dyn_token[at], tail * sizeof(char *));
         memmove(&f->dyn_pos[at + 1],   &f->dyn_pos[at],   tail);
     }
-    f->dyn[at] = strdup(body); CHECK(f->dyn[at], "engine: OOM dynamic-script body");
+    /* ONE REFERENCE, NOT ONE COPY — and therefore nothing here can fail for want of memory. The row now costs
+       a pointer whatever the program's size, which is what makes a document's bundle cost the instance one
+       buffer instead of one per timeline that runs it. */
+    f->dyn[at] = dyn_body_ref(body);
     f->dyn_cand[at] = (unsigned char)kind;
     f->dyn_type[at] = (unsigned char)stype;
     f->dyn_url[at] = NULL;
@@ -3432,12 +3483,30 @@ static void engine_queue_into(Flow *f, uint32_t doc, const char *body, DynKind k
     f->dyn_n++;
 }
 
-static void engine_queue_el(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
-                            DynPos pos, lxb_dom_element_t *el) {
+/* THE ROW A CALLER HOLDS ALREADY-DECODED BYTES FOR. `body` is the shared text and this entry does NOT take it
+   over: the caller keeps its reference and releases it, exactly as engine_queue_into's does, so a caller that
+   queues one program into several places pays for the bytes once. */
+static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
+                                 DynPos pos, lxb_dom_element_t *el) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
                       "frontier and there is no member to give it to, so it would be dropped without a trace");
     engine_queue_into(f, doc, body, kind, stype, url, NULL, pos, el);
+}
+
+/* …AND THE ROW A CALLER HOLDS AS A PLAIN STRING — a `setTimeout` body, a `javascript:` URL, an @S candidate, a
+   cross-agent operation's program. The one copy those need is made HERE and released HERE, so the sharing is
+   the only thing the rest of the engine has to know about. */
+static void engine_queue_el(uint32_t doc, const char *body, DynKind kind, ScriptType stype, const char *url,
+                            DynPos pos, lxb_dom_element_t *el) {
+    DynBody *b;
+
+    DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
+                         "entry would be a slot the compile below dereferences");
+    b = dyn_body_new(body);
+    CHECK(b, "engine: OOM dynamic-script body");
+    engine_queue_el_body(doc, b, kind, stype, url, pos, el);
+    dyn_body_unref(b);
 }
 
 /* …AND THE ROWS NO ELEMENT CAUSED. §4.12.1.1's "execute the script element" never runs for these — a §8.6
@@ -3507,11 +3576,21 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            every pre-fetched external script compile under its document's name, which for a module is the
            module map key: §8.1.4.2's own note, "the base URL for the module script is set to the response
            URL … used for URL resolution". A row with only an address is still the DYN_SCRIPT_SRC shape, whose
-           body IS its URL until flow_drain_pending moves it across. */
-        if (rows[i].body) engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
-                                            NULL, DYN_POS_APPEND, rows[i].el);
-        else engine_queue_into(f, doc, rows[i].url, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL, DYN_POS_APPEND,
-                               rows[i].el);
+           body IS its URL until flow_drain_pending takes it across. */
+        /* THE PROGRAM ROW REFERENCES THE TABLE'S OWN BODY — this is the seeding that used to copy a document's
+           whole bundle into every flow it created. The ADDRESS row still makes a body, because its body IS the
+           address until the reply replaces it and that string is the table's, not this row's; it is tens of
+           bytes and it is released here, the row keeping the reference engine_queue_into took. */
+        if (rows[i].body) {
+            engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
+                              NULL, DYN_POS_APPEND, rows[i].el);
+        } else {
+            DynBody *addr = dyn_body_new(rows[i].url);
+            CHECK(addr, "engine: OOM seeding an external script's address as its row's body");
+            engine_queue_into(f, doc, addr, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL, DYN_POS_APPEND,
+                              rows[i].el);
+            dyn_body_unref(addr);
+        }
     }
 }
 
@@ -3732,12 +3811,17 @@ static void flow_perform(JSContext *ctx, Flow *f)
        flow, which is what lets the next entry start on a flow that is already performing one. */
     {
         char *own = strdup(token);
+        /* THE PROGRAM IS READ BEFORE THE ROW IS MADE because reading it is what SETS the operation's operands
+           on the answering realm's global (remote_op.c) — one call, and the row's body is what it answered. */
+        DynBody *prog = dyn_body_new(remote_op_program(rctx, op));
         CHECK(own != NULL, "engine: OOM moving a cross-agent operation's rendezvous token onto its program");
+        CHECK(prog != NULL, "engine: OOM making the body of a cross-agent operation's program");
         /* NO ELEMENT: this program is the ENGINE'S own text, not a `<script>`, so §4.12.1.1's "execute the
            script element" is not the algorithm that runs it and the peer document's §3.1.7 `currentScript`
            stays null while it does — which is the truth about a document answering a cross-agent read. */
-        engine_queue_into(f, doc, remote_op_program(rctx, op), DYN_CROSS_AGENT_OP, SCRIPT_TYPE_CLASSIC,
+        engine_queue_into(f, doc, prog, DYN_CROSS_AGENT_OP, SCRIPT_TYPE_CLASSIC,
                           NULL, own, DYN_POS_APPEND, NULL);
+        dyn_body_unref(prog);
     }
     remote_op_free(op);
     JS_FreeCString(ctx, record);
@@ -4327,6 +4411,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
         }
         if (!f->frame) {
             const char *body;
+            /* AND ITS LENGTH, WHICH THE BODY ALREADY KNOWS. Both compiles below took `strlen(body)`, which is
+               a pass over every byte of the program each time one starts — on a real single-page app's module
+               bundle that is 2.1 MB walked to learn a number the row was already holding (solver/dyn_body.h). */
+            size_t body_n = 0;
             /* WHICH KIND the program about to be compiled is — only a page <script> must parse. */
             DynKind kind = DYN_PAGE_SCRIPT;
             /* AND WHICH OF §8.1.4.4 "Calling scripts"'S TWO ALGORITHMS RUNS IT — run a classic script, or run
@@ -4380,7 +4468,8 @@ static int flow_step(JSContext *ctx, Flow *f) {
                an address — and the split cost this engine the one position §4.12.1.1's "immediately execute the
                script element" needs (engine_queue_into). One arm now, over one table. */
             if (f->script_i < f->dyn_n) {
-                body = f->dyn[f->script_i];
+                body = dyn_body_text(f->dyn[f->script_i]);
+                body_n = dyn_body_len(f->dyn[f->script_i]);
                 kind = flow_dyn_kind(f);
                 /* THE SEQUENCE HOLDS ONLY EXECUTABLE SCRIPTS — engine_queue_into asserts it at the one site
                    that creates a row, and this is the read that would otherwise have to pick an algorithm for a
@@ -4586,12 +4675,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "§4.12.1.1's module arm asserts this document's currentScript is null and it is not — "
                        "a classic script's §3.1.7 bracket has outlived the program it belonged to, so this "
                        "module would run with some other script element globally exposed");
-                ev = JS_FlowEvalModule(prog_ctx, body, strlen(body), prog_name, 0);
+                ev = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, 0);
                 started = !JS_IsException(ev);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
-                f->frame = JS_FlowNew(prog_ctx, body, strlen(body), prog_name, 0);   /* classic non-strict global */
+                f->frame = JS_FlowNew(prog_ctx, body, body_n, prog_name, 0);   /* classic non-strict global */
                 started = (f->frame != NULL);
                 /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
                    arm's third step ("run the classic script") is the JS_FlowNew above plus every JS_FlowResume
@@ -5059,7 +5148,13 @@ static void engine_session_close(void) {
        §4.12.1.1's encoding-parsed addresses that engine_sched_begin computed ABOUT it. Given back at the one
        point a session ends, which is the same argument this function's own comment makes about the hooks. */
     if (g_root_scripts) {
-        for (int i = 0; i < g_root_n; i++) { free(g_root_scripts[i].body); free(g_root_scripts[i].url); }
+        /* THE BODY GIVES A REFERENCE BACK. This table holds one on each of its programs and every flow seeded
+           from it holds one of its own, so the buffer outlives the session exactly as long as some flow still
+           holds the row — which is the whole point of sharing it. */
+        for (int i = 0; i < g_root_n; i++) {
+            if (g_root_scripts[i].body) dyn_body_unref(g_root_scripts[i].body);
+            free(g_root_scripts[i].url);
+        }
         free(g_root_scripts);
         g_root_scripts = NULL;
     }
@@ -5299,8 +5394,11 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
             /* COPIED RATHER THAN BORROWED, because this table outlives the call and is read every time a flow
                of this document is created — which is throughout the session, not only at its start. The host's
                three columns are freed by whoever built them, and a table that pointed into them would hand a
-               later seeding whatever that free left behind. */
-            g_root_scripts[g_root_n].body = strdup(bodies[i]);
+               later seeding whatever that free left behind.
+               ONCE, THOUGH, AND NOT ONCE PER FLOW: the copy is the shared body every timeline of this document
+               then references (solver/dyn_body.h), so the document's own bundle is in this instance exactly one
+               time however many flows the frontier grows. */
+            g_root_scripts[g_root_n].body = dyn_body_new(bodies[i]);
             CHECK(g_root_scripts[g_root_n].body,
                   "engine: OOM copying a program of the root document into its seed table");
         }
@@ -5477,15 +5575,27 @@ void engine_join_document(JSContext *cctx, uint32_t doc, char **bodies, char **s
             rows[rown].url = script_src_absolute(cctx, srcs[i], strlen(srcs[i]));
             if (!rows[rown].url) continue;
         }
-        rows[rown].body = bodies[i];
+        /* THE COPY IS MADE ONCE, HERE, and every timeline of this document then references it — the row's body
+           is the shared program text (solver/dyn_body.h) rather than a borrowed pointer into the host's
+           inventory, so this document's own bundle is in the instance exactly one time however many arms its
+           boot flow forks. Borrowing was sound only because the seed copied immediately; it no longer does. */
+        if (bodies[i]) {
+            rows[rown].body = dyn_body_new(bodies[i]);
+            CHECK(rows[rown].body,
+                  "engine: OOM copying a joined document's program into its script table");
+        }
         rown++;
     }
     engine_seed_scripts(f, doc, rows, rown);
-    /* THE TABLE IS THIS CALL'S, NOT THE FLOW'S. engine_queue_into COPIES every string it is given into the
-       flow's own row, so the addresses resolved above are given back here; the bodies are the HOST's inventory
-       and are freed by whoever built it. The root document's table outlives this pattern because it seeds a
-       flow every time one is created, and this one seeds exactly one. */
-    for (i = 0; i < rown; i++) free(rows[i].url);
+    /* THE TABLE IS THIS CALL'S, NOT THE FLOW'S. engine_queue_into copies the address it is given into the
+       flow's own row and takes a REFERENCE on the body, so both are given back here — the addresses resolved
+       above are freed and the bodies released, each surviving exactly as long as some flow still holds the row
+       that names it. The root document's table outlives this pattern because it seeds a flow every time one is
+       created, and this one seeds exactly one. */
+    for (i = 0; i < rown; i++) {
+        free(rows[i].url);
+        if (rows[i].body) dyn_body_unref(rows[i].body);
+    }
     free(rows);
 }
 
@@ -5909,7 +6019,7 @@ static int engine_sched_slice(void) {
                        exists to replace. */
                     const char *bodytxt = NULL;
                     int si = cur ? cur->script_i : -1;
-                    if (cur && si >= 0 && si < cur->dyn_n) bodytxt = cur->dyn[si];
+                    if (cur && si >= 0 && si < cur->dyn_n) bodytxt = dyn_body_text(cur->dyn[si]);
                     uint64_t pq = 0, pf = 0;
                     const char *slow_name = "(none)";
                     long wrap_n = 0, wrap_cap = 0;
@@ -6444,9 +6554,15 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
                        "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                        "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
-                       "\"dynKiB\":%ld,\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
+                       "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
+                       /* `dynKiB` MOVED FROM THE PER-FLOW HALF TO THE SHARED ONE and took its count with it —
+                          a program's text is one buffer however many timelines hold that program
+                          (solver/dyn_body.h), so it is priced like a frozen segment and not like a delta head.
+                          Summed per flow it reported the sharing as if it did not exist, which is the one
+                          thing this line's own comment says a pager must not do. */
                        "\"segKiB\":%ld,\"domSegKiB\":%ld,\"pinSegs\":%ld,\"pinSegEntries\":%ld,"
                        "\"pinSegKiB\":%ld,\"decSegs\":%ld,\"decSegEntries\":%ld,\"decSegKiB\":%ld,"
+                       "\"dynBodies\":%ld,\"dynKiB\":%ld,"
                        "\"sharedKiB\":%ld,\"stepMachines\":%d}\n",
                        c.flows, c.framed, c.blocked, flow_host_owed_count(),
                        g_finished, g_deepest, g_completed, g_orphans_driven,
@@ -6455,13 +6571,15 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                        g_host_answers_late, g_paged_reqs,
                        c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                        c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
-                       c.pend_bytes / 1024, c.dyn_bytes / 1024, c.misc_bytes / 1024,
-                       (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes + c.dyn_bytes +
+                       c.pend_bytes / 1024, c.misc_bytes / 1024,
+                       (c.dec_bytes + c.head_bytes + c.dom_head_bytes + c.pend_bytes +
                         c.misc_bytes) / 1024,
                        c.seg_bytes / 1024, c.dom_seg_bytes / 1024,
                        c.pin_seg_count, c.pin_seg_entries, c.pin_seg_bytes / 1024,
                        c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
-                       (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes) / 1024,
+                       c.dyn_count, c.dyn_bytes / 1024,
+                       (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes +
+                        c.dyn_bytes) / 1024,
                        JS_StepMachineCount(JS_GetRuntime(g_sess_ctx)));
             }
             /* AND WHAT THE ORDER ITSELF IS MADE OF (solver/flow.h's WfqCensus). @PROGRESS says how much work is

@@ -8,6 +8,7 @@
 #include "solver/world.h"
 #include "solver/solve.h"     /* …and the @S sink table a parked candidate's class is re-bound through */
 #include "solver/pending.h"   /* the session's context, which a flow's JS-valued queues are read through */
+#include "solver/dyn_body.h"  /* …and the program text, which is SHARED and so is counted once, not per flow */
 #include "check.h"
 
 #include <stdio.h>
@@ -66,10 +67,9 @@ void cold_census(ColdCensus *out)
            the record's shape, which is exactly what drifts the next time a field is added. */
         out->pend_count += pending_count(f->pending);
         out->pend_bytes += pending_bytes(f->pending);
-        {
-            int k;
-            for (k = 0; k < f->dyn_n; k++) out->dyn_bytes += (long)strlen(f->dyn[k]) + 1;
-        }
+        /* THE PROGRAM TEXT IS NOT A PER-FLOW ROW ANY MORE — see the shared block below. What this walk used to
+           add here was `strlen` over every row of every flow, which both multiplied the sharing back out and
+           made the census itself a pass over every byte of every bundle the frontier holds. */
 
         out->misc_bytes += (long)sizeof(Flow);
         if (f->cand_src) out->misc_bytes += (long)strlen(f->cand_src) + 1;
@@ -89,6 +89,12 @@ void cold_census(ColdCensus *out)
        flow's own total would report the structural sharing as if it did not exist — which is precisely the
        mistake a pager makes when it writes one flow's snapshot without knowing what its siblings already
        wrote. */
+    /* THE PROGRAM TEXT, ONCE FOR THE INSTANCE. A body is referenced by every flow whose sequence holds that
+       program — the document's own bundle by every timeline of the document — so it belongs here for the same
+       reason a frozen segment does. The component keeps the total rather than this walk deriving it, because
+       deriving it means walking the rows again and the rows do not know which of them share a buffer. */
+    out->dyn_bytes = dyn_body_total_bytes();
+    out->dyn_count = dyn_body_live_count();
     cow_chain_stats(&out->seg_count, &out->seg_entries);
     out->seg_bytes = cow_chain_bytes();
     dom_cow_chain_stats(&out->dom_seg_count, &out->dom_seg_entries);

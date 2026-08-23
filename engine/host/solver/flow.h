@@ -22,6 +22,7 @@
 #include "quickjs.h"
 #include "solver/world.h"
 #include "solver/pending.h"   /* the replies the host still owes this flow — a JS Array, not a malloc'd list */
+#include "solver/dyn_body.h"  /* …and the program text its sequence holds — shared, because no flow writes it */
 
 /* A NODE OF THE FORK TREE, AND THE ONLY THING IN A FLOW THAT OUTLIVES IT. It exists for one sentence: the thread
    time a DEPARTING flow burned has to reach the flow that FORKED it, because §scheduler prices the aging term
@@ -220,8 +221,15 @@ typedef struct Flow {
     int   last_compiled;   /* -1 until the flow compiles its first program */
     /* this flow's OWN program bodies (per-flow, not global): a lazily-loaded chunk, a queued document script —
        or, while the kind beside it is DYN_SCRIPT_SRC, the ADDRESS of a script whose source has not arrived. One
-       column either way, because it is one queue and the entry is one position in it. */
-    char **dyn; int dyn_n, dyn_cap;
+       column either way, because it is one queue and the entry is one position in it.
+       THE ROW IS THIS FLOW'S; THE BYTES ARE NOT. A program's source text is fixed the moment it is decoded and
+       no flow can write it, so it is shared baseline state and every timeline holding that program holds the
+       SAME buffer (solver/dyn_body.h). It was a `char *` this table strdup'd, and the fork therefore cost
+       O(total script bytes) rather than O(rows) — a 2.1 MB module bundle is an ordinary size for one real
+       single-page app, forced multi-path execution forks per branch, and the run ended at the allocator with
+       the page's whole learned surface as nothing. This is the same conversion solver/pending.h records for
+       the register beside it, on the one column that was left. */
+    DynBody **dyn; int dyn_n, dyn_cap;
     /* WHICH DOCUMENT each of those programs belongs to, which is WHERE it is compiled — a program is closed
        over the compiling realm's global (JS_FlowNew), and an instance is an ORIGIN-KEYED AGENT CLUSTER, so the
        document a program belongs to is a child navigable's as often as it is the session's. §7.4 step 14's
