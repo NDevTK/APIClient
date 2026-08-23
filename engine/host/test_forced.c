@@ -1258,6 +1258,23 @@ static const char *HTML =
        the coercion produced a value the string concatenation could carry rather than a crash. */
     "function orphanCharCode(e){ var s = String.fromCharCode(e.charCode);"
     " fetch('/api/orphan/charcode?c=' + s); }"
+    /* AND THE POSTFIX UPDATE OPERATOR, WHICH IS HALF OF §13.4 AND WAS THE HALF NOBODY ASKED. `++i` reaches
+       js_unary_arith_slow and its .arith hook answered; `i--` goes through §13.4.3.1 step 3's
+       `? ToNumeric(? GetValue(lhs))` first and CONVERTED, so `for (; e--; )` — a real route loader's own loop —
+       aborted the whole instance. Both spellings are here because the row must fail when only one is built:
+       the PREFIX arm passed the entire time the postfix arm was crashing, so a fixture holding only `++i`
+       reports a family that works while half of it takes documents down. */
+    "function orphanUpdate(e){ var i = e.n, j = ++i, k = i--, n = 0;"
+    " for (var m = e.n; m--;) { n = n + 1; if (n > 2) break; }"
+    " fetch('/api/orphan/update?n=' + n); }"
+    /* AND A COERCE-THEN-COMPUTE BUILTIN WITH A GENERIC BODY — the clamp every bundle writes. §21.3.2.26
+       Math.min ( ...args ) step 2 is `? ToNumber(arg)` for each argument and the declaration's own coercion is
+       §7.1.1 ToPrimitive, which over an unknown is the identity, so the body's JS_ToFloat64 reached the
+       conversion boundary. One unknown argument makes the whole result unknown (step 4's `number > highest` is
+       undecided against a value nobody has), and the endpoint AFTER the clamp is the claim because an abort
+       emits none. */
+    "function orphanClamp(e){ var v = Math.max(0, Math.min(255, e.n));"
+    " fetch('/api/orphan/clamp?v=' + v); }"
     "(async function(){ var c = await (await fetch('/api/config')).json(); fetch('/api/user?region=' + c.region); })();"   /* FETCH-AWAIT-RESULT: await a safe GET, then §6.4.3 json() over the host's bytes — the parsed body's field flows into a later endpoint as a concrete example */
     /* §6.4 clone(), which is how a caching or interceptor layer is written: copy the reply, read the copy, and
        still hand the original on. Both halves of the spec are asserted because both are the reason it exists —
@@ -4182,6 +4199,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        different mechanism: this one is §7.1.4 ToNumber over unknown input inside a C body, which aborted the
        instance and took every row here down with it. */
     int orphan_ccode  = strstr(js, "\"/api/orphan/charcode\"") != NULL;
+    /* AND THE SIXTH AND SEVENTH, both "the driven body survived an operation over its unknown". They are
+       separate rows because they are separate mechanisms and each passed while the other crashed: §13.4.3.1's
+       postfix ToNumeric is an OPERATOR that answers on the interpreter's own path, while §21.3.2.26's is a
+       coerce-then-compute BUILTIN whose generic body converts for itself. The request is uninteresting in both;
+       reaching it is the claim. */
+    int orphan_update = strstr(js, "\"/api/orphan/update\"") != NULL;
+    int orphan_clamp  = strstr(js, "\"/api/orphan/clamp\"") != NULL;
     /* FETCH-AWAIT-RESULT: `await fetch('/api/config')` delivered the reply and §6.4.3 json() parsed it,
        whose .region flowed into /api/user?region=us-west-2 as a CONCRETE example — a safe GET's result driving
        API-value learning, through the Response the shipped fetch component actually hands back. */
@@ -4825,6 +4849,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-loop", orphan_loop, "orphanLoops", SESS_EXPLORE },
         { "orphan-ident", orphan_ident, "orphanIdentity", SESS_EXPLORE },
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE },
+        { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE },
+        { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE },
