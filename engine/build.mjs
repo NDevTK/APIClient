@@ -20,7 +20,7 @@ import { dirname, join, resolve, relative, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { stampArtifact } from "./gate_revision.mjs";
+import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 
 /* A RUN THAT NEVER RETURNS IS NOT A VERDICT. Every program this file launches gets the same generous backstop
    and reports a hang through a DIFFERENT signal than a failure — `.signal` where a failure sets `.status` — so
@@ -263,8 +263,32 @@ function skipped(label, why) {
    rest. Every stage this run reached is named with its own verdict, so "the smoke failed" and "the two-instance
    drive was never asked" can never again be the same line. The exit code is the FIRST non-zero in stage order,
    which is exactly what each single-stage target exited with before. */
+/* THE REVISION THIS BUILD IS OF, TAKEN BEFORE THE FIRST COMPILER RUNS. This file STAMPED the artifact and
+   never SAID anything, so the one program every other gate then measures arrived with no revision on it and
+   each reader restated the pair from memory — which is the recovery-by-forensics failure gate_revision.mjs
+   was written for, one layer earlier: a stamp nobody reads aloud is a fact that has to be dug up.
+   AND THIS IS THE STAGE THE QUESTION IS SHARPEST FOR. §Testing's worked example of a program no revision
+   contains IS A BUILD: `idl_args.h` gained a field 33 seconds before a link finished, two translation units
+   disagreed on a struct's size, and the segfault was in `strcmp` inside a DFAIL's own order check. A build
+   reads its inputs over minutes from a checkout several agents are editing, so "which revision is this" is not
+   a formality here — it is the difference between a verdict and an artifact of when the reads happened. */
+let REV_AT_START = null;
+const revAtStart = () => (REV_AT_START ||= gateRevision(
+  ["engine/host", "engine/qjs", "engine/build.mjs", "engine/gate_revision.mjs"]));
+
 function report(stages) {
   const w = Math.max(...stages.map((s) => s.label.length));
+  /* BEFORE THE STAGE TABLE, because the tail is what gets pasted and the revision is what the table is about.
+     Printed on the failing path as well as the passing one: a stage that ABORTED is the result most likely to
+     be quoted at another agent, and "which tree aborted" is the whole of what they need. */
+  for (const l of revisionLines(revAtStart())) console.log(l);
+  const moved = revisionMoved(revAtStart());
+  /* A POSITIVE STATEMENT EITHER WAY. The sources that were COMPILED are not necessarily the sources on disk
+     now, and a reader who runs `git show` after this build would be reading a different program. Saying "did
+     not move" is what makes the silence readable as an answer rather than as a question nobody asked. */
+  if (moved) console.error("[rev] THE TREE MOVED UNDER THIS BUILD — " + moved + ". The stages below measured " +
+                           "the sources as they were read, which no revision now describes.");
+  else console.log("[rev] the tree did not move under this build");
   console.log("[build] ── stages ──");
   for (const s of stages) console.log("[build]   " + s.label.padEnd(w) + "  " + s.verdict);
   const bad = stages.find((s) => s.code !== 0);
@@ -466,6 +490,14 @@ if (LIST_INCLUDE_ROOTS) {
   ], null, 1));
   process.exit(0);
 }
+
+/* TAKEN AND SAID HERE: after BOTH question-answering modes have exited — a list with a revision block in front
+   of it is not a list, and `--list-include-roots` emits JSON a consumer parses — and before the first compiler
+   runs. Both halves matter. Taken early, so the end-of-build re-ask can tell whether the tree moved WHILE the
+   reads were happening. Said early, so a build that dies before `report()` — an unhandled throw, a kill, a
+   full disk — still names the tree it was reading. The block is printed again in the summary because that is
+   the end a reader pastes. */
+for (const l of revisionLines(revAtStart())) console.log(l);
 
 /* THE NATIVE SMOKE TARGET, and the sanitized builds that are only possible on it.
  *
