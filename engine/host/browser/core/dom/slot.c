@@ -466,11 +466,17 @@ void slot_insert_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *par
     if (slot_is(parent) && shadow_root_is(node_root(parent)) && slot_assigned_empty(ctx, parent))
         signal_a_slot_change(ctx, parent);
     /* "Run ASSIGN SLOTTABLES FOR A TREE with node's root."
-       ONLY WHEN THAT ROOT IS A SHADOW ROOT, and that is a derivation about THIS call site rather than about the
-       algorithm: a slot whose root is not a shadow root computes the empty list at "find slottables", and a
-       tree being INSERTED holds no slot that already has assigned nodes — an insertion is how a node gets into
-       a tree, so nothing in it can have been assigned to anything yet. Without the test this runs on every
-       insertion, and a document with no shadow tree in it would walk itself once per node. */
+       ONLY WHEN THAT ROOT IS A SHADOW ROOT, and that is a derivation about THE CALL SITES rather than about the
+       algorithm, so it is checked once per site: a slot whose root is not a shadow root computes the empty list
+       at "find slottables", and a tree being INSERTED holds no slot that already has assigned nodes — an
+       insertion is how a node gets into a tree, so nothing in it can have been assigned to anything yet.
+       Without the test this runs on every insertion, and a document with no shadow tree in it would walk itself
+       once per node.
+       THE SECOND SITE IS §4.2.3's MOVE (steps 21-23, which are this text word for word). A moved subtree CAN
+       hold a slot that already has assigned nodes, so the derivation had to be re-made for it and it holds for
+       a different reason: a slot leaving a shadow tree is cleared by the removal half's step 16 (whose own
+       guard is that the OLD parent's root is a shadow root, which is exactly that case), and a slot arriving in
+       one has its new root pass this test. So neither direction reaches this line needing what the guard skips. */
     if (shadow_root_is(node_root(node)))
         assign_slottables_for_a_tree(ctx, node_root(node));
 }

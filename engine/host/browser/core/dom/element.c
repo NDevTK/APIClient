@@ -48,6 +48,7 @@
 #include "core/html/declarative_shadow.h"
 #include "core/html/html_script.h"
 #include "core/html/html_base_element.h"
+#include "core/html/html_form.h"    /* §2.1.4's moving steps step 2 — the form owner a move may have to reset */
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
 #include "core/html/fragment_serializer.h"
@@ -2022,6 +2023,60 @@ static void element_slot_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t
     else if (phase == NODE_TREE_REMOVED) slot_removed_steps(ctx, n, parent);
 }
 
+/* HTML §2.1.4 DOM trees — "THE MOVING STEPS FOR THE HTML STANDARD, given movedNode, isSubtreeRoot, and
+ * oldAncestor", registered on DOM §4.2.3's moving-steps list (core/dom/node.h). TWO STEPS.
+ *
+ * STEP 1 dispatches to the per-local-name "HTML element moving steps", and this standard defines them for four
+ * names — `a` and `area` (consider speculative loads), `img` and `source` (count this as a relevant mutation
+ * for a `picture` ancestor), and `option` (update an option's nearest ancestor select). Each of those names a
+ * component this engine does not have on ANY side of a tree change: there is no speculative parser, no
+ * relevant-mutations counter and no nearest-ancestor-select update, so the identical clause in HTML's INSERTION
+ * and REMOVING steps reaches nothing either. The absence is those components', not this step's, and a move
+ * therefore loses nothing an insert or a remove would have done.
+ *
+ * STEP 2 is the one this engine can state: "if movedNode is a form-associated element with a non-null form
+ * owner and movedNode and its form owner are no longer in the same tree, then reset the form owner of
+ * movedNode." It is the reason the moving steps exist as a family at all — a control moved out from under its
+ * `<form>` must lose it, and a move runs no removing steps to do that for it.
+ *
+ * A MOVE CANNOT CHANGE WHICH TREE A NODE IS IN — DOM §4.2.3 move step 1 makes the two shadow-including roots
+ * the same — so the condition is only ever true for an element whose owner was set by a `form=` attribute
+ * naming a form in a DIFFERENT tree, or by a reset that has not run since the tree changed under it. That it is
+ * rarely true is not a reason to skip it: HTML §4.10.18.3 states the reset as the thing that keeps
+ * `form.elements` and every entry list honest, and the failure mode of not running it is a form that submits a
+ * control it no longer contains. */
+static void element_moving_steps(JSContext *ctx, lxb_dom_node_t *n, bool is_subtree_root,
+                                 lxb_dom_node_t *old_ancestor)
+{
+    JSValue wrap, owner;
+    lxb_dom_node_t *ow;
+
+    /* Step 1's arguments and no reader — see above: the four local names this standard defines moving steps
+       for name three components this engine does not have, so there is nothing for them to be handed to. */
+    (void)is_subtree_root; (void)old_ancestor;
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT || !html_form_maybe_associated(n)) return;
+    /* THE NODE'S OWN DOCUMENT'S REALM, for the reason element_tree_steps_step resolves one: two same-origin
+       documents are one agent, so the flow performing the move is routinely not standing in the realm whose
+       Document this element belongs to — and the form owner is a per-flow slot on a wrapper whose prototypes
+       are that document's. */
+    ctx = document_realm_of(n);
+    DCHECK(ctx != NULL,
+           "§4.2.3's moving steps reached an element in a document no realm was installed for — a document "
+           "that can hold a moved node is a document a flow can run steps in, so build its realm rather than "
+           "borrowing whichever one performed the move");
+    wrap = node_wrap(ctx, n);
+    if (JS_IsNull(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    owner = html_form_owner_of(ctx, wrap);
+    ow = node_of(owner);
+    /* "no longer in the same TREE" — §4.2's tree, which is the node's root, and not its node document: a
+       control and its form can both be in one detached fragment, and moving between two detached fragments of
+       one document is a move DOM §4.2.3 step 1 already refuses. */
+    if (ow && node_root(n) != node_root(ow))
+        JS_FreeValue(ctx, html_form_reset_owner(ctx, wrap, NULL));
+    JS_FreeValue(ctx, owner);
+    JS_FreeValue(ctx, wrap);
+}
+
 static void element_tree_changed(JSContext *ctx, lxb_dom_node_t *root, lxb_dom_node_t *parent, int phase)
 {
     int inserted = phase == NODE_TREE_INSERTED;
@@ -2483,6 +2538,10 @@ void element_init(JSContext *ctx)
     node_add_tree_hook(element_range_steps);
     node_add_tree_hook(element_iterator_pre_remove);
     node_add_tree_hook(element_slot_steps);
+    /* …AND THE MOVING STEPS, which are a DIFFERENT list and deliberately not one of the three above: DOM
+       §4.2.3's move runs none of the insertion or removing steps, so the two lists share no registrant and a
+       component that belongs on both says so twice. */
+    node_add_moving_hook(element_moving_steps);
     /* HTML §4.2.3's FIRST SITUATION, BEFORE element_tree_changed. That hook PREPARES an inserted `<script>`,
        which resolves its `src` against the document base URL — so inserting `<div><base href=x><script
        src=y></div>` must freeze the base before the script is prepared, or the one script the markup put

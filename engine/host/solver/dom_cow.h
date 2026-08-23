@@ -107,6 +107,24 @@ void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child);
 /* Detach a node the BASELINE may own — captured so it comes back on revert/unapply. innerHTML= needs it:
    it REPLACES children, and an uncaptured removal leaks the old subtree across a context switch. */
 void dom_cow_remove_child(lxb_dom_node_t *node);
+/* DOM §4.2.3's "MOVE", AS ITS OWN CHOKEPOINT PAIR — steps 13 and 19-20 of `move a node node into a node
+   newParent before null or a node child`. The standard says why this is not remove-then-insert in its own
+   words, in the note under move step 24.2: "Because the move algorithm is a separate primitive from insert
+   and remove, it does not invoke the insertion steps or removing steps for inclusiveDescendant." Those steps
+   are what destroy a child navigable's document, reset a focused area, hide a popover and re-fire a custom
+   element's connected/disconnected pair — every piece of state `moveBefore()` exists to preserve. So a move
+   that reached `dom_cow_remove_child` + `dom_cow_insert_before` would be a state-PRESERVING member built out
+   of the two calls that destroy the state, and nothing would say so: the tree would end up right and the
+   iframe would be blank.
+   THE DELTA ENTRIES ARE EXACTLY THE TWO A REMOVE AND AN INSERT PUSH, which is what makes a move time-travel
+   with no new entry kind: the removal remembers (old parent, old next sibling) and the insertion remembers
+   where it landed, so an unapply walks them head-first and puts the node back where the baseline had it.
+   IT IS A PAIR AND NOT ONE CALL because §4.2.3 runs steps 14-16's slot steps BETWEEN them, on a node that is
+   already detached — slot_removed_steps asserts that detachment. The two halves are one uninterrupted C
+   operation (nothing between them runs the page's code), and in dev the second asserts that the first ran for
+   the same node, because a `_move_out` with no `_move_in` is a node removed with no removing steps. */
+void dom_cow_move_out(lxb_dom_node_t *node);
+void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
 /* A character-data node's VALUE (§4.10 `data`) — the third thing a flow can change about the tree, on a node
    whose identity must survive the write, so it cannot be a remove+insert of a replacement. */
 void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len);

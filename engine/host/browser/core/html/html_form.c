@@ -392,7 +392,10 @@ typedef bool (*FormMemberPred)(JSContext *ctx, JSValueConst wrap);
    to ask them would materialise the whole tree on the first `form.elements` read. §4.10.2's categories are all
    built-in tags plus custom elements, and a custom element is exactly an element whose local name is a valid
    custom element name — so this filter drops nothing the categories contain. */
-static bool form_maybe_associated(lxb_dom_node_t *n)
+/* EXPORTED for the second caller with the same need: DOM §4.2.3's moving steps run once per shadow-including
+   inclusive descendant of a moved subtree, and HTML §2.1.4's second moving step is about form owners — so the
+   walk asks this before it mints a wrapper, exactly as the members below do. */
+bool html_form_maybe_associated(lxb_dom_node_t *n)
 {
     size_t len = 0;
     const lxb_char_t *tag;
@@ -414,7 +417,7 @@ static JSValue form_members(JSContext *ctx, JSValueConst form_wrap, FormMemberPr
     if (!form) return arr;
     root = node_root(form);
     for (n = root; n; ) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && form_maybe_associated(n)) {
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && html_form_maybe_associated(n)) {
             JSValue wrap = node_wrap(ctx, n);
             if (want(ctx, wrap)) {
                 JSValue owner = html_form_owner_of(ctx, wrap);

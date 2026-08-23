@@ -433,20 +433,26 @@ static JSAtom  g_atom_state = JS_ATOM_NULL;
    engine enqueues by and the names step 14.4 reads off the prototype, which cannot be two lists for the same
    reason a machine's stages cannot: the ORDER is observable. The prototype may be a Proxy, so the sequence of
    `get`s is part of what the algorithm does and the corpus asserts it exactly.
-   `connectedMoveCallback` is NOT here because `moveBefore` is not: §4.13.4 names that key on a platform that
-   has the operation which fires it, and collecting one for an operation this engine cannot perform would show
-   a page's Proxy a read for a callback nothing will ever invoke. custom_elements_install ASSERTS that pairing.
+   `connectedMoveCallback` IS THIRD, which is where §4.13.4 step 14.3 puts it: "let lifecycleCallbacks be the
+   ordered map «[ "connectedCallback" → null, "disconnectedCallback" → null, "connectedMoveCallback" → null,
+   "adoptedCallback" → null, "attributeChangedCallback" → null ]»". It stood outside this list while
+   `moveBefore` did not exist, paired with an assert at custom_elements_install that fired the moment Element
+   grew the operation; the operation is built (DOM §4.2.3 move, core/dom/node.c), so the key is collected and
+   that assert is gone with it. Its POSITION is the observable half: step 14.4 reads the keys in map order off
+   a prototype the page may have made a Proxy, so a fifth entry appended at the end is a different sequence of
+   `get`s from the one the algorithm performs.
    THE FORM FOUR ARE A SECOND LIST AND NOT FOUR MORE ENTRIES OF THIS ONE, because §4.13.4 reads them at a
    different STEP under a different condition: step 14.4 walks THIS list unconditionally off the prototype, and
    step 14.13 walks the form list only when step 14.12's `formAssociated` converted to true. Merging them would
-   show a page's Proxy four reads the algorithm never makes for a class that is not form-associated — the same
-   observability rule that keeps `connectedMoveCallback` out. They index into ONE callback map, contiguously,
-   because §4.13.4 step 15's definition holds one map and a reaction names one entry of it. */
+   show a page's Proxy four reads the algorithm never makes for a class that is not form-associated. They index
+   into ONE callback map, contiguously, because §4.13.4 step 15's definition holds one map and a reaction names
+   one entry of it. */
 #define CE_LIFECYCLE_CALLBACKS(X) \
-    X(CE_CB_CONNECTED,    "connectedCallback") \
-    X(CE_CB_DISCONNECTED, "disconnectedCallback") \
-    X(CE_CB_ADOPTED,      "adoptedCallback") \
-    X(CE_CB_ATTR_CHANGED, "attributeChangedCallback")
+    X(CE_CB_CONNECTED,     "connectedCallback") \
+    X(CE_CB_DISCONNECTED,  "disconnectedCallback") \
+    X(CE_CB_CONNECTED_MOVE, "connectedMoveCallback") \
+    X(CE_CB_ADOPTED,       "adoptedCallback") \
+    X(CE_CB_ATTR_CHANGED,  "attributeChangedCallback")
 /* §4.13.4 step 14.13's « formAssociatedCallback, formResetCallback, formDisabledCallback,
    formStateRestoreCallback » — IN THAT ORDER, because the reads are observable in it. */
 #define CE_FORM_CALLBACKS(X) \
@@ -1849,6 +1855,65 @@ void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el)
     JS_FreeValue(ctx, wrap);
 }
 
+void custom_elements_moved(JSContext *ctx, lxb_dom_element_t *el)
+{
+    JSValue wrap, def, cbs, fn, dis, con;
+
+    if (!g_ready || !ce_upgradable_name(el)) return;
+    wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+    /* DOM §4.2.3 move step 24.3's condition is "inclusiveDescendant is CUSTOM", which is the same predicate
+       the disconnected reaction above uses and for the same reason: only an element whose upgrade succeeded
+       has a lifecycle to react with. The "newParent is connected" half is the CALLER's — it is one fact for
+       the whole subtree and re-deriving it per descendant would ask the tree a question about a node instead
+       of about the move. */
+    if (ce_state_of(ctx, wrap) != CE_STATE_CUSTOM) { JS_FreeValue(ctx, wrap); return; }
+    def = ce_definition_of(ctx, wrap);
+    if (!JS_IsObject(def)) { JS_FreeValue(ctx, def); JS_FreeValue(ctx, wrap); return; }   /* enqueue step 1 */
+    cbs = JS_GetProperty(ctx, def, g_atom_callbacks);
+    DCHECK(JS_IsObject(cbs), "a custom element definition carries no step 14.4 callback map — every definition "
+                             "this component commits builds one");
+    fn = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_CONNECTED_MOVE);                  /* enqueue step 2 */
+    if (JS_IsFunction(ctx, fn)) {
+        JS_FreeValue(ctx, fn);
+        JS_FreeValue(ctx, cbs);
+        /* §4.13.6 steps 5-6, through the one enqueue — "connectedMoveCallback … and « »", no arguments. This
+           is the whole point of the operation: the element is told it moved and its connected state, its
+           observers, its tab index and its internals are all untouched. */
+        ce_enqueue(ctx, wrap, def, CE_CB_CONNECTED_MOVE);
+        JS_FreeValue(ctx, def);
+        JS_FreeValue(ctx, wrap);
+        return;
+    }
+    JS_FreeValue(ctx, fn);
+    /* §4.13.6 ENQUEUE STEP 3 — "if callbackName is "connectedMoveCallback" and callback is null: let
+       disconnectedCallback / connectedCallback be the entries with those keys; if both are null, then return;
+       set callback to the following steps: 1. if disconnectedCallback is not null, call it; 2. if
+       connectedCallback is not null, call it."
+       BOTH-NULL IS A RETURN AND IT IS THE COMMON CASE — a class with none of the three costs nothing here. */
+    dis = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_DISCONNECTED);
+    con = JS_GetPropertyUint32(ctx, cbs, (uint32_t)CE_CB_CONNECTED);
+    JS_FreeValue(ctx, cbs);
+    if (JS_IsFunction(ctx, dis) || JS_IsFunction(ctx, con))
+        /* THE SYNTHESIZED CALLBACK IS ONE REACTION THAT MAKES TWO CALLS, and §4.13.6's drain has ONE rest
+           point per reaction: `q->phase` is step_call_run's single phase and `q->cur` is the one reaction in
+           flight, so there is nowhere for "I have run the first of two and am parked inside it" to live. It is
+           not two reactions either — a throw from disconnectedCallback must ABORT the synthesized callback and
+           be reported once, where two queued reactions would run the second anyway.
+           WHAT TO BUILD: a third reaction type beside CE_REACTION_CALLBACK and CE_REACTION_UPGRADE holding
+           « disconnectedCallback, connectedCallback », a second phase and a two-step cursor on
+           CustomElementQueue, and its own stage in the three enumerations that must stay paired —
+           CE_ARM_* (custom_elements.h), CE_BACKUP_STAGES (this file, static-asserted against CE_ARM_*) and
+           IDL_EPILOGUE_STEPS (core/idl_args.c). */
+        DFAIL("HTML §4.13.6 enqueue a custom element callback reaction step 3: a custom element with a "
+              "connectedCallback or a disconnectedCallback and no connectedMoveCallback was moved into a "
+              "connected parent, and the synthesized disconnected-then-connected callback is a reaction that "
+              "makes TWO calls — §4.13.6's drain holds one rest point per reaction, so build the second one");
+    JS_FreeValue(ctx, dis);
+    JS_FreeValue(ctx, con);
+    JS_FreeValue(ctx, def);
+    JS_FreeValue(ctx, wrap);
+}
+
 void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el)
 {
     JSValue wrap;
@@ -2835,27 +2900,6 @@ void custom_elements_install(JSContext *ctx, JSValueConst global)
     JSValue reg;
 
     DCHECK(g_ready, "customElements was installed before custom_elements_init ran");
-    /* §4.13.4 step 14's map NAMES `connectedMoveCallback` exactly on a platform that has `moveBefore` — the two
-       move together, and neither half is safe alone: a key collected for an operation this engine cannot
-       perform shows a page's Proxy a read for a callback nothing will invoke, and the operation without the key
-       silently drops the reaction it is supposed to fire. Asserted where Element's prototype exists, so
-       building moveBefore CRASHES here rather than leaving the pairing to a comment. */
-    {
-        JSValue ep = element_proto(ctx), mb;
-        JSAtom a = JS_NewAtom(ctx, "moveBefore");
-        int has;
-        CHECK(a != JS_ATOM_NULL, "custom elements: `moveBefore` could not be interned");
-        DCHECK(JS_IsObject(ep), "customElements was installed before Element.prototype existed — §4.13.4's "
-                                "callback list is paired with what Element can do, and that pairing cannot be "
-                                "checked against a prototype that is not there yet");
-        has = JS_GetOwnSlot(ctx, &mb, ep, a);
-        if (has > 0) JS_FreeValue(ctx, mb);
-        JS_FreeAtom(ctx, a);
-        JS_FreeValue(ctx, ep);
-        DCHECK(has <= 0, "Element has moveBefore, so HTML §4.13.4 step 14's lifecycle callback map must name "
-                         "`connectedMoveCallback` between disconnectedCallback and adoptedCallback — add it to "
-                         "CE_LIFECYCLE_CALLBACKS and enqueue it from the move");
-    }
     /* §4.13.4: "A Window's associated Document is ALWAYS created with a new CustomElementRegistry object", and
        this is that creation. Built for the agent's own realm while it is still pre-boot, so a definition a flow
        adds to it is captured by the heap COW rather than being that flow's private object. `is scoped` is

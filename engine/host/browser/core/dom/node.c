@@ -52,6 +52,7 @@
 #include "core/dom/slot.h"
 #include "core/dom/collections.h"
 #include "core/dom/range.h"
+#include "core/dom/node_iterator.h"   /* §6.1's pre-remove steps, which §4.2.3's move runs at its step 10 */
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -503,6 +504,24 @@ void node_add_tree_hook(NodeTreeHook fn)
     dom_cow_set_tree_hook(node_tree_hooks_run);
 }
 
+/* §4.2.3's MOVING STEPS — see node.h. It is NOT reached from the DOM-mutation chokepoint, and that is the
+   whole difference between this list and the one above: the chokepoint fires the insertion and removing steps
+   for every tree write there is, and a move is the one tree write that must reach neither. So the move
+   algorithm calls this list by name, at its own step 24.2, and nothing else can. */
+#define NODE_MOVING_HOOKS_MAX 4
+static NodeMovingHook g_moving_hooks[NODE_MOVING_HOOKS_MAX];
+static int g_moving_hook_n;
+
+void node_add_moving_hook(NodeMovingHook fn)
+{
+    DCHECK(fn != NULL, "a moving-steps hook was registered as nothing");
+    CHECK(g_moving_hook_n < NODE_MOVING_HOOKS_MAX,
+          "more §4.2.3 moving-steps hooks were registered than the list holds — a dropped one is a component "
+          "whose moving steps silently never run, which is a state-preserving move that preserves the wrong "
+          "state");
+    g_moving_hooks[g_moving_hook_n++] = fn;
+}
+
 /* ---- DOM §4.5 "ADOPT A NODE" ----------------------------------------------------------------------------
  *
  * ONLY STEP 2 OF IT EXISTED, inline in `node_insert_at`, and step 2 is the one step that is not about
@@ -764,7 +783,8 @@ static bool node_pre_insert_valid(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
                                         "a doctype's parent can only be a document"), false;
         return true;                                                                        /* STEP 5.2 */
     }
-    /* STEP 6. A CDATASection IS a Text node — §4.11's CDATASection inherits Text — so both are the one case. */
+    /* STEP 6. A CDATASection IS a Text node — §4.12 Interface CDATASection is `interface CDATASection : Text`
+       — so both are the one case. */
     if (node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION)
         return JS_ThrowDOMException(ctx, "HierarchyRequestError",
                                     "a document cannot have a Text node child"), false;
@@ -901,6 +921,170 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
     node_insert_adopt(parent, node);
     if (ref) dom_cow_insert_before(ref, node);
     else     dom_cow_append_child(parent, node);
+}
+
+/* ---- DOM §4.2.3 "MOVE" ------------------------------------------------------------------------------------
+ *
+ * "To MOVE a node node into a node newParent before null or a node child" — the TWENTY-SIX steps, and the
+ * algorithm §4.2.6's `moveBefore(node, child)` is three lines on top of.
+ *
+ * IT IS NOT A REMOVE FOLLOWED BY AN INSERT, and that is the entire feature rather than an optimisation. The
+ * standard says so in its own note, at step 24.2: "Because the move algorithm is a separate primitive from
+ * insert and remove, it does not invoke the insertion steps or removing steps for inclusiveDescendant." Those
+ * are the steps that DESTROY the state a page uses `moveBefore` to keep — HTML §4.8.5's `iframe` removing steps
+ * destroy the child navigable (so `frame.contentDocument` becomes a fresh blank document), HTML §2.1.4's
+ * removing steps clear the document's focused area, and §4.13.3's disconnected/connected pair resets a custom
+ * element. A `moveBefore` written as remove-then-insert therefore ends with the tree in the right SHAPE and the
+ * state gone, and nothing throws: the plausible wrong answer, which is why this is its own algorithm down to
+ * its own chokepoint pair (solver/dom_cow.h's move_out/move_in, which fire no tree hook at all).
+ *
+ * ITS VALIDITY IS NOT `ensure pre-insert validity`, AND THE DIFFERENCE IS NOT A SUBSET. Steps 1-6 are the move's
+ * own six, and three of them have no pre-insert counterpart while three pre-insert steps have no move
+ * counterpart:
+ *   - step 1 (shadow-including roots must be the SAME) does not exist for pre-insert at all, and it is what
+ *     makes every cross-document and connected↔disconnected move a HierarchyRequestError. The standard's own
+ *     note states the consequence: "this has the side effect of ensuring that a move is only performed if
+ *     newParent's connected is node's connected."
+ *   - step 4 admits ONLY an Element or a CharacterData node, where pre-insert validity step 4 also admits a
+ *     DocumentFragment and a DocumentType. `moveBefore(new DocumentFragment(), null)` throws.
+ *   - pre-insert validity's step 1 (the parent must be a Document, DocumentFragment or Element) is absent
+ *     because §4.2.6 puts `moveBefore` only on the three interfaces that include ParentNode, so there is no
+ *     receiver that could fail it; its steps 5.1, 8 and 11 are absent because steps 4 and 5 here have already
+ *     rejected every doctype and every fragment those steps are about.
+ * So this does NOT go through node_pre_insert_valid, and calling that entry with a `childrenToExclude` of its
+ * own would be the second copy of a check rather than the reuse it looks like: the two algorithms answer
+ * different questions and only three of their eleven and six steps coincide.
+ *
+ * WHAT IT SHARES WITH `remove` IT SHARES BY CALL. Steps 9-10 are §5.5's live-range pre-remove steps and §6.1's
+ * NodeIterator pre-remove steps; steps 14-16 are §4.2.2's removal-side slot steps and steps 21-23 its
+ * insertion-side ones — each is word-for-word the text its component already implements, so each is that
+ * component's function and not a copy. What is NOT shared is remove's step 15 (the transient registered
+ * observers), which move's numbering does not contain: a node moved out of a subtree an observer watches with
+ * `subtree: true` stops reporting to it, and that is the standard's answer, not an omission.
+ *
+ * A STRAIGHT-LINE C BODY, DELIBERATELY. Nothing in the twenty-six steps runs the page's code: the slot steps
+ * assign and SIGNAL (which queues §4.3's microtask), the custom-element step ENQUEUES a reaction, and the
+ * records are queued. The reactions run at the member's own `[CEReactions]` epilogue, which every declared
+ * member converges on — so the move is one uninterrupted operation and its chokepoint pair can assert it.
+ *
+ * Returns false HAVING THROWN. */
+static bool node_move(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_parent, lxb_dom_node_t *child)
+{
+    lxb_dom_node_t *old_parent, *old_prev, *old_next, *new_prev, *d;
+    bool new_parent_connected;
+
+    DCHECK(node != NULL && new_parent != NULL,
+           "§4.2.3's move was asked about no node or no newParent — both are non-nullable in the algorithm's "
+           "own signature, and a member reaching here with one skipped its declaration's interface conversion");
+
+    /* STEP 1 — "if newParent's shadow-including root is not the same as node's shadow-including root, then
+       throw a HierarchyRequestError." */
+    if (shadow_root_shadow_including_root(new_parent) != shadow_root_shadow_including_root(node))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "a node can only be moved within the tree it is already in"), false;
+    /* STEP 2 — host-including inclusive ancestor, which is the ONE step move and pre-insert share verbatim. */
+    if (shadow_root_is_shadow_including_inclusive_ancestor(node, new_parent))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "a node cannot be moved into its own descendant"), false;
+    /* STEP 3 */
+    if (child && child->parent != new_parent)
+        return JS_ThrowDOMException(ctx, "NotFoundError",
+                                    "the reference child is not a child of this node"), false;
+    /* STEP 4 — "if node is not an Element or a CharacterData node". NARROWER THAN PRE-INSERT'S STEP 4: a
+       DocumentFragment and a DocumentType are both legal to INSERT and neither can be moved. */
+    if (node->type != LXB_DOM_NODE_TYPE_ELEMENT && !node_is_chardata(node))
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "only an Element or a CharacterData node can be moved"), false;
+    /* STEP 5. A CDATASection IS a Text node — §4.12 Interface CDATASection is `interface CDATASection : Text`
+       — so both are the one case, exactly as pre-insert validity step 6 has them. */
+    if ((node->type == LXB_DOM_NODE_TYPE_TEXT || node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION) &&
+        new_parent->type == LXB_DOM_NODE_TYPE_DOCUMENT)
+        return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                    "a document cannot have a Text node child"), false;
+    /* STEP 6 — "if newParent is a document, node is an Element node, and either newParent has an element child,
+       child is a doctype, or child is non-null and a doctype is following child". A document's ONE element
+       child and its position relative to the doctype, which is pre-insert validity step 9's element arm with no
+       `childrenToExclude`: move removes nothing on its way in, so there is no child to exclude. */
+    if (new_parent->type == LXB_DOM_NODE_TYPE_DOCUMENT && node->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_node_t *c;
+
+        for (c = new_parent->first_child; c; c = c->next)
+            if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && c != node)
+                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                            "a document already has an element child"), false;
+        if (child && child->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
+            return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                        "an element cannot be moved before the doctype"), false;
+        for (c = child ? child->next : NULL; c; c = c->next)
+            if (c->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
+                return JS_ThrowDOMException(ctx, "HierarchyRequestError",
+                                            "an element cannot be moved before the doctype"), false;
+    }
+    old_parent = node->parent;                                                             /* STEP 7 */
+    /* STEP 8 — the standard ASSERTS this rather than testing it, and so does this engine. Step 1 is what makes
+       it true: a node with no parent is its own shadow-including root, so it can only pass step 1 by BEING
+       newParent's root, and step 2 has already rejected that. A null here means step 1 read the wrong root. */
+    DCHECK(old_parent != NULL,
+           "§4.2.3 move step 8 asserts oldParent is non-null and it is null — step 1's shadow-including-root "
+           "equality is what guarantees a parentless node cannot reach here, so one of the two read a root the "
+           "other did not");
+    /* THE MOVE'S ONE DOCUMENT, asserted rather than adopted. §4.5's adopt is absent from the move's numbering
+       because step 1 has already made it unnecessary: one shadow-including root is one tree, and every node in
+       a tree in this engine shares its node document (node_insert_at adopts on the way in). A move that found
+       two documents would be a move across a boundary step 1 was supposed to refuse. */
+    DCHECK(node_document_of(node) == node_document_of(new_parent),
+           "§4.2.3's move found `node` and `newParent` in two different node documents — step 1's "
+           "shadow-including-root equality is what makes adopt absent from this algorithm, so two documents "
+           "here means a tree was built without adopting and `ownerDocument` is already wrong");
+
+    range_pre_remove(ctx, node);                                                           /* STEP 9 */
+    node_iterator_pre_remove(ctx, node);                                                   /* STEP 10 */
+    old_prev = node->prev;                                                                 /* STEP 11 */
+    old_next = node->next;                                                                 /* STEP 12 */
+    dom_cow_move_out(node);                                                                /* STEP 13 */
+    /* STEPS 14-16 — §4.2.2's removal-side slot steps, WORD FOR WORD the text `remove` runs, which is why they
+       are that component's function. They read the tree in the DETACHED state (slot_removed_steps asserts the
+       detachment), which is the whole reason step 13 is not fused with steps 19-20. */
+    slot_removed_steps(ctx, node, old_parent);
+    /* STEP 17 — the live-range offsets in newParent past `child`'s index. It is stated BEFORE the insertion and
+       over `child`'s index; range_did_insert states the same arithmetic AFTER it and over the inserted node's
+       own index, which is the same number because the node lands exactly at `child`'s index. §4.2.3's insert
+       step 5 is the same pair of clauses with a `count`, so this is one implementation and not two.
+       Its "if child is non-null" guard is inside that call: with `child` null the node is APPENDED and its
+       index is the parent's last, so no offset can be greater than it. */
+    new_prev = child ? child->prev : new_parent->last_child;                               /* STEP 18 */
+    dom_cow_move_in(new_parent, node, child);                                              /* STEPS 19-20 */
+    range_did_insert(ctx, node);                                                           /* STEP 17 */
+    /* STEPS 21-23 — §4.2.2's insertion-side slot steps, again the same text `insert` runs. */
+    slot_insert_steps(ctx, node, new_parent);
+    /* STEP 24 — "for each shadow-including inclusive descendant inclusiveDescendant of node, in shadow-
+       including tree order". The walk is the shared shadow-including successor, so `<slot>`s and shadow trees
+       inside the moved subtree are visited exactly as §4.5's adopt visits them.
+       "newParent is connected" IS READ ONCE, HERE, and not per descendant: it is a fact about the move, and a
+       per-node `isConnected` would answer the same thing N times over a tree walk of the page's own depth. */
+    new_parent_connected = node_is_connected(new_parent);
+    for (d = node; d; d = shadow_root_next_in_shadow_including(ctx, d, node)) {
+        bool is_subtree_root = d == node;                                                  /* STEP 24.1 */
+        int i;
+
+        for (i = 0; i < g_moving_hook_n; i++)                                              /* STEP 24.2 */
+            g_moving_hooks[i](ctx, d, is_subtree_root, old_parent);
+        /* STEP 24.3. The realm is the NODE'S DOCUMENT'S, for the reason §4.2.3's other per-node steps resolve
+           theirs that way: two same-origin documents are one agent, so the flow performing the move is
+           routinely not standing in the realm whose Document the element belongs to, and a reaction enqueued
+           out of the mutating realm would name that realm's registry. */
+        if (new_parent_connected && d->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            JSContext *realm = document_realm_of(d);
+
+            DCHECK(realm != NULL,
+                   "§4.2.3's move reached a connected element in a document no realm was installed for — a "
+                   "document that can hold a connected node is a document a flow can run steps in");
+            custom_elements_moved(realm, lxb_dom_interface_element(d));
+        }
+    }
+    /* STEPS 25-26 — the TWO tree mutation records, one for each parent, with the siblings bound above. */
+    mutation_observer_move_steps(ctx, node, old_parent, old_prev, old_next, new_parent, new_prev, child);
+    return true;
 }
 
 /* §4.5 appendChild / removeChild. DECLARED members, like every other one — they were raw JS_CFUNC_DEF entries,
@@ -1074,6 +1258,41 @@ static JSValue js_node_mixin(JSContext *ctx, JSValueConst this_val, int argc, JS
     default: DFAIL("a ChildNode/ParentNode member ran with an unknown magic"); break;
     }
     return JS_UNDEFINED;
+}
+
+/* §4.2.6 `[CEReactions] undefined moveBefore(Node node, Node? child)` — THREE STEPS on top of §4.2.3's move.
+ *
+ * IT IS NOT ON Node.prototype. §4.2.6 declares it on the ParentNode mixin, so it exists on exactly the three
+ * interfaces whose IDL includes ParentNode — Document, DocumentFragment and Element — and `"moveBefore" in
+ * document.doctype` is FALSE. That is not a detail of where the installer is called from: a DocumentType and a
+ * Text are the two node kinds §4.2.3's move can be given and can never be given TO, so a `moveBefore` on
+ * Node.prototype would be a member every node advertises and two thirds of them throw from.
+ *
+ * ITS TWO ARGUMENTS ARE INTERFACE TYPES AND THE DECLARATION IS WHAT ENFORCES THEM: `Node node` is required and
+ * non-nullable, `Node? child` is required and nullable, and neither is optional — so `body.moveBefore(t)` is a
+ * TypeError for its arity and `body.moveBefore({}, null)` is a TypeError for its type, both thrown by the one
+ * machine every declared member converges on rather than by a test in this body. */
+static JSValue js_node_move_before(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *parent = node_of(this_val), *node, *ref;
+
+    (void)magic;
+    DCHECK(argc == 2, "moveBefore reached its body without the two arguments its declaration requires — both "
+                      "positions are non-optional, so §3.6 step 5's arity TypeError is what stands in front of "
+                      "this body");
+    if (!parent)
+        return JS_ThrowTypeError(ctx, "moveBefore called on something that is not a Node");
+    node = node_of(argv[0]);
+    DCHECK(node != NULL, "moveBefore's `Node node` reached the body as something that is not a node — the "
+                         "declaration's IDL_INTERFACE position is what makes that a TypeError before step 1");
+    ref = node_of(argv[1]);                                             /* STEP 1 */
+    /* STEP 2 — "if referenceChild is node, then set referenceChild to node's next sibling", read BEFORE the
+       move takes the node out of its place. `a.moveBefore(b, b)` is the no-op the standard's own test names,
+       and without this step it would move `b` before itself, which is a position that stops existing at step
+       13. §4.2.3's pre-insert has the identical step for the identical reason. */
+    if (ref == node) ref = node->next;                                  /* STEP 2 */
+    if (!node_move(ctx, node, parent, ref)) return JS_EXCEPTION;        /* STEP 3 */
+    return JS_UNDEFINED;                                                /* `undefined` return type */
 }
 
 /* §4.10's CharacterData is FOUR node kinds, not two. Text and Comment were the only ones the engine could
@@ -2845,6 +3064,11 @@ void node_install_child_mixin(JSContext *ctx, JSValueConst proto)
    three insertion members while its reads and lookups are re-declared per interface, which is how Document
    ended up without `children` and with a querySelector that ignored its receiver. */
 static int g_id_qs = -1, g_id_qsa = -1, g_id_by_tag = -1, g_id_by_class = -1, g_id_by_tag_ns = -1;
+/* §4.2.6's `moveBefore` is NOT one of the mixin table's entries above, and the reason is the table's own shape:
+   every member in it is variadic `(Node or DOMString)... nodes` over §4.2.6's "convert nodes into a node".
+   `moveBefore(Node node, Node? child)` converts nothing and inserts nothing — it is §4.2.3's move — so it is
+   its own declaration on the same three prototypes. */
+static int g_id_move_before = -1;
 
 void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
 {
@@ -2855,6 +3079,7 @@ void node_install_parent_mixin(JSContext *ctx, JSValueConst proto)
                                (int)(sizeof(js_parent_node_reads) / sizeof(js_parent_node_reads[0])));
     idl_install_method(ctx, proto, "querySelector", 1, g_id_qs);
     idl_install_method(ctx, proto, "querySelectorAll", 1, g_id_qsa);
+    idl_install_method(ctx, proto, "moveBefore", 2, g_id_move_before);
     /* Not part of ParentNode in the IDL — §4.5 puts these on Document and §4.9 on Element, which between them
        is every interface that includes ParentNode except DocumentFragment. Installed here because that is one
        place rather than two, and a fragment answering them is a superset nothing can observe as wrong: its
@@ -2874,6 +3099,19 @@ static void node_declare_mixins(JSContext *ctx)
     g_id_by_id = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, &NODE_BYID_STEP, 0);
     g_id_qs = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, document_qs_decl(), 0);
     g_id_qsa = idl_method_id_step(ctx, ONE_STR, 1, NULL, 0, document_qs_decl(), 1);
+    {
+        /* §4.2.6: `[CEReactions] undefined moveBefore(Node node, Node? child)`. BOTH POSITIONS ARE INTERFACE
+           TYPES AND NEITHER IS OPTIONAL, and stating that here is what makes the two TypeErrors the standard's
+           own test asks for come out of §3.6 rather than out of this component: `moveBefore(text)` fails step
+           5's arity check, `moveBefore({}, null)` and `moveBefore(node, {})` fail the interface conversion, and
+           `moveBefore(node, null)` and `moveBefore(node, undefined)` are the nullable position's IDL null. The
+           brand is the node wrapper class — one class for every node kind, which is exactly the granularity
+           `Node` needs. */
+        static const IdlArgType NODE_AND_NULLABLE_NODE[2] = { IDL_INTERFACE, IDL_INTERFACE_NULLABLE };
+
+        g_id_move_before = idl_method_id(ctx, NODE_AND_NULLABLE_NODE, 2, js_node_move_before, 0);
+        idl_iface_brand(node_class_id());
+    }
     g_id_by_tag = idl_method_id(ctx, ONE_STR, 1, js_node_by_name, 0);
     g_id_by_class = idl_method_id(ctx, ONE_STR, 1, js_node_by_name, 1);
     {

@@ -182,6 +182,15 @@ void custom_elements_element_connected(JSContext *ctx, lxb_dom_element_t *el);
 /* §4.13.3's disconnected reaction — the twin of the upgrade, for an element LEAVING a document. A no-op unless
    the element was upgraded, because only an upgraded element has a lifecycle to react with. */
 void custom_elements_disconnected(JSContext *ctx, lxb_dom_element_t *el);
+/* DOM §4.2.3 MOVE STEP 24.3 — "if inclusiveDescendant is custom and newParent is connected, then enqueue a
+   custom element callback reaction with inclusiveDescendant, callback name "connectedMoveCallback", and « »".
+   THE THIRD SIDE OF A TREE CHANGE, and it is neither of the other two: a move runs no insertion steps and no
+   removing steps, so an element that is moved must not be told it disconnected and reconnected — HTML
+   §4.13.2.1 "Preserving custom element state when moved" is the section that says so, and its whole example is
+   an element whose observer and tab index survive because the pair did not fire.
+   THE CALLER OWNS "newParent is connected" — one fact for the whole moved subtree, decided once by the move.
+   A no-op for an element that is not custom, and for a definition with none of the three callbacks. */
+void custom_elements_moved(JSContext *ctx, lxb_dom_element_t *el);
 /* §4.13.3's attribute-changed reaction. Called BEFORE the write, so the element still holds the old value;
    `val` is NULL for a removal. A no-op unless the element is upgraded and its definition OBSERVES this name.
    BOTH VALUES ARE PASSED, because §9.4.6 step 3 runs the change steps AFTER step 2 stored the new one — the

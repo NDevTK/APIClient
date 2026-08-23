@@ -855,6 +855,58 @@ static const char *HTML =
     /* the scope is the RECEIVER: `pn` has no <body> under it, the document does. */
     " + '&sc=' + (pn.querySelector('body') === null && document.querySelector('body') === document.body"
     " && pn.querySelectorAll('p').length === 1 ? 'scoped' : 'wrong'));"
+    /* ---- §4.2.6 moveBefore / §4.2.3 move — ONE CONTIGUOUS BLOCK, /api/movebefore* ------------------------
+       THE POINT OF THE MEMBER IS THE STATE IT DOES NOT DESTROY, so the assertion that matters is the one a
+       remove-then-insert `moveBefore` would fail while getting the tree shape right: a custom element that is
+       MOVED gets `connectedMoveCallback` and does NOT get the disconnected/connected pair. HTML §4.13.2.1
+       "Preserving custom element state when moved" is that behaviour, and a page that loses it silently loses
+       whatever the callbacks reset — an observer, a tab index, an iframe's document.
+       The three validity assertions are the ones where move's six steps DIVERGE from pre-insert's eleven:
+       step 1 (one shadow-including root, which is what makes every disconnected↔connected move throw) has no
+       pre-insert counterpart at all, and step 4 refuses a DocumentFragment and a DocumentType that pre-insert
+       validity step 4 admits. */
+    "var mbCe = [];"
+    "customElements.define('x-moved', class extends HTMLElement {"
+      "connectedCallback(){ mbCe.push('c'); }"
+      "disconnectedCallback(){ mbCe.push('d'); }"
+      "connectedMoveCallback(){ mbCe.push('m'); } });"
+    "var mbA = document.createElement('div'); document.body.appendChild(mbA);"
+    "var mbB = document.createElement('div'); var mbC = document.createElement('div');"
+    "mbA.append(mbB, mbC);"
+    "var mbR = mbA.moveBefore(mbC, mbB);"
+    "var mbOrder = mbA.firstChild === mbC && mbA.lastChild === mbB && mbR === undefined;"
+    /* §4.2.6 step 2: a reference child that IS the node becomes its next sibling, so this is a no-op. */
+    "mbA.moveBefore(mbC, mbC); mbA.moveBefore(mbB, mbB);"
+    "var mbSelf = mbA.firstChild === mbC && mbA.lastChild === mbB;"
+    "fetch('/api/movebefore?v=' + (mbOrder && mbSelf ? 'ismoved' : 'wrong'));"
+    "var mbThrew = '';"
+    /* STEP 1, the step pre-insert does not have: a node with no parent is its own shadow-including root, so
+       every disconnected→connected move is a HierarchyRequestError where the same appendChild succeeds. */
+    "try { document.body.moveBefore(document.createElement('p'), null); mbThrew += 'none'; }"
+      "catch (e) { mbThrew += e.name; }"
+    /* …and a DocumentFragment is always its own root, so step 1 answers before step 4 ever can. That is not a
+       redundancy: it is why step 4's fragment arm is unreachable and its DOCTYPE arm is not. */
+    "try { document.body.moveBefore(new DocumentFragment(), null); mbThrew += ':none'; }"
+      "catch (e) { mbThrew += ':' + e.name; }"
+    /* STEP 3's NotFoundError, over a reference child of a different parent. */
+    "try { mbA.moveBefore(mbB, document.body.firstChild); mbThrew += ':none'; }"
+      "catch (e) { mbThrew += ':' + e.name; }"
+    /* STEP 4 IS ONLY REACHABLE FOR A DOCTYPE, and only for one already in this tree — `document.doctype` is
+       the only such node there is. Its presence is reported beside the throw rather than assumed, because a
+       null one would make this a TypeError from the IDL and read as a pass by name. */
+    "var mbDt = document.doctype;"
+    "try { document.body.moveBefore(mbDt, null); mbThrew += ':none'; } catch (e) { mbThrew += ':' + e.name; }"
+    "fetch('/api/movebeforethrow?v=' + encodeURIComponent(mbThrew)"
+    " + '&doctype=' + (mbDt ? 'has' : 'null'));"
+    /* THE STATE-PRESERVING HALF. The element is appended (one `c`), then moved between two connected parents
+       (one `m` and nothing else). A move written as remove-then-insert reads 'cdc' here and the tree looks
+       identical either way, which is the whole reason this is the assertion. */
+    "var mbP1 = document.createElement('div'); var mbP2 = document.createElement('div');"
+    "document.body.append(mbP1, mbP2);"
+    "var mbEl = document.createElement('x-moved'); mbP1.appendChild(mbEl);"
+    "mbP2.moveBefore(mbEl, null);"
+    "fetch('/api/movebeforece?v=' + (mbCe.join('') === 'cm' && mbEl.parentNode === mbP2"
+    " ? 'ispreserved' : mbCe.join('') || 'none'));"
     /* §13.4 A PARSE OF THE PAGE'S SIZE. The tokeniser is fed ONE BYTE per step, so this assignment suspends
        about two thousand times — and a resume that loses the tokeniser's position gives a DIFFERENT TREE, not
        a slower one, which is what the counts below catch. The markup is built by doubling rather than by a
@@ -5031,6 +5083,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "\"/api/mixin3\"",     "%3Cspan%3E%3C%2Fspan%3E" },
         { "\"/api/variadic\"",   "%3Cli%3E%3C%2Fli%3En1770abcdefg" },   /* nine arguments, one a page toString */
         { "\"/api/live\"",       "islive"  },   /* childNodes and children track the tree; qSA does not */
+        /* §4.2.6 moveBefore / §4.2.3 move — the three rows of the one block above. */
+        { "\"/api/movebefore\"",      "ismoved" },       /* the reorder, and `moveBefore(n, n)` as a no-op */
+        /* move's SIX validity steps where they diverge from pre-insert's eleven: step 1 first (which is why
+           the fragment reads HierarchyRequestError and not step 4's), then step 3, then step 4's doctype. */
+        { "\"/api/movebeforethrow\"",
+          "HierarchyRequestError%3AHierarchyRequestError%3ANotFoundError%3AHierarchyRequestError" },
+        { "\"/api/movebeforece\"",    "ispreserved" },   /* connectedMoveCallback ONLY — not the c/d pair */
         { "\"/api/named\"",      "isnamed" },
         /* §4.2.6 installed from ONE place: Document gets the reads it never had, and the lookups scope to
            whichever node they were called on rather than to the global document */

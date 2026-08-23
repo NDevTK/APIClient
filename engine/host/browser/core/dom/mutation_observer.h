@@ -50,6 +50,25 @@ void mutation_observer_transient_for_removal(JSContext *ctx, lxb_dom_node_t *nod
    custom-element reactions. */
 void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *parent, int phase);
 
+/* §4.2.3's MOVE STEPS 25-26 — "queue a tree mutation record for oldParent with « », « node »,
+   oldPreviousSibling, and oldNextSibling" and "queue a tree mutation record for newParent with « node », « »,
+   newPreviousSibling, and child".
+ *
+ * IT IS A CALL AND NOT THE TREE-HOOK REGISTRATION ABOVE, because a move fires no tree hook at all: §4.2.3's
+ * move is a separate primitive from insert and remove and runs neither's steps, so the list that carries the
+ * insertion and removing steps is exactly the list a move must not reach. What survives of the removal side is
+ * these two records and nothing else — in particular NOT remove's step 15, whose transient registered
+ * observers are absent from move's numbering, so a node moved out of a subtree an observer watches stops
+ * reporting to it. That absence is the standard's, and reusing the hook would have silently added it back.
+ *
+ * TWO RECORDS FOR ONE NODE is what makes this its own entry rather than two calls at the caller: the node list
+ * « node » is ONE array shared by both records, and building it is this component's private shape. The four
+ * sibling arguments are all bound by the caller BEFORE its own step 13 detach (steps 11-12) or between the
+ * detach and the insert (step 18), which is why they are passed rather than read back off the tree. */
+void mutation_observer_move_steps(JSContext *ctx, lxb_dom_node_t *node,
+                                  lxb_dom_node_t *old_parent, lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next,
+                                  lxb_dom_node_t *new_parent, lxb_dom_node_t *new_prev, lxb_dom_node_t *child);
+
 /* §4.2.3's `suppressObservers`, as a SCOPE. Insert and replace are each ONE operation in the standard and N
    tree writes here, so the per-node hook queued N records where a browser queues one. `parent` is the
    operation's parent — the target of the record this scope will queue — and `suppressed` is the one child the

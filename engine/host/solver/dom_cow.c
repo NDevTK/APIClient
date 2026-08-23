@@ -1100,6 +1100,63 @@ void dom_cow_insert_before(lxb_dom_node_t *ref, lxb_dom_node_t *child) {
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
     if (g_tree_hook) g_tree_hook(g_cow_ctx, child, child->parent, 1);
 }
+
+/* DOM §4.2.3 "MOVE" STEPS 13 AND 19-20 — the same two captures the remove and insert chokepoints push, and NO
+   TREE HOOK. See dom_cow.h for why the absence of the hook is the whole operation rather than an omission.
+   THE PAIR IS ASSERTED, in dev, through one file-static: a `_move_out` whose `_move_in` never came is a node
+   taken out of the tree with no removing steps run for it, which is a leak of live tree from every walk in the
+   engine and shows up nowhere. Nothing between the two can run the page's code (§4.2.3's steps 14-18 are slot
+   assignment and live-range arithmetic, neither of which calls out), so ONE pointer is the whole state the
+   invariant needs — and it is compiled out with the check it exists for. */
+#if APICLIENT_DEV
+static lxb_dom_node_t *g_move_in_flight;
+#endif
+
+void dom_cow_move_out(lxb_dom_node_t *node) {
+    DCHECK(node != NULL, "§4.2.3's move was asked to take nothing out of a tree — `node` is non-nullable in the "
+                         "algorithm's own signature");
+    DCHECK(node->parent != NULL,
+           "§4.2.3 move step 8 asserts oldParent is non-null and it is null — step 1's shadow-including-root "
+           "test is what guarantees it, so reaching here with a parentless node means the member skipped it");
+#if APICLIENT_DEV
+    DCHECK(g_move_in_flight == NULL,
+           "§4.2.3's move took a second node out of the tree while the first was still detached — the pair is "
+           "one uninterrupted operation, so a nested move is a caller running two algorithms at once");
+    g_move_in_flight = node;
+#endif
+    g_dom_version++;
+    if (g_dom_capture) {
+        DomUndo u; memset(&u, 0, sizeof u);
+        dom_capture_begin();   /* the position is read off the live tree and written down by the push */
+        u.kind = 2; u.node = node;
+        u.parent = node->parent; u.next = node->next;
+        u.sh_old = u.sh_cur = JS_UNDEFINED;
+        dom_undo_push(u);
+        dom_capture_end();
+    }
+    lxb_dom_node_remove(node);
+}
+
+void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref) {
+    DCHECK(parent != NULL && node != NULL, "§4.2.3's move was asked to put nothing anywhere");
+    DCHECK(node->parent == NULL,
+           "§4.2.3 move step 19/20 ran on a node that is still in a tree — step 13's detach is what makes the "
+           "slot steps between them recompute anything, so a move that skipped it inserts a node with two "
+           "parents and a sibling chain that loops");
+    DCHECK(ref == NULL || ref->parent == parent,
+           "§4.2.3's move was given a reference child of another parent — step 3's NotFoundError is what keeps "
+           "that out, and reaching here past it inserts into a tree the member never named");
+#if APICLIENT_DEV
+    DCHECK(g_move_in_flight == node,
+           "§4.2.3's move put back a node its own step 13 never took out — the two halves are one operation "
+           "over one node, and a mismatch is a removal whose removing steps nobody ran");
+    g_move_in_flight = NULL;
+#endif
+    g_dom_version++;
+    dom_insert_capture(node);
+    if (ref) lxb_dom_node_insert_before(ref, node);
+    else     lxb_dom_node_insert_child(parent, node);
+}
 /* dom_revert — the "DISCARD the running flow's writes -> baseline" twin of dom_unapply — is DELETED, and this
  * note is here because the deletion is the point rather than a tidy-up. It was the ONE caller's (flow_finish's)
  * private discard: the same per-entry restore dom_unapply already does, minus the stash into `cur`, plus

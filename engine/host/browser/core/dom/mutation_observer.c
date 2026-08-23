@@ -760,6 +760,35 @@ void mutation_observer_tree_steps(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_nod
     JS_FreeValue(ctx, list);
 }
 
+void mutation_observer_move_steps(JSContext *ctx, lxb_dom_node_t *node,
+                                  lxb_dom_node_t *old_parent, lxb_dom_node_t *old_prev, lxb_dom_node_t *old_next,
+                                  lxb_dom_node_t *new_parent, lxb_dom_node_t *new_prev, lxb_dom_node_t *child)
+{
+    JSValue one, wrap;
+
+    DCHECK(node && old_parent && new_parent,
+           "§4.2.3's move queued its records without one of the three nodes they are about — steps 25 and 26 "
+           "name oldParent, newParent and node, and step 8 asserts oldParent is non-null");
+    if (!g_ready || !g_any_observer) return;
+    wrap = node_wrap(ctx, node);
+    if (JS_IsNull(wrap)) { JS_FreeValue(ctx, wrap); return; }
+    one = JS_NewArray(ctx);
+    CHECK(!JS_IsException(one), "a move's tree mutation record node list could not be allocated");
+    JS_SetPropertyUint32(ctx, one, 0, wrap);
+    /* STEP 25 — "queue a tree mutation record for oldParent with « », « node », oldPreviousSibling, and
+       oldNextSibling". The siblings are the ones step 11-12 bound BEFORE the detach, so they arrive as
+       arguments rather than being read back off a node that has since been re-parented. */
+    mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, old_parent, NULL, NULL, NULL, 0,
+                                   JS_UNDEFINED, one, old_prev, old_next);
+    /* STEP 26 — "queue a tree mutation record for newParent with « node », « », newPreviousSibling, and
+       child". `child` is the member's own reference child and not `node`'s current next sibling: they are the
+       same node here, but the standard names the argument, and a re-derivation would answer differently the
+       moment `child` is null (an append, whose nextSibling is null either way) or the tree moves under it. */
+    mutation_observer_queue_record(ctx, MR_TYPE_CHILD_LIST, new_parent, NULL, NULL, NULL, 0,
+                                   one, JS_UNDEFINED, new_prev, child);
+    JS_FreeValue(ctx, one);
+}
+
 void mutation_observer_character_data(JSContext *ctx, lxb_dom_node_t *node, const char *old, size_t old_len)
 {
     if (!g_ready || !g_any_observer || !node) return;

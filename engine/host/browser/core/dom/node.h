@@ -111,6 +111,29 @@ void node_add_tree_hook(NodeTreeHook fn);
  * the flow performing the write is routinely not in the realm the parent belongs to. */
 typedef void (*NodeChildrenChangedHook)(JSContext *ctx, lxb_dom_node_t *parent);
 void node_add_children_changed_hook(NodeChildrenChangedHook fn);
+
+/* §4.2.3's MOVING STEPS — "specifications may define moving steps for all or some nodes. The algorithm is
+ * passed a node movedNode, a boolean isSubtreeRoot, and a node oldAncestor as indicated in the move algorithm
+ * below."
+ *
+ * A FOURTH LIST, and it exists because the move algorithm's own note says the other lists must not run: "Because
+ * the move algorithm is a separate primitive from insert and remove, it does not invoke the insertion steps or
+ * removing steps for inclusiveDescendant." A move that reused the tree-hook list would destroy an `<iframe>`'s
+ * child navigable, reset the document's focused area and fire a custom element's disconnected/connected pair —
+ * every piece of state `moveBefore()` exists to preserve. So the two lists are disjoint by construction, which
+ * is the only way that guarantee can be made rather than remembered.
+ *
+ * THE THREE ARGUMENTS ARE THE SPEC'S OWN. `is_subtree_root` is move step 24.1 ("true if inclusiveDescendant is
+ * node; otherwise false") and `old_ancestor` is the move's oldParent — HTML §2.1.4's moving steps and the per-
+ * local-name ones it dispatches to (`source` and `img` ask whether the old ancestor was a `picture`) are stated
+ * over both, so a hook handed only the node could not implement them at all.
+ *
+ * `ctx` IS THE MUTATING REALM, exactly as it is for the tree hooks, and a registrant that needs the node's own
+ * document realm resolves it itself (document_realm_of). */
+typedef void (*NodeMovingHook)(JSContext *ctx, lxb_dom_node_t *moved, bool is_subtree_root,
+                               lxb_dom_node_t *old_ancestor);
+void node_add_moving_hook(NodeMovingHook fn);
+
 /* THE PRE-ORDER SUCCESSOR within `root`'s subtree, or NULL at the end — the one traversal primitive the spec's
    tree-order algorithms need. Exported for the same reason it exists: having it once is what keeps every
    algorithm that walks in tree order from growing its own walker that disagrees at the edges. */

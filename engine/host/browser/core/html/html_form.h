@@ -35,6 +35,13 @@ void html_form_free(JSRuntime *rt);
 /* THE ELEMENT'S FORM OWNER — the form element's wrapper, or JS_NULL. OWNED. */
 JSValue html_form_owner_of(JSContext *ctx, JSValueConst wrap);
 
+/* COULD this element be form-associated at all — asked of the TAG, with NO WRAPPER. §4.10.2's categories are
+   all built-in tags plus custom elements, so this drops nothing they contain; what it buys is that a tree walk
+   over a page's own markup does not materialise a wrapper per node just to find out that a `<div>` has no form
+   owner. Whether it IS one is only knowable through its definition and its per-flow owner slot, which is what
+   html_form_owner_of answers. */
+bool html_form_maybe_associated(lxb_dom_node_t *n);
+
 /* "RESET THE FORM OWNER of element", steps 1-5. `*pchanged` (may be NULL) says whether step 3-5 left a
    DIFFERENT owner than the element had, which is what §4.13.3's "doing so changes the form owner" reads.
    Returns the new owner (or JS_NULL), OWNED.
