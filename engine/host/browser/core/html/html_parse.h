@@ -177,15 +177,16 @@ bool html_parse_owns_tokens_of(const lxb_dom_document_t *doc);
    being built. That stamp is why §13.4's temporary fragment document does not have to carry this itself: its
    elements and its Attrs name the REAL document, so the table the append reads is the real one's, whatever the
    fragment document's own field says.
-   AND IT NO LONGER SAYS "EMPTY". An owned document used to be handed lexbor's all-NULL default, because the
-   default was assigned before the owner branch; it is now assigned INSIDE that branch from `owner->mutation`
-   and `owner->attr_mutation`, so a fragment document INHERITS this component's table. That is a widening of
-   what `html_parse_owns_token_values_of` answers true for, and it widens toward the truth — the documents it
-   newly admits are exactly the ones whose appends were already reaching this callback through the owner stamp,
-   so the predicate now agrees with the dispatch instead of understating it.
+   AND WHAT IT CARRIES INSTEAD IS LEXBOR'S OWN STEPS, NOT AN EMPTY TABLE. `lxb_dom_document_init` does now copy
+   `owner->attr_mutation` into an owned document, but that inheritance never survives for an HTML document:
+   `lxb_html_document_interface_create` calls `lxb_html_document_mutation_init` immediately afterwards, which
+   overwrites both tables with lexbor's `lxb_html_attribute_steps_*` and `lxb_html_element_steps_*`. So a
+   fragment document carries lexbor's HTML steps, exactly as the root does, and `html_parse_owns_token_values_of`
+   answers FALSE for it — the same answer as before v3, reached by a different route.
    `lxb_dom_document_set_default_node_cb` is NOT the way back to the default: it resets `mutation` and leaves
-   `attr_mutation` — the half this component installs on — untouched.
-   It refuses to overwrite a callback table that is neither lexbor's default nor this one, because a second
+   `attr_mutation` — the half this component installs on — untouched. `lxb_html_document_mutation_erase` is the
+   one that resets both.
+   It refuses to overwrite a callback table that is neither lexbor's HTML steps nor this one, because a second
    component wanting `append` needs the two composed rather than one of them silently dropped. */
 void html_parse_own_token_values(lxb_dom_document_t *doc);
 

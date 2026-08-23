@@ -290,8 +290,9 @@ lxb_html_document_t *dom_document_create(void)
        reads `attr_mutation` off `lxb_dom_interface_node(element)->owner_document`, so the field the DOM reads
        is the owner's and installing on an inherited struct would write the one pointer nothing reads. That is
        also what covers §13.4's fragment parse, whose temporary document stamps every element and Attr it makes
-       with this one — and which now INHERITS this table rather than being reset to lexbor's empty one, so the
-       field agrees with the stamp instead of contradicting it. */
+       with this one while carrying lexbor's own HTML attribute steps in its own field —
+       `lxb_html_document_mutation_init` installs those on every HTML document at creation, which is also what
+       this install composes over rather than replaces. */
     html_parse_own_token_values(doc);
     /* AND THE ARENAS ARE THE AGENT'S, from here rather than from the first adopt — see core/dom/node_heap.h.
        Here, because it is the only moment the document has none of its own bytes yet, and because a document

@@ -2,6 +2,9 @@
 #include <lexbor/core/mraw.h>
 #include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
+/* NOT REACHED THROUGH `html.h` — the four §4.9 attribute-change steps this component composes over are named
+   directly, and nothing else pulls their declarations in. */
+#include <lexbor/html/attribute_steps.h>
 
 #include "check.h"
 #include "core/dom/node_heap.h"
@@ -43,7 +46,7 @@ static lxb_html_token_t *g_token_in_construction;
    and it MEMCPYs its input into a fresh `doc->text` allocation before firing, so a token's bytes can never be
    what a change reports; `lxb_dom_attr_set_value_wo_copy`, which is what tree construction uses and what does
    hold the token's pointer, fires nothing at all. Append is therefore the one edge those bytes cross, which is
-   why the other three members of the table stay NULL — see the table below. */
+   why it is the one member the table below wraps rather than passes through. */
 static lxb_status_t html_parse_attr_appended(lxb_dom_element_t *element,
                                              lxb_dom_attr_id_t local_name,
                                              const lxb_char_t *old_value, size_t old_len,
@@ -52,44 +55,63 @@ static lxb_status_t html_parse_attr_appended(lxb_dom_element_t *element,
 {
     lxb_html_token_attr_t *ta;
 
-    (void) local_name; (void) ns;
     DCHECK(element != NULL, "the DOM reported an attribute append onto no element");
     DCHECK(old_value == NULL && old_len == 0,
            "an attribute APPEND reported a previous value — an append is §4.9's \"append an attribute\", which "
            "puts an attribute that was on no element onto one, so there is nothing it could replace; a "
            "non-NULL old value means these bytes came from \"change an attribute\" and the table below wired "
            "the wrong member");
-    if (g_token_in_construction == NULL || value == NULL)
-        return LXB_STATUS_OK;
-    for (ta = g_token_in_construction->attr_first; ta != NULL; ta = ta->next) {
-        if (ta->value != value)
-            continue;
-        DCHECK(ta->value_size == value_len,
-               "an Attr took a token attribute's exact allocation and recorded a different length for it — "
-               "`lxb_dom_attr_set_value_wo_copy` is handed `token_attr->value` and `token_attr->value_size` "
-               "together, so the two disagreeing means something rewrote one of them in between and the bytes "
-               "past the shorter of the pair belong to nobody");
-        /* THE DOM IS THE OWNER FROM HERE. Nothing reads a token attribute's value after tree construction has
-           appended it: `lxb_html_tree_append_attributes` advances to the next attribute without re-reading
-           this one, and the only two other readers of the field in lexbor run BEFORE any element exists —
-           §13.2.6.4.9's `<input type=hidden>` test, which reads the token to decide whether to insert at all,
-           and `lxb_html_token_doctype_parse`, which a DOCTYPE token never reaches an element from. */
-        ta->value = NULL;
-        ta->value_size = 0;
-        return LXB_STATUS_OK;
+    if (g_token_in_construction != NULL && value != NULL) {
+        for (ta = g_token_in_construction->attr_first; ta != NULL; ta = ta->next) {
+            if (ta->value != value)
+                continue;
+            DCHECK(ta->value_size == value_len,
+                   "an Attr took a token attribute's exact allocation and recorded a different length for it — "
+                   "`lxb_dom_attr_set_value_wo_copy` is handed `token_attr->value` and `token_attr->value_size` "
+                   "together, so the two disagreeing means something rewrote one of them in between and the "
+                   "bytes past the shorter of the pair belong to nobody");
+            /* THE DOM IS THE OWNER FROM HERE. Nothing reads a token attribute's value after tree construction
+               has appended it: `lxb_html_tree_append_attributes` advances to the next attribute without
+               re-reading this one, and the only two other readers of the field in lexbor run BEFORE any element
+               exists — §13.2.6.4.9's `<input type=hidden>` test, which reads the token to decide whether to
+               insert at all, and `lxb_html_token_doctype_parse`, which a DOCTYPE token never reaches an element
+               from. */
+            ta->value = NULL;
+            ta->value_size = 0;
+            break;
+        }
     }
-    return LXB_STATUS_OK;
+    /* AND THEN LEXBOR'S OWN STEPS RUN — the composition, on EVERY path out of the bookkeeping above. The match
+       ends in a `break` rather than a return for exactly that reason: a claimed token attribute is the common
+       case, and returning there is how the delegation silently stops happening for it. */
+    return lxb_html_attribute_steps_append(element, local_name, old_value, old_len,
+                                           value, value_len, ns);
 }
 
-/* APPEND ONLY. `change`, `remove` and `replace` stay lexbor's NULL because this component's question is
-   asked exactly once per allocation — at the instant ownership moves — and a table that answered more would be
-   a second place the same fact is decided.
+/* THE COMPOSITION, NAMING BOTH. Every HTML document carries lexbor's OWN §4.9 attribute change steps —
+   `lxb_html_document_mutation_init` installs all four the moment `lxb_html_document_interface_create` finishes
+   `lxb_dom_document_init`, so there is no such thing here as an HTML document whose table is empty. Replacing
+   it wholesale would silently disable them, which is what the install below asserts against.
+   SO THREE MEMBERS ARE LEXBOR'S, UNCHANGED, and only `append` is wrapped — this component has exactly one
+   question and it is asked at exactly one edge. A member this component wrapped without needing to would be a
+   second place the same fact is decided, and three pass-through wrappers that only delegate would be three
+   chances to forget to.
+   THERE IS EXACTLY ONE OTHER INSTALLER IN LEXBOR AND THIS ENGINE DOES NOT REACH IT: `lxb_style_init` calls
+   `lxb_html_document_style_mutation_init`, which swaps in the STYLE module's tables (they chain to these same
+   HTML steps). Nothing here calls `lxb_style_*` or `lxb_html_document_css_init`, so the table found below is
+   the HTML one. The day the style module IS initialised, the install below FIRES rather than silently
+   delegating to the wrong steps — which is the correct outcome, because the composition target changes and
+   this file has to name the new one.
    THE NODE-MUTATION TABLE IS LEFT ALONE ENTIRELY. Attributes are not nodes to lexbor's mutation callbacks any
    more: `lxb_dom_element_attr_append` reaches `attr_mutation`, while `mutation->inserted` is now a TREE edge
    that fires over shadow-including descendants for every element §13.2.6 inserts. Wiring this component there
-   would put a per-subtree walk on the hot parse path to be told about nodes it has no question about. */
+   would put a per-subtree walk on the hot parse path to be told about nodes it has no question about — and
+   would drop `lxb_html_element_steps_*`, the same defect one table over. */
 static const lxb_dom_document_attr_mutation_cb_t g_attr_cb = {
-    .change = NULL, .append = html_parse_attr_appended, .remove = NULL, .replace = NULL
+    .change  = lxb_html_attribute_steps_change,
+    .append  = html_parse_attr_appended,
+    .remove  = lxb_html_attribute_steps_remove,
+    .replace = lxb_html_attribute_steps_replace
 };
 
 void html_parse_own_token_values(lxb_dom_document_t *doc)
@@ -99,11 +121,16 @@ void html_parse_own_token_values(lxb_dom_document_t *doc)
            "a document reached this install with no attribute-mutation table at all — `lxb_dom_document_init` "
            "points every document at one before anything else, so a NULL means these bytes are not a document");
     DCHECK(doc->attr_mutation == &g_attr_cb ||
-           (doc->attr_mutation->change == NULL && doc->attr_mutation->append == NULL &&
-            doc->attr_mutation->remove == NULL && doc->attr_mutation->replace == NULL),
-           "a document already carries an attribute-mutation table that is neither lexbor's empty default nor "
-           "this one — installing over it would silently drop whatever that component watches; COMPOSE the two "
-           "here instead, naming both");
+           (doc->attr_mutation->change  == lxb_html_attribute_steps_change &&
+            doc->attr_mutation->append  == lxb_html_attribute_steps_append &&
+            doc->attr_mutation->remove  == lxb_html_attribute_steps_remove &&
+            doc->attr_mutation->replace == lxb_html_attribute_steps_replace),
+           "a document already carries an attribute-mutation table that is neither lexbor's own HTML steps nor "
+           "this one — the table above composes over `lxb_html_attribute_steps_*` BY NAME, so installing on a "
+           "third component's table would drop whichever of the two it is not; COMPOSE them here instead, "
+           "naming all three. An ALL-NULL table means this is not an HTML document: "
+           "`lxb_html_document_mutation_init` runs for every one, so the steps to delegate to are missing and "
+           "the wrapper above would be delegating into lexbor's DOM-level default that does nothing");
     doc->attr_mutation = &g_attr_cb;
 }
 
