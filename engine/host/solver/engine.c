@@ -4160,6 +4160,19 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
     dom_buf_load(f->dom, f->dom_n, f->dom_cap);   /* attach this flow's DOM head (NULL/0 for a fresh flow = empty) */
     dom_base_load(f->dom_base);                   /* ...and its base chain, BEFORE dom_apply walks it */
     dom_apply();                                  /* DOM twin of cow_apply: replay this flow's document writes */
+    /* A FRESH FLOW CARRIES NO RECORDED PATH, asserted here because this is the line that would DROP one. The
+       two branches below are told apart by `started` alone, so a flow whose installer set `dec_blob` and left
+       the bit clear takes decide_enter, replays from nothing, and never reads the path it was given — and the
+       pointer is still live at that flow's first suspend, where the line `f->dec_blob = decide_suspend()`
+       overwrites it and leaks the blob together with its reference on the frozen segment, keeping the whole
+       prefix under it alive. Ignored and leaked, in silence, with the only symptom a feature that does not
+       work. A flow standing on a recorded path is installed as a TRIPLE — `started`, `dec_blob`, `pin_blob` —
+       by cold.c's 'f' and 'c' arms and by solve.c's @S re-injection, and this is where setting fewer than all
+       three stops being invisible. */
+    DCHECK(f->started || f->dec_blob == NULL,
+           "a flow that has never run carries a recorded decision path — decide_enter is about to ignore it "
+           "and the flow's first suspend will overwrite the pointer, so the path is dropped AND its segment "
+           "reference leaked. Whatever installed it set `dec_blob` without `started`");
     if (!f->started) { f->started = 1; decide_enter(ctx, f); }   /* fresh flow: replay from cursor 0 */
     else {                                                        /* paused flow: restore where it left off */
         decide_resume(f->dec_blob, f->fn);   decide_blob_free(f->dec_blob); f->dec_blob = NULL;

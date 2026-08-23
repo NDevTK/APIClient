@@ -1087,11 +1087,31 @@ int solve_seed_candidates(JSContext *ctx) {
                are seeded at DETECTION, when this problem does not arise. Delete the derivation and that class
                still needs this branch; delete the vectors and a derived class still needs the replay. */
             if (e->reinject) {
-                DCHECK(f->dec_blob == NULL,
-                       "a freshly added flow already carries decision state — the re-injection blob below "
+                DCHECK(f->dec_blob == NULL && f->pin_blob == NULL && !f->started,
+                       "a freshly added flow already carries decision state — the re-injection install below "
                        "would overwrite it and drop that segment's reference, and the flow would replay a path "
                        "that is not the one it was given");
+                /* THE TRIPLE, AND IT IS ONE THING RATHER THAN THREE ASSIGNMENTS. A flow standing on a
+                   RECORDED path is `started` — flow_switch_in routes on exactly that bit, and a flow that has
+                   never run takes decide_enter, which replays from NOTHING and never looks at `dec_blob`.
+                   Setting the blob alone therefore does not merely fail to work, it fails SILENTLY IN BOTH
+                   DIRECTIONS: the path is ignored, and the pointer is still live at the flow's first suspend,
+                   where engine.c does `f->dec_blob = decide_suspend()` and overwrites it — leaking the blob
+                   AND its reference on the frozen segment, which keeps the whole prefix under it alive. That
+                   is the exact ceiling this field's own comment says is released here, defeated by the two
+                   assignments it did not make. Measured: two derived searches whose breakouts read
+                   `survivedBy:[16,0]` after the re-injection landed, because it had never once been read.
+                   THE EMPTY PIN BLOB IS THE THIRD MEMBER AND NOT A COURTESY. flow_switch_in's resume branch
+                   calls concolic_pins_resume beside decide_resume, so a flow marked started with no pin blob
+                   hands it NULL; cold.c pairs the two for this reason and says so ("the empty pin blob is what
+                   makes the second half of that true"). A replaying flow re-derives every pin from the gates
+                   it replays, so EMPTY is the correct content and not a placeholder.
+                   cold.c's 'f' and 'c' arms are the other installer of this triple, and they are the reason it
+                   is known to work: a cold-resumed candidate IS a candidate flow standing on a path it did not
+                   itself run. */
+                f->started  = 1;
                 f->dec_blob = decide_blob_new((void *)decide_blob_seg(e->reinject));
+                f->pin_blob = concolic_pins_blob_empty();
             }
             added++;
             g_cands_seeded++;
