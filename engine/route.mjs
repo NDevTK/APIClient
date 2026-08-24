@@ -703,23 +703,82 @@ for (const r of reads.values())
    a seam that materialized and released; held == made is a live peer; held above made is impossible and
    world.c DCHECKs it. */
 let forked = 0;
+/* AND WHAT THE RECEIVING HALF DID WITH THE RECORDS THIS ZONE ROUTED — the two numbers the check below is
+   about, read off the instances rather than counted here, because only an engine knows how many of its
+   TIMELINES a record was offered to and how many of them it belonged to. */
+let delivered = 0, refused = 0;
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
   forked += r._worldSegmentsForked;
+  /* NEITHER IS DEFAULTED. A `|| 0` here would turn "this build stopped emitting the pair" into the number a
+     healthy run also produces, and the check below would then be satisfied by an engine that said nothing. */
+  if (typeof r._routedDelivered !== 'number' || typeof r._routedRefused !== 'number')
+    fail(`[${e.tag}] the result document carries no routed-delivery census — solver/result.c emits the pair ` +
+         'and solver/engine.c counts it at the two lines that ARE the two outcomes, so an absent field is a ' +
+         'producer that moved under this reader and every delivery assertion below would be reading a hole');
+  delivered += r._routedDelivered;
+  refused += r._routedRefused;
   console.log(`[${e.tag}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
-              `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches}`);
+              `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches} ` +
+              `routedDelivered=${r._routedDelivered} routedRefused=${r._routedRefused}`);
 }
 
 /* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT. Four things have to have happened, and each of them is
    a whole mechanism failing silently if it did not: a second instance was provisioned (the create notice was
-   acted on), every routed record reached the receiving page's listener (the inbound half), at least one
+   acted on), every routed record was admitted by at least one TIMELINE of the receiving document and fired its
+   listener exactly once per delivery (the inbound half — see the pair of checks below for why that is two
+   statements and why the single equality it replaced was a claim about the SCHEDULER), at least one
    segment was materialized by FORKING an ancestor (the world vector's ancestry was READ and used), and the one
    synchronous cross-instance READ this engine has was asked AND answered by the instance that holds the
    document — which is the half that has never run. */
 if (engines.length < 2) fail('no second instance was provisioned — the navigable.create notice went unanswered');
 if (!posts.length) fail('the sender emitted no cross-instance post');
-if (got.length !== posts.length)
-  fail(`${posts.length} posts routed but the receiving page's listener saw ${got.length}`);
+/* A ROUTED RECORD IS NOT A HANDLER INVOCATION, AND THIS LINE ASSERTED THAT IT WAS.
+ *
+ * `got.length !== posts.length` compared the number of records THIS ZONE routed against the number of times the
+ * receiving page's `message` handler ran, and the engine has never promised those are equal. solver/engine.c's
+ * engine_route attaches every arriving record to EVERY live flow of the receiving document and says why in the
+ * same breath — "THE MESSAGE ARRIVES IN EVERY TIMELINE OF THE RECEIVING DOCUMENT, and that is what makes it
+ * arrive at all", because the page's listener was registered by a script and therefore lives in the COW delta
+ * of the flow that ran it; a delivery seeded from the baseline arrives at a document where it was never
+ * registered. So N timelines that admit a record produce N invocations, and the equality above is the claim
+ * that the receiver has exactly ONE timeline.
+ *
+ * IT PASSED ONLY WHILE THE RECEIVER'S OTHER TIMELINES WERE STARVED, and that is measurable rather than
+ * inferred: across the two builds where this went from OK to FAILED, the ONLY other difference in this whole
+ * drive was the RECEIVING instance's switch count (97 against 108) — the sending instance's line was identical
+ * to the digit, every read was asked and answered by the same timelines in the same order, and the two extra
+ * invocations were two more of the deliveries the engine had already attached finally getting the thread. An
+ * assertion whose truth is a function of how many turns the scheduler happened to give one instance is the
+ * schedule-dependent answer §Testing's differential exists to catch, and solver/engine.c already names this
+ * exact defect one layer down, about the superseded pairwise queue check: "a router that hands over one record
+ * and pumps before handing over the next" got one answer and a router that handed over both first got another.
+ * This file re-introduced it in its own assertion.
+ *
+ * WHAT IS ACTUALLY INVARIANT is stated instead, and it is two separate facts that fail for different reasons.
+ *   - NO RECORD IS LOST: every routed record is admitted by at least one timeline, so the engine's own count of
+ *     deliveries is at least the number of records this zone handed over. A zero-delivery record is a peer's
+ *     message no timeline of this document ever receives, which the page cannot distinguish from one that was
+ *     never sent.
+ *   - THE PAGE SAW EXACTLY WHAT THE ENGINE DELIVERED: one handler invocation per delivery. This is the check
+ *     the old equality was reaching for and could not express — a delivery that fired the handler twice, or an
+ *     invocation with no delivery behind it, is a defect at ANY timeline count, and neither is visible in a
+ *     comparison against `posts.length`. solver/engine.c asserts the same statement at its origin (§9.3.3
+ *     Posting messages step 8 queues ONE global task), so a double-fire crashes there rather than being
+ *     counted here; this is that assertion read from the outside, where a build with DCHECKs compiled out is
+ *     the only place it can still be seen.
+ * `refused` is printed with them because a low delivery count has two readings — the other timelines DECLINED
+ * the record (they are on the other side of a sender branch) or they were never offered it — and those take
+ * opposite actions. */
+if (delivered < posts.length)
+  fail(`${posts.length} record(s) were routed and the receiving instances delivered ${delivered} — a record ` +
+       'that no timeline of the target document admits is a peer\'s message the page never receives and ' +
+       `cannot know it did not (refused as not-this-timeline: ${refused})`);
+if (got.length !== delivered)
+  fail(`the receiving page's listener ran ${got.length} time(s) against ${delivered} delivery(ies) the engine ` +
+       'made — HTML §9.3.3 Posting messages step 8 queues ONE global task per delivery, so more invocations ' +
+       'than deliveries is one message a page handled twice and fewer is a task that was queued and never ' +
+       `ran (records routed: ${posts.length}, refused as not-this-timeline: ${refused})`);
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used, which is the state this driver exists to detect');
 /* ASKED IS THE FIRST HALF AND IT IS NOW TRUE. A zero here would mean `w.length` resolved WITHOUT reaching the
@@ -855,7 +914,9 @@ if (!worldDeaths.length)
        'and with neither, every segment `b` materialized is a foreign flow\'s state it holds for the rest of ' +
        'its process, and `b` can never park while it does (solver/cold.c refuses it)');
 console.log(`world deaths announced: ${worldDeaths.length} — ${worldDeaths.join(' ')}`);
-console.log('[route] OK — two instances, every routed record delivered, ancestry-forked segments: ' + forked +
+console.log(`[route] OK — two instances, ${posts.length} record(s) routed into ${delivered} delivery(ies) ` +
+            `across the receiver's timelines (${refused} refused as not-this-timeline) with one listener run ` +
+            'each, ancestry-forked segments: ' + forked +
             `, cross-agent reads answered: ${readsAnswered}, w.closed read back: ${closedReports[0]}` +
             `, parked and resumed across ${residue.length} bytes of residue`);
 

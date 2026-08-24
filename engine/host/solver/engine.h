@@ -718,6 +718,22 @@ long engine_jobs_run(void);
    eligible. See the declaration in engine.c for the measurement that made the pair necessary. */
 long engine_units_done(void);
 
+/* WHAT THIS INSTANCE'S TIMELINES DID WITH THE ROUTED RECORDS HANDED TO IT — how many they DELIVERED (each one
+   became §9.3.3 step 8's one global task at the receiving Window) and how many they CONSUMED as not theirs (a
+   message belonging to the other side of a sender branch this timeline has taken a side at).
+   BOTH OR NEITHER, because either alone is uninterpretable and the pair is what makes a delivery count mean
+   anything at all. A routed record is attached to EVERY live flow of the receiving document (engine_route says
+   why: a document's state IS its flows, and a delivery seeded from the baseline arrives at a document where
+   the page's own listener was never registered), so the number of times a page's `message` handler runs is the
+   number of TIMELINES that admitted the record — never the number of records the zone routed. A host that
+   compares its own routed count against the handler's invocations is asserting that the receiver has exactly
+   one timeline, which is true only of a receiver whose other timelines the scheduler never reached: it passes
+   while they are starved and fails the moment they run, which is the schedule-dependent answer §Testing's
+   differential exists to catch. These two numbers are what such a host compares against instead — `delivered`
+   is exactly how many handler invocations the engine caused, and `refused` is what says the rest of the
+   frontier saw the record and correctly declined it rather than never having been offered it. */
+void engine_routed_census(long *delivered, long *refused);
+
 /* THE ORPHAN ROUND TRIP'S TWO NUMBERS — how many waits for a parked drive's function a TAKE satisfied this
    session, and how many waiting drives FINISHED never having been handed one. The third, how many were rebuilt,
    belongs to the cold tier and is asked of it (ColdResumed's `orphans`).

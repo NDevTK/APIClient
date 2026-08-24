@@ -1639,6 +1639,19 @@ static void deliver_commit_taken(JSContext *ctx, Flow *f, const char *vec)
    delta, and the task it enqueues lands on that flow's own queue like every other job. This is the dispatch on
    the op, and the ONLY place a routed op is turned into a call: an op with no component here is a transport
    carrying something nothing receives. */
+/* THE TWO OUTCOMES OF A ROUTED RECORD MEETING A TIMELINE — see engine.h for why neither is readable alone and
+   why a host that has only its own routed count cannot state the invariant at all. Counted at the two lines
+   below that ARE those outcomes, so the pair cannot drift from the branch it describes. */
+static long g_routed_delivered, g_routed_refused;
+
+void engine_routed_census(long *delivered, long *refused) {
+    DCHECK(delivered != NULL && refused != NULL,
+           "the routed-delivery census was asked for one of its two numbers — a delivery count with no refusal "
+           "count beside it cannot say whether the rest of the frontier declined the record or never saw it, "
+           "which is the whole of what the pair is for");
+    *delivered = g_routed_delivered; *refused = g_routed_refused;
+}
+
 static void flow_deliver(JSContext *ctx, Flow *f)
 {
     JSValue entry, rv, ov;
@@ -1679,6 +1692,10 @@ static void flow_deliver(JSContext *ctx, Flow *f)
         free(vec);
         entry = flow_deliver_take(ctx, f);
         JS_FreeValue(ctx, entry);
+        /* …AND IT IS COUNTED, because "this timeline declined it" and "this timeline was never offered it" are
+           the two readings of a delivery count that is lower than a host expected, and they take opposite
+           actions (engine.h). */
+        g_routed_refused++;
         g_step_unit = "routed-delivery-not-this-timeline";
         return;
     }
@@ -1749,13 +1766,49 @@ static void flow_deliver(JSContext *ctx, Flow *f)
        zone; nothing in the replayed program produces it, so the task it becomes is the one work item on this
        queue a recipe does not regenerate. Bracketed here rather than recognised at the park, because WHERE the
        work came from is knowable only at the moment it arrives. */
-    flow_job_external_begin();
-    if (!strcmp(dup, "windowproxy.post"))
-        window_message_route(rctx, tail, world_doc_name(w.doc), origin);
-    else
-        DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
-              "receiving half is the unbuilt one; build it rather than dropping the delivery");
-    flow_job_external_end();
+    /* §9.3.3 "Posting messages" STEP 8 IS ONE TASK, AND THIS IS WHERE THAT BECOMES CHECKABLE. The step ends
+       the window post message steps by "queue a global task on the posted message task source given
+       targetWindow", singular — so a record that becomes ZERO tasks is a peer's message this document never
+       receives, and one that becomes TWO is a page whose handler runs twice for one message. Both are silent
+       everywhere else: the page cannot tell a message it never got from one that was never sent, and a second
+       handler run is indistinguishable from a second message.
+       IT IS AN EQUALITY AND NOT A CEILING, and the reason is that the origin check is NOT here. §9.3.3 step
+       8.1's targetOrigin comparison happens inside the delivery task itself (core/frame/window_message.c: "not
+       same origin, so nothing is delivered"), because the target may have navigated since the post — so the
+       ENQUEUE is unconditional and a delivery that reaches this line always produces exactly one task. A `<=`
+       would have been the one-sided form of this assert, and the cost of that form is on record one file over:
+       solver/flow.c's arrival rule guarded itself with `<=` while assigning three of the four tags its own
+       prose claimed it assigned, and the omission — which a one-sided guard can only ever be satisfied by —
+       placed every @S candidate session below the entire frontier for whole runs with nothing firing.
+       WHY IT IS ASKED HERE RATHER THAN COUNTED AT THE END. A route that fires a page's handler more often
+       than it should is measured today by a host comparing its own routed count against the handler's
+       invocations, and that comparison is not a statement about this engine at all: the record is attached to
+       EVERY live flow, so N timelines that admit it legitimately produce N invocations. The number a host can
+       compare is `g_routed_delivered` below; the DUPLICATE it was trying to catch is this line's. */
+    {
+        /* READ ON ITS OWN LINE AND VOIDED BELOW, for the reason every other reading this file takes for a
+           DCHECK is: the condition vanishes in release, and a value read only inside one is a variable the
+           compiler is right to call set-and-unused. */
+        int jobs0 = flow_job_pending(f);
+        flow_job_external_begin();
+        if (!strcmp(dup, "windowproxy.post"))
+            window_message_route(rctx, tail, world_doc_name(w.doc), origin);
+        else
+            DFAIL("a record was routed with an op no component receives — the sending half emits it, so the "
+                  "receiving half is the unbuilt one; build it rather than dropping the delivery");
+        flow_job_external_end();
+        DCHECK(flow_job_pending(f) == jobs0 + 1,
+               "a routed delivery did not become exactly ONE task on the receiving timeline's queue — HTML "
+               "§9.3.3 Posting messages step 8 queues one global task on the posted message task source, so "
+               "zero is a peer's message this document never receives (and cannot know it did not) and two is "
+               "one message the page's handler runs for twice, which no count outside this line can tell from "
+               "two messages");
+        (void)jobs0;
+        /* AND THE DELIVERY IS COUNTED WHERE IT HAPPENED — one per task queued, which is one per handler
+           invocation, which is the only quantity a host may compare its own routed count's CONSEQUENCES
+           against (engine.h). */
+        g_routed_delivered++;
+    }
     free(dup);
     JS_FreeCString(ctx, record);
     JS_FreeCString(ctx, origin);
