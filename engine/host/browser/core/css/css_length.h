@@ -37,10 +37,14 @@
  *   line-height properties, if the element has no parent" — so `div{font-size:1.2em}` is 1.2 x the INHERITED
  *   size and `html{font-size:2rem}` is 2 x the INITIAL one rather than a definition of itself, and that is a
  *   property of the ANSWERS the caller supplies rather than of the arithmetic here.
- *   THE OTHER TEN STILL CRASH, and they name a component that is still absent rather than the one that is now
- *   built: five real font metrics of a first available font, of which this engine keeps no record. Three of
- *   them (`ex`, `ch`, `ic`) have a NORMATIVE fallback in §6.1.1 stated in `em`s and are therefore buildable
- *   the moment this paragraph's first half is, which the crash itself says.
+ *   SIX MORE RESOLVE OUT OF THOSE TWO, and the number they are multiplied by is the SPEC's rather than this
+ *   engine's: §6.1.1 states what MUST be assumed for `ex`, `ch` and `ic` when the metric cannot be
+ *   determined, and a face with no glyph outlines is exactly that antecedent — core/css/font_metrics.h owns
+ *   the three numbers and says why they are a real value here and not a stand-in. Each `r`-prefixed twin is
+ *   "the value of the <unit> unit ON THE ROOT ELEMENT", so it is the same ratio over the `rem` base.
+ *   THE LAST FOUR STILL CRASH, and they are the two §6.1.1 states no must-assume value for: `cap`/`rcap`
+ *   falls back to "the font's ascent", which is a measurement of a real face, and `lh`/`rlh` is a computed
+ *   `line-height` with `normal` resolved from that same face. The crash names each half separately.
  *   media_query.c resolves `em` against the INITIAL font size and is right to, and §6.1.1 says so itself —
  *   "when used outside the context of an element (such as in media queries), the font-relative lengths units
  *   refer to the metrics corresponding to the initial values of the font and line-height properties" — so the
@@ -252,9 +256,24 @@ typedef struct {
    inheritance walk — a walk over the flattened element tree, which is core/css/css_computed_value.c's and not
    this file's. Threading an element and a tree through here to answer it would put the cascade inside the unit
    table; handing the two ANSWERS in would be worse still, for the reason below. */
+/* AND THE SAME SPLIT COVERS §6.1.1's FONT-METRIC UNITS, which is why they are rows of this enumeration rather
+   than a second seam. Each of `ex`, `ch` and `ic` is core/css/font_metrics.h's assumed ratio times one of the
+   two font sizes above — the LOCAL units against the element's, the `r`-prefixed twins against the root's,
+   because §6.1.1 defines each twin as "the value of the <unit> unit ON THE ROOT ELEMENT" and so carries the
+   whole computation there, including the axis question. So the caller answering this callback answers one
+   question it already answers (which element's computed `font-size`) and one it alone can (which axis is the
+   element's inline axis), and this file's unit table stays a table.
+   `cap` AND `lh` ARE ABSENT FOR font_metrics.h's REASON: §6.1.1 states no must-assume value for either, so
+   there is no row for a caller to answer and the unit arm in css_length.c crashes naming what each needs. */
 typedef enum {
-    CSS_FONT_METRIC_EM = 0,   /* §6.1.1's `em` — the element the unit is used on */
-    CSS_FONT_METRIC_REM       /* §6.1.1's `rem` — the root element */
+    CSS_FONT_METRIC_EM = 0,   /* §6.1.1's `em`  — the element the unit is used on */
+    CSS_FONT_METRIC_REM,      /* §6.1.1's `rem` — the root element */
+    CSS_FONT_METRIC_EX,       /* §6.1.1's `ex`  — the used x-height */
+    CSS_FONT_METRIC_REX,      /* §6.1.1's `rex` */
+    CSS_FONT_METRIC_CH,       /* §6.1.1's `ch`  — the advance measure of the "0" glyph */
+    CSS_FONT_METRIC_RCH,      /* §6.1.1's `rch` */
+    CSS_FONT_METRIC_IC,       /* §6.1.1's `ic`  — the advance measure of the "水" glyph */
+    CSS_FONT_METRIC_RIC       /* §6.1.1's `ric` */
 } CssFontMetric;
 
 /* IT IS ASKED LAZILY, AND THAT IS THE POINT OF THE INDIRECTION RATHER THAN AN OPTIMISATION. Resolving both

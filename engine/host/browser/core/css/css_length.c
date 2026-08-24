@@ -134,18 +134,36 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
    or a resolution". §6.1.1 defines all four as lengths, so that message sent the reader to look for a caller
    asking the wrong component when what is missing is a font metric. A crash that names the wrong absence is
    the stale-`DFAIL` failure with the coordinates still correct.
-   THE TWELVE ARE TWO GROUPS AND THEY ANSWER TWO DIFFERENT QUESTIONS, which is why they are two tables. §6.1.1
-   defines `em` as "the computed value of the font-size property of the element on which it is used" and `rem`
-   as "the computed value of the em unit on the root element" — both are a computed `font-size` and nothing
-   else, and both RESOLVE, through the `CssFontMetrics` pair the caller holding the tree answers. The other ten
-   are FONT METRICS: an x-height (`ex`/`rex`), a cap-height (`cap`/`rcap`), the advance measure of the "0"
-   glyph (`ch`/`rch`) and of the "水" glyph (`ic`/`ric`), and a computed `line-height` with `normal` resolved
-   "by using only the metrics of the first available font" (`lh`/`rlh`). Those are a font record no component
-   in this engine keeps, and they still crash. */
-static const char *const CSS_FONT_SIZE_RELATIVE[] = { "em", "rem" };
-static const char *const CSS_FONT_METRIC_RELATIVE[] = {
-    "ex", "rex", "cap", "rcap", "ch", "rch", "ic", "ric", "lh", "rlh",
+   THE TWELVE SPLIT BY WHETHER THIS ENGINE CAN ANSWER THEM, AND THE LINE IS THE SPEC'S OWN. §6.1.1 defines
+   `em` as "the computed value of the font-size property of the element on which it is used" and `rem` as "the
+   computed value of the em unit on the root element" — both are a computed `font-size` and nothing else. Six
+   more are a FONT METRIC times one of those two sizes, and §6.1.1 states what MUST be assumed for each when
+   the metric cannot be determined (an x-height is 0.5em, the "0" glyph is "0.5em wide by 1em tall", the "水"
+   glyph is 1em), which core/css/font_metrics.h owns and which is a real value for a user agent with no glyph
+   outlines rather than a stand-in. All eight resolve, through the ONE `CssFontMetrics` pair the caller holding
+   the tree answers — one table, because the arithmetic is the same and only the base differs.
+   THE REMAINING FOUR HAVE NO SUCH SENTENCE and still crash: `cap`/`rcap`'s fallback is "the font's ascent",
+   which is a measurement of a real face, and `lh`/`rlh` is a computed `line-height` with `normal` resolved
+   "by using only the metrics of the first available font", which needs that face AND a computed-value rule
+   for a property core/css/css_computed_value.c does not model. */
+static const struct { const char *unit; CssFontMetric metric; } CSS_FONT_RELATIVE[] = {
+    { "em",  CSS_FONT_METRIC_EM  }, { "rem", CSS_FONT_METRIC_REM },
+    { "ex",  CSS_FONT_METRIC_EX  }, { "rex", CSS_FONT_METRIC_REX },
+    { "ch",  CSS_FONT_METRIC_CH  }, { "rch", CSS_FONT_METRIC_RCH },
+    { "ic",  CSS_FONT_METRIC_IC  }, { "ric", CSS_FONT_METRIC_RIC },
 };
+static const char *const CSS_FONT_RECORD_RELATIVE[] = { "cap", "rcap", "lh", "rlh" };
+
+/* WHICH METRIC A UNIT NAMES, or false for one this file cannot route. It is a lookup and not a test followed
+   by a second lookup, because the two would be one list that can disagree about a spelling. */
+static bool css_len_font_metric_of(const char *unit, CssFontMetric *out)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(CSS_FONT_RELATIVE) / sizeof(CSS_FONT_RELATIVE[0]); i++)
+        if (strcmp(CSS_FONT_RELATIVE[i].unit, unit) == 0) { *out = CSS_FONT_RELATIVE[i].metric; return true; }
+    return false;
+}
 
 /* §6.1.2.2's VIEWPORT-PERCENTAGE units, in their DEFAULT spelling — the `v*` family, which §6.1.2.1 defines
    against the LARGE viewport size. The `sv*`, `lv*` and `dv*` variants are the same six names with one letter
@@ -304,59 +322,58 @@ static void css_len_keyword(CssLength *out, const char *kw)
    and the alternative is core/css/css_math.c carrying a second copy of the one table this file exists to be. */
 static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const char *unit, double num)
 {
+    CssFontMetric metric;
     unsigned i;
 
     for (i = 0; i < CSS_LEN_N(CSS_ABSOLUTE); i++)
         if (strcmp(CSS_ABSOLUTE[i].unit, unit) == 0) return css_px(num * CSS_ABSOLUTE[i].px);
-    /* §6.1.1's TWO FONT-SIZE-RELATIVE UNITS. `em` is "the computed value of the font-size property of the
-       element on which it is used" and `rem` is "the computed value of the em unit on the root element", so
-       each is one number times the declaration's own multiplier and the whole of the difference between them
-       is WHICH element's computed `font-size` — which is the caller's walk (css_length.h) and is asked here
-       and nowhere else. The scale carries the base's environment facts, so a `margin: 1em` reaches the page as
-       a function of the reader's default font size exactly as a `50vw` reaches it as a function of the
-       viewport, and the responsive ladder a `rem`-sized bundle builds on that number keeps its second arm. */
-    if (css_len_in(CSS_FONT_SIZE_RELATIVE, CSS_LEN_N(CSS_FONT_SIZE_RELATIVE), unit)) {
-        CssPx base = font->resolve(font->ctx,
-                                   strcmp(unit, "rem") == 0 ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
+    /* §6.1.1's EIGHT RESOLVABLE FONT-RELATIVE UNITS, which are ONE arm because they are one multiplication.
+       `em` is "the computed value of the font-size property of the element on which it is used" and `rem` is
+       "the computed value of the em unit on the root element"; `ex`, `ch` and `ic` are a metric of the FIRST
+       AVAILABLE FONT, which for a face with no glyph outlines is §6.1.1's own must-assume ratio of the em
+       (core/css/font_metrics.h); and each `r`-prefixed twin is "the value of the <unit> unit ON THE ROOT
+       ELEMENT". So every one of them is a base times this declaration's own multiplier, and the whole of the
+       difference between them is WHICH base — which is the caller's walk (css_length.h), asked here and
+       nowhere else because it needs the element and the tree this file deliberately does not hold.
+       THE SCALE CARRIES THE BASE'S ENVIRONMENT FACTS, so a `margin: 1em` reaches the page as a function of the
+       reader's default font size exactly as a `50vw` reaches it as a function of the viewport — and a
+       `width: 20ch` does too, because the assumed ratio is a spec constant with no freedom in it and the only
+       picked number in the product is the font size. The responsive ladder a `rem`- or `ch`-sized bundle
+       builds on that number keeps its second arm. */
+    if (css_len_font_metric_of(unit, &metric)) {
+        CssPx base = font->resolve(font->ctx, metric);
 
         DCHECK(base.px >= 0.0,
-               "css-values-4 §6.1.1's `em` or `rem` was resolved against a NEGATIVE computed `font-size`. "
-               "css-fonts-4 §2.5 (Font size: the font-size property) states the range in the property's own "
-               "`Value:` line — `<length-percentage [0,∞]>` — and again in words twice, so a negative one is a "
-               "declaration the grammar should have DROPPED rather than a font size to be a multiple of");
+               "a css-values-4 §6.1.1 font-relative unit was resolved against a NEGATIVE base. Every base this "
+               "callback answers is a computed `font-size` or a non-negative ratio of one, and css-fonts-4 "
+               "§2.5 (Font size: the font-size property) states that property's range in its own `Value:` "
+               "line — `<length-percentage [0,∞]>` — and again in words twice, so a negative one is a "
+               "declaration the grammar should have DROPPED rather than a length to be a multiple of");
         DCHECK(base.px == base.px && base.px * 0.0 == 0.0,
-               "css-values-4 §6.1.1's `em` or `rem` was resolved against a computed `font-size` that is not a "
-               "FINITE number — every value css-fonts-4 §2.5 admits is an absolute length off a real "
-               "declaration, a ratio of one, or §2.5.1's table entry, so a NaN or an infinity is a derivation "
-               "that lost an operand rather than a size this multiplication can use");
+               "a css-values-4 §6.1.1 font-relative unit was resolved against a base that is not a FINITE "
+               "number — every value css-fonts-4 §2.5 admits is an absolute length off a real declaration, a "
+               "ratio of one, or §2.5.1's table entry, and §6.1.1's assumed metrics are finite ratios of "
+               "those, so a NaN or an infinity is a derivation that lost an operand rather than a size this "
+               "multiplication can use");
         return css_px_scale(base, num);
     }
-    if (css_len_in(CSS_FONT_METRIC_RELATIVE, CSS_LEN_N(CSS_FONT_METRIC_RELATIVE), unit))
-        DFAIL("a length in one of css-values-4 §6.1.1's FONT-METRIC units (`ex`, `rex`, `cap`, `rcap`, `ch`, "
-              "`rch`, `ic`, `ric`, `lh`, `rlh`) reached absolutization. These are NOT a computed `font-size` "
-              "and must not be built out of one as though they were: §6.1.1 defines `ex` as \"the used "
-              "x-height of the first available font\", `cap` as \"the used cap-height\", `ch` as \"the used "
-              "advance measure of the '0' (ZERO, U+0030) glyph\", `ic` as the same for the \"'水' (CJK water "
-              "ideograph, U+6C34) glyph\", and `lh` as the computed `line-height` \"converting normal to an "
-              "absolute length by using only the metrics of the first available font\" — five real font "
-              "metrics, of which this engine has none, plus the `r`-prefixed twin of each measured on the root "
-              "element. THE `em` THEY WOULD FALL BACK TO EXISTS NOW — the arm above resolves css-fonts-4 §2.5's "
-              "computed `font-size` through this file's own `CssFontMetrics` — so what is left of each is its "
-              "own §6.1.1 sentence, and the three of them are not one absence: (1) `ex`/`rex` is DONE the "
-              "moment someone writes it, because §6.1.1 says an x-height that is impossible or impractical to "
-              "determine \"must be assumed\" to be 0.5em and this engine has no font to determine one from; "
-              "(2) `ic`/`ric` the same, at 1em — \"in the cases where it is impossible or impractical to "
-              "determine the ideographic advance measure, it must be assumed to be 1em\" — which is a DIFFERENT "
-              "number from `ex`'s and from `ch`'s and must not be built by copying either; (3) `ch`/`rch` is "
-              "0.5em \"in the general case, and to 1em when it would be typeset upright (i.e. writing-mode is "
-              "vertical-rl or vertical-lr and text-orientation is upright)\", so it needs those two INHERITED "
-              "properties, which css_computed_value.c models no entry for — the same pair the `vi`/`vb` arm "
-              "names. `cap`/`rcap` and `lh`/`rlh` are the two that are still a FONT RECORD: an "
-              "undeterminable cap-height falls back to \"the font's ascent\", which is itself a metric, and "
-              "`lh` is a computed `line-height` with `normal` resolved from the first available font. BUILD "
-              "`ex`, `ic` and their root twins out of the `em` resolution beside them, then the writing mode, "
-              "then a font record — ascent, cap-height and the first available font's line metrics — in "
-              "core/frame, for the last two pairs");
+    if (css_len_in(CSS_FONT_RECORD_RELATIVE, CSS_LEN_N(CSS_FONT_RECORD_RELATIVE), unit))
+        DFAIL("a length in css-values-4 §6.1.1's `cap`, `rcap`, `lh` or `rlh` reached absolutization. These are "
+              "the two PAIRS among its twelve units for which §6.1.1 states NO must-assume value, so neither "
+              "can be "
+              "answered the way `ex`, `ch` and `ic` are answered in the arm above — and neither may borrow one of "
+              "their ratios, which would be one sentence of §6.1.1 standing in for another. Each needs ONE thing "
+              "and they are different things. (1) `cap`/`rcap`: §6.1.1 says an undeterminable cap-height means "
+              "\"the font's ASCENT must be used\", and an ascent is a measurement of a real face rather than a "
+              "ratio the spec fixes — so this needs the FONT RECORD core/css/font_metrics.h describes the absence "
+              "of, which is also what CSS 2 §9.4.2's line boxes and §10.8's leading need and is therefore the one "
+              "piece that unblocks text measurement as well as this unit. (2) `lh`/`rlh`: §6.1.1 makes it \"the "
+              "computed value of the line-height property of the element on which it is used, converting normal "
+              "to an absolute length by using only the metrics of the first available font\", which is TWO "
+              "absences — that same record, and a computed-value rule for `line-height`, which "
+              "core/css/css_computed_value.c does not model at all (css_computed_models does not name it, so "
+              "asking for its computed value crashes there instead). BUILD the face's metrics in "
+              "core/css/font_metrics.c, then `line-height`'s computed value beside `font-size`'s");
     else if (css_len_is_viewport(unit))
         return css_len_viewport(realm, unit, num / 100.0);
     else if (css_len_is_viewport_variant(unit))
@@ -510,8 +527,12 @@ static bool css_len_unit_known(const char *unit)
 
     for (i = 0; i < CSS_LEN_N(CSS_ABSOLUTE); i++)
         if (strcmp(CSS_ABSOLUTE[i].unit, unit) == 0) return true;
-    return css_len_in(CSS_FONT_SIZE_RELATIVE, CSS_LEN_N(CSS_FONT_SIZE_RELATIVE), unit) ||
-           css_len_in(CSS_FONT_METRIC_RELATIVE, CSS_LEN_N(CSS_FONT_METRIC_RELATIVE), unit) ||
+    {
+        CssFontMetric metric;
+
+        if (css_len_font_metric_of(unit, &metric)) return true;
+    }
+    return css_len_in(CSS_FONT_RECORD_RELATIVE, CSS_LEN_N(CSS_FONT_RECORD_RELATIVE), unit) ||
            css_len_is_viewport(unit) || css_len_is_viewport_variant(unit);
 }
 

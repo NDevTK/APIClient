@@ -15,6 +15,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
 #include "core/dom/document.h"
 #include "core/dom/shadow_root.h"
@@ -327,6 +328,58 @@ static lxb_dom_node_t *css_cv_root_element(lxb_dom_element_t *el)
     return document_document_element_of(lxb_dom_interface_node(n->owner_document));
 }
 
+/* css-values-4 §6.1.1's ASSUMED "0" GLYPH IS "0.5em WIDE BY 1em TALL", and which of its two dimensions the
+   `ch` unit takes is not a fact about the font: §6.1.1 defines the advance measure of a glyph as "its advance
+   width or height, WHICHEVER IS IN THE INLINE AXIS of the element", and states the consequence itself — the
+   unit "falls back to 0.5em in the general case, and to 1em when it would be typeset upright (i.e.
+   writing-mode is vertical-rl or vertical-lr AND text-orientation is upright)".
+   THE PARENTHETICAL IS THE TEST AND IT NAMES TWO OF THE FIVE WRITING MODES. `horizontal-tb` puts the inline
+   axis on the horizontal, so the advance is the WIDTH; `sideways-rl` and `sideways-lr` are vertical modes in
+   which text is never typeset upright, so §6.1.1's general case covers them too and the answer is the same
+   width. Only `vertical-rl` and `vertical-lr` can reach the other branch, and which one they take is
+   `text-orientation` — a property core/css/css_computed_value.c models no entry for, so that arm crashes.
+   THE ELEMENT IS THE ONE THE UNIT IS USED ON and not the one whose METRICS are borrowed. §6.1.1's
+   font-affecting clause redirects a unit inside a font-affecting property to "the computed METRICS of the
+   parent element", and an inline axis is not a metric — it is the axis of the box the advance is measured
+   along, which the section names as the element's own. `el` is NULL for §6.1.1's no-root-element case, where
+   the initial values apply and `writing-mode`'s initial value is `horizontal-tb`. */
+static FontMetricsEmRatio css_cv_zero_advance(lxb_dom_element_t *el)
+{
+    char *wm;
+    bool upright_possible;
+
+    if (el == NULL) return FONT_METRICS_ZERO_ADVANCE_WIDTH;
+    wm = css_computed_value(el, "writing-mode");
+    DCHECK(wm != NULL, "the cascade produced no computed `writing-mode` — css-writing-modes-4 §3.2 gives the "
+                       "property an `Initial:` line of `horizontal-tb` and lexbor's registry carries it, so "
+                       "the last layer always answers");
+    upright_possible = strcmp(wm, "vertical-rl") == 0 || strcmp(wm, "vertical-lr") == 0;
+    free(wm);
+    if (upright_possible)
+        DFAIL("css-values-4 §6.1.1's `ch` unit was resolved on an element whose computed `writing-mode` is "
+              "`vertical-rl` or `vertical-lr`, which are the two modes in which text CAN be typeset upright — "
+              "and whether it IS decides which dimension of the assumed \"0\" glyph is the advance measure, "
+              "0.5em wide or 1em tall. §6.1.1 names the deciding property outright: the unit falls back \"to "
+              "1em when it would be typeset upright (i.e. writing-mode is vertical-rl or vertical-lr and "
+              "TEXT-ORIENTATION IS UPRIGHT)\". css-writing-modes-4 §5.1 \"Orienting Text: the text-orientation "
+              "property\" gives it `Value: mixed | upright | sideways`, `Initial: mixed`, `Inherited: yes` and "
+              "`Computed value: specified value`, and lexbor's property registry carries it — so this is ONE "
+              "ROW of css_computed_models' as-specified arm plus one of css_shorthand_complete_for, exactly as "
+              "`writing-mode` and `direction` were, and this crash then becomes the branch between the two "
+              "ratios core/css/font_metrics.h already holds");
+    return FONT_METRICS_ZERO_ADVANCE_WIDTH;
+}
+
+/* IS THIS UNIT MEASURED ON THE ROOT ELEMENT — one of the two questions §6.1.1 splits its twelve units by, and
+   the only one that is a property of the unit's NAME rather than of the element. §6.1.1 defines each
+   `r`-prefixed unit as "the value of the <unit> unit on the root element", so the answer selects which font
+   size the ratio below is a multiple of and, for `ch`, which element's inline axis decides the ratio. */
+static bool css_cv_metric_is_root(CssFontMetric which)
+{
+    return which == CSS_FONT_METRIC_REM || which == CSS_FONT_METRIC_REX ||
+           which == CSS_FONT_METRIC_RCH || which == CSS_FONT_METRIC_RIC;
+}
+
 static CssPx css_cv_font_metric(void *p, CssFontMetric which)
 {
     CssCvFontCtx *f = p;
@@ -337,6 +390,33 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            "css-values-4 §6.1.1's font-metric callback was invoked with no element — the pair is handed to "
            "css_length_parse by the entries below and by nothing else, so an absent element is a metrics "
            "struct assembled field-by-field past them");
+    /* §6.1.1's SIX FONT-METRIC UNITS ARE A RATIO TIMES ONE OF THE TWO FONT SIZES BELOW, so each is answered by
+       recursing into this same callback for its base and scaling — which is what makes `ex` and `rex` one
+       derivation with one difference (`rem` rather than `em`) rather than two that can drift apart. The ratio
+       is core/css/font_metrics.h's, and for `ch` it is the axis question above. */
+    if (which != CSS_FONT_METRIC_EM && which != CSS_FONT_METRIC_REM) {
+        bool root_relative = css_cv_metric_is_root(which);
+        CssPx base = css_cv_font_metric(p, root_relative ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
+        FontMetricsEmRatio ratio;
+
+        switch (which) {
+        case CSS_FONT_METRIC_EX:
+        case CSS_FONT_METRIC_REX: ratio = FONT_METRICS_X_HEIGHT; break;
+        case CSS_FONT_METRIC_IC:
+        case CSS_FONT_METRIC_RIC: ratio = FONT_METRICS_WATER_ADVANCE; break;
+        default:
+            DCHECK(which == CSS_FONT_METRIC_CH || which == CSS_FONT_METRIC_RCH,
+                   "css_length.h's font-metric enumeration named a unit this component answers no arm for — "
+                   "the two are one list and have come apart");
+            /* §6.1.1's `rch` is "the value of the ch unit ON THE ROOT ELEMENT", so the whole computation moves
+               there, the inline axis included. A document with no root element takes §6.1.1's own clause for
+               that case and the initial values with it, which `css_cv_zero_advance` reads as its NULL. */
+            root = root_relative ? css_cv_root_element(f->el) : lxb_dom_interface_node(f->el);
+            ratio = css_cv_zero_advance(root == NULL ? NULL : lxb_dom_interface_element(root));
+            break;
+        }
+        return css_px_scale(base, font_metrics_em_ratio(ratio));
+    }
     /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
        used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
        the font-relative lengths resolve against the computed metrics of the parent element—or against the
@@ -355,8 +435,10 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
     }
     DCHECK(which == CSS_FONT_METRIC_REM,
            "css_length.h's font-metric enumeration named a metric this component answers no arm for — the two "
-           "are one list and have come apart, and the other ten of css-values-4 §6.1.1's units are a FONT "
-           "RECORD that crashes in css_length.c rather than a third value here");
+           "are one list and have come apart. The four of css-values-4 §6.1.1's units that this callback does "
+           "NOT carry a row for (`cap`, `rcap`, `lh`, `rlh`) are the ones §6.1.1 states no must-assume value "
+           "for, and they crash in css_length.c naming the font record and `line-height`'s computed value "
+           "rather than reaching a third arm here");
     root = css_cv_root_element(f->el);
     /* §6.1.1: `rem` is "equal to the computed value of the em unit on the root element". The element it REFERS
        TO is therefore the root, so the font-affecting clause above bites only when the declaration is on the

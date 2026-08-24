@@ -8,6 +8,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/css/css_dimension.h"
+#include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
 #include "core/css/media_query.h"
 #include "core/dom/document.h"
@@ -862,12 +863,22 @@ MediaQuerySet *media_query_parse_one(const char *text)
 
 /* A `<length>` in CSS pixels. css-values-4 §6.1.1's own last clause is why the font-relative units resolve
    against the INITIAL value of `font-size` here and NOT against a computed one: a media query is evaluated
-   outside the context of an element, so there is no element whose `font-size` an `em` could be. `ex` and `ch`
-   are half of it by §6.1.1's two normative fallbacks — an undeterminable x-height "must be assumed" to be
-   0.5em, and an undeterminable "0" glyph "must be assumed to be 0.5em wide by 1em tall" — which apply here
-   because there is no font to measure either from. Viewport units resolve against the viewport, which is what
-   this whole file is about. An unknown unit cannot reach `length_px` — value_ok admitted the dimension and this
-   is the same list, which is what the DFAIL states.
+   outside the context of an element, so there is no element whose `font-size` an `em` could be — "when used
+   outside the context of an element (such as in media queries), the font-relative lengths units refer to the
+   metrics corresponding to the initial values of the font and line-height properties".
+   THE METRIC RATIOS ARE READ FROM core/css/font_metrics.h AND ARE NOT WRITTEN HERE. They used to be two
+   literal halves with §6.1.1's two sentences quoted beside them, which is the same fact answered from two
+   places that css_length.h opens by naming and that core/css/font_size_functions.h was created to end for the
+   default font size — and it is the shape this file's own next paragraph complains about one level up ("the
+   copy is what would go on being wrong"). The initial `writing-mode` is `horizontal-tb`, so §6.1.1's advance
+   measure is the assumed "0" glyph's WIDTH and never its height; the `r`-prefixed twins are the same numbers
+   because a document with no element has no root element either, which is the case §6.1.1 gives the initial
+   values to.
+   A §6 LENGTH UNIT WITH NO ROW HERE MAKES THE FEATURE EVALUATE FALSE rather than crashing, and that is a
+   DIVERGENCE from core/css/css_length.c, which crashes for the same units. The set is exactly the same one:
+   `cap`, `lh` and their twins (a font record §6.1.1 states no must-assume value for), `vi`/`vb` (an inline
+   axis), and the `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate facts). `value_ok`
+   admits every DIMENSION for a `<length>` feature, so those reach this table and leave through `*ok = false`.
    THE TABLE IS SPLIT FROM THE `MqValue` WALK because it has a SECOND caller with no MqValue to hand it, and
    that caller's rule is HTML §4.8.4.3 "Processing model" in one sentence: a source size's units other than the
    viewport-relative ones "must be interpreted THE SAME AS IN MEDIA QUERIES". So `media_query_length_px` below
@@ -877,8 +888,12 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
     *ok = true;
     if (!strcmp(u, "px")) return n;
     if (!strcmp(u, "em") || !strcmp(u, "rem")) return n * e->font_size;
-    if (!strcmp(u, "ex")) return n * e->font_size * 0.5;
-    if (!strcmp(u, "ch")) return n * e->font_size * 0.5;
+    if (!strcmp(u, "ex") || !strcmp(u, "rex"))
+        return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_X_HEIGHT);
+    if (!strcmp(u, "ch") || !strcmp(u, "rch"))
+        return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_ZERO_ADVANCE_WIDTH);
+    if (!strcmp(u, "ic") || !strcmp(u, "ric"))
+        return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_WATER_ADVANCE);
     if (!strcmp(u, "cm")) return n * 96.0 / 2.54;
     if (!strcmp(u, "mm")) return n * 96.0 / 25.4;
     if (!strcmp(u, "q"))  return n * 96.0 / 101.6;
