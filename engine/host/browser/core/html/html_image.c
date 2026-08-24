@@ -10,7 +10,6 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
-#include "solver/dom_cow.h"       /* the `src` a flow wrote out of unknown input, kept beside the attribute */
 #include "solver/endpoint.h"      /* every request host-edge funnels one endpoint into the @H surface */
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -25,6 +24,7 @@
 #include "core/fetch/port_blocking.h"
 #include "core/frame/policy_container.h"
 #include "core/html/html_image.h"
+#include "core/html/image_source_set.h"   /* §4.8.4.3.7-.12: what source this element selects, and from what */
 
 /* §4.8.4.3 "Processing model": "An image request's state is one of the following" — and the two composite
    answers the spec gives names to are derived from it rather than stored, because a stored copy of a derived
@@ -394,12 +394,14 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
 {
     JSValueConst elv = func_data[0];
     lxb_dom_element_t *el = element_of_value(elv);
-    JSValue st, taint;   /* `taint` is BORROWED from the attribute's shadow — see the read below */
+    JSValue st;
     int32_t started = 0;
     const char *selected;
     size_t selected_n = 0;
     char *abs = NULL;
     UrlRecord rec;
+    ImageSourceSet ss;
+    int i;
 
     (void)this_val; (void)argc; (void)argv; (void)magic;
     DCHECK(el != NULL, "§4.8.4.3.5's microtask continuation was queued for something that is not an element");
@@ -409,32 +411,58 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     if (st_int(ctx, st, "gen") != started) { JS_FreeValue(ctx, st); return JS_UNDEFINED; }
 
     /* "Let selected source and selected pixel density be the URL and pixel density that results from SELECTING
-       AN IMAGE SOURCE" — §4.8.4.3.7, whose first step updates the source set (§4.8.4.3.9). For an element that
-       does not use srcset or picture that algorithm reduces to §4.8.4.3.9's own sentence "If el is an img
-       element that has a src attribute, then set default source to that attribute's value", with a pixel
-       density of 1; the whole of the rest of it — the walk over the previous-sibling `source` elements, the
-       `media` and `type` conditions, the density normalisation — is reachable only for an element that DOES.
+       AN IMAGE SOURCE" — §4.8.4.3.7, whose first step updates the source set (§4.8.4.3.9) and whose grammar and
+       choice are core/html/image_source_set.h's whole problem. IT IS ASKED FOR EVERY `img` AND NOT ONLY FOR ONE
+       THAT USES SRCSET OR PICTURE, which is the standard's own shape and is why this file no longer reads the
+       `src` attribute for itself: for an element with a bare `src`, §4.8.4.3.9 sets default source to that
+       attribute's value, §4.8.4.3.8 step 4 appends it (there is no 1x and no width descriptor to stop it) and
+       §4.8.4.3.12 gives it a 1x — the same single candidate the hand-written branch produced, out of the
+       algorithm that is defined to produce it rather than out of a second one that agreed with it.
        THE PIXEL DENSITY IS NOT CARRIED, and that is a consequence rather than an omission: every consumer of
        it in §4.8.4.3.5 reads it into the image request's CURRENT PIXEL DENSITY, which is only ever read back
        by the density-corrected natural dimensions — a decoded image's, which this agent has none of. It comes
        back with the decoder, beside the dimensions it corrects. */
-    if (img_uses_srcset_or_picture(el)) {
-        DFAIL("an `img` that USES SRCSET OR PICTURE reached §4.8.4.3.5's selection step — HTML §4.8.4.3.9 "
-              "Updating the source set's walk over the element's previous-sibling `source` elements and HTML "
-              "§4.8.4.3.10 Parsing a srcset attribute are what answer for it, and neither is built. Build "
-              "those two (and §4.8.4.3.11 Parsing a sizes attribute for the `sizes` half) here; until then "
-              "this element selects no source and takes the null-source arm below, which fires `error`");
-        selected = NULL;
-    } else {
-        /* An empty `src` makes an empty source set, and `img_attr` already answers NULL for one — see its
-           note, and the assert that keeps that the only spelling of empty this file has to know. */
-        selected = img_attr(el, "src", &selected_n);
-        DCHECK(selected == NULL || selected_n > 0,
-               "Lexbor answered a `src` attribute with a zero-length value — this file reads emptiness as the "
-               "NULL its get_attribute gives an absent VALUE, and a second spelling of empty would make "
-               "`<img src=` with an empty value select a source of no characters and fetch this document's "
-               "own address");
+    image_source_set_select(ctx, el, &ss);
+
+    /* EVERY IMAGE SOURCE IN THE SET IS AN ADDRESS THE BUNDLE SHIPPED, and only ONE of them is fetched. The
+       others are what a browser at another device pixel ratio or another viewport requests from the same
+       markup — which is CLAUDE.md §What-the-tool-produces exactly ("what the bundle CAN do but didn't"), so
+       they reach the @H surface here even though no request is owed for them. Recorded BEFORE the policy checks
+       below for the reason core/fetch/fetch.c records one before its own: a request a policy refuses is still a
+       request the bundle can make. The selected one is recorded again at its own site and the surface dedupes
+       on method+url, which is what makes stating it twice harmless rather than a second endpoint. */
+    for (i = 0; i < ss.n; i++) {
+        char *cand;
+        JSValue uv;
+
+        DCHECK(ss.items[i].url != NULL && ss.items[i].url[0] != '\0',
+               "§4.8.4.3's source set holds an image source with no URL — §4.8.4.3.10 asserts a non-empty url "
+               "for every candidate it appends and §4.8.4.3.8 appends a default source only when it is not the "
+               "empty string, so an empty one here is one of those two disagreeing with its own assert");
+        cand = img_url_absolute(ctx, ss.items[i].url, strlen(ss.items[i].url));
+        if (!cand) continue;   /* HTML §2.4.2's failure: an address that is not one names no endpoint */
+        uv = JS_NewString(ctx, cand);
+        CHECK(!JS_IsException(uv), "§4.8.4.3.7: OOM naming an image candidate for the endpoint surface");
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
+        JS_FreeValue(ctx, uv);
+        free(cand);
     }
+
+    /* AN ATTRIBUTE THE SELECTION DEPENDS ON WAS COMPOSED OUT OF UNKNOWN EXTERNAL INPUT, so which source this
+       element selects is not a question any host can be asked. It is still a request the page makes: the SHAPE
+       reaches the @H surface rather than disappearing, which is the same answer core/html/html_script.c gives
+       an unknown `<script src>`. The image request is left at its current state — nothing was fetched, so
+       nothing may claim to have been, and no event is fired for a decision that was never taken. */
+    if (ss.undecided) {
+        if (!JS_IsUndefined(ss.undecided_url))
+            endpoint_record(ctx, "GET", ss.undecided_url, NULL, 0, NULL);
+        image_source_set_release(ctx, &ss);
+        JS_FreeValue(ctx, st);
+        return JS_UNDEFINED;
+    }
+
+    selected = ss.selected >= 0 ? ss.items[ss.selected].url : NULL;
+    selected_n = selected ? strlen(selected) : 0;
 
     /* "If selected source is null: Set the current request's state to broken … Queue an element task … Change
        the current request's current URL to the empty string. If all of the following are true: the element has
@@ -448,17 +476,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         st_set_int(ctx, st, "state", IMG_BROKEN);
         st_set_str(ctx, st, "currentURL", "");
         if (named_a_source) img_queue_fire(ctx, elv, "error");
-        JS_FreeValue(ctx, st);
-        return JS_UNDEFINED;
-    }
-
-    /* A `src` THIS FLOW COMPOSED OUT OF UNKNOWN EXTERNAL INPUT is an address no host can be asked for, and it
-       is still a request the page makes: it reaches the @H surface as the SHAPE it is rather than disappearing,
-       which is the same answer core/html/html_script.c gives an unknown `<script src>`. The image request is
-       left at its current state — nothing was fetched, so nothing may claim to have been. */
-    taint = dom_cow_attr_taint(el, "src");   /* BORROWED (solver/dom_cow.h) — never freed here */
-    if (!JS_IsUndefined(taint)) {
-        endpoint_record(ctx, "GET", taint, NULL, 0, NULL);
+        image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
         return JS_UNDEFINED;
     }
@@ -477,9 +495,16 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
             JS_SetPropertyStr(ctx, st, "currentURL", s);
         }
         img_queue_fire(ctx, elv, "error");
+        image_source_set_release(ctx, &ss);
         JS_FreeValue(ctx, st);
         return JS_UNDEFINED;
     }
+    /* THE SELECTED SOURCE HAS BEEN COPIED INTO `abs` AND IS NOT READ AGAIN, so the set is released here rather
+       than at each of the three remaining returns — `selected` points INTO it and every use of that pointer is
+       above this line. */
+    image_source_set_release(ctx, &ss);
+    selected = NULL;
+    selected_n = 0;
 
     /* "If the pending request is not null and urlString is the same as the pending request's current URL, then
        return." The pending request is null throughout this build; the assert two steps down is where that is
@@ -577,7 +602,12 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         CHECK(!JS_IsException(deliver), "§4.8.4.3.5: OOM allocating an image reply's processResponse steps");
         /* §4.8.4.3.5 creates the request and never sets a method, so it is Fetch §2.2 "Requests"'s `GET`.
            STATED, because the reply seam is keyed on the (method, url) pair and a park that does not say is a
-           park the host's join cannot list. */
+           park the host's join cannot list.
+           §4.8.4.3.5's "If the element USES SRCSET OR PICTURE, set request's INITIATOR to `imageset`" writes a
+           field core/fetch/fetch.h's request record does not carry, and it is not carried because it has no
+           reader in this engine: Fetch's initiator is read by service workers and by §4.8.4.3.13 "Reacting to
+           environment changes", and neither exists here. A field a producer writes and nothing reads is the
+           mirror of the defect CLAUDE.md counts seven of, so it arrives with its first consumer. */
         req.method = "GET";
         req.url = abs;
         req.headers = NULL;
@@ -670,12 +700,45 @@ void html_image_update(JSContext *ctx, lxb_dom_element_t *el)
 
 /* ---- §4.8.4.3.2 "Reacting to DOM mutations" --------------------------------------------------------------- */
 
+/* WHICH `img` ELEMENTS A `source` ELEMENT'S MUTATION IS RELEVANT TO, which §4.8.4.3.9's own closing note
+   answers rather than §4.8.4.3.2: "Each img element independently considers its PREVIOUS SIBLING source
+   elements plus the img element itself for selecting an image source … [ignoring] source elements that are
+   FOLLOWING SIBLINGS of the relevant img element." So a mutated `source` is relevant to exactly the `img`
+   elements that come AFTER it under the same `picture` parent — one `<picture>` may hold several, and each of
+   them selects out of a different prefix of the child list.
+   A `source` OUTSIDE a `picture` is §4.8.12's media-element source and is nobody's image candidate; it reaches
+   this function and leaves it, which is why the parent test is here rather than at the call sites. */
+static void img_source_mutated(JSContext *ctx, lxb_dom_element_t *src)
+{
+    lxb_dom_node_t *parent = lxb_dom_interface_node(src)->parent;
+    lxb_dom_node_t *n;
+
+    if (!parent || parent->type != LXB_DOM_NODE_TYPE_ELEMENT ||
+        !lxb_html_tree_node_is(parent, LXB_TAG_PICTURE))
+        return;
+    for (n = lxb_dom_interface_node(src)->next; n; n = n->next)
+        if (img_is_node(n)) html_image_update(ctx, lxb_dom_interface_element(n));
+}
+
 void html_image_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
 {
-    if (!img_is_node(lxb_dom_interface_node(el))) return;
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
     /* A content attribute is the HTML namespace's; a `foo:src` is a different attribute entirely. */
     if (ns && *ns) return;
     DCHECK(local != NULL, "§4.8.4.3.2 was asked about an attribute change with no attribute name");
+    /* "The element's parent is a picture element and A SOURCE ELEMENT THAT IS A PREVIOUS SIBLING has its
+       srcset, sizes, media, type, width or height attributes set, changed, or removed." SIX names, and they are
+       not the img's six: `media` and `type` are §4.8.4.3.9's own two conditions on a `source`, and `width` and
+       `height` are the ones its step 9 reads for the dimension attribute source. */
+    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(n, LXB_TAG_SOURCE)) {
+        if (strcmp(local, "srcset") && strcmp(local, "sizes") && strcmp(local, "media") &&
+            strcmp(local, "type") && strcmp(local, "width") && strcmp(local, "height"))
+            return;
+        img_source_mutated(ctx, el);
+        return;
+    }
+    if (!img_is_node(n)) return;
     /* "The element's src, srcset, width, or sizes attributes are set, changed, or removed", plus "The element's
        crossorigin attribute's state is changed" and "The element's referrerpolicy attribute's state is
        changed". `width` is in the list because it feeds the auto-sizes machinery §4.8.4.3.9 reads, and it
@@ -688,10 +751,16 @@ void html_image_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *
 
 void html_image_inserted(JSContext *ctx, lxb_dom_element_t *el)
 {
-    /* "The img or source HTML element insertion steps … count the mutation as a relevant mutation." The
-       `source` half belongs to an element that uses picture, which §4.8.4.3.9's absent walk is what would read
-       — so this asks only about the `img`, and the day that walk exists it gains its own sibling entry. */
-    if (!img_is_node(lxb_dom_interface_node(el))) return;
+    const lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    /* "The img or source HTML element insertion steps … count the mutation as a relevant mutation." BOTH
+       halves: an inserted `source` changes which candidates every `img` after it in the same `picture` selects
+       from, and §4.8.4.3.9's walk is what reads it. */
+    if (n && n->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(n, LXB_TAG_SOURCE)) {
+        img_source_mutated(ctx, el);
+        return;
+    }
+    if (!img_is_node(n)) return;
     html_image_update(ctx, el);
 }
 
@@ -707,10 +776,15 @@ void html_image_parsed(JSContext *ctx, lxb_dom_node_t *root)
         if (!img_is_node(n)) continue;
         /* PRESENCE, NOT VALUE — `<img src="">` IS an element that named a source, and §4.8.4.3.5's null-source
            arm is where the empty string is answered, with the `error` event a browser fires for it. An element
-           with no `src` and no `srcset` has nothing to update and is skipped so a parse of a document full of
-           `<img alt>` placeholders queues nothing. */
+           with no `src` and no `srcset` AND NO `picture` PARENT has nothing to update and is skipped so a parse
+           of a document full of `<img alt>` placeholders queues nothing.
+           THE PARENT IS PART OF THE TEST because §4.8.4.3 makes it part of the question: an element "uses
+           srcset or picture … if it has a srcset attribute specified OR IF IT HAS A PARENT THAT IS A PICTURE
+           ELEMENT", so `<picture><source srcset=a><img alt=x></picture>` selects a real source out of a
+           `source` sibling while carrying neither attribute itself. Testing only the two attributes skipped
+           exactly the markup this component was built for. */
         if (!lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"src", 3) &&
-            !lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"srcset", 6))
+            !img_uses_srcset_or_picture(lxb_dom_interface_element(n)))
             continue;
         html_image_update(ctx, lxb_dom_interface_element(n));
     }

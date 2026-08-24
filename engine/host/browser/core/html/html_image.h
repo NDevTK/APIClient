@@ -28,11 +28,17 @@
  * That is the honest answer for a user agent that supports no image format, and it is the same one a real
  * browser gives for an image it cannot decode.
  *
+ * THE SOURCE SET IS NOT THIS FILE'S PROBLEM AND IS NOT ABSENT EITHER. §4.8.4.3.5's selection step is asked of
+ * core/html/image_source_set.h, which owns §4.8.4.3.7 "Selecting an image source" and the five algorithms
+ * under it — the srcset and sizes grammars, the `<picture>` walk, the density normalization and the
+ * implementation-defined choice. It is asked for EVERY `img` and not only for one that uses srcset or picture,
+ * because that is the standard's own shape: a bare `src` is a default source that §4.8.4.3.8 step 4 appends and
+ * §4.8.4.3.12 gives a 1x, which is the same one-candidate answer a hand-written branch here produced and is now
+ * produced by the algorithm defined to produce it. What this file keeps is the half that is about IMAGE
+ * REQUESTS: the microtask split, the generation counter, the URL parse, the policy check, the fetch and the
+ * queued events.
+ *
  * WHAT IS HONESTLY ABSENT, EACH CRASHING WHERE IT IS REACHED RATHER THAN ANSWERING SOMETHING PLAUSIBLE:
- *   - §4.8.4.3.7 "Selecting an image source" and §4.8.4.3.10 "Parsing a srcset attribute". An element that
- *     USES SRCSET OR PICTURE (§4.8.4.3 "Processing model": it has a `srcset` attribute, or its parent is a
- *     `picture`) selects its source through them; this build does the `src` half of §4.8.4.3.5 and DFAILs
- *     naming those two, which is the next subproblem in spec order rather than a fallback.
  *   - The DECODER itself: `naturalWidth`/`naturalHeight` answer 0 for an image that is not available, which
  *     is §4.8.3's own step 1 and is every image in this build; the step that reads a decoded image's
  *     density-corrected natural dimensions crashes naming what has to exist first.
@@ -91,13 +97,28 @@ void html_image_update(JSContext *ctx, lxb_dom_element_t *el);
    `crossorigin`/`referrerpolicy` state changes, as one of §4.9's attribute change steps — the chokepoint every
    spelling of those writes reaches (`img.src = u`, `setAttribute`, `attributes.src.value = u`), which is why
    it is here and not inside the reflection's setter. Asks whether `el` is an `img` itself, so core/dom's drain
-   states no brand it would have to keep in step with this file. */
+   states no brand it would have to keep in step with this file.
+   AND THE `source` HALF OF THE SAME LIST — "The element's parent is a picture element and a source element that
+   is a previous sibling has its srcset, sizes, media, type, width or height attributes set, changed, or
+   removed" — which is a mutation on a DIFFERENT element that is relevant to THIS one, and is therefore asked
+   here rather than at a second call site: core/dom's drain states one element and this file decides which img
+   elements it moved. */
 void html_image_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
 
 /* §4.8.4.3.2's "The img or source HTML element insertion steps ... count the mutation as a relevant mutation",
    from core/dom/element.c's §4.2.3 insertion-steps drain, in the inserted node's own document realm — beside
    `<script>` preparation and the child-navigable creation, which are the same family of HTML element insertion
-   steps and need the same realm and the same position. */
+   steps and need the same realm and the same position. BOTH halves of that sentence: an inserted `source`
+   changes what every `img` after it under the same `picture` selects from, so it updates those and not itself.
+   THE REMOVING AND MOVING STEPS OF THE SAME SENTENCE ARE NOT WIRED, and the reason is a CONTRACT and not an
+   omission this file could close. core/dom/element.c's tree-steps drain does run a removing side (§4.8.5's
+   `iframe` destroys its child navigable there), but it is DEFERRED: the entry it queues carries the removed
+   node and nothing else, and core/dom/node.h says in as many words why the parent has to be PASSED — "by
+   NODE_TREE_REMOVED there is none left to read". §4.8.4.3.2's removing case is precisely the one that needs it:
+   the img elements a removed `source` moved are its FOLLOWING SIBLINGS under its OLD parent, and by the time
+   the deferred steps run its `parent` and `next` are already NULL. So this belongs to that drain's record
+   carrying the old parent — a core/dom change, in spec order before this one — and not to a sibling walk here
+   over pointers that have been cleared. */
 void html_image_inserted(JSContext *ctx, lxb_dom_element_t *el);
 
 /* THE SAME MUTATION FOR THE ELEMENTS A PARSE CREATED, which reach neither chokepoint above: lexbor builds a

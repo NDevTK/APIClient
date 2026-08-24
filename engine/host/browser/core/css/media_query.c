@@ -866,30 +866,90 @@ MediaQuerySet *media_query_parse_one(const char *text)
    are half of it by §6.1.1's two normative fallbacks — an undeterminable x-height "must be assumed" to be
    0.5em, and an undeterminable "0" glyph "must be assumed to be 0.5em wide by 1em tall" — which apply here
    because there is no font to measure either from. Viewport units resolve against the viewport, which is what
-   this whole file is about. An unknown unit cannot reach here — value_ok admitted the dimension and this is
-   the same list, which is what the DFAIL states. */
-static double length_px(const MqValue *v, const MqEnv *e, bool *ok)
+   this whole file is about. An unknown unit cannot reach `length_px` — value_ok admitted the dimension and this
+   is the same list, which is what the DFAIL states.
+   THE TABLE IS SPLIT FROM THE `MqValue` WALK because it has a SECOND caller with no MqValue to hand it, and
+   that caller's rule is HTML §4.8.4.3 "Processing model" in one sentence: a source size's units other than the
+   viewport-relative ones "must be interpreted THE SAME AS IN MEDIA QUERIES". So `media_query_length_px` below
+   is this same table asked from outside, and not a copy of it — the copy is what would go on being wrong. */
+static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
 {
-    const char *u = v->unit;
-
     *ok = true;
-    if (v->kind == MV_NUMBER) return v->a;          /* a unitless zero */
-    if (!strcmp(u, "px")) return v->a;
-    if (!strcmp(u, "em") || !strcmp(u, "rem")) return v->a * e->font_size;
-    if (!strcmp(u, "ex")) return v->a * e->font_size * 0.5;
-    if (!strcmp(u, "ch")) return v->a * e->font_size * 0.5;
-    if (!strcmp(u, "cm")) return v->a * 96.0 / 2.54;
-    if (!strcmp(u, "mm")) return v->a * 96.0 / 25.4;
-    if (!strcmp(u, "q"))  return v->a * 96.0 / 101.6;
-    if (!strcmp(u, "in")) return v->a * 96.0;
-    if (!strcmp(u, "pt")) return v->a * 96.0 / 72.0;
-    if (!strcmp(u, "pc")) return v->a * 16.0;
-    if (!strcmp(u, "vw")) return v->a * e->width / 100.0;
-    if (!strcmp(u, "vh")) return v->a * e->height / 100.0;
-    if (!strcmp(u, "vmin")) return v->a * (e->width < e->height ? e->width : e->height) / 100.0;
-    if (!strcmp(u, "vmax")) return v->a * (e->width > e->height ? e->width : e->height) / 100.0;
+    if (!strcmp(u, "px")) return n;
+    if (!strcmp(u, "em") || !strcmp(u, "rem")) return n * e->font_size;
+    if (!strcmp(u, "ex")) return n * e->font_size * 0.5;
+    if (!strcmp(u, "ch")) return n * e->font_size * 0.5;
+    if (!strcmp(u, "cm")) return n * 96.0 / 2.54;
+    if (!strcmp(u, "mm")) return n * 96.0 / 25.4;
+    if (!strcmp(u, "q"))  return n * 96.0 / 101.6;
+    if (!strcmp(u, "in")) return n * 96.0;
+    if (!strcmp(u, "pt")) return n * 96.0 / 72.0;
+    if (!strcmp(u, "pc")) return n * 16.0;
+    if (!strcmp(u, "vw")) return n * e->width / 100.0;
+    if (!strcmp(u, "vh")) return n * e->height / 100.0;
+    if (!strcmp(u, "vmin")) return n * (e->width < e->height ? e->width : e->height) / 100.0;
+    if (!strcmp(u, "vmax")) return n * (e->width > e->height ? e->width : e->height) / 100.0;
     *ok = false;
     return 0;
+}
+
+static double length_px(const MqValue *v, const MqEnv *e, bool *ok)
+{
+    *ok = true;
+    if (v->kind == MV_NUMBER) return v->a;          /* a unitless zero */
+    return mq_unit_px(v->unit, v->a, e, ok);
+}
+
+bool media_query_length_px(JSContext *ctx, double n, const char *unit, size_t unit_len, double *px)
+{
+    char u[MQ_IDENT_MAX];
+    MqEnv e;
+    size_t i;
+    bool ok = false;
+
+    DCHECK(px != NULL, "a `<length>` was resolved against the media query unit table with nowhere to put it");
+    DCHECK(unit != NULL || unit_len == 0,
+           "a `<length>`'s unit was given as no bytes with a non-zero length — a dimension token's unit is a "
+           "span of its own source and an absent one is the UNITLESS case, which is a length of length zero");
+    /* css-values-4 §6: the unit may be omitted for ZERO and for nothing else, which is the whole of what a bare
+       `<number>` can be where a `<length>` is wanted. Answered here rather than by the table, which is a table
+       of UNITS and has no row for the absence of one. */
+    if (unit_len == 0) { *px = n; return n == 0.0; }
+    if (unit_len >= sizeof u) return false;         /* longer than any unit §6 defines; not one of them */
+    for (i = 0; i < unit_len; i++) u[i] = mq_lower(unit[i]);
+    u[unit_len] = '\0';
+    mq_env(ctx, &e);
+    *px = mq_unit_px(u, n, &e, &ok);
+    return ok;
+}
+
+MediaQuerySet *media_query_parse_condition(const char *text)
+{
+    MediaQuerySet *set;
+    MqCond *cond = NULL;
+    MqLex L;
+
+    DCHECK(text != NULL, "a `<media-condition>` was parsed from no text — an absent condition is a caller that "
+                         "never had one, and the EMPTY string is a condition that does not match the grammar");
+    mq_lex_init(&L, text);
+    /* §3's `<media-condition>`, with `or` allowed — the production HTML §4.8.4.3.11 step 3.5 names, which is
+       NOT `<media-query>`: a bare `<media-type>` (`screen`) is a valid media query and is not a condition, so
+       parsing this as a query would accept a sizes entry no browser accepts. It must consume the WHOLE text;
+       a trailing token is a condition with something after it, which is not one. */
+    if (!parse_condition(&L, true, &cond) || L.kind != TK_EOF) {
+        cond_free(cond);
+        return NULL;
+    }
+    set = calloc(1, sizeof *set);
+    CHECK(set != NULL, "media queries: OOM holding a parsed media condition");
+    set->q = calloc(1, sizeof *set->q);
+    CHECK(set->q != NULL, "media queries: OOM holding a parsed media condition's query");
+    set->n = 1;
+    /* A bare `<media-condition>` IS §3's first arm of `<media-query>`, so it is held as a query with no
+       `<media-type>` — which is exactly the shape parse_query produces for one, and is what makes
+       `media_query_matches` and its concolic-carrying twin answer this without a second evaluator. */
+    set->q[0].cond = cond;
+    return set;
 }
 
 /* §4's `resolution` operand as the number `e->dppx` is measured in. The four unit identifiers and the two
