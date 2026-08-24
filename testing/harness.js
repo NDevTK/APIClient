@@ -223,16 +223,34 @@ async function cmdRestart(args, keepIdb) {
       log(`killed Chrome pid ${lock.pid}`);
     } catch (e) { log(`kill pid ${lock.pid}: ${e.message || e} (may already be gone)`); }
   }
-  // Reap LEAKED harness Chromes not in the lock: a test script killed mid-restart (TaskStop)
-  // leaves its Chrome behind, and they accumulate until the grind wedges (measured: ~10
-  // instances -> sentry barely grinds). Every harness Chrome carries --remote-debugging-port;
-  // a normal browser has none, so this can't touch the user's browser. Base64 -EncodedCommand
-  // sidesteps cmd/PowerShell quoting. Best-effort.
+  /* Reap LEAKED harness Chromes not in the lock: a test script killed mid-restart (TaskStop) leaves its
+     Chrome behind, and they accumulate until the grind wedges (measured: ~10 instances -> sentry barely
+     grinds). A launch whose port never answered leaves one too — cmdStart exits before it writes the lock,
+     so the process it started becomes unkillable by every later restart, and the NEXT launch then fails on a
+     profile another process still holds. That failure is silent in the way §Testing warns about: the row
+     reports on a browser nobody started.
+     THE REAP IS SCOPED BY THE PROFILE, WHICH IS THIS LANE'S NAME FOR ITS OWN BROWSER. It used to match
+     `remote-debugging-port`, which is carried by EVERY harness Chrome on the box — and this checkout holds
+     several agents at once, each with one, which is the exact defect the PROFILE_DIR/LOCK_FILE split was
+     introduced to fix one screen up. A reap that kills a browser it did not start destroys somebody else's
+     measurement and does it invisibly. `--user-data-dir=<PROFILE_DIR>` is on the command line of this lane's
+     Chrome and of no other, so it is the one predicate that reaps exactly what this command owns. */
+  const mine = `--user-data-dir=${PROFILE_DIR}`;
   if (process.platform === "win32") {
     try {
-      const ps = "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | Where-Object { $_.CommandLine -match 'remote-debugging-port' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+      const ps = "Get-CimInstance Win32_Process -Filter \"name='chrome.exe'\" | Where-Object { $_.CommandLine -match " +
+                 JSON.stringify(mine.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).replace(/"/g, "'") +
+                 " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
       execSync(`powershell -NoProfile -EncodedCommand ${Buffer.from(ps, "utf16le").toString("base64")}`, { stdio: "ignore" });
     } catch (e) { /* best-effort reap */ }
+  } else {
+    try {
+      const stray = execSync("ps -eo pid,args", { stdio: ["ignore", "pipe", "ignore"] }).toString()
+        .split("\n").filter((l) => l.includes(mine))
+        .map((l) => Number(l.trim().split(/\s+/)[0])).filter((p) => p && p !== process.pid);
+      for (const p of stray) { try { process.kill(p, "SIGKILL"); } catch (e) { /* already gone */ } }
+      if (stray.length) log(`reaped ${stray.length} stray process(es) still holding ${PROFILE_DIR}`);
+    } catch (e) { /* no ps: best-effort reap */ }
   }
   await clearLock();
   await sleep(1800);   // let the process group exit + release the profile's file locks
@@ -583,14 +601,36 @@ async function cmdStart(args) {
   chromeProc.unref();
   if (!chromeProc.pid) { log("failed to spawn Chrome"); process.exit(1); }
 
-  // Wait for the debug port to be reachable.
-  let ready = false;
-  for (let i = 0; i < 100; i++) {
+  /* WAIT FOR THE DEBUG PORT, AND THE VERDICT IS THE PROCESS — NOT A CLOCK. This waited 20 seconds and gave
+     up, which is a wall-clock kill in §Testing's sense: a COLD profile (first launch of a lane, a fresh
+     `--load-extension` to verify) legitimately takes longer than a warm one, and on a loaded box longer
+     still, so the number decided the outcome. Measured: the first launch of a new profile exceeded it, and
+     the port answered a few seconds after the harness had already declared failure. What the harness actually
+     wants to know is whether Chrome is STILL COMING UP, and the process itself answers that — so the loop
+     runs while the process is alive, and the elapsed cap below is only a BACKSTOP for a Chrome that is alive
+     and will never listen. The two report through DIFFERENT messages so they can never collapse into one
+     verdict, and the backstop's number is deliberately generous.
+     AND A FAILED LAUNCH KILLS WHAT IT STARTED. Exiting here without doing so is what leaked the browser this
+     command owns: the lock is not written, so no later `restart` can find that process, and the next launch
+     fails on a profile it still holds — a cascade whose first symptom is a measurement of a browser nobody
+     started. */
+  let ready = false, exited = false;
+  chromeProc.on("exit", () => { exited = true; });
+  const BACKSTOP_MS = 180000;
+  for (let t0 = Date.now(); Date.now() - t0 < BACKSTOP_MS; ) {
     await sleep(200);
     if (await pingPort(port)) { ready = true; break; }
+    if (exited) break;
+    /* The child is detached and unref'd, so node's own `exit` event is not the whole story once this process
+       stops being its parent's waiter — signal 0 asks the kernel directly. */
+    try { process.kill(chromeProc.pid, 0); } catch { exited = true; break; }
   }
   if (!ready) {
-    log(`Chrome launched (pid ${chromeProc.pid}) but port ${port} isn't responding`);
+    if (exited) log(`Chrome (pid ${chromeProc.pid}) EXITED before opening port ${port}`);
+    else {
+      log(`Chrome (pid ${chromeProc.pid}) is ALIVE but never opened port ${port} within ${BACKSTOP_MS / 1000}s — killing it`);
+      try { process.kill(-chromeProc.pid, "SIGKILL"); } catch { try { process.kill(chromeProc.pid, "SIGKILL"); } catch {} }
+    }
     /* THE CAUSE, not just the symptom. Chrome states its own refusal and this is where a reader needs it. */
     try {
       const tail = fs.readFileSync(chromeLog, "utf8").split("\n").filter(Boolean).slice(-12);
