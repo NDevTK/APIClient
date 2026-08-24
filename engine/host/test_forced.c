@@ -10,7 +10,8 @@
 #include "core/crypto/secure_hash.h"
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
-#include "core/xml/xml_markup.h" /* XML §2.7's [18] CDSect — the construct in which nothing else is markup */
+#include "core/xml/xml_name.h"   /* XML §2.3's [5] Name, which §2.6's [17] PITarget is a subtraction from */
+#include "core/xml/xml_markup.h" /* XML §2.5's [15] Comment, §2.6's [16] PI and §2.7's [18] CDSect */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -6227,9 +6228,40 @@ static void xml_ref_selftest(void)
     }
 }
 
-/* XML 1.0 (Fifth Edition) §2.7 CDATA Sections — core/xml/xml_markup.h, the construct in which no other markup
- * is recognized — driven together with §2.11 End-of-Line Handling's SECOND spelling, which that construct is
- * the first caller of.
+/* THE §2.11 CROSS-CHECK EVERY CONTENT RUN IN core/xml/xml_markup.h OWES. A scan hands back a BORROWED slice
+ * of BYTES while the standard says the production matched CHARACTERS, and the only thing between them is
+ * §2.11 End-of-Line Handling — so every successful row is read BOTH ways: the reader is driven over the raw
+ * slice, and over the byte-level normalized copy, and the two must produce the identical code points with no
+ * #xD surviving into the copy. A component that measured the slice correctly and normalized it wrongly would
+ * pass every answer-and-position row and still ship a carriage return the parser had already removed. */
+static void xml_markup_text_selftest(const XmlMarkupText *t, const char *why)
+{
+    char norm[64];
+    size_t nl = xml_char_normalized_len(t->raw, t->raw_len);
+    XmlCharReader a, b;
+    uint32_t ca = 0, cb = 0;
+
+    CHECK(nl <= t->raw_len && nl < sizeof norm,
+          "§2.11's normalization measured a slice as longer than its own bytes, or this row is too long for "
+          "the fixture's buffer");
+    CHECK(xml_char_normalize(t->raw, t->raw_len, norm) == nl, why);
+    CHECK(memchr(norm, 0x0D, nl) == NULL,
+          "§2.11's normalized copy of a markup construct's content still contains a carriage return");
+    xml_char_reader_init(&a, t->raw, t->raw_len);
+    xml_char_reader_init(&b, norm, nl);
+    for (;;) {
+        CHECK(xml_char_read(&a, &ca) == XML_CHAR_OK && xml_char_read(&b, &cb) == XML_CHAR_OK,
+              "a markup construct's content did not read back as characters");
+        CHECK(ca == cb,
+              "the characters a construct's RAW slice reads as and the characters its §2.11-normalized copy "
+              "reads as are not the same — those are one rule written twice, and a caller materializing this "
+              "content would build a node the parser never read");
+        if (ca == XML_CHAR_EOF) break;
+    }
+}
+
+/* XML 1.0 (Fifth Edition) §2.5 Comments, §2.6 Processing Instructions and §2.7 CDATA Sections —
+ * core/xml/xml_markup.h, the three constructs §2.4 names as the places a literal `<` or `&` may stand.
  *
  * THE ROWS THAT CARRY THE COMPONENT ARE THE ONES A REFERENCE-EXPANDING SCAN WOULD GET WRONG. §2.7's own
  * sentence is that "within a CDATA section, only the CDEnd string is recognized as markup ... they need not
@@ -6240,12 +6272,18 @@ static void xml_ref_selftest(void)
  * CDEnd is the LAST two brackets before the `>` — a three-character window that started matching at the first
  * `]` would run off the end of the section it was supposed to close.
  *
- * THE §2.11 CROSS-CHECK IS THE POINT OF THE SECOND HALF. The scan hands back a BORROWED slice of bytes while
- * the standard says the production matched CHARACTERS, and the only thing between them is §2.11 — so every
- * successful row is read BOTH ways: the reader is driven over the raw slice, and over the normalized copy,
- * and the two must produce the identical code points with no #xD surviving into the copy. A component that
- * measured the slice correctly and normalized it wrongly would pass every row above and ship a carriage
- * return the parser had already removed. */
+ * AND THE ROW MOST LIKELY TO BE MISSING FROM A PARSER WRITTEN FROM MEMORY IS `<?xml-stylesheet ...?>`. [17]
+ * PITarget is `Name - (('X' | 'x') ('M' | 'm') ('L' | 'l'))`, and §6 Notation defines `A - B` as the strings
+ * matching A that do not match B — so the subtracted language is exactly the THREE-CHARACTER spellings of
+ * `xml` and nothing else. §2.6's prose that those names "and so on are reserved for standardization" is about
+ * what the working group may define and not a rule of the grammar; a scan that read it as one would reject
+ * the single most common processing instruction on the web. `<?xmls?>` is here for the same boundary from the
+ * other side.
+ *
+ * THE COMMENT ROWS ARE THE STANDARD'S OWN EXAMPLES. `<!-- B+, B, or B--->` is printed in §2.5 as its
+ * not-well-formed case, and `<!--a-b-->` is the contrast that makes the rule "no two ADJACENT hyphens" rather
+ * than "no hyphen". `<!--->` is the one that separates the two answers: it has no `-->` at all, so it is the
+ * unterminated report and not the double-hyphen one. */
 static void xml_markup_selftest(void)
 {
     static const struct { const char *in; size_t n; XmlMarkupError err;
@@ -6307,19 +6345,124 @@ static void xml_markup_selftest(void)
         { "<![CDATA[a\xC3]]>", 14, XML_MARKUP_ERR_CHARACTER, NULL, 0, 0,
           "§4.3.3: and an ill-formed code unit sequence is ill-formed here too" },
     };
-    /* The peek is the CALLER's and the scan asserts it, so the predicate is exercised on its own — including
-       on the shapes a [43] content dispatcher will actually hand it. */
-    static const struct { const char *in; bool at; const char *why; } PEEK[] = {
-        { "<![CDATA[", true, "[19] CDStart, exactly" },
-        { "<![CDATA[x]]>", true, "and with a section behind it" },
-        { "<![CDATA", false, "an entity that ends inside the delimiter does not stand at it" },
-        { "<![cdata[", false,
+    /* §2.5's [15] Comment */
+    static const struct { const char *in; size_t n; XmlMarkupError err;
+                          const char *raw; size_t raw_len; size_t after; const char *why; } CO[] = {
+        { "<!---->", 7, XML_MARKUP_OK, "", 0, 7,
+          "[15]'s body is `(...)*`, so zero repetitions is a comment — and `<!--` followed immediately by "
+          "`-->` is exactly that" },
+        { "<!--a-->", 8, XML_MARKUP_OK, "a", 1, 8, "the shortest comment with content in it" },
+        { "<!--a-b-->", 10, XML_MARKUP_OK, "a-b", 3, 10,
+          "[15]'s second alternative is `'-' (Char - '-')`, so a SINGLE hyphen is content — the restriction is "
+          "on two ADJACENT hyphens and not on the character" },
+        { "<!--<&-->", 9, XML_MARKUP_OK, "<&", 2, 9,
+          "§2.4 names a comment in its own exception clause, so `<` and `&` stand here in their literal form "
+          "and §4.1's reference layer is never asked" },
+        { "<!--a\r\nb-->", 11, XML_MARKUP_OK, "a\r\nb", 4, 11,
+          "the slice is BYTES and §2.11 collapses `#xD #xA` to one #xA, so this comment's content is four "
+          "bytes and three characters" },
+        { "<!--a-->b", 9, XML_MARKUP_OK, "a", 1, 8,
+          "the scan stops immediately after `-->`, leaving the `b` for the caller" },
+
+        /* §2.5's compatibility restriction */
+        { "<!--a--b-->", 11, XML_MARKUP_ERR_DOUBLE_HYPHEN, NULL, 0, 0,
+          "§2.5: `For compatibility, the string \"--\" (double-hyphen) MUST NOT occur within comments`" },
+        { "<!-- B+, B, or B--->", 20, XML_MARKUP_ERR_DOUBLE_HYPHEN, NULL, 0, 0,
+          "§2.5's OWN not-well-formed example, printed under the note that `the grammar does not allow a "
+          "comment ending in --->` — read left to right that document's `--` is followed by a third hyphen "
+          "instead of the `>`, which is why one answer covers both framings" },
+        { "<!--a---->", 10, XML_MARKUP_ERR_DOUBLE_HYPHEN, NULL, 0, 0,
+          "and four hyphens contain the forbidden pair before the closing one begins" },
+
+        /* [15], unclosed */
+        { "<!--->", 6, XML_MARKUP_ERR_UNTERMINATED_COMMENT, NULL, 0, 0,
+          "THE ROW THAT SEPARATES THE TWO ANSWERS: this is `<!--` then `->`, which contains no `--` at all — "
+          "the mistake is a comment nobody closed, and reporting §2.5's compatibility sentence would name a "
+          "rule the author did not break" },
+        { "<!--a--", 7, XML_MARKUP_ERR_UNTERMINATED_COMMENT, NULL, 0, 0,
+          "and a `--` the entity ends on is not WITHIN a comment, because there is no comment for it to be "
+          "within" },
+        { "<!--", 4, XML_MARKUP_ERR_UNTERMINATED_COMMENT, NULL, 0, 0, "nor is an empty one closed" },
+        { "<!--a\x01" "b-->", 10, XML_MARKUP_ERR_CHARACTER, NULL, 0, 0,
+          "§2.2: [15]'s content is written over `Char`, and U+0001 is not one inside a comment any more than "
+          "it is anywhere else" },
+    };
+    /* §2.6's [16] PI and [17] PITarget */
+    static const struct { const char *in; size_t n; XmlMarkupError err;
+                          const char *target; const char *data; size_t after; const char *why; } PI[] = {
+        { "<?t?>", 5, XML_MARKUP_OK, "t", "", 5,
+          "[16]'s `(S (Char* - …))?` group is optional, so a target and the closing `?>` are a whole "
+          "processing instruction" },
+        { "<?t ?>", 6, XML_MARKUP_OK, "t", "", 6,
+          "and the group present with an empty instruction is the same DOM §4.7 `data` — which is why this "
+          "component does not report which of the two it was" },
+        { "<?t  a?>", 8, XML_MARKUP_OK, "t", "a", 8,
+          "[3] S is `+` and the instruction is `Char*`, so the grammar admits two splits of `  a` and decides "
+          "neither; the whole run is taken, which is what expat answers and the only reading under which the "
+          "instruction does not depend on how many spaces the author typed" },
+        { "<?t\r\n a?>", 9, XML_MARKUP_OK, "t", "a", 9,
+          "and §2.11 has already made that run one #xA and a space before [3] S is asked about it" },
+        { "<?t a??>", 8, XML_MARKUP_OK, "t", "a?", 8,
+          "`?>` is found on a ONE-character lookahead, unlike §2.7's `]]>` run: this instruction closes with "
+          "its LAST `?`, so the instruction is `a?`" },
+        { "<?t >?>", 7, XML_MARKUP_OK, "t", ">", 7,
+          "and a `>` that no `?` precedes is an ordinary Char of the instruction" },
+        { "<?t <&?>", 8, XML_MARKUP_OK, "t", "<&", 8,
+          "§2.4 names a processing instruction in its own exception clause, so `<` and `&` stand here in "
+          "their literal form" },
+        { "<?xml-stylesheet href='x'?>", 27, XML_MARKUP_OK, "xml-stylesheet", "href='x'", 27,
+          "[17] subtracts `('X' | 'x') ('M' | 'm') ('L' | 'l')`, which §6 Notation's `A - B` makes exactly the "
+          "THREE-character spellings of `xml` — so the most common processing instruction on the web is a "
+          "PITarget like any other, and a scan that read §2.6's `and so on are reserved` prose as a rule of "
+          "the grammar would reject it" },
+        { "<?xmls?>", 8, XML_MARKUP_OK, "xmls", "", 8, "the same boundary one character the other side of it" },
+        { "<?t-1?>", 7, XML_MARKUP_OK, "t-1", "", 7,
+          "[4a] NameChar adds `-` and the digits to [4], so both are target characters after the first" },
+        { "<?t a?>b", 8, XML_MARKUP_OK, "t", "a", 7,
+          "the scan stops immediately after `?>`, leaving the `b` for the caller" },
+
+        /* [17], the targets that are not it */
+        { "<?xml a?>", 9, XML_MARKUP_ERR_PI_TARGET_RESERVED, NULL, NULL, 0,
+          "the subtracted language itself — §2.8's [23] XMLDecl is a different production and is permitted "
+          "only at the start of the document entity" },
+        { "<?XmL a?>", 9, XML_MARKUP_ERR_PI_TARGET_RESERVED, NULL, NULL, 0,
+          "and [17] writes its three alternations out by hand, so all eight ASCII case spellings are "
+          "subtracted — which is the one place in this standard where case does not matter, §1.2's `match` "
+          "performing no folding everywhere else" },
+        { "<?1t a?>", 8, XML_MARKUP_ERR_PI_TARGET, NULL, NULL, 0,
+          "[17] is a [5] Name, and a digit is [4a] NameChar without being [4] NameStartChar" },
+        { "<?", 2, XML_MARKUP_ERR_PI_TARGET, NULL, NULL, 0,
+          "and [5] is one NameStartChar followed by zero or more NameChars, so the empty string is not one" },
+
+        /* [16], the shapes that are not it */
+        { "<?t?x?>", 7, XML_MARKUP_ERR_PI_TARGET_END, NULL, NULL, 0,
+          "[16] allows the target to be followed by the closing `?>` or by [3] S, and `?x` is neither" },
+        { "<?t", 3, XML_MARKUP_ERR_UNTERMINATED_PI, NULL, NULL, 0,
+          "an entity that ends on the target has not closed the instruction" },
+        { "<?t a", 5, XML_MARKUP_ERR_UNTERMINATED_PI, NULL, NULL, 0, "nor has one that ends inside it" },
+        { "<?t a\x01" "?>", 8, XML_MARKUP_ERR_CHARACTER, NULL, NULL, 0,
+          "§2.2: [16]'s instruction is written over `Char` as well" },
+    };
+    /* The peek is the CALLER's and the scan asserts it, so the predicates are exercised on their own —
+       including on the shapes a [43] content dispatcher will actually hand them. */
+    static const struct { const char *in; bool cdsect, comment, pi; const char *why; } PEEK[] = {
+        { "<![CDATA[", true, false, false, "[19] CDStart, exactly" },
+        { "<![CDATA[x]]>", true, false, false, "and with a section behind it" },
+        { "<![CDATA", false, false, false, "an entity that ends inside the delimiter does not stand at it" },
+        { "<![cdata[", false, false, false,
           "§1.2 Terminology's `match`: `No case folding is performed` — this is not [19] CDStart, and a "
           "predicate that folded case would open a CDATA section in a document that has none" },
-        { "<!--", false, "§2.5's comment opens with a different string" },
-        { "<?x?>", false, "and so does §2.6's processing instruction" },
-        { "<foo>", false, "a start-tag is not this construct" },
-        { "", false, "and an entity that has ended stands at no construct at all" },
+        { "<!--", false, true, false, "§2.5's comment opens with its own string" },
+        { "<!--a-->", false, true, false, "and with a comment behind it" },
+        { "<!-", false, false, false, "one character short of it is not it" },
+        { "<!DOCTYPE html>", false, false, false, "and §2.8's document type declaration is not a comment" },
+        { "<?x?>", false, false, true, "§2.6's processing instruction opens with `<?`" },
+        { "<?xml version=\"1.0\"?>", false, false, true,
+          "AND SO DOES §2.8's [23] XMLDecl — this predicate answers about `<?` and nothing more, so a caller "
+          "in the prolog owes [23] its own question first; reaching the PI scan with one is not undefined, "
+          "because [17] subtracts that target" },
+        { "<foo>", false, false, false, "a start-tag is none of the three" },
+        { "", false, false, false, "and an entity that has ended stands at no construct at all" },
     };
     size_t i;
 
@@ -6348,32 +6491,7 @@ static void xml_markup_selftest(void)
                   "a CDATA section's content does not point inside the entity it was scanned from — it is a "
                   "borrowed slice and not a copy, so a pointer outside means the scan measured it against "
                   "something else");
-            /* §2.11's TWO SPELLINGS, held to each other over the slice this scan produced: the reader's, which
-               is what the parse actually read, and the byte-level one a caller materializes with. */
-            {
-                char norm[64];
-                size_t nl = xml_char_normalized_len(got.raw, got.raw_len);
-                XmlCharReader a, b;
-                uint32_t ca = 0, cb = 0;
-
-                CHECK(nl <= got.raw_len && nl < sizeof norm,
-                      "§2.11's normalization measured a slice as longer than its own bytes, or this row is too "
-                      "long for the fixture's buffer");
-                CHECK(xml_char_normalize(got.raw, got.raw_len, norm) == nl, CD[i].why);
-                CHECK(memchr(norm, 0x0D, nl) == NULL,
-                      "§2.11's normalized copy of a CDATA section still contains a carriage return");
-                xml_char_reader_init(&a, got.raw, got.raw_len);
-                xml_char_reader_init(&b, norm, nl);
-                for (;;) {
-                    CHECK(xml_char_read(&a, &ca) == XML_CHAR_OK && xml_char_read(&b, &cb) == XML_CHAR_OK,
-                          "a CDATA section's content did not read back as characters");
-                    CHECK(ca == cb,
-                          "the characters a CDATA section's RAW slice reads as and the characters its "
-                          "§2.11-normalized copy reads as are not the same — those are one rule written twice, "
-                          "and a caller materializing this content would get a document the parser never read");
-                    if (ca == XML_CHAR_EOF) break;
-                }
-            }
+            xml_markup_text_selftest(&got, CD[i].why);
         } else {
             CHECK(strcmp(xml_markup_error_message(e), xml_markup_error_message(XML_MARKUP_OK)) != 0, CD[i].why);
             if (e == XML_MARKUP_ERR_CHARACTER) {
@@ -6395,45 +6513,135 @@ static void xml_markup_selftest(void)
             }
         }
     }
+    for (i = 0; i < sizeof(CO) / sizeof(CO[0]); i++) {
+        XmlCharReader r, start;
+        XmlMarkupText got;
+        XmlMarkupError e;
+
+        CHECK(CO[i].n == strlen(CO[i].in), "a comment row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, CO[i].in, CO[i].n);
+        start = r;
+        CHECK(xml_markup_at_comment(&r), "a comment row does not begin at [15] Comment's `<!--`");
+        memset(&got, 0, sizeof got);
+        e = xml_markup_scan_comment(&r, &got);
+        CHECK(e == CO[i].err, CO[i].why);
+        if (e == XML_MARKUP_OK) {
+            CHECK(got.raw != NULL && got.raw_len == CO[i].raw_len
+                      && memcmp(got.raw, CO[i].raw, got.raw_len) == 0, CO[i].why);
+            CHECK((size_t)(r.p - r.start) == CO[i].after, CO[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful comment scan left the reader's §1.2 latch set");
+            CHECK(got.raw > CO[i].in && got.raw + got.raw_len <= CO[i].in + CO[i].n,
+                  "a comment's content does not point inside the entity it was scanned from");
+            xml_markup_text_selftest(&got, CO[i].why);
+        } else if (e == XML_MARKUP_ERR_CHARACTER) {
+            CHECK(r.fatal != XML_CHAR_OK && r.p != start.p,
+                  "a comment scan reported the character layer's fatal error and either rewound past it or "
+                  "left the §1.2 latch clear — the caller is told to ask the reader which sentence was "
+                  "violated, and a rewind would have cleared the answer");
+        } else {
+            CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                      && r.fatal == start.fatal,
+                  "a comment scan that reported a §2.5 error did not restore the reader it was handed");
+        }
+    }
+    for (i = 0; i < sizeof(PI) / sizeof(PI[0]); i++) {
+        XmlCharReader r, start;
+        XmlPi got;
+        XmlMarkupError e;
+
+        CHECK(PI[i].n == strlen(PI[i].in), "a processing-instruction row's declared byte length is not its "
+                                           "literal's");
+        xml_char_reader_init(&r, PI[i].in, PI[i].n);
+        start = r;
+        CHECK(xml_markup_at_pi(&r), "a processing-instruction row does not begin at [16] PI's `<?`");
+        memset(&got, 0, sizeof got);
+        e = xml_markup_scan_pi(&r, &got);
+        CHECK(e == PI[i].err, PI[i].why);
+        if (e == XML_MARKUP_OK) {
+            CHECK(got.target != NULL && got.target_len == strlen(PI[i].target)
+                      && memcmp(got.target, PI[i].target, got.target_len) == 0, PI[i].why);
+            CHECK(got.data.raw != NULL && got.data.raw_len == strlen(PI[i].data)
+                      && memcmp(got.data.raw, PI[i].data, got.data.raw_len) == 0, PI[i].why);
+            CHECK((size_t)(r.p - r.start) == PI[i].after, PI[i].why);
+            CHECK(r.fatal == XML_CHAR_OK,
+                  "a successful processing-instruction scan left the reader's §1.2 latch set");
+            /* [17]'s target is BYTE-EXACT and not merely borrowed: §2.11 rewrites only #xD, and #xD is in
+               neither [4] NameStartChar nor [4a] NameChar, so no character of a target can differ from the
+               bytes it was decoded from — which is what lets a caller compare one without copying it. */
+            CHECK(xml_name_is_name(got.target, got.target_len),
+                  "a [17] PITarget that this component accepted is not a §2.3 [5] Name");
+            CHECK(got.target > PI[i].in && got.target + got.target_len <= PI[i].in + PI[i].n
+                      && got.data.raw >= got.target + got.target_len
+                      && got.data.raw + got.data.raw_len <= PI[i].in + PI[i].n,
+                  "a processing instruction's target and instruction are not two disjoint slices of the "
+                  "entity, in that order");
+            xml_markup_text_selftest(&got.data, PI[i].why);
+        } else if (e == XML_MARKUP_ERR_CHARACTER) {
+            CHECK(r.fatal != XML_CHAR_OK && r.p != start.p,
+                  "a processing-instruction scan reported the character layer's fatal error and either "
+                  "rewound past it or left the §1.2 latch clear");
+        } else {
+            CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                      && r.fatal == start.fatal,
+                  "a processing-instruction scan that reported a §2.6 error did not restore the reader it "
+                  "was handed");
+        }
+    }
     for (i = 0; i < sizeof(PEEK) / sizeof(PEEK[0]); i++) {
         XmlCharReader r;
 
         xml_char_reader_init(&r, PEEK[i].in, strlen(PEEK[i].in));
-        CHECK(xml_markup_at_cdsect(&r) == PEEK[i].at, PEEK[i].why);
+        CHECK(xml_markup_at_cdsect(&r) == PEEK[i].cdsect, PEEK[i].why);
+        CHECK(xml_markup_at_comment(&r) == PEEK[i].comment, PEEK[i].why);
+        CHECK(xml_markup_at_pi(&r) == PEEK[i].pi, PEEK[i].why);
+        /* THE THREE ARE MUTUALLY EXCLUSIVE, which is what makes a [43] content dispatcher's order of asking
+           unobservable — three delimiters that could match at once would make this component's answer depend
+           on which question the caller happened to ask first. */
+        CHECK((PEEK[i].cdsect ? 1 : 0) + (PEEK[i].comment ? 1 : 0) + (PEEK[i].pi ? 1 : 0) <= 1, PEEK[i].why);
     }
     /* Every sentence this layer can report is a DIFFERENT sentence — core/xml/xml_char.c's argument for its
        own two, and core/xml/xml_ref.c's for its five. */
     {
         static const XmlMarkupError ALL[] = {
-            XML_MARKUP_OK, XML_MARKUP_ERR_UNTERMINATED_CDATA_SECTION, XML_MARKUP_ERR_CHARACTER,
+            XML_MARKUP_OK, XML_MARKUP_ERR_UNTERMINATED_COMMENT, XML_MARKUP_ERR_DOUBLE_HYPHEN,
+            XML_MARKUP_ERR_PI_TARGET, XML_MARKUP_ERR_PI_TARGET_RESERVED, XML_MARKUP_ERR_PI_TARGET_END,
+            XML_MARKUP_ERR_UNTERMINATED_PI, XML_MARKUP_ERR_UNTERMINATED_CDATA_SECTION,
+            XML_MARKUP_ERR_CHARACTER,
         };
         size_t a, b;
 
         for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
             for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
                 CHECK(strcmp(xml_markup_error_message(ALL[a]), xml_markup_error_message(ALL[b])) != 0,
-                      "two of §2.7's answers carry one message — a section nobody closed and a character that "
-                      "is not [2] Char are different mistakes an author has to be told apart");
+                      "two of this component's answers carry one message — a comment nobody closed, a "
+                      "processing instruction nobody closed and a CDATA section nobody closed are three "
+                      "different places to look, and a report that merged any two would send an author to "
+                      "the wrong construct");
     }
     /* THE SCAN IS A READER OPERATION, so the peek-and-park copy the parse above it will fork on has to survive
        one — core/xml/xml_char.h's property, exercised through this layer rather than assumed to compose. */
     {
-        static const char SRC[] = "<![CDATA[a]]><![CDATA[b]]>";
+        static const char SRC[] = "<!--c--><?t d?><![CDATA[e]]>";
         XmlCharReader r, saved;
         XmlMarkupText got;
+        XmlPi pi;
 
         xml_char_reader_init(&r, SRC, sizeof SRC - 1);
-        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw_len == 1 && got.raw[0] == 'a',
-              "the first CDATA section of a known entity");
+        CHECK(xml_markup_scan_comment(&r, &got) == XML_MARKUP_OK && got.raw_len == 1 && got.raw[0] == 'c',
+              "the comment of a known entity");
         saved = r;
-        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw[0] == 'b' && r.p == r.end,
-              "the second CDATA section of a known entity, read to the end");
+        CHECK(xml_markup_scan_pi(&r, &pi) == XML_MARKUP_OK && pi.target_len == 1 && pi.data.raw[0] == 'd',
+              "the processing instruction after it");
+        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw[0] == 'e' && r.p == r.end,
+              "and the CDATA section after that, read to the end — three constructs in one [43] content run");
         r = saved;
-        CHECK(xml_markup_at_cdsect(&r), "a reader restored from a copy does not stand where it was copied at");
-        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw_len == 1 && got.raw[0] == 'b',
-              "a CDATA section scanned again from a reader restored out of a copy did not produce the same "
-              "section — peeking and parking ARE that copy, so a parse that cannot rewind across a construct "
-              "can neither fork an arm nor suspend inside [43] content");
+        CHECK(xml_markup_at_pi(&r) && !xml_markup_at_comment(&r) && !xml_markup_at_cdsect(&r),
+              "a reader restored from a copy does not stand where it was copied at");
+        CHECK(xml_markup_scan_pi(&r, &pi) == XML_MARKUP_OK && pi.target_len == 1 && pi.target[0] == 't'
+                  && pi.data.raw_len == 1 && pi.data.raw[0] == 'd',
+              "a construct scanned again from a reader restored out of a copy did not produce the same "
+              "construct — peeking and parking ARE that copy, so a parse that cannot rewind across one can "
+              "neither fork an arm nor suspend inside [43] content");
     }
 }
 
@@ -6930,7 +7138,8 @@ int main(int argc, char **argv) {
     css_property_grammar_selftest();
     xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
     xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
-    xml_markup_selftest(); /* XML §2.7's [18] CDSect, and §2.11's byte-level spelling that construct needs */
+    xml_markup_selftest(); /* XML §2.5's [15] Comment, §2.6's [16] PI, §2.7's [18] CDSect, and §2.11's
+                              byte-level spelling those three borrowed slices need */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
