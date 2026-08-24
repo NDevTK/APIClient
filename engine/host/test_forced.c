@@ -12,6 +12,8 @@
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
 #include "core/xml/xml_name.h"   /* XML §2.3's [5] Name, which §2.6's [17] PITarget is a subtraction from */
 #include "core/xml/xml_markup.h" /* XML §2.5's [15] Comment, §2.6's [16] PI and §2.7's [18] CDSect */
+#include "core/xml/xml_decl.h"   /* XML §2.8's [23] XMLDecl, §2.9's [32] SDDecl and §4.3.1's [77] TextDecl */
+#include "core/xml/xml_literal.h" /* XML §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] PubidChar */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -6693,6 +6695,561 @@ static void xml_markup_selftest(void)
     }
 }
 
+/* XML 1.0 (Fifth Edition) §2.8 Prolog and Document Type Declaration's [23] `XMLDecl`, §2.9 Standalone Document
+ * Declaration's [32] `SDDecl`, §4.3.1 The Text Declaration's [77] `TextDecl` and §4.3.3 Character Encoding in
+ * Entities' [80] `EncodingDecl` — core/xml/xml_decl.h, the declaration at the head of an entity.
+ *
+ * ONE TABLE DRIVEN AS A WHOLE ENTITY EACH TIME, and every row states BOTH productions' answer where they
+ * differ, because the two are one scan asked twice and the only thing separating them is which components are
+ * required. `<?xml version="1.0"?>` is a perfectly good [23] and a fatal [77]; `<?xml encoding='UTF-8'?>` —
+ * §4.3.3's own printed example — is the reverse; and `standalone` is not a component of [77] at all. A fixture
+ * that drove only the document entity's production would pass with a TextDecl scan that had never been
+ * written.
+ *
+ * THE ROWS THAT CARRY THE COMPONENT ARE THE ORDERING ONES AND THE ONES THAT LOOK LIKE TYPOS. [23] is `'<?xml'
+ * VersionInfo EncodingDecl? SDDecl? S? '?>'`, a SEQUENCE, so `<?xml encoding='UTF-8' version='1.0'?>` is
+ * fatally in error rather than a reordering a processor tidies up. §1.2 Terminology's `match` performs no case
+ * folding anywhere in this standard, so `VERSION`, `YES` and `<?XML` are none of them the terminals they look
+ * like. And §2.8's [26] `VersionNum ::= '1.' [0-9]+` accepts `1.1` — §2.8's own note says an XML 1.0 processor
+ * "will process it as a 1.0 document", so matching it is the standard's instruction and not laxity.
+ *
+ * AND THE BOUNDARY AGAINST §2.6 IS MEASURED RATHER THAN ASSERTED, because it is the one thing this component
+ * exists to settle. A `<?xml` NOT followed by [3] S is never a declaration — [24], [80] and [32] each open
+ * with a required S — so `<?xml-stylesheet ...?>` and `<?xmls?>` are ordinary processing instructions while
+ * `<?xml?>` and `<?XML ...?>` are §2.6's reserved-target fatal error. Every peek row is therefore driven
+ * through core/xml/xml_markup.h's PI scan as well, which is what holds the two components' answers to each
+ * other: wherever a declaration IS permitted, the PI scan reports [17]'s reserved target — so a caller that
+ * asked §2.6 first would report a fatal error about a well-formed document — and the rows where the PI scan
+ * SUCCEEDS are exactly the ones whose target is more than the three characters [17] subtracts. */
+static void xml_decl_selftest(void)
+{
+    static const struct { const char *in; size_t n; bool text_decl; XmlDeclError err;
+                          const char *version, *encoding; XmlStandalone standalone; size_t after;
+                          const char *why; } DECL[] = {
+        /* [23] XMLDecl ::= '<?xml' VersionInfo EncodingDecl? SDDecl? S? '?>' */
+        { "<?xml version=\"1.0\"?>", 21, false, XML_DECL_OK, "1.0", NULL, XML_STANDALONE_ABSENT, 21,
+          "[23]'s smallest form: [24] VersionInfo is the one component that is not optional, and §2.9's "
+          "absent [32] is a POSITIVE statement — §2.9 assumes the value `no` only where there ARE external "
+          "markup declarations, which is §2.8's [28] doctypedecl's question and not this one" },
+        { "<?xml version='1.0'?>", 21, false, XML_DECL_OK, "1.0", NULL, XML_STANDALONE_ABSENT, 21,
+          "[24] writes the value in TWO alternatives, one quoted with apostrophes and one with quotation "
+          "marks, so either character opens it" },
+        { "<?xml version = \"1.0\" ?>", 24, false, XML_DECL_OK, "1.0", NULL, XML_STANDALONE_ABSENT, 24,
+          "[25] Eq ::= S? '=' S?, so white space may stand on either side of the equals sign — and [23]'s "
+          "trailing `S?` is why a space before the `?>` is not a component that is missing" },
+        { "<?xml\tversion=\"1.0\"?>", 21, false, XML_DECL_OK, "1.0", NULL, XML_STANDALONE_ABSENT, 21,
+          "[3] S is `(#x20 | #x9 | #xD | #xA)+`, so a tab separates '<?xml' from its first component exactly "
+          "as a space does — which is also what the peek has to accept, since the peek IS that S" },
+        { "<?xml\r\nversion=\"1.0\"?>", 22, false, XML_DECL_OK, "1.0", NULL, XML_STANDALONE_ABSENT, 22,
+          "and §2.11 End-of-Line Handling has already made the #xD#xA pair ONE character before this "
+          "component sees it, which is why a declaration may be broken across lines and why the borrowed "
+          "value can still be compared as bytes" },
+        { "<?xml version=\"1.1\"?>", 21, false, XML_DECL_OK, "1.1", NULL, XML_STANDALONE_ABSENT, 21,
+          "[26] VersionNum ::= '1.' [0-9]+ matches any 1.x, and §2.8's note is explicit that `an XML 1.0 "
+          "processor will accept 1.x documents provided they do not use any non-1.0 features` and `will "
+          "process it as a 1.0 document` — so this is the standard's instruction, not a missing XML 1.1" },
+        { "<?xml version=\"1.10\"?>", 22, false, XML_DECL_OK, "1.10", NULL, XML_STANDALONE_ABSENT, 22,
+          "and the `+` is one-or-more DIGITS rather than one digit, so the minor version is not bounded" },
+        { "<?xml version=\"1.0\" encoding=\"UTF-8\"?>", 38, false, XML_DECL_OK, "1.0", "UTF-8",
+          XML_STANDALONE_ABSENT, 38,
+          "§4.3.3: `In the document entity, the encoding declaration is part of the XML declaration`" },
+        { "<?xml version=\"1.0\" encoding=\"utf-8\"?>", 38, false, XML_DECL_OK, "1.0", "utf-8",
+          XML_STANDALONE_ABSENT, 38,
+          "THE NAME COMES BACK AS THE AUTHOR WROTE IT. §4.3.3's `XML processors SHOULD match character "
+          "encoding names in a case-insensitive way` is a rule for whoever INTERPRETS the name, and that is "
+          "the step that determined the encoding and holds the bytes — folding here would throw away the one "
+          "fact this scan is reporting" },
+        { "<?xml version=\"1.0\" encoding=\"x-mac_roman.1\"?>", 46, false, XML_DECL_OK, "1.0",
+          "x-mac_roman.1", XML_STANDALONE_ABSENT, 46,
+          "[81] EncName ::= [A-Za-z] ([A-Za-z0-9._] | '-')*, so a digit, a dot, an underscore and a hyphen "
+          "are all name characters after the first — and §4.3.3 itself says that other encodings SHOULD use "
+          "names starting with an `x-` prefix" },
+        { "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>", 55, false, XML_DECL_OK, "1.0",
+          "UTF-8", XML_STANDALONE_YES, 55,
+          "all three components in [23]'s order — and this is the one answer §4.1's [WFC: Entity Declared] "
+          "names by value: `a document with standalone='yes'` is one of the three conditions under which an "
+          "undeclared entity reference is a fatal error" },
+        { "<?xml version=\"1.0\" standalone='no'?>", 37, false, XML_DECL_OK, "1.0", NULL, XML_STANDALONE_NO,
+          37,
+          "[80] EncodingDecl is optional in [23], so [32] SDDecl may follow the version directly — and an "
+          "explicit `no` is a third answer distinct from the absent declaration above it" },
+        { "<?xml ?>", 8, false, XML_DECL_ERR_VERSION_MISSING, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "[23]'s `S? '?>'` can close a declaration that has no components, and then [24] VersionInfo is the "
+          "one this document owed" },
+        { "<?xml encoding=\"UTF-8\"?>", 24, false, XML_DECL_ERR_VERSION_MISSING, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "an encoding declaration on its own is §4.3.1's [77] TextDecl and NOT [23] — the same bytes are "
+          "well-formed at the head of an external parsed entity and fatally in error at the head of a "
+          "document" },
+        { "<?xml standalone=\"yes\"?>", 24, false, XML_DECL_ERR_VERSION_MISSING, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "and so is a standalone declaration on its own, which is worth stating because §2.9's [32] is the "
+          "component this file exists to deliver and it still does not excuse the version" },
+        { "<?xml VERSION=\"1.0\"?>", 21, false, XML_DECL_ERR_COMPONENT, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "§1.2 Terminology's `match`: `Two strings or names being compared are identical ... No case folding "
+          "is performed` — [24] spells the terminal 'version' and this is not it, so what stands after the "
+          "'<?xml' is not a component [23] has" },
+        { "<?xml version=\"2.0\"?>", 21, false, XML_DECL_ERR_VERSION_NUM, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "[26]'s major version is the LITERAL '1.', so there is no 2.0 in this grammar at all" },
+        { "<?xml version=\"1.\"?>", 20, false, XML_DECL_ERR_VERSION_NUM, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "and `[0-9]+` is one or more, so `1.` on its own is not a version number" },
+        { "<?xml version=\"\"?>", 18, false, XML_DECL_ERR_VERSION_NUM, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "nor is the empty string — which is why an absent version is a NULL pointer and never a "
+          "zero-length slice a consumer could mistake for one the author wrote" },
+        { "<?xml version\"1.0\"?>", 20, false, XML_DECL_ERR_EQ, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "[25] Eq ::= S? '=' S? — the equals sign is the only character that names a component's value, and "
+          "its surrounding white space is what is optional" },
+        { "<?xml version=1.0?>", 19, false, XML_DECL_ERR_QUOTE, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "[24] writes the value quoted in both alternatives, so an unquoted version number matches neither" },
+        { "<?xml version=\"1.0'?>", 21, false, XML_DECL_ERR_QUOTE, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "and the two alternatives are two whole strings rather than one rule about `a quote`, so the "
+          "character that closes a value MUST be the one that opened it" },
+        { "<?xml version=\"1.0x\"?>", 22, false, XML_DECL_ERR_QUOTE, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "and what stands between the quotes must be a WHOLE [26] VersionNum: the digits end at the `x`, "
+          "and [24] wants its closing quotation character there" },
+        { "<?xml version=\"1.0\"standalone=\"yes\"?>", 37, false, XML_DECL_ERR_SPACE, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "[32] SDDecl ::= S 'standalone' Eq ... — the leading S is IN the production, so a component written "
+          "hard against the one before it is not that component" },
+        { "<?xml version=\"1.0\" lang=\"en\"?>", 31, false, XML_DECL_ERR_COMPONENT, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "[23] is a fixed sequence of three named components and has no room for a fourth, however it is "
+          "spelled" },
+        { "<?xml standalone=\"yes\" version=\"1.0\"?>", 38, false, XML_DECL_ERR_COMPONENT, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "AND THE SEQUENCE IS ORDERED. [23] is VersionInfo EncodingDecl? SDDecl?, so a version AFTER a "
+          "standalone declaration is not the version component arriving late — it is a component that is no "
+          "longer permitted, which is what a processor that tidied the order up would silently accept" },
+        { "<?xml version=\"1.0\"", 19, false, XML_DECL_ERR_UNTERMINATED, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "an entity that ends inside a declaration and a declaration closed around something [23] does not "
+          "have are two different places to look, which is why they are two answers" },
+        { "<?xml version=\"1.0\" encoding=\"8bit\"?>", 37, false, XML_DECL_ERR_ENCODING_NAME, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "[81]'s first character is `[A-Za-z]` and a digit is only permitted after it — the production's own "
+          "comment is that `Encoding name contains only Latin characters`" },
+        { "<?xml version=\"1.0\" encoding=\"\"?>", 33, false, XML_DECL_ERR_ENCODING_NAME, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "and [81] has no empty alternative, so an encoding declaration naming nothing is not one" },
+        { "<?xml version=\"1.0\" standalone=\"maybe\"?>", 40, false, XML_DECL_ERR_STANDALONE_VALUE, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "[32]'s alternation names the two STRINGS 'yes' and 'no' rather than a class, so there is no third "
+          "value for a document to choose" },
+        { "<?xml version=\"1.0\" standalone=\"YES\"?>", 38, false, XML_DECL_ERR_STANDALONE_VALUE, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "and §1.2's `match` folds no case here either — a processor that accepted this would decide §4.1's "
+          "[WFC: Entity Declared] from a value the grammar does not have" },
+        { "<?xml version=\"1.0\"\x01" "?>", 22, false, XML_DECL_ERR_CHARACTER, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "§2.2: U+0001 is below [2] Char's first alternative, so the character layer latches its own fatal "
+          "error inside the construct — and THAT return must not be rewound, because restoring a saved reader "
+          "would restore the §1.2 latch to OK and un-report it" },
+
+        /* [77] TextDecl ::= '<?xml' VersionInfo? EncodingDecl S? '?>' */
+        { "<?xml encoding='UTF-8'?>", 24, true, XML_DECL_OK, NULL, "UTF-8", XML_STANDALONE_ABSENT, 24,
+          "§4.3.3's own printed example of a text declaration — [24] VersionInfo is what [77] makes optional, "
+          "so an absent version is a NULL pointer and not a fatal error here" },
+        { "<?xml encoding='EUC-JP'?>", 25, true, XML_DECL_OK, NULL, "EUC-JP", XML_STANDALONE_ABSENT, 25,
+          "and its second, which is also the case §4.3.3 makes fatal further down — `it is a fatal error for "
+          "an entity including an encoding declaration to be presented to the XML processor in an encoding "
+          "other than that named in the declaration` — and that reconciliation belongs to whichever step "
+          "determined the encoding, because it is the only one holding both facts" },
+        { "<?xml version=\"1.0\" encoding=\"UTF-8\"?>", 38, true, XML_DECL_OK, "1.0", "UTF-8",
+          XML_STANDALONE_ABSENT, 38,
+          "[77] permits the version as well, and the same bytes are a valid [23] — which is the whole reason "
+          "the two productions are one scan asked twice" },
+        { "<?xml version=\"1.0\"?>", 21, true, XML_DECL_ERR_ENCODING_MISSING, NULL, NULL,
+          XML_STANDALONE_ABSENT, 0,
+          "THE MIRROR OF THE FIRST ROW IN THIS TABLE. [77] makes EncodingDecl required and VersionInfo "
+          "optional, so the declaration that opens every well-formed document is fatally in error at the head "
+          "of an external parsed entity" },
+        { "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>", 55, true,
+          XML_DECL_ERR_STANDALONE_IN_TEXT_DECL, NULL, NULL, XML_STANDALONE_ABSENT, 0,
+          "[77] has no SDDecl in it at all — §2.9's declaration is a statement about a DOCUMENT, and an "
+          "external parsed entity is not one, so this is a different mistake from a standalone whose value is "
+          "wrong and gets its own report" },
+    };
+    /* THE BOUNDARY AGAINST §2.6's [16] PI, ASKED OF BOTH COMPONENTS. `pi` is what core/xml/xml_markup.h
+       answers for the same bytes, and the pairing is the point: a declaration is always ALSO at a `<?`, so
+       the two peeks agree, and it is the PI scan's reserved-target report that makes asking [23] first
+       obligatory rather than optional. */
+    static const struct { const char *in; bool decl; XmlMarkupError pi; const char *why; } PEEK[] = {
+        { "<?xml version=\"1.0\"?>", true, XML_MARKUP_ERR_PI_TARGET_RESERVED,
+          "the declaration this component owns, and §2.6's answer for the same bytes — [17] PITarget is "
+          "`Name - (('X' | 'x') ('M' | 'm') ('L' | 'l'))`, so a caller in §2.8's prolog that reached the PI "
+          "scan first would report a fatal error about a perfectly well-formed document" },
+        { "<?xml\n<greeting/>", true, XML_MARKUP_ERR_PI_TARGET_RESERVED,
+          "the peek is `'<?xml'` and [3] S and NOTHING MORE — deciding whether what follows is a declaration "
+          "is the scan's job, and a peek that looked further would have to parse to answer" },
+        { "<?xml?>", false, XML_MARKUP_ERR_PI_TARGET_RESERVED,
+          "[24], [80] and [32] each OPEN with a required S, so neither production has a `<?xml?>` in it — "
+          "and §2.6's is the correct report, because the target is `xml` exactly" },
+        { "<?xml", false, XML_MARKUP_ERR_PI_TARGET_RESERVED,
+          "an entity that ends on the delimiter itself is not a declaration either, and the peek answers "
+          "without reading past its own end" },
+        { "<?XML version=\"1.0\"?>", false, XML_MARKUP_ERR_PI_TARGET_RESERVED,
+          "§1.2's `match` performs no case folding, so this is not the '<?xml' either production spells — "
+          "and [17] subtracts all EIGHT ASCII case spellings, so §2.6 is the report and it is right" },
+        { "<?xml-stylesheet href='x'?>", false, XML_MARKUP_OK,
+          "THE ROW THE WHOLE BOUNDARY IS FOR. §6 Notation defines `A - B` as the strings matching A that do "
+          "not match B, and B is three single-character alternations in SEQUENCE, so the subtracted language "
+          "is exactly the three-character spellings of `xml` — the most common processing instruction on the "
+          "web is neither a declaration nor a reserved target" },
+        { "<?xmls?>", false, XML_MARKUP_OK, "the same boundary one character the other side of it" },
+        { "<?php echo 1;?>", false, XML_MARKUP_OK,
+          "and an ordinary target that merely begins with a `<?` is untouched by any of this" },
+    };
+    /* Every sentence this layer can report is a DIFFERENT sentence — core/xml/xml_char.c's argument for its
+       own two, core/xml/xml_ref.c's for its five and core/xml/xml_markup.c's for its eight. */
+    static const XmlDeclError ALL[] = {
+        XML_DECL_OK, XML_DECL_ERR_SPACE, XML_DECL_ERR_VERSION_MISSING, XML_DECL_ERR_VERSION_NUM,
+        XML_DECL_ERR_ENCODING_MISSING, XML_DECL_ERR_ENCODING_NAME, XML_DECL_ERR_STANDALONE_VALUE,
+        XML_DECL_ERR_STANDALONE_IN_TEXT_DECL, XML_DECL_ERR_EQ, XML_DECL_ERR_QUOTE, XML_DECL_ERR_COMPONENT,
+        XML_DECL_ERR_UNTERMINATED, XML_DECL_ERR_CHARACTER,
+    };
+    size_t i, a, b;
+
+    for (i = 0; i < sizeof(DECL) / sizeof(DECL[0]); i++) {
+        XmlCharReader r, start;
+        XmlDecl got;
+        XmlDeclError e;
+
+        /* THE DECLARED LENGTH IS MACHINE-CHECKED AGAINST THE LITERAL — core/xml/xml_markup.c's fixture rule,
+           and it has caught a wrong count in this family more than once. Every row here is NUL-free, so
+           `strlen` and the number beside it answer about the same bytes. */
+        CHECK(DECL[i].n == strlen(DECL[i].in), "a declaration row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, DECL[i].in, DECL[i].n);
+        start = r;
+        CHECK(xml_decl_at(&r),
+              "a declaration row does not begin at '<?xml' followed by [3] S — every row in this table is a "
+              "construct the scan is permitted to be handed, and one that is not would be asserting the "
+              "caller's peek rather than testing the grammar");
+        memset(&got, 0, sizeof got);
+        e = DECL[i].text_decl ? xml_decl_scan_textdecl(&r, &got) : xml_decl_scan_xmldecl(&r, &got);
+        CHECK(e == DECL[i].err, DECL[i].why);
+        if (e == XML_DECL_OK) {
+            CHECK((got.version == NULL) == (DECL[i].version == NULL), DECL[i].why);
+            CHECK(got.version == NULL
+                      || (got.version_len == strlen(DECL[i].version)
+                          && memcmp(got.version, DECL[i].version, got.version_len) == 0), DECL[i].why);
+            CHECK((got.encoding == NULL) == (DECL[i].encoding == NULL), DECL[i].why);
+            CHECK(got.encoding == NULL
+                      || (got.encoding_len == strlen(DECL[i].encoding)
+                          && memcmp(got.encoding, DECL[i].encoding, got.encoding_len) == 0), DECL[i].why);
+            CHECK(got.standalone == DECL[i].standalone, DECL[i].why);
+            CHECK((size_t)(r.p - r.start) == DECL[i].after, DECL[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful declaration scan left the reader's §1.2 latch set");
+            /* [26] AND [81] ARE BYTE-EXACT AND NOT MERELY BORROWED: §2.11 rewrites only #xD, and #xD is a
+               decimal digit in neither production nor a Latin character in either, so no character of a value
+               can differ from the bytes it was decoded from — which is what lets a caller compare a version
+               or an encoding name without copying it. */
+            CHECK(got.version == NULL
+                      || (got.version > DECL[i].in && got.version + got.version_len < DECL[i].in + DECL[i].n
+                          && memchr(got.version, 0x0D, got.version_len) == NULL), DECL[i].why);
+            CHECK(got.encoding == NULL
+                      || (got.encoding > DECL[i].in && got.encoding + got.encoding_len < DECL[i].in + DECL[i].n
+                          && memchr(got.encoding, 0x0D, got.encoding_len) == NULL), DECL[i].why);
+            CHECK(got.version == NULL || got.encoding == NULL
+                      || got.version + got.version_len < got.encoding,
+                  "a declaration's version and encoding are not two disjoint slices of the entity in [23]'s "
+                  "own order");
+            CHECK(!DECL[i].text_decl || got.standalone == XML_STANDALONE_ABSENT,
+                  "a §4.3.1 [77] TextDecl came back carrying §2.9's standalone document declaration, which "
+                  "that production does not have");
+        } else if (e == XML_DECL_ERR_CHARACTER) {
+            CHECK(r.fatal != XML_CHAR_OK && r.p != start.p,
+                  "a declaration scan reported the character layer's fatal error and either rewound past it "
+                  "or left the §1.2 latch clear — the caller is told to ask the reader which sentence was "
+                  "violated, and a rewind would have cleared the answer");
+        } else {
+            CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                      && r.fatal == start.fatal,
+                  "a declaration scan that reported a §2.8/§2.9/§4.3 error did not restore the reader it was "
+                  "handed — the position a `parsererror` quotes has to name the construct and not some place "
+                  "inside the one that failed");
+            CHECK(strcmp(xml_decl_error_message(e), xml_decl_error_message(XML_DECL_OK)) != 0, DECL[i].why);
+        }
+    }
+    for (i = 0; i < sizeof(PEEK) / sizeof(PEEK[0]); i++) {
+        XmlCharReader r;
+        XmlPi pi;
+
+        xml_char_reader_init(&r, PEEK[i].in, strlen(PEEK[i].in));
+        CHECK(xml_decl_at(&r) == PEEK[i].decl, PEEK[i].why);
+        /* EVERY ROW IS ALSO AT §2.6's [16] PI, AND A DECLARATION NECESSARILY IS: both open with the same two
+           characters, so the two peeks can never disagree in that direction — which is exactly why the PI
+           scan cannot be the one a caller in [22] prolog asks first. */
+        CHECK(xml_markup_at_pi(&r), PEEK[i].why);
+        memset(&pi, 0, sizeof pi);
+        CHECK(xml_markup_scan_pi(&r, &pi) == PEEK[i].pi, PEEK[i].why);
+    }
+    for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+        for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+            CHECK(strcmp(xml_decl_error_message(ALL[a]), xml_decl_error_message(ALL[b])) != 0,
+                  "two of this component's answers carry one message — a missing version, a version that is "
+                  "not [26] VersionNum, a standalone declaration in a text declaration and a standalone "
+                  "whose value is neither string are four different mistakes, and a report that merged any "
+                  "two would send an author to the wrong sentence");
+    /* THE SCAN IS A READER OPERATION, so the peek-and-park copy the parse above it will fork and suspend on
+       has to survive one — core/xml/xml_char.h's property, exercised through this layer rather than assumed
+       to compose. A prolog parked at the head of the document entity holds exactly this copy. */
+    {
+        static const char SRC[] = "<?xml version=\"1.0\" standalone=\"yes\"?><!--c-->";
+        XmlCharReader r, saved;
+        XmlDecl got;
+        XmlMarkupText text;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        saved = r;
+        CHECK(xml_decl_scan_xmldecl(&r, &got) == XML_DECL_OK && got.standalone == XML_STANDALONE_YES
+                  && got.version_len == 3 && xml_markup_at_comment(&r),
+              "the declaration of a known entity, and the [27] Misc that follows it in [22] prolog");
+        CHECK(xml_markup_scan_comment(&r, &text) == XML_MARKUP_OK && text.raw_len == 1 && r.p == r.end,
+              "that comment, read to the end");
+        r = saved;
+        memset(&got, 0, sizeof got);
+        CHECK(xml_decl_at(&r) && xml_decl_scan_xmldecl(&r, &got) == XML_DECL_OK
+                  && got.standalone == XML_STANDALONE_YES && got.version_len == 3
+                  && got.encoding == NULL && xml_markup_at_comment(&r),
+              "a declaration scanned again from a reader restored out of a copy did not produce the same "
+              "declaration — peeking and parking ARE that copy, so a parse that cannot rewind across the "
+              "prolog can neither fork an arm nor suspend before the document element");
+    }
+}
+
+/* XML 1.0 (Fifth Edition) §2.3 Common Syntactic Constructs' [11] `SystemLiteral`, [12] `PubidLiteral` and
+ * [13] `PubidChar` — core/xml/xml_literal.h, the two quoted strings an external identifier is made of.
+ *
+ * TWO HALVES AND NEITHER SUBSUMES THE OTHER. [13]'s class is swept over the whole of ASCII against a SECOND,
+ * independently written copy of the same set, because a nineteen-character punctuation list copied by hand out
+ * of a bracket is wrong at one character if it is wrong anywhere and no compiler can say so; the literals are
+ * then driven as whole entities, because the delimiter rule, the empty run and §2.11's borrowed slice exist
+ * only there.
+ *
+ * THE ROWS THAT CARRY THE COMPONENT ARE THE ASYMMETRIC ONES. [11]'s content is any character but the
+ * delimiter, so `<`, `&` and `%` are ordinary characters of a system identifier — which is §2.3's own note
+ * that "a SystemLiteral can be parsed without scanning for markup" and §4.4's table naming SystemLiteral among
+ * the contexts its "Reference in DTD" row is defined outside of. [12]'s two alternatives are NOT symmetrical:
+ * `"O'Reilly"` is a public identifier because the apostrophe IS a [13] PubidChar, while `'O'Reilly'` is the
+ * public identifier `O` and then characters that are not part of it — the same bytes read two ways by two
+ * alternatives of one production. And the quotation mark is in NEITHER alternative, because [13]'s set has no
+ * quotation mark in it at all, which is why `'a"b'` reports the class rather than the delimiter. */
+static void xml_literal_selftest(void)
+{
+    /* [13]'s FOUR ALTERNATIVES WRITTEN OUT AS A SET — a second spelling of the same production, against which
+       the component's own transcription is swept. It is deliberately not the same arrangement as the file
+       under test: that one keeps the bracket's own order so a reader can diff it against the spec by eye, and
+       this one groups by alternative, so the two can only agree by both being right. */
+    static const char PUBID_ALL[] =
+        " \r\n"
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz"
+        "-'()+,./:=?;!*#@$_%";
+    static const struct { const char *in; size_t n; bool pubid; XmlLiteralError err;
+                          const char *raw; size_t after; const char *why; } LIT[] = {
+        /* [11] SystemLiteral ::= ('"' [^"]* '"') | ("'" [^']* "'") */
+        { "\"hello.dtd\"", 11, false, XML_LITERAL_OK, "hello.dtd", 11,
+          "§2.8's own example — the system identifier `hello.dtd` gives the address (a URI reference) of a "
+          "DTD for the document" },
+        { "'hello.dtd'", 11, false, XML_LITERAL_OK, "hello.dtd", 11,
+          "[11]'s two alternatives are one delimited by quotation marks and one by apostrophes, and they name "
+          "the same identifier" },
+        { "\"\"", 2, false, XML_LITERAL_OK, "", 2,
+          "the content run is zero or more, so an empty system identifier is a literal — and its slice still "
+          "stands AT a position in the entity, which is why the pointer is never null" },
+        { "\"a'b\"", 5, false, XML_LITERAL_OK, "a'b", 5,
+          "§2.3: literal data is `any quoted string not containing the quotation mark used as a delimiter for "
+          "that string` — the OTHER delimiter character is ordinary content" },
+        { "'a\"b'", 5, false, XML_LITERAL_OK, "a\"b", 5, "and the same in the other direction" },
+        { "\"a&b<c%d\"", 9, false, XML_LITERAL_OK, "a&b<c%d", 9,
+          "THE ROW §2.3's NOTE IS ABOUT: `a SystemLiteral can be parsed without scanning for markup`. §2.8 "
+          "says the same from the other side — parameter entity references are recognized anywhere in the DTD "
+          "`except in literals, processing instructions, comments` — and §4.4's table defines its `Reference "
+          "in DTD` row as being OUTSIDE a SystemLiteral. So none of these three characters is markup here" },
+        { "\"http://www.xml.com/iso/isolat2-xml.entities\"", 45, false, XML_LITERAL_OK,
+          "http://www.xml.com/iso/isolat2-xml.entities", 45,
+          "§4.1's own printed example of a parameter entity's system identifier, colons, slashes and all" },
+        { "\"a\r\nb\"", 6, false, XML_LITERAL_OK, "a\r\nb", 6,
+          "THE SLICE IS BYTES AND THE PRODUCTION MATCHED CHARACTERS. §2.11 End-of-Line Handling makes this "
+          "four-byte run three characters, so the borrowed slice and the identifier a caller materializes are "
+          "not the same length — which is the whole reason every successful row here is read both ways" },
+        { "\"unterminated", 13, false, XML_LITERAL_ERR_UNTERMINATED, NULL, 0,
+          "the character that opened a literal is the one that MUST close it, and this entity ended first" },
+        { "\"a\x01" "b\"", 5, false, XML_LITERAL_ERR_CHARACTER, NULL, 0,
+          "§2.2: U+0001 is below [2] Char's first alternative, so the character layer latches its own fatal "
+          "error inside the literal — and THAT return must not be rewound, because restoring a saved reader "
+          "would restore the §1.2 latch to OK and un-report it" },
+        { "\"caf\xC3\xA9\"", 7, false, XML_LITERAL_OK, "caf\xC3\xA9", 7,
+          "[11]'s content run admits every [2] Char, so a system identifier is not restricted to ASCII — "
+          "§4.2.2 has a whole paragraph on escaping `all characters above #x7F` when the identifier is "
+          "converted to a URI reference, which would name nothing if they could not appear" },
+
+        /* [12] PubidLiteral ::= '"' PubidChar* '"' | "'" (PubidChar - "'")* "'" */
+        { "\"-//W3C//DTD XHTML 1.0 Strict//EN\"", 34, true, XML_LITERAL_OK,
+          "-//W3C//DTD XHTML 1.0 Strict//EN", 34,
+          "a formal public identifier of the shape the web is full of — hyphen, solidus, space, letters and "
+          "digits are all [13] PubidChars" },
+        { "\"O'Reilly\"", 10, true, XML_LITERAL_OK, "O'Reilly", 10,
+          "THE APOSTROPHE IS A PubidChar. [12]'s quotation-mark alternative is `PubidChar*` with nothing "
+          "subtracted, and [13]'s punctuation set has an apostrophe in it" },
+        { "'O'Reilly'", 10, true, XML_LITERAL_OK, "O", 3,
+          "AND THE SAME BYTES UNDER THE OTHER ALTERNATIVE ARE A DIFFERENT LITERAL. The apostrophe-delimited "
+          "alternative subtracts the apostrophe, so this literal is the single character `O` and the scan "
+          "stops after the delimiter that closed it — a scanner that took the LAST apostrophe would be "
+          "reading a production the standard does not have" },
+        { "''", 2, true, XML_LITERAL_OK, "", 2, "`PubidChar*` is zero or more here as well" },
+        { "\"a b\"", 5, true, XML_LITERAL_OK, "a b", 5, "[13]'s first alternative is #x20" },
+        { "\"a\r\nb\"", 6, true, XML_LITERAL_OK, "a\r\nb", 6,
+          "and its second and third are #xD and #xA — which §2.11 has already collapsed into ONE character "
+          "before this class is ever asked, so the transcribed #xD row is complete and unreachable" },
+        { "\"a<b\"", 5, true, XML_LITERAL_ERR_PUBID_CHAR, NULL, 0,
+          "there is no `<` in [13], which is the difference between a public identifier and a system one" },
+        { "\"a&b\"", 5, true, XML_LITERAL_ERR_PUBID_CHAR, NULL, 0, "and no `&`" },
+        { "\"a[b\"", 5, true, XML_LITERAL_ERR_PUBID_CHAR, NULL, 0,
+          "and no bracket — the punctuation set is nineteen characters and every one of them is listed" },
+        { "'a\"b'", 5, true, XML_LITERAL_ERR_PUBID_CHAR, NULL, 0,
+          "AND NO QUOTATION MARK IN EITHER ALTERNATIVE, which is why [12] subtracts the apostrophe and says "
+          "nothing about the other delimiter: it is not a PubidChar at all, so this is the class's report and "
+          "not an unterminated literal" },
+        { "\"caf\xC3\xA9\"", 7, true, XML_LITERAL_ERR_PUBID_CHAR, NULL, 0,
+          "and [13] stops at ASCII — the same bytes that are a perfectly good system identifier above are not "
+          "a public one, which is the boundary a class test written over BYTES would get wrong" },
+        { "'abc", 4, true, XML_LITERAL_ERR_UNTERMINATED, NULL, 0,
+          "an entity that ends inside a public identifier is the delimiter's report and not the class's — the "
+          "characters it did contain were all PubidChars" },
+    };
+    static const struct { const char *in; size_t n; bool at; const char *why; } PEEK[] = {
+        { "\"x\"", 3, true, "both productions open with a quotation mark" },
+        { "'x'", 3, true, "or an apostrophe" },
+        { "", 0, false, "an entity that has ended stands at no literal, and the peek answers without reading "
+                        "past its own end" },
+        { "SYSTEM \"x\"", 10, false,
+          "§4.2.2's [75] ExternalID is `'SYSTEM' S SystemLiteral`, so the keyword and the [3] S before the "
+          "literal are ITS to consume — the peek is about the delimiter and nothing else" },
+        { "x", 1, false, "and an unquoted run is not literal data" },
+    };
+    static const XmlLiteralError ALL[] = {
+        XML_LITERAL_OK, XML_LITERAL_ERR_UNTERMINATED, XML_LITERAL_ERR_PUBID_CHAR, XML_LITERAL_ERR_CHARACTER,
+    };
+    size_t i, a, b, listed = 0;
+    uint32_t cp;
+
+    /* [13] SWEPT AGAINST ITS SECOND SPELLING, over every code point ASCII has and a little way past it. The
+       COUNT is checked as well as the membership: a set that agreed character for character with a list that
+       had lost a character would pass every membership test there was. */
+    CHECK(sizeof PUBID_ALL - 1 == 3 + 10 + 26 + 26 + 19,
+          "[13] PubidChar's second spelling in this fixture is not the 84 characters its four alternatives "
+          "have — three white space characters, ten digits, fifty-two letters and nineteen punctuation marks");
+    for (cp = 0; cp < 0x200; cp++) {
+        bool want = cp <= 0x7F && memchr(PUBID_ALL, (int)cp, sizeof PUBID_ALL - 1) != NULL;
+
+        CHECK(xml_literal_is_pubid_char(cp) == want,
+              "a code point's [13] PubidChar membership disagrees with the production's four alternatives "
+              "written out as a set — the class under test keeps the bracket's own order so it can be diffed "
+              "against the spec by eye, and this one groups by alternative, so the two can only agree by "
+              "both being right");
+        if (want) listed++;
+    }
+    CHECK(listed == sizeof PUBID_ALL - 1,
+          "the number of code points this component calls [13] PubidChars is not the number the set has — a "
+          "duplicated character in either spelling would otherwise be invisible");
+    CHECK(!xml_literal_is_pubid_char(XML_CHAR_EOF),
+          "the end of the entity is a [13] PubidChar — the sentinel is above [2] Char's ceiling precisely so "
+          "that no class predicate can confuse it with a character the document contained");
+
+    for (i = 0; i < sizeof(LIT) / sizeof(LIT[0]); i++) {
+        XmlCharReader r, start;
+        const char *raw = NULL;
+        size_t raw_len = 0;
+        XmlLiteralError e;
+
+        /* THE DECLARED LENGTH IS MACHINE-CHECKED AGAINST THE LITERAL — core/xml/xml_markup.c's fixture rule.
+           Every row here is NUL-free, so `strlen` and the number beside it answer about the same bytes. */
+        CHECK(LIT[i].n == strlen(LIT[i].in), "a literal row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, LIT[i].in, LIT[i].n);
+        start = r;
+        CHECK(xml_literal_at(&r),
+              "a literal row does not begin at an apostrophe or a quotation mark — every row in this table is "
+              "a construct the scan is permitted to be handed");
+        e = LIT[i].pubid ? xml_literal_scan_pubid(&r, &raw, &raw_len)
+                         : xml_literal_scan_system(&r, &raw, &raw_len);
+        CHECK(e == LIT[i].err, LIT[i].why);
+        if (e == XML_LITERAL_OK) {
+            XmlMarkupText t;
+
+            CHECK(raw != NULL && raw_len == strlen(LIT[i].raw)
+                      && memcmp(raw, LIT[i].raw, raw_len) == 0, LIT[i].why);
+            CHECK((size_t)(r.p - r.start) == LIT[i].after, LIT[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful literal scan left the reader's §1.2 latch set");
+            CHECK(raw > LIT[i].in && raw + raw_len < LIT[i].in + LIT[i].n,
+                  "a literal's content does not lie strictly inside the entity it was scanned from — the "
+                  "delimiters stand on either side of it, so a slice reaching either end was measured "
+                  "against something else");
+            /* §2.11's CROSS-CHECK, through the SAME helper core/xml/xml_markup.h's three constructs use: the
+               slice is BYTES and the production matched CHARACTERS, and a component that measured the extent
+               correctly and normalized it wrongly would pass every row above. */
+            t.raw = raw;
+            t.raw_len = raw_len;
+            xml_markup_text_selftest(&t, LIT[i].why);
+        } else if (e == XML_LITERAL_ERR_CHARACTER) {
+            CHECK(r.fatal != XML_CHAR_OK && r.p != start.p,
+                  "a literal scan reported the character layer's fatal error and either rewound past it or "
+                  "left the §1.2 latch clear — the caller is told to ask the reader which sentence was "
+                  "violated, and a rewind would have cleared the answer");
+        } else {
+            CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                      && r.fatal == start.fatal,
+                  "a literal scan that reported a §2.3 error did not restore the reader it was handed — the "
+                  "position a `parsererror` quotes has to name the construct and not some place inside the "
+                  "one that failed");
+            CHECK(strcmp(xml_literal_error_message(e), xml_literal_error_message(XML_LITERAL_OK)) != 0,
+                  LIT[i].why);
+        }
+    }
+    for (i = 0; i < sizeof(PEEK) / sizeof(PEEK[0]); i++) {
+        XmlCharReader r;
+
+        CHECK(PEEK[i].n == strlen(PEEK[i].in),
+              "a literal peek row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, PEEK[i].in, PEEK[i].n);
+        CHECK(xml_literal_at(&r) == PEEK[i].at, PEEK[i].why);
+    }
+    for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+        for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+            CHECK(strcmp(xml_literal_error_message(ALL[a]), xml_literal_error_message(ALL[b])) != 0,
+                  "two of this component's answers carry one message — a literal nobody closed, one holding "
+                  "a character [13] does not have and one the character layer stopped inside are three "
+                  "different places to look");
+    /* THE SCAN IS A READER OPERATION, so the peek-and-park copy the parse above it will fork and suspend on
+       has to survive one — and §4.2.2's [75] ExternalID's `'PUBLIC' S PubidLiteral S SystemLiteral` is the
+       arrangement that reads TWO of these in a row, which is what this drives. */
+    {
+        static const char SRC[] = "\"-//W3C//DTD XHTML 1.0 Strict//EN\" \"xhtml1-strict.dtd\"";
+        XmlCharReader r, saved;
+        const char *raw = NULL;
+        size_t raw_len = 0;
+        uint32_t sp = 0;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        CHECK(xml_literal_scan_pubid(&r, &raw, &raw_len) == XML_LITERAL_OK && raw_len == 32,
+              "the public identifier of a known external identifier");
+        CHECK(xml_char_read(&r, &sp) == XML_CHAR_OK && xml_char_is_s(sp),
+              "[75] ExternalID's `'PUBLIC' S PubidLiteral S SystemLiteral` puts a required [3] S between the "
+              "two literals, and it is the caller's to consume");
+        saved = r;
+        CHECK(xml_literal_scan_system(&r, &raw, &raw_len) == XML_LITERAL_OK && raw_len == 17
+                  && r.p == r.end, "and the system identifier after it, read to the end");
+        r = saved;
+        raw = NULL;
+        raw_len = 0;
+        CHECK(xml_literal_at(&r) && xml_literal_scan_system(&r, &raw, &raw_len) == XML_LITERAL_OK
+                  && raw_len == 17 && memcmp(raw, "xhtml1-strict.dtd", 17) == 0,
+              "a literal scanned again from a reader restored out of a copy did not produce the same literal "
+              "— peeking and parking ARE that copy, so a parse that cannot rewind across an external "
+              "identifier can neither fork an arm nor suspend inside a document type declaration");
+    }
+}
+
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
  * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
  * stated by reference to.
@@ -7188,6 +7745,11 @@ int main(int argc, char **argv) {
     xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
     xml_markup_selftest(); /* XML §2.5's [15] Comment, §2.6's [16] PI, §2.7's [18] CDSect, and §2.11's
                               byte-level spelling those three borrowed slices need */
+    xml_decl_selftest();   /* XML §2.8's [23] XMLDecl, §2.9's [32] SDDecl and §4.3.1's [77] TextDecl — AFTER
+                              the markup fixture, because the boundary it measures is against §2.6's [16] PI
+                              and a failure there must be read as this component's and not as that one's */
+    xml_literal_selftest();/* XML §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] PubidChar — the two
+                              quoted strings §4.2.2's [75] ExternalID is made of */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
