@@ -726,11 +726,22 @@ void html_element_install(JSContext *ctx, JSValueConst global)
     media_element_install(ctx, global);
     JS_FreeValue(ctx, hp);
     JS_FreeValue(ctx, up);
+    /* ONE INTERFACE OBJECT PER INTERFACE, DEDUPED ON THE NAME COLUMN — the SAME key, in the same spelling, as
+       the class-assignment loop above. It used to compare `g_iface_class[]` instead, which is the same
+       partition (that loop assigns a shared class exactly when the names are equal) reached by a DIFFERENT
+       question, and one nothing stated: a reader of this loop alone could not tell whether the filter drops a
+       NAME, and two rows sharing a class under different names would silently install one of them. Asking the
+       name here makes the rule readable where it is applied instead of fifteen lines away in another
+       vocabulary; the DCHECK below is what keeps the two answers from drifting apart. */
     for (i = 0; i < HTML_IFACE_N; i++) {
         JSValue p;
         for (j = 0; j < i; j++)
-            if (g_iface_class[j] == g_iface_class[i]) break;
-        if (j < i) continue;   /* one interface OBJECT per interface, however many tags name it */
+            if (strcmp(HTML_IFACE[j].iface, HTML_IFACE[i].iface) == 0) break;
+        DCHECK(j >= i || g_iface_class[j] == g_iface_class[i],
+               "two rows of the element-interface table name one interface and were given different classes — "
+               "`instanceof` would then answer false in every realm for one of the two tags, and this loop "
+               "would install the interface object twice");
+        if (j < i) continue;
         p = JS_GetClassProto(ctx, g_iface_class[i]);
         node_install_interface(ctx, global, HTML_IFACE[i].iface, p);
         /* Web IDL §3.7.2's LEGACY FACTORY FUNCTION for §4.8.3's `Image`, which is a global name of its own
