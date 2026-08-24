@@ -142,18 +142,31 @@ typedef struct CssRuleData {
        only ever "this is not a namespace rule". (OWNED) */
     JSValue namespace_uri;
     JSValue prefix;
-    /* §6.4.8's `name` — "the name of the margin at-rule. The @ character is not included in the name."
-       JS_NULL on every rule that is not one of CSS Paged Media §4.3's sixteen margin at-rules. It is stored
-       rather than derived because the RULE is what the at-keyword was: `type` says MARGIN and nothing else on
-       the record could say WHICH margin box, and `cssText` needs the same string the attribute returns. */
+    /* THE AT-KEYWORD THE RULE WAS WRITTEN WITH — the `@` not included — on every rule type whose `type` does
+       not determine it, and JS_NULL on every rule whose type does. Two types do not, and they are the same
+       question asked of two closed sets rather than two facts sharing a slot:
+         - §6.4.8's `name`, "the name of the margin at-rule. The @ character is not included in the name." Its
+           `type` says MARGIN and nothing else on the record could say WHICH of CSS Paged Media §4.3's sixteen
+           margin boxes, and `cssText` needs the same string the attribute returns.
+         - A CSS Animations §6.3 keyframes rule's `@keyframes` or `@-webkit-keyframes`. CSS Compatibility
+           Standard §3.1 "CSS At-rules" makes those two spellings of ONE rule — one interface, one prototype,
+           one `type` of 7, one `<keyframes-name>` grammar — so `type` cannot say which the page wrote, and
+           §6.4's serialization is where the difference shows. No IDL member returns it, which is the ONLY way
+           the two rows differ and is not a difference in the fact.
+       So it is one string with one meaning, read with the rule's type in hand at both sites — which is the
+       test `keyframes_name` beside it FAILS (an author's case-sensitive settable `<custom-ident>` is not an
+       at-keyword out of a closed set), and which the two `@layer` interfaces sharing `layer_names` pass. A
+       margin rule's is never absent and a keyframes rule's is never absent, so this field has no third state
+       for either of them to have to distinguish. */
     JSValue at_name;
     /* CSS Animations §6.3.2's `name` — "the name of the keyframes, used by the animation-name property".
        JS_NULL on every rule that is not a `@keyframes`. It is a SECOND name field beside `at_name` and not a
-       widening of it, because the two are two different facts under one word: §6.4.8's is an AT-KEYWORD out of
-       CSS Paged Media's closed sixteen, ASCII case-insensitive and readonly, while this one is an author's
-       `<custom-ident>` or `<string>`, FULLY case-sensitive ("two names are equal only if they are
-       codepoint-by-codepoint equal"), settable, and serialized by a rule of its own. One slot would have had
-       to be read with the rule's type in hand at every site anyway, which is two facts wearing one name. */
+       widening of it, and a keyframes rule carrying BOTH is where that is easiest to see: `at_name` is the
+       AT-KEYWORD, out of a closed set the standards fix, ASCII-lowercased by the parse and reachable by no IDL
+       member, while this one is an author's `<custom-ident>` or `<string>`, FULLY case-sensitive ("two names
+       are equal only if they are codepoint-by-codepoint equal"), settable through §6.3.2, and serialized by a
+       rule of its own. One slot would have had to be read with the rule's type in hand at every site anyway,
+       which is two facts wearing one name. */
     JSValue keyframes_name;
     /* CSS Cascade §8.1's `name` and §8.2's `nameList` — the `<layer-name>`s the `@layer` at-rule ITSELF
        declares, as the FROZEN Array §8.2's `FrozenArray<CSSOMString>` value IS (Web IDL §2.13.35: such a value
@@ -740,6 +753,57 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
     return obj;
 }
 
+/* THE PREFIXED SPELLINGS OF AT-RULES THIS BUILD ALREADY HAS — CSS Compatibility Standard §3.1 "CSS At-rules",
+ * ENTIRE: "The following -webkit- vendor prefixed at-rules must be supported as aliases of the corresponding
+ * unprefixed at-rules", over a table whose every row is transcribed below. It has ONE row today, and that is
+ * the table's own state and not a subset chosen here: a row is added when that section adds one.
+ *
+ * AN ALIAS IS A SECOND SPELLING OF ONE RULE, NOT A SECOND RULE. §3.1 aliases the AT-KEYWORD, so everything
+ * downstream of the name is the unprefixed rule's: the same `<keyframes-name>` grammar (so
+ * `@-webkit-keyframes none {}` is dropped exactly as `@keyframes none {}` is), the same CSS Animations §6.3
+ * CSSKeyframesRule interface and prototype, the same §6.4.2 `type` of 7, the same body. That is why this is a
+ * NAME RESOLUTION in front of the builder's dispatch rather than an arm inside it — an arm would be a second
+ * creator able to disagree with the first about any of those, and the disagreement would be invisible.
+ *
+ * WHAT THE ALIAS DOES CHANGE IS THE SERIALIZATION, AND THE SPEC IS SILENT THERE. CSSOM §6.4 "CSS Rules"'s
+ * serialize-a-CSS-rule CSSKeyframesRule arm opens with "The literal string "@keyframes ", followed by a single
+ * SPACE" — an arm written before §3.1 existed and which does not mention the second spelling. Both readings
+ * are defensible from the text alone, so the question is settled by MEASUREMENT: real Chrome 148.0.7778.167
+ * answers `@-webkit-keyframes spin { \n  0% { … }\n}` for a rule written with the prefix and `@keyframes …`
+ * for one written without, off one CSSKeyframesRule interface with `type` 7 in both cases. So the rule carries
+ * the AT-KEYWORD IT WAS WRITTEN WITH and the arm emits that, which is also the only reading under which
+ * `cssText` re-parses to the rule it came from.
+ *
+ * THE TABLE IS ASSERTED AGAINST ITS OWN SECTION on every lookup, because a row is a claim about §3.1 and a
+ * wrong one reads exactly like a right one: §3.1's table is "-webkit- prefixed at-rule alias" against "the
+ * CORRESPONDING unprefixed at-rule", so the two names in a row are one at-keyword with and without the
+ * prefix, and a row that is not is a row nobody read that section for. */
+static const struct { const char *prefixed; const char *unprefixed; } AT_RULE_ALIASES[] = {
+    { "-webkit-keyframes", "keyframes" },
+};
+
+/* The unprefixed at-keyword §3.1 aliases `name` onto, or NULL when it aliases none. `name` is the at-keyword
+   with no `@`, ASCII-lowercased by the parse — which is what makes `@-WEBKIT-KEYFRAMES` this row too. */
+static const char *at_rule_alias(const char *name)
+{
+    static const char PREFIX[] = "-webkit-";
+    const size_t plen = sizeof PREFIX - 1;
+    unsigned i;
+
+    DCHECK(name != NULL, "an at-keyword was looked up in CSS Compatibility §3.1's alias table with no name");
+    for (i = 0; i < sizeof AT_RULE_ALIASES / sizeof AT_RULE_ALIASES[0]; i++) {
+        DCHECK(strncmp(AT_RULE_ALIASES[i].prefixed, PREFIX, plen) == 0 &&
+               strcmp(AT_RULE_ALIASES[i].prefixed + plen, AT_RULE_ALIASES[i].unprefixed) == 0,
+               "a row of CSS Compatibility Standard §3.1 \"CSS At-rules\"'s alias table pairs two at-keywords "
+               "that are not one name with and without the `-webkit-` prefix. §3.1 aliases a PREFIXED at-rule "
+               "onto THE CORRESPONDING UNPREFIXED one, so a row spelling anything else is a row that was "
+               "written from memory rather than read from that section, and it would silently reroute a "
+               "page's rule to an interface the standard never named");
+        if (strcmp(AT_RULE_ALIASES[i].prefixed, name) == 0) return AT_RULE_ALIASES[i].unprefixed;
+    }
+    return NULL;
+}
+
 /* A CSS Animations §6.3 CSSKeyframesRule over the `@keyframes` at-rule's prelude. That prelude is §3's
    `<keyframes-name>`, a grammar this file does not own (core/css/css_at_rule_prelude.h) and one whose failure
    is not a rule at all: `@keyframes none {}` and `@keyframes {}` are at-rules whose grammar failed, which CSS
@@ -748,9 +812,14 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
    the name `foo`, and §6.3.2's setter stores whatever it is given), while §6.4's CSSKeyframesRule arm decides
    per read whether that name serializes as an identifier or as a string — two answers off one storage, which
    is why the storage is the one the attribute returns.
+   `at_keyword` IS THE SPELLING THE PAGE WROTE — `keyframes`, or one CSS Compatibility Standard §3.1 "CSS
+   At-rules" aliases onto it — and it is stored because it is the ONE thing the two spellings do not share:
+   the interface, the prototype, the §6.4.2 `type`, the `<keyframes-name>` grammar and the body are the same
+   rule, and only the at-keyword the serialization emits differs. See the alias table above for the
+   measurement that says so.
    The child list `rule_new` gives it is where its `<keyframe-block>`s go. */
 static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
-                                  const char *prelude)
+                                  const char *at_keyword, const char *prelude)
 {
     char *name;
     JSValue obj;
@@ -759,6 +828,15 @@ static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     DCHECK(prelude != NULL, "a CSSKeyframesRule was built with no prelude — `<keyframes-name>` is REQUIRED by "
                             "§3's grammar, so an empty prelude is a rule that does not match it rather than a "
                             "rule with an empty name");
+    DCHECK(at_keyword != NULL &&
+               (strcmp(at_keyword, "keyframes") == 0 ||
+                (at_rule_alias(at_keyword) != NULL &&
+                 strcmp(at_rule_alias(at_keyword), "keyframes") == 0)),
+           "a CSS Animations §6.3 CSSKeyframesRule was built for an at-keyword that is neither `@keyframes` "
+           "nor one CSS Compatibility Standard §3.1 \"CSS At-rules\" aliases onto it. §3.1 aliases a prefixed "
+           "spelling onto an EXISTING at-rule, so a row whose target is some other rule builds an object of "
+           "the WRONG KIND wearing this interface's prototype — and the tell would be `cssText`, which would "
+           "then emit an at-keyword that does not re-parse to the rule it came from");
     name = css_prelude_keyframes_name(prelude, strlen(prelude));
     if (!name) return JS_UNDEFINED;
     obj = rule_new(ctx, PROTO_KEYFRAMES, RULE_TYPE_KEYFRAMES, parent_style_sheet, parent_rule);
@@ -766,6 +844,8 @@ static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     r = JS_GetOpaque(obj, g_rule_class);
     JS_FreeValue(ctx, r->keyframes_name);
     r->keyframes_name = JS_NewString(ctx, name);
+    JS_FreeValue(ctx, r->at_name);
+    r->at_name = JS_NewString(ctx, at_keyword);
     free(name);
     return obj;
 }
@@ -1071,11 +1151,67 @@ static void build_free(RuleBuild *b)
     b->n_built = b->cap_built = 0;
 }
 
-/* THE ONE AT-RULE THAT IS DROPPED RATHER THAN CRASHED ON, and it is a POSITIVE statement about the spec rather
-   than a gap: CSSOM keeps the historical constant `CHARSET_RULE = 2` and declares NO CSSCharsetRule interface
-   at all, so there is no object an `@charset` could become and every user agent leaves it out of `cssRules`.
-   Every OTHER at-rule in the platform HAS an interface, so meeting one is a capability to build. */
-static bool at_rule_dropped(const char *name) { return strcmp(name, "charset") == 0; }
+/* THE CRASH FOR A ROW OF THAT TABLE THAT POINTS AT NOTHING. Its buffer is sized from its format string plus
+   ONE at-keyword bound PER SUBSTITUTION — three, not two — for the reason `rule_unbuilt_fail`'s is: a
+   truncated `@WHY` deletes the sentence the crash exists to deliver, silently, at the one moment somebody is
+   reading it, and a size that counts the ARGUMENTS rather than the `%s`es is off by exactly one name. Both
+   names are a row of the table above, so both are short; the 64 is the same conservative at-keyword bound its
+   sibling takes, and it is written as a `sizeof` of the field that carries one so it cannot go stale. */
+static void rule_alias_unbuilt_fail(const char *written, const char *target)
+{
+#define RULE_ALIAS_UNBUILT_FMT                                                                                 \
+    "CSS Compatibility Standard §3.1 \"CSS At-rules\" aliases `@%s` onto `@%s`, and this builder has no arm "   \
+    "for `@%s`. §3.1's table maps a prefixed spelling onto an at-rule the platform ALREADY HAS, so the thing "  \
+    "to build is the UNPREFIXED rule's §6.4 interface, in rule_from_parse, exactly as if the page had written " \
+    "it unprefixed — and then this row starts working with no further change. Do NOT answer this by deleting " \
+    "the row: §3.1 says the prefixed spelling MUST be supported, so a missing row is a page's rule silently "   \
+    "vanishing out of `cssRules` rather than a crash anyone will see"
+
+    char msg[sizeof RULE_ALIAS_UNBUILT_FMT + 3 * sizeof ((RuleBuild *)0)->unbuilt];
+
+    snprintf(msg, sizeof msg, RULE_ALIAS_UNBUILT_FMT, written, target, target);
+    DFAIL(msg);
+#undef RULE_ALIAS_UNBUILT_FMT
+}
+
+/* THE AT-RULES THAT ARE DROPPED RATHER THAN CRASHED ON, AND BOTH ARMS ARE POSITIVE STATEMENTS ABOUT THE
+ * PLATFORM rather than gaps. `name` is the at-keyword as the builder resolved it — §3.1's aliases have already
+ * been taken out of it, which is why this function never has to ask about one.
+ *
+ * `@charset`: CSSOM keeps the historical constant `CHARSET_RULE = 2` and declares NO CSSCharsetRule interface
+ * at all, so there is no object an `@charset` could become and every user agent leaves it out of `cssRules`.
+ *
+ * AN AT-KEYWORD BEGINNING WITH `-` OR `_`: CSS 2.1 §4.1.2.1 "Vendor-specific extensions" reserves exactly that
+ * shape — "Keywords and property names beginning with '-' or '_' are reserved for vendor-specific extensions"
+ * — and states the consequence outright: "An initial dash or underscore is guaranteed never to be used in a
+ * property or keyword by any current or future level of CSS. Thus typical CSS implementations may not
+ * recognize such properties and may ignore them according to the rules for handling parsing errors." §4.2
+ * "Rules for handling parsing errors" is where that lands, under "At-rules with unknown at-keywords": "User
+ * agents must ignore an invalid at-keyword together with everything following it, up to the end of the block
+ * that contains the invalid at-keyword". So `@-moz-keyframes`, `@-ms-keyframes`, `@-o-keyframes` and
+ * `@-ms-viewport` — which autoprefixed bundles still ship beside the row above — name ANOTHER VENDOR'S
+ * extension, which this user agent is not and never will be. Confirmed on real Chrome 148.0.7778.167: of
+ * `@-webkit-keyframes`, `@-moz-keyframes`, `@-ms-keyframes`, `@-o-keyframes`, `@-ms-viewport`,
+ * `@-moz-document` and eleven other `-webkit-`-prefixed spellings of at-rules it implements unprefixed, the
+ * ONLY one in `cssRules` is §3.1's row.
+ *
+ * THIS IS NOT AN UNKNOWN-AT-RULE FALLBACK AND MUST NEVER BECOME ONE. The set it drops is closed by the shape
+ * of the NAME, and CSS 2.1 §4.2's other half is why that matters: "CSS 2.1 reserves for future updates of CSS
+ * all property:value combinations and @-keywords that do not contain an identifier beginning with dash or
+ * underscore". An UNPREFIXED at-keyword is therefore reserved to CSS itself, so meeting one this build has no
+ * arm for is a specification's interface that is missing here — a capability to build — and it keeps crashing
+ * by name below. Widening this predicate to cover those would delete exactly the signal that crash exists to
+ * deliver. */
+static bool at_rule_dropped(const char *name)
+{
+    if (strcmp(name, "charset") == 0) return true;
+    DCHECK(!(name[0] == '-' || name[0] == '_') || at_rule_alias(name) == NULL,
+           "a `-webkit-` at-keyword CSS Compatibility §3.1 aliases onto a real at-rule reached the DROP "
+           "predicate. The builder resolves §3.1's table before it dispatches, so an aliased name must have "
+           "become the unprefixed one long before this line — reaching it means the resolution was moved "
+           "after the dispatch, which silently deletes every rule the standard requires to be supported");
+    return name[0] == '-' || name[0] == '_';
+}
 
 /* The TYPE of the rule this one is written inside, or 0 at a sheet's top level. What a rule may BE depends on
    it — CSS Syntax's rules are context-sensitive and CSS Paged Media §4.3 states two of them outright. */
@@ -1117,6 +1253,7 @@ static JSValueConst rule_nesting_parent(JSValueConst parent_rule)
 static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst parent_rule)
 {
     uint16_t enclosing = enclosing_rule_type(parent_rule);
+    const char *at;
 
     /* CSS Paged Media §4.3: "The @page rule can only contain page properties and margin at-rules." So inside
        an `@page` the ONLY rules are §4.3's sixteen margin at-rules, and everything else written there — a
@@ -1177,7 +1314,16 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
     if (!pr->at_name && !pr->prelude_is_selectors) return JS_UNDEFINED;
     if (!pr->at_name)
         return style_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude, pr->block ? pr->block : "");
-    if (strcmp(pr->at_name, "media") == 0) {
+    /* CSS COMPATIBILITY STANDARD §3.1 "CSS At-rules", RESOLVED ONCE, IN FRONT OF THE DISPATCH. `at` is the
+       at-keyword the arms below decide from and `pr->at_name` stays the spelling the page WROTE; a creator
+       that has to emit the written one takes it as an argument. Resolving here rather than in an arm is what
+       makes an alias a SPELLING: every question after this line — the grammar of the prelude, which interface,
+       which prototype, which `type`, what the body may contain — is answered by the one arm the unprefixed
+       name reaches, so the two spellings cannot drift apart in any of them. Adding §3.1's next row is then a
+       table entry and nothing else. */
+    at = at_rule_alias(pr->at_name);
+    if (!at) at = pr->at_name;
+    if (strcmp(at, "media") == 0) {
         DCHECK(pr->has_block,
                "an `@media` rule reached the builder with no block. CSS Syntax makes a block at-rule without "
                "one INVALID, and cssom_parse_rules drops an invalid at-rule before it is ever reported, so a "
@@ -1194,15 +1340,15 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        it are not read — the same sentence `@keyframes` and `@layer` get, and for the same reason: a
        declaration written where §6 admits only rules would be CSSOM's CSSNestedDeclarations, a rule interface
        this build does not have and whose absence the parse walk already records. */
-    if (strcmp(pr->at_name, "supports") == 0)
+    if (strcmp(at, "supports") == 0)
         return pr->has_block ? supports_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
     /* CSS Cascade §2 makes `@import` a STATEMENT at-rule terminated by a semicolon, so `@import url(x) {}` is
        an at-rule whose grammar failed and CSS Syntax DROPS it. It is dropped HERE and not asserted against,
        because the shape reaches this file from the PAGE: lexbor parses an at-rule it does not know as
        `_CUSTOM`, which accepts a block, so this is malformed author CSS and not an engine invariant. */
-    if (strcmp(pr->at_name, "import") == 0)
+    if (strcmp(at, "import") == 0)
         return pr->has_block ? JS_UNDEFINED : import_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude);
-    if (strcmp(pr->at_name, "namespace") == 0) {
+    if (strcmp(at, "namespace") == 0) {
         DCHECK(!pr->has_block,
                "an `@namespace` rule reached the builder WITH a block. Lexbor's own namespace state marks the "
                "parse failed the moment it meets one and converts the rule to `_UNDEF`, which the walk drops, "
@@ -1212,7 +1358,7 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
     /* And the mirror of it: CSS Fonts §12 makes `@font-face` a BLOCK at-rule, so `@font-face;` is invalid and
        dropped. Lexbor keeps this one rather than converting it (its `font_face_end` stores the returned block
        whether or not there is one, where `media_end` checks), so the drop is this file's. */
-    if (strcmp(pr->at_name, "font-face") == 0) {
+    if (strcmp(at, "font-face") == 0) {
         DCHECK(!pr->has_block || pr->block != NULL,
                "an `@font-face` rule reached the builder with a block whose DESCRIPTORS were not reported. "
                "cssom_parse_rules serializes an `@font-face` body as declarations precisely because it is one, "
@@ -1224,7 +1370,7 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        an at-rule whose grammar failed and CSS Syntax drops it — the same shape `@font-face;` has, and dropped
        here for the same reason it is: lexbor parses an at-rule it does not know as `_CUSTOM`, which accepts
        both, so this is malformed author CSS and not an engine invariant. */
-    if (strcmp(pr->at_name, "page") == 0)
+    if (strcmp(at, "page") == 0)
         return pr->has_block ? page_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude,
                                              pr->block ? pr->block : "")
                              : JS_UNDEFINED;
@@ -1233,8 +1379,9 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        it — the same shape `@font-face;` and `@page;` have, and dropped here for the same reason. Its BODY is
        a rule list and nothing else, so the declarations the parse reports for it are not read: a declaration
        written directly inside a `@keyframes` is not in a `<keyframe-block>` and §3 admits nothing else. */
-    if (strcmp(pr->at_name, "keyframes") == 0)
-        return pr->has_block ? keyframes_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
+    if (strcmp(at, "keyframes") == 0)
+        return pr->has_block ? keyframes_rule_new(b->ctx, b->sheet, parent_rule, pr->at_name, pr->prelude)
+                             : JS_UNDEFINED;
     /* CSS Cascade §6.4.4 gives `@layer` TWO grammars and the BLOCK is what tells them apart: §6.4.4.1's block
        at-rule is `@layer <layer-name>? { <rule-list> }` and §6.4.4.2's statement at-rule is
        `@layer <layer-name>#;`. So `has_block` forks here as it does for `@import` and `@font-face` — and this
@@ -1252,14 +1399,20 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        rule written inside a `<declaration-list>` is invalid in that context, which is the sentence `@font-face`
        and a `<keyframe-block>` already get and which `rule_built` applies from the other side through
        `rule_type_has_child_rules`. */
-    if (strcmp(pr->at_name, "property") == 0)
+    if (strcmp(at, "property") == 0)
         return pr->has_block ? property_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude,
                                                  pr->block ? pr->block : "")
                              : JS_UNDEFINED;
-    if (strcmp(pr->at_name, "layer") == 0)
+    if (strcmp(at, "layer") == 0)
         return pr->has_block ? layer_block_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude)
                              : layer_statement_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude);
-    if (at_rule_dropped(pr->at_name)) return JS_UNDEFINED;
+    if (at_rule_dropped(at)) return JS_UNDEFINED;
+    /* AN ALIAS WHOSE TARGET NO ARM ABOVE ANSWERS IS THE TABLE DISAGREEING WITH THIS BUILDER, and it is a
+       different crash from the one below on purpose: the message below names the at-keyword THE PAGE SHIPPED
+       and tells its reader to build that interface, which is the wrong instruction here — the page shipped a
+       spelling the standard says is already supported, and what is missing is the rule it was aliased ONTO.
+       It cannot be reached by a page: only a row of the table above can put a name here. */
+    if (at != pr->at_name) rule_alias_unbuilt_fail(pr->at_name, at);
     if (!b->unbuilt[0]) snprintf(b->unbuilt, sizeof b->unbuilt, "%s", pr->at_name);
     return JS_UNDEFINED;
 }
@@ -1756,11 +1909,19 @@ static bool page_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rul
  * `@keyframes bar { }` collapses to in css/cssom/CSSKeyframesRule.html's whitespace-insensitive assertion.
  * A KEYFRAMES RULE'S CHILDREN ARE NOT FILTERED FOR EMPTINESS the way §6.4.5's are: this arm names no
  * "filtering out empty strings" step, and it does not need one — every child is a CSSKeyframeRule and every
- * CSSKeyframeRule serializes to at least its keyText and a brace pair. */
+ * CSSKeyframeRule serializes to at least its keyText and a brace pair.
+ * THE SECOND DIVERGENCE IS THE FIRST PIECE, AND IT IS A SECTION THE ARM PREDATES. This arm says "The literal
+ * string "@keyframes "" because when it was written that was the only spelling; CSS Compatibility Standard
+ * §3.1 "CSS At-rules" then made `@-webkit-keyframes` a second one that "must be supported", and said nothing
+ * about how the resulting rule serializes. A literal reading would emit `@keyframes` for a rule the page wrote
+ * with the prefix, which is a `cssText` that does not round-trip through the parse it came from; real Chrome
+ * 148.0.7778.167 emits the written spelling for exactly that reason. So the piece is the rule's OWN
+ * at-keyword, which is the same string the literal names for every rule that was written unprefixed. */
 static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
 {
-    size_t nl = 0;
+    size_t nl = 0, kwl = 0;
     char *name = rule_text_copy(ctx, r->keyframes_name, &nl);
+    char *keyword = rule_text_copy(ctx, r->at_name, &kwl);
     char **kids;
     char *piece;
     unsigned nk, i;
@@ -1769,7 +1930,12 @@ static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCons
            "a CSS Animations §6.3 keyframes rule has no name. §3's grammar has no arm without a "
            "`<keyframes-name>` so the creator refuses a prelude that lacks one, and §6.3.2's setter stores a "
            "string — a null here means the string conversion itself failed");
-    if (!name) return false;
+    DCHECK(keyword != NULL,
+           "a CSS Animations §6.3 keyframes rule has no at-keyword. `keyframes_rule_new` is its one creator "
+           "and it stores either `keyframes` or the CSS Compatibility §3.1 spelling the page wrote, so a null "
+           "here is a rule minted somewhere else — and the serialization would then have to guess which of "
+           "the two spellings the page's own stylesheet used");
+    if (!name || !keyword) { free(name); free(keyword); return false; }
     /* THE THREE EXCLUSIONS ARE THE `<keyframes-name>` GRAMMAR'S OWN, so they are asked of the one entry that
        holds them (core/css/css_at_rule_prelude.h) rather than restated here — the parse REFUSES exactly this
        set and the serialization QUOTES exactly this set, and that is what makes `cssText` re-parse as the rule
@@ -1779,7 +1945,10 @@ static bool keyframes_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCons
                                                       : css_serialize_identifier(name, nl);
     free(name);
     kids = rule_children_serialized(ctx, rule, &nk);
-    rbuf_add(out, "@keyframes ");
+    rbuf_add(out, "@");
+    rbuf_add(out, keyword);
+    rbuf_add(out, " ");
+    free(keyword);
     rbuf_add(out, piece);
     free(piece);
     rbuf_add(out, " { \n");

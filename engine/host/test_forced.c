@@ -373,6 +373,44 @@ static const char *HTML =
     "fetch('/api/cssnest?v=' + (nsv === 'block|inline-block|flex|table' ? 'NESTOK' : 'NESTBAD:' + nsv));"
     "fetch('/api/cssnestmedia?v=' + (nsd('nstmedia') === 'grid' ? 'NESTMEDIAOK' : 'NESTMEDIABAD:'"
     " + nsd('nstmedia')));</script>"
+    /* ---- CSS Compatibility Standard §3.1 "CSS At-rules" — THE PREFIXED SPELLING OF A RULE WE HAVE ---------
+       linear.app aborted the whole document at stage `create` — before one line of the page ran, so no
+       endpoint, no sink and no flow — on `@-webkit-keyframes`, because CSSOM's builder had no arm for the
+       at-keyword and an unbuilt at-rule is a `@WHY`. §3.1 says that keyword "must be supported as an alias of
+       the corresponding unprefixed at-rule", so the fix is a NAME RESOLUTION and the fixture's job is to prove
+       it stayed one: the same interface, the same `type`, the same `<keyframes-name>` grammar, the same body,
+       and the ONE thing that differs.
+       THE SHEET WRITES FIVE AT-RULES AND EXACTLY TWO OF THEM BECOME CSSOM RULES — that ratio is the design.
+       `spin` is the alias; `spin2` is the unprefixed rule beside it, which is what makes the serialization
+       claim a comparison rather than an assertion about one string. The last three must be OUT of `cssRules`,
+       and every one of them used to abort this document instead: `@-moz-keyframes` and `@-ms-viewport` are
+       another vendor's extensions, which CSS 2.1 §4.1.2.1 "Vendor-specific extensions" reserves and §4.2
+       "Rules for handling parsing errors" ignores, and `@-webkit-keyframes none` is the alias meeting §3's own
+       `<keyframes-name>` exclusion — a rule dropped by the grammar it now shares, which is the claim that the
+       resolution happens BEFORE the prelude is parsed rather than beside it. A rule that wrongly survives and
+       one that wrongly vanishes both move the LENGTH, so the first field of the token carries all three.
+       REAL CHROME 148.0.7778.167 ANSWERS EXACTLY THESE BYTES for this sheet, which is where the expected
+       strings come from: CSSOM §6.4's CSSKeyframesRule arm names the literal `"@keyframes "` and predates
+       §3.1, so the serialization half is not derivable from the text and is a measurement. */
+    "<style id=kfsheet>"
+    "@-webkit-keyframes spin { from { opacity: 0 } to { opacity: 1 } }"
+    "@keyframes spin2 { 0%, 50% { opacity: 0 } }"
+    "@-moz-keyframes spin3 { from { opacity: 0 } }"
+    "@-webkit-keyframes none { from { opacity: 0 } }"
+    "@-ms-viewport { width: device-width }"
+    "</style>"
+    /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, the same arrangement `/api/cssprop` above takes: what
+       the alias PRODUCES (one CSSKeyframesRule, §6.4.2's `type` 7, §6.3.2's `name`, its `<keyframe-block>`s
+       canonicalised by §6.2.2 — `from` reads back as `0%`) and what §6.4 SERIALIZES. A build could get the
+       object right and emit `@keyframes` for it, and one boolean over both would not say which. */
+    "<script>var kfr = document.getElementById('kfsheet').sheet.cssRules;"
+    "var kv = kfr.length + '|' + (kfr[0] instanceof CSSKeyframesRule) + '|' + kfr[0].type + '|' + kfr[0].name"
+    " + '|' + kfr[0].cssRules.length + '|' + kfr[0].cssRules[0].keyText + '|' + kfr[1].name;"
+    "fetch('/api/csswkkf?v=' + (kv === '2|true|7|spin|2|0%|spin2' ? 'WKKFOK' : 'WKKFBAD:' + kv));"
+    "var kt = kfr[0].cssText + '~' + kfr[1].cssText;"
+    "fetch('/api/csswkkfText?v=' + (kt === '@-webkit-keyframes spin { \\n  0% { opacity: 0; }\\n"
+    "  100% { opacity: 1; }\\n}~@keyframes spin2 { \\n  0%, 50% { opacity: 0; }\\n}'"
+    " ? 'WKKFTEXTOK' : 'WKKFTEXTBAD:' + kt));</script>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
@@ -4935,6 +4973,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int cssprop_tt = strstr(js, "CSSPROPOK") != NULL;
     int csspropText_tt = strstr(js, "CSSTEXTOK") != NULL;
 
+    /* CSS COMPATIBILITY STANDARD §3.1's ALIAS, as the two tokens the page's own comparisons emitted — see the
+       `<style id=kfsheet>` block in HTML above for what each one covers and why they are two. A red row here
+       is a document that BOOTED, which is itself the first thing this fixture is about: the at-rule these
+       cover used to abort at stage `create`, and a fixture that only proved the crash was gone would go green
+       on a build that dropped the rule instead of building it. */
+    int csswkkf_tt = strstr(js, "WKKFOK") != NULL;
+    int csswkkfText_tt = strstr(js, "WKKFTEXTOK") != NULL;
+
     /* CSS NESTING'S THREE CLAIMS, as the tokens the page's own comparisons emitted — the same arrangement the
        two rows above have and for the same reason: §6 "CSSOM"'s absolutized `selectorText`, §4's `:is()`
        specificity carried through the resolved cascade, and §3.3's nested group rule are three capabilities,
@@ -5531,6 +5577,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "optiter", optiter_tt, "/api/optiter", SESS_EXPLORE },
         { "cssprop", cssprop_tt, "/api/cssprop?", SESS_EXPLORE },
         { "cssprop-text", csspropText_tt, "/api/csspropText", SESS_EXPLORE },
+        { "css-webkit-keyframes", csswkkf_tt, "/api/csswkkf?", SESS_EXPLORE },
+        { "css-webkit-keyframes-text", csswkkfText_tt, "/api/csswkkfText", SESS_EXPLORE },
         { "css-nesting-selectortext", cssnestsel_tt, "/api/cssnestsel", SESS_EXPLORE },
         { "css-nesting-cascade", cssnest_tt, "/api/cssnest?", SESS_EXPLORE },
         { "css-nesting-group-rule", cssnestmedia_tt, "/api/cssnestmedia", SESS_EXPLORE },

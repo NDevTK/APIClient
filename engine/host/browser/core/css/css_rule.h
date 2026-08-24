@@ -101,6 +101,23 @@
  * decl this file hands out for that one rule type. A collection object could not have carried it: a
  * CSSKeyframesRule is a rule, its record lives behind this class's opaque, and one object has one class.
  *
+ * A PREFIXED AT-KEYWORD IS A SECOND SPELLING OF ONE RULE, RESOLVED IN FRONT OF THE BUILDER'S DISPATCH — never
+ * an arm of its own. CSS Compatibility Standard §3.1 "CSS At-rules" requires "-webkit- vendor prefixed
+ * at-rules ... as aliases of the corresponding unprefixed at-rules" over a table with one row today
+ * (`@-webkit-keyframes` onto `@keyframes`), so the alias names the AT-KEYWORD and nothing else: one interface,
+ * one prototype, one §6.4.2 `type`, one prelude grammar, one body. A second arm would be a second creator able
+ * to disagree with the first about any of those and no reader would see it. What the two spellings DO NOT
+ * share is the at-keyword §6.4's serialize-a-CSS-rule emits — which is why the rule stores the one it was
+ * written with, and why that half is settled by measuring a real browser rather than by reading CSSOM's arm,
+ * which names the literal `"@keyframes "` and predates §3.1 entirely.
+ * AND THE REST OF THE PREFIXED CLASS IS NOT AN ABSENT CAPABILITY, WHICH IS WHY IT DROPS RATHER THAN CRASHING.
+ * CSS 2.1 §4.1.2.1 "Vendor-specific extensions" reserves an initial `-` or `_` for one vendor's own
+ * extensions and guarantees CSS itself will never use one, and §4.2 "Rules for handling parsing errors" then
+ * ignores the at-rule; so `@-moz-keyframes` and `@-ms-viewport` name a user agent this is not, and there is no
+ * interface for them to be missing. An UNPREFIXED at-keyword is the opposite case by the same two sections —
+ * §4.2 reserves it to CSS — so one this build has no arm for is a real interface that is missing here, and it
+ * keeps crashing by name.
+ *
  * WHAT A RULE HOLDS AND WHAT READS IT. The selector text is read by §6.4.3's `selectorText`, which is also
  * SETTABLE — one of the reasons the record time-travels. The declaration block text is a style rule's BODY, and
  * §6.4.3's `style` is the CSS DECLARATION BLOCK over it: core/css/css_style_declaration.h owns §6.6 and reads
