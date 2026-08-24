@@ -377,7 +377,8 @@ static FontMetricsEmRatio css_cv_zero_advance(lxb_dom_element_t *el)
 static bool css_cv_metric_is_root(CssFontMetric which)
 {
     return which == CSS_FONT_METRIC_REM || which == CSS_FONT_METRIC_REX ||
-           which == CSS_FONT_METRIC_RCH || which == CSS_FONT_METRIC_RIC;
+           which == CSS_FONT_METRIC_RCH || which == CSS_FONT_METRIC_RIC ||
+           which == CSS_FONT_METRIC_RCAP;
 }
 
 static CssPx css_cv_font_metric(void *p, CssFontMetric which)
@@ -390,15 +391,24 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            "css-values-4 §6.1.1's font-metric callback was invoked with no element — the pair is handed to "
            "css_length_parse by the entries below and by nothing else, so an absent element is a metrics "
            "struct assembled field-by-field past them");
-    /* §6.1.1's SIX FONT-METRIC UNITS ARE A RATIO TIMES ONE OF THE TWO FONT SIZES BELOW, so each is answered by
-       recursing into this same callback for its base and scaling — which is what makes `ex` and `rex` one
-       derivation with one difference (`rem` rather than `em`) rather than two that can drift apart. The ratio
-       is core/css/font_metrics.h's, and for `ch` it is the axis question above. */
+    /* §6.1.1's EIGHT FONT-METRIC UNITS ARE A METRIC OVER ONE OF THE TWO FONT SIZES BELOW, so each is answered
+       by recursing into this same callback for its base — which is what makes `ex` and `rex` one derivation
+       with one difference (`rem` rather than `em`) rather than two that can drift apart. Six of them scale by
+       a ratio §6.1.1 fixes; `cap` and `rcap` take core/css/font_metrics.h's picked ascent instead, and the
+       difference in signature is the difference in kind (font_metrics.h). For `ch` the ratio is the axis
+       question above. */
     if (which != CSS_FONT_METRIC_EM && which != CSS_FONT_METRIC_REM) {
         bool root_relative = css_cv_metric_is_root(which);
         CssPx base = css_cv_font_metric(p, root_relative ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
         FontMetricsEmRatio ratio;
 
+        /* §6.1.1's `cap` IS THE ONE THAT IS NOT A SPEC RATIO, so it leaves through its own component entry
+           rather than through the table below: "in the cases where it is impossible or impractical to
+           determine the cap-height, THE FONT'S ASCENT must be used", and that ascent is a metric of the
+           modelled face rather than a number §6.1.1 fixes. core/css/font_metrics.h forms the product so the
+           reader's font size and this user agent's face are unioned there and not here. */
+        if (which == CSS_FONT_METRIC_CAP || which == CSS_FONT_METRIC_RCAP)
+            return font_metrics_ascent_px(css_cv_realm(f->el), base);
         switch (which) {
         case CSS_FONT_METRIC_EX:
         case CSS_FONT_METRIC_REX: ratio = FONT_METRICS_X_HEIGHT; break;
@@ -435,10 +445,10 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
     }
     DCHECK(which == CSS_FONT_METRIC_REM,
            "css_length.h's font-metric enumeration named a metric this component answers no arm for — the two "
-           "are one list and have come apart. The four of css-values-4 §6.1.1's units that this callback does "
-           "NOT carry a row for (`cap`, `rcap`, `lh`, `rlh`) are the ones §6.1.1 states no must-assume value "
-           "for, and they crash in css_length.c naming the font record and `line-height`'s computed value "
-           "rather than reaching a third arm here");
+           "are one list and have come apart. The two of css-values-4 §6.1.1's units that this callback does "
+           "NOT carry a row for (`lh`, `rlh`) are the pair §6.1.1 states in terms of a PROPERTY rather than a "
+           "metric, and they crash in css_length.c naming `line-height`'s computed value and §10.8.1's depth "
+           "below the baseline rather than reaching a third arm here");
     root = css_cv_root_element(f->el);
     /* §6.1.1: `rem` is "equal to the computed value of the em unit on the root element". The element it REFERS
        TO is therefore the root, so the font-affecting clause above bites only when the declaration is on the

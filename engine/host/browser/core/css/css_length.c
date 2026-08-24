@@ -140,19 +140,22 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
    more are a FONT METRIC times one of those two sizes, and §6.1.1 states what MUST be assumed for each when
    the metric cannot be determined (an x-height is 0.5em, the "0" glyph is "0.5em wide by 1em tall", the "水"
    glyph is 1em), which core/css/font_metrics.h owns and which is a real value for a user agent with no glyph
-   outlines rather than a stand-in. All eight resolve, through the ONE `CssFontMetrics` pair the caller holding
-   the tree answers — one table, because the arithmetic is the same and only the base differs.
-   THE REMAINING FOUR HAVE NO SUCH SENTENCE and still crash: `cap`/`rcap`'s fallback is "the font's ascent",
-   which is a measurement of a real face, and `lh`/`rlh` is a computed `line-height` with `normal` resolved
-   "by using only the metrics of the first available font", which needs that face AND a computed-value rule
-   for a property core/css/css_computed_value.c does not model. */
+   outlines rather than a stand-in. `cap`/`rcap` join them on the same arithmetic and a DIFFERENT footing:
+   §6.1.1 fixes no cap-height, only that an undeterminable one takes "the font's ASCENT", and that ascent is a
+   metric of the modelled face that core/css/font_metrics.h PICKS — so the product carries an environment fact
+   where the three above carry none. All ten resolve, through the ONE `CssFontMetrics` pair the caller holding
+   the tree answers — one table, because the arithmetic is the same and only the base and the ratio differ.
+   THE REMAINING PAIR STILL CRASHES: `lh`/`rlh` is a computed `line-height` with `normal` resolved "by using
+   only the metrics of the first available font", which needs a metric no reader has yet AND a computed-value
+   rule for a property core/css/css_computed_value.c does not model at all. */
 static const struct { const char *unit; CssFontMetric metric; } CSS_FONT_RELATIVE[] = {
     { "em",  CSS_FONT_METRIC_EM  }, { "rem", CSS_FONT_METRIC_REM },
     { "ex",  CSS_FONT_METRIC_EX  }, { "rex", CSS_FONT_METRIC_REX },
     { "ch",  CSS_FONT_METRIC_CH  }, { "rch", CSS_FONT_METRIC_RCH },
     { "ic",  CSS_FONT_METRIC_IC  }, { "ric", CSS_FONT_METRIC_RIC },
+    { "cap", CSS_FONT_METRIC_CAP }, { "rcap", CSS_FONT_METRIC_RCAP },
 };
-static const char *const CSS_FONT_RECORD_RELATIVE[] = { "cap", "rcap", "lh", "rlh" };
+static const char *const CSS_FONT_RECORD_RELATIVE[] = { "lh", "rlh" };
 
 /* WHICH METRIC A UNIT NAMES, or false for one this file cannot route. It is a lookup and not a test followed
    by a second lookup, because the two would be one list that can disagree about a spelling. */
@@ -358,22 +361,22 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
         return css_px_scale(base, num);
     }
     if (css_len_in(CSS_FONT_RECORD_RELATIVE, CSS_LEN_N(CSS_FONT_RECORD_RELATIVE), unit))
-        DFAIL("a length in css-values-4 §6.1.1's `cap`, `rcap`, `lh` or `rlh` reached absolutization. These are "
-              "the two PAIRS among its twelve units for which §6.1.1 states NO must-assume value, so neither "
-              "can be "
-              "answered the way `ex`, `ch` and `ic` are answered in the arm above — and neither may borrow one of "
-              "their ratios, which would be one sentence of §6.1.1 standing in for another. Each needs ONE thing "
-              "and they are different things. (1) `cap`/`rcap`: §6.1.1 says an undeterminable cap-height means "
-              "\"the font's ASCENT must be used\", and an ascent is a measurement of a real face rather than a "
-              "ratio the spec fixes — so this needs the FONT RECORD core/css/font_metrics.h describes the absence "
-              "of, which is also what CSS 2 §9.4.2's line boxes and §10.8's leading need and is therefore the one "
-              "piece that unblocks text measurement as well as this unit. (2) `lh`/`rlh`: §6.1.1 makes it \"the "
-              "computed value of the line-height property of the element on which it is used, converting normal "
-              "to an absolute length by using only the metrics of the first available font\", which is TWO "
-              "absences — that same record, and a computed-value rule for `line-height`, which "
-              "core/css/css_computed_value.c does not model at all (css_computed_models does not name it, so "
-              "asking for its computed value crashes there instead). BUILD the face's metrics in "
-              "core/css/font_metrics.c, then `line-height`'s computed value beside `font-size`'s");
+        DFAIL("a length in css-values-4 §6.1.1's `lh` or `rlh` reached absolutization — the one pair among its "
+              "twelve units this engine cannot answer, and the only one §6.1.1 does not state in terms of a "
+              "single metric. §6.1.1 makes it \"the computed value of the LINE-HEIGHT property of the element on "
+              "which it is used, converting normal to an absolute length by using only the metrics of the first "
+              "available font\", which is TWO absences and they are not one problem. (1) The PROPERTY: "
+              "core/css/css_computed_value.c models no entry for `line-height` at all — `css_computed_models` "
+              "does not name it, so asking for its computed value crashes there rather than here — and CSS 2.1 "
+              "§10.8's `Computed value:` line is \"for <length> and <percentage> the absolute value; otherwise as "
+              "specified\", so the length arm is this file's own absolutization and the `normal` and `<number>` "
+              "arms survive to the used value. (2) `normal` ITSELF, which §10.8 leaves to the user agent (\"tells "
+              "user agents to set the used value to a 'reasonable' value based on the font of the element … we "
+              "recommend a used value for 'normal' between 1.0 to 1.2\") and §10.8.1 states over `AD = A + D`. "
+              "core/css/font_metrics.h picks `A` now; what it does not have is `D`, the depth below the "
+              "baseline, which §10.8.1 defines beside it and which nothing yet reads. BUILD `D` there with its "
+              "reader — §10.8.1's leading, `L = 'line-height' - AD` — and `line-height`'s computed value beside "
+              "`font-size`'s, and this unit is their first consumer");
     else if (css_len_is_viewport(unit))
         return css_len_viewport(realm, unit, num / 100.0);
     else if (css_len_is_viewport_variant(unit))

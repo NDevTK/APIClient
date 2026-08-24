@@ -212,6 +212,7 @@ typedef struct {
     double dev_width, dev_height;
     double dppx;
     double font_size;          /* css-values-4 §6.1.1's "initial values of the font ... properties" */
+    double ascent;             /* CSS 2.1 §10.8.1's `A` at that size — core/css/font_metrics.h's picked face */
     int    color_bits;
 } MqEnv;
 
@@ -241,6 +242,12 @@ static void mq_env(JSContext *ctx, MqEnv *e)
        1920/1080 two lines up was. core/css/font_size_functions.h picks the number; what is read here is its
        EXAMPLE, for the reason stated above this function: the comparison below is a C `if`. */
     e->font_size = css_default_font_size(ctx).px;
+    /* §6.1.1's `cap` falls back to "the font's ascent", which is the SAME modelled face outside an element as
+       inside one — §6.1.1's clause redirects the SIZE to the initial value and says nothing about the face.
+       Its EXAMPLE is read here for the reason stated above this function, exactly as the font size's is: the
+       comparison below is a C `if`, and core/css/font_metrics.c is where the fact behind the number is minted
+       for the readers that cross to a page. */
+    e->ascent = font_metrics_ascent_px(ctx, css_px(e->font_size)).px;
     /* §4.5: `color` is the bits per COLOUR COMPONENT of the output device. screen.c owns the depth. */
     e->color_bits = screen_color_depth() / 3;
 }
@@ -876,9 +883,9 @@ MediaQuerySet *media_query_parse_one(const char *text)
    values to.
    A §6 LENGTH UNIT WITH NO ROW HERE MAKES THE FEATURE EVALUATE FALSE rather than crashing, and that is a
    DIVERGENCE from core/css/css_length.c, which crashes for the same units. The set is exactly the same one:
-   `cap`, `lh` and their twins (a font record §6.1.1 states no must-assume value for), `vi`/`vb` (an inline
-   axis), and the `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate facts). `value_ok`
-   admits every DIMENSION for a `<length>` feature, so those reach this table and leave through `*ok = false`.
+   `lh`/`rlh` (a computed `line-height`, a property nothing models), `vi`/`vb` (an inline axis), and the
+   `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate facts). `value_ok` admits every
+   DIMENSION for a `<length>` feature, so those reach this table and leave through `*ok = false`.
    THE TABLE IS SPLIT FROM THE `MqValue` WALK because it has a SECOND caller with no MqValue to hand it, and
    that caller's rule is HTML §4.8.4.3 "Processing model" in one sentence: a source size's units other than the
    viewport-relative ones "must be interpreted THE SAME AS IN MEDIA QUERIES". So `media_query_length_px` below
@@ -894,6 +901,7 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
         return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_ZERO_ADVANCE_WIDTH);
     if (!strcmp(u, "ic") || !strcmp(u, "ric"))
         return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_WATER_ADVANCE);
+    if (!strcmp(u, "cap") || !strcmp(u, "rcap")) return n * e->ascent;
     if (!strcmp(u, "cm")) return n * 96.0 / 2.54;
     if (!strcmp(u, "mm")) return n * 96.0 / 25.4;
     if (!strcmp(u, "q"))  return n * 96.0 / 101.6;

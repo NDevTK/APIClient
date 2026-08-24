@@ -132,6 +132,13 @@ typedef enum {
        this model determines it, the spec calls it the reader's own preference, and a `rem`-sized layout puts
        its entire responsive ladder behind it. */
     CSS_ENV_DEFAULT_FONT_SIZE,
+    /* CSS 2.1 §10.8.1 (Leading and half-leading)'s `A` — "a characteristic height above the baseline" of the
+       first available font, which core/css/font_metrics.h picks and says why. It is a SEPARATE fact from the
+       default font size beside it and not a refinement of it: the size is the reader's preference and the
+       ascent is the installed FACE, so a page that measures `1cap` against `fontSize` is reading the ratio
+       between them and would get one arm out of a single key. It is also separate from §6.1.1's assumed
+       x-height, which is a spec constant with no freedom in it and therefore no fact at all. */
+    CSS_ENV_FONT_ASCENT,
     CSS_ENV_FACT_COUNT
 } CssEnvFact;
 
@@ -263,8 +270,13 @@ typedef struct {
    whole computation there, including the axis question. So the caller answering this callback answers one
    question it already answers (which element's computed `font-size`) and one it alone can (which axis is the
    element's inline axis), and this file's unit table stays a table.
-   `cap` AND `lh` ARE ABSENT FOR font_metrics.h's REASON: §6.1.1 states no must-assume value for either, so
-   there is no row for a caller to answer and the unit arm in css_length.c crashes naming what each needs. */
+   `cap` IS HERE ON THE SAME ARITHMETIC BUT NOT ON THE SAME FOOTING: §6.1.1 states no must-assume value for a
+   cap-height, only that an undeterminable one takes "the font's ascent", and that ascent is a PICKED metric of
+   the modelled face rather than a spec constant — so it carries CSS_ENV_FONT_ASCENT while the three above
+   carry nothing of their own. The row is the same shape because the multiplication is.
+   `lh` IS ABSENT FOR font_metrics.h's REASON: it is a computed `line-height`, a property core/css/
+   css_computed_value.h models no entry for, so there is nothing for a caller to answer and the unit arm in
+   css_length.c crashes naming it. */
 typedef enum {
     CSS_FONT_METRIC_EM = 0,   /* §6.1.1's `em`  — the element the unit is used on */
     CSS_FONT_METRIC_REM,      /* §6.1.1's `rem` — the root element */
@@ -273,7 +285,9 @@ typedef enum {
     CSS_FONT_METRIC_CH,       /* §6.1.1's `ch`  — the advance measure of the "0" glyph */
     CSS_FONT_METRIC_RCH,      /* §6.1.1's `rch` */
     CSS_FONT_METRIC_IC,       /* §6.1.1's `ic`  — the advance measure of the "水" glyph */
-    CSS_FONT_METRIC_RIC       /* §6.1.1's `ric` */
+    CSS_FONT_METRIC_RIC,      /* §6.1.1's `ric` */
+    CSS_FONT_METRIC_CAP,      /* §6.1.1's `cap` — the used cap-height, which falls back to the font's ASCENT */
+    CSS_FONT_METRIC_RCAP      /* §6.1.1's `rcap` */
 } CssFontMetric;
 
 /* IT IS ASKED LAZILY, AND THAT IS THE POINT OF THE INDIRECTION RATHER THAN AN OPTIMISATION. Resolving both

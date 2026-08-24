@@ -43,16 +43,37 @@
  * font-relative lengths units refer to the metrics corresponding to the initial values of the font and
  * line-height properties" — the same assumed face, reached without an element. Two readers, one table.
  *
- * WHAT IS DELIBERATELY ABSENT, because §6.1.1 states no must-assume value for it. `cap`'s fallback is not a
- * constant at all — "in the cases where it is impossible or impractical to determine the cap-height, THE
- * FONT'S ASCENT must be used" — and an ascent is a metric of a face, so it is the first thing a real font
- * record must carry. `lh` is the computed `line-height` "converting normal to an absolute length by using only
- * the metrics of the first available font", which needs that record AND a computed-value rule for a property
- * core/css/css_computed_value.c does not model. Both crash in core/css/css_length.c naming their own half, and
- * neither borrows a number from the three below — which is the one way this file could come to report a
- * measurement nothing measured. */
+ * AND THE ASCENT IS THE OTHER KIND OF ANSWER, WHICH IS WHY IT HAS A DIFFERENT SIGNATURE. §6.1.1 states no
+ * must-assume value for a cap-height — only that an undeterminable one takes "THE FONT'S ASCENT" — and CSS 2.1
+ * §10.8.1 "Leading and half-leading" is where that metric is defined: "CSS assumes that every font has font
+ * metrics that specify a characteristic height above the baseline and a depth below it. In this section we use
+ * A to mean that height (for a given font at a given size) and D the depth." CSS ASSUMES IT AND FIXES NOTHING
+ * ABOUT IT: §10.8 says "the height and depth of the font above and below the baseline are assumed to be
+ * metrics that are contained in the font", and §10.8.1's own note recommends reading them from a real face's
+ * `OS/2` table ("sTypoAscender" and "sTypoDescender", falling back to the `HHEA` table's "Ascent" and
+ * "Descent"). There is no such table here, and no sentence to read instead.
+ * SO IT IS PICKED, AND core/frame/viewport.h's TEST MAKES IT A FACT rather than a constant: the model chose
+ * one point out of a range the environment leaves free, and a page reads it — `width: 1cap` against
+ * `getComputedStyle(el).fontSize` is a two-member ratio a fingerprinting probe asks directly, and once CSS 2
+ * §9.4.2's line boxes exist every text box's height asks it again. It therefore carries CSS_ENV_FONT_ASCENT
+ * and returns a `CssPx`, where the three spec-fixed ratios above return a bare `double` and carry nothing.
+ * THAT ASYMMETRY IS THE CONTRACT AND NOT AN INCONSISTENCY: a value the spec fixes has a domain of one point
+ * and a concolic over it would model an ignorance this engine does not have, while a value the model picked
+ * has a real range behind it and a bare number there deletes the arm another reader's font takes.
+ *
+ * WHAT IS STILL DELIBERATELY ABSENT. §10.8.1's `D` — the depth below the baseline — is NOT here, because
+ * nothing reads it: `cap` needs `A` alone, and a constant nobody consumes is the mirror of the defect
+ * CLAUDE.md names, a value that is real, asserted and consumed by nothing. It lands with its reader, which is
+ * §10.8.1's leading (`L = 'line-height' - AD`), and THAT is also where CSS 2.1 §10.8's own recommendation
+ * becomes checkable — "we recommend a used value for 'normal' between 1.0 to 1.2" is a statement about `AD`
+ * and cannot be asserted over `A` alone. `lh` is the computed `line-height` "converting normal to an absolute
+ * length by using only the metrics of the first available font", which needs `D` AND a computed-value rule for
+ * a property core/css/css_computed_value.c does not model; it crashes in core/css/css_length.c naming both. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
+
+#include "core/css/css_length.h"
+#include "quickjs.h"
 
 /* ONE METRIC OF THE FIRST AVAILABLE FONT, as a MULTIPLE OF THE EM — which is the form §6.1.1 states all three
    in, and the form that makes them independent of any element's computed `font-size`. The caller multiplies.
@@ -71,5 +92,16 @@ typedef enum {
 } FontMetricsEmRatio;
 
 double font_metrics_em_ratio(FontMetricsEmRatio which);
+
+/* CSS 2.1 §10.8.1's `A` — the first available font's "characteristic height above the baseline" — for a face
+   rendered at `font_size`, in CSS pixels. It is the used value css-values-4 §6.1.1's `cap` unit falls back to.
+   IT TAKES THE SIZE RATHER THAN ANSWERING A RATIO because the ascent is a METRIC and not a multiplier: a
+   caller holding the ratio would have to know to multiply, and the two facts — the reader's font size and this
+   user agent's face — would then be unioned by whichever caller remembered to. The product is formed here, so
+   the returned length is a joint function of both and css_length.h's arithmetic carries the pair.
+   `realm` IS THE ELEMENT'S DOCUMENT'S, never the running one, for the reason every other picked fact takes one
+   (core/frame/viewport.h): the source key is keyed on the document that read it. A document no navigable
+   presents CRASHES rather than being handed a bare number, exactly as core/css/font_size_functions.h does. */
+CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size);
 
 #endif

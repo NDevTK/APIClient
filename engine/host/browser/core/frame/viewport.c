@@ -136,6 +136,14 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
        text size is a preference the user agent has whether or not this document is on a screen, while the
        INITIAL CONTAINING BLOCK is a rectangle a navigable presents and stops existing when it does not. */
     [CSS_ENV_DEFAULT_FONT_SIZE]  = { "defaultFontSize",               false },
+    /* CSS 2.1 §10.8.1's `A`, picked by core/css/font_metrics.h, which is where the PICKED-rather-than-DERIVED
+       test is argued for it. It is its own row beside the one above rather than sharing it because the two are
+       separately observable: a script reads `getComputedStyle(el).fontSize` for the size and measures a `1cap`
+       box for the ascent, and one key for both would decide their RATIO on the example — the same mistake
+       core/css/css_length.c's `sv*`/`lv*`/`dv*` crash refuses for three viewport sizes that happen to agree
+       today. `presented` is false for the reason it is false one row up: the user agent's installed face
+       exists whether or not this document is on a screen. */
+    [CSS_ENV_FONT_ASCENT]        = { "fontAscent",                    false },
 };
 
 /* THE SOURCE KEY, SPELLED ONCE — the document is part of it for media_query_list.c's reason (viewport.h), and
