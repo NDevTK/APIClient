@@ -45,8 +45,15 @@ static bool css_dim_in(const char *const *set, unsigned n, const char *unit)
 static const char *const CSS_ANGLE_UNITS[] = { "deg", "grad", "rad", "turn" };
 /* §7.2's two. */
 static const char *const CSS_TIME_UNITS[] = { "s", "ms" };
+/* §7.3's two. */
+static const char *const CSS_FREQUENCY_UNITS[] = { "hz", "khz" };
 /* §7.4's four identifiers, which name three quantities — `x` is defined beside `dppx` with the same words. */
 static const char *const CSS_RESOLUTION_UNITS[] = { "dpi", "dpcm", "dppx", "x" };
+
+/* css-values-4 §10.7.1 "Numeric Constants: e, pi" prints pi to the digits below and §7.1 states the radian in
+   terms of it ("There are 2π radians in a full circle"), so the two agree by construction rather than by a
+   platform's `M_PI`. */
+#define CSS_DIM_PI 3.1415926535897932
 
 bool css_angle_unit(const char *unit, size_t unit_len)
 {
@@ -56,12 +63,67 @@ bool css_angle_unit(const char *unit, size_t unit_len)
     return css_dim_in(CSS_ANGLE_UNITS, CSS_DIM_N(CSS_ANGLE_UNITS), u);
 }
 
+bool css_angle_deg(const char *unit, size_t unit_len, double n, double *deg)
+{
+    char u[CSS_DIM_UNIT_MAX];
+
+    DCHECK(deg != NULL, "§7.1's canonical angle was asked for with nowhere to put it");
+    if (!css_dim_unit_of(unit, unit_len, u)) return false;
+    if (strcmp(u, "deg") == 0)  { *deg = n; return true; }
+    if (strcmp(u, "grad") == 0) { *deg = n * 360.0 / 400.0; return true; }
+    if (strcmp(u, "rad") == 0)  { *deg = n * 180.0 / CSS_DIM_PI; return true; }
+    if (strcmp(u, "turn") == 0) { *deg = n * 360.0; return true; }
+    DCHECK(!css_angle_unit(unit, unit_len),
+           "§7.1 names an angle unit this conversion has no ratio for — the membership test and the conversion "
+           "are two readings of ONE list, and a unit in one and not the other is that list having grown in one "
+           "place");
+    return false;
+}
+
 bool css_time_unit(const char *unit, size_t unit_len)
 {
     char u[CSS_DIM_UNIT_MAX];
 
     if (!css_dim_unit_of(unit, unit_len, u)) return false;
     return css_dim_in(CSS_TIME_UNITS, CSS_DIM_N(CSS_TIME_UNITS), u);
+}
+
+bool css_time_s(const char *unit, size_t unit_len, double n, double *s)
+{
+    char u[CSS_DIM_UNIT_MAX];
+
+    DCHECK(s != NULL, "§7.2's canonical duration was asked for with nowhere to put it");
+    if (!css_dim_unit_of(unit, unit_len, u)) return false;
+    if (strcmp(u, "s") == 0)  { *s = n; return true; }
+    if (strcmp(u, "ms") == 0) { *s = n / 1000.0; return true; }
+    DCHECK(!css_time_unit(unit, unit_len),
+           "§7.2 names a time unit this conversion has no ratio for — the membership test and the conversion "
+           "are two readings of ONE list, and a unit in one and not the other is that list having grown in one "
+           "place");
+    return false;
+}
+
+bool css_frequency_unit(const char *unit, size_t unit_len)
+{
+    char u[CSS_DIM_UNIT_MAX];
+
+    if (!css_dim_unit_of(unit, unit_len, u)) return false;
+    return css_dim_in(CSS_FREQUENCY_UNITS, CSS_DIM_N(CSS_FREQUENCY_UNITS), u);
+}
+
+bool css_frequency_hz(const char *unit, size_t unit_len, double n, double *hz)
+{
+    char u[CSS_DIM_UNIT_MAX];
+
+    DCHECK(hz != NULL, "§7.3's canonical frequency was asked for with nowhere to put it");
+    if (!css_dim_unit_of(unit, unit_len, u)) return false;
+    if (strcmp(u, "hz") == 0)  { *hz = n; return true; }
+    if (strcmp(u, "khz") == 0) { *hz = n * 1000.0; return true; }
+    DCHECK(!css_frequency_unit(unit, unit_len),
+           "§7.3 names a frequency unit this conversion has no ratio for — the membership test and the "
+           "conversion are two readings of ONE list, and a unit in one and not the other is that list having "
+           "grown in one place");
+    return false;
 }
 
 bool css_resolution_unit(const char *unit, size_t unit_len)

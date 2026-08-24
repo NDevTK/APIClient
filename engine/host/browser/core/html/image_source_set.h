@@ -61,11 +61,6 @@
  *
  * ---------------------------------------------------------------------------------------------------------
  * WHAT CRASHES RATHER THAN ANSWERING SOMETHING PLAUSIBLE, each naming a component that has to exist first:
- *   - A MATH FUNCTION as a `<source-size-value>` (`sizes="calc(100vw - 2em)"`). css-values-4 §10 "Mathematical
- *     Expressions" makes one a value of whatever numeric type its operands give it, so a `calc()` IS a
- *     `<length>` and this engine has no grammar that can say so — which is a crash and not a refusal, exactly
- *     as core/css/css_length.h states for the same values and core/css/css_syntax_match.c crashes for. This is
- *     the THIRD site reaching that one missing grammar; building it deletes all three.
  *   - `sizes="auto"` on an element that ALLOWS AUTO-SIZES and is BEING RENDERED. §4.8.4.3.11 step 3.3 sets the
  *     size to "the concrete object size width of img, in CSS pixels", and CSS Images 3 §4.5 "Sizing Objects:
  *     the object-fit property" makes that the element's USED WIDTH under the initial `fill` ("the object's

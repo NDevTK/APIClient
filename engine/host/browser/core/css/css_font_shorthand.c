@@ -187,7 +187,12 @@ static bool font_length_percentage_nonneg(const char *w, size_t len)
         return font_number(w, len - 1, &n);
     }
     probe = font_dupn(w, len);
-    ok = css_length_is_length(probe);
+    /* §2.5's own production is `<length-percentage [0,∞]>`, so the entry asked is the one that answers BOTH
+       arms — which matters for a math function and for nothing else, because a literal `50%` was answered by
+       the branch above. `font-size: calc(50% + 2px)` is a valid declaration (css-values-4 §10.9.1 makes the
+       percentage resolve against the parent's computed size, exactly as a bare `50%` does), and asking the
+       `<length>`-only entry would drop it. */
+    ok = css_length_is_length_percentage(probe);
     /* §6's unitless zero is a `<length>` and a bare NON-zero is not, and `css_length_is_length` answers TRUE
        for both because its own caller asserts the difference. A `<'font-size'>` grammar has no `<number>` arm
        at all, so the bare number is refused here. */

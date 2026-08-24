@@ -15,6 +15,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_dimension.h"
 #include "core/css/css_length.h"
+#include "core/css/css_math.h"
 #include "core/css/css_syntax_match.h"
 
 /* ONE VALUE BEING READ. `base`/`len` are the source every span below indexes — lexbor stamps each token with a
@@ -240,44 +241,29 @@ static bool val_name_is(const char *s, const char *lower)
     return s[i] == '\0';
 }
 
-/* CSS Values and Units 4 §10.8 "Syntax" — the twenty-one functional notations that ARE a math function, listed
-   as that section lists them. §10's own first paragraphs are why they have to be recognised at all: "A math
+/* CSS Values and Units 4 §10's own first paragraph is why every numeric type below has a FUNCTION arm: "A math
    function represents a numeric value, one of: <length>, <frequency>, <angle>, <time>, <flex>, <resolution>,
    <percentage>, <number>, <integer> ...or the <length-percentage>/etc mixed types, and can be used wherever
-   such a value would be valid." So a `calc()` IS a `<length>` for §5.1's purposes and this engine has no
-   grammar that can say so — which is a crash and not a refusal. `rgb()` is a function too and is NOT one of
-   these, so a numeric type refuses it with no crash, and the two cases stay distinguishable. */
-static bool val_math_function(const ValLead *lead)
+   such a value would be valid." So a `calc()` IS a `<length>` for §5.1's purposes, and WHICH numeric type any
+   given one is is §10.9 "Type Checking"'s question — core/css/css_math.h's, over the whole component value's
+   source span rather than over the lead token, because a math function's type is a function of its operands.
+   `rgb()` is a function too and is not a math function at all, so it simply does not match, which is what
+   keeps a colour from being read as a number.
+   THE CONTEXT IS §5.1's OWN SPLIT. `<length>` and `<length-percentage>` are two supported names, so the first
+   is a context that does not allow percentages to be mixed and the second is one that resolves them against a
+   length — which CSS Typed OM 1 §4.3.2 makes the difference between a null and a hinted percent hint, and is
+   why the production is passed down rather than the answers being ORed together afterwards. */
+static bool val_math_is(const ValLead *lead, const char *span, size_t span_len, CssMathProduction want)
 {
-    static const char *const MATH[] = {
-        "calc", "min", "max", "clamp", "round", "mod", "rem", "sin", "cos", "tan", "asin", "acos", "atan",
-        "atan2", "pow", "sqrt", "hypot", "log", "exp", "abs", "sign",
-    };
-    unsigned i;
-
     if (lead->type != LXB_CSS_SYNTAX_TOKEN_FUNCTION) return false;
-    for (i = 0; i < sizeof(MATH) / sizeof(MATH[0]); i++)
-        if (val_name_is(val_text(lead), MATH[i])) return true;
-    return false;
-}
-
-static void val_reject_math(const ValLead *lead)
-{
-    if (!val_math_function(lead)) return;
-    DFAIL("a registered custom property's value is a MATH FUNCTION where CSS Properties and Values API 1 §5.1 "
-          "admits a numeric type. CSS Values and Units 4 §10 'Mathematical Expressions' makes one a value of "
-          "whichever numeric type its operands give it, usable wherever that type is valid, so `calc(1px + "
-          "2px)` IS a `<length>` and this component cannot say so. BUILD css-values §10's grammar and its §10.9 "
-          "type algebra — §10.8's <calc-sum>/<calc-product>/<calc-value> productions over the units "
-          "core/css/css_length.h and core/css/css_dimension.h already name, plus §10.7's e/pi/infinity/NaN "
-          "keywords — and route it from here and from css_length.c's own math-function crash, which is the "
-          "same missing grammar reached from the computed-value side");
+    return css_math_matches(span, span_len, want);
 }
 
 /* §5.1's `<number>`: "<number> values" — CSS Values §5.3's `<number-token>` production. */
-static bool val_is_number(const ValLead *lead)
+static bool val_is_number(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_NUMBER);
     return lead->type == LXB_CSS_SYNTAX_TOKEN_NUMBER;
 }
 
@@ -286,16 +272,22 @@ static bool val_is_number(const ValLead *lead)
    subset CSS Syntax §4.3.13 "Consume a number" stamps with the "integer" type — that algorithm starts with
    "Let type be the string \"integer\"" and sets it to "number" at both the fraction step and the exponent
    step, so `1.0` and `1e3` are number tokens that are not `<integer>`s. */
-static bool val_is_integer(const ValLead *lead)
+static bool val_is_integer(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    /* §10.9: "Additionally, math functions that resolve to <number> can be used in any place that only accepts
+       <integer>; the value is rounded to the nearest integer as it resolves." So a math function needs no
+       integer-valued operands to match this name, and `calc(1.5)` IS an `<integer>` here while the literal
+       `1.5` is not — which is the spec's own asymmetry and not a looseness in this arm. */
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_INTEGER);
     return lead->type == LXB_CSS_SYNTAX_TOKEN_NUMBER && !lead->is_float;
 }
 
 /* §5.1's `<percentage>`: "Any valid <percentage> value" — CSS Values §5.5's `<percentage-token>`. */
-static bool val_is_percentage(const ValLead *lead)
+static bool val_is_percentage(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_PERCENTAGE);
     return lead->type == LXB_CSS_SYNTAX_TOKEN_PERCENTAGE;
 }
 
@@ -303,36 +295,43 @@ static bool val_is_percentage(const ValLead *lead)
    section's unitless zero: "for zero lengths the unit identifier is optional (i.e. can be syntactically
    represented as the <number> 0)". The unit set is core/css/css_length.h's, which is the same set the
    computed-value path absolutizes from. */
-static bool val_is_length(const ValLead *lead)
+static bool val_is_length(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_LENGTH);
     if (lead->type == LXB_CSS_SYNTAX_TOKEN_NUMBER) return lead->num == 0.0;
     if (lead->type != LXB_CSS_SYNTAX_TOKEN_DIMENSION) return false;
     return css_length_is_length_unit(val_text(lead), strlen(val_text(lead)));
 }
 
 /* §5.1's `<length-percentage>`: "Any valid <length> or <percentage> value, any valid <calc()> expression
-   combining <length> and <percentage> components." The `<calc()>` half is the crash above, reached through
-   either arm. */
-static bool val_is_length_percentage(const ValLead *lead)
+   combining <length> and <percentage> components." The third clause is ONE question and not the OR of the
+   other two: `calc(1px + 50%)` matches neither `<length>` nor `<percentage>` on its own — CSS Typed OM 1
+   §4.3.2 gives it «["length" → 1]» with a percent hint of "length", which `<length>` refuses for exactly the
+   reason §4.3.2 states — and it is the value the third clause exists for. */
+static bool val_is_length_percentage(const ValLead *lead, const char *span, size_t span_len)
 {
-    return val_is_length(lead) || val_is_percentage(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_LENGTH_PERCENTAGE);
+    return val_is_length(lead, span, span_len) || val_is_percentage(lead, span, span_len);
 }
 
 /* §5.1's `<angle>`: "Any valid <angle> value" — CSS Values §7.1, a dimension in `deg`, `grad`, `rad` or
    `turn`. A BARE ZERO IS NOT ONE: §7.1's note says the legacy bare-0 spelling "is not true in general, however,
    and will not occur in future uses of the <angle> type", and a syntax component is a new use. */
-static bool val_is_angle(const ValLead *lead)
+static bool val_is_angle(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_ANGLE);
     if (lead->type != LXB_CSS_SYNTAX_TOKEN_DIMENSION) return false;
     return css_angle_unit(val_text(lead), strlen(val_text(lead)));
 }
 
 /* §5.1's `<time>`: "Any valid <time> value" — CSS Values §7.2, a dimension in `s` or `ms`. */
-static bool val_is_time(const ValLead *lead)
+static bool val_is_time(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_TIME);
     if (lead->type != LXB_CSS_SYNTAX_TOKEN_DIMENSION) return false;
     return css_time_unit(val_text(lead), strlen(val_text(lead)));
 }
@@ -343,9 +342,14 @@ static bool val_is_time(const ValLead *lead)
    that might be specified", and §5.1 "Range Restrictions and Range Definition Notation" says what a value
    outside the allowed range is — "If the value is outside the allowed range, then unless otherwise specified,
    the declaration is invalid and must be ignored." */
-static bool val_is_resolution(const ValLead *lead)
+static bool val_is_resolution(const ValLead *lead, const char *span, size_t span_len)
 {
-    val_reject_math(lead);
+    if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)
+        /* The range restriction is NOT re-asked of a math function: css-values-4 §10.12 "Range Checking" says
+           the clamping "is, for math functions, only performed on the results of a TOP-LEVEL calculation", and
+           a top-level result outside the range is clamped rather than making the value invalid — which is why
+           §10.9's type question is the whole of the grammar question here. */
+        return val_math_is(lead, span, span_len, CSS_MATH_PROD_RESOLUTION);
     if (lead->type != LXB_CSS_SYNTAX_TOKEN_DIMENSION) return false;
     if (!css_resolution_unit(val_text(lead), strlen(val_text(lead)))) return false;
     return lead->num >= 0.0;
@@ -447,17 +451,17 @@ static bool val_type_matches(const char *type, const ValLead *lead, const char *
                "definition that was not built by that algorithm");
         return lead->type == LXB_CSS_SYNTAX_TOKEN_IDENT && strcmp(val_text(lead), type) == 0;
     }
-    if (strcmp(type, "<length>") == 0)             return val_is_length(lead);
-    if (strcmp(type, "<number>") == 0)             return val_is_number(lead);
-    if (strcmp(type, "<percentage>") == 0)         return val_is_percentage(lead);
-    if (strcmp(type, "<length-percentage>") == 0)  return val_is_length_percentage(lead);
+    if (strcmp(type, "<length>") == 0)             return val_is_length(lead, span, span_len);
+    if (strcmp(type, "<number>") == 0)             return val_is_number(lead, span, span_len);
+    if (strcmp(type, "<percentage>") == 0)         return val_is_percentage(lead, span, span_len);
+    if (strcmp(type, "<length-percentage>") == 0)  return val_is_length_percentage(lead, span, span_len);
     if (strcmp(type, "<string>") == 0)             return val_is_string(lead);
     if (strcmp(type, "<color>") == 0)              return val_is_color(span, span_len);
     if (strcmp(type, "<url>") == 0)                return val_is_url(lead, span, span_len);
-    if (strcmp(type, "<integer>") == 0)            return val_is_integer(lead);
-    if (strcmp(type, "<angle>") == 0)              return val_is_angle(lead);
-    if (strcmp(type, "<time>") == 0)               return val_is_time(lead);
-    if (strcmp(type, "<resolution>") == 0)         return val_is_resolution(lead);
+    if (strcmp(type, "<integer>") == 0)            return val_is_integer(lead, span, span_len);
+    if (strcmp(type, "<angle>") == 0)              return val_is_angle(lead, span, span_len);
+    if (strcmp(type, "<time>") == 0)               return val_is_time(lead, span, span_len);
+    if (strcmp(type, "<resolution>") == 0)         return val_is_resolution(lead, span, span_len);
     if (strcmp(type, "<custom-ident>") == 0)       return val_is_custom_ident(lead);
     if (strcmp(type, "<image>") == 0)
         DFAIL("a registered custom property's syntax is `<image>` and this engine has no `<image>` grammar. "

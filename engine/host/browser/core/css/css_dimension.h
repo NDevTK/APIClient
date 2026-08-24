@@ -32,9 +32,30 @@
    future uses of the <angle> type." A caller that is one of those legacy uses states that for itself. */
 bool css_angle_unit(const char *unit, size_t unit_len);
 
+/* §7.1's CANONICAL UNIT — "All <angle> units are compatible, and deg is their canonical unit" — with the three
+   ratios §7.1 states in its own definitions: "There are 360 degrees in a full circle", "There are 400 gradians
+   in a full circle", "There are 2π radians in a full circle", "There is 1 turn in a full circle". False for a
+   unit that is not §7.1's, writing nothing; `n` is the dimension token's number. */
+bool css_angle_deg(const char *unit, size_t unit_len, double n, double *deg);
+
 /* §7.2 "Duration Units: the <time> type and s, ms units" — "Time values are dimensions denoted by <time>. The
    time unit identifiers are: s … ms". */
 bool css_time_unit(const char *unit, size_t unit_len);
+
+/* §7.2's CANONICAL UNIT — "All <time> units are compatible, and s is their canonical unit" — over that
+   section's one ratio: "There are 1000 milliseconds in a second." */
+bool css_time_s(const char *unit, size_t unit_len, double n, double *s);
+
+/* §7.3 "Frequency Units: the <frequency> type and Hz, kHz units" — "Frequency values are dimensions denoted by
+   <frequency>. The frequency unit identifiers are: Hz … kHz". THE FAMILY IS HERE BECAUSE §10 NEEDS IT: CSS
+   Typed OM 1 §4.3.2 "Numeric Value Typing" makes "frequency" one of the seven base types a math function's
+   type is a map over, so `calc(1kHz + 200Hz)` cannot be typed without this set — and §7 defines it beside the
+   three families already above, which is why it is a row here rather than a table inside the type algebra. */
+bool css_frequency_unit(const char *unit, size_t unit_len);
+
+/* §7.3's CANONICAL UNIT — "All <frequency> units are compatible, and hz is their canonical unit" — over that
+   section's one ratio: "A kiloHertz is 1000 Hertz." */
+bool css_frequency_hz(const char *unit, size_t unit_len, double n, double *hz);
 
 /* §7.4 "Resolution Units: the <resolution> type and dpi, dpcm, dppx units" — "Resolution units are dimensions
    denoted by <resolution>. The resolution unit identifiers are: dpi … dpcm … dppx … x". `x` is in that list

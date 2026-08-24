@@ -17,6 +17,13 @@
  * CSSPropertyRule was produced by parsing the rule's body as declarations, so it already IS a
  * `<declaration-value>`.
  *
+ * A MATH FUNCTION IS A VALUE OF WHICHEVER NUMERIC TYPE ITS OPERANDS GIVE IT, so every numeric name below has a
+ * FUNCTION arm and none of them has a table of function names. CSS Values and Units 4 §10.9 "Type Checking"
+ * decides which type any given one is, over the whole component value rather than over its lead token, and
+ * core/css/css_math.h answers it. §5.1's own split between `<length>` and `<length-percentage>` is passed down
+ * as the CALCULATION CONTEXT §10.9.1 says a math function inherits, because `calc(1px + 50%)` matches the
+ * second and not the first and no OR of the two could say so.
+ *
  * A SYNTAX COMPONENT MATCHES EXACTLY ONE CSS COMPONENT VALUE, and that is the invariant the whole file rests
  * on rather than a simplification of it. Every one of §5.1's fifteen types is a single CSS Syntax token or a
  * single functional notation — `10px`, `"s"`, `#fff`, `rgb(1 2 3)`, `url(a.png)`, `rotate(45deg)`,

@@ -61,9 +61,12 @@
  *   answering all four families out of one source key would decide `100dvh === 100lvh` on the example and
  *   delete the arm a mobile bundle wrote the comparison for.
  *
- * AND `calc()` IS A THIRD. css-values §10 makes a math function a value in its own right whose result depends
- * on every unit above; lexbor parses it and serializes it back as text, so it arrives here as a string that is
- * not a dimension, and the honest answer is the grammar this file does not implement.
+ * AND `calc()` IS A THIRD, ANSWERED BY core/css/css_math.h OVER THE SAME TABLE. css-values-4 §10 makes a math
+ * function a value in its own right whose result depends on every unit above, and it arrives here as a string
+ * that is neither a dimension nor a keyword. The GRAMMAR and the §10.9 type algebra are that component's; the
+ * UNITS stay this one's, and `calc(100vw - 2em)` reaches exactly the arms above through the resolver callback
+ * §10.10.1's canonical-unit step is asked through — so a `dvh` inside a math function crashes with the same
+ * message, in the same place, as a `dvh` written on its own.
  *
  * A LENGTH IN CSS PIXELS IS NOT ALWAYS A NUMBER, WHICH IS WHY `CssPx` BELONGS HERE AND NOT IN WHOEVER COMPUTES
  * ONE. CSS 2.1 §10.1 makes the ROOT ELEMENT's containing block the INITIAL CONTAINING BLOCK, "it has the
@@ -274,10 +277,20 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
    TRUE for a `<number>` (§6's unitless zero, and the unitless non-zero the parse above asserts on), for a
    dimension in ANY unit §6 defines as a length INCLUDING the relative ones this engine cannot yet absolutize
    (those are a missing component and must reach the crash that names it, never be dropped as invalid), and for
-   a FUNCTION — css-values §10 makes a math function a value of whatever type its operands give it, and telling
-   `calc()` from `rgb()` is the same unbuilt grammar the parse above crashes for. FALSE for a `<percentage>`,
-   for a keyword, and for anything else. */
+   a MATH FUNCTION whose css-values-4 §10.9 "Type Checking" type matches `<length>` — which is what
+   core/css/css_math.h answers, and is why `calc(2em)` is a length here while `rgb(1, 2, 3)` and
+   `calc(1px + 1s)` are not. FALSE for a `<percentage>`, for a keyword, and for anything else. */
 bool css_length_is_length(const char *value);
+
+/* §5.6 "Mixing Percentages and Dimensions"'s `<length-percentage>`, which is the SAME walk with two arms
+   widened: a literal `<percentage>` is one, and a math function is one when its §10.9 type matches
+   `<length-percentage>` — `calc(100% - 2em)`, which §10.9.1's calculation context makes a `<length>` in every
+   property that resolves percentages against one.
+   IT IS A SEPARATE ENTRY AND NOT A FLAG BECAUSE THE TWO ARE DIFFERENT PRODUCTIONS IN THE SPEC, and the callers
+   split the same way: css-backgrounds-3 §3.3's `<line-width>` admits no percentage at all, while css-fonts-4
+   §2.5's `<'font-size'>` is `<length-percentage [0,∞]>` and a `calc(50% + 2px)` there is a valid declaration
+   that must not be dropped. A caller that asks the wrong one turns one into the other silently. */
+bool css_length_is_length_percentage(const char *value);
 
 /* CSS Values §6's SNAP A LENGTH AS A LINE WIDTH, which css-backgrounds-3 §3.3 makes part of a
    `border-*-width`'s COMPUTED value ("absolute length, snapped as a border width"): a length that is an integer

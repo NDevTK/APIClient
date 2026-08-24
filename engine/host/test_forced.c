@@ -37,6 +37,7 @@
 #include "core/css/media_query_list.h"
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_property_syntax.h"
+#include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
 #include "core/css/css_syntax_match.h"
 #include "core/rendering/animation_frame.h"
 #include "core/rendering/page_reveal.h"
@@ -94,6 +95,7 @@
 #include "solver/attr_shadow.h"   /* the (element, slot) taint shadow — freed with the frontier at teardown */
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
+#include <math.h>     /* css-values-4 §10.9.2's signed zero and infinity, which only `signbit`/`isinf` can see */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -814,6 +816,19 @@ static const char *HTML =
     "sa.setAttribute('srcset', '/api/sizes-200.png 200w, /api/sizes-400.png 400w, /api/sizes-900.png 900w');"
     "document.body.appendChild(sa);"
     "fetch('/api/sizesauto?src=' + encodeURIComponent(sa.currentSrc));"
+    /* A MATH FUNCTION AS A `<source-size-value>`, which §4.8.4.2.2 "Sizes attributes" admits by name ("must not
+       use CSS functions other than the math functions") and which css-values-4 §10 makes a `<length>` of
+       whichever type its operands give it. This is the END-TO-END path — §4.8.4.3.11's tokenizer into
+       core/css/css_math.c's §10.8 grammar into core/css/media_query.c's unit table — and it EMITS rather than
+       comparing, because which candidate wins is a joint function of the modelled viewport and the modelled
+       device pixel ratio and pinning it here would assert this fixture's environment rather than §10's
+       arithmetic. What it does hold is that the path ANSWERS: every DCHECK on it fires as an abort, and before
+       §10 existed this attribute reached a DFAIL naming the missing grammar. */
+    "var sc = document.createElement('img');"
+    "sc.setAttribute('sizes', 'calc(100vw - 40px)');"
+    "sc.setAttribute('srcset', '/api/calc-320.png 320w, /api/calc-640.png 640w, /api/calc-1280.png 1280w');"
+    "document.body.appendChild(sc);"
+    "fetch('/api/sizescalc?src=' + encodeURIComponent(sc.currentSrc));"
     /* ---- css-fonts-4 §2.5's computed `font-size` and css-values-4 §6.1.1's `em`/`rem` --------------------
        EVERY VALUE COMPARED HERE IS ROOTED IN A DECLARED ABSOLUTE FONT SIZE, deliberately: an undeclared one is
        §2.5's `medium`, which IS the CSS_ENV_DEFAULT_FONT_SIZE fact, so its computed value is a CONCOLIC and a
@@ -7552,6 +7567,269 @@ static void css_property_grammar_selftest(void)
     }
 }
 
+/* CSS Values and Units 4 §10 "Mathematical Expressions", in the two halves that split at §10.9 and are asked
+ * through two different entries — the TYPE, which needs no realm and no unit resolution at all, and the VALUE,
+ * which needs both.
+ *
+ * WHY THE TYPE HALF IS THE LARGER TABLE. §10.9 "Type Checking" is the part a hand-rolled `calc()` gets wrong,
+ * and it gets it wrong in BOTH directions: `calc(100vw - 20px)` is valid because CSS Typed OM 1 §4.3.2
+ * "Numeric Value Typing" adds «["length" → 1]» to itself, while `calc(100vw * 20px)` is not invalid arithmetic
+ * at all — it MULTIPLIES to «["length" → 2]», which §10.9's last rule then refuses because that matches none of
+ * the productions a math function can resolve to. A single "are the units the same" check accepts the second
+ * and a single "is everything a length" check rejects the first, so the rows below are chosen to fail one of
+ * those two shortcuts each.
+ *
+ * THE PERCENT HINT IS EXERCISED THROUGH THE CONTEXT AND NOT THROUGH A FLAG, because that is how the spec poses
+ * it: §10.9.1 "Calculation Contexts" says a math function "always inherits the calculation context from
+ * wherever they're used", so the SAME text answers differently for `<length>` and for `<length-percentage>` —
+ * `calc(1px + 50%)` is the second and not the first — and a row that only ever asked one production could not
+ * tell a hint that is null from one that is wrong.
+ *
+ * THE VALUE HALF ASSERTS THE ENVIRONMENT SET AND NOT ONLY THE NUMBER. `50vw` is a function of the initial
+ * containing block (core/css/css_length.h), and a `min(50vw, 400px)` that answers 400 must still carry that
+ * fact — the operand that lost at this viewport is the one that wins at another, and a math component that
+ * dropped the set at its own comparison would delete the mobile arm `css_px_min` exists to keep. */
+
+/* THE FIXTURE'S §6 UNIT TABLE, which is the ONE question core/css/css_math.h asks its caller. `px` is 1, `em`
+   is a declared 16, and `vw` is a hundredth of a 1280-pixel initial containing block CARRYING that rectangle's
+   environment fact.
+   THE REALM IS A SENTINEL ADDRESS. `css_px_env` requires one because the mint at the JS boundary needs to know
+   WHICH viewport, and `css_px_combine` only ever compares two of them for identity — nothing on the path under
+   test dereferences one — so a token address exercises the union exactly as a real realm would, and the day
+   something does dereference it this fixture is where it says so. */
+static int css_math_fixture_realm_token;
+
+static CssPx css_math_fixture_length(void *ctx, double n, const char *unit, size_t unit_len)
+{
+    JSContext *realm = (JSContext *)(void *)&css_math_fixture_realm_token;
+
+    (void)ctx;
+    if (unit_len == 2 && memcmp(unit, "px", 2) == 0) return css_px(n);
+    if (unit_len == 2 && memcmp(unit, "em", 2) == 0) return css_px(n * 16.0);
+    if (unit_len == 2 && memcmp(unit, "vw", 2) == 0)
+        return css_px_env(CSS_ENV_ICB_WIDTH, realm, n * 1280.0 / 100.0);
+    CHECK_FAIL("this fixture's `<length>` resolver was asked for a unit it does not model — the rows below name "
+               "only `px`, `em` and `vw`, so a fourth one is a row that was added without its answer");
+    return css_px(0.0);
+}
+
+static bool css_math_close(double got, double want)
+{
+    double d = got - want;
+
+    return (d < 0.0 ? -d : d) < 1e-9;
+}
+
+static void css_math_selftest(void)
+{
+    /* §10.9's LAST RULE, asked with no resolver at all: does this math function resolve to this production? */
+    static const struct { const char *v; CssMathProduction want; bool match; const char *why; } TYPE[] = {
+        { "calc(100vw - 20px)", CSS_MATH_PROD_LENGTH, true,
+          "CSS Typed OM 1 §4.3.2's add-two-types over «[\"length\" → 1]» and itself, which is the whole of why "
+          "mixing viewport and absolute units in one sum is legal" },
+        { "calc(100vw * 20px)", CSS_MATH_PROD_LENGTH, false,
+          "§10.9's note: multiplication is NOT limited any more, so this is a valid sub-expression of type "
+          "«[\"length\" → 2]» — and §10.9's last rule refuses it because that matches no production a math "
+          "function can resolve to. A units-must-match check would call it invalid for the wrong reason and a "
+          "units-are-all-lengths check would accept it" },
+        { "calc(1px + 1s)", CSS_MATH_PROD_LENGTH, false,
+          "§10.9's own worked note: `calc(5px - 5px + 10s)` is invalid `due to the attempt to add a length and "
+          "a time`" },
+        { "calc(0 + 5px)", CSS_MATH_PROD_LENGTH, false,
+          "§10.9's note: `Because <number-token>s are always interpreted as <number>s or <integer>s, \"unitless "
+          "zero\" <length>s aren't supported in math functions. That is, width: calc(0 + 5px); is invalid`" },
+        { "calc(1px / 1px)", CSS_MATH_PROD_NUMBER, true,
+          "§10.9's `/` rule inverts the right type, so the product is «[\"length\" → 0]», which is the empty "
+          "map §4.3.2 says matches `<number>`" },
+        { "calc(2 + 3 * 4)", CSS_MATH_PROD_NUMBER, true, "§10.1: `calc(2 + 3 * 4) is equal to 14, not 20`" },
+        { "calc((2 + 3) * 4)", CSS_MATH_PROD_NUMBER, true,
+          "§10.1: `Parentheses can be used to manipulate precedence`" },
+        { "rgb(1, 2, 3)", CSS_MATH_PROD_LENGTH, false,
+          "a function that is not one of §10.8's twenty-one is not a math function and simply does not match — "
+          "which is what keeps a colour from being read as a length" },
+        { "calc(50%)", CSS_MATH_PROD_LENGTH, false,
+          "§4.3.2: `If the context does not allow <percentage> values to be mixed with <length>/etc values ... "
+          "the percent hint must be null`" },
+        { "calc(50%)", CSS_MATH_PROD_PERCENTAGE, true,
+          "§4.3.2: `A type matches <percentage> if its only non-zero entry is «[\"percent\" → 1]», and its "
+          "percent hint is either null or \"percent\"`" },
+        { "calc(50%)", CSS_MATH_PROD_LENGTH_PERCENTAGE, true,
+          "§10.9's `<percentage>` terminal rule in a context that resolves percentages against a `<length>`: "
+          "`the type is determined as the other type, but with a percent hint set to that other type`" },
+        { "calc(1px + 50%)", CSS_MATH_PROD_LENGTH, false, "the same hint rule, reached through an addition" },
+        { "calc(1px + 50%)", CSS_MATH_PROD_LENGTH_PERCENTAGE, true,
+          "§5.1's third clause for `<length-percentage>`: `any valid <calc()> expression combining <length> and "
+          "<percentage> components` — a value that matches NEITHER `<length>` nor `<percentage>` alone, which "
+          "is why the two questions cannot be ORed together" },
+        { "min(50vw, 400px)", CSS_MATH_PROD_LENGTH, true,
+          "§10.9: min()'s type is `the result of adding the types of its comma-separated calculations`" },
+        { "clamp(12px, 4vw, 24px)", CSS_MATH_PROD_LENGTH, true, "§10.2's three calculations, one type" },
+        { "clamp(12px, 4vw, none)", CSS_MATH_PROD_LENGTH, true,
+          "§10.8's `clamp( [ <calc-sum> | none ], <calc-sum>, [ <calc-sum> | none ] )` — `none` is a keyword "
+          "and not a calculation, so it contributes no type" },
+        { "sin(45deg)", CSS_MATH_PROD_NUMBER, true,
+          "§10.4: sin() `must resolve to either a <number> or an <angle>` and represents a `<number>`" },
+        { "sin(45px)", CSS_MATH_PROD_NUMBER, false, "and a `<length>` is neither of those two" },
+        { "atan(1)", CSS_MATH_PROD_ANGLE, true, "§10.9 gives asin/acos/atan/atan2 the type «[\"angle\" → 1]»" },
+        { "calc(45deg + 0.25turn)", CSS_MATH_PROD_ANGLE, true, "§7.1's four units are one `<angle>` family" },
+        { "calc(1s + 500ms)", CSS_MATH_PROD_TIME, true, "§7.2's two units are one `<time>` family" },
+        { "calc(1kHz + 200Hz)", CSS_MATH_PROD_FREQUENCY, true,
+          "§7.3's two units are one `<frequency>` family, and §4.3.2 makes \"frequency\" one of the seven base "
+          "types — which is why core/css/css_dimension.h had to grow that set for §10 to be able to type it" },
+        { "calc(1dppx + 96dpi)", CSS_MATH_PROD_RESOLUTION, true, "§7.4's four identifiers, one family" },
+        { "calc(1fr + 1fr)", CSS_MATH_PROD_FLEX, true,
+          "css-grid-2 §7.2.4 `Flexible Lengths: the fr unit` is §4.3.2's \"flex\" base type — TYPING one needs "
+          "no track sizer, which is why this answers while evaluating it crashes" },
+        { "calc(1px+1px)", CSS_MATH_PROD_LENGTH, false,
+          "§10.8: `whitespace is required on both sides of the + and - operators`" },
+        { "calc(1px - 1px)", CSS_MATH_PROD_LENGTH, true, "and with it on both sides the same sum is valid" },
+        { "calc(pi)", CSS_MATH_PROD_NUMBER, true, "§10.7.1: `Both of these keywords are <number>s`" },
+        { "calc(InFiNiTy)", CSS_MATH_PROD_NUMBER, true,
+          "§10.7.2: `As usual for CSS keywords, these are ASCII case-insensitive. Thus, calc(InFiNiTy) is "
+          "perfectly valid`" },
+        { "calc(1.5)", CSS_MATH_PROD_INTEGER, true,
+          "§10.9: `math functions that resolve to <number> can be used in any place that only accepts "
+          "<integer>; the value is rounded to the nearest integer as it resolves` — so a non-integral operand "
+          "does not make this fail, while the bare token `1.5` is not an `<integer>` at all" },
+        { "calc(1px) 2px", CSS_MATH_PROD_LENGTH, false,
+          "a math function is ONE component value, so a second one after it is not this production" },
+        { "hypot(30px, 40px)", CSS_MATH_PROD_LENGTH, true,
+          "§10.5: hypot()'s arguments `can resolve to any <number>, <dimension>, or <percentage>`" },
+        { "pow(30px, 2)", CSS_MATH_PROD_LENGTH, false,
+          "§10.5: pow()'s two calculations `both of which must resolve to <number>s`, which §10.5's own note "
+          "explains at length — `you aren't allowed to write sqrt(pow(30px, 2) + pow(40px, 2))`" },
+        { "sqrt(pow(30, 2) + pow(40, 2))", CSS_MATH_PROD_NUMBER, true, "and the same shape over numbers is" },
+        { "round(up, 1.2px, 1px)", CSS_MATH_PROD_LENGTH, true, "§10.8's `round( <rounding-strategy>?, ... )`" },
+        { "round(1.2px)", CSS_MATH_PROD_LENGTH, false,
+          "§10.3: `If the type of A matches <number>, then B may be omitted ... In all other cases, omitting B "
+          "is invalid`" },
+        { "round(1.2)", CSS_MATH_PROD_NUMBER, true, "and for a `<number>` A it defaults to 1" },
+        { "mod(18px, 5px)", CSS_MATH_PROD_LENGTH, true, "§10.3's two calculations of one type" },
+        { "abs(-5px)", CSS_MATH_PROD_LENGTH, true, "§10.6: abs() returns `the same type as the input`" },
+        { "sign(-5px)", CSS_MATH_PROD_NUMBER, true, "§10.6: sign()'s `return type is a <number>`" },
+        { "calc(2em)", CSS_MATH_PROD_LENGTH, true,
+          "§6.1.1's `em` is a `<length>` unit whether or not this call has any way to absolutize one, which is "
+          "the whole reason the type question takes no resolver" },
+    };
+    /* §10.10.1's simplification and §10.9.2's censoring, over the fixture unit table above. */
+    static const struct { const char *v; CssMathProduction want; double px; CssEnvSet env; const char *why; }
+    EVAL[] = {
+        { "calc(100vw - 20px)", CSS_MATH_PROD_LENGTH, 1260.0, CSS_ENV_BIT(CSS_ENV_ICB_WIDTH),
+          "the headline case: 1280 minus 20, DERIVED from the initial containing block — a result that dropped "
+          "the fact would report a viewport-relative length as a number the author's own declaration fixed" },
+        { "calc(2 + 3 * 4)", CSS_MATH_PROD_NUMBER, 14.0, CSS_ENV_NONE, "§10.1's own worked example" },
+        { "calc((2 + 3) * 4)", CSS_MATH_PROD_NUMBER, 20.0, CSS_ENV_NONE, "§10.1's own parenthesised twin" },
+        { "calc(calc(2 + 3) * 4)", CSS_MATH_PROD_NUMBER, 20.0, CSS_ENV_NONE,
+          "§10.1: `Parentheses and nesting additional calc() functions are equivalent`" },
+        { "min(50vw, 400px)", CSS_MATH_PROD_LENGTH, 400.0, CSS_ENV_BIT(CSS_ENV_ICB_WIDTH),
+          "the LOSER's fact survives the comparison: 400px wins at 1280 and 50vw wins at 320, so a result "
+          "carrying only the winner would report this as environment-independent in exactly the world where it "
+          "is not" },
+        { "max(50vw, 400px)", CSS_MATH_PROD_LENGTH, 640.0, CSS_ENV_BIT(CSS_ENV_ICB_WIDTH), "and the same both ways" },
+        { "clamp(12px, 4vw, 24px)", CSS_MATH_PROD_LENGTH, 24.0, CSS_ENV_BIT(CSS_ENV_ICB_WIDTH),
+          "§10.2: `clamp(MIN, VAL, MAX) ... represents exactly the same value as max(MIN, min(VAL, MAX))`, and "
+          "4vw is 51.2 here" },
+        { "clamp(100px, 1px, 50px)", CSS_MATH_PROD_LENGTH, 100.0, CSS_ENV_NONE,
+          "§10.2: `clamp(100px, ..., 50px) will resolve to 100px, exceeding its stated \"max\" value`" },
+        { "clamp(12px, 4vw, none)", CSS_MATH_PROD_LENGTH, 51.2, CSS_ENV_BIT(CSS_ENV_ICB_WIDTH),
+          "§10.2: `clamp(MIN, VAL, none) is equivalent to max(MIN, VAL)`" },
+        { "hypot(30px, 40px)", CSS_MATH_PROD_LENGTH, 50.0, CSS_ENV_NONE, "§10.5's own worked example" },
+        { "hypot(-2em)", CSS_MATH_PROD_LENGTH, 32.0, CSS_ENV_NONE,
+          "§10.5: `With a single argument, hypot() gives the absolute value of its input; hypot(2em) and "
+          "hypot(-2em) both resolve to 2em`" },
+        { "mod(18px, 5px)", CSS_MATH_PROD_LENGTH, 3.0, CSS_ENV_NONE, "§10.3's own worked example" },
+        { "mod(-18px, 5px)", CSS_MATH_PROD_LENGTH, 2.0, CSS_ENV_NONE,
+          "§10.3: `mod(-18px, 5px) resolves to the value 2px` — the result shares the sign of B, not A" },
+        { "rem(-18px, 5px)", CSS_MATH_PROD_LENGTH, -3.0, CSS_ENV_NONE,
+          "§10.3: `rem(-18px, 5px) resolves to the value -3px`, which is where the two functions diverge" },
+        { "mod(140deg, -90deg)", CSS_MATH_PROD_ANGLE, -40.0, CSS_ENV_NONE, "§10.3's own angle example" },
+        { "rem(140deg, -90deg)", CSS_MATH_PROD_ANGLE, 50.0, CSS_ENV_NONE, "and its rem() twin" },
+        { "round(1.2px, 1px)", CSS_MATH_PROD_LENGTH, 1.0, CSS_ENV_NONE, "§10.3's default `nearest`" },
+        { "round(up, 1.2px, 1px)", CSS_MATH_PROD_LENGTH, 2.0, CSS_ENV_NONE, "§10.3's `up`: `Choose upper B`" },
+        { "round(down, 1.8px, 1px)", CSS_MATH_PROD_LENGTH, 1.0, CSS_ENV_NONE, "§10.3's `down`: `Choose lower B`" },
+        { "round(to-zero, -1.8px, 1px)", CSS_MATH_PROD_LENGTH, -1.0, CSS_ENV_NONE,
+          "§10.3's `to-zero`: `Choose whichever of lower B and upper B that has the smallest absolute "
+          "difference from 0`" },
+        { "round(1.5px, 1px)", CSS_MATH_PROD_LENGTH, 2.0, CSS_ENV_NONE,
+          "§10.3's tie rule: `If both have an equal difference (A is exactly between the two values), choose "
+          "upper B`" },
+        { "atan2(1, -1)", CSS_MATH_PROD_ANGLE, 135.0, CSS_ENV_NONE,
+          "§10.4's own note: `atan2(1, -1), corresponding to the point (-1, 1), returns 135deg`, and §7.1 makes "
+          "`deg` the canonical unit an `<angle>` answers in" },
+        { "calc(45deg + 0.25turn)", CSS_MATH_PROD_ANGLE, 135.0, CSS_ENV_NONE,
+          "§7.1: `There is 1 turn in a full circle`, converted to §7.1's canonical `deg`" },
+        { "calc(1s + 500ms)", CSS_MATH_PROD_TIME, 1.5, CSS_ENV_NONE,
+          "§7.2: `There are 1000 milliseconds in a second`, in §7.2's canonical `s`" },
+        { "calc(1kHz + 200Hz)", CSS_MATH_PROD_FREQUENCY, 1200.0, CSS_ENV_NONE,
+          "§7.3: `A kiloHertz is 1000 Hertz`, in §7.3's canonical `hz`" },
+        { "calc(96dpi)", CSS_MATH_PROD_RESOLUTION, 1.0, CSS_ENV_NONE,
+          "§7.4: `1dppx is equivalent to 96dpi`, in §7.4's canonical `dppx`" },
+        { "abs(-5px)", CSS_MATH_PROD_LENGTH, 5.0, CSS_ENV_NONE, "§10.6's absolute value" },
+        { "sign(-5px)", CSS_MATH_PROD_NUMBER, -1.0, CSS_ENV_NONE, "§10.6: `-1 if A's numeric value is negative`" },
+        { "calc(2em)", CSS_MATH_PROD_LENGTH, 32.0, CSS_ENV_NONE,
+          "the resolver's own answer, reached through §10.10.1's canonical-unit step rather than through a "
+          "second unit table inside the math component" },
+        { "calc(-5 * 0)", CSS_MATH_PROD_NUMBER, 0.0, CSS_ENV_NONE,
+          "§10.9.2: `calc(-5 * 0) produces an unsigned zero — the calculation resolves to 0⁻, but as it's a "
+          "TOP-LEVEL calculation, it's then censored to an unsigned zero`. The sign bit is asserted below, "
+          "because -0.0 and 0.0 compare EQUAL and a comparison alone could not see this" },
+        { "calc(NaN)", CSS_MATH_PROD_NUMBER, 0.0, CSS_ENV_NONE,
+          "§10.9.2: `NaN does not escape a top-level calculation; it's censored into a zero value`" },
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(TYPE) / sizeof(TYPE[0]); i++)
+        CHECK(css_math_matches(TYPE[i].v, strlen(TYPE[i].v), TYPE[i].want) == TYPE[i].match, TYPE[i].why);
+    for (i = 0; i < sizeof(EVAL) / sizeof(EVAL[0]); i++) {
+        CssMathResolver res;
+        CssMathValue v;
+
+        res.length_px = css_math_fixture_length;
+        res.ctx = NULL;
+        res.realm = (JSContext *)(void *)&css_math_fixture_realm_token;
+        /* Pre-seeded with the WRONG answer, so a refused evaluation that still wrote shows as a failure rather
+           than as a row that happened to want zero. */
+        v.num = css_px(-99999.0);
+        v.pct = -99999.0;
+        v.pct_term = true;
+        CHECK(css_math_eval(EVAL[i].v, strlen(EVAL[i].v), &res, EVAL[i].want, &v), EVAL[i].why);
+        CHECK(css_math_close(v.num.px, EVAL[i].px), EVAL[i].why);
+        CHECK(v.num.env == EVAL[i].env, EVAL[i].why);
+        /* Every row above is a math function that simplifies to a single numeric value, so a surviving
+           `<percentage>` term would mean §10.10.1 stopped somewhere these rows do not describe. */
+        CHECK(!v.pct_term, EVAL[i].why);
+        CHECK(EVAL[i].env == CSS_ENV_NONE ? v.num.realm == NULL : v.num.realm != NULL,
+              "css_length.h's pairing — a length carries facts and a realm together or neither — did not "
+              "survive the math component's arithmetic");
+    }
+    /* §10.9.2's two halves that a value comparison cannot see, because -0.0 == 0.0 and because a nested
+       calculation is NOT censored: `calc(1 / calc(-5 * 0)) produces −∞, same as calc(1 / (-5 * 0)) — the inner
+       calc resolves to 0⁻, and as it's not a top-level calculation, it passes it up unchanged to the outer
+       calc to produce −∞. If it was censored into an unsigned zero, it would instead produce +∞.` */
+    {
+        CssMathResolver res;
+        CssMathValue v;
+
+        res.length_px = css_math_fixture_length;
+        res.ctx = NULL;
+        res.realm = (JSContext *)(void *)&css_math_fixture_realm_token;
+        CHECK(css_math_eval("calc(-5 * 0)", 12, &res, CSS_MATH_PROD_NUMBER, &v) && v.num.px == 0.0 &&
+              !signbit(v.num.px),
+              "§10.9.2: a signed zero escaped a TOP-LEVEL calculation, which that section forbids in so many "
+              "words — and it is observable, because the next division's sign is decided by it");
+        CHECK(css_math_eval("calc(1 / calc(-5 * 0))", 22, &res, CSS_MATH_PROD_NUMBER, &v) &&
+              v.num.px < 0.0 && isinf(v.num.px),
+              "§10.9.2's own worked example: the INNER calc is not a top-level calculation, so its 0⁻ passes up "
+              "uncensored and the division is −∞. A +∞ here means the censoring ran at every nesting level "
+              "instead of only at the top, which is the same bug with the opposite sign");
+        CHECK(css_math_eval("calc(1 / (-5 * 0))", 18, &res, CSS_MATH_PROD_NUMBER, &v) &&
+              v.num.px < 0.0 && isinf(v.num.px),
+              "and §10.1's `Parentheses and nesting additional calc() functions are equivalent` makes the "
+              "parenthesised spelling the same value, which is the half a separate paren production would get "
+              "wrong");
+    }
+}
+
 /* FILE API §6.3 Packaging data — the one part of the FileReader that is a PURE FUNCTION of four values, and
  * therefore the part a fixture can hold to a known answer without an event loop under it. The event ORDER
  * §6.2 produces is exercised by wpt/FileAPI/reading-data-section; what is checked here is what those tests
@@ -7801,6 +8079,9 @@ int main(int argc, char **argv) {
     csp_url_matching_selftest();
     document_policy_selftest();
     css_property_grammar_selftest();
+    css_math_selftest();   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction —
+                              AFTER the syntax-string fixture, because §5.1's numeric types are matched
+                              THROUGH this component now and a failure there must be read as this one's */
     xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
     xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
     xml_markup_selftest(); /* XML §2.5's [15] Comment, §2.6's [16] PI, §2.7's [18] CDSect, and §2.11's

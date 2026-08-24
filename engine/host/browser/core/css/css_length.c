@@ -10,6 +10,7 @@
 
 #include "check.h"
 #include "core/css/css_length.h"
+#include "core/css/css_math.h"
 #include "core/frame/viewport.h"
 
 static char *css_len_strdup(const char *s)
@@ -295,6 +296,112 @@ static void css_len_keyword(CssLength *out, const char *kw)
     snprintf(out->keyword, sizeof out->keyword, "%s", kw);
 }
 
+/* ONE §6 UNIT, ABSOLUTIZED — the whole of the family split css_length.h describes, with each arm naming the
+   component that is missing rather than the one beside it. `unit` is already lowercased and NUL-terminated.
+   IT IS A FUNCTION AND NOT THE TAIL OF THE PARSE because css-values-4 §10's math functions reach the same
+   table through a different door: a `calc(100vw - 2em)` resolves `100vw` and `2em` through exactly these arms,
+   and the alternative is core/css/css_math.c carrying a second copy of the one table this file exists to be. */
+static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const char *unit, double num)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_LEN_N(CSS_ABSOLUTE); i++)
+        if (strcmp(CSS_ABSOLUTE[i].unit, unit) == 0) return css_px(num * CSS_ABSOLUTE[i].px);
+    /* §6.1.1's TWO FONT-SIZE-RELATIVE UNITS. `em` is "the computed value of the font-size property of the
+       element on which it is used" and `rem` is "the computed value of the em unit on the root element", so
+       each is one number times the declaration's own multiplier and the whole of the difference between them
+       is WHICH element's computed `font-size` — which is the caller's walk (css_length.h) and is asked here
+       and nowhere else. The scale carries the base's environment facts, so a `margin: 1em` reaches the page as
+       a function of the reader's default font size exactly as a `50vw` reaches it as a function of the
+       viewport, and the responsive ladder a `rem`-sized bundle builds on that number keeps its second arm. */
+    if (css_len_in(CSS_FONT_SIZE_RELATIVE, CSS_LEN_N(CSS_FONT_SIZE_RELATIVE), unit)) {
+        CssPx base = font->resolve(font->ctx,
+                                   strcmp(unit, "rem") == 0 ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
+
+        DCHECK(base.px >= 0.0,
+               "css-values-4 §6.1.1's `em` or `rem` was resolved against a NEGATIVE computed `font-size`. "
+               "css-fonts-4 §2.5 (Font size: the font-size property) states the range in the property's own "
+               "`Value:` line — `<length-percentage [0,∞]>` — and again in words twice, so a negative one is a "
+               "declaration the grammar should have DROPPED rather than a font size to be a multiple of");
+        DCHECK(base.px == base.px && base.px * 0.0 == 0.0,
+               "css-values-4 §6.1.1's `em` or `rem` was resolved against a computed `font-size` that is not a "
+               "FINITE number — every value css-fonts-4 §2.5 admits is an absolute length off a real "
+               "declaration, a ratio of one, or §2.5.1's table entry, so a NaN or an infinity is a derivation "
+               "that lost an operand rather than a size this multiplication can use");
+        return css_px_scale(base, num);
+    }
+    if (css_len_in(CSS_FONT_METRIC_RELATIVE, CSS_LEN_N(CSS_FONT_METRIC_RELATIVE), unit))
+        DFAIL("a length in one of css-values-4 §6.1.1's FONT-METRIC units (`ex`, `rex`, `cap`, `rcap`, `ch`, "
+              "`rch`, `ic`, `ric`, `lh`, `rlh`) reached absolutization. These are NOT a computed `font-size` "
+              "and must not be built out of one as though they were: §6.1.1 defines `ex` as \"the used "
+              "x-height of the first available font\", `cap` as \"the used cap-height\", `ch` as \"the used "
+              "advance measure of the '0' (ZERO, U+0030) glyph\", `ic` as the same for the \"'水' (CJK water "
+              "ideograph, U+6C34) glyph\", and `lh` as the computed `line-height` \"converting normal to an "
+              "absolute length by using only the metrics of the first available font\" — five real font "
+              "metrics, of which this engine has none, plus the `r`-prefixed twin of each measured on the root "
+              "element. THE `em` THEY WOULD FALL BACK TO EXISTS NOW — the arm above resolves css-fonts-4 §2.5's "
+              "computed `font-size` through this file's own `CssFontMetrics` — so what is left of each is its "
+              "own §6.1.1 sentence, and the three of them are not one absence: (1) `ex`/`rex` is DONE the "
+              "moment someone writes it, because §6.1.1 says an x-height that is impossible or impractical to "
+              "determine \"must be assumed\" to be 0.5em and this engine has no font to determine one from; "
+              "(2) `ic`/`ric` the same, at 1em — \"in the cases where it is impossible or impractical to "
+              "determine the ideographic advance measure, it must be assumed to be 1em\" — which is a DIFFERENT "
+              "number from `ex`'s and from `ch`'s and must not be built by copying either; (3) `ch`/`rch` is "
+              "0.5em \"in the general case, and to 1em when it would be typeset upright (i.e. writing-mode is "
+              "vertical-rl or vertical-lr and text-orientation is upright)\", so it needs those two INHERITED "
+              "properties, which css_computed_value.c models no entry for — the same pair the `vi`/`vb` arm "
+              "names. `cap`/`rcap` and `lh`/`rlh` are the two that are still a FONT RECORD: an "
+              "undeterminable cap-height falls back to \"the font's ascent\", which is itself a metric, and "
+              "`lh` is a computed `line-height` with `normal` resolved from the first available font. BUILD "
+              "`ex`, `ic` and their root twins out of the `em` resolution beside them, then the writing mode, "
+              "then a font record — ascent, cap-height and the first available font's line metrics — in "
+              "core/frame, for the last two pairs");
+    else if (css_len_is_viewport(unit))
+        return css_len_viewport(realm, unit, num / 100.0);
+    else if (css_len_is_viewport_variant(unit))
+        DFAIL("a length in one of css-values §6.1.2.1's SMALL, LARGE or DYNAMIC viewport-percentage units "
+              "(`svh`, `lvw`, `dvh`, …). The default `v*` family resolves — it is 1% of the INITIAL CONTAINING "
+              "BLOCK, which core/frame/viewport.h models — and these three do not, because each is a percentage "
+              "of a DIFFERENT viewport size: the large one assumes every dynamically retractable UA interface "
+              "retracted, the small one assumes them all expanded, and the dynamic one tracks them and is "
+              "explicitly NOT STABLE while the viewport itself is unchanged. This engine models ONE viewport "
+              "with no retractable interface, so the three coincide in the number — and answering all four "
+              "families out of the ONE source key that number carries is exactly what must not happen: "
+              "`100dvh === 100lvh` is the comparison a mobile bundle writes its viewport workaround around, and "
+              "deciding it on the shared example deletes the arm where they differ. BUILD the three viewport "
+              "sizes as their own PICKED facts in core/frame/viewport.c — a row each in its seam's table, by "
+              "the same test viewport.h applies to `innerWidth` and the ICB, which reports the same number "
+              "today and is still a separate fact for the same reason");
+    else
+        DFAIL("a length-valued property's value is a DIMENSION in a unit CSS Values §6 does not define as a "
+              "length at all — an angle, a time, a frequency or a resolution. A property whose grammar admits "
+              "one of those is not a box-model length, so this is a caller asking the wrong component, or "
+              "lexbor's own validation admitting a declaration its grammar rejects");
+    return css_px(0.0);
+}
+
+/* css-values-4 §10's MATH FUNCTIONS, answered over the table above. `css_math_eval` calls this only for a unit
+   `css_length_is_length_unit` already admitted, so there is no "not a length" answer to give — the crash for a
+   unit that cannot be absolutized is the same one a bare dimension reaches, in the same place. */
+typedef struct { JSContext *realm; const CssFontMetrics *font; } CssLenMathCtx;
+
+static CssPx css_len_math_length(void *ctx, double n, const char *unit, size_t unit_len)
+{
+    CssLenMathCtx *c = (CssLenMathCtx *)ctx;
+    char lower[CSS_LEN_UNIT_MAX];
+    size_t i;
+
+    DCHECK(unit_len > 0 && unit_len < CSS_LEN_UNIT_MAX,
+           "a math function's `<length>` leaf carries a unit longer than any CSS Values §6 defines. "
+           "`css_math_eval` reaches this callback only for a unit `css_length_is_length_unit` has already "
+           "admitted, and that entry refuses everything from CSS_LEN_UNIT_MAX bytes up, so one arriving here "
+           "is those two tests having come apart");
+    if (unit_len == 0 || unit_len >= CSS_LEN_UNIT_MAX) return css_px(0.0);
+    for (i = 0; i < unit_len; i++) lower[i] = (char)tolower((unsigned char)unit[i]);
+    lower[unit_len] = '\0';
+    return css_len_unit_px(c->realm, c->font, lower, n);
+}
+
 CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const char *value)
 {
     CssLength out = { CSS_LENGTH_KEYWORD, css_px(0.0), 0.0, { '\0' } };
@@ -302,7 +409,6 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
     const char *p = value;
     char *end = NULL;
     double num;
-    unsigned i;
 
     DCHECK(value != NULL, "a CSS length was parsed from a NULL value — the cascade answers every property this "
                           "engine models, so a NULL here is a cascade that stopped early");
@@ -320,20 +426,50 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
        admits would be a second copy of lexbor's own grammar), or a FUNCTION, which is a different thing and is
        told apart by the one character that distinguishes them in CSS Syntax's own tokenizer. */
     if (end == p) {
-        if (strchr(p, '(') != NULL)
-            DFAIL("a length-valued property's value is a FUNCTION — `calc()`, `min()`, `max()`, `clamp()`, "
-                  "css-sizing's `fit-content()`, a `var()` substitution that produced one, or a function that "
-                  "is not a length at all and whose declaration the grammar should have DROPPED (`border-width: "
-                  "rgb(1, 2, 3)` reaches here through css_length_is_length, which cannot tell them apart for "
-                  "the same reason). css-values §10 "
-                  "makes a math function a value in its "
-                  "own right whose result is computed from operands in every unit this file knows and several "
-                  "it crashes on, and lexbor parses one and serializes it back as TEXT, so it arrives here "
-                  "looking like neither a dimension nor a keyword. BUILD the math-function grammar and its type "
-                  "algebra: that is where `calc(100% - 2em)` splits into the PERCENTAGE half its caller "
-                  "resolves against the containing block and the LENGTH half the crashes below are about, "
-                  "it is what tells a math function from `rgb()`, and it is also where css-variables' "
-                  "substitution has to have happened already");
+        if (strchr(p, '(') != NULL) {
+            CssLenMathCtx mc;
+            CssMathResolver res;
+            CssMathValue v;
+
+            mc.realm = realm;
+            mc.font = font;
+            res.length_px = css_len_math_length;
+            res.ctx = &mc;
+            res.realm = realm;
+            /* §10.9.1 "Calculation Contexts": "Math functions always inherit the calculation context from
+               wherever they're used." A length-valued property is §10.9's own worked example of a context that
+               resolves percentages against a `<length>` ("such as in width, where <percentage> is resolved
+               against a <length>"), so `<length-percentage>` is the production asked for and `calc(25% + 50px)`
+               is valid here for exactly the reason `width: 25%` is. */
+            if (css_math_eval(p, strlen(p), &res, CSS_MATH_PROD_LENGTH_PERCENTAGE, &v)) {
+                if (v.pct_term)
+                    DFAIL("a length-valued property's value is a math function that resolves to a LENGTH AND A "
+                          "PERCENTAGE together (`width: calc(100% - 2em)`), and `CssLength` has no kind that "
+                          "carries both. css-values-4 §10.11 'Computed Value' is why it must: \"Where "
+                          "percentages are not resolved at computed-value time, they are not resolved in math "
+                          "functions, e.g. calc(100% - 100% + 1px) resolves to calc(0% + 1px), not to 1px\" — "
+                          "so the computed value of one of these IS the pair, and the basis it needs is the "
+                          "containing block, which core/layout/used_value.h owns. The grammar and the type "
+                          "algebra are built (core/css/css_math.h) and `CssMathValue` already answers the pair; "
+                          "what is missing is downstream. BUILD a fourth `CssLengthKind` carrying the "
+                          "`CssPx` and the percentage together, and give it its arm in every used-value "
+                          "algorithm that already has one for CSS_LENGTH_PERCENTAGE — CSS 2.1 §10.3's width "
+                          "resolution, §10.4's min/max clamp, §10.5's height and §10.6.3's auto-height walk — "
+                          "so the two terms are resolved against the SAME basis in one step rather than a "
+                          "percentage being resolved and a length added afterwards");
+                out.kind = CSS_LENGTH_ABSOLUTE;
+                out.px = v.num;
+                return out;
+            }
+            DFAIL("a length-valued property's value is a FUNCTION that is not a math function resolving to a "
+                  "`<length>` — `rgb(1, 2, 3)`, css-sizing's `fit-content()`, a `var()` substitution that "
+                  "produced neither, or a math function whose type is failure (`calc(1px + 1s)`). Every one of "
+                  "those is a declaration CSS Syntax DROPS, and the entry that decides it is "
+                  "`css_length_is_length`, which now asks core/css/css_math.h the same question this arm just "
+                  "asked. So a value reaching here is one that answered TRUE there and FALSE here, which means "
+                  "the two are asking about different productions — or a caller that never asked at all, which "
+                  "for a shorthand lexbor's registry does not carry is the whole of the validation there is");
+        }
         css_len_keyword(&out, p);
         return out;
     }
@@ -362,90 +498,8 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
               "not a dimension reaching the dimension arm");
         return out;
     }
-    for (i = 0; i < CSS_LEN_N(CSS_ABSOLUTE); i++) {
-        if (strcmp(CSS_ABSOLUTE[i].unit, unit) != 0) continue;
-        out.kind = CSS_LENGTH_ABSOLUTE;
-        out.px = css_px(num * CSS_ABSOLUTE[i].px);
-        return out;
-    }
-    /* §6.1.1's TWO FONT-SIZE-RELATIVE UNITS. `em` is "the computed value of the font-size property of the
-       element on which it is used" and `rem` is "the computed value of the em unit on the root element", so
-       each is one number times the declaration's own multiplier and the whole of the difference between them
-       is WHICH element's computed `font-size` — which is the caller's walk (css_length.h) and is asked here
-       and nowhere else. The scale carries the base's environment facts, so a `margin: 1em` reaches the page as
-       a function of the reader's default font size exactly as a `50vw` reaches it as a function of the
-       viewport, and the responsive ladder a `rem`-sized bundle builds on that number keeps its second arm. */
-    if (css_len_in(CSS_FONT_SIZE_RELATIVE, CSS_LEN_N(CSS_FONT_SIZE_RELATIVE), unit)) {
-        CssPx base = font->resolve(font->ctx,
-                                   strcmp(unit, "rem") == 0 ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
-
-        DCHECK(base.px >= 0.0,
-               "css-values-4 §6.1.1's `em` or `rem` was resolved against a NEGATIVE computed `font-size`. "
-               "css-fonts-4 §2.5 (Font size: the font-size property) states the range in the property's own "
-               "`Value:` line — `<length-percentage [0,∞]>` — and again in words twice, so a negative one is a "
-               "declaration the grammar should have DROPPED rather than a font size to be a multiple of");
-        DCHECK(base.px == base.px && base.px * 0.0 == 0.0,
-               "css-values-4 §6.1.1's `em` or `rem` was resolved against a computed `font-size` that is not a "
-               "FINITE number — every value css-fonts-4 §2.5 admits is an absolute length off a real "
-               "declaration, a ratio of one, or §2.5.1's table entry, so a NaN or an infinity is a derivation "
-               "that lost an operand rather than a size this multiplication can use");
-        out.kind = CSS_LENGTH_ABSOLUTE;
-        out.px = css_px_scale(base, num);
-        return out;
-    }
-    if (css_len_in(CSS_FONT_METRIC_RELATIVE, CSS_LEN_N(CSS_FONT_METRIC_RELATIVE), unit)) {
-        DFAIL("a length in one of css-values-4 §6.1.1's FONT-METRIC units (`ex`, `rex`, `cap`, `rcap`, `ch`, "
-              "`rch`, `ic`, `ric`, `lh`, `rlh`) reached absolutization. These are NOT a computed `font-size` "
-              "and must not be built out of one as though they were: §6.1.1 defines `ex` as \"the used "
-              "x-height of the first available font\", `cap` as \"the used cap-height\", `ch` as \"the used "
-              "advance measure of the '0' (ZERO, U+0030) glyph\", `ic` as the same for the \"'水' (CJK water "
-              "ideograph, U+6C34) glyph\", and `lh` as the computed `line-height` \"converting normal to an "
-              "absolute length by using only the metrics of the first available font\" — five real font "
-              "metrics, of which this engine has none, plus the `r`-prefixed twin of each measured on the root "
-              "element. THE `em` THEY WOULD FALL BACK TO EXISTS NOW — the arm above resolves css-fonts-4 §2.5's "
-              "computed `font-size` through this file's own `CssFontMetrics` — so what is left of each is its "
-              "own §6.1.1 sentence, and the three of them are not one absence: (1) `ex`/`rex` is DONE the "
-              "moment someone writes it, because §6.1.1 says an x-height that is impossible or impractical to "
-              "determine \"must be assumed\" to be 0.5em and this engine has no font to determine one from; "
-              "(2) `ic`/`ric` the same, at 1em — \"in the cases where it is impossible or impractical to "
-              "determine the ideographic advance measure, it must be assumed to be 1em\" — which is a DIFFERENT "
-              "number from `ex`'s and from `ch`'s and must not be built by copying either; (3) `ch`/`rch` is "
-              "0.5em \"in the general case, and to 1em when it would be typeset upright (i.e. writing-mode is "
-              "vertical-rl or vertical-lr and text-orientation is upright)\", so it needs those two INHERITED "
-              "properties, which css_computed_value.c models no entry for — the same pair the `vi`/`vb` arm "
-              "below names. `cap`/`rcap` and `lh`/`rlh` are the two that are still a FONT RECORD: an "
-              "undeterminable cap-height falls back to \"the font's ascent\", which is itself a metric, and "
-              "`lh` is a computed `line-height` with `normal` resolved from the first available font. BUILD "
-              "`ex`, `ic` and their root twins out of the `em` resolution beside them, then the writing mode, "
-              "then a font record — ascent, cap-height and the first available font's line metrics — in "
-              "core/frame, for the last two pairs");
-        return out;
-    }
-    if (css_len_is_viewport(unit)) {
-        out.kind = CSS_LENGTH_ABSOLUTE;
-        out.px = css_len_viewport(realm, unit, num / 100.0);
-        return out;
-    }
-    if (css_len_is_viewport_variant(unit)) {
-        DFAIL("a length in one of css-values §6.1.2.1's SMALL, LARGE or DYNAMIC viewport-percentage units "
-              "(`svh`, `lvw`, `dvh`, …). The default `v*` family resolves — it is 1% of the INITIAL CONTAINING "
-              "BLOCK, which core/frame/viewport.h models — and these three do not, because each is a percentage "
-              "of a DIFFERENT viewport size: the large one assumes every dynamically retractable UA interface "
-              "retracted, the small one assumes them all expanded, and the dynamic one tracks them and is "
-              "explicitly NOT STABLE while the viewport itself is unchanged. This engine models ONE viewport "
-              "with no retractable interface, so the three coincide in the number — and answering all four "
-              "families out of the ONE source key that number carries is exactly what must not happen: "
-              "`100dvh === 100lvh` is the comparison a mobile bundle writes its viewport workaround around, and "
-              "deciding it on the shared example deletes the arm where they differ. BUILD the three viewport "
-              "sizes as their own PICKED facts in core/frame/viewport.c — a row each in its seam's table, by "
-              "the same test viewport.h applies to `innerWidth` and the ICB, which reports the same number "
-              "today and is still a separate fact for the same reason");
-        return out;
-    }
-    DFAIL("a length-valued property's value is a DIMENSION in a unit CSS Values §6 does not define as a length "
-          "at all — an angle, a time, a frequency or a resolution. A property whose grammar admits one of those "
-          "is not a box-model length, so this is a caller asking the wrong component, or lexbor's own "
-          "validation admitting a declaration its grammar rejects");
+    out.kind = CSS_LENGTH_ABSOLUTE;
+    out.px = css_len_unit_px(realm, font, unit, num);
     return out;
 }
 
@@ -479,7 +533,10 @@ bool css_length_is_length_unit(const char *unit, size_t unit_len)
     return css_len_unit_known(lower);
 }
 
-bool css_length_is_length(const char *value)
+/* §6's production over serialized text, with `want` naming which of the two questions below is being asked —
+   both walks are identical apart from what a `<percentage>` and a math function answer, and writing them twice
+   is how the two would come to disagree about `calc(2em)`. */
+static bool css_len_is(const char *value, CssMathProduction want)
 {
     const char *p = value;
     char *end = NULL;
@@ -489,12 +546,30 @@ bool css_length_is_length(const char *value)
     while (*p != '\0' && isspace((unsigned char)*p)) p++;
     (void)strtod(p, &end);
     /* Not a number token at all: a FUNCTION is the one remaining production a `<length>` can take (see the
-       header), and every other spelling — a keyword, an identifier, a string — is not one. */
-    if (end == p) return strchr(p, '(') != NULL;
+       header), and every other spelling — a keyword, an identifier, a string — is not one. WHICH function is
+       css-values-4 §10.9 "Type Checking"'s question and is now answerable: a math function IS a `<length>` when
+       its type matches one, `rgb(1, 2, 3)` is not a math function at all, and `calc(1px + 1s)` is one whose
+       type is failure. This is the entry css_length.h said "cannot tell them apart for the same reason". */
+    /* The `(` is CSS Syntax's own one-character difference between a FUNCTION and an IDENT, and it is tested
+       here so that `auto`, `none` and every other keyword answer without standing a tokenizer up. */
+    if (end == p) return strchr(p, '(') != NULL && css_math_matches(p, strlen(p), want);
     while (*end != '\0' && isspace((unsigned char)*end)) end++;
     if (*end == '\0') return true;    /* §6's unitless zero; the parse above asserts on a unitless non-zero */
-    if (*end == '%') return false;    /* a `<percentage>` is a sibling production, never a `<length>` */
+    if (*end == '%')
+        /* §5.5's `<percentage>` is a SIBLING production of §6's `<length>` and never a `<length>`; it is one
+           arm of `<length-percentage>`, which is the other question. */
+        return want == CSS_MATH_PROD_LENGTH_PERCENTAGE && end[1] == '\0';
     return css_length_is_length_unit(end, strlen(end));
+}
+
+bool css_length_is_length(const char *value)
+{
+    return css_len_is(value, CSS_MATH_PROD_LENGTH);
+}
+
+bool css_length_is_length_percentage(const char *value)
+{
+    return css_len_is(value, CSS_MATH_PROD_LENGTH_PERCENTAGE);
 }
 
 /* CSS Values §6's SNAP A LENGTH AS A LINE WIDTH, in the spec's own three steps, over the DEVICE PIXEL the realm

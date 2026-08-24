@@ -13,6 +13,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"          /* the attribute a flow composed out of unknown input, beside its value */
 #include "core/css/css_length.h"     /* §6's `<length>` UNIT set, to tell an unbuilt unit from an author error */
+#include "core/css/css_math.h"       /* §4.8.4.2.2 admits the MATH FUNCTIONS as a `<source-size-value>` */
 #include "core/css/media_query.h"    /* §4.8.4.3: "Other units must be interpreted the same as in Media Queries" */
 #include "core/dom/element_view.h"   /* HTML's "being rendered", which is "has any associated CSS layout boxes" */
 #include "core/frame/viewport.h"
@@ -526,6 +527,43 @@ static bool iss_component_values(const char *text, size_t len, IssCvList *out)
     return ok;
 }
 
+/* §4.8.4.3's ONE SENTENCE about units, as a function so the math-function arm and the bare-dimension arm ask
+   it once: a source size's units other than the viewport-relative ones "must be interpreted THE SAME AS IN
+   MEDIA QUERIES". So core/css/media_query.h's table is the answer and this file carries no second copy of it.
+   FALSE for a unit that is not a `<length>` at all; a unit that IS one and that table cannot absolutize is a
+   MISSING COMPONENT and crashes here, because reporting it as a refusal would turn one into a page's own parse
+   error. */
+static bool iss_length_px(JSContext *ctx, double n, const char *unit, size_t unit_len, double *px)
+{
+    if (media_query_length_px(ctx, n, unit, unit_len, px)) return true;
+    if (css_length_is_length_unit(unit, unit_len))
+        DFAIL("a `sizes` attribute's `<source-size-value>` is a `<length>` in a unit core/css/media_query.c "
+              "cannot absolutize. HTML §4.8.4.3 'Processing model' is explicit that a source size's units "
+              "other than the viewport-relative ones 'must be interpreted the same as in Media Queries', "
+              "so this is that component's unit table and not a second one — and css-values-4 §6.1.1 "
+              "'Font-relative Lengths' and §6.1.2 'Viewport-relative Lengths' are the two families it "
+              "stops short of (the ten font METRICS beyond `em`/`rem`/`ex`/`ch`, and the `sv*`/`lv*`/`dv*` "
+              "and `vi`/`vb` viewport families). Reporting one as an author's mistake would turn a missing "
+              "component into a page's own parse error. Build it there, beside the table this asks");
+    return false;
+}
+
+/* css-values-4 §10.10.1's canonical-unit step for a `<length>` leaf inside a math function, over the same
+   table. It never answers a stand-in: a unit this engine cannot absolutize crashes above, in the one place
+   that message belongs. */
+static CssPx iss_math_length(void *ctx, double n, const char *unit, size_t unit_len)
+{
+    double v = 0.0;
+
+    DCHECK(css_length_is_length_unit(unit, unit_len),
+           "core/css/css_math.c asked this `sizes` attribute's resolver to absolutize a unit that is not one of "
+           "css-values-4 §6's. That callback's contract is that it is called only for a unit "
+           "`css_length_is_length_unit` has already admitted — every other family is converted inside that "
+           "component by an exact ratio — so one arriving here is that contract having changed");
+    (void)iss_length_px((JSContext *)ctx, n, unit, unit_len, &v);
+    return css_px(v);
+}
+
 /* §4.8.4.3.11 step 3.2's "a valid non-negative `<source-size-value>`", over ONE component value's source span.
    `<source-size-value> = <length> | auto` (§4.8.4.2.2 "Sizes attributes"), and "A `<source-size-value>` that is
    a `<length>` must not be negative, and must not use CSS functions other than the math functions."
@@ -547,21 +585,40 @@ static bool iss_source_size_value(JSContext *ctx, const char *text, size_t len, 
     t = lxb_css_syntax_token(tkz);
     if (!t) { lxb_css_syntax_tokenizer_destroy(tkz); return false; }
     switch (t->type) {
-    case LXB_CSS_SYNTAX_TOKEN_FUNCTION:
-        /* §4.8.4.2.2 admits the MATH FUNCTIONS here, and css-values-4 §10 "Mathematical Expressions" makes one
-           a value of whichever numeric type its operands give it — so `calc(100vw - 2em)` IS a `<length>` and
-           this engine has no grammar that can say so. core/css/css_length.h states the same thing for the same
-           values ("telling `calc()` from `rgb()` is the same unbuilt grammar"), so a function is not refused
-           here either: it is the crash that names what to build. */
-        DFAIL("a `sizes` attribute's `<source-size-value>` is a FUNCTION. css-values-4 §10 'Mathematical "
-              "Expressions' makes a math function a value of whichever numeric type its operands give it, so "
-              "`calc(100vw - 2em)` IS a `<length>` and HTML §4.8.4.2.2 'Sizes attributes' admits it — while a "
-              "non-math function is not a `<source-size-value>` at all, and this engine has no grammar that "
-              "tells the two apart. BUILD css-values-4 §10.8's <calc-sum>/<calc-product>/<calc-value> "
-              "productions and §10.9's type algebra over the units core/css/css_length.h already names, then "
-              "route it from HERE, from core/css/css_length.c's own math-function crash and from "
-              "core/css/css_syntax_match.c's — three sites, one missing grammar");
+    case LXB_CSS_SYNTAX_TOKEN_FUNCTION: {
+        /* §4.8.4.2.2 admits the MATH FUNCTIONS here and nothing else — "must not use CSS functions other than
+           the math functions" — and css-values-4 §10 makes one a value of whichever numeric type its operands
+           give it, so `calc(100vw - 2em)` IS a `<length>`. The production asked for is `<length>` and NOT
+           `<length-percentage>`, because §4.8.4.2.2 says so in its own words: "Percentages are not allowed in a
+           <source-size-value>, to avoid confusion about what it would be relative to." That one parameter is
+           the whole of the rule — a `calc(50%)` types as a `<percentage>` under it and simply does not match,
+           so there is no second check to keep in step with the first. */
+        CssMathResolver res;
+        CssMathValue v;
+
+        res.length_px = iss_math_length;
+        res.ctx = ctx;
+        res.realm = ctx;
+        if (css_math_eval(text, len, &res, CSS_MATH_PROD_LENGTH, &v)) {
+            /* THE FACT SET IS EMPTY HERE AND THAT IS media_query.h's LAYERING, not a drop. That header states
+               it for `media_query_length_px`: "The answer is a plain `double` — the modelled EXAMPLE — ... the
+               C side resolves and the concolic is minted at the JS boundary." A viewport-derived `sizes` value
+               therefore reaches the page through `img.currentSrc`, which is where the source identity belongs.
+               ASSERTED rather than assumed, so the day that table starts answering an environment fact this
+               arm is where the obligation to carry it surfaces. */
+            DCHECK(v.num.env == CSS_ENV_NONE && !v.pct_term,
+                   "a `sizes` attribute's math function resolved to a length carrying an environment fact or a "
+                   "surviving `<percentage>`. Neither is reachable through this resolver: core/css/"
+                   "media_query.h answers a plain modelled number by design, and HTML §4.8.4.2.2 'Sizes "
+                   "attributes' forbids a percentage here, which css_math_eval enforces by being asked for a "
+                   "`<length>` rather than a `<length-percentage>`. So this is one of those two having changed "
+                   "— and if it is the first, this arm now owes the page the source identity it is carrying");
+            /* "A `<source-size-value>` that is a `<length>` MUST NOT BE NEGATIVE" — and §4.8.4.3.11 step 3.2
+               asks for a valid NON-NEGATIVE one, so a negative length is a parse error and not a size. */
+            if (v.num.px >= 0.0) { *px = v.num.px; ok = true; }
+        }
         break;
+    }
     case LXB_CSS_SYNTAX_TOKEN_IDENT: {
         const lxb_css_syntax_token_string_t *s = lxb_css_syntax_token_string(t);
 
@@ -576,19 +633,10 @@ static bool iss_source_size_value(JSContext *ctx, const char *text, size_t len, 
         double n = lxb_css_syntax_token_number(t)->num;
         double v = 0.0;
 
-        if (media_query_length_px(ctx, n, (const char *)u->data, u->length, &v)) {
+        if (iss_length_px(ctx, n, (const char *)u->data, u->length, &v)) {
             /* "A `<source-size-value>` that is a `<length>` MUST NOT BE NEGATIVE" — and §4.8.4.3.11 step 3.2
                asks for a valid NON-NEGATIVE one, so a negative length is a parse error and not a size. */
             if (v >= 0.0) { *px = v; ok = true; }
-        } else if (css_length_is_length_unit((const char *)u->data, u->length)) {
-            DFAIL("a `sizes` attribute's `<source-size-value>` is a `<length>` in a unit core/css/media_query.c "
-                  "cannot absolutize. HTML §4.8.4.3 'Processing model' is explicit that a source size's units "
-                  "other than the viewport-relative ones 'must be interpreted the same as in Media Queries', "
-                  "so this is that component's unit table and not a second one — and css-values-4 §6.1.1 "
-                  "'Font-relative Lengths' and §6.1.2 'Viewport-relative Lengths' are the two families it "
-                  "stops short of (the ten font METRICS beyond `em`/`rem`/`ex`/`ch`, and the `sv*`/`lv*`/`dv*` "
-                  "and `vi`/`vb` viewport families). Reporting one as an author's mistake would turn a missing "
-                  "component into a page's own parse error. Build it there, beside the table this asks");
         }
         break;
     }
