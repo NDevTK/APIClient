@@ -311,11 +311,16 @@ const INTERFACES = {
   URL:                  "core/url/url.c",
   URLSearchParams:     ["core/url/url_search_params.c", "core/idl_iter.c"],
   /* CSSOM §6.6.1's two. CSSStyleDeclaration is the block's own eight members and nothing is an instance of it;
-     CSSStyleProperties CHAINS to it and carries `cssFloat` plus the per-property camel-cased attributes, which
-     are installed from LEXBOR'S REGISTRY in a loop — so their member names are not literals and the audit
-     reports them UNRESOLVED with file and line rather than crediting or omitting them. What the second row is
-     EXPECTED to report missing is exactly that set: `cssFloat` and the spec's three placeholder names
-     (`_camel_cased_attribute`, `_webkit_cased_attribute`, `_dashed_attribute`). */
+     CSSStyleProperties CHAINS to it and carries `cssFloat` plus the per-property attributes of §6.6.1's three
+     partial interfaces, which are installed from LEXBOR'S REGISTRY in a loop — read by idl_installed.mjs's
+     GENERATED_FORMS out of the same array the component indexes at run time.
+     NEITHER ROW CAN EVER REPORT ONE OF THOSE ATTRIBUTES ABSENT, AND THAT IS A FACT ABOUT THE IDL RATHER THAN
+     ABOUT THIS ENGINE: §6.6.1 spells the three partials with the placeholder members `_camel_cased_attribute`,
+     `_webkit_cased_attribute` and `_dashed_attribute`, each standing for a hundred names rather than naming
+     one, and @webref/idl carries none of the three — so the flattened member list here is `cssFloat` and the
+     base's eight, full stop. A gap in that surface is found by READING §6.6.1, never by working this audit's
+     list; two of the three partials were missing entirely while both rows reported nothing at all. What each
+     row is EXPECTED to report missing is therefore: nothing. */
   CSSStyleDeclaration:  "core/css/css_style_declaration.c",
   CSSStyleProperties:   "core/css/css_style_declaration.c",
   /* CSSOM §6.1's two. StyleSheet is a base nothing instantiates, so its six members live on their own

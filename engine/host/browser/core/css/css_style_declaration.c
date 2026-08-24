@@ -17,8 +17,9 @@
  * as the rule's own declarations.
  *
  * LEXBOR OWNS THE CSS, and that is the point of binding to it rather than hand-rolling. It has the real
- * property registry (so the camel-cased IDL attributes are GENERATED FROM THE SPEC'S OWN PROPERTY LIST rather
- * than typed here), a real declaration parser, real value serializers, and a real selector matcher that answers
+ * property registry — which is CSSOM §2 Terminology's "supported CSS property" set for this engine, so §6.6.1's
+ * three per-property partial interfaces are GENERATED FROM IT rather than typed here — a real declaration
+ * parser, real value serializers, and a real selector matcher that answers
  * for a SINGLE node. Every layer below is Lexbor doing the parsing and this file doing the cascade.
  *
  * THE DECLARATIONS ARE THE BACKING'S OWN TEXT, which is the design decision the rest follows from. §6.6 models
@@ -108,12 +109,15 @@ static int       g_font_face_proto_slot = -1;
    rule's own text, through core/css/css_rule.h), so what differs is only which member names the interface
    answers to and, through core/css/css_page.h, which declarations the block admits at all. */
 static int       g_page_proto_slot = -1;
-/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. The camel-cased
+/* Declared once per AGENT (the IDL pool is sealed after agent init); installed per realm. §6.6.1's per-property
    attributes are GENERATED from Lexbor's property registry, so their setter ids are an array indexed the same
-   way the registry is — one entry per property, declared once, installed into every realm. */
+   way the registry is — one entry per property, declared once, installed into every realm, and SHARED by that
+   property's camel-cased, webkit-cased and dashed spellings because §6.6.1 gives the three one set of setter
+   steps. A row §2 Terminology excludes holds -1, which is `no setter`: an installer reaching one would make an
+   attribute silently read-only, so it is DCHECKed at the install rather than left to be discovered. */
 static int g_set_css_text_id = -1, g_get_prop_id = -1, g_remove_prop_id = -1, g_get_priority_id = -1,
            g_set_prop_id = -1, g_item_id = -1, g_put_forwards_id = -1;
-static int g_camel_set_id[LXB_CSS_PROPERTY__LAST_ENTRY];
+static int g_property_set_id[LXB_CSS_PROPERTY__LAST_ENTRY];
 static int g_id_gcs;   /* getComputedStyle — declared once per agent, installed on each realm's window */
 static int     g_ready;
 
@@ -2227,11 +2231,12 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
     return JS_UNDEFINED;
 }
 
-/* The camel-cased IDL attributes. §6.6.1 states both halves as a forward — the getter "must return the result
-   of invoking getPropertyValue()" and the setter "must invoke setProperty() ... and no third argument" — so
-   they answer out of the same two paths above and never grow a rule of their own. `magic` is Lexbor's own
-   property id, so the dashed name is read back out of the registry rather than stored twice. */
-static JSValue js_cssd_camel_get(JSContext *ctx, JSValueConst this_val, int magic)
+/* THE ONE PAIR OF BODIES ALL THREE §6.6.1 SPELLINGS ANSWER THROUGH. §6.6.1 states both halves of each of them
+   as a forward — the getter "must return the result of invoking getPropertyValue()" and the setter "must invoke
+   setProperty() ... and no third argument" — so they answer out of the same two paths above and never grow a
+   rule of their own. `magic` is Lexbor's own property id, so the PROPERTY name is read back out of the registry
+   rather than stored twice, and the attribute's own spelling is never inverted to recover it. */
+static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
     JSValue block = cssd_block(ctx, this_val), r;
@@ -2253,7 +2258,7 @@ static JSValue js_cssd_camel_get(JSContext *ctx, JSValueConst this_val, int magi
     return r;
 }
 
-static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
     JSValue block = cssd_block(ctx, this_val);
@@ -2273,13 +2278,160 @@ static JSValue js_cssd_camel_set(JSContext *ctx, JSValueConst this_val, JSValueC
     return JS_UNDEFINED;
 }
 
+/* ---- CSSOM §6.6.1's THREE PER-PROPERTY PARTIAL INTERFACES ---------------------------------------------------
+ *
+ * §6.6.1 The CSSStyleDeclaration Interface declares THREE partial interfaces on CSSStyleProperties — one per
+ * SPELLING of the same property — and this engine installed one of them, so `element.style["font-size"]` was
+ * undefined in a browser that has it:
+ *   - the CAMEL-CASED attribute, "for each CSS property property that is a supported CSS property", named by
+ *     running the CSS property to IDL attribute algorithm for property;
+ *   - the WEBKIT-CASED attribute, "for each CSS property property that is a supported CSS property and that
+ *     begins with the string -webkit-", named by that same algorithm "with the lowercase first flag set";
+ *   - the DASHED attribute, "for each CSS property property that is a supported CSS property, except for
+ *     properties that have no "-" (U+002D) in the property name", "where dashed attribute is property".
+ *
+ * THREE FUNCTIONS AND NOT ONE LOOP WITH THREE `if`s, because the spec states three partial interfaces and each
+ * one is a contract that can be absent on its own: an installer that is never called is a partial interface
+ * this engine does not have, and one function per partial is what makes that visible from outside — to a reader
+ * and to engine/idlgen.mjs's gap audit, which names these three by their own names and reports the day one of
+ * them stops being called. A single loop can lose a spelling silently inside itself.
+ *
+ * ALL THREE ANSWER THROUGH js_cssd_property_get / js_cssd_property_set, whose `magic` is lexbor's property
+ * id, which is exactly what §6.6.1 asks for and is why no inverse algorithm is written here. The getter of a
+ * webkit-cased attribute must invoke getPropertyValue "with the argument being the result of running the IDL
+ * attribute to CSS property algorithm ... with the dash prefix flag set" — that inverse exists to recover the
+ * property name from the ATTRIBUTE name, and this engine never lost it: the id names the registry row, so the
+ * property name is read back rather than reconstructed. Writing the inverse would be a second derivation free
+ * to disagree with the first. */
+
+/* CSSOM §2 Terminology: "The term supported CSS property refers to a CSS property that the user agent
+   implements, INCLUDING ANY VENDOR-PREFIXED PROPERTIES, but excluding custom properties." Lexbor's registry IS
+   that set for this engine, minus its two non-property rows: `LXB_CSS_PROPERTY__UNDEF` is its "no property"
+   sentinel and `LXB_CSS_PROPERTY__CUSTOM` is the custom-property marker §2 excludes by name.
+   WHAT STOOD HERE WAS THE OPPOSITE OF §2 ON BOTH COUNTS. It skipped every name beginning with "-" — a
+   vendor-prefixed property, which §2 says IS supported and §6.6.1 gives two spellings of — and it started the
+   walk at id 1, so lexbor's custom-property marker was installed as an IDL attribute literally spelled
+   `#сustom` (with a Cyrillic С, and a `length` field that disagrees with its own bytes: the one row in the
+   registry whose declared length is not its strlen). A member no browser has, on the prototype of every
+   declaration block in the engine. */
+static bool cssom_supported_css_property(uintptr_t id, const lxb_css_entry_data_t *e)
+{
+    DCHECK(e != NULL && e->name != NULL, "lexbor's property registry answered a row with no name");
+    if (id == LXB_CSS_PROPERTY__UNDEF || id == LXB_CSS_PROPERTY__CUSTOM)
+        return false;
+    DCHECK(e->name[0] != '#',
+           "a lexbor property row spells a MARKER rather than a property name — §2 Terminology's two "
+           "exclusions are the ids above, and this registry has grown a third that would install as a member");
+    DCHECK(e->length == strlen((const char *)e->name),
+           "a lexbor property row's declared length is not its own strlen, so an IDL attribute name derived "
+           "from it would be truncated or would read past the row");
+    return true;
+}
+
+/* An IDL attribute name is bounded by the property name it comes from, since §6.6.1's algorithm only ever
+   DROPS characters and the dashed spelling IS the property name. Sized well past lexbor's longest row so the
+   DCHECK below states the invariant rather than guarding a real edge; the version of this loop that
+   `continue`d past an over-long name would have dropped a member of a browser's surface without a word. */
+#define CSSOM_IDL_ATTRIBUTE_MAX 64
+
+/* CSSOM §6.6.1 The CSSStyleDeclaration Interface's CSS PROPERTY TO IDL ATTRIBUTE algorithm, "optionally with a
+   lowercase first flag set", step for step:
+     1. Let output be the empty string.        2. Let uppercase next be unset.
+     3. If the lowercase first flag is set, remove the first character from property.
+     4. For each character c in property: if c is "-" (U+002D), let uppercase next be set; otherwise, if
+        uppercase next is set, let uppercase next be unset and append c converted to ASCII uppercase to output;
+        otherwise, append c to output.
+     5. Return output.
+   Step 3 is what the flag's NAME describes rather than what the step does — it removes a character, and the
+   lowercase first is the CONSEQUENCE, because the removed character is the "-" that would otherwise have set
+   uppercase next. `-webkit-transform` is the spec's own worked example: with the flag it is `webkitTransform`,
+   without it `WebkitTransform`, and §6.6.1 says a user agent supporting that property has BOTH. */
+static void cssom_css_property_to_idl_attribute(const lxb_css_entry_data_t *e, bool lowercase_first,
+                                                char *out, size_t cap)
+{
+    size_t i = 0, j = 0;
+    bool uppercase_next = false;
+
+    DCHECK(e->length > 0, "§6.6.1's algorithm was run for a property with no name");
+    DCHECK(e->length < cap, "a CSS property name outgrew the IDL attribute buffer — raise "
+                            "CSSOM_IDL_ATTRIBUTE_MAX rather than dropping the member");
+    if (lowercase_first)
+        i = 1;
+    for (; i < e->length; i++) {
+        lxb_char_t c = e->name[i];
+
+        if (c == '-') { uppercase_next = true; continue; }
+        out[j++] = uppercase_next ? (char)toupper(c) : (char)c;
+        uppercase_next = false;
+    }
+    out[j] = 0;
+    DCHECK(j > 0, "§6.6.1's algorithm produced the empty string for a supported CSS property");
+}
+
+/* THE ONE INSTALL ALL THREE SPELLINGS GO THROUGH. §6.6.1 gives the camel-cased, webkit-cased and dashed
+   attributes of one property the same getter steps and the same setter steps, so what differs between them is
+   the NAME and nothing else — the getter, the setter id and the magic are the PROPERTY's. */
+static void cssom_install_property_attribute(JSContext *ctx, JSValueConst proto, uintptr_t id, const char *name)
+{
+    DCHECK(g_property_set_id[id] >= 0,
+           "a §6.6.1 per-property attribute is being installed for a property cssom_init declared no setter "
+           "for — the attribute would be silently read-only");
+    idl_install_accessor(ctx, proto, name, js_cssd_property_get, (int)id, g_property_set_id[id]);
+}
+
+static void cssom_install_camel_cased_attributes(JSContext *ctx, JSValueConst proto)
+{
+    uintptr_t id;
+
+    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
+        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+        char name[CSSOM_IDL_ATTRIBUTE_MAX];
+
+        if (!cssom_supported_css_property(id, e)) continue;
+        cssom_css_property_to_idl_attribute(e, false, name, sizeof name);
+        cssom_install_property_attribute(ctx, proto, id, name);
+    }
+}
+
+static void cssom_install_webkit_cased_attributes(JSContext *ctx, JSValueConst proto)
+{
+    static const char PREFIX[] = "-webkit-";
+    uintptr_t id;
+
+    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
+        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+        char name[CSSOM_IDL_ATTRIBUTE_MAX];
+
+        if (!cssom_supported_css_property(id, e)) continue;
+        /* "and that begins with the string -webkit-" */
+        if (e->length < sizeof(PREFIX) - 1 || memcmp(e->name, PREFIX, sizeof(PREFIX) - 1) != 0) continue;
+        cssom_css_property_to_idl_attribute(e, true, name, sizeof name);
+        cssom_install_property_attribute(ctx, proto, id, name);
+    }
+}
+
+static void cssom_install_dashed_attributes(JSContext *ctx, JSValueConst proto)
+{
+    uintptr_t id;
+
+    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
+        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+
+        if (!cssom_supported_css_property(id, e)) continue;
+        /* "except for properties that have no "-" (U+002D) in the property name" — and "dashed attribute is
+           property", so no algorithm runs here at all: the member's name IS the registry row's. */
+        if (memchr(e->name, '-', e->length) == NULL) continue;
+        cssom_install_property_attribute(ctx, proto, id, (const char *)e->name);
+    }
+}
+
 /* ---- THE DESCRIPTOR INTERFACES: CSS Fonts 5 §9.1's CSSFontFaceDescriptors and CSSOM §6.4.7's
  * CSSPageDescriptors -----------------------------------------------------------------------------------------
  *
- * EACH LIST IS TYPED OUT BECAUSE THERE IS NO REGISTRY TO GENERATE IT FROM, and that is the opposite of the
- * camel-cased property attributes above, which are generated precisely because lexbor's property table IS the
- * "supported CSS property" set §6.6.1 states them over. A DESCRIPTOR is not a property: `src` and
- * `unicode-range` are accepted nowhere but inside an `@font-face` rule and `size` nowhere but inside an
+ * EACH LIST IS TYPED OUT BECAUSE THERE IS NO REGISTRY TO GENERATE IT FROM, and that is the opposite of
+ * §6.6.1's three per-property partial interfaces above, which are generated precisely because lexbor's
+ * property table IS the "supported CSS property" set §6.6.1 states them over. A DESCRIPTOR is not a property:
+ * `src` and `unicode-range` are accepted nowhere but inside an `@font-face` rule and `size` nowhere but inside an
  * `@page`, lexbor's registry has no entry for any of them, and each set is closed by the IDL rather than by
  * what this engine implements.
  *
@@ -2506,10 +2658,14 @@ static void cssd_computed_names(CssDecls *d)
     uintptr_t id;
     unsigned k, nlh, j, i;
 
-    for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
+    /* THE SAME QUESTION §6.6.1's installers ask, asked THROUGH THE SAME PREDICATE. This walk had its own
+       spelling of it — a start index and a null/empty guard — which let lexbor's custom-property marker
+       through to be filtered by whether css_computed_models happens to model a property called `#сustom`.
+       One "supported CSS property" question with two answers is how the two sites drift apart. */
+    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
         const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
 
-        if (!e || !e->name || e->length == 0) continue;
+        if (!cssom_supported_css_property(id, e)) continue;
         cssd_computed_name(d, (const char *)e->name);
     }
     for (k = 0; k < 2; k++) {
@@ -2816,8 +2972,16 @@ void cssom_init(JSContext *ctx)
             idl_optional_from(1);
         }
     }
-    for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
-        g_camel_set_id[id] = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_camel_set, (int)id);
+    /* §6.6.1 declares all three per-property spellings `[CEReactions] attribute [LegacyNullToEmptyString]
+       CSSOMString`, so `el.style.color = null` REMOVES the declaration exactly as `""` does. This declared them
+       with null_to_empty FALSE, which made `null` reach the setter as the four-character string "null" and
+       declare `color: null` — the descriptors beside them had it right, which is what made the disagreement
+       readable. One id per property, shared by the property's camel-cased, webkit-cased and dashed attributes,
+       because §6.6.1 gives all three the same setter steps. */
+    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
+        g_property_set_id[id] = cssom_supported_css_property(id, lxb_css_property_by_id(id))
+                              ? idl_setter_id(ctx, IDL_DOMSTRING, true, js_cssd_property_set, (int)id)
+                              : -1;
     {
         /* CSS Fonts 5 §9.1 and CSSOM §6.4.7 both declare every descriptor attribute
            `[LegacyNullToEmptyString]`, so `null` reaches the setter as "" and REMOVES the descriptor rather
@@ -2831,8 +2995,9 @@ void cssom_init(JSContext *ctx)
 }
 
 /* FOUR INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because four specs split them. CSSOM §6.6.1 The
-   CSSStyleDeclaration Interface's `partial interface CSSStyleProperties` carries `cssFloat` and the
-   per-property camel-cased attributes; CSS Fonts 5 §9.1 The CSSFontFaceRule interface's
+   CSSStyleDeclaration Interface's `interface CSSStyleProperties` carries `cssFloat`, and its three
+   `partial interface CSSStyleProperties` blocks the per-property camel-cased, webkit-cased and dashed
+   attributes; CSS Fonts 5 §9.1 The CSSFontFaceRule interface's
    `interface CSSFontFaceDescriptors : CSSStyleDeclaration` carries the forty-one `@font-face` DESCRIPTORS its
    twenty-one names spell, and CSSOM §6.4.7 The CSSPageRule Interface's
    `interface CSSPageDescriptors : CSSStyleDeclaration` the fourteen `@page` ones its nine names spell, which
@@ -2845,7 +3010,6 @@ void cssom_init(JSContext *ctx)
 void cssom_install_proto(JSContext *ctx)
 {
     JSValue base, proto, descriptors, page, prev;
-    uintptr_t id;
     int d;
 
     DCHECK(g_ready, "a realm asked for the declaration-block prototypes before the interfaces were declared");
@@ -2867,32 +3031,27 @@ void cssom_install_proto(JSContext *ctx)
     proto = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(proto), "CSSStyleProperties.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "CSSStyleProperties");
-    /* THE CAMEL-CASED IDL ATTRIBUTES, generated from LEXBOR'S OWN CSS PROPERTY REGISTRY. §6.6.1 states them as
-       a partial interface "for each CSS property property that is a supported CSS property", so the registry IS
-       the list — typing a hundred names here would be a second copy of it that could disagree, and inventing
-       them would be worse. */
-    for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
-        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
-        char camel[64];
-        size_t i, j = 0;
-        bool up = false;
+    /* §6.6.1's THREE PER-PROPERTY PARTIAL INTERFACES, each generated from LEXBOR'S OWN CSS PROPERTY REGISTRY:
+       §6.6.1 states each of them "for each CSS property property that is a supported CSS property", so the
+       registry IS the list — typing a hundred names here would be a second copy of it that could disagree, and
+       inventing them would be worse. The three are called here, side by side, because that is what the spec
+       declares: three partial interfaces on this one prototype. */
+    cssom_install_camel_cased_attributes(ctx, proto);
+    cssom_install_webkit_cased_attributes(ctx, proto);
+    cssom_install_dashed_attributes(ctx, proto);
+    {
+        /* §6.6.1's `cssFloat` IS A MEMBER OF `interface CSSStyleProperties` ITSELF — the IDL declares it there
+           and not in any of the three partials — AND IT IS A SECOND ATTRIBUTE OVER THE SAME PROPERTY, NOT A
+           RENAME OF THE FIRST. The CSS property to IDL attribute algorithm has no float case, so it produces
+           `float`, and §6.6.1 then declares `cssFloat` separately, defined to invoke setProperty "with float as
+           first argument". Renaming inside the generated loop DELETED `float`, so `element.style.float` was
+           undefined in this engine and it is a property of every browser. */
+        const lxb_css_entry_data_t *f = lxb_css_property_by_name((const lxb_char_t *)"float", 5);
 
-        if (!e || !e->name || e->length == 0 || e->length + 1 >= sizeof(camel)) continue;
-        if (e->name[0] == '-') continue;   /* a vendor-prefixed name has its own IDL spelling; not invented here */
-        for (i = 0; i < e->length; i++) {
-            if (e->name[i] == '-') { up = true; continue; }
-            camel[j++] = up ? (char)toupper(e->name[i]) : (char)e->name[i];
-            up = false;
-        }
-        camel[j] = 0;
-        idl_install_accessor(ctx, proto, camel, js_cssd_camel_get, (int)id, g_camel_set_id[id]);
-        /* §6.6.1's `cssFloat` IS A SECOND ATTRIBUTE OVER THE SAME PROPERTY, NOT A RENAME OF THE FIRST. The
-           CSS-property-to-IDL-attribute algorithm this loop runs has NO float case — it uppercases after a
-           dash and nothing else — so it produces `float`, and §6.6.1 then declares `cssFloat` separately,
-           defined to invoke setProperty "with float as first argument". Renaming here DELETED `float`, so
-           `element.style.float` was undefined in this engine and it is a property of every browser. */
-        if (strcmp(camel, "float") == 0)
-            idl_install_accessor(ctx, proto, "cssFloat", js_cssd_camel_get, (int)id, g_camel_set_id[id]);
+        DCHECK(f != NULL && f->unique != LXB_CSS_PROPERTY__UNDEF,
+               "CSSOM §6.6.1's `cssFloat` forwards to the `float` property and lexbor's registry has no such "
+               "row, so the member would answer for a property that does not exist");
+        cssom_install_property_attribute(ctx, proto, f->unique, "cssFloat");
     }
 
     /* CSS Fonts 5 §9.1's CSSFontFaceDescriptors.prototype and CSSOM §6.4.7's CSSPageDescriptors.prototype,

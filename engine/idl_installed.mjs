@@ -84,7 +84,8 @@
  * never a fallback to the union: a subset the audit cannot compute is a member list it does not know.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, extname } from "node:path";
+import { join, extname, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /* ---- source masking ------------------------------------------------------------------------------------- */
 
@@ -788,6 +789,140 @@ const TABLE_FORMS = [
   { declare: "byte_reader_declare", install: "byte_reader_install", arg: 1, via: "readers", field: "name",
     target: 1, handle: 2, kind: "data" },
 ];
+
+/* ---- THE GENERATED REGISTRY: a member list the SPEC does not spell either ---------------------------------
+ *
+ * Every form above takes the member's name out of the corpus, because the member has a name in the corpus. A
+ * TABLE_FORMS row reads the very array the C hands its installer, which is what makes it a reading of the C
+ * rather than a belief about it. CSSOM §6.6.1 The CSSStyleDeclaration Interface has no such array and cannot:
+ * it declares three partial interfaces "for each CSS property property that is a supported CSS property", so
+ * the member list is a FUNCTION of the user agent's property set, and the IDL's `_camel_cased_attribute` is a
+ * placeholder standing for a hundred names rather than one member. The component answers that correctly — it
+ * generates the attributes from lexbor's own property registry — and doing so put its install construct beyond
+ * every resolver here: a `char[]` filled by element writes is not a literal, a table index or an identifier.
+ *
+ * SO THE SITE WAS REPORTED UNRESOLVED, AND THAT IS THE ONE ANSWER THAT MUST NOT STAND. This file's own header
+ * says a construct it cannot resolve is a member it can neither count nor miss, so the ABSENT number beside it
+ * is a number over a surface with holes in it — and this hole was the whole per-property surface of the three
+ * interfaces every declaration block in the engine is. Making the C spell a hundred names would close it by
+ * making the component worse: a second copy of lexbor's registry, free to disagree with the one the getters
+ * read at run time. The other repair the audit names is the right one — teach the detector the construct.
+ *
+ * IT IS TAUGHT AS A READING, NOT AS A LIST. The auditor reads THE SAME FILE THE C READS — lexbor is vendored
+ * in this tree, so `lxb_css_property_data` in engine/lexbor/…/property/res.h is the array
+ * `lxb_css_property_by_id` indexes at run time, not a transcription of it — and it runs §6.6.1's own CSS
+ * property to IDL attribute algorithm over it. That leaves exactly one thing it cannot read: whether the C
+ * still runs the same algorithm with the same flag over the same rows. Three declarations below say what each
+ * §6.6.1 partial interface's installer must be, and each is CHECKED against the C rather than assumed:
+ *   - the installer must EXIST and be CALLED. A partial interface whose installer nothing calls is a partial
+ *     interface this engine does not have, and crediting its names would be the false COMPLETE this file is
+ *     built to remove — so it is a refusal, named with the component the declaration says it lives in.
+ *   - the ALGORITHM CALL inside it is read, and its `lowercase first` flag EVALUATED. §6.6.1 gives the
+ *     webkit-cased attribute the same algorithm as the camel-cased one and one flag's difference, so the flag
+ *     IS the difference between two member lists; reading it off the C is what stops this declaration from
+ *     being a second opinion about what the C does. The dashed attribute declares NO algorithm — §6.6.1 says
+ *     "where dashed attribute is property" — so its installer running one is the same contradiction.
+ * A registry that disagrees with itself (a row count that is not the enum's last entry, a row whose id is not
+ * its index, a name whose declared length is not its own bytes) is a refusal too, for the reason every other
+ * unread fact here is one: the alternative is a member list computed from data nobody checked. */
+const CSS_PROPERTY_REGISTRY = {
+  /* relative to this file: the VENDORED lexbor tree, whose res.h is what the engine compiles and links */
+  dir: ["lexbor", "source", "lexbor", "css", "property"],
+  table: "lxb_css_property_data",
+  last: "LXB_CSS_PROPERTY__LAST_ENTRY",
+  /* CSSOM §2 Terminology: "The term supported CSS property refers to a CSS property that the user agent
+     implements, including any vendor-prefixed properties, but excluding custom properties." Lexbor states the
+     two rows that are not properties as ids, and the component excludes them by those ids. */
+  notProperties: ["LXB_CSS_PROPERTY__UNDEF", "LXB_CSS_PROPERTY__CUSTOM"],
+};
+
+/* CSSOM §6.6.1 The CSSStyleDeclaration Interface's CSS PROPERTY TO IDL ATTRIBUTE algorithm — the same five
+   steps the component runs, over the same rows. */
+function cssPropertyToIdlAttribute(property, lowercaseFirst) {
+  let out = "", uppercaseNext = false;                                   /* steps 1-2 */
+  for (const c of lowercaseFirst ? property.slice(1) : property) {       /* step 3, then step 4 */
+    if (c === "-") { uppercaseNext = true; continue; }
+    out += uppercaseNext ? c.toUpperCase() : c;
+    uppercaseNext = false;
+  }
+  return out;                                                            /* step 5 */
+}
+
+const CSS_ALGORITHM = "cssom_css_property_to_idl_attribute";
+const GENERATED_FORMS = [
+  { fn: "cssom_install_camel_cased_attributes", target: 1, kind: "accessor",
+    in: "core/css/css_style_declaration.c",
+    partial: "CSSOM §6.6.1's camel-cased attribute",
+    /* "For each CSS property property that is a supported CSS property" */
+    applies: () => true,
+    algorithm: { fn: CSS_ALGORITHM, arg: 1, flag: false },
+    name: (p) => cssPropertyToIdlAttribute(p, false) },
+  { fn: "cssom_install_webkit_cased_attributes", target: 1, kind: "accessor",
+    in: "core/css/css_style_declaration.c",
+    partial: "CSSOM §6.6.1's webkit-cased attribute",
+    /* "and that begins with the string -webkit-" … "with the lowercase first flag set" */
+    applies: (p) => p.startsWith("-webkit-"),
+    algorithm: { fn: CSS_ALGORITHM, arg: 1, flag: true },
+    name: (p) => cssPropertyToIdlAttribute(p, true) },
+  { fn: "cssom_install_dashed_attributes", target: 1, kind: "accessor",
+    in: "core/css/css_style_declaration.c",
+    partial: "CSSOM §6.6.1's dashed attribute",
+    /* "except for properties that have no "-" (U+002D) in the property name" … "where dashed attribute is
+       property", which is why this one runs no algorithm at all */
+    applies: (p) => p.includes("-"),
+    algorithm: null,
+    name: (p) => p },
+];
+
+/* THE SUPPORTED CSS PROPERTY SET, read from the array the engine links. Every disagreement the two files can
+   hold is checked, because each one silently changes the member list this computes: a row count that is not
+   the enum's last entry means `lxb_css_property_by_id` walks past the array or stops short of it, a row whose
+   id is not its own index means the id the component stores as `magic` names a different property than the
+   name it installed, and a declared length that is not the name's own bytes means the algorithm reads a
+   truncated name or runs off the end (lexbor's custom-property marker is that row today — it is spelled with a
+   Cyrillic С and its `length` is one short — which is exactly why it must be excluded by ID and not by text). */
+let cssPropertiesCache = null;
+function cssProperties() {
+  if (cssPropertiesCache) return cssPropertiesCache;
+  const dir = join(dirname(fileURLToPath(import.meta.url)), ...CSS_PROPERTY_REGISTRY.dir);
+  const refuse = (why) => (cssPropertiesCache = { rows: null, why });
+  let res, konst;
+  try {
+    res = readFileSync(join(dir, "res.h"), "utf8");
+    konst = readFileSync(join(dir, "const.h"), "utf8");
+  } catch (e) {
+    return refuse(`lexbor's CSS property registry could not be read: ${e.message}`);
+  }
+  if (!new RegExp(`\\b${CSS_PROPERTY_REGISTRY.table}\\s*\\[`).test(res))
+    return refuse(`res.h no longer defines \`${CSS_PROPERTY_REGISTRY.table}\`, so the array the component ` +
+                  `indexes by property id is not the one this read`);
+  const ids = new Map();
+  for (const m of konst.matchAll(/\b(LXB_CSS_PROPERTY[A-Za-z_0-9]*)\s*=\s*(0[xX][0-9a-fA-F]+|\d+)/g))
+    ids.set(m[1], parseInt(m[2]));
+  const last = ids.get(CSS_PROPERTY_REGISTRY.last);
+  if (last === undefined) return refuse(`const.h no longer states \`${CSS_PROPERTY_REGISTRY.last}\``);
+  /* a row: `{(lxb_char_t *) "align-content", 13, LXB_CSS_PROPERTY_ALIGN_CONTENT, …}` — name, byte length, id */
+  const ROW = /\{\s*\(lxb_char_t\s*\*\)\s*"((?:[^"\\]|\\.)*)"\s*,\s*(\d+)\s*,\s*(LXB_CSS_PROPERTY\w*)\s*,/g;
+  const rows = [...res.matchAll(ROW)].map((m) => ({ name: m[1], length: Number(m[2]), id: m[3] }));
+  if (rows.length !== last)
+    return refuse(`res.h holds ${rows.length} rows and const.h says ${CSS_PROPERTY_REGISTRY.last} is ${last}`);
+  const out = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (ids.get(r.id) !== i)
+      return refuse(`res.h row ${i} carries the id \`${r.id}\`, which const.h numbers ${ids.get(r.id)} — the ` +
+                    `array is not indexed by property id`);
+    if (CSS_PROPERTY_REGISTRY.notProperties.includes(r.id)) continue;   /* CSSOM §2 Terminology */
+    if (r.name.startsWith("#"))
+      return refuse(`res.h row ${i} spells the marker \`${r.name}\` rather than a property name, and CSSOM ` +
+                    `§2 Terminology's exclusions are ${CSS_PROPERTY_REGISTRY.notProperties.join(" and ")}`);
+    if (Buffer.byteLength(r.name, "utf8") !== r.length || !/^[\x20-\x7e]+$/.test(r.name))
+      return refuse(`res.h row ${i} declares \`${r.name}\` to be ${r.length} bytes long and it is not, or it ` +
+                    `is not ASCII — §6.6.1's algorithm would not read the name the engine installs`);
+    out.push({ id: i, name: r.name });
+  }
+  return (cssPropertiesCache = { rows: out, why: null });
+}
 
 /* ---- which INTERFACE an object is ------------------------------------------------------------------------ */
 
@@ -1688,9 +1823,40 @@ export function loadEnvironment(root) {
    COMPLETE this attribution exists to remove, and the caller reports it as its own category instead.
    `paths` are absolute; pass the whole program, since which interface a member belongs to is a fact about the
    object it is installed on and not about which row named the file. */
+/* WHAT THE GENERATED INSTALLER ACTUALLY RUNS, read out of its body: the §6.6.1 algorithm call and its
+   `lowercase first` flag, which is the ONE fact the registry read cannot supply and the whole difference
+   between the camel-cased member list and the webkit-cased one. Returns null when the C says what the
+   declaration says, and the sentence to refuse with otherwise. */
+function generatedRefusal(form, env) {
+  let body = null;
+  for (const fns of env.fnsOf.values()) {
+    const f = fns.find((x) => x.name === form.fn);
+    if (f) { body = f.body; break; }
+  }
+  if (body === null) return `\`${form.fn}\` is declared as ${form.partial}'s installer and no such function exists`;
+  const runs = callSites(body, CSS_ALGORITHM);
+  if (!form.algorithm) {
+    return runs.length === 0 ? null
+      : `${form.partial} is the property name itself, and \`${form.fn}\` runs ${CSS_ALGORITHM} over it`;
+  }
+  if (runs.length !== 1)
+    return `${form.partial} is named by one run of ${CSS_ALGORITHM} and \`${form.fn}\` runs it ${runs.length} time(s)`;
+  const arg = String(runs[0].args[form.algorithm.arg] ?? "").trim();
+  const flag = arg === "true" || arg === "1" ? true : arg === "false" || arg === "0" ? false : null;
+  if (flag === null)
+    return `\`${form.fn}\` passes \`${arg}\` as ${CSS_ALGORITHM}'s lowercase first flag, which is not a ` +
+           `constant this can evaluate, so which of two member lists it installs is unknown`;
+  if (flag !== form.algorithm.flag)
+    return `${form.partial} is obtained with the lowercase first flag ${form.algorithm.flag ? "SET" : "UNSET"} ` +
+           `and \`${form.fn}\` passes \`${arg}\``;
+  return null;
+}
+
 export function installedMembers(paths, env) {
   const records = [], unresolved = [], offInstaller = [], excluded = [], unselected = [];
   const { forms } = env;
+  /* which GENERATED_FORMS installers the corpus calls at all — see the loop after the file walk */
+  const called = new Set();
 
   /* WHICH INTERFACE THIS TARGET IS — hoisted out of the per-file loop because a SELECTED installer's target is
      resolved in the CALLER's file and function, not in the one the install is written in. */
@@ -1828,6 +1994,9 @@ export function installedMembers(paths, env) {
         const pos = form.name === undefined ? form.tableArg : form.name;
         if (forms.has(f.name) && fromParam(f, site.args[pos] || "")) continue;
         if (TABLE_FORMS.some((t) => t.install === f.name)) continue;
+        /* The same rule for a GENERATED registry's installer: the names it writes are the registry's, read in
+           section 5 from the array the C reads, so the install line inside it names nothing on its own. */
+        if (GENERATED_FORMS.some((g) => g.fn === f.name)) continue;
         const target = stripCast(site.args[form.target] || "");
         const a = interfacesOf(path, f, target, site.at);
         if (form.ambiguous && !a.ifaces.length && !a.candidates.length) {
@@ -2027,6 +2196,38 @@ export function installedMembers(paths, env) {
         }
       }
     }
+
+    /* 5. THE GENERATED REGISTRIES — see GENERATED_FORMS. The member list is computed from the array the C
+       reads; what is read HERE is the call, so the target is the caller's object like every other install. */
+    for (const form of GENERATED_FORMS) {
+      for (const site of callSites(masked, form.fn)) {
+        const f = fnAt(site.at);
+        if (!f) continue;
+        called.add(form.fn);
+        const reg = cssProperties();
+        if (!reg.rows) { report(site.at, form.fn, reg.why); continue; }
+        const why = generatedRefusal(form, env);
+        if (why) { report(site.at, form.fn, why); continue; }
+        const names = reg.rows.filter((r) => form.applies(r.name)).map((r) => form.name(r.name));
+        emit(names, false, f, stripCast(site.args[form.target] || ""), site.at, form.fn, form.kind);
+      }
+    }
+  }
+  /* A DECLARED INSTALLER NOTHING CALLS. The three §6.6.1 partial interfaces are three contracts that can go
+     absent one at a time, and an installer with no call site installs nothing — so crediting its hundred names
+     would be a false COMPLETE with the auditor's own name on it, and saying nothing at all would be this
+     file's other failure, a member it can neither count nor miss. It is named, with the component the
+     declaration says it lives in, in the category the audit reports about ITSELF. */
+  for (const form of GENERATED_FORMS) {
+    if (called.has(form.fn)) continue;
+    /* named against the COMPONENT the declaration says it lives in, resolved in the corpus so the refusal
+       lands on that interface's row rather than in the "no row names this file" tail — and so a declaration
+       naming a component that does not exist says so instead of going quiet */
+    const where = paths.find((p) => p.endsWith(form.in));
+    unresolved.push({ file: where || form.in, line: 0, form: form.fn,
+                      expr: where ? `${form.partial} has no installer this corpus calls`
+                                  : `${form.partial}'s installer is declared to live in \`${form.in}\`, and ` +
+                                    `this corpus has no such file` });
   }
   return { records, unresolved, offInstaller, excluded, unselected };
 }
