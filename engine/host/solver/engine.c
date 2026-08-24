@@ -4339,11 +4339,39 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    every charge and bumps no generation, so the instant aging became a real quantity the cached verdict was a
    comparison made before the flow had aged: the term would have demoted it correctly and the hook would never
    have looked again.
-   Only the RUNNING flow's weight moves between generation bumps — a parked flow burns no CPU, and an emit both
-   changes `val` and bumps the generation — so the RIVAL's weight is constant across the cache's key and the
-   O(flows) scan for it still happens only on a change. The running flow's own weight is recomputed at every
-   consultation: two divisions beside a clock read the hook already performs, and exact rather than stale. */
-static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static double g_rival_w = -1.0 / 0.0;
+   WHAT IS CACHED IS THE RIVAL'S IDENTITY AND NOT ITS WEIGHT, and the difference is a defect this file used to
+   assert its way past. The sentence that stood here was: "only the RUNNING flow's weight moves between
+   generation bumps — a parked flow burns no CPU, and an emit both changes `val` and bumps the generation — so
+   the RIVAL's weight is constant across the cache's key." The premise is FALSE, and it became false the moment
+   the aging term acquired a FAMILY half. `flow_silence_notch` reads `f->cpu + fam_us`, and `flow_age_running`
+   writes `family->fam_us` after EVERY step without raising the generation — so a parked flow burns no CPU OF
+   ITS OWN and its weight moves anyway, because the quantity is shared with whichever arm holds the thread. On
+   a real page the whole frontier is ONE family (flow.c: every flow descends from the boot flow), so this is
+   not an edge: it is every parked member of the frontier, on every step.
+   AND THE STALENESS IS DIRECTIONAL, WHICH IS WHY IT COST AN ABORT AND NOT A MISSED YIELD. The notch is a FLOOR
+   of `(cpu_i + fam_us) / S`, and each member straddles its own boundary at its own instant because each has
+   its own `cpu_i`. So a step can carry the RIVAL's floor across while the running flow's stands still: the
+   rival's true weight drops by a whole point, the cache keeps the value from before the drop, and the hook
+   then yields to a flow that is no longer better while every quantity the seam assertion snapshots about the
+   running flow is correctly unchanged. That is the assertion's own "a rival recomputed against a stale cache",
+   fired by the cache this comment declared could not go stale.
+   SO THE WEIGHT IS RECOMPUTED AT EVERY CONSULTATION, both sides of it, which is what makes the comparison the
+   same question the pick answers rather than a different one. The O(flows) SCAN — finding WHICH flow is the
+   rival — is what the generation key is for and still happens only on a change; evaluating one weight is two
+   divisions beside a clock read the hook already performs.
+   AND IT IS NOT THE FITNESS TERM, WHICH IS WORTH WRITING DOWN BECAUSE THE TWO ARRIVED TOGETHER AND THE OTHER
+   ONE IS A CLAUSE IN THE ASSERTION BELOW. A `cand_dist` write cannot fire that assertion: it is made only on
+   the RUNNING flow, only through flow_set_distance, and that raises the generation — so clause one is true for
+   the whole remainder of the turn and the disjunction cannot be false. Watching the distance is the discipline
+   the snapshot block states for ANY summand of the weight and is right on that ground alone; it is not the
+   mechanism that aborts, and a reader who takes it for one will conclude this cache is sound. ONE READING
+   tells the two apart: a fire with the generation EQUAL to the ranked one, which a distance write makes
+   impossible and which a family-notch straddle leaves untouched.
+   The cached POINTER is safe across the key for a
+   reason the key itself supplies: a flow leaving the frontier is a membership change and raises the
+   generation, so the rescan re-runs before a departed member could be read. That is asserted where the pointer
+   is taken rather than where it is read, because membership is an O(flows) scan and the read is per-opcode. */
+static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_rival = NULL;
 /* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the quantities the value yield's
    verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
    clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
@@ -4450,14 +4478,26 @@ static int preempt_hook(int kind) {
        against is the same one the pick used. */
     if (flow_frontier_gen() != g_seen_gen || cur != g_seen_cur) {   /* (1) rescan for the rival only on change */
         g_seen_gen = flow_frontier_gen(); g_seen_cur = cur;
-        Flow *rival = cur ? flow_rival_of(cur) : NULL;
-        g_rival_w = rival ? flow_weight(rival) : -1.0 / 0.0;
+        g_rival = cur ? flow_rival_of(cur) : NULL;
+        /* THE CACHED POINTER'S WHOLE SAFETY ARGUMENT, ASSERTED WHERE IT IS ESTABLISHED. It is read at every
+           consultation until the generation moves, so it is live only because a member LEAVING the frontier is
+           a membership change that raises the generation and forces this rescan. Asked here and not at the
+           read: membership is an O(flows) scan and the read is per-opcode, so putting it there would make the
+           dev build's hot path linear in the frontier — the same reason flow_weight may not walk. */
+        DCHECK(g_rival == NULL || flow_is_member(g_rival),
+               "the value yield cached a rival that is not in the frontier — the pointer is read until the "
+               "generation next moves, so a departure that did not raise the generation leaves this hook "
+               "ranking against freed memory");
     }
     /* (0) BLOCKED BEATS BOTH RANKINGS. A flow holding an unanswered synchronous host request cannot make
        progress no matter how it ranks, and the answer cannot arrive while it holds the thread — the host is
        only asked between steps. Deciding this by weight would re-enter it immediately and spin. */
     if (cur && flow_blocked(cur)) return 1;
-    if (cur && g_rival_w > flow_weight(cur)) {   /* value yield — the rival is cached, the verdict is not */
+    /* BOTH SIDES EVALUATED HERE, WHICH IS WHAT MAKES THIS THE SAME QUESTION THE PICK ANSWERS. What the cache
+       holds is WHICH flow the rival is; what this line computes is what the two are worth right now. The
+       rival's weight was cached once, on the reasoning that a parked flow's weight cannot move — see the
+       cache's own declaration for why that is false, and for the abort it produced. */
+    if (cur && g_rival && flow_weight(g_rival) > flow_weight(cur)) {   /* value yield */
         /* THE VALUE YIELD MAY ONLY FIRE ON A RANK CHANGE, AND THIS IS WHERE THAT IS EITHER TRUE OR A SENTENCE
            IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/
            suspension that changes ranks)" and that "a top-ranked flow runs on at ~zero switch cost" — so a flow
