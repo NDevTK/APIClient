@@ -1120,6 +1120,17 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
         Cand *e;
         const char *code;
         if (concolic_is(arg)) return;           /* injection didn't reach this read -> not our candidate */
+        /* A NON-STRING SOURCE IS NOT A SINK, AND THAT IS A POSITIVE STATEMENT RATHER THAN A GUARD.
+           ECMAScript §19.2.1.1 PerformEval ( source, strictCaller, direct ) step 2 is "If source is not a
+           String, return source" — the argument is handed back UNEVALUATED, so nothing is compiled, no JS
+           context exists to break out of, and there are no bytes for the filter rung to measure. `eval(fn)`
+           and `eval({})` are the whole of it: an object is NOT coerced here the way it is at a USVString or
+           DOMString sink, which is why the sibling sinks below must NOT copy this line — `location = {
+           toString(){ return "javascript:…" } }` really does run ToString and really is a vector, so an early
+           return there would delete a true finding rather than decline a false one.
+           Without this the conversion below reached ToPrimitive on a real object and aborted, which read as a
+           missing engine capability when the spec had already answered: there is nothing here to convert. */
+        if (!JS_IsString(arg)) return;
         /* THE STRING IS CONVERTED BEFORE THE CLASS PARTITION, which is what puts the filter rung inside the
            runway. The partition below decides whose SINK this is; the survival measurement is about the
            running flow's own bytes and is true wherever they surface, so asking it first is not a reordering
