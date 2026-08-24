@@ -1189,11 +1189,21 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
     target = form_element_target(ctx, s->submitter, form, node_of(s->hdr.this_val), &tlen);
     if (strcmp(scheme, "javascript") == 0) {
         if (!form_target_is_self(target, tlen))
+            /* WHAT THIS ASKED FOR HAS PARTLY ARRIVED, AND A DFAIL THAT KEEPS ASKING IS THE STALE ONE
+               CLAUDE.md NAMES. It used to instruct the next reader to "build steps 18-21 (get an element's
+               target, get an element's noopener, the rules for choosing a navigable)", and TWO of those three
+               are in this tree: get-an-element's-target is form_element_target, twenty lines up and already
+               called on the line above; the rules for choosing a navigable are HTML §7.3.1.7's, implemented as
+               navigable_open in core/frame/navigable.c and reached by both `window.open` and §4.6.3. So the
+               instruction sent its reader to write a third copy of an algorithm whose whole point is that
+               there is one. What is genuinely absent is named instead. */
             DFAIL("a form submits to a `javascript:` action while naming another navigable in `target` or "
                   "`formtarget` — §4.10.22.3 steps 18-21 choose that navigable and §7.4.2.3.2 evaluates the "
-                  "URL in ITS active document, under ITS settings object and API base URL; build steps 18-21 "
-                  "(get an element's target, get an element's noopener, the rules for choosing a navigable) "
-                  "and evaluate the URL in the navigable they choose");
+                  "URL in ITS active document, under ITS settings object and API base URL, while "
+                  "navigable_evaluate_javascript_url below runs it in THIS one. Build §4.10.22.3 step 19's "
+                  "get-an-element's-noopener for a form, hand the target and that flag to navigable_open "
+                  "(core/frame/navigable.c, which already runs §7.3.1.7's rules), and evaluate the URL in the "
+                  "realm of the navigable it answers with");
         serialized = url_serialize(parsed, /*exclude_fragment*/ false);
         CHECK(serialized != NULL, "form: OOM serializing a javascript: action URL");
         navigable_evaluate_javascript_url(ctx, serialized);

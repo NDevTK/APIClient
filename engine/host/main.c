@@ -494,7 +494,8 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
        ZERO IS THE ROOT NAVIGABLE'S TARGET SNAPSHOT SANDBOXING FLAGS, and it is the spec's answer rather than a
        placeholder: this is the navigable the INSTANCE STARTED IN, a top-level traversable with no embedder
        element, so §7.1.5 answers its creation flags from the POPUP sandboxing flag set — which begins empty and
-       which only §7.1's rules for choosing a navigable ever fill. Nothing chose this one. The other half of
+       which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill. Nothing
+       chose this one. The other half of
        §7.4.5's union, this response's CSP-derived flags, is what navigation_params computes. */
     memset(&response_headers, 0, sizeof response_headers);
     header_list_parse_field_lines(&response_headers, headers);

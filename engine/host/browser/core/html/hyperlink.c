@@ -225,7 +225,7 @@ static JSValue js_link_tostring(JSContext *ctx, JSValueConst this_val, int argc,
  * as one: a page cannot remove it, cannot see it in a listener list, and cannot run it out of order. §2.9 picks
  * the activation target while it builds the path and runs it after the walk only if nothing cancelled.
  *
- * THE NAVIGATION IS §7.4's, reached through navigable_open — the same rules for choosing a navigable that
+ * THE NAVIGATION IS §7.2.2.1's, reached through navigable_open — the same §7.3.1.7 rules for choosing a
  * `window.open()` applies. `rel="noopener"` and `rel="noreferrer"` are where this caller's noopener comes
  * from instead of a features string, which is the only difference between the two callers. */
 static bool link_has_activation(JSContext *ctx, JSValueConst el)
@@ -280,14 +280,19 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
         feat.noopener = strstr(rel, "noopener") != NULL || strstr(rel, "noreferrer") != NULL;
         feat.noreferrer = strstr(rel, "noreferrer") != NULL;
     }
-    /* §4.6.3 step 2: the target attribute value, and an EMPTY one is no target at all — which the rules for
-       choosing a navigable read as `_self`, the navigable the link is in. */
+    /* §4.6.3's "get an element's target": the `target` attribute's value, and the empty string when there is
+       none. It is handed over AS IT IS — this line used to substitute the literal "_self" for an absent or
+       empty target, which is HTML §7.3.1.7 "Navigable target names" step 4 written a second time in a caller.
+       The rules for choosing a navigable answer the current navigable for the empty string themselves, and a
+       caller that pre-translates is the second copy navigable_open's own header warns is always subtly wrong:
+       this one hid that navigable_open read an empty target as CREATE, so the day anything else passed one
+       through it opened a popup. */
     /* §7.4 STEPS 6 AND 14. `phase` and `req` are this behaviour's suspension, held by the dispatch machine that
        called it: the navigate inside here FETCHES, and when that fetch becomes the host request it already has
        to be (navigable.h), it is these two words the wait lives in and this line that returns JS_STEP_YIELD.
        It does not park yet — navigable_open reaches the host's synchronous fetcher — so this always finishes in
        one entry, and the contract is what makes the change to child_document a change to child_document. */
-    r = navigable_open(ctx, href, target && *target ? target : "_self", &feat);
+    r = navigable_open(ctx, href, target, &feat);
     JS_FreeCString(ctx, href);
     JS_FreeValue(ctx, hrefv);
     free(target);

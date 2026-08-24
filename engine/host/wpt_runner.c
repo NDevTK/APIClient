@@ -1545,7 +1545,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
     }
     /* ZERO IS THE ROOT NAVIGABLE'S TARGET SNAPSHOT SANDBOXING FLAGS: a top-level traversable has no embedder
        element, so §7.1.5 answers its creation flags from the POPUP sandboxing flag set, which begins empty and
-       which only §7.1's rules for choosing a navigable ever fill — nothing chose this one. The other half of
+       which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever fill — nothing
+       chose this one. The other half of
        §7.4.5's union is this response's CSP-derived flags, which navigation_params computes.
        §8.1.3.5's SECURE-CONTEXT ANSWER is over the environment's TOP-LEVEL CREATION URL, which is what decides
        whether an `Origin-Agent-Cluster`, a COOP or a COEP is honoured at all. */

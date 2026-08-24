@@ -235,13 +235,18 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
  * `url` is the SERIALIZED URL, whose scheme must be `javascript`; the caller has already parsed it. */
 void navigable_evaluate_javascript_url(JSContext *ctx, const char *url);
 
-/* §7.4 STEPS 6 AND 14 AS ONE OPERATION — choose a navigable for `target` and navigate it to `url`, creating one
-   and giving it the name when nothing answers to it. TWO callers, and they are not variants of each other:
-   `window.open()` reaches it after parsing a features string, and §4.6.3's FOLLOWING A HYPERLINK reaches it
-   from an `<a>`'s activation behaviour with `noopener` read off `rel`. The rules for choosing a navigable are
-   ONE algorithm; a second copy in the hyperlink path would be the second answer that is always subtly wrong.
+/* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, then the navigation both callers
+   want: choose a navigable for `target` and navigate it to `url`, creating one and giving it the name when
+   nothing answers to it. TWO callers, and they are not variants of each other: §7.2.2.1's window open steps
+   reach it after parsing a features string, and §4.6.3's FOLLOWING A HYPERLINK reaches it from an `<a>`'s
+   activation behaviour with `noopener` read off `rel`. The rules for choosing a navigable are ONE algorithm; a
+   second copy in the hyperlink path would be the second answer that is always subtly wrong.
+   `target` IS THE RAW TARGET — the attribute's value, or the string the page passed — and NULL or the empty
+   string means "no target", which §7.3.1.7 step 4 answers with the CURRENT navigable. A caller wanting the
+   other meaning states it: §7.2.2.1 step 5 maps an empty target to "_blank" before applying these rules, and
+   that mapping lives at that caller because it is that algorithm's step and not this one's.
    Answers the chosen navigable's WindowProxy (owned), or JS_UNDEFINED when the url does not parse — which
-   §7.4 turns into a SyntaxError and §4.6.3 discards, because a click is not a place a page can catch one. */
+   §7.2.2.1 turns into a SyntaxError and §4.6.3 discards, because a click is not a place a page can catch one. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat);
 void navigable_free(JSContext *ctx);
 

@@ -1285,26 +1285,79 @@ JSValue navigable_tree_order(JSContext *ctx)
     return out;
 }
 
+/* HTML §7.3.1.7 "Navigable target names" spells its four reserved tokens as "an ASCII case-insensitive match",
+ * and this component compared them with `strcmp` — so `window.open(u, "_SELF")` opened a window where the spec
+ * navigates the current navigable, and `open(u, "_ToP")` did the same. The corpus tests this by name:
+ * `choose-_self-002.html`, `choose-_parent-004.html` and `choose-_top-003.html` all carry "(case-sensitivity)"
+ * in their titles, and `choose-_top-003-iframe-2.html` opens with the literal spelling `"_ToP"`.
+ * NOT `strcasecmp`, WHICH IS THE LOCALE'S — the spec says ASCII, and a Turkish locale folds `I` to `ı`. The
+ * keyword is always the lower-case literal, so only the left operand needs folding. */
+static bool target_name_is(const char *name, const char *keyword)
+{
+    size_t i;
+
+    for (i = 0; keyword[i]; i++) {
+        char c = name[i];
+
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != keyword[i]) return false;
+    }
+    return name[i] == '\0';
+}
+
+/* §7.3.1.7 "Navigable target names", FIND A NAVIGABLE BY TARGET NAME, given `name` and this navigable.
+ *
+ * THE SUBTREES ARE SEARCHED IN REVERSE ORDER, AND THAT IS THE HALF THIS FUNCTION DID NOT HAVE. Step 3 offers an
+ * IMPLEMENTATION-DEFINED choice of two subtree lists (the spec's own Issue #10848 tracks settling it), and this
+ * engine takes the first, « currentNavigable's traversable navigable, currentNavigable » — which step 6 then
+ * walks "in reverse order", so THIS navigable's own subtree is searched FIRST and the traversable's whole tree
+ * second. This function started at the traversable and never looked at the requestor's subtree at all, so a
+ * name held by BOTH a child of the requestor and a sibling of it answered the SIBLING — the requestor's own
+ * frame lost to a stranger's. `duplicate-name-order.html` asserts exactly that, in exactly those words:
+ * 'subtree first', then 'then the rest of the tree', then 'then other pages'.
+ * The first match wins in each tree rather than the best — §7.3.1.7 and §7.3.1.5 define no ranking. */
 static JSValue navigable_choose_name(JSContext *ctx, const char *name)
 {
-    JSValue top = window_proxy_top_of(ctx, document_window_proxy(ctx));
-    JSValue hit = nav_find_in_tree(ctx, top, name);
+    JSValueConst self = document_window_proxy(ctx);
+    JSValue top = window_proxy_top_of(ctx, self);
+    JSValue hit;
     uint32_t i, n = 0;
     JSValue len;
 
-    JS_FreeValue(ctx, top);
-    if (!JS_IsUndefined(hit)) return hit;   /* §7.3.1.7 searches subtreesToSearch before the group, and returns
-                                               the first match rather than the best — there is no ranking. */
+    /* THE KEYWORDS NEVER REACH THE SEARCH, and that is a rule of the algorithm rather than of its callers:
+       steps 4-6 answer `_self`/`_parent`/`_top` before step 7 exists, and step 7 itself excludes `_blank`. If
+       one arrives here the rules have been re-ordered, and the visible symptom would be a page naming a frame
+       `_top` and then being HANDED it — a navigable answering to a token the spec reserves. */
+    DCHECK(!target_name_is(name, "_self") && !target_name_is(name, "_parent") &&
+           !target_name_is(name, "_top") && !target_name_is(name, "_blank"),
+           "§7.3.1.7's find-a-navigable-by-target-name was asked for one of the four reserved keywords — the "
+           "rules for choosing a navigable consume all four before the search, so a keyword here means a "
+           "navigable can be given a name the spec never lets it answer to");
+    /* §7.3.1.7 compares target names for EQUALITY. Only the four keywords above are matched ASCII
+       case-insensitively, so nav_find_in_tree's strcmp is the spec's own comparison and not an oversight. */
+    hit = nav_find_in_tree(ctx, self, name);
+    /* THE TWO SUBTREES ARE ONE SUBTREE FOR A TOP-LEVEL DOCUMENT, which is most of them: `self` IS the
+       traversable, so the second walk would re-ask the identical question of the identical tree. The spec's
+       list is « traversable, currentNavigable » and a duplicate member costs a walk and can change no answer,
+       since the first match in a pre-order over the same root is the same navigable. */
+    if (JS_IsUndefined(hit) && !JS_IsSameValue(ctx, self, top)) hit = nav_find_in_tree(ctx, top, name);
+    if (!JS_IsUndefined(hit)) { JS_FreeValue(ctx, top); return hit; }
     DCHECK(JS_IsArray(g_group), "the browsing context group's list was read before navigable_init built it");
     len = JS_GetPropertyStr(ctx, g_group, "length");
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
     for (i = 0; i < n; i++) {
         JSValue other = JS_GetPropertyUint32(ctx, g_group, i);
+
+        /* §7.3.1.7's step 9 loop over the group opens "If currentTopLevelBrowsingContext is
+           topLevelBrowsingContext, then continue" — the two searches above already covered this tree, and
+           walking it again is the same answer computed twice for every miss. */
+        if (JS_IsSameValue(ctx, other, top)) { JS_FreeValue(ctx, other); continue; }
         hit = nav_find_in_tree(ctx, other, name);
         JS_FreeValue(ctx, other);
-        if (!JS_IsUndefined(hit)) return hit;
+        if (!JS_IsUndefined(hit)) { JS_FreeValue(ctx, top); return hit; }
     }
+    JS_FreeValue(ctx, top);
     return JS_UNDEFINED;
 }
 
@@ -1322,20 +1375,33 @@ static void navigable_group_add(JSContext *ctx, JSValueConst proxy)
     JS_SetPropertyUint32(ctx, g_group, n, JS_DupValue(ctx, proxy));
 }
 
+/* §7.3.1.7's STEPS 4-6 — the three keywords that answer with an existing navigable, ASCII case-insensitively
+ * and in the spec's own order. `_blank` is NOT here: step 7 excludes it from the search and step 8 creates, so
+ * it is the caller's fall-through rather than a fourth arm returning "nothing".
+ * NOR IS ANY OTHER `_`-PREFIXED TOKEN. This function used to be reached by `target[0] == '_'`, which handed it
+ * `_foo` and got JS_UNDEFINED back — so `open("", "_foo")` minted a window with NO NAME, and a second call
+ * minted another. §7.3.1.7 reserves exactly four tokens; `_foo` is not one of them, so step 7 SEARCHES for it
+ * and step 8 gives the created navigable that very name. (A leading `_` makes it not a "valid navigable target
+ * name" — that is an authoring-conformance sentence in the same section, and the algorithm below it does not
+ * consult it.) */
 static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 {
     JSValueConst self = document_window_proxy(ctx);
 
-    if (!target || !*target || !strcmp(target, "_self")) return JS_DupValue(ctx, self);
-    if (!strcmp(target, "_parent")) {
-        /* §7.1: a navigable with no parent is its own parent — the keyword never reaches past the top. */
+    DCHECK(target != NULL, "the rules for choosing a navigable were given a null name — §7.3.1.7 is written "
+                           "over a STRING, and navigable_open turns an absent target into the empty one so "
+                           "that step 4's two spellings of \"no target\" arrive here as one");
+    if (!*target || target_name_is(target, "_self")) return JS_DupValue(ctx, self);
+    if (target_name_is(target, "_parent")) {
+        /* §7.3.1.7 step 5: "currentNavigable's parent, if any, and currentNavigable otherwise" — a navigable
+           with no parent is its own parent, so the keyword never reaches past the top. */
         JSValue p = window_proxy_parent(ctx, self);
         if (window_proxy_is(p)) return p;
         JS_FreeValue(ctx, p);
         return JS_DupValue(ctx, self);
     }
-    if (!strcmp(target, "_top")) return window_proxy_top_of(ctx, self);
-    return JS_UNDEFINED;   /* `_blank`, and any other `_`-prefixed token, CREATE */
+    if (target_name_is(target, "_top")) return window_proxy_top_of(ctx, self);
+    return JS_UNDEFINED;
 }
 
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
@@ -1655,58 +1721,87 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     return proxy;
 }
 
-/* §7.4 STEPS 6 AND 14, AS ONE OPERATION — choose a navigable for `target` and navigate it to `url`, creating
- * one when nothing answers to the name. It is its own function because it has TWO callers and they are not
- * variants of each other: `window.open()` reaches it after parsing a features string, and §4.6.3's FOLLOWING A
- * HYPERLINK reaches it from an `<a>`'s activation behaviour with `noopener` read off `rel` instead. The rules
- * for choosing a navigable are one algorithm; a second copy in the hyperlink path would be the second answer
- * that is always subtly wrong.
- * `feat` carries what only §7.4 supplies (the popup decision) and what both supply (`noopener`). */
+/* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, given `target`, this document's
+ * node navigable and `noopener` — followed by the navigation the two callers both want. It is its own function
+ * because it has TWO callers and they are not variants of each other: §7.2.2.1's window open steps reach it
+ * after parsing a features string, and §4.6.3's FOLLOWING A HYPERLINK reaches it from an `<a>`'s activation
+ * behaviour with `noopener` read off `rel` instead. The rules are ONE algorithm; a second copy in the hyperlink
+ * path would be the second answer that is always subtly wrong.
+ * `feat` carries what only §7.2.2.1 supplies (the popup decision) and what both supply (`noopener`).
+ *
+ * THE STEP ORDER IS THE ALGORITHM, AND IT WAS INVERTED HERE. This function opened by testing `noopener` and
+ * skipping the whole choice when it was set — "a request that must not be able to script its opener cannot be
+ * answered with a navigable the opener already holds, so it always CREATES", which sounds like a reason and is
+ * not the spec's. `noopener` guards STEP 7 alone, the search by target name; steps 4-6 run before it and are
+ * unconditional. So `open(url, "_self", "noopener")` must navigate THIS navigable — a page cannot be given a
+ * handle it already has, so there is nothing for the flag to withhold — and it was opening a new window
+ * instead, silently turning a same-window navigation into a popup. The same inversion swallowed `_parent` and
+ * `_top`.
+ *
+ * AN EMPTY TARGET IS `_self` HERE, WHICH IS STEP 4 AND NOT A CALLER'S BUSINESS. §4.6.3 passed the literal
+ * "_self" for a missing `target` attribute — a second copy of step 4 living in the caller — while this function
+ * read an empty target as "create", which is neither caller's rule. §7.2.2.1's window open steps map "" to
+ * "_blank" in their own step 5 BEFORE applying these rules, so `window.open(url, "")` still opens a window:
+ * that mapping belongs to §7.2.2.1 and now lives there. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat)
 {
-    /* §7.1's FIRST rule is `noopener`, and it comes before every other: a request that must not be able to
-       script its opener cannot be answered with a navigable the opener already holds, so it always CREATES. */
-    if (target && *target && !(feat && feat->noopener)) {
-        JSValue chosen = (target[0] == '_') ? navigable_choose_keyword(ctx, target)
-                                            : navigable_choose_name(ctx, target);
-        if (window_proxy_is(chosen)) {
-            /* §7.4 step 14 over the chosen navigable. An absent url is the empty string, which resolves
-               against the document's own address — so `open("", "_self")` reloads. */
-            JSValue r = navigable_navigate(ctx, chosen, url ? url : "");
-            JS_FreeValue(ctx, chosen);
-            return r;
-        }
+    const char *name = target ? target : "";
+    const bool noopener = feat && feat->noopener;
+    /* Steps 4-6: the empty string and the three keywords that answer with a navigable that already exists. */
+    JSValue chosen = navigable_choose_keyword(ctx, name);
+
+    /* Step 7: "if name is not an ASCII case-insensitive match for `_blank` and noopener is false, then set
+       chosen to the result of finding a navigable by target name". Both halves are conditions on the SEARCH. */
+    if (JS_IsUndefined(chosen) && !target_name_is(name, "_blank") && !noopener)
+        chosen = navigable_choose_name(ctx, name);
+    if (window_proxy_is(chosen)) {
+        /* §7.2.2.1's window open steps 15-16 over the chosen navigable — the two arms that navigate, split by
+           windowType, which this engine has one loader for. An absent url is the empty string, which resolves
+           against the document's own address — so `open("", "_self")` reloads. */
+        JSValue r = navigable_navigate(ctx, chosen, url ? url : "");
         JS_FreeValue(ctx, chosen);
+        return r;
     }
-    /* §7.1's LAST rule: create one, and GIVE it the name — unless the name was a keyword, which names no
-       navigable at all. */
+    JS_FreeValue(ctx, chosen);
+    /* Step 8: nothing answered, so a new top-level traversable is created. "Let targetName be the empty
+       string. If name is not an ASCII case-insensitive match for `_blank`, then set targetName to name." —
+       so every name that reached step 7 and found nothing NAMES the navigable it creates, `_foo` included,
+       and only `_blank` creates an unnamed one. */
     /* §7.1.5: an AUXILIARY navigable has NO EMBEDDER ELEMENT, so there is no iframe sandboxing flag set for
        it to inherit — its creation flags come from the popup sandboxing flag set, which navigable_create
-       derives from this document's own active set through §7.1's propagate rule. */
-    return navigable_create(ctx, url, target && *target && target[0] != '_' ? target : NULL, false, feat, 0);
+       derives from this document's own active set through §7.3.1.7's propagate rule. */
+    DCHECK(*name, "§7.3.1.7 step 4 answers the CURRENT navigable for an empty name, so nothing empty can reach "
+                  "step 8 — an empty target arriving here would mint an unnamed window where the spec navigates "
+                  "this one, which is how `<a target=\"\">` used to open a popup");
+    return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0);
 }
 
-/* §7.4's `window.open`, AS A STEP MACHINE — and it is one again for a reason that did not exist when the note
- * here said the opposite. That note read "nothing to ask and nothing to suspend for", which was true while the
- * only thing `open()` did was mint a name: §7.4 step 14 NAVIGATES, navigating FETCHES, and a fetch is a
- * host-owed answer that suspends the asking flow. A plain C body cannot suspend, so it can only reach a
- * SYNCHRONOUS fetch — which is why navigable.h's DCHECK says the shipped host, whose network is the trusted
- * zone's, cannot navigate at all. The machine is what removes that sentence.
+/* HTML §7.2.2.1 "Opening and closing windows" — `window.open`'s WINDOW OPEN STEPS, AS A STEP MACHINE, and it is
+ * one again for a reason that did not exist when the note here said the opposite. That note read "nothing to
+ * ask and nothing to suspend for", which was true while the only thing `open()` did was mint a name: the step
+ * that NAVIGATES fetches, and a fetch is a host-owed answer that suspends the asking flow. A plain C body
+ * cannot suspend, so it can only reach a SYNCHRONOUS fetch — which is why navigable.h's DCHECK says the shipped
+ * host, whose network is the trusted zone's, cannot navigate at all. The machine is what removes that sentence.
  * IT DOES NOT PARK YET. The fetch below is still the host's synchronous one; what changed is the substrate
- * under it, so making that fetch a host request is a change to child_document and to nothing here. */
-/* WHERE THIS MACHINE RESTS. §7.4's open() is nine steps and the only one that can suspend is step 14's load,
-   which the LOAD JOB below owns rather than this member — so open() has one stage today, and the machine
-   exists so that step can become a park without this being rewritten. */
+ * under it, so making that fetch a host request is a change to child_document and to nothing here.
+ * THE SECTION NUMBER WAS §7.4 IN EVERY LINE OF THIS BLOCK, AND §7.4 IS "Navigation and session history" — a
+ * real section, about a different algorithm, which is the citation failure CLAUDE.md calls worse than none:
+ * it reads as authoritative and sends the reader somewhere that does not say this. The steps below are
+ * §7.2.2.1's; the choice they delegate is §7.3.1.7's. Only this block is corrected — the rest of this file's
+ * §7.4 citations are a separate reading, and a sweep would be a diff nobody can check. */
+/* WHERE THIS MACHINE RESTS. The window open steps are seventeen and the only one that can suspend is the
+   navigate, which the LOAD JOB below owns rather than this member — so open() has one stage today, and the
+   machine exists so that step can become a park without this being rewritten. */
 #define OPEN_STAGES(X) \
     X(OPEN_CHOOSE = IDL_STEP_FIRST, \
-      "HTML §7.4 open(url, target, features) steps 1-9 (the features, choosing or creating the navigable, " \
-      "navigating it, and the null a `noopener` request answers with)")
+      "HTML §7.2.2.1 Opening and closing windows — the window open steps (the features, §7.3.1.7's rules for " \
+      "choosing a navigable, navigating it, and the null a `noopener` request answers with)")
 enum { OPEN_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const OPEN_STEPS[] = { OPEN_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
 typedef struct {
     JSValue result;   /* the chosen navigable's proxy (owned) */
-    uint8_t noopener; /* §7.4's last step needs it after the navigable is made */
+    uint8_t noopener; /* §7.2.2.1 step 17 needs it after the navigable is made */
 } OpenState;
 
 static void open_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -1724,8 +1819,8 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
     DCHECK(hdr->stage == OPEN_CHOOSE,
-           "window.open resumed, and §7.4 gives it one stage here — step 14's load is the load job's, and it "
-           "is that job that parks");
+           "window.open resumed, and §7.2.2.1 gives it one stage here — steps 15-16's navigate is the load "
+           "job's, and it is that job that parks");
     s->result = JS_UNDEFINED;
     url    = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
     target = argc > 1 ? JS_ToCString(ctx, argv[1]) : NULL;
@@ -1734,22 +1829,29 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        a non-empty map, and therefore a popup where the spec has a tab. */
     features = (argc > 2 && !JS_IsUndefined(argv[2])) ? JS_ToCString(ctx, argv[2]) : NULL;
     if (argc > 0 && !url) return JS_STEP_ABRUPT;
-    /* §7.4's THIRD ARGUMENT decides whether the new navigable is a POPUP — what §7.2.2.5's six BarProps answer
-       from — and whether it gets an OPENER at all. */
+    /* §7.2.2.1's THIRD ARGUMENT decides whether the new navigable is a POPUP — what §7.2.2.5's six BarProps
+       answer from — and whether it gets an OPENER at all. */
     feat = window_features_parse(features);
     s->noopener = feat.noopener ? 1 : 0;
-    s->result = navigable_open(ctx, url, target, &feat);
+    /* §7.2.2.1's window open steps, STEP 5: "If target is the empty string, then set target to `_blank`." It
+       belongs to THIS algorithm and not to §7.3.1.7's, whose own step 4 answers the CURRENT navigable for an
+       empty name — which is what `<a target="">` gets and what `window.open(url, "")` must not. An omitted
+       argument takes the same branch because the IDL's default for it IS "_blank"
+       (open(optional USVString url = "", optional DOMString target = "_blank", …)), so the two spellings of
+       "no target" reach one answer here rather than two further down. */
+    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat);
     if (url) JS_FreeCString(ctx, url);
     if (target) JS_FreeCString(ctx, target);
     if (features) JS_FreeCString(ctx, features);
-    /* §7.4 step 4: a URL that does not parse is a SyntaxError, and it is the PAGE's mistake. */
+    /* §7.2.2.1 step 4: "If urlRecord is failure, then throw a \"SyntaxError\" DOMException" — the PAGE's
+       mistake, and the one this algorithm hands back rather than swallowing. */
     if (JS_IsUndefined(s->result)) {
         JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
         return JS_STEP_ABRUPT;
     }
-    /* §7.4's LAST STEP: with `noopener`, `open()` RETURNS NULL. The navigable is created and navigated all the
-       same — a page that opens a window it cannot script still opened one — and what the caller loses is the
-       handle, which is the whole point of the feature. */
+    /* §7.2.2.1 step 17: "If noopener is true or windowType is \"new with no opener\", then return null." The
+       navigable is created and navigated all the same — a page that opens a window it cannot script still
+       opened one — and what the caller loses is the handle, which is the whole point of the feature. */
     if (s->noopener) { JS_FreeValue(ctx, s->result); s->result = JS_NULL; }
     *presult = s->result;
     s->result = JS_UNDEFINED;
@@ -1757,11 +1859,11 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 }
 
 static const IdlStepDecl OPEN_DECL = { js_win_open_step, sizeof(OpenState), open_visit, NULL,
-                                      "HTML §7.4 open(url, target, features)", OPEN_STEPS };
+                                      "HTML §7.2.2.1 open(url, target, features)", OPEN_STEPS };
 
 static int g_id_open;
 
-/* §7.4's IDL: open(optional USVString url = "", optional DOMString target = "_blank",
+/* §7.2.2.1's IDL: open(optional USVString url = "", optional DOMString target = "_blank",
    optional [LegacyNullToEmptyString] DOMString features = "") -> WindowProxy?
    DECLARED ONCE PER AGENT — a member has one pool entry, and every realm's global installs that same one. */
 void navigable_init(JSContext *ctx)

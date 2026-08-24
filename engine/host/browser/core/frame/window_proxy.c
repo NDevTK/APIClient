@@ -719,8 +719,9 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
     /* §7.1.5: AN EMPTY CREATION SANDBOXING FLAG SET, and it is the spec's answer rather than a placeholder.
        This is the navigable the INSTANCE STARTED IN — a top-level traversable with no embedder, so
        determine-the-creation-sandboxing-flags returns its POPUP SANDBOXING FLAG SET, which §7.1.5 says is
-       empty when a browsing context is created and which only §7.1's rules for choosing a navigable ever
-       populate. Nothing chose this one. What the ROOT document's own `Content-Security-Policy: sandbox` adds
+       empty when a browsing context is created and which only §7.3.1.7 "Navigable target names"'s rules
+       for choosing a navigable ever populate. Nothing chose this one. What the ROOT document's own
+       `Content-Security-Policy: sandbox` adds
        is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
     /* NO CREATOR POLICY — this navigable is the one §7.4 did NOT create, so there is nothing to clone — but
        CSP §2.2's SELF-ORIGIN of its document's list is still a real value and is this agent's own: the root
