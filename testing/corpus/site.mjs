@@ -181,8 +181,20 @@ const row = {
   endpoints: counted.length ? counted[counted.length - 1].endpoints : null,
   endpointSnapshots: counted.length,
   sinks: counted.length ? counted[counted.length - 1].sinks : null,
+  /* THE RUNG THE @S SEARCH DIED AT, WHICH `sinks` ALONE CANNOT NAME. Emission is working-PoC-only and
+     fire-verified, so `sinks: 0` is the reading for BOTH "no tainted value ever reached a sink" and "sinks
+     were reached, candidates were constructed, none of them fired" — opposite findings needing opposite fixes,
+     and indistinguishable from outside. `_candidates` is solve_candidate_count(), the searches' own tally, and
+     bridge.js has been relaying it onto every run record all along; only this row never asked for it. Measured
+     across eight live app pages, every one read `sinks: 0`, and without this there was no way to say whether
+     that was a page with no sinks or a search that never got to one. */
+  candidates: counted.length ? counted[counted.length - 1].candidates : null,
   flows: counted.length ? counted[counted.length - 1].flows : null,
   switches: counted.length ? counted[counted.length - 1].switches : null,
+  /* QUEUED BESIDE RUN, for the same reason held is emitted beside made: `jobsRun: 0` alone cannot say whether
+     the pump never ran or nothing was ever enqueued for it, and those are a scheduler bug and a page that got
+     nowhere. */
+  jobsQueued: counted.length ? counted[counted.length - 1].jobsQueued : null,
   jobsRun: counted.length ? counted[counted.length - 1].jobsRun : null,
   parked: counted.length ? counted[counted.length - 1].park : null,
   docsAnswered: mine.filter(d => d.answered).length,
