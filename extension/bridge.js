@@ -2870,7 +2870,25 @@ const _hostOps = {
     eng._resolvers.length = 0;
   },
 };
+/* THE SCHEDULER DIED, AND A DEAD SCHEDULER IS NOT RE-ENTERED. Set by the rejection arm below and never
+   cleared: every rejection out of this loop is an INVARIANT abort (see the arm for why none of them is
+   transient), so the state that killed the loop is still in `_pool`/`_waiting` when the next kick arrives and
+   the next round dies at the identical line. `_hostKicksRefused` counts the kicks that arrive after, because a
+   refusal nothing records is the silence this whole file is written against — the pair says "the scheduler is
+   down, and N callers have asked for it since", which is a diagnosis, where a bare no-op is a mystery. */
+let _hostDead = null;
+let _hostKicksRefused = 0;
 function _hostKick() {
+  /* DEAD IS ASKED BEFORE DRIVING, AND THE ORDER IS THE WHOLE VALUE OF THE COUNTER. Behind the `_hostDriving`
+     guard this line was unreachable and `kicksRefused` could only ever read 0 — a field READ by the probe and
+     WRITTEN by nothing, which is the contract break §Architecture names and the reason a default is never
+     allowed to stand in for a producer. The two are not the same question either: `driving` says a round is in
+     flight, `dead` says there will never be another, and only one of them outlives the round.
+     REFUSED, NOT RETRIED, AND NOT ASSERTED EITHER. The abort has already been reported ONCE, by the arm that
+     latched it; a DCHECK here would blame whichever content script happened to arrive next for a violation
+     that is neither theirs nor new, and would throw that abort into a fresh caller on every subsequent
+     navigation — the same unbounded repetition this latch exists to end, relocated. */
+  if (_hostDead) { _hostKicksRefused++; return; }
   if (_hostDriving) return;
   _hostDriving = true;
   /* THE ONE LOOP'S FAILURE IS NOT A DEBUG LINE. Every assertion in the bridge — the notice router's field
@@ -2879,17 +2897,46 @@ function _hostKick() {
      the whole class and printed one line of it at a level nothing reads. Worse, it did so while the analysis
      promise for the document being stepped was still unresolved, so a violated invariant surfaced as a page
      that simply never finished. A LOUD banner, then rethrow in dev: an unhandled rejection is the honest
-     shape of "the scheduler died", and it is impossible to overlook. */
-  hostSchedule(_pool, _hostOps).catch((e) => {
-    crashBanner("host-wfq", String((e && e.stack) || e));
-    if (self.APICLIENT_DEV) throw e;
-    /* RE-KICK ON THE POOL ALONE. `|| _waiting.length` stood here so a document held back by the RAM floor was
+     shape of "the scheduler died", and it is impossible to overlook.
+     THAT REPORT WAS BEING DEFEATED ON THE VERY NEXT LINE, AND IT COST 16 MINUTES OF A WEDGED BROWSER. The
+     two outcomes shared one `.finally`, so a loop that DIED was carried into the same re-kick as a loop that
+     finished a round — and since the only thing that shrinks `_pool` is `finish`, which a dying round never
+     reaches, `_pool.length` stayed true for ever. One invariant abort therefore became an unbounded retry at
+     the rate of the one IDB read `admit` opens with: MEASURED on the real extension, two same-origin
+     documents in one tab (which is what a link click IS, and what makes this the continuous-browsing case
+     rather than an edge case), 23,163 identical aborts and 17.9 s of renderer CPU inside 20 s of wall clock,
+     49 MB of console, the offscreen document unreachable over CDP, and no end state — the analysis promises
+     for BOTH documents unresolved throughout. The "impossible to overlook" unhandled rejection was overlooked
+     precisely because there were thousands of it a second and the one that mattered was the first.
+     So the two paths are SPLIT. Re-kicking is what a COMPLETED round does; the failure arm latches and stops.
+     A dead scheduler is a worse outcome for the user than a live one — that is the point of it. §Offensive
+     programming: the crash is the system doing its job, and the job is to force the root fix, which a retry
+     loop actively prevents by burying the one line that names it. */
+  hostSchedule(_pool, _hostOps).then(
+    /* THE COMPLETED ROUND, WHICH IS THE ONLY THING THE RE-KICK WAS EVER REASONED ABOUT.
+       RE-KICK ON THE POOL ALONE. `|| _waiting.length` stood here so a document held back by the RAM floor was
        picked up when a slot freed — but a freed slot is a pool that is not empty, and with an EMPTY pool RAM is
        free by definition, so the only document that can still be waiting is one admit DEFERRED (a sub-frame
        whose same-origin top has not reported yet). Re-kicking for that one spins the loop at full speed on a
        condition nothing in this file can change; the thing that changes it is the top's CONTENT_HTML, which
        kicks the pool itself when it arrives. */
-  }).finally(() => { _hostDriving = false; if (_pool.length) _hostKick(); });
+    () => { _hostDriving = false; if (_pool.length) _hostKick(); },
+    /* THE LOOP DIED. NOTHING RETRIED, BECAUSE NOTHING HERE IS RETRYABLE: every rejection that reaches this arm
+       is a should-never-happen — a bridge assertion, or an invariant abort travelling out of `_readyP` (an
+       ENGINE abort is not one of them; engineBootFailed answers those on the record and RESOLVES, precisely so
+       that one page failing to boot does not take the pool down). A should-never-happen does not become false
+       by being asked again, and the second ask is over the same `_waiting` entry and the same `_pool`.
+       `_hostDriving` IS CLEARED HERE LIKE ANYWHERE ELSE, because it answers "is a round in flight" and no round
+       is. Holding it true as a second bolt against re-entry was one fact spread over two fields, and it made
+       the refusal counter unreachable — `_hostKick` returned on `driving` before it could record that a
+       document had arrived to a dead scheduler, so the probe's one number for "how much has been silently
+       dropped since" was structurally always 0. The latch is what refuses; this field just tells the truth. */
+    (e) => {
+      _hostDead = e;
+      _hostDriving = false;
+      crashBanner("host-wfq", String((e && e.stack) || e));
+      if (self.APICLIENT_DEV) throw e;
+    });
 }
 /* The offscreen kicks the pool on idle so parked COLD recipes get pulled in (admit re-checks the frontier)
    even when no new document arrives — the single ATTENTION keeps advancing across sessions. */
@@ -3030,7 +3077,14 @@ self.rendererPoolProbe = function rendererPoolProbe() {
          registry.launched + " launched, " + registry.failed + " failed) while this document forked " +
          renderers.forked + " — a frame is materialized by one admission and by nothing else, so a difference " +
          "is a frame created outside that path or an admission whose fork never began");
+  /* IS THE ONE LOOP STILL ALIVE, which is a fact no other field here can be read for. Every number below
+     describes what the pool HOLDS, and a dead scheduler holds exactly what it held when it died — so a probe
+     reading a plausible pool, a plausible waiting count and a plausible renderer set was the picture of a
+     healthy extension and of a wedged one alike. `kicksRefused` is what tells them apart from the outside: it
+     is the number of documents that have arrived since and been answered by nothing. */
   return { renderers: renderers, registry: registry, mojo: self.mojo.stats(),
+           scheduler: { alive: !_hostDead, driving: _hostDriving, kicksRefused: _hostKicksRefused,
+                        diedOf: _hostDead ? String((_hostDead && _hostDead.message) || _hostDead) : null },
            pool: pool, waiting: _waiting.length, residentBytes: _residentBytes(),
            reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
                            booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,
