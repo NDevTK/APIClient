@@ -1396,6 +1396,27 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
         mine = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(global);
 
         JS_FreeValue(ctx, g);
+        /* THE ONE JOB THIS WALK TAKES THAT NOTHING WILL EVER RE-CAUSE, AND IT LEFT NO TRACE.
+           HTML §7.5.10 "Destroying documents" step 7 is explicit that what it removes never runs ("remove any
+           tasks whose document is document from any task queue (without running those tasks)"), and that is
+           CORRECT for a routed cross-document delivery too: the Document the message was for is gone, so there
+           is no listener left to fire and no page left to notice. What is not correct is doing it silently. A
+           routed delivery is the single job on this queue a replay does not re-cause (see the record's WHERE
+           THE WORK CAME FROM bullet in flow.h, and cold.c's park assert built on the same sentence), so from
+           out here — where the only numbers are `_routedDelivered` and how many times the receiving page's own
+           code ran — a delivery removed here is INDISTINGUISHABLE from one the scheduler lost, and those take
+           opposite actions. It is one of the four ends solver/engine.h declares, and it is the SAME end
+           core/frame/window_message.c reports when the task does get to run and finds the navigable destroyed
+           (§7.5.10 step 7 stated where the task runs) — the two paths are one fact reached at two moments.
+           IT IS SOUND TO NAME IT WITHOUT ASKING WHAT THE JOB IS because flow.h's sentence is what makes the
+           EXTERNAL bit mean this: the routed delivery is the only work on a flow's queue that came from
+           outside the replayed program. A second kind of external job would have to revisit this line, and
+           that sentence is where the obligation is written down.
+           COUNTED PER ARM, WHICH IS WHY THE CONSERVATION LAW IS AN INEQUALITY: a fork gives each arm its own
+           Array naming the same record, this walk visits every flow, and each arm's copy is an end that arm
+           would otherwise have reached. */
+        if (mine && job_field_int(e, JOB_EXTERNAL))
+            engine_routed_task_end(ROUTED_TASK_TARGET_GONE);
         if (mine) { JS_FreeValue(ctx, e); continue; }
         JS_SetPropertyUint32(ctx, f->jobs, (uint32_t)keep++, e);
     }
@@ -1426,6 +1447,21 @@ int flow_job_remove(Flow *f, JSTaskHandle handle) {
 
         /* EVERY entry is compared, including after a hit, because the count is what the assert is made of. */
         if (job_field_handle(e, JOB_HANDLE) == handle) {
+            /* AND THE OTHER REMOVAL MAY NOT TAKE A ROUTED DELIVERY AT ALL, which is a different statement from
+               §7.5.10 step 7's above rather than the same one twice. That walk removes the tasks OF A DOCUMENT
+               THAT IS GONE, so the delivery it takes has no page left to receive it; this one is a tracker
+               coalescing its OWN queued callback (HTML §4.11.4 "The dialog element", §4.11.1 "The details
+               element") in a document that is still running, and a routed delivery taken here would be a live
+               page's message deleted by an element's toggle task. It cannot happen — a delivery is pushed by
+               the engine and not by the runtime's enqueue, so it carries JS_TASK_HANDLE_NONE and no tracker's
+               handle can name it — and that is exactly why it is asserted rather than trusted: the handle
+               field is the whole of what stands between the two. */
+            DCHECK(!job_field_int(e, JOB_EXTERNAL),
+                   "a tracker's removal-by-handle named the §9.3.3 task a ROUTED cross-document delivery "
+                   "became — that is a live document's message being deleted by an element's coalescing task "
+                   "tracker, and nothing re-causes it because nothing in the replayed program caused it. A "
+                   "delivery carries JS_TASK_HANDLE_NONE precisely so no handle can name it, so this is two "
+                   "records wearing one name");
             found++;
             JS_FreeValue(ctx, e);
             continue;

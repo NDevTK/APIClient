@@ -730,9 +730,52 @@ long engine_units_done(void);
    one timeline, which is true only of a receiver whose other timelines the scheduler never reached: it passes
    while they are starved and fails the moment they run, which is the schedule-dependent answer §Testing's
    differential exists to catch. These two numbers are what such a host compares against instead — `delivered`
-   is exactly how many handler invocations the engine caused, and `refused` is what says the rest of the
-   frontier saw the record and correctly declined it rather than never having been offered it. */
+   is exactly how many TASKS the engine queued, and `refused` is what says the rest of the frontier saw the
+   record and correctly declined it rather than never having been offered it.
+   `delivered` IS NOT A HANDLER-INVOCATION COUNT AND THIS LINE USED TO SAY IT WAS. A queued task has FOUR ends
+   and only one of them runs a listener — see engine_routed_task_census below, which is the half that was
+   missing and which a host had no choice but to guess at. */
 void engine_routed_census(long *delivered, long *refused);
+
+/* ---- THE FOUR ENDS OF §9.3.3 STEP 8'S TASK, AND WHY ONE NUMBER COULD NOT SAY WHICH ---------------------
+ *
+ * `engine_routed_census`'s `delivered` counts tasks QUEUED. Nothing counted what became of them, so a host
+ * looking at a page that ran its `message` listener fewer times than the engine delivered had exactly one
+ * number for THREE different facts, each taking a different action: the task ran and the page saw the message;
+ * the task ran and HTML §9.3.3 "Posting messages" step 8.1 declined it (the target's origin is not the one the
+ * sender asked for); the task ran, or was taken off the queue before it could, and there was no Document left
+ * to fire at (HTML §7.5.10 "Destroying documents" step 7 — reachable both ways, because engine.c's flow_deliver
+ * enqueues a ROUTED delivery in the RECEIVING document's realm, which is exactly the realm step 7's removal
+ * walk keys on); or the task never ran at all, which is a work item the ONE frontier dropped and is the only
+ * one of the four that is a defect.
+ * That is §@S's rule about a search that cannot be directed at a gap it reports with the same number as two
+ * other gaps, one layer down and about deliveries instead of candidates — and it is what a driver measured
+ * instead by counting the receiving page's own fetches, which cannot work: engine_pending_fetches dedups over
+ * the (method, URL) pair, and N timelines of one document run the SAME listener and therefore issue byte-
+ * identical requests, so the host's view of the fetch register collapses them by construction.
+ * SUM ≥ `delivered`, NEVER `==`, and the inequality is not slack: a fork gives the arm its own Array naming
+ * the parent's job RECORDS (flow.c's flow_job_fork), so a timeline that branches between the enqueue and the
+ * run delivers the message once in each arm — two timelines, two deliveries, one queued task. A sum BELOW
+ * `delivered` is the defect, and it is a task that was queued and never ran. */
+enum {
+    ROUTED_TASK_FIRED = 0,        /* §9.3.3 step 8.7: the event was fired at the target Window */
+    ROUTED_TASK_TARGET_ORIGIN,    /* §9.3.3 step 8.1: the target is not same origin with the requested origin */
+    ROUTED_TASK_TARGET_GONE,      /* §7.5.10 step 7: the target's Document was destroyed */
+    ROUTED_TASK_THREW,            /* the task itself went abrupt before it could fire anything */
+    ROUTED_TASK_END_N
+};
+/* REPORTED AT THE LINE THAT IS THAT END, and TARGET_GONE has two such lines because §7.5.10 step 7 is reachable
+ * at two moments and is ONE fact either way. core/frame/window_message.c reports it when the task RUNS and
+ * finds the navigable destroyed; solver/flow.c's flow_job_drop_realm reports it when step 7's own removal walk
+ * takes the still-queued task off a destroyed document's queue ("without running those tasks"), which is the
+ * path that used to leave no trace at all — and a delivery that vanished there is indistinguishable from one
+ * the scheduler lost, which is the whole distinction this census exists to make.
+ * ONCE PER TASK on the running side: the task records which end it reached, so a machine that is re-entered
+ * cannot count its delivery twice. */
+void engine_routed_task_end(int end);
+/* ALL FOUR OR NONE, for engine_routed_census's reason exactly — a fired count with no declined count beside it
+   cannot say whether the rest of the deliveries were refused by the spec or lost by the scheduler. */
+void engine_routed_task_census(long *ends);
 
 /* THE ORPHAN ROUND TRIP'S TWO NUMBERS — how many waits for a parked drive's function a TAKE satisfied this
    session, and how many waiting drives FINISHED never having been handed one. The third, how many were rebuilt,

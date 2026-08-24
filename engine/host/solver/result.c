@@ -169,20 +169,21 @@ char *result_json(JSContext *ctx) {
 
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 359 with its conversion specifiers
-       and 311 without them, and the fifteen counters' full-width decimals are 255 (five ints at 11, ten longs
-       at 20), so the worst case is 566 against this 640. It was 192 for a shape whose widest form was already
-       197 — inside only because the real numbers are small — then 384 against a worst case the arrival census
-       took to 454, then 512 against 488; the routed-delivery pair is the FOURTH field to outgrow it, and the
-       count above is it re-done rather than adjusted. RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD; it is four
-       counts off the format string and there is no way to be nearly right. The DCHECK under the snprintf is
+       and stated so the count can be re-done: the format's fixed bytes are 467 with its conversion specifiers
+       and 407 without them, and the nineteen counters' full-width decimals are 335 (five ints at 11, fourteen
+       longs at 20), so the worst case is 742 against this 768. It was 192 for a shape whose widest form was
+       already 197 — inside only because the real numbers are small — then 384 against a worst case the arrival
+       census took to 454, then 512 against 488, then 640 against the routed-delivery pair's 566; the four ends
+       of §9.3.3's delivery task are the FIFTH field to outgrow it, and the count above is it re-done rather
+       than adjusted. RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD; it is four counts off the format string and
+       there is no way to be nearly right. The DCHECK under the snprintf is
        the second half of this, not a substitute for it: the arithmetic is what makes the buffer right, the
        assert is what catches the arithmetic being re-done wrong. */
     /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 640;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 768;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -217,23 +218,34 @@ char *result_json(JSContext *ctx) {
            rides the result document for the reason the four above it do: a zone reading this from a log would
            be reading a stream the renderer deliberately does not tee. */
         long routedDelivered = 0, routedRefused = 0;
+        /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
+           forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
+           the engine delivered has ONE number covering "the spec declined it" (§9.3.3 step 8.1), "there was no
+           Document left to fire at" (§7.5.10 step 7) and "the scheduler lost the task", and only the last is a
+           defect. All four ride the document rather than a log, for the reason the counts above them do. */
+        long routedEnds[ROUTED_TASK_END_N];
         world_segment_stats(&made, &segf);
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         engine_routed_census(&routedDelivered, &routedRefused);
+        engine_routed_task_census(routedEnds);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,\"_unitsDone\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
                              "\"_worldSegmentsForked\":%d,"
                              "\"_routedDelivered\":%ld,\"_routedRefused\":%ld,"
+                             "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
+                             "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
                              "\"_sinkSuppressed\":%ld,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
+                     routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
+                     routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
-           eight, whose widest form is 115 digits beside 208 bytes of literal — inside the slack only because
+           nineteen, whose widest form is 335 digits beside 407 bytes of literal — inside the slack only because
            the real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
            gets a document that will not parse and reports NOTHING for the page, which is the loudest possible
            consequence arriving as the quietest possible bug. snprintf already told us; nothing was asking. */

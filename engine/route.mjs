@@ -190,7 +190,13 @@ const engines = [];
 const holderOf = (doc) => engines.find((e) => e.docId === doc) ?? null;
 
 const posts = [];   /* routed records, in emission order, held until their target is free to receive one */
-const got = [];     /* every /got the receiving page fetched — one per message its listener actually saw */
+/* THE DISTINCT `/got` REQUESTS THIS ZONE WAS SHOWN, WHICH IS NOT A COUNT OF LISTENER INVOCATIONS AND WAS READ
+   AS ONE. `qjs_pending` is a SET keyed on the (method, URL) pair — engine_pending_fetches dedups it there,
+   deliberately, because several flows park on one request and a second listing would make this zone provide
+   twice — and every timeline of one document runs the same listener and issues the same bytes. What this
+   witnesses is that the receiving page's own code RAN; how many times it ran is the engine's to state (the
+   four ends of §9.3.3 step 8's task, read off `qjs_result` at the bottom of this file). */
+const got = [];
 /* EVERY CROSS-AGENT OPERATION THIS ZONE WAS ASKED TO PERFORM, keyed by the asking engine's request id, and
    whether it was ever answered. Keyed rather than counted because `qjs_host_requests` deliberately does NOT
    dedupe — an unanswered request is re-reported on every single step, so a count would be a step count, and
@@ -707,6 +713,12 @@ let forked = 0;
    about, read off the instances rather than counted here, because only an engine knows how many of its
    TIMELINES a record was offered to and how many of them it belonged to. */
 let delivered = 0, refused = 0;
+/* …AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED, which is the half this file used to INFER and could
+   not. §9.3.3 step 8's task has four ends and only one of them runs a listener; solver/engine.h declares them,
+   core/frame/window_message.c reports the end a task RUNS to, and solver/flow.c reports the one §7.5.10 step
+   7's removal walk reaches before it can run. */
+const ENDS = ['_routedTasksFired', '_routedTasksTargetOrigin', '_routedTasksTargetGone', '_routedTasksThrew'];
+const ends = { _routedTasksFired: 0, _routedTasksTargetOrigin: 0, _routedTasksTargetGone: 0, _routedTasksThrew: 0 };
 for (const e of engines) {
   const r = JSON.parse(e.str('qjs_result'));
   forked += r._worldSegmentsForked;
@@ -716,18 +728,32 @@ for (const e of engines) {
     fail(`[${e.tag}] the result document carries no routed-delivery census — solver/result.c emits the pair ` +
          'and solver/engine.c counts it at the two lines that ARE the two outcomes, so an absent field is a ' +
          'producer that moved under this reader and every delivery assertion below would be reading a hole');
+  /* AND NOR IS ANY OF THE FOUR, for the same reason and one worse: a missing end reads as ZERO, and the check
+     below is that the four SUM to at least the deliveries — so a producer that stopped emitting one of them
+     would fail this driver with a message about a lost message. */
+  for (const k of ENDS) {
+    if (typeof r[k] !== 'number')
+      fail(`[${e.tag}] the result document carries no \`${k}\` — solver/result.c emits all four ends of ` +
+           '§9.3.3 step 8\'s task together (solver/engine.h says why one number could not say which), so an ' +
+           'absent one is a producer that moved under this reader');
+    ends[k] += r[k];
+  }
   delivered += r._routedDelivered;
   refused += r._routedRefused;
   console.log(`[${e.tag}] worldSegments held=${r._worldSegmentsHeld} made=${r._worldSegmentsMade} ` +
               `forkedFromAncestor=${r._worldSegmentsForked} flows=${r._flows} switches=${r._switches} ` +
               `routedDelivered=${r._routedDelivered} routedRefused=${r._routedRefused}`);
+  console.log(`[${e.tag}] §9.3.3 step 8 task ends: fired=${r._routedTasksFired} ` +
+              `declinedByTargetOrigin=${r._routedTasksTargetOrigin} targetDestroyed=${r._routedTasksTargetGone} ` +
+              `threw=${r._routedTasksThrew}`);
 }
 
 /* WHAT MAKES THIS A SMOKE TEST RATHER THAN A PRINTOUT. Four things have to have happened, and each of them is
    a whole mechanism failing silently if it did not: a second instance was provisioned (the create notice was
-   acted on), every routed record was admitted by at least one TIMELINE of the receiving document and fired its
-   listener exactly once per delivery (the inbound half — see the pair of checks below for why that is two
-   statements and why the single equality it replaced was a claim about the SCHEDULER), at least one
+   acted on), every routed record was admitted by at least one TIMELINE of the receiving document and every
+   task those deliveries became reached one of §9.3.3 step 8's four ends (the inbound half — see the checks
+   below for why that is three statements, why the equality it replaced was a claim about the SCHEDULER, and
+   why the count it was made from could never have been a count of handler invocations), at least one
    segment was materialized by FORKING an ancestor (the world vector's ancestry was READ and used), and the one
    synchronous cross-instance READ this engine has was asked AND answered by the instance that holds the
    document — which is the half that has never run. */
@@ -760,25 +786,70 @@ if (!posts.length) fail('the sender emitted no cross-instance post');
  *     deliveries is at least the number of records this zone handed over. A zero-delivery record is a peer's
  *     message no timeline of this document ever receives, which the page cannot distinguish from one that was
  *     never sent.
- *   - THE PAGE SAW EXACTLY WHAT THE ENGINE DELIVERED: one handler invocation per delivery. This is the check
- *     the old equality was reaching for and could not express — a delivery that fired the handler twice, or an
- *     invocation with no delivery behind it, is a defect at ANY timeline count, and neither is visible in a
- *     comparison against `posts.length`. solver/engine.c asserts the same statement at its origin (§9.3.3
- *     Posting messages step 8 queues ONE global task), so a double-fire crashes there rather than being
- *     counted here; this is that assertion read from the outside, where a build with DCHECKs compiled out is
- *     the only place it can still be seen.
+ *   - EVERY DELIVERY REACHED AN END: the four ends of §9.3.3 step 8's task sum to at least the deliveries. A
+ *     sum BELOW the deliveries is the one outcome that is a defect — a task that was queued and never ran, a
+ *     work item the ONE frontier dropped — and it is the only one of the four the page cannot tell from a
+ *     message that was never sent.
  * `refused` is printed with them because a low delivery count has two readings — the other timelines DECLINED
  * the record (they are on the other side of a sender branch) or they were never offered it — and those take
- * opposite actions. */
+ * opposite actions.
+ *
+ * AND THE SECOND HALF USED TO BE MEASURED WITH `got.length`, WHICH CANNOT COUNT WHAT IT WAS COUNTING.
+ *
+ * `got.length !== delivered` read "the receiving page's listener ran N times" off the number of DISTINCT
+ * `/got` lines this zone was shown in `qjs_pending`, and that register is a SET OF REQUESTS: solver/engine.c's
+ * engine_pending_fetches dedups over the (method, URL) pair and says why in its own comment — several flows
+ * park on one request and `engine_provide` fills every entry naming it, so listing it twice would make this
+ * zone provide twice and the second call would find nothing left. N timelines of one document run the SAME
+ * listener and therefore issue BYTE-IDENTICAL requests (here they are identical to the character, because the
+ * data of a cross-origin message is concolic and every field renders as its shape), so the count collapses by
+ * construction. It is the §Testing defect of measuring what a harness prints rather than what the shipped path
+ * writes, and it was reported as four §9.3.3 tasks the scheduler had lost: measured at d13ab52b, 9 deliveries
+ * against 5 `/got` lines, with `_jobsQueued` and `_jobsRun` both 14 and the receiving instance answering
+ * STALLED with an empty frontier — every task had run. It also moved between runs of ONE build (5, 5, 7) with
+ * `delivered` fixed at 9, because how many identical requests are outstanding SIMULTANEOUSLY is a property of
+ * the schedule, which is the same schedule-dependence this file's own comment above says it had removed.
+ *
+ * The statement it was reaching for — one handler invocation per delivery, no more — lives where it can
+ * actually be made: solver/engine.c asserts §9.3.3 step 8's ONE global task at the enqueue, and
+ * core/frame/window_message.c records the task's end once per task. `got` is kept for what it does witness,
+ * which is not a count at all: that the receiving page's own code RAN and issued the request its listener was
+ * written to issue. */
 if (delivered < posts.length)
   fail(`${posts.length} record(s) were routed and the receiving instances delivered ${delivered} — a record ` +
        'that no timeline of the target document admits is a peer\'s message the page never receives and ' +
        `cannot know it did not (refused as not-this-timeline: ${refused})`);
-if (got.length !== delivered)
-  fail(`the receiving page's listener ran ${got.length} time(s) against ${delivered} delivery(ies) the engine ` +
-       'made — HTML §9.3.3 Posting messages step 8 queues ONE global task per delivery, so more invocations ' +
-       'than deliveries is one message a page handled twice and fewer is a task that was queued and never ' +
-       `ran (records routed: ${posts.length}, refused as not-this-timeline: ${refused})`);
+const endsTotal = ENDS.reduce((n, k) => n + ends[k], 0);
+/* `<` AND NOT `!==`, AND THE SLACK IS A MECHANISM RATHER THAN TOLERANCE: a fork gives the arm its own Array
+   naming the parent's job RECORDS (solver/flow.c's flow_job_fork), so a timeline that branches between the
+   enqueue and the run delivers the message once in EACH arm — two timelines, two ends, one queued task. Only
+   the deficit is a defect, and solver/engine.c asserts the same inequality at the frontier's DONE; this is that
+   assertion read from the outside, where a build with DCHECKs compiled out is the only place it can be seen. */
+if (endsTotal < delivered)
+  fail(`${delivered} delivery(ies) became a §9.3.3 step 8 task and only ${endsTotal} of those tasks ever ` +
+       `reached an end (fired ${ends._routedTasksFired}, declined by targetOrigin ` +
+       `${ends._routedTasksTargetOrigin}, target destroyed ${ends._routedTasksTargetGone}, threw ` +
+       `${ends._routedTasksThrew}) — the missing ${delivered - endsTotal} were queued on a receiving ` +
+       'timeline and never run, which is a peer\'s message dropped by the scheduler rather than by any of the ' +
+       'spec\'s own ways of delivering nothing, and is the one of the four the page cannot tell from a ' +
+       `message that was never sent (records routed: ${posts.length}, refused as not-this-timeline: ${refused})`);
+/* AND AT LEAST ONE OF THEM REACHED A PAGE. This is deliberately NOT `fired >= posts.length`, and the reason is
+   a real ordering rather than caution: `b`'s own listener calls `window.close()`, §7.2.2.1 step 6.2 queues the
+   definitely-close, and a LATER record delivered into a timeline that has already run it is removed by §7.5.10
+   step 7 before its task can fire — a correct end, and one whose count is a function of which of `b`'s
+   timelines got the thread first. An assertion over it would be the schedule-dependent claim this file already
+   made once. Zero, on the other hand, is not schedule-dependent at all: it is the whole inbound half never
+   having happened. */
+if (!ends._routedTasksFired)
+  fail(`${posts.length} record(s) were routed, ${delivered} became a task, and NOT ONE of those tasks fired an ` +
+       'event at the receiving Window — §9.3.3 step 8.7 is the only end at which a page learns anything, so ' +
+       'this is the inbound half of the seam not existing. The ends they did reach: declined by targetOrigin ' +
+       `${ends._routedTasksTargetOrigin}, target destroyed ${ends._routedTasksTargetGone}, threw ` +
+       `${ends._routedTasksThrew}`);
+if (!got.length)
+  fail('the receiving page never issued the request its `message` listener is written to issue — every ' +
+       'delivery reached an end and none of them ran the page\'s own code, so the event fired at a Window ' +
+       'whose listener is not the one the document registered');
 if (!forked) fail("no segment was materialized by forking an ancestor — the world vector's ancestry was carried " +
                   'and never used, which is the state this driver exists to detect');
 /* ASKED IS THE FIRST HALF AND IT IS NOW TRUE. A zero here would mean `w.length` resolved WITHOUT reaching the

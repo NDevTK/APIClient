@@ -1652,6 +1652,29 @@ void engine_routed_census(long *delivered, long *refused) {
     *delivered = g_routed_delivered; *refused = g_routed_refused;
 }
 
+/* WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED — see engine.h for why one number could not say. Counted
+   here rather than in window_message.c because the pair above is counted here and the sum of these four is
+   compared against it; two files each holding half of one conservation law is how the halves drift. */
+static long g_routed_task_end[ROUTED_TASK_END_N];
+
+void engine_routed_task_end(int end) {
+    DCHECK(end >= 0 && end < ROUTED_TASK_END_N,
+           "§9.3.3 step 8's task reported an end this census does not name — the ends are declared in engine.h "
+           "and a fifth is a path through the delivery task that nothing counts, which is exactly the hole the "
+           "census exists to close");
+    g_routed_task_end[end]++;
+}
+
+void engine_routed_task_census(long *ends) {
+    int i;
+
+    DCHECK(ends != NULL,
+           "the routed-task census was asked for nothing to write into — all four ends or none, because a "
+           "fired count with no declined count beside it cannot tell a delivery the spec refused from one the "
+           "scheduler lost");
+    for (i = 0; i < ROUTED_TASK_END_N; i++) ends[i] = g_routed_task_end[i];
+}
+
 static void flow_deliver(JSContext *ctx, Flow *f)
 {
     JSValue entry, rv, ov;
@@ -6940,6 +6963,29 @@ static int engine_sched_slice(void) {
         DCHECK(flow_deliver_pending(flow_at(i)) == 0,
                "the frontier was declared exhausted while a live flow still held routed records — a peer's "
                "message this document never received, dropped with the session");
+    }
+    /* AND THE CONSERVATION LAW OVER THE DELIVERIES THAT DID BECOME TASKS. The four asserts above are each about
+       ONE queue at ONE moment; this is the only line that can say the queued §9.3.3 tasks all reached an end,
+       because a task's end is a fact about a run and not about a queue. flow_deliver asserts the delivery
+       became exactly one task (§9.3.3 step 8 queues one global task, singular); nothing asserted that the task
+       RUNS, and a task that never ran leaves the page unable to tell a message it did not get from one that was
+       never sent. The four ends are engine.h's; the inequality is its too — a fork gives the arm its own Array
+       naming the parent's job records, so a timeline that branches between the enqueue and the run delivers in
+       both arms and the sum legitimately exceeds the count of tasks queued. Below it, a delivery vanished. */
+    {
+        long ends[ROUTED_TASK_END_N], sum = 0;
+
+        engine_routed_task_census(ends);
+        for (int i = 0; i < ROUTED_TASK_END_N; i++) sum += ends[i];
+        DCHECK(sum >= g_routed_delivered,
+               "the frontier was declared exhausted with FEWER §9.3.3 delivery-task ends than deliveries — a "
+               "routed record became a task on a receiving timeline's queue (flow_deliver asserts exactly one) "
+               "and that task never ran, so a peer's message was dropped by the SCHEDULER rather than reaching "
+               "any of the three ends on which delivering nothing is correct (§9.3.3 step 8.1's targetOrigin "
+               "check, a target Document §7.5.10 destroyed, and the task's own abrupt completion). It is the "
+               "one outcome that is a defect: find the queue it is standing on and why that flow was never "
+               "picked");
+        (void)sum;
     }
     engine_session_close();
     return ENGINE_STEP_DONE;

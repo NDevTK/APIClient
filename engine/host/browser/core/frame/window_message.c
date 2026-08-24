@@ -87,7 +87,30 @@ static int     g_deliver_stepid = -1;   /* §9.3.3's queued delivery task, as a 
    for as long as every post was local. A post from ANOTHER instance is cross-origin by construction, its
    origin is stamped by the trusted zone, and `event.origin` is the check every bundle in this corpus writes:
    answering it from the receiver's own origin would tell a page that a foreign message came from itself. */
-enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_N };
+/* PQ_ROUTED SAYS WHICH HALF OF THIS FILE BUILT THE ENTRY, and it is a FACT ABOUT THE POST rather than a flag:
+   a message from ANOTHER INSTANCE is one the trusted zone handed in, so nothing in a replayed program re-causes
+   it and the solver's routed census (solver/engine.h) is about exactly those. It travels on the entry for
+   §scheduler's reason — an operation that becomes a work item takes its inputs with it — because by the time
+   the task runs there is no other way to know: the callee is one function object per agent, so its realm names
+   whichever document minted it and never the sender. */
+enum { PQ_DATA = 0, PQ_HOLDERS, PQ_TARGET_ORIGIN, PQ_SOURCE, PQ_SENDER_ORIGIN, PQ_ROUTED, PQ_N };
+
+/* READ, NEVER DEFAULTED. A `JS_ToBool` over whatever came back would turn "the producer stopped writing this"
+   into the perfectly plausible answer `false`, and the census would then quietly describe none of the routed
+   deliveries while looking exactly like a session that received none. */
+static bool delivery_is_routed(JSContext *ctx, JSValueConst entry)
+{
+    JSValue v = JS_GetPropertyUint32(ctx, entry, PQ_ROUTED);
+    bool routed;
+
+    DCHECK(JS_IsBool(v),
+           "a queued window message does not say whether it was ROUTED — both halves of this file set the slot "
+           "where they build the entry, so an entry without it was built by something else and the routed "
+           "census would silently describe the wrong set of deliveries");
+    routed = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    return routed;
+}
 
 /* §9.3.3 step 8.1: the origin check happens IN THE TASK, not at the call — the target may have navigated
    between the post and the delivery, and the standard checks the origin it has THEN. `want` is the serialized
@@ -120,9 +143,30 @@ static const char *const WM_DELIVER_STEPS[] = { WM_DELIVER_STAGES(JS_STEP_STAGE_
 typedef struct {
     JSStepHdr   hdr;
     uint8_t     fphase;   /* the fire request's own phase */
+    /* WHICH OF §9.3.3 STEP 8'S ENDS THIS TASK REACHED, +1, so the zero js_mallocz leaves means "not yet". The
+       task is a MACHINE and is therefore re-entered, so an end counted where it is DECIDED would be counted
+       once per resume; recorded on the state, it is counted once per task. */
+    uint8_t     end;
     JSValue     ev;       /* the MessageEvent, minted at WD_DESERIALIZE and held across the suspension (owned) */
     EventFireCb cb;       /* the fire request's buffer — the type carries §2.9's argument count */
 } WmDeliverTask;
+
+/* THE TASK'S ONE END, REPORTED WHERE IT HAPPENS. solver/engine.h declares the four and why one number could
+   not say which; this is the only writer. A LOCAL post reaches the same ends and is not counted, because the
+   census the four feed is about the records a PEER routed here — the ones a host handed in and can therefore
+   ask about — and mixing the two would make a receiver's number depend on how much same-agent messaging the
+   page happens to do. */
+static void delivery_end(JSContext *ctx, WmDeliverTask *s, int end)
+{
+    DCHECK(s->end == 0, "§9.3.3 step 8's delivery task reported a SECOND end — its ends are exclusive by "
+                        "construction (one is recorded and the task returns), so two is the machine being "
+                        "re-entered past its own completion");
+    DCHECK(end >= 0 && end < ROUTED_TASK_END_N, "§9.3.3 step 8's delivery task reported an end solver/engine.h "
+                                                "does not name");
+    s->end = (uint8_t)(end + 1);
+    if (delivery_is_routed(ctx, step_arg(&s->hdr, 1)))
+        engine_routed_task_end(end);
+}
 
 static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
@@ -132,16 +176,26 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
     int r;
 
     /* §7.5.10 STEP 7 FROM THE OTHER SIDE — "remove any tasks whose document is document from any task queue
-       (without running those tasks)". This task's document is the TARGET's and the task is standing on the
-       SENDER's flow queue, which is not a queue that walk can reach: it is keyed on the realm that ENQUEUED the
-       job (JS_DropJobsForContext / engine.c's engine_drop_jobs), and this one was enqueued by the poster. So
-       the same fact is stated here, where the task runs, and it is a POSITIVE statement rather than a guard: a
-       navigable whose active document was destroyed has no Window to fire at and no listeners left to fire.
+       (without running those tasks)". This task's document is the TARGET's, and whether that walk reaches it
+       depends on WHICH HALF OF THIS FILE ENQUEUED IT, which is why the same fact has to be stated here as well:
+       the walk is keyed on the realm that ENQUEUED the job (JS_DropJobsForContext / engine.c's
+       engine_drop_jobs), a LOCAL post is enqueued by the POSTER — so a destroyed target does not reach it at
+       all — and a ROUTED one is enqueued by engine.c's flow_deliver in the RECEIVING document's realm, which is
+       the very realm the walk keys on. So a routed delivery is removable there and a local one is not, and
+       BOTH ends are the same end (solver/engine.h's ROUTED_TASK_TARGET_GONE, reported from both lines).
+       This one is a POSITIVE statement rather than a guard: a navigable whose active document was destroyed has
+       no Window to fire at and no listeners left to fire.
        ASKED AT EVERY STAGE, not only at the first: the destruction may be performed by one of this very
        document's own `message` listeners (`frameElement.remove()` in a handler), and the listeners after it
        belong to a document that no longer exists. Without this the fire's window_proxy_realm asks a destroyed
        navigable for an active document and crashes naming a capability that is not the missing one. */
     if (window_proxy_destroyed(target)) {
+        /* AND THIS IS AN END, WHICH IS NOT THE SAME AS BEING THE END THIS TASK REACHED. Asked at every stage,
+           so a listener that destroys the navigable mid-dispatch (`frameElement.remove()` in a handler) brings
+           the machine back here AFTER the event was already fired — and that task's end is the FIRE. The one
+           already recorded is therefore the one that stands; only a task that never got as far as the dispatch
+           ends here. */
+        if (!s->end) delivery_end(ctx, s, ROUTED_TASK_TARGET_GONE);
         JS_FreeValue(ctx, cb_result);
         JS_FreeValue(ctx, s->ev);
         s->ev = JS_UNDEFINED;
@@ -169,10 +223,15 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
         want = JS_GetPropertyUint32(ctx, entry, PQ_TARGET_ORIGIN);
         if (!JS_IsNull(want)) {
             want_s = JS_ToCString(ctx, want);
-            if (!want_s) { JS_FreeValue(ctx, want); return JS_STEP_ABRUPT; }
+            if (!want_s) {
+                delivery_end(ctx, s, ROUTED_TASK_THREW);
+                JS_FreeValue(ctx, want);
+                return JS_STEP_ABRUPT;
+            }
         }
         /* The origin the target has NOW — read through the proxy, so a flow that navigated it sees its own. */
         if (!origin_matches(want_s, window_proxy_origin(target))) {
+            delivery_end(ctx, s, ROUTED_TASK_TARGET_ORIGIN);
             if (want_s) JS_FreeCString(ctx, want_s);
             JS_FreeValue(ctx, want);
             return JS_STEP_DONE;   /* §9.3.3 step 8.1: not same origin, so nothing is delivered */
@@ -231,6 +290,7 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
             JSValue new_ports = message_event_ports_of(tctx, ports);
             JS_FreeValue(tctx, ports);
             if (JS_IsException(new_ports)) {
+                delivery_end(ctx, s, ROUTED_TASK_THREW);
                 JS_FreeValue(tctx, data);
                 JS_FreeValue(ctx, sender_origin);
                 JS_FreeValue(ctx, source);
@@ -242,7 +302,17 @@ static int js_window_deliver_step(JSContext *ctx, void *st, JSValue cb_result, J
         }
         JS_FreeValue(ctx, sender_origin);
         JS_FreeValue(ctx, source);
-        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        if (JS_IsException(s->ev)) {
+            delivery_end(ctx, s, ROUTED_TASK_THREW);
+            s->ev = JS_UNDEFINED;
+            return JS_STEP_ABRUPT;
+        }
+        /* THE FIRE IS THE END, AND IT IS RECORDED AS THE DISPATCH IS ENTERED rather than after it returns.
+           §9.3.3 step 8.7's fire is what a page's listener IS, so from this line the message has been
+           delivered — and the dispatch suspends (it is a request into §2.9), so a task that is preempted,
+           parked or torn down inside a listener has still delivered. Recorded after it, every one of those
+           would read as a delivery that never reached the page. */
+        delivery_end(ctx, s, ROUTED_TASK_FIRED);
         STEP_GOTO(s->hdr.stage, WD_FIRE, &s->fphase, NULL);
         return JS_STEP_YIELD;
     }
@@ -455,6 +525,8 @@ void window_message_deliver_remote(JSContext *ctx, const char *sender_doc, const
               "window message: the sending origin of a routed cross-origin message could not be allocated");
         JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, org);
     }
+    /* THIS IS THE ROUTED HALF, and the slot says so at the one place that knows. */
+    JS_SetPropertyUint32(ctx, entry, PQ_ROUTED, JS_TRUE);
     {
         JSValueConst args[2];
         args[0] = target;
@@ -648,6 +720,13 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
        the incumbent settings object" — so this is one of the places a serialization is the ANSWER rather than
        a lost identity. */
     JS_SetPropertyUint32(ctx, entry, PQ_SENDER_ORIGIN, JS_NewString(ctx, origin_serialized(origin_agent())));
+    /* A POST MADE BY A SCRIPT OF THIS AGENT — written here, where the entry is built, rather than left absent
+       for the delivery to read as false: an absent slot and a false one are the same bytes to a `JS_ToBool` and
+       different facts to a reader, and the delivery DCHECKs the shape rather than defaulting it. An entry that
+       is ROUTED OUT of this instance never reaches a delivery at all (window_message_send_remote serializes
+       the message and returns), and the peer's own window_message_deliver_remote sets the slot true where it
+       rebuilds the entry from the wire. */
+    JS_SetPropertyUint32(ctx, entry, PQ_ROUTED, JS_FALSE);
     structured_with_transfer_free(ctx, &swt);
 
     /* THE RESOLVED TARGET, not this window. A task in THIS instance can only deliver to a navigable this
