@@ -4632,9 +4632,18 @@ long engine_jobs_run(void) { return g_jobs_run; }
    reaction pump was never eligible to run at all. Those need opposite fixes and one zero was the evidence for
    both. Measured on four live sites at 90 s each: jobsQueued climbed past 29000 with jobsRun flat at 0, and
    nothing in the document could say which of the two it was.
+   IT ANSWERED, AND THE ANSWER WAS THE FIRST ONE: excalidraw.com over three runs reported 3500-4067 units
+   against 2657-2923 jobs queued and jobsRun 0, so the boundary was reached thousands of times per run by flows
+   that held nothing to do there. The reading the pair made possible is that the flows REACHING the boundary
+   and the flows HOLDING the jobs were disjoint sets — and they were disjoint because the credit itself was
+   what separated them: it is a demotion (the optimism term is 1/(1+visits)) taken at the exact instant a
+   flow's own queued reactions became eligible. flow_credit_visit now asserts the rest of §8.1.4.4's boundary
+   at the origin so that cannot be reintroduced.
    IT IS THE SAME QUANTITY THE OPTIMISM TERM COUNTS — flow_credit_visit's "completed unit of work" — counted
    once for the whole instance rather than per flow, and incremented at that credit's own site so the two
-   cannot come to mean different things. */
+   cannot come to mean different things. A boundary reached with a checkpoint still owed is deliberately NOT
+   one of them: the turn is not over there, and the step that follows it is the one that runs the job, so it is
+   `jobsRun` that reads it. */
 static long g_units_done;
 long engine_units_done(void) { return g_units_done; }
 
@@ -6588,7 +6597,19 @@ static int engine_sched_slice(void) {
                reports: `_unitsDone` beside `_jobsRun` is what tells "flows reach the between-units boundary and
                have no jobs" from "no flow has ever reached it", which is the pair engine.c's declaration of
                g_units_done argues for. It is not a second predicate — it is this one, counted. */
-            if (!cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx))) { flow_credit_visit(cur); g_units_done++; }
+            /* AND THE THIRD HALF OF §8.1.4.4'S BOUNDARY, WHICH THE CHECKPOINT HOOK THREE LINES ABOVE WAS
+               ALREADY ASKING AND THIS WAS NOT. Both lines claim to answer "is this flow's turn over"; the hook
+               asked `!flow_job_microtask(cur)` and the credit asked a strictly weaker predicate, so two
+               readings of one spec sentence stood one screen apart and disagreed. Step 3 of clean up after
+               running script performs a microtask checkpoint when the execution context stack empties — the
+               emptying is the checkpoint's TRIGGER, and the checkpoint runs "While the event loop's microtask
+               queue is not empty", so the unit ends when the queue does. Crediting at the return DEMOTED the
+               flow (the optimism term is 1/(1+visits)) at the one instant its queued reactions became eligible,
+               and every job arm of flow_step is under this same `frame == NULL`: the flow then had to win the
+               whole frontier again to run its own checkpoint. flow_credit_visit asserts it at the origin so no
+               future credit site can reintroduce it; this is the predicate that satisfies the assert. */
+            if (!cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur)) {
+                flow_credit_visit(cur); g_units_done++; }
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend

@@ -295,6 +295,35 @@ void flow_credit_visit(Flow *f) {
            "a flow was credited a completed unit of work while it is still INSIDE a program — a preempt is the "
            "middle of a trial, not the end of one, and counting it makes this term a second clock beside the "
            "aging: the flow is then outranked by its own arms after one quantum and no program ever finishes");
+    /* …AND A MICROTASK CHECKPOINT IT STILL OWES IS THE SAME SENTENCE, WHICH IS WHERE THE UNIT ACTUALLY ENDS.
+       HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: "If the JavaScript execution
+       context stack is now empty, perform a microtask checkpoint" — the checkpoint is a step OF cleaning up
+       after the script, run in the same turn, and §8.1.7.3 "Processing model" places the identical step at the
+       end of a task. The checkpoint itself is "While the event loop's microtask queue is not empty: … Run
+       oldestMicrotask", so the turn is over when the queue is EMPTY and not when the program returned. An
+       empty execution context stack is therefore the checkpoint's TRIGGER, never the unit's end, and this
+       counted it as the end.
+       WHAT THAT COST IS THE WHOLE PRODUCT. The credit is a DEMOTION — the optimism term is 1/(1+visits) — so a
+       flow was demoted at the exact instant its queued reactions first became eligible to run (every job arm of
+       flow_step is under `frame == NULL`, engine.c). It then had to win the thread a SECOND time against the
+       entire frontier before its own checkpoint could run, and on a forking page the frontier is refilled by
+       branching faster than it drains. Measured on the artifact this fixes, three runs each: a six-line fixture
+       whose only forking construct is a 40-iteration loop over `location.hash` reported 19678 flows, 1320 jobs
+       QUEUED, 1316 units credited and ZERO jobs run — the two counts within four of each other because each
+       flow that finished its program queued exactly one reaction, was credited exactly one unit, and never held
+       the thread again. The same page without the loop (4 flows) ran 28 of 28 jobs. excalidraw.com: 15993-17556
+       flows, 2657-2923 jobs queued, 3500-4067 units, jobsRun 0, endpoints 0 on all three runs.
+       IT IS NOT A DRAIN LOOP AND MAY NOT BECOME ONE. Each microtask is still its own flow_step return, still
+       preemptible, still parkable, still re-ranked; what this removes is only the flow's own demotion ACROSS
+       the checkpoint, so flow_pick's strict comparison leaves the thread with it on a tie and any strictly
+       better flow still takes it. A checkpoint that never ends is governed by the aging term, which is the term
+       §scheduler assigns that job — not by a cap here. */
+    DCHECK(!flow_job_microtask(f),
+           "a flow was credited a completed unit of work while it still owes a MICROTASK CHECKPOINT — HTML "
+           "§8.1.4.4 \"Calling scripts\" step 3 of clean up after running script performs the checkpoint as "
+           "part of the turn that just ended, so the unit is not over and this credit DEMOTES the flow at the "
+           "one instant its queued reactions became eligible to run: it must then out-rank the whole frontier "
+           "a second time to run its own checkpoint, which on a forking page never happens");
     f->visits++;
 }
 
