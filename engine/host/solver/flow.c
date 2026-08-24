@@ -1491,9 +1491,14 @@ int flow_owes_answer(const Flow *f) {
  * the thread is actually handed over, because a term that steps coarser than that is INVISIBLE to every pick
  * inside one step of it: the scheduler charges the flow, re-picks, and reads a weight the charge did not move.
  *
- * WHAT THAT COST, MEASURED ON REAL PAGES. With one constant serving both, the step was one SECOND — 83
- * cooperative quanta — so 82 of every 83 picks were made against a weight the previous pick's service had not
- * touched, and the only term left with sub-second resolution was the optimism bonus, whose sole mover is
+ * WHAT THAT COST, MEASURED ON REAL PAGES. With one constant serving both, the step was one SECOND, which is
+ * 83.3 cooperative quanta of SILENCE — and the flow being charged accrues silence at TWICE the rate it burns
+ * CPU, because flow_age_running adds the same microseconds to `cpu` AND to the family's `fam_us` and the notch
+ * is their SUM. So the running flow crossed a step once every 41.7 quanta it consumed: 40 of every 41 picks
+ * were made against a weight the previous pick's service had not touched. (The 2x is worth stating rather than
+ * folding into the number, because it means the price a CONSUMING flow actually pays is two points per second
+ * where FLOW_AGE_RATE says one. That is a pricing question, not a resolution one, and it is untouched here.)
+ * The only term left with sub-second resolution was the optimism bonus, whose sole mover is
  * COMPLETING a unit of work. A flow reaches its queued jobs only with `frame == NULL` (engine.c's job arms are
  * all under it) and is credited a completed unit under the SAME predicate, so the one flow that can run a job
  * is the only kind of flow that pays anything at all between two whole seconds, and it pays once per job. Three
@@ -1657,10 +1662,12 @@ double flow_weight(const Flow *f) {
        with an arm entering at its parent's virtual time a handover per quantum is the queue rotating, not
        thrashing. It costs no extra switch either: the cooperative quantum ALREADY returns the thread at
        exactly this granularity, so the aging-driven yield now coincides with the slice expiry instead of
-       firing once per 83 of them.
+       firing once per 42 of them.
        WHAT THE POINT-WIDE STEP COST, and it is the reason this is a correction rather than a preference. A
-       step of one whole point is 83 quanta wide, so a flow that consumes a quantum has its rank UNCHANGED and
-       the pick that immediately follows re-reads the weight the charge did not move. The order then rests
+       step of one whole point is 83.3 quanta of silence, which a CONSUMING flow accrues in 41.7 quanta of its
+       own CPU (the charge bills `cpu` and `fam_us` both, and the notch is their sum), so a flow that consumes
+       a quantum has its rank UNCHANGED and the pick that immediately follows re-reads the weight the charge
+       did not move — 40 times out of 41. The order then rests
        entirely on whatever else has sub-second resolution, and the only such term is the optimism bonus —
        whose sole mover is COMPLETING a unit of work, which is also the sole precondition for reaching a queued
        job (`frame == NULL`, engine.c). So the one flow that could run a promise reaction was the one flow

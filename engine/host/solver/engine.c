@@ -6481,8 +6481,9 @@ static int engine_sched_slice(void) {
                granularity the thread is handed out in. The next statement of this loop is the pick.
                IT IS AN IDENTITY UNDER TODAY'S UNIT AND IT FIRES ON THE ONE IT REPLACES. `flow_silence_notch`
                divides by the cooperative quantum and the charge adds the same microseconds to BOTH of its
-               summands, so a full quantum moves it by at least two notches. With the unit at one SECOND — 83
-               quanta — a full quantum moved it by ZERO, eighty-two picks out of every eighty-three, and the
+               summands, so a full quantum moves it by at least two notches. That doubling is also why the unit
+               it replaces was 41.7 quanta of CPU rather than the 83.3 quanta of SILENCE a whole second names:
+               with it, a full quantum moved this by ZERO, forty picks out of every forty-one, and the
                only term left with finer resolution was the optimism bonus, whose sole mover is COMPLETING a
                unit of work — which is also the sole precondition for reaching a queued job (`frame == NULL`,
                the predicate three lines below and the predicate every job arm of flow_step is under). So the
