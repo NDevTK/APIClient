@@ -59,6 +59,20 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+/* XML 1.0 §2.3's [4] `NameStartChar` and [4a] `NameChar`, ONE CODE POINT AT A TIME — the two productions [5]
+   `Name` is composed of, asked the way a SCANNER has to ask them.
+     They are exposed rather than private to this file because a tokenizer reading a name out of a stream
+   cannot use the slice predicate below: it does not yet know where the name ENDS, and finding out IS asking
+   [4a] of each character until one says no. core/xml/xml_ref.c's [68] `EntityRef ::= '&' Name ';'` is the
+   first caller and every other name in the grammar — an element type, an attribute, a PI target — is scanned
+   the same way. The slice predicate and these two are ONE transcription read two ways, and xml_ref.c asserts
+   they agree on every name it scans.
+     They take a CODE POINT, not bytes, for the reason this header's opening gives: [4] has a hole at U+00D7
+   and U+00B7 is [4a]-only, so no byte test can stand in for either. */
+bool xml_name_is_name_start_char(uint32_t cp);
+bool xml_name_is_name_char(uint32_t cp);
 
 /* XML 1.0 §2.3 [5] `Name`. `s` is `len` bytes of WELL-FORMED UTF-8 — the JS string encoder's output — so a
    truncated or structurally invalid sequence is an engine bug that crashes at the walk rather than a name this

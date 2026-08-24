@@ -50,14 +50,14 @@ static const XmlCpRange NAME_CHAR_ONLY[] = {
     { 0x0300, 0x036F }, { 0x203F, 0x2040 },
 };
 
-static bool name_start_char(uint32_t cp)
+bool xml_name_is_name_start_char(uint32_t cp)
 {
     return xml_char_in_ranges(NAME_START_CHAR, XML_CP_RANGE_N(NAME_START_CHAR), cp);
 }
 
-static bool name_char(uint32_t cp)
+bool xml_name_is_name_char(uint32_t cp)
 {
-    return name_start_char(cp)
+    return xml_name_is_name_start_char(cp)
         || xml_char_in_ranges(NAME_CHAR_ONLY, XML_CP_RANGE_N(NAME_CHAR_ONLY), cp);
 }
 
@@ -87,7 +87,7 @@ bool xml_name_is_name(const char *s, size_t len)
                "hands it the JS string encoder's output, so a truncated or structurally invalid sequence here "
                "is an engine bug and not a name to answer about");
         DCHECK(p > was, "the UTF-8 walk consumed no bytes, so the Name production would never terminate");
-        if (!(first ? name_start_char(cp) : name_char(cp))) return false;
+        if (!(first ? xml_name_is_name_start_char(cp) : xml_name_is_name_char(cp))) return false;
         first = false;
     }
     return true;

@@ -9,6 +9,7 @@
 #include "solver/world.h"
 #include "core/crypto/secure_hash.h"
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
+#include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -6011,6 +6012,220 @@ static void xml_char_selftest(void)
     }
 }
 
+/* XML 1.0 (Fifth Edition) §4.1 Character and Entity References and §4.6 Predefined Entities —
+ * core/xml/xml_ref.h, the layer that turns a reference into the thing it refers to.
+ *
+ * ONE TABLE, DRIVEN AS A WHOLE ENTITY EACH TIME, because a reference is a PRODUCTION and not a predicate: the
+ * interesting failures are all about how far the scan got — a `+` with no digits, a run that ended on the
+ * wrong character, a constraint asked before the production matched — and none of them is visible from the
+ * answer alone. So every row states the reader's position afterwards as well, which is where this component's
+ * one structural promise lives: a failed scan consumes NOTHING, and the single exception is the character
+ * layer's own fatal error, which must NOT be rewound because rewinding would clear its §1.2 latch.
+ *
+ * THE ROWS THAT MATTER MOST ARE THE ONES THAT LOOK LIKE TYPOS. `&#X41;` is not a hexadecimal reference
+ * because [66] spells the prefix `'&#x'`; `&AMP;` is not §4.6's entity because §1.2's `match` performs no case
+ * folding; `&#xD;` is a REAL carriage return, which is the whole reason core/xml/xml_char.h keeps #xD in [3]
+ * `S` after §2.11 has removed every literal one. Each of those is a document that parses one way under this
+ * standard and another way under a tokenizer written from memory. */
+static void xml_ref_selftest(void)
+{
+    static const struct { const char *in; size_t n; XmlRefError err;
+                          XmlRefKind kind; uint32_t cp; const char *name; size_t after;
+                          const char *why; } REF[] = {
+        /* [66] CharRef ::= '&#' [0-9]+ ';' | '&#x' [0-9a-fA-F]+ ';' */
+        { "&#65;", 5, XML_REF_OK, XML_REF_CHAR_REF, 'A', NULL, 5,
+          "[66]'s decimal alternative: the digits up to the terminating `;` are a decimal representation of "
+          "the character's code point" },
+        { "&#x41;", 6, XML_REF_OK, XML_REF_CHAR_REF, 'A', NULL, 6,
+          "and its hexadecimal alternative names the same character" },
+        { "&#x4a;", 6, XML_REF_OK, XML_REF_CHAR_REF, 'J', NULL, 6,
+          "[66]'s hexadecimal digit class is `[0-9a-fA-F]` — lower case is in it" },
+        { "&#x4A;", 6, XML_REF_OK, XML_REF_CHAR_REF, 'J', NULL, 6, "and so is upper case" },
+        { "&#0000000065;", 13, XML_REF_OK, XML_REF_CHAR_REF, 'A', NULL, 13,
+          "`[0-9]+` puts no limit on the digits, so leading zeros are a reference like any other" },
+        { "&#x0000000041;", 14, XML_REF_OK, XML_REF_CHAR_REF, 'A', NULL, 14, "in either base" },
+        { "&#xD;", 5, XML_REF_OK, XML_REF_CHAR_REF, 0x0D, NULL, 5,
+          "THE ONE #xD A PRODUCTION CAN EVER MATCH. §2.3's note: `all #xD characters literally present in an "
+          "XML document are either removed or replaced by #xA characters before any other processing is done. "
+          "The only way to get a #xD character to match this production is to use a character reference` — so "
+          "§2.11 must not reach this one, and §3.3.3's note says the same from the attribute side: a "
+          "character reference to a white space character other than #x20 survives normalization as itself" },
+        { "&#x20;", 6, XML_REF_OK, XML_REF_CHAR_REF, 0x20, NULL, 6,
+          "and a referenced space is a space, which §3.3.3's table distinguishes from a literal one" },
+        { "&#38;X", 6, XML_REF_OK, XML_REF_CHAR_REF, '&', NULL, 5,
+          "§4.6: `the numeric character references &#60; and &#38; may be used to escape < and & when they "
+          "occur in character data` — and the scan stops ON the `;`, leaving the `X` for the caller, which is "
+          "what makes a reference a construct inside [43] content rather than the whole of it" },
+
+        /* [66], the shapes that are NOT it */
+        { "&#X41;", 6, XML_REF_ERR_NO_DIGITS, XML_REF_CHAR_REF, 0, NULL, 0,
+          "[66] spells the hexadecimal prefix `'&#x'` in lower case, so `X` is simply not a decimal digit and "
+          "this document is fatally in error — a tokenizer that took both spellings would be reading HTML's "
+          "rules into XML's grammar" },
+        { "&#;", 3, XML_REF_ERR_NO_DIGITS, XML_REF_CHAR_REF, 0, NULL, 0, "[66]'s `[0-9]+` is one or more" },
+        { "&#x;", 4, XML_REF_ERR_NO_DIGITS, XML_REF_CHAR_REF, 0, NULL, 0, "and so is its `[0-9a-fA-F]+`" },
+        { "&#65", 4, XML_REF_ERR_UNTERMINATED, XML_REF_CHAR_REF, 0, NULL, 0,
+          "the entity ends before the `;` that closes [66]" },
+        { "&#6 5;", 6, XML_REF_ERR_UNTERMINATED, XML_REF_CHAR_REF, 0, NULL, 0,
+          "and a character that is neither a digit nor the terminator ends the production without closing it" },
+
+        /* [66]'s [WFC: Legal Character] — asked only after the production has matched */
+        { "&#0;", 4, XML_REF_ERR_LEGAL_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0,
+          "[WFC: Legal Character]: `characters referred to using character references MUST match the "
+          "production for Char`, and [2] Char opens at #x9 — so NUL is not referenceable either" },
+        { "&#xD800;", 8, XML_REF_ERR_LEGAL_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0,
+          "nor is a surrogate, which [2]'s own gloss excludes by name" },
+        { "&#xFFFE;", 8, XML_REF_ERR_LEGAL_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0, "nor #xFFFE" },
+        { "&#x110000;", 10, XML_REF_ERR_LEGAL_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0,
+          "nor the first code point above [2]'s ceiling" },
+        { "&#99999999999999999999;", 23, XML_REF_ERR_LEGAL_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0,
+          "[66] puts no bound on the digit run, so the accumulator SATURATES above [2]'s ceiling — a value "
+          "that wrapped would report a legal character for a reference that names nothing" },
+        { "&#x110000", 9, XML_REF_ERR_UNTERMINATED, XML_REF_CHAR_REF, 0, NULL, 0,
+          "AND THE ORDER IS THE STANDARD'S: [WFC: Legal Character] is attached TO [66], so there is no "
+          "constraint to violate until [66] has matched — this answer names the missing `;` and not a "
+          "constraint about a reference the document does not contain" },
+
+        /* §4.6's five, recognized `whether they are declared or not` */
+        { "&amp;", 5, XML_REF_OK, XML_REF_PREDEFINED, 0x26, "amp", 5, "§4.6's set, in the order it lists them" },
+        { "&lt;", 4, XML_REF_OK, XML_REF_PREDEFINED, 0x3C, "lt", 4, "§4.6" },
+        { "&gt;", 4, XML_REF_OK, XML_REF_PREDEFINED, 0x3E, "gt", 4, "§4.6" },
+        { "&apos;", 6, XML_REF_OK, XML_REF_PREDEFINED, 0x27, "apos", 6, "§4.6" },
+        { "&quot;", 6, XML_REF_OK, XML_REF_PREDEFINED, 0x22, "quot", 6, "§4.6" },
+        { "&AMP;", 5, XML_REF_OK, XML_REF_ENTITY, XML_CHAR_EOF, "AMP", 5,
+          "§1.2's `match`: `No case folding is performed` — so this is a general entity reference to a name "
+          "§4.6 does not define, and what it stands for is §4.2's question. An ASCII-folding lookup would "
+          "make a document that is fatally in error under [WFC: Entity Declared] parse silently" },
+
+        /* [68] EntityRef ::= '&' Name ';' — everything else, handed back as a Name */
+        { "&foo;", 5, XML_REF_OK, XML_REF_ENTITY, XML_CHAR_EOF, "foo", 5,
+          "an undeclared name is not this layer's error to report: only the caller knows whether a DTD was "
+          "read, and [WFC: Entity Declared] is written in terms of exactly that" },
+        { "&a.b-c;", 7, XML_REF_OK, XML_REF_ENTITY, XML_CHAR_EOF, "a.b-c", 7,
+          "[4a] NameChar adds `-` and `.` to [4], so both are name characters after the first" },
+        { "&x:y;", 5, XML_REF_OK, XML_REF_ENTITY, XML_CHAR_EOF, "x:y", 5,
+          "[4] NameStartChar contains the colon and §2.3's note says processors MUST accept it as a name "
+          "character — narrowing to NCName is Namespaces in XML's, and it does not govern entity names" },
+        { "&a\xC2\xB7;", 5, XML_REF_OK, XML_REF_ENTITY, XML_CHAR_EOF, "a\xC2\xB7", 5,
+          "U+00B7 MIDDLE DOT is [4a] and not [4], so it is a name character in every position but the first" },
+
+        /* [68], the shapes that are NOT it */
+        { "&;", 2, XML_REF_ERR_NOT_A_REFERENCE, XML_REF_CHAR_REF, 0, NULL, 0,
+          "[68]'s Name is [5], which is one NameStartChar and then zero or more NameChars — the empty string "
+          "is not one" },
+        { "& ", 2, XML_REF_ERR_NOT_A_REFERENCE, XML_REF_CHAR_REF, 0, NULL, 0,
+          "§2.4: the ampersand MUST NOT appear in its literal form except as a markup delimiter" },
+        { "&", 1, XML_REF_ERR_NOT_A_REFERENCE, XML_REF_CHAR_REF, 0, NULL, 0,
+          "and an entity that ends on one has a literal ampersand in it just the same — the end of the entity "
+          "is not a NameStartChar and not a `#`" },
+        { "&-a;", 4, XML_REF_ERR_NOT_A_REFERENCE, XML_REF_CHAR_REF, 0, NULL, 0,
+          "`-` is [4a] and not [4], so it cannot open a Name" },
+        { "&\xC2\xB7;", 4, XML_REF_ERR_NOT_A_REFERENCE, XML_REF_CHAR_REF, 0, NULL, 0,
+          "and neither can U+00B7 — the same code point that is legal one position later" },
+        { "&a\xC3\x97;", 5, XML_REF_ERR_UNTERMINATED, XML_REF_CHAR_REF, 0, NULL, 0,
+          "U+00D7 MULTIPLICATION SIGN is in neither production — it sits in the hole [4] leaves between "
+          "[#xC0-#xD6] and [#xD8-#xF6] — so the Name ends before it and the `;` is not where it must be" },
+        { "&foo bar;", 9, XML_REF_ERR_UNTERMINATED, XML_REF_CHAR_REF, 0, NULL, 0,
+          "[68] has no white space in it; a space ends the Name and does not close the reference" },
+        { "&foo", 4, XML_REF_ERR_UNTERMINATED, XML_REF_CHAR_REF, 0, NULL, 0,
+          "and an entity that ends inside a Name has not closed it either" },
+
+        /* The character layer, reached from inside a reference */
+        { "&#x41\x01;", 7, XML_REF_ERR_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0,
+          "§2.2: U+0001 is not [2] Char, and a fatal error the character layer detects is ITS sentence to "
+          "word — this layer says `ask the reader` rather than carrying a second copy of the message" },
+        { "&a\xC3", 3, XML_REF_ERR_CHARACTER, XML_REF_CHAR_REF, 0, NULL, 0,
+          "§4.3.3: a sequence the entity ends inside is ill-formed, and it is ill-formed inside a reference "
+          "exactly as it is anywhere else" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(REF) / sizeof(REF[0]); i++) {
+        XmlCharReader r, start;
+        XmlRef got;
+        XmlRefError e;
+
+        xml_char_reader_init(&r, REF[i].in, REF[i].n);
+        start = r;
+        memset(&got, 0, sizeof got);
+        e = xml_ref_scan(&r, &got);
+        CHECK(e == REF[i].err, REF[i].why);
+        if (e == XML_REF_OK) {
+            CHECK(got.kind == REF[i].kind && got.cp == REF[i].cp, REF[i].why);
+            CHECK((size_t)(r.p - r.start) == REF[i].after, REF[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful reference scan left the reader's §1.2 latch set");
+            if (REF[i].name == NULL) {
+                CHECK(got.name == NULL && got.name_len == 0,
+                      "a [66] CharRef came back carrying a [5] Name — a character reference has none, and a "
+                      "consumer must crash on that pointer rather than read an empty name");
+                CHECK(got.kind == XML_REF_CHAR_REF, REF[i].why);
+            } else {
+                CHECK(got.name != NULL && got.name_len == strlen(REF[i].name)
+                          && memcmp(got.name, REF[i].name, got.name_len) == 0, REF[i].why);
+                /* The slice is BORROWED from the entity and the borrow is what §2.11 could have broken. */
+                CHECK(got.name > REF[i].in && got.name + got.name_len <= REF[i].in + REF[i].n,
+                      "an entity reference's Name does not point inside the entity it was scanned from — it "
+                      "is a borrowed slice and not a copy, so a pointer outside means the scan measured it "
+                      "against something else");
+            }
+            /* An unresolved [68] must carry a value no character predicate accepts — never a plausible one. */
+            CHECK(got.kind != XML_REF_ENTITY || !xml_char_is_char(got.cp),
+                  "an unresolved entity reference came back with a code point that passes [2] Char — nothing "
+                  "has read §4.2's declaration yet, so any character here is a fabricated one");
+        } else if (e == XML_REF_ERR_CHARACTER) {
+            CHECK(r.fatal != XML_CHAR_OK,
+                  "a reference scan reported the character layer's fatal error and the reader's §1.2 latch is "
+                  "clear — the caller is told to ask the reader which sentence was violated, and a clear "
+                  "latch has no answer to give");
+            CHECK(r.p != start.p, REF[i].why);
+        } else {
+            /* THE STRUCTURAL PROMISE: a failed §4.1 scan consumes nothing, so the position a `parsererror`
+               quotes names the reference and no caller is left standing inside a construct that failed. */
+            CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                      && r.fatal == start.fatal,
+                  "a reference scan that reported a §4.1 error did not restore the reader it was handed — a "
+                  "caller reporting the mistake would quote a position inside the failed construct, and a "
+                  "caller that recovered would resume in the middle of one");
+            CHECK(strcmp(xml_ref_error_message(e), xml_ref_error_message(XML_REF_OK)) != 0, REF[i].why);
+        }
+    }
+    /* Every sentence this layer can report is a DIFFERENT sentence — a report that merged two would send an
+       author to the wrong one, which is core/xml/xml_char.c's argument for its own two. */
+    {
+        static const XmlRefError ALL[] = {
+            XML_REF_OK, XML_REF_ERR_NOT_A_REFERENCE, XML_REF_ERR_NO_DIGITS, XML_REF_ERR_UNTERMINATED,
+            XML_REF_ERR_LEGAL_CHARACTER, XML_REF_ERR_CHARACTER,
+        };
+        size_t a, b;
+
+        for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+            for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+                CHECK(strcmp(xml_ref_error_message(ALL[a]), xml_ref_error_message(ALL[b])) != 0,
+                      "two of §4.1's constraints carry one message — an ampersand that begins nothing, a "
+                      "character reference with no digits, one nobody closed and one naming a code point that "
+                      "is not a character are four different mistakes");
+    }
+    /* THE SCAN IS A READER OPERATION, so the peek-and-park copy the parse above it will fork on has to survive
+       one — core/xml/xml_char.h's property, exercised through this layer rather than assumed to compose. */
+    {
+        static const char SRC[] = "&amp;&#x21;";
+        XmlCharReader r, saved;
+        XmlRef got;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        CHECK(xml_ref_scan(&r, &got) == XML_REF_OK && got.kind == XML_REF_PREDEFINED && got.cp == 0x26,
+              "the first reference of a known entity");
+        saved = r;
+        CHECK(xml_ref_scan(&r, &got) == XML_REF_OK && got.cp == '!' && r.p == r.end,
+              "the second reference of a known entity, read to the end");
+        r = saved;
+        CHECK(xml_ref_scan(&r, &got) == XML_REF_OK && got.kind == XML_REF_CHAR_REF && got.cp == '!',
+              "a reference scanned again from a reader restored out of a copy did not produce the same "
+              "reference — peeking and parking ARE that copy, so a parse that cannot rewind across a "
+              "reference can neither fork an arm nor suspend inside [43] content");
+    }
+}
+
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
  * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
  * stated by reference to.
@@ -6503,6 +6718,7 @@ int main(int argc, char **argv) {
     document_policy_selftest();
     css_property_grammar_selftest();
     xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
+    xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
