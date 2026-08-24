@@ -93,12 +93,17 @@ static JSValue g_decl_key = JS_UNDEFINED, g_inline_key = JS_UNDEFINED;
    which is the same shape §6.1.1's StyleSheet and §6.4.2's CSSRule take. */
 static JSClassID g_cssd_class;
 static int       g_declaration_proto_slot = -1;
-/* CSS Fonts §12.1's CSSFontFaceDescriptors.prototype, the same way and for the same reason. It is a THIRD
+/* CSS Fonts 5 §9.1 The CSSFontFaceRule interface's CSSFontFaceDescriptors.prototype, the same way and for the
+   same reason. THE LEVEL IS PART OF THIS CITATION: Level 4 numbers the same-titled section §12.1 and declares
+   the interface with SIX names fewer, so a bare "CSS Fonts §12.1" sends a reader to an edition that does not
+   carry what this file installs — the title is identical across both, which is exactly why the number alone
+   cannot be checked. It is a THIRD
    prototype over the SAME class and the same record: an `@font-face` block's declarations are kept where
    §6.4.3's are (the rule's own text, through core/css/css_rule.h), so what differs is only which member names
    the interface answers to. */
 static int       g_font_face_proto_slot = -1;
-/* CSSOM §6.4.7's CSSPageDescriptors.prototype, the same way and for the same reason — a FOURTH prototype over
+/* CSSOM §6.4.7 The CSSPageRule Interface's CSSPageDescriptors.prototype, the same way and for the same
+   reason — a FOURTH prototype over
    the one class and the one record. A `@page` rule's descriptors are kept where §6.4.3's declarations are (the
    rule's own text, through core/css/css_rule.h), so what differs is only which member names the interface
    answers to and, through core/css/css_page.h, which declarations the block admits at all. */
@@ -2614,8 +2619,8 @@ static JSValue cssd_new(JSContext *ctx, JSValueConst proto, JSValueConst owner_n
     DCHECK(g_ready, "a CSS declaration block was minted before cssom_init ran");
     DCHECK(JS_IsObject(proto),
            "a CSS declaration block was minted in a realm that never ran its prototype install — WHICH "
-           "interface the block is is the caller's to state, because §6.6's three creators and CSS Fonts "
-           "§12.1's fourth do not all make the same one");
+           "interface the block is is the caller's to state, because §6.6's three creators and CSS Fonts 5 "
+           "§9.1's fourth do not all make the same one");
     DCHECK(JS_IsNull(owner_node) != JS_IsNull(parent_rule),
            "§6.6's owner node and parent CSS rule are not two independent fields for this engine: one of them "
            "is where the declarations LIVE, so a block with both or with neither is a block whose declarations "
@@ -2651,7 +2656,7 @@ JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule)
     return out;
 }
 
-/* CSS Fonts §12.1's `style` — see the header. The block's PROPERTIES are §6.4.3's exactly (computed flag unset,
+/* CSS Fonts 5 §9.1's `style` — see the header. The block's PROPERTIES are §6.4.3's exactly (computed flag unset,
    readonly flag unset, declarations the rule's own, parent CSS rule the rule, owner node null); only the
    prototype differs, which is what makes the descriptors reachable and the properties not. */
 JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
@@ -2659,7 +2664,7 @@ JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule)
     JSValue proto = realm_value_get(ctx, g_font_face_proto_slot), out;
 
     DCHECK(css_rule_is(rule),
-           "CSS Fonts §12.1's `style` was asked to back a descriptor block with something that is not a CSS "
+           "CSS Fonts 5 §9.1's `style` was asked to back a descriptor block with something that is not a CSS "
            "rule");
     out = cssd_new(ctx, proto, JS_NULL, rule, false, false);
     JS_FreeValue(ctx, proto);
@@ -2780,14 +2785,14 @@ void cssom_init(JSContext *ctx)
         /* THE CLASS IS A PER-REALM PROTOTYPE HOLDER AND NOTHING ELSE — no block is ever an instance of it
            (`cssd_new` builds a plain object over the prototype it is handed), which is why a THIRD interface
            over the same record costs a value slot and not a class. `[object …]` is §3.7.3's @@toStringTag on
-           the prototype, so CSSStyleProperties and CSS Fonts §12.1's CSSFontFaceDescriptors are told apart by
+           the prototype, so CSSStyleProperties and CSS Fonts 5 §9.1's CSSFontFaceDescriptors are told apart by
            a page even though their records are identical. */
         JSClassDef d = { "CSSStyleProperties" };
         JS_NewClassID(JS_GetRuntime(ctx), &g_cssd_class);
         JS_NewClass(JS_GetRuntime(ctx), g_cssd_class, &d);
     }
     g_declaration_proto_slot = realm_value_declare(ctx, "CSSOM §6.6.1 CSSStyleDeclaration.prototype");
-    g_font_face_proto_slot = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceDescriptors.prototype");
+    g_font_face_proto_slot = realm_value_declare(ctx, "CSS Fonts 5 §9.1 CSSFontFaceDescriptors.prototype");
     g_page_proto_slot = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageDescriptors.prototype");
     g_ready = 1;
     {
@@ -2814,7 +2819,7 @@ void cssom_init(JSContext *ctx)
     for (id = 1; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
         g_camel_set_id[id] = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_camel_set, (int)id);
     {
-        /* CSS Fonts §12.1 and CSSOM §6.4.7 both declare every descriptor attribute
+        /* CSS Fonts 5 §9.1 and CSSOM §6.4.7 both declare every descriptor attribute
            `[LegacyNullToEmptyString]`, so `null` reaches the setter as "" and REMOVES the descriptor rather
            than declaring the string "null". */
         int i;
@@ -2825,11 +2830,13 @@ void cssom_init(JSContext *ctx)
     realm_declare_intrinsic(cssom_install_proto);
 }
 
-/* FOUR INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because four specs split them. §6.6.1's
-   `interface CSSStyleProperties : CSSStyleDeclaration` carries `cssFloat` and the per-property camel-cased
-   attributes; CSS Fonts §12.1's `interface CSSFontFaceDescriptors : CSSStyleDeclaration` carries the fifteen
-   `@font-face` DESCRIPTORS and CSSOM §6.4.7's `interface CSSPageDescriptors : CSSStyleDeclaration` the
-   fourteen `@page` ones, which are different sets with a different source (see the tables above); and
+/* FOUR INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM, because four specs split them. CSSOM §6.6.1 The
+   CSSStyleDeclaration Interface's `partial interface CSSStyleProperties` carries `cssFloat` and the
+   per-property camel-cased attributes; CSS Fonts 5 §9.1 The CSSFontFaceRule interface's
+   `interface CSSFontFaceDescriptors : CSSStyleDeclaration` carries the forty-one `@font-face` DESCRIPTORS its
+   twenty-one names spell, and CSSOM §6.4.7 The CSSPageRule Interface's
+   `interface CSSPageDescriptors : CSSStyleDeclaration` the fourteen `@page` ones its nine names spell, which
+   are different sets with a different source (see the tables above); and
    CSSStyleDeclaration carries the block's own eight members, which all three inherit. Installing all of them on
    one object made `CSSStyleProperties` an absent global — an honest ReferenceError for an interface every one
    of this engine's blocks IS — and made `Object.getOwnPropertyNames(CSSStyleDeclaration.prototype)` report

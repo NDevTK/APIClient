@@ -654,7 +654,7 @@ static JSValue namespace_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     return obj;
 }
 
-/* A CSS Fonts §12.1 CSSFontFaceRule over the DESCRIPTORS its block declares. They are kept in `block_text`,
+/* A CSS Fonts 5 §9.1 CSSFontFaceRule over the DESCRIPTORS its block declares. They are kept in `block_text`,
    which is where a style rule's declarations are kept and is read through the same two entries — so
    `rule.style` is a §6.6 declaration block over the rule's own storage, and CSS Fonts' CSSFontFaceDescriptors
    is a different PROTOTYPE over that identical record rather than a second place the descriptors live. */
@@ -687,7 +687,7 @@ static CssomBlockContext rule_block_context(uint16_t type)
     if (type == RULE_TYPE_KEYFRAME) return CSSOM_BLOCK_KEYFRAME;
     DCHECK(type == RULE_TYPE_STYLE || type == RULE_TYPE_FONT_FACE,
            "a rule type that has no declaration block was asked which restriction its block carries — §6.4.3's "
-           "CSSStyleRule and CSS Fonts §12.1's CSSFontFaceRule are the two whose blocks are unrestricted, and "
+           "CSSStyleRule and CSS Fonts 5 §9.1's CSSFontFaceRule are the two whose blocks are unrestricted, and "
            "every other rule with a block is named above");
     return CSSOM_BLOCK_UNRESTRICTED;
 }
@@ -1477,7 +1477,7 @@ static void rule_unbuilt_fail(const char *name)
     "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
     "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
     "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
-    "CSSMediaRule, §7.4's CSSSupportsRule, CSS Fonts §12.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's "      \
+    "CSSMediaRule, §7.4's CSSSupportsRule, CSS Fonts 5 §9.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's "      \
     "CSSKeyframeRule and CSSKeyframesRule, CSS Cascade §8.1/§8.2's CSSLayerBlockRule and "                      \
     "CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's CSSPropertyRule are built; what "        \
     "remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's CSSContainerRule, CSS Counter Styles 3 "       \
@@ -3069,11 +3069,11 @@ static JSValue js_rule_delete_rule(JSContext *ctx, JSValueConst this_val, int ar
 /* THE FOUR `style` ATTRIBUTES, WHICH ARE ONE MEMBER OVER ONE FIELD. §6.4.3 states it: "the style attribute
    must return a CSSStyleProperties object for the style rule, with the following properties: computed flag
    unset, readonly flag unset, declarations THE DECLARED DECLARATIONS IN THE RULE, parent CSS rule THIS, owner
-   node null" — and CSS Fonts §12.1's, §6.4.7's and §6.4.8's say the same five things. [SameObject], so the
+   node null" — and CSS Fonts 5 §9.1's, §6.4.7's and §6.4.8's say the same five things. [SameObject], so the
    block is remembered on the record: a page holds `rule.style` and compares it, and a fresh object per read
    makes every such comparison false. A rule has exactly ONE block object, which is why they share `r->style`.
    WHAT DIFFERS IS THE INTERFACE, and the table says so once: §6.4.3's and §6.4.8's hand back a
-   CSSStyleProperties, CSS Fonts §12.1's a CSSFontFaceDescriptors, §6.4.7's a CSSPageDescriptors. §6.4.8's
+   CSSStyleProperties, CSS Fonts 5 §9.1's a CSSFontFaceDescriptors, §6.4.7's a CSSPageDescriptors. §6.4.8's
    choice is the corpus's own — css/cssom/idlharness.html lists `sheet.cssRules[2].cssRules[0].style` under
    CSSStyleProperties, where it lists `sheet.cssRules[2].style` under CSSPageDescriptors. The IDL in
    @webref/idl types it `CSSStyleDeclaration`, which a CSSStyleProperties IS; the editor's draft types it
@@ -3144,7 +3144,7 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
            r->type == RULE_TYPE_MARGIN || r->type == RULE_TYPE_KEYFRAME,
            "§6.6's declaration block wrote its text back onto a rule that HAS no declaration block. A rule's "
            "`style` attribute is the only thing that reaches this, and it is declared by §6.4.3's "
-           "CSSStyleRule, CSS Fonts §12.1's CSSFontFaceRule, §6.4.7's CSSPageRule, §6.4.8's CSSMarginRule and "
+           "CSSStyleRule, CSS Fonts 5 §9.1's CSSFontFaceRule, §6.4.7's CSSPageRule, §6.4.8's CSSMarginRule and "
            "CSS Animations §6.2's CSSKeyframeRule and by nothing else in this build");
     /* THE RULE'S OWN RESTRICTION, ON THE WRITE SIDE. `setProperty`, `style.cssText =` and every descriptor
        attribute reach the record through this one function, so filtering here is what makes
@@ -3543,7 +3543,7 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_SUPPORTS] = realm_value_declare(ctx, "CSS Conditional §7.4 CSSSupportsRule.prototype");
     g_proto_slot[PROTO_IMPORT] = realm_value_declare(ctx, "CSSOM §6.4.4 CSSImportRule.prototype");
     g_proto_slot[PROTO_NAMESPACE] = realm_value_declare(ctx, "CSSOM §6.4.9 CSSNamespaceRule.prototype");
-    g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts §12.1 CSSFontFaceRule.prototype");
+    g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts 5 §9.1 CSSFontFaceRule.prototype");
     g_proto_slot[PROTO_PAGE] = realm_value_declare(ctx, "CSSOM §6.4.7 CSSPageRule.prototype");
     g_proto_slot[PROTO_MARGIN] = realm_value_declare(ctx, "CSSOM §6.4.8 CSSMarginRule.prototype");
     g_proto_slot[PROTO_KEYFRAMES] = realm_value_declare(ctx, "CSS Animations §6.3 CSSKeyframesRule.prototype");
@@ -3670,7 +3670,7 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, ns, "namespaceURI", js_rule_get, CR_NAMESPACE_URI, -1);
     idl_install_accessor(ctx, ns, "prefix", js_rule_get, CR_PREFIX, -1);
 
-    /* CSS Fonts §12.1's CSSFontFaceRule.prototype. Its `style` is a CSSFontFaceDescriptors and not a
+    /* CSS Fonts 5 §9.1's CSSFontFaceRule.prototype. Its `style` is a CSSFontFaceDescriptors and not a
        CSSStyleProperties, which is a real difference a page reads (`[object CSSFontFaceDescriptors]`, and a
        `unicode-range` attribute the other interface does not have) — see core/css/css_style_declaration.h.
        The [PutForwards=cssText] setter is the shared one, because §3.4.4's forwarding is a [[Get]] of `style`

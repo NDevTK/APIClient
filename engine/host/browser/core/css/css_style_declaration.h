@@ -32,7 +32,7 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name);
    property with no initial value anywhere (a custom property nobody set), which §6.6.1 answers as the empty
    string. Exported for §7's defaulting step, which is the only thing that reaches for it. */
 char *cssom_initial_value(const char *name);
-/* §6.6.1's two prototypes, CSS Fonts §12.1's third and CSSOM §6.4.7's fourth, for ONE realm — declared into
+/* §6.6.1's two prototypes, CSS Fonts 5 §9.1's third and CSSOM §6.4.7's fourth, for ONE realm — declared into
    core/realm.h's list, run once per realm. */
 void cssom_install_proto(JSContext *ctx);
 void cssom_free(JSRuntime *rt);
@@ -100,7 +100,7 @@ char *cssom_declared_value(const char *text, size_t len, const char *name);
    OWNED: the caller frees. */
 JSValue cssom_style_properties_for_rule(JSContext *ctx, JSValueConst rule);
 
-/* CSS Fonts §12.1's `[SameObject, PutForwards=cssText] readonly attribute CSSFontFaceDescriptors style` on a
+/* CSS Fonts 5 §9.1's `[SameObject, PutForwards=cssText] readonly attribute CSSFontFaceDescriptors style` on a
  * CSSFontFaceRule — the SAME §6.6 declaration block over the same rule-backed text, behind a DIFFERENT
  * interface, which is the whole of what makes it a different object.
  *
