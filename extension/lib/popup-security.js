@@ -96,8 +96,30 @@ function _encodeSentence(item) {
   if (item.sourceEncodes === "")
     return "the browser percent-encodes <strong>nothing</strong> in this source — the bytes reach the page "
          + "exactly as the attacker wrote them";
-  return "the browser percent-encodes <code>" + esc(item.sourceEncodes) + "</code> in this source, so a "
-       + "candidate needing those bytes arrives escaped";
+  // AND THE DECLARATION IS A PRIOR, NOT AN OUTCOME — solve.h says so at `sourceDelivers` in those words, and
+  // this sentence stated the prior AS the outcome ("so a candidate needing those bytes arrives escaped") on
+  // every card that carried one. On a FIRED card that is a flat contradiction of the finding printed two lines
+  // above it. Measured: an `innerHTML` sink fed `decodeURIComponent(location.hash.slice(1))` emits
+  // poc `<svg onload=X9()>` with sourceEncodes `" \"<>`"` AND sourceDelivers the SAME set — the page's own
+  // decode hands back every byte the browser encoded — and the envelope told the reader those bytes "arrive
+  // escaped" beside a PoC built out of them. Confirmed on real Chrome through the declared delivery: the
+  // fragment arrives as `#%3Csvg%20onload%3DX9()%3E`, the page decodes it, and the handler runs.
+  // THE TWO ARE HELD AGAINST EACH OTHER, which is the whole reason the engine emits both. `sourceDelivers` is
+  // the MEASURED subset that reached a sink; its ABSENCE is two positive facts (nothing in question, or no
+  // delivery probe has arrived yet) and is NOT a licence to report the prior as a result — so with no
+  // measurement the sentence says what the browser does and stops there.
+  var enc = "the browser percent-encodes <code>" + esc(item.sourceEncodes) + "</code> in this source";
+  if (typeof item.sourceDelivers !== "string")
+    return enc + ", so a candidate needs those bytes to survive the way in — no delivery probe of this search "
+         + "has reached a sink yet, so whether they do is unmeasured here";
+  if (item.sourceDelivers === "")
+    return enc + " and a run MEASURED that <strong>none</strong> of them arrives — the source's own transform "
+         + "is the whole of the failure, and no re-derivation reaches past it";
+  if (item.sourceDelivers === item.sourceEncodes)
+    return enc + ", and a run MEASURED that <strong>all</strong> of them arrive anyway — the page performs the "
+         + "round trip that undoes it, so the encode set defeats nothing here";
+  return enc + ", and a run MEASURED <code>" + esc(item.sourceDelivers) + "</code> of them arriving anyway — "
+       + "the page undoes part of the transform, and an escape is constructed out of exactly that subset";
 }
 
 // WHICH QUESTION A PARKED SEARCH IS STUCK ON, which is the whole content of the parked card and which one
