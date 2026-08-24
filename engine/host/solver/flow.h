@@ -66,8 +66,15 @@ typedef struct Flow {
        every fork (flow_fork_inherit) and restored by the cold tier, so it is monotone down a fork chain and
        says what an ANCESTRY emitted; `val - val_born` is what THIS flow emitted, and a frontier where that is
        zero for every member is one whose whole reward ordering was decided before any of them existed.
-       0 for a from-baseline flow (the first flow, a joined document's boot flow, a candidate session), which
-       is the truth about one: it inherited nothing, so all of its reward is its own from the start. */
+       A FROM-BASELINE FLOW INHERITS IT TOO, and this line used to say the opposite ("0 for a from-baseline
+       flow … it inherited nothing, so all of its reward is its own from the start"). That was a description of
+       a defect: `val` is the frontier's dominant term and a newcomer entering at zero entered BELOW every
+       member of a frontier whose arms had all inherited the boot family's reward, which is not "the system's
+       virtual time" and is not reachable by the ordering again. flow_arrive_at_virtual_time assigns both halves
+       now, exactly as flow_fork_inherit does, so this field means the same thing at both doors: everything a
+       flow was handed, and `val - val_born` is everything it has emitted since. The cold tier's rebuild is the
+       one writer that REPLACES the pair rather than inheriting it — a resumed flow is a returning member
+       carrying its own parked account, not a newcomer being placed. */
     double val_born;
     /* THE AGING TERM, AND ITS UNIT IS THE WHOLE OF WHETHER THE TERM WORKS. Thread time in MICROSECONDS burned
        since this flow's last emit — never a step/opcode/visit count. A count is not commensurate with `val`

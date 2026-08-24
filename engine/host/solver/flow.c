@@ -780,6 +780,10 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     return f;
 }
 
+/* THE QUEUE COORDINATE, forward-declared because the arrival rule below is the OTHER half of the split that
+   defines it and the ordering itself is stated once, further down beside the terms it is made of. */
+static double flow_queue_weight(const Flow *f);
+
 /* THE ARRIVAL RULE — START-TIME FAIR QUEUEING'S `max{v(t), F_prev}`, APPLIED TO THE ENTRIES THAT WERE MISSING IT.
  *
  * flow_fork_inherit already states this rule and already obeys it: "a continuation of an active flow enters at
@@ -817,9 +821,37 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * valMax of 10.0), so the newcomer would jump the entire backlog exactly as it did before this rule existed.
  * The assertion below is what says so — it FIRES on the one-tag version of this function — and the fix is that
  * the rule assigns every term the weight is made of, which is what "enters at the system's virtual time" means
- * once the system's virtual time has two coordinates. */
+ * once the system's virtual time has two coordinates.
+ *
+ * IT IS FOUR TAGS NOW AND THE FOURTH IS THE REWARD, WHICH IS THE ONE THAT DECIDES ANYTHING. The sentence above
+ * — "the rule assigns every term the weight is made of" — was written while the rule assigned THREE of four,
+ * and the term it left out is the term the whole ordering is built on. A one-sided `<=` cannot see that: the
+ * omission can only push a newcomer DOWN, and the assert passed however far down it went. flow_fork_inherit's
+ * parallel assertion is an EQUALITY over the weight and would have fired at the very first fork, which is
+ * exactly the difference between an assert that FORCES a rule and one that merely records a direction.
+ *
+ * WHAT IT COST, MEASURED, AND IT IS THE WHOLE @S SURFACE. `val` is copied to every arm at every fork, so a
+ * document's frontier stands at its boot family's reward — 401 members at `valMax` 118 on the smoke fixture —
+ * while a from-baseline flow entered at reward ZERO. The only members of that frontier at zero were the twelve
+ * @S candidate sessions (`valZero:12` beside `cands:12`, the same twelve flows counted twice), so their weight
+ * was `1.0 − aging` = 0.976 for the entire run against a `wTop` that never fell below 56. They were never
+ * picked: `turns:0` on all twelve after 254,181 switches, in the field solve.h added precisely to tell "the WFQ
+ * has never once given this search the thread" from "its flows have run and have not reached the sink". Every
+ * §@S mechanism — the delivery probe, the derived breakout, the byte-provenance distance, the fire — executes
+ * only inside a candidate flow, so on any document whose exploration keeps emitting, all of them were
+ * unreachable BY CONSTRUCTION and the run reported a clean parked search instead of a starved one.
+ *
+ * INHERITING THE REWARD IS NOT CREDITING IT, and the design already carries the field that says so. `val_born`
+ * is "how much of `val` this flow did not earn"; a fork takes its parent's reward and marks all of it
+ * inherited, and a newcomer at v(t) is the same statement made at the other door. It cannot promote either: the
+ * newcomer TIES with the flow in service, and flow_pick's STRICT comparison leaves the thread where it is until
+ * the incumbent's own service moves it — which is start-time fair queueing doing exactly what this rule is.
+ * The prose above already reached this conclusion for the boot-flow door and stopped one step short of it:
+ * "Inheritance closes that for `f(){g()}` and left it open for `open()`." Inheritance is the closure; it was
+ * applied to three coordinates and not to the fourth. */
 static void flow_arrive_at_virtual_time(Flow *f) {
-    DCHECK(f->cpu == 0 && f->visits == 0 && f->family == f->acct && f->family->fam_us == 0,
+    DCHECK(f->val == 0.0 && f->val_born == 0.0 && f->cpu == 0 && f->visits == 0 &&
+           f->family == f->acct && f->family->fam_us == 0,
            "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
            "every term, so a caller that wrote one first has ranked this flow at a virtual time nobody chose "
            "and this assignment throws that away");
@@ -827,19 +859,32 @@ static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(flow_is_member(g_running),
            "the flow holding the thread is not a member of the frontier, so the virtual time a newcomer would "
            "enter at is a tag belonging to no queue — a newcomer placed against it is placed against nothing");
+    f->val = g_running->val;                              /* the reward term's coordinate */
+    /* …AND THE MARK THAT NONE OF IT IS THIS FLOW'S OWN, written beside the copy for the same reason
+       flow_fork_inherit writes it beside its own: `val` is now a statement about an ANCESTRY, and the census
+       row that asks what a member has emitted ITSELF (`val > val_born`) would otherwise read a whole frontier
+       of newcomers as productive on the strength of the flow that happened to be running when they arrived. */
+    f->val_born = g_running->val;
     f->visits = g_running->visits;                        /* the optimism term's coordinate */
     f->cpu = g_running->cpu;                              /* …and the aging term's own half */
     f->family->fam_us = acct_family_us(g_running);        /* …and its family half */
-    /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED. A newcomer may tie with the flow in service — that is what
-       "enters at the system's virtual time" means, and flow_pick's STRICT comparison is what then leaves the
-       thread where it is — but it may never be worth MORE, because the only way to be worth more than the flow
-       in service without having earned it is the reset this rule exists to forbid. It is not a tautology: it
-       fires the moment a term enters flow_weight that this assignment does not carry, which is the same shape
-       flow_fork_inherit's own equality guards at the other entry. */
-    DCHECK(flow_weight(f) <= flow_weight(g_running),
-           "a flow arriving from the baseline outranks the flow that is running — it entered the queue ahead of "
-           "a member that has been served, so a page can promote the documents and candidate sessions it "
-           "creates above the whole backlog by creating them");
+    /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED, AND IT IS AN EQUALITY. A newcomer enters AT the system's
+       virtual time — not at or below it — and flow_pick's STRICT comparison is what then leaves the thread with
+       the incumbent, so a tie is the whole of what "arrives" means and there is nothing left for a `<=` to
+       express. Written over flow_queue_weight rather than over a list of fields for the reason
+       flow_fork_inherit gives about its own: a list cannot fire when a term is ADDED, and every term this rule
+       has ever been missing was added to the weight by somebody who did not know this function existed.
+       THE FITNESS IS THE ONE TERM NAMED RATHER THAN CARRIED, and naming it is what keeps this exact. §@S's
+       distance is a fraction OF A PAYLOAD, and a newcomer's payload is not the payload the flow in service
+       holds — there is no position for it to arrive at, which is why flow_queue_weight excludes it and why a
+       second per-item reading added to flow_weight would fire flow_fork_inherit's assert instead of this one.
+       EXACT WITH NO EPSILON: all four tags are copied verbatim and the silence notch is an integer division of
+       copied integers, so the two sides are the same float expression over the same values. */
+    DCHECK(flow_queue_weight(f) == flow_queue_weight(g_running),
+           "a flow arriving from the baseline did not enter at the frontier's virtual time — it was placed "
+           "above the flow in service (a page promoting the documents and candidate sessions it creates over "
+           "the whole backlog) or below it (a newcomer the ordering can never reach, which is what starved "
+           "every @S candidate session behind a boot family whose reward its arms had all inherited)");
 }
 
 /* THE PROGRAMS A NEW FLOW STARTS WITH — installed by the session, asked at the ONE place a flow is created.
@@ -1568,9 +1613,29 @@ int64_t flow_silence_notch(const Flow *f) {
     return (f->cpu + acct_family_us(f)) / FLOW_SERVICE_US;
 }
 
-/* Anytime-bandit priority: reward + UCB optimism − CPU aging. Additive (never a value/cpu ratio — the aging
-   term already yields value-per-CPU behaviour without the 0/0 degeneracy on an unrun flow). */
-double flow_weight(const Flow *f) {
+/* THE FLOW'S PLACE IN THE QUEUE — every term of the weight that is a TAG rather than a reading, which is
+   exactly the set an ARRIVAL has to reproduce. It is split out of flow_weight for one reason and it is the
+   defect that forced it: flow_arrive_at_virtual_time's own prose says it "assigns every term the weight is made
+   of", and it assigned three of four, leaving the REWARD at zero. Its assert was a one-sided `<=`, so the
+   omission could only ever push a newcomer DOWN and the assert passed however far down that was — while
+   flow_fork_inherit's parallel assert is an EQUALITY over flow_weight and would have fired at the first fork.
+   MEASURED, and the number is what a one-sided assert cannot see: on the smoke fixture every fork carried the
+   boot family's reward, so a 401-member frontier stood at `valMax` 118 and the ONLY members at zero were the 12
+   @S candidate sessions — `valZero:12` beside `cands:12`, the two counts identical because they are the same
+   twelve flows. Their weight was 0.976 for the whole run against a `wTop` that never fell below 56, and the
+   report said so in the field that exists to say so: `turns:0` on every one of them, after 254,181 switches.
+   §@S's whole search — the delivery probe, the derived breakout, the filter-survival distance, the fire — runs
+   only inside a candidate flow, so on any document whose exploration keeps emitting, every one of those
+   mechanisms was unreachable by construction and nothing crashed.
+   WHY THE FITNESS IS NOT IN HERE, and it is not an exception carved for convenience. §scheduler calls the
+   distance "a fraction, READ at the pick and never accumulated"; a tag is a POSITION a newcomer can be placed
+   at, and a per-payload reading is not one — the payload a newcomer carries is not the payload the flow in
+   service carries, so there is nothing for it to arrive at. It is the one term the arrival names rather than
+   copies, and naming it is what keeps the assert below an exact equality instead of a tolerance.
+   EXACT IN INTEGERS AND IN FLOATS. `val` and `visits` are copied verbatim by both entries, and the silence
+   notch is an integer division of copied integers, so two flows that arrived at one another compare EQUAL here
+   with no epsilon — which is the same property flow_fork_inherit's assert already rests on. */
+static double flow_queue_weight(const Flow *f) {
     double reward = f->val;
     /* §scheduler'S THREE QUANTITIES, AND THIS FUNCTION USED TO HOLD TWO. "accumulated emitted VALUE + a UCB
        optimism bonus ∝ 1/(visits+1) − CPU-AGING" names emitted value, VISITS and CPU; the optimism term read
@@ -1609,26 +1674,6 @@ double flow_weight(const Flow *f) {
        §scheduler's "a deep loop suspends and yields so siblings run, then resumes" measured in the unit the
        page's own code is written in. What it may NOT do is monopolise a unit that never ends, and that is the
        aging term's job below — not this one's. */
-    /* §@S'S FITNESS, READ WHERE A FITNESS IS READ. "The search is DISTANCE-DIRECTED (a fitness of
-       {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)" — and this function read
-       `val`, so what the WFQ actually read was a LEDGER of what each search had learned. The two are different
-       quantities and the difference is not academic: a ledger must be paid at most once per observation or it
-       reorders the frontier on repetition, and that same rule makes every candidate that merely EQUALS an
-       earlier one worth exactly what an unstarted flow is worth. So a search's second, third and tenth
-       breakouts — the ones a derivation produced precisely because the first did not fire — ran with the
-       ordering blind to how far each of them got, and §@S's "a near-miss is mutated toward the gap; a dead
-       candidate starves" had no comparison anywhere to be true of. This term is that comparison, and the
-       ledger above is untouched by it: nothing is paid here, nothing accumulates, and two flows standing at
-       the same distance rank equal, which is the correct answer and the one a once-only credit cannot give.
-       IT IS BOUNDED BY THE OPTIMISM TERM'S OWN RANGE for the reason that term is bounded by one emission: a
-       fitness says how promising an item is, not how much it has produced, so it may never outweigh a finding.
-       At its maximum a candidate whose bytes arrive intact ranks with a never-run flow — enough to be picked
-       out of a saturated frontier, not enough to hold the thread against a flow that has emitted. It is
-       charged the same aging as everything else, so it buys a candidate turns, never a monopoly.
-       ZERO FOR EVERY FLOW THAT IS NOT A CANDIDATE, which is not a special case in the arithmetic: a flow with
-       no payload has no distance to be a fraction of, and flow_set_distance asserts that rather than allowing
-       one to be recorded. */
-    double dist    = f->cand_dist;
     int64_t visits = f->visits;
     double ucb     = 1.0 / (1.0 + (double)visits);
     /* THE AGING IS THE FLOW'S OWN SILENCE **AND** ITS FAMILY'S, and the second half is what the family charge
@@ -1687,7 +1732,33 @@ double flow_weight(const Flow *f) {
        O(1) to read: every flow points straight at its family's root, so this adds one indirection to the pick
        and no walk. It is why the preempt hook's seam assertion snapshots this notch and the visit count
        (engine.c) — between two of them a flow's weight cannot move except through an emission. */
-    return reward + dist + ucb - (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
+    return reward + ucb - (double)flow_silence_notch(f) * FLOW_AGE_QUANTUM;
+}
+
+/* THE ORDER ITSELF — the queue coordinate above plus the one term that is a READING of the item rather than a
+   TAG on the queue. There is still exactly one comparator: every caller ranks by this, and the split names
+   which half an ARRIVAL can be placed at.
+   §@S'S FITNESS, READ WHERE A FITNESS IS READ. "The search is DISTANCE-DIRECTED (a fitness of
+   {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)" — and this function read
+   `val`, so what the WFQ actually read was a LEDGER of what each search had learned. The two are different
+   quantities and the difference is not academic: a ledger must be paid at most once per observation or it
+   reorders the frontier on repetition, and that same rule makes every candidate that merely EQUALS an
+   earlier one worth exactly what an unstarted flow is worth. So a search's second, third and tenth
+   breakouts — the ones a derivation produced precisely because the first did not fire — ran with the
+   ordering blind to how far each of them got, and §@S's "a near-miss is mutated toward the gap; a dead
+   candidate starves" had no comparison anywhere to be true of. This term is that comparison, and the
+   ledger above is untouched by it: nothing is paid here, nothing accumulates, and two flows standing at
+   the same distance rank equal, which is the correct answer and the one a once-only credit cannot give.
+   IT IS BOUNDED BY THE OPTIMISM TERM'S OWN RANGE for the reason that term is bounded by one emission: a
+   fitness says how promising an item is, not how much it has produced, so it may never outweigh a finding.
+   At its maximum a candidate whose bytes arrive intact ranks with a never-run flow — enough to be picked
+   out of a saturated frontier, not enough to hold the thread against a flow that has emitted. It is
+   charged the same aging as everything else, so it buys a candidate turns, never a monopoly.
+   ZERO FOR EVERY FLOW THAT IS NOT A CANDIDATE, which is not a special case in the arithmetic: a flow with
+   no payload has no distance to be a fraction of, and flow_set_distance asserts that rather than allowing
+   one to be recorded. */
+double flow_weight(const Flow *f) {
+    return flow_queue_weight(f) + f->cand_dist;
 }
 
 /* THE SILENCE AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's

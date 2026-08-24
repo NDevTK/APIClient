@@ -961,6 +961,14 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
     DCHECK(flow_at((int)(before + flows)) == fl,
            "a rebuilt flow did not land at the end of the frontier — a resume APPENDS, so anything else means "
            "a live member was displaced by a parked one and is now unreachable");
+    /* AND IT REPLACES WHAT THE ARRIVAL RULE PUT THERE, which is the one place in the engine where that is the
+       right thing to do. flow_add places a from-baseline flow at the frontier's virtual time and that includes
+       the REWARD tag (flow.c's flow_arrive_at_virtual_time), because a newcomer with no account of its own must
+       enter beside the flow in service rather than below the whole frontier. A rebuilt flow is not a newcomer:
+       it is a member coming BACK, and it carries the account the session that parked it wrote down. So the
+       parked reward is assigned over the inherited one rather than added to it — adding would credit this
+       session's findings to last session's flow, and leaving the inherited one would silently discard the
+       ordering the park exists to preserve. */
     fl->val = val;
     /* A RESUME IS A REBUILD AND NOT AN EMISSION, so every point of that reward was INHERITED from the session
        that parked it — this flow has produced nothing yet in this one. It is the same statement the fork makes
