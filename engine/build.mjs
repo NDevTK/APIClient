@@ -21,6 +21,7 @@ import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { lexborSourceId } from "./lexbor_source.mjs";
 
 /* A RUN THAT NEVER RETURNS IS NOT A VERDICT. Every program this file launches gets the same generous backstop
    and reports a hang through a DIFFERENT signal than a failure — `.signal` where a failure sets `.status` — so
@@ -377,33 +378,13 @@ function findC(dir, out) {
    the defect this build already carries a paragraph about one level up: a value read from one place and written
    in another with nothing asserting they agree. An edit to html/tree.c would relink the PREVIOUS objects and
    every gate would attribute the result to the edited revision.
-   Content, not mtime: a fresh clone writes every file at checkout time, so mtimes would rebuild 213 sources on
-   a tree that changed nothing, and a restored file would keep a stale hash. Reading 22 MB to hash it costs a
-   fraction of the compile it guards. */
-function lexborSourceId() {
-  /* HEADERS COUNT. They are not compiled on their own, so a walk that collected only .c would call a tree with
-     an edited html/tree.h unchanged — and that header is exactly where this fork's seam is declared. */
-  const walk = (dir, out) => {
-    for (const e of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
-      const p = join(dir, e.name);
-      if (e.isDirectory()) { if (p.includes("windows_nt")) continue; walk(p, out); }
-      else if (e.name.endsWith(".c") || e.name.endsWith(".h")) out.push(p);
-    }
-    return out;
-  };
-  /* THE PATH IS RELATIVE TO THE SOURCE ROOT, because an absolute one makes the id a property of WHERE the tree
-     is checked out rather than of what is in it. A gate runs from a frozen snapshot in a scratch directory, so
-     an absolute path recompiled 213 sources on content byte-identical to the tree it was cloned from — never a
-     wrong answer, but a per-build cost paid to learn nothing, and an id that cannot be compared between two
-     checkouts of the same revision is not an identity. */
-  const h = createHash("sha256");
-  const root = join(LEXBOR_SRC, "lexbor");
-  for (const p of walk(root, [])) h.update(relative(root, p).replace(/\\/g, "/")).update(readFileSync(p));
-  return h.digest("hex").slice(0, 16);
-}
+   THE COMPUTATION IS engine/lexbor_source.mjs's, NOT THIS FILE'S, because it was this file's and the OTHER
+   compiler in this tree never got it: engine/wpt.mjs cached its native archive on presence alone and stopped
+   linking the day the fork grew a function. One archive-identity answer, imported by everything that caches an
+   archive — a second copy of it is the same shape as the defect it removes. */
 const LEXBOR_ID_FILE = join(WORK, "liblexbor.srcid");
 function buildLexbor(force) {
-  const id = lexborSourceId();
+  const id = lexborSourceId(LEXBOR_SRC);
   const cachedId = existsSync(LEXBOR_ID_FILE) ? readFileSync(LEXBOR_ID_FILE, "utf8").trim() : null;
   if (!force && existsSync(LEXBOR_LIB) && cachedId === id) return;
   if (existsSync(LEXBOR_LIB) && cachedId !== id)
@@ -421,8 +402,6 @@ function buildLexbor(force) {
   writeFileSync(LEXBOR_ID_FILE, id + "\n");
   console.log("[build] lexbor OK -> " + LEXBOR_LIB + " (source " + id + ")");
 }
-buildLexbor(process.argv[2] === "lexbor");
-if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
 // THE IDL GAP AUDIT IS A STAGE OF THIS BUILD — see the stage list at the bottom. It was in nobody's build,
 // which is §Testing's excluded gate: its whole subject (does each component install the members its IDL
@@ -535,6 +514,21 @@ if (LIST_INCLUDE_ROOTS) {
   ], null, 1));
   process.exit(0);
 }
+
+/* THE FIRST COMPILE OF THIS RUN, AND IT SITS BELOW BOTH QUESTIONS BECAUSE A QUESTION MUST NOT BUILD ANYTHING.
+   It sat ABOVE them, and the header two screens up already said why that is wrong — "a list with build output
+   in front of it is not a list" — while this call put exactly that in front of both lists. It was not a style
+   defect and it did not stay quiet:
+     * `--list-include-roots` ANSWERED NON-JSON. buildLexbor prints its progress on stdout, so gate_revision's
+       dangling-include check got `[build] lexbor: compiling …` where it expected a manifest and reported
+       "THIS REVISION DOES NOT COMPILE — 1 include(s) below name a file no commit provides" on a clean tree, on
+       every gate run. That is the confident false red the paragraph above `--list-sources` was written to
+       prevent, produced by this line instead of by the copied list it replaced.
+     * AND ASKING THE QUESTION RAN EMCC. A gate that only wanted to print its revision banner spent a full
+       lexbor compile doing it, on the shared four-core box CLAUDE.md §Testing prices every build against.
+   Both are one fact: a mode whose whole contract is "answer and exit" had a compiler under it. */
+buildLexbor(process.argv[2] === "lexbor");
+if (process.argv[2] === "lexbor") { console.log("[build] lexbor archive rebuilt; re-run without arg to build the engine."); process.exit(0); }
 
 /* TAKEN AND SAID HERE: after BOTH question-answering modes have exited — a list with a revision block in front
    of it is not a list, and `--list-include-roots` emits JSON a consumer parses — and before the first compiler

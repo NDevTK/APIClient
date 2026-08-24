@@ -16,11 +16,12 @@
  * Usage:  node engine/wpt.mjs [subdir-or-file]
  */
 import { spawnSync, spawn } from "node:child_process";
-import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync, statSync,
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, statSync,
          writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { tmpdir, cpus, loadavg } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { lexborSourceId } from "./lexbor_source.mjs";
 
 function walk(dir) {
   const out = [];
@@ -789,23 +790,57 @@ const bin = join(mkdtempSync(join(tmpdir(), "wpt-")), "wpt.exe");
    That is not a warning-shaped problem: it segfaulted the whole corpus with no output, and it read as a crash
    in the engine rather than as a missing #include, which is the most expensive shape a diagnostic can take.
    -Werror on that one diagnostic makes it a build failure naming the function. */
-/* LEXBOR, BUILT NATIVELY ONCE. Streams §5.4 gives every writable controller a real AbortSignal, which is an
+/* LEXBOR, BUILT NATIVELY. Streams §5.4 gives every writable controller a real AbortSignal, which is an
    EventTarget, which reaches the solver's decision hook and through it the scheduler — and the scheduler's COW
    covers the DOM, so the gate needs the same tree the shipped build has. The .a is committed to nothing and
-   built on first use; the SOURCE is tracked at engine/lexbor and is no longer fetched, so this gate and the
-   emscripten build compile the same bytes by construction rather than by two clones agreeing. */
+   built from the SOURCE tracked at engine/lexbor, which is no longer fetched.
+   THIS PARAGRAPH USED TO END "so this gate and the emscripten build compile the same bytes by construction
+   rather than by two clones agreeing", AND THAT WAS FALSE AT THE MOMENT IT WAS WRITTEN, because the line below
+   it was `if (!existsSync(LEXBOR_LIB))` — construction was exactly what was missing. The archive was cached on
+   PRESENCE, which is the cache key engine/build.mjs carries a whole paragraph about having abandoned: a tracked
+   source is EDITABLE, so presence means "some archive exists" and nothing more. build.mjs learned it and this
+   file did not, which is the one-lesson-two-copies shape that CLAUDE.md's §Architecture calls out — and the
+   copy that did not learn is the one that took the browser half's gate down.
+   IT WAS NOT A HYPOTHETICAL AND IT WAS NOT SUBTLE. The fork grew `lxb_html_attribute_steps_*`,
+   `lxb_dom_attr_local_name` and `lxb_html_tree_dom_set` (superproject 6caa074c, "HTML §13.2.6's DOM writes go
+   through one embedder seam"), the cached archive predated all three, and `node engine/wpt.mjs <area>` DIED IN
+   THE LINKER at every revision after it — on a clean tree, with every other gate green, and with nothing in the
+   failure naming a stale cache. A LINK ERROR IS THE LUCKY CASE: an ADDED function breaks the link and says so,
+   an EDITED BODY does not, and that archive would have linked and measured a lexbor no revision of this tree
+   contains — §Testing's frozen-snapshot rule broken from inside the toolchain.
+   THE ID IS engine/lexbor_source.mjs's, IMPORTED, so this file and build.mjs cannot disagree about whether the
+   fork moved. The stamp is written only after a SUCCESSFUL build and only beside the archive it describes, for
+   build.mjs's reason: an id recorded for a failed compile makes the next run skip it and link whatever object
+   was there before, which is this defect reached through its own cache. */
 const LEXBOR_SRC = join(ENGINE, "lexbor");
 const LEXBOR_BUILD = join(WORK, "lexbor-native");
 const LEXBOR_LIB = join(LEXBOR_BUILD, "liblexbor_static.a");
-if (!existsSync(LEXBOR_LIB)) {
-  console.log("[wpt] building lexbor natively (once)…");
-  mkdirSync(LEXBOR_BUILD, { recursive: true });
-  for (const [cmd, args] of [["cmake", ["-DCMAKE_BUILD_TYPE=Release", "-DLEXBOR_BUILD_SHARED=OFF",
-                                        "-DLEXBOR_BUILD_STATIC=ON", "-DLEXBOR_BUILD_TESTS=OFF",
-                                        "-DLEXBOR_BUILD_EXAMPLES=OFF", LEXBOR_SRC]],
-                             ["make", ["-j" + (cpus().length || 4)]]]) {
-    const b = spawnSync(cmd, args, { cwd: LEXBOR_BUILD, encoding: "utf8" });
-    if (b.status !== 0) { console.error(`[wpt] lexbor ${cmd} FAILED\n` + (b.stderr || "")); process.exit(1); }
+const LEXBOR_ID_FILE = join(LEXBOR_BUILD, "liblexbor_static.srcid");
+{
+  const id = lexborSourceId(join(LEXBOR_SRC, "source"));
+  const cached = existsSync(LEXBOR_ID_FILE) ? readFileSync(LEXBOR_ID_FILE, "utf8").trim() : null;
+  if (!existsSync(LEXBOR_LIB) || cached !== id) {
+    console.log(existsSync(LEXBOR_LIB)
+      ? `[wpt] lexbor source changed (${cached || "no id"} -> ${id}) — the cached native archive is not this ` +
+        "tree's, so it is rebuilt before anything is measured against it"
+      : "[wpt] building lexbor natively (once)…");
+    /* AND THE BUILD DIRECTORY GOES WITH IT, because a CMake cache is a record of WHERE the source was as much
+       as of what was in it. This one was generated when lexbor lived at `.work/lexbor-src`, a path that stopped
+       existing when the fork became tracked at `engine/lexbor`, and cmake REFUSES rather than reconfiguring:
+       "The source … does not match the source … used to generate cache." That is the same stale-cache defect
+       one level down — an artifact kept because it is present, describing a tree that is gone — so the archive's
+       identity check and its build directory are one decision: if this archive is not this source's, nothing
+       cached beside it is either. */
+    rmSync(LEXBOR_BUILD, { recursive: true, force: true });
+    mkdirSync(LEXBOR_BUILD, { recursive: true });
+    for (const [cmd, args] of [["cmake", ["-DCMAKE_BUILD_TYPE=Release", "-DLEXBOR_BUILD_SHARED=OFF",
+                                          "-DLEXBOR_BUILD_STATIC=ON", "-DLEXBOR_BUILD_TESTS=OFF",
+                                          "-DLEXBOR_BUILD_EXAMPLES=OFF", LEXBOR_SRC]],
+                               ["make", ["-j" + (cpus().length || 4)]]]) {
+      const b = spawnSync(cmd, args, { cwd: LEXBOR_BUILD, encoding: "utf8" });
+      if (b.status !== 0) { console.error(`[wpt] lexbor ${cmd} FAILED\n` + (b.stderr || "")); process.exit(1); }
+    }
+    writeFileSync(LEXBOR_ID_FILE, id + "\n");
   }
 }
 
