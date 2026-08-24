@@ -223,6 +223,11 @@ static void img_task_visit(JSContext *ctx, void *stp, JSStepVisit *v)
     ImgTask *s = stp;
     int k;
 
+    /* NOTHING IS OWNED UNTIL THE FIRST STEP RUNS. The state's block is ZEROED (quickjs-step.h), and a zeroed
+       JSValue is not JS_UNDEFINED — so a visit that reached a machine the driver has allocated and not yet
+       entered would hand the collector a value nobody wrote. `started` is that fact, and it is the same flag
+       the step's own entry arm turns on before anything that can fail. */
+    if (!s->started) return;
     v->val(ctx, &s->ev);
     STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
 }
@@ -238,12 +243,18 @@ static int img_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue *
 
     STEP_ARM(IMGT_FIRE);
         if (!s->started) {
-            const char *type = JS_ToCString(ctx, name);
+            const char *type;
             int k;
 
+            /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST THING THAT CAN FAIL, and the state's block is
+               ZEROED rather than filled with JS_UNDEFINEDs (quickjs-step.h), so a read of `ev` between the
+               entry and the first assignment is a read of a value that is not one. `JS_ToCString` allocates,
+               which is a moment the collector can walk this machine through `img_task_visit`. */
             s->started = 1;
             s->fphase = 0;
+            s->ev = JS_UNDEFINED;
             STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            type = JS_ToCString(ctx, name);
             CHECK(type != NULL, "§4.8.4.3.5: OOM reading a queued image task's event name");
             /* Neither of §4.8.4.3.5's two events bubbles and neither is cancelable — the standard names each
                fire as "fire an event named e at the img element" and gives no initialiser. */
