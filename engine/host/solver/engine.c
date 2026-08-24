@@ -4362,6 +4362,16 @@ static int64_t g_ranked_silence = 0;
    notch stands still. Omitting it would make the assertion below fire on the most ordinary rank change there
    is: a flow finished a program, its bonus halved, and a sibling passed it. */
 static int64_t g_ranked_visits = 0;
+/* …AND THE FITNESS DISTANCE, WHICH IS A TERM OF THE WEIGHT AND SO HAS TO BE A COORDINATE OF IT. `flow_weight`
+   sums FOUR quantities — `reward + dist + ucb - silence` — and this snapshot set watched three of them, so the
+   one it did not watch could move the rank while the assertion below read the state as unchanged and called a
+   correct yield a swap for nothing. That is not a hypothetical: it aborted the smoke fixture on the first build
+   after the distance became a term, at a switch count in the ten thousands, with @S searches live.
+   THE RULE THE OMISSION BROKE IS THE ONE THIS BLOCK EXISTS FOR: these are "the coordinates the verdict is a
+   pure function of", so a term added to `flow_weight` and not added here makes that sentence false, and it
+   makes it false in the direction that fires — a real rank change reported as an unchanged one. Anything summed
+   into the weight belongs here, and the assertion is what enforces that it was not forgotten. */
+static double g_ranked_dist = 0.0;
 /* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
    TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
@@ -4490,9 +4500,11 @@ static int preempt_hook(int kind) {
            nothing, and at 512 flows that was 1.28 million of them for one document. */
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
                flow_silence_notch(cur) != g_ranked_silence ||
-               cur->visits != g_ranked_visits || cur->val != g_ranked_val,
+               cur->visits != g_ranked_visits || cur->val != g_ranked_val ||
+               cur->cand_dist != g_ranked_dist,
                "the VALUE YIELD fired on a flow whose rank nothing changed since the scheduler switched it in — "
-               "same frontier generation, same silence notch, same completed-unit count, same reward on both "
+               "same frontier generation, same silence notch, same completed-unit count, same reward and same "
+               "fitness distance on both "
                "sides of the comparison, so the pick and the hook are answering one unchanged state two "
                "different ways and every swap this buys is a COW delta swap for no ranking decision at all");
         return 1;
@@ -5463,6 +5475,7 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
     g_ranked_gen = flow_frontier_gen(); g_ranked_val = f->val;
     g_ranked_silence = flow_silence_notch(f);  /* the aging term — see the assertion in preempt_hook */
     g_ranked_visits = f->visits;               /* …and the optimism term's, which is a count and not a clock */
+    g_ranked_dist = f->cand_dist;              /* …and the fitness term's, which is a reading and not a payment */
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
