@@ -4523,10 +4523,36 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
     if (!f)
         f = flow_running();
     else
-        DCHECK(flow_running() == NULL,
-               "a host-time callback was queued into a NAMED flow while another flow was running — the bracket "
-               "names an owner precisely because there is none, so an overlap is one timeline's work landing "
-               "on another timeline's queue, to be run later under a delta that never caused it");
+        /* HOST TIME IS "NO SLICE OPEN", NEVER "NO FLOW RUNNING", AND THOSE ARE NOT THE SAME STATEMENT.
+           This asserted `flow_running() == NULL` on the premise that a bracket set between two steps names an
+           owner "precisely because there is none" — and engine_sched_step's contract says the opposite in its
+           own words one screen down: the cooperative-quantum yield RETURNS WITHOUT SWITCHING THE RUNNING FLOW
+           OUT, because §scheduler requires the same flow to resume byte-identically on the frontier it left.
+           The stamp therefore stays up across the host's own time BY DESIGN, so the premise is false on the
+           only return a busy engine ever makes, and an assert is false exactly when the engine is working.
+           WHAT IT COST IS THE PRODUCT PATH IT STOOD ON. A navigation reported to a HOT engine aborted the
+           instance and wedged the one scheduler for the rest of the session, so continuous browsing survived
+           exactly ONE navigation per browser — the second one died, on unrelated origins alike, which is the
+           shape of a false invariant rather than of a site.
+           THE MISROUTING IT NAMED IS REAL AND IS ALREADY FORECLOSED ABOVE, which is why the answer is a truer
+           assert and not a deleted one: a callback landing on the wrong timeline's queue is prevented by
+           PRECEDENCE — a named owner wins outright, so the queue reached is the named flow's whatever
+           `flow_running()` says. The three marks the host's time does have to have down (the flow stamp, the
+           DOM capture, the capture route) are suspended and restored by engine_sched_step's wrapper and
+           re-asserted at the ABI boundary by qjs_step; `g_running` is deliberately not one of them, because a
+           yielded flow's COW delta is still APPLIED to the heap and clearing the stamp would be a claim about
+           that heap which is not true.
+           WHAT IS LEFT TO ASSERT IS THE PROPERTY THAT WOULD ACTUALLY BREAK THIS: not that no flow holds the
+           thread, but that none is EXECUTING. A slice open here means the interpreter reached this line on the
+           scheduler's own time while a host-time bracket named an owner — two queuers claiming one callback,
+           which is the overlap the old reason was reaching for and the only form of it that can happen. It is
+           the same predicate preempt_hook asks above and qjs_step asserts on every exit, so host time has ONE
+           spelling in this file instead of two that disagree. */
+        DCHECK(!quantum_slice_open(),
+               "a host-time bracket named the owner of a queued callback while a scheduler SLICE was open — an "
+               "owner is named only between two steps, so an open slice means a flow is EXECUTING and two "
+               "queuers claim one callback: the named one wins and the running flow's own reaction is filed "
+               "under a timeline that never caused it");
     /* THERE IS NO GLOBAL DRAIN. Declining here hands the job to quickjs's global list, and nothing in this
        engine ever runs that list — so the job is not "deferred to the default", it is DROPPED. Every task
        source goes through here: a window message, a port delivery, a broadcast, a timer callback, a custom
