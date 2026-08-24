@@ -1079,6 +1079,10 @@ function renderEngineRuns() {
     ["endpoints", "endpoints learned"], ["sinks", "@S sinks"], ["park", "flows parked for next session"],
     ["switches", "flow context-switches"], ["flows", "flows created"], ["candidates", "@S candidates run"],
     ["jobsQueued", "jobs queued"], ["jobsRun", "jobs run"],
+    /* WHAT MAKES "jobs run 0" READABLE: a queued job may only run with the flow's execution context stack
+       empty (HTML §8.1.4.4 step 3 of clean up after running script), so this says whether that boundary was
+       ever reached. Zero here and thousands queued is a document no program of which has finished. */
+    ["unitsDone", "units of work completed"],
     ["worldSegmentsHeld", "cross-instance world segments held"],
     ["worldSegmentsMade", "…made (cumulative)"], ["worldSegmentsForked", "…forked"],
     /* THE FOUR THAT MAKE AN EMPTY @S SURFACE READABLE, and they were written by bridge.js and read by nobody.

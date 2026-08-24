@@ -169,14 +169,15 @@ char *result_json(JSContext *ctx) {
 
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 298 with its conversion specifiers
-       and 259 without them, and the twelve counters' full-width decimals are 195 (five ints at 11, seven longs
-       at 20), so the worst case is 454 against this 512. It was 192 for a shape whose widest form was already
-       197 — inside only because the real numbers are small — and it was 384 against a worst case that the
-       arrival census took to 454, which is the second time this number has been outgrown by a field added
-       without re-doing it. RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD; it is four counts off the format string
-       and there is no way to be nearly right. The DCHECK under the snprintf is the second half of this, not a
-       substitute for it: the arithmetic is what makes the buffer right, the assert is what catches the
+       and stated so the count can be re-done: the format's fixed bytes are 315 with its conversion specifiers
+       and 273 without them, and the thirteen counters' full-width decimals are 215 (five ints at 11, eight
+       longs at 20), so the worst case is 488 against this 512. It was 192 for a shape whose widest form was
+       already 197 — inside only because the real numbers are small — and it was 384 against a worst case that
+       the arrival census took to 454, which is the second time this number has been outgrown by a field added
+       without re-doing it; `_unitsDone` is the third field to require this arithmetic and the count above is
+       it re-done, not adjusted. RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD; it is four counts off the format
+       string and there is no way to be nearly right. The DCHECK under the snprintf is the second half of
+       this, not a substitute for it: the arithmetic is what makes the buffer right, the assert is what catches the
        arithmetic being re-done wrong. */
     /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
@@ -216,13 +217,13 @@ char *result_json(JSContext *ctx) {
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
-                             "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
+                             "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,\"_unitsDone\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
                              "\"_worldSegmentsForked\":%d,"
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
                              "\"_sinkSuppressed\":%ld,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
-                     engine_jobs_queued(), engine_jobs_run(), held, made, segf,
+                     engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      srcReads, sinkReached, sinkTainted, sinkSuppressed, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
            eight, whose widest form is 115 digits beside 208 bytes of literal — inside the slack only because

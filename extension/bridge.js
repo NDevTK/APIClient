@@ -109,7 +109,7 @@ function assertResultDocument(r) {
      DECLINED because the check standing on it was unforgeable. Those are four different pages and one empty
      array was the evidence for each. A missing one here is the whole split gone, so it is asserted with the
      rest and never defaulted — the same rule that put the other eight in this loop. */
-  for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
+  for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                    "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
                    "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"]) {
     DCHECK(typeof r[k] === "number",
@@ -217,6 +217,10 @@ function linesToAnalysis(lines, msg, outcome, eng) {
     ? { run: outcome,
         switches: result._switches, flows: result._flows, candidates: result._candidates,
         jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
+        /* THE PRECONDITION FOR RUNNING A JOB, beside the count of jobs run, because one of those numbers alone
+           has two opposite readings — see solver/engine.c's g_units_done. A run whose reactions never fire and
+           a run whose flows never reach the between-units boundary at all need opposite fixes. */
+        unitsDone: result._unitsDone,
         worldSegmentsHeld: result._worldSegmentsHeld, worldSegmentsMade: result._worldSegmentsMade,
         worldSegmentsForked: result._worldSegmentsForked,
         /* …AND WHY THE SECURITY SURFACE IS THE SIZE IT IS. Every counter above is about how much work the run

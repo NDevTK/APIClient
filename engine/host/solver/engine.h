@@ -711,6 +711,12 @@ void engine_gen_fork(JSContext *ctx, JSValueConst genobj, void *base_gd, void *c
 int  engine_switch_count(void);
 long engine_jobs_queued(void);
 long engine_jobs_run(void);
+/* HOW MANY COMPLETED UNITS OF WORK this instance's flows have been credited — HTML §8.1.4.4 "Calling scripts"
+   step 3 of clean up after running script, "if the JavaScript execution context stack is now empty". It is the
+   PRECONDITION for running a queued job, so it is what makes `jobsRun` readable: without it, a run that queued
+   thousands of reactions and ran none says nothing about whether the pump had nothing to do or was never
+   eligible. See the declaration in engine.c for the measurement that made the pair necessary. */
+long engine_units_done(void);
 
 /* THE ORPHAN ROUND TRIP'S TWO NUMBERS — how many waits for a parked drive's function a TAKE satisfied this
    session, and how many waiting drives FINISHED never having been handed one. The third, how many were rebuilt,

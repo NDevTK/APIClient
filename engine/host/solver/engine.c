@@ -4571,6 +4571,19 @@ static int preempt_hook(int kind) {
 static long g_jobs_q, g_jobs_run;
 long engine_jobs_queued(void) { return g_jobs_q; }
 long engine_jobs_run(void) { return g_jobs_run; }
+/* …AND THE PRECONDITION FOR RUNNING ONE, WHICH IS WHY `jobsRun: 0` NEEDED A SECOND NUMBER BESIDE IT. Every job
+   arm of flow_step is under `frame == NULL` — HTML §8.1.4.4 "Calling scripts" step 3 of clean up after running
+   script, "if the JavaScript execution context stack is now empty" — so a run with jobs queued and none run has
+   TWO opposite readings and the pair above states neither: either flows are reaching that boundary and finding
+   nothing to do, or NO FLOW EVER REACHES IT, which means no program in the document has finished and the
+   reaction pump was never eligible to run at all. Those need opposite fixes and one zero was the evidence for
+   both. Measured on four live sites at 90 s each: jobsQueued climbed past 29000 with jobsRun flat at 0, and
+   nothing in the document could say which of the two it was.
+   IT IS THE SAME QUANTITY THE OPTIMISM TERM COUNTS — flow_credit_visit's "completed unit of work" — counted
+   once for the whole instance rather than per flow, and incremented at that credit's own site so the two
+   cannot come to mean different things. */
+static long g_units_done;
+long engine_units_done(void) { return g_units_done; }
 
 void engine_orphan_claims(long *met, long *unmet) {
     DCHECK(met != NULL && unmet != NULL,
@@ -6518,7 +6531,11 @@ static int engine_sched_slice(void) {
                completed unit there is, and the flow is about to leave the frontier, so the count is read only
                by the census that reports what the order was made of. Excluding it would mean the ONE step whose
                completion is certain is the one step not counted as one. */
-            if (!cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx))) flow_credit_visit(cur);
+            /* AND THE INSTANCE-WIDE COUNT OF THE SAME EVENT, taken HERE so it cannot drift from the credit it
+               reports: `_unitsDone` beside `_jobsRun` is what tells "flows reach the between-units boundary and
+               have no jobs" from "no flow has ever reached it", which is the pair engine.c's declaration of
+               g_units_done argues for. It is not a second predicate — it is this one, counted. */
+            if (!cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx))) { flow_credit_visit(cur); g_units_done++; }
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend

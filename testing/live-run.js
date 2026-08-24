@@ -85,7 +85,7 @@ function snapshot(pg) {
    that take opposite actions, and a probe that reports only `sinks: 0` cannot tell "no attacker source was
    ever read" from "taint arrived at a sink and the search was declined as unforgeable". This driver was
    reporting the cost columns and dropping the four that say whether there was anything to find. */
-const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun",
+const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "unitsDone",
                   "worldSegmentsHeld", "worldSegmentsMade", "worldSegmentsForked",
                   "sourceReads", "sinkReached", "sinkTainted", "sinkSuppressed",
                   "endpoints", "sinks", "park", "resumed"];
@@ -225,6 +225,7 @@ async function main() {
         switches: spread(rs, first("switches")),
         jobsQueued: spread(rs, first("jobsQueued")),
         jobsRun: spread(rs, first("jobsRun")),
+        unitsDone: spread(rs, first("unitsDone")),
         sourceReads: spread(rs, first("sourceReads")),
         sinkReached: spread(rs, first("sinkReached")),
         sinkTainted: spread(rs, first("sinkTainted")),

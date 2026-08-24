@@ -45,7 +45,7 @@
  * Both are solver-semantics regressions and neither has any other detector in this tree.
  *
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
- * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
+ * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_unitsDone`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
  * `_sinkTainted`, `_sinkSuppressed`), and a
  * parked search's `tried`. `_switches` exists precisely BECAUSE it differs between an interleaving scheduler
@@ -307,7 +307,7 @@ async function child(docPath, schedName) {
    A DROPPED FIELD IS DROPPED BY PATH, so the exclusion is stated about one place in one document rather than
    about a name that might mean something else somewhere else. */
 const DROP = new Map([
-  ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
+  ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                 "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
                 "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"])],
   [".securitySinks[]", new Set(["tried"])],
