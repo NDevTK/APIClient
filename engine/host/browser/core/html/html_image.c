@@ -161,18 +161,20 @@ static bool img_uses_srcset_or_picture(lxb_dom_element_t *el)
     return p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(p, LXB_TAG_PICTURE);
 }
 
-/* HTML §7.3.1 "Navigables"'s FULLY ACTIVE, asked of THE ELEMENT'S NODE DOCUMENT — which is not the question
-   document_fully_active answers. A realm holds several documents and only its ACTIVE one can be fully active
-   (§7.3.1 defines the term by walking from a navigable's active document), so the element's document is fully
-   active exactly when it IS this realm's active document and that document is. Asking the realm alone answers
-   TRUE for a `DOMParser` document's elements, and §4.8.4.3.5 would then fetch every address in markup a page
-   merely PARSED — requests a browser does not make and a `<template>`'s contents do not make either. */
+/* HTML §7.3.3 "Fully active documents", asked of THE ELEMENT'S NODE DOCUMENT — which is not the question
+   document_fully_active answers. §7.3.3: "A Document d is said to be FULLY ACTIVE when d is the ACTIVE
+   DOCUMENT of a navigable navigable, and either navigable is a top-level traversable or navigable's container
+   document is fully active." A realm holds several documents — a `DOMParser` parse, a `createHTMLDocument`, an
+   XHR's responseXML — and only its ACTIVE one is any navigable's, so the element's document is fully active
+   exactly when it IS this realm's active document and that document is. Asking the realm alone answers TRUE
+   for a `DOMParser` document's elements, and §4.8.4.3.5 would then fetch every address in markup a page merely
+   PARSED — requests a browser does not make, and which a `<template>`'s contents do not make either. */
 static bool img_document_fully_active(JSContext *ctx, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *root = document_root_node(ctx);
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
 
-    DCHECK(n != NULL, "§7.3.1's fully active was asked about no element");
+    DCHECK(n != NULL, "§7.3.3's fully active was asked about no element");
     if (!root || root->owner_document != n->owner_document) return false;
     return document_fully_active(ctx);
 }
@@ -537,8 +539,10 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        WHAT THIS ENGINE MAY DECIDE ABOUT THAT REQUEST AND WHAT IT MAY NOT. Fetch §4.1 "Main fetch" step 7 —
        "If should request be blocked due to a bad port, should fetching request be blocked as mixed content, or
        should request be blocked by Content Security Policy returns blocked, then set response to a network
-       error" — runs HERE, in the engine, because a policy is the DOCUMENT's and CSP §6.8.1 gives this request
-       the `image` destination, which is what makes `img-src` the directive that governs it. The CORS mode is
+       error" — runs HERE, in the engine, because a policy is the DOCUMENT's. §4.8.4.3.5 creates the request
+       with the `image` DESTINATION, and CSP §6.8.1 "Get the effective directive for request" is the switch on
+       that destination which answers `img-src`, so naming the destination is the whole of what this call site
+       has to get right for the right directive to govern the check. The CORS mode is
        NOT decided here: SECURITY.md puts SOP/CORS/credentials behind the trusted zone's `safeFetch`, which is
        the one chokepoint that may see a cross-origin body, so the mode crosses as the request it is and the
        zone answers it. */
@@ -805,8 +809,9 @@ static JSValue js_img_current_src(JSContext *ctx, JSValueConst this_val, int mag
  * the width and height are set only WHEN GIVEN: `new Image()` produces an element with no `width` attribute at
  * all, where a defaulted 0 would put `width="0"` in the serialized markup.
  *
- * DOM §4.9 "create an element" rather than §4.5's createElement is also what makes step 2 run no page code —
- * there is no custom element registry lookup for `img`, and the internal creation is the half that has none. */
+ * DOM §4.9 "Interface Element"'s CREATE AN ELEMENT rather than §4.5 "Interface Document"'s createElement is
+ * also what makes step 2 run no page code — there is no custom element definition for `img` to look up, and
+ * the internal creation is the half that has none. */
 static JSValue js_image_factory(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     JSValue img;
@@ -823,9 +828,10 @@ static JSValue js_image_factory(JSContext *ctx, JSValueConst this_val, int argc,
            "§4.8.3's legacy factory function created something that is not an `img` element — DOM §4.9's "
            "create an element was given the local name `img` in the HTML namespace, so a node that is not one "
            "means the element-interface resolution and this brand disagree about what an img is");
-    /* Steps 3-4. DOM §3.2.5 "set an attribute value" goes through the mutation chokepoint, which is what makes
-       the write per-flow AND what runs §4.9's attribute change steps — including this file's own, which is why
-       an `Image(w,h)` whose `width` counts as a relevant mutation is one update rather than a special case.
+    /* Steps 3-4. DOM §4.9 "Interface Element"'s SET AN ATTRIBUTE VALUE goes through the mutation chokepoint,
+       which is what makes the write per-flow AND what runs the same section's attribute change steps —
+       including this file's own, which is why an `Image(w,h)` whose `width` counts as a relevant mutation is
+       one update rather than a special case.
        THE VALUE CROSSES AS THE VALUE, not as a C string this function formats: `new Image(cfg.thumbSize)`
        passes an argument the page computed, and where that is unknown external input the attribute must keep
        its provenance rather than be stamped with whatever number a coercion invented. element_attr_set_value
