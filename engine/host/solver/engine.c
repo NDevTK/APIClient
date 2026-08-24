@@ -4379,10 +4379,14 @@ static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static Flow *g_r
    cost" is a check rather than a claim, at the one point where it can be false. */
 static unsigned g_ranked_gen = 0; static double g_ranked_val = 0.0;
 /* …AND THE AGING TERM'S NOTCH — this flow's silence, its own thread time since its last emission plus its fork
-   family's since any arm of it last emitted, in whole emitted findings (solver/flow.h's flow_silence_notch).
+   family's since any arm of it last emitted, in whole COOPERATIVE QUANTA (solver/flow.h's flow_silence_notch).
    Two separate snapshots stood here, the flow's service quantum and its family's, and they are ONE now because
    the weight reads one quantity: the sum, at the price FLOW_AGE_RATE states. Keeping two would be keeping the
-   coordinates of a formula this file no longer computes. */
+   coordinates of a formula this file no longer computes.
+   THE UNIT IS THE ONE THE THREAD IS HANDED OUT IN, and it used to be one whole emitted FINDING — 83 quanta —
+   which is the correction this snapshot carries. Between two of those the running flow's rank could not move
+   on aging at all, so this variable stood still across eighty-two consecutive picks and the assertion below
+   permitted nothing it should have; see the charge's own resolution assertion in engine_sched_slice. */
 static int64_t g_ranked_silence = 0;
 /* …AND THE COMPLETED-UNIT COUNT, which is the optimism term's whole quantity (solver/flow.h's `visits`). It
    moves at an instant no clock names — the scheduler credits it after a step that left the flow between units,
@@ -4505,7 +4509,7 @@ static int preempt_hook(int kind) {
            WHAT CAN CHANGE THE ANSWER IS EXACTLY WHAT IS SNAPSHOTTED AT THE SWITCH-IN: the
            frontier GENERATION (a fork or a finish added or removed a member, and an emission bumps it too), the
            running flow's SILENCE NOTCH (its own thread time since its last emission plus its fork family's,
-           crossing a whole emitted finding's worth — flow.c), its COMPLETED-UNIT COUNT (the optimism term's
+           crossing a whole COOPERATIVE QUANTUM's worth — flow.c), its COMPLETED-UNIT COUNT (the optimism term's
            whole quantity, which moves at no clock's instants), and its own REWARD. Nothing else moves either
            side of the comparison: a parked flow
            burns no CPU, and its `val` cannot change without it running, which cannot happen while this one
@@ -6455,8 +6459,46 @@ static int engine_sched_slice(void) {
                    "the flow the scheduler stepped is not the one it is about to charge for that step's thread "
                    "time — the aging term would demote a flow that did not burn it and leave the one that did "
                    "holding its rank");
+            /* WHAT THE ORDER SAID ABOUT THIS FLOW BEFORE IT WAS CHARGED — held for the resolution assertion
+               below, and only in a build that evaluates it. It is `#if`-guarded WITH its assertion rather than
+               declared unconditionally, because check.h's release DCHECK still TYPE-CHECKS its condition
+               (`(void)sizeof(cond)`) and would therefore make an unguarded reading a per-step call in a build
+               that reads nothing. The seam census above is guarded the same way for the same reason. */
+#if APICLIENT_DEV
+            int64_t age_notch0 = flow_silence_notch(cur);
+#endif
             now = quantum_thread_us();
             flow_age_running(now - t0);
+#if APICLIENT_DEV
+            /* §scheduler'S MONOPOLIZER HALF, ASSERTED AT THE SEAM WHERE THE CHARGE MEETS THE PICK — and it is
+               the one claim in the WFQ that nothing was checking. Its twin — "a UCB optimism bonus ∝
+               1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED" — is a floor on the weight flow_pick returns.
+               The other half — "CPU-AGING so a monopolizer that burns CPU without emitting sinks below
+               productive+unrun flows" — has a bound in flow_pick too, but that bound is DERIVED from
+               flow_weight, so it can only catch an EDIT to the formula and says nothing about whether the term
+               it is derived from can be OBSERVED. This is the observability, and it is a different claim: not
+               how far a flow sinks, but whether consuming a slice of the thread moves its rank AT ALL at the
+               granularity the thread is handed out in. The next statement of this loop is the pick.
+               IT IS AN IDENTITY UNDER TODAY'S UNIT AND IT FIRES ON THE ONE IT REPLACES. `flow_silence_notch`
+               divides by the cooperative quantum and the charge adds the same microseconds to BOTH of its
+               summands, so a full quantum moves it by at least two notches. With the unit at one SECOND — 83
+               quanta — a full quantum moved it by ZERO, eighty-two picks out of every eighty-three, and the
+               only term left with finer resolution was the optimism bonus, whose sole mover is COMPLETING a
+               unit of work — which is also the sole precondition for reaching a queued job (`frame == NULL`,
+               the predicate three lines below and the predicate every job arm of flow_step is under). So the
+               one flow that could run a promise reaction was the only flow paying anything between two whole
+               seconds. Measured on one login page, three runs, a fresh browser each: `jobsQueued` 373/401/417
+               and `jobsRun` 14/14/14 — an integral, document-determined number with no network in it.
+               A CHARGE UNDER ONE QUANTUM IS EXEMPT because it is below the resolution of anything this
+               scheduler decides: a step that ended early is not a slice consumed, and the charges TELESCOPE
+               across the quantum (the reading above is carried), so nothing is lost by not asserting on one. */
+            DCHECK(now - t0 < (int64_t)ENGINE_QUANTUM_MS * 1000 || flow_silence_notch(cur) > age_notch0,
+                   "a flow consumed a whole COOPERATIVE QUANTUM of the thread and its rank did not move — the "
+                   "aging term is quantised coarser than the granularity at which the thread is handed over, "
+                   "so the pick that immediately follows this charge is made against a weight this charge did "
+                   "not touch, and a monopolizer is invisible to the ordering for as many picks as that unit "
+                   "is quanta wide");
+#endif
             /* …AND THE OTHER TERM'S CHARGE, WHICH IS A COUNT AND NOT A CLOCK. §scheduler's optimism bonus is
                "∝ 1/(visits+1)", and a VISIT is a completed unit of work — a program that ended, a job that ran,
                a delivery, a lifecycle stage — never a slice of thread time. The two are charged here together

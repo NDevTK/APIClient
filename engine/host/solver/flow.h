@@ -85,10 +85,14 @@ typedef struct Flow {
        MICROSECOND IS NOT A VISIT, and reading it as one put the same physical quantity — thread time — into
        BOTH of flow_weight's non-reward terms at two scopes. §scheduler names three quantities (emitted value,
        visits, CPU) and the weight then held two, so the term priced to demote a monopolizer was DOMINATED by
-       the term meant to protect a newcomer: FLOW_AGE_RATE gives a silent flow one second of CPU before an unrun
-       sibling outranks it, while `1/(1+cpu/Q)` did it after ONE QUANTUM — 12 ms, eighty-three times sooner. The
-       priced budget therefore governed nothing, and no flow on a heavily-forking document ever held the thread
-       long enough to finish the program it was inside. `visits` below is the optimism term's quantity now; this
+       the term meant to protect a newcomer: FLOW_AGE_RATE prices one second of CPU at one emitted finding —
+       the optimism bonus's ENTIRE range — while `1/(1+cpu/Q)` spent HALF that range in ONE QUANTUM, so the
+       priced budget was dominated eighty-three to one and governed nothing, and no flow on a heavily-forking
+       document ever held the thread long enough to finish the program it was inside. What the rate buys is a
+       flow's REWARD in seconds and not a fixed grace period: the term steps in cooperative quanta (flow.c's
+       FLOW_AGE_QUANTUM), so a flow tied with an unrun sibling on reward and bonus hands over after ONE quantum
+       — which is the queue rotating — and a flow that has emitted V findings holds the thread for V seconds of
+       silence before that sibling reaches it, which is the rate doing what it is priced for. `visits` below is the optimism term's quantity now; this
        one is the aging's own half, and the family's is the other. Both reset at flow_credit_emit, which is what
        makes them AGING (silence) rather than lifetime service.
        WHY BOTH HALVES AND NOT ONE. The family charge alone cannot order anything WITHIN a family, because every
@@ -879,20 +883,23 @@ Flow *flow_next_to_run(const Flow *incumbent);
  * It is the same scan, so the hook and the pick can never rank two flows differently. */
 Flow *flow_rival_of(const Flow *cur);
 
-/* HOW MANY WHOLE QUANTA OF THREAD TIME THIS FLOW HAS CONSUMED — the quantised reading of `cpu` that BOTH terms
- * of flow_weight are built from, exposed because it is what a rank CHANGE is made of. Between two notches a
- * flow's own weight cannot move except through an emission, and that pair of facts is exactly the invariant
- * engine.c's seam assertion holds the value yield to. */
+/* HOW MANY WHOLE QUANTA OF THREAD TIME THIS FLOW HAS CONSUMED — the quantised reading of `cpu`, and a CENSUS
+ * quantity: it says who is consuming the thread, at the granularity the thread is handed out in. It is not
+ * itself a term of the weight (it used to be the optimism term's, and a microsecond is not a visit), but the
+ * aging term reads the SUM of it and the row below in exactly this unit. */
 int64_t flow_service_notch(const Flow *f);
-/* …AND THE FAMILY'S, in the same unit. Both are CENSUS quantities: they say who is consuming the thread, at the
-   granularity the thread is handed out in, and neither is a term of the weight. */
+/* …AND THE FAMILY'S, in the same unit. Two quantities with two reset points (flow.c's flow_age_running says
+   why); their RATIO is the fork factor of the widest family in the frontier. */
 int64_t flow_family_notch(const Flow *f);
-/* THE AGING TERM ITSELF — how many whole EMITTED FINDINGS this flow's silence is worth, its own thread time
-   since its last emission plus its fork family's since any arm of it last emitted, divided by the price
-   FLOW_AGE_RATE names. A different unit from the two above and deliberately so (flow.c says why a rank may not
-   step at the service quantum), and public because it is half of what a rank CHANGE is made of: between two of
-   these notches, and between two of the flow's completed units, its weight cannot move except through an
-   emission. That pair is exactly the invariant engine.c's seam assertion holds the value yield to. */
+/* THE AGING TERM'S QUANTITY — how many whole COOPERATIVE QUANTA of silence this flow stands at: its own thread
+   time since its last emission plus its fork family's since any arm of it last emitted, in the unit of the two
+   notches above and deliberately the SAME one. The PRICE is applied where the term is summed (flow.c's
+   FLOW_AGE_QUANTUM), because what a microsecond costs and the smallest step the order can express are two
+   quantities and one constant cannot be both: this used to step in whole emitted FINDINGS, 83 quanta wide, so
+   a flow that consumed a slice of the thread had its rank unchanged and the pick that immediately followed
+   read a weight the charge had not moved. Public because it is half of what a rank CHANGE is made of: between
+   two of these notches, and between two of the flow's completed units, its weight cannot move except through
+   an emission. That pair is exactly the invariant engine.c's seam assertion holds the value yield to. */
 int64_t flow_silence_notch(const Flow *f);
 
 /* THE LOWEST-PRIORITY MEMBER OTHER THAN `exclude` — the TAIL the cold tier gives up first at the RAM floor, and
