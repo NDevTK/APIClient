@@ -414,6 +414,78 @@ bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
     return rtl;
 }
 
+/* css-sizing-3 §3.2.1 "“Behaving as auto”" — THE QUESTION CSS 2.1 ASKS AS "a computed value of `auto`", ASKED
+ * THE WAY THE CURRENT SPEC DEFINES IT, AND THE ANSWER IS NOT A COMPUTED VALUE.
+ * CSS 2.1 §10.5's `<percentage>` prose says "if the height of the containing block is not specified explicitly
+ * (i.e., it depends on content height), and this element is not absolutely positioned, THE VALUE COMPUTES TO
+ * 'auto'", and its `Computed value:` line carries the same reading ("the percentage or 'auto' (see prose under
+ * <percentage>) or the absolute length"). css-sizing-3 SUPERSEDES BOTH: §1.1 "Module interactions" says the
+ * module "extends the width, height, min-width, min-height, max-width, max-height … features defined in [CSS2]
+ * chapter 10", §3.1.1 "Preferred Size Properties: the width and height properties" gives the property
+ * `Computed value: as specified, with <length-percentage> values computed` — a percentage SURVIVES to the
+ * computed value — and §3.2.1 names this exact case as the reason the term exists: "to have a common term for
+ * both when width/height computes to auto AND WHEN IT IS DEFINED TO BEHAVE AS IF AUTO WERE SPECIFIED (as in the
+ * case of block percentage heights resolving against an indefinite size, see CSS2§10.5), the property is said
+ * to BEHAVE AS AUTO in both of these cases", with the note that "legacy spec prose defining layout behavior,
+ * particularly in [CSS2], might explicitly refer to width/height having a computed value of auto as a
+ * condition; some of these cases should be interpreted as meaning behaves as auto".
+ * SO THIS IS A USED-VALUE QUESTION AND NOT A COMPUTED-VALUE RULE, which is the opposite of what the crash that
+ * stood here instructed. Building it in core/css/css_computed_value.c would make `getComputedStyle(el).height`
+ * answer `auto` for a `display: none` element declaring `height: 50%`, where every user agent answers `50%` —
+ * a fidelity bug written under a spec sentence that a later level withdrew.
+ * WHICH LAYOUT CONDITIONS IT REPLACES IS THE SPEC'S OWN CHOICE, NOT A SWEEP OF EVERY `auto` IN §10. §3.2.1's
+ * test list names `margin-collapse-with-indefinite-block-size-001` through `-005`, so CSS 2.1 §8.3.1's
+ * collapsing conditions ("auto computed height", "zero or auto computed height") are cases the current spec
+ * reads this way, and §10.6.3's content-based height is the same question by construction — a box whose height
+ * behaves as auto is a box whose height comes from its content. §10.3.2's intrinsic-ratio arms and §10.4's
+ * ratio table say "computed values of 'auto'" about a REPLACED element's two axes, and those stay literal
+ * here: their antecedent needs an intrinsic ratio, which core/layout/replaced_element.c mints nowhere, so
+ * widening them would be a guess at a rule no fixture in this build can exercise.
+ * IT READS COMPUTED VALUES AND WALKS §10.1's CHAIN, AND COMPUTES NO SIZE. That is what keeps it cheap enough to
+ * be asked at every one of those conditions: the definiteness of a percentage height is a property of the chain
+ * of declarations above it, and §4.1 "Percentage Sizing"'s own worked example says so — a percentage height "is
+ * itself definite because it's a percentage resolved against a definite length". A size-computing answer would
+ * re-run each ancestor's layout once per level. */
+bool used_value_height_behaves_as_auto(lxb_dom_element_t *el)
+{
+    CssLength h;
+    lxb_dom_element_t *cb;
+
+    DCHECK(el != NULL, "the behaves-as-auto question was asked with no element");
+    h = css_computed_length(el, "height");
+    if (h.kind == CSS_LENGTH_KEYWORD) {
+        DCHECK(uv_len_is_auto(h),
+               "a `height` computed to a keyword that is not `auto`. CSS 2.1 §10.5's `<length> | <percentage> "
+               "| auto` admits no other, and css-sizing-3 §3.2 \"Sizing Values\"'s `min-content`/`max-content`/"
+               "`fit-content()` are level-3 additions this engine records no computed-value rule for");
+        return true;
+    }
+    if (h.kind == CSS_LENGTH_ABSOLUTE) return false;
+    DCHECK(h.kind == CSS_LENGTH_PERCENTAGE || h.kind == CSS_LENGTH_CALCULATED,
+           "a computed `height` is none of the four kinds css_length.h defines");
+    /* §10.5's OWN EXCEPTION, "AND THIS ELEMENT IS NOT ABSOLUTELY POSITIONED", with §10.5's own reason stated
+       in its note: "the height of the containing block of an absolutely positioned element is independent of
+       the size of the element itself, and thus a percentage height on such an element CAN ALWAYS BE RESOLVED".
+       CSS 2.1 §9.6 "Absolute positioning" defines the term over both values — "references in this
+       specification to an absolutely positioned element (or its box) imply that the element's 'position'
+       property has the value 'absolute' or 'fixed'" — and §9.6.1 "Fixed positioning" calls fixed positioning
+       "a subcategory of absolute positioning". So such a box's height never behaves as auto for want of a
+       definite containing block. Whether this engine can RESOLVE it is a DIFFERENT question and is not
+       answered here: §10.1's third and fourth cases own that rectangle and crash where it is asked for. This
+       arm is what keeps THIS predicate from being the thing that raises that crash, which matters because
+       core/layout/block_flow.c asks it of boxes it is only classifying. */
+    if (uv_computed_is(el, "position", "absolute") || uv_computed_is(el, "position", "fixed")) return false;
+    /* §10.5: "A percentage height on the ROOT ELEMENT is relative to the initial containing block" — whose
+       dimensions are the viewport's, so the root's percentage always resolves and never behaves as auto.
+       §10.1's first case is the same element, which is why the NULL is that sentence rather than a gap. */
+    cb = used_value_containing_block(el);
+    if (cb == NULL) return false;
+    /* §4.1 "Percentage Sizing": the percentage is definite exactly when the containing block's height is, and
+       a containing block whose OWN height is a percentage is definite "because it's a percentage resolved
+       against a definite length" one level further up. The recursion terminates at the root above. */
+    return used_value_height_behaves_as_auto(cb);
+}
+
 /* CSS 2.1 §10.7's OTHER BASIS, and the reason it is a `bool` and not a `CssPx`: "If the height of the
    containing block is NOT SPECIFIED EXPLICITLY (i.e., it depends on content height), and this element is not
    absolutely positioned, the percentage value is treated as '0' (for 'min-height') or 'none' (for
@@ -423,7 +495,7 @@ bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
  * IT IS ALSO WHAT KEEPS THE CLAMP FROM WALKING THE TREE TWICE PER LEVEL. "Depends on content height" is
  * §10.6.3's walk, so resolving a percentage against an `auto`-height containing block would run that walk for
  * every descendant that declares a percentage limit — and §10.7 does not ask for it: the definiteness test is
- * over the containing block's COMPUTED `height`, which no layout has to run to read.
+ * over COMPUTED `height`s up §10.1's chain, which no layout has to run to read.
  * THE ABSOLUTELY-POSITIONED HALF OF THE SENTENCE IS NOT WRITTEN HERE AND IS NOT SKIPPED. An absolutely
  * positioned box's containing block is §10.1's FOURTH case — the PADDING EDGE of the nearest positioned
  * ancestor — and `used_value_containing_block` crashes on it naming exactly what that case needs. So an
@@ -432,35 +504,18 @@ bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
 static bool uv_cb_height(lxb_dom_element_t *el, CssPx *out)
 {
     lxb_dom_element_t *cb = used_value_containing_block(el);
-    CssLength h;
 
     /* §10.1's first case: the INITIAL containing block, whose height is the viewport's and is therefore as
        explicitly specified as a height gets — the one containing block that is definite without a layout. */
     if (cb == NULL) { *out = uv_icb(el, true); return true; }
-    h = css_computed_length(cb, "height");
-    if (h.kind == CSS_LENGTH_KEYWORD) {
-        DCHECK(uv_len_is_auto(h),
-               "a containing block's `height` computed to a keyword that is not `auto`. CSS 2.1 §10.5's "
-               "`<length> | <percentage> | auto` admits no other, and css-sizing-3 §3.2's `min-content`/"
-               "`max-content`/`fit-content()` are level-3 additions this engine records no computed-value rule "
-               "for — so this is a value that reached the cascade without its grammar");
-        return false;
-    }
-    if (h.kind == CSS_LENGTH_PERCENTAGE || h.kind == CSS_LENGTH_CALCULATED)
-        DFAIL("CSS 2.1 §10.7's percentage was asked for the height of a containing block whose OWN `height` "
-              "carries a PERCENTAGE — a bare one, or css-values-4 §10.11 \"Computed Value\"'s unresolved term "
-              "inside a math function, which §10.11 says takes the SAME rule (\"if there are special rules for "
-              "computing percentages in a value (e.g. the height property), they apply whenever a math "
-              "function contains percentages\") — and §10.5 \"Content height: the 'height' property\" decides "
-              "that one stage "
-              "earlier: \"if the height of the containing block is not specified explicitly (i.e., it depends "
-              "on content height), and this element is not absolutely positioned, the value computes to "
-              "'auto'\". So a percentage `height` is either already resolved against a definite grandparent — "
-              "in which case it is definite and this basis is real — or it COMPUTED TO `auto`, in which case "
-              "§10.7's escape applies and this function must answer false. The two are not distinguishable "
-              "from the percentage alone. BUILD §10.5's computed-value rule in core/css/css_computed_value.c "
-              "beside `height`'s other rules, and this arm becomes unreachable because no percentage `height` "
-              "survives to a computed value");
+    /* "NOT SPECIFIED EXPLICITLY (i.e., it depends on content height)" IS THE BEHAVES-AS-AUTO QUESTION, asked
+       through the one predicate above rather than re-derived from a computed value here. It answers `auto`
+       and a percentage alike: a percentage `height` SURVIVES to the computed value (css-sizing-3 §3.1.1), and
+       whether it resolves is a fact about §10.1's chain above the containing block — §4.1 "Percentage Sizing"'s
+       own example is a `50%` height that is definite "because it's a percentage resolved against a definite
+       length". The arm that used to crash here asked for §10.5 as a COMPUTED-value rule, which css-sizing-3
+       §3.2.1 withdrew; the predicate is that withdrawal. */
+    if (used_value_height_behaves_as_auto(cb)) return false;
     *out = uv_content_size(cb, true, uv_surround(cb, true));
     return true;
 }
@@ -1172,14 +1227,30 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
    the pass's, and after §10.4 substitutes a limit the two are different values. */
 static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool vertical)
 {
+    /* THE BASIS A PERCENTAGE SIZE RESOLVES AGAINST, AND WHETHER THERE IS ONE — the one difference between the
+       two axes, and the reason a percentage `height` reaches this function at all rather than having been
+       decided one stage earlier. CSS 2.1 §10.2 makes the horizontal basis the containing block's WIDTH, which
+       §10.1's chain always answers. §10.5 makes the vertical one its HEIGHT, which exists only when that
+       height is definite — and when it is not, css-sizing-3 §3.2.1 "“Behaving as auto”" says the property
+       BEHAVES AS AUTO, so the percentage falls through to the `auto` arms below rather than resolving. */
+    CssPx basis = css_px(0.0);
+    bool pct = len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED;
+    bool resolves = false;
+
+    if (pct && !vertical) {
+        basis = used_value_containing_block_width(el);
+        resolves = true;
+    } else if (pct) {
+        resolves = uv_cb_height(el, &basis);
+    }
     /* CSS 2.1 §10.2: a percentage `width` "is calculated with respect to the width of the generated box's
        containing block", which §10.1 answers — and past that resolution it is a declared length like any
        other, which is why the two arms join here rather than each carrying its own copy of css-sizing-3 §3.3's
        `box-sizing` conversion. §10.2's other sentence, "if the containing block's width depends on this
        element's width, then the resulting layout is undefined in CSS 2.1", is unreachable for the reason
-       uv_padding states. A percentage HEIGHT is not here: §10.5 makes it a computed-value question. */
-    if (len.kind == CSS_LENGTH_ABSOLUTE ||
-        ((len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) && !vertical)) {
+       uv_padding states. A percentage HEIGHT joins the SAME arm when it resolves, which is what makes
+       `height: 100%` inside a sized container a declared length here and not a second algorithm. */
+    if (len.kind == CSS_LENGTH_ABSOLUTE || resolves) {
         /* `width: calc(100% - 2rem)` joins §10.2's percentage arm and not the length one, because css-values-4
            §10.11 "Computed Value" left the percentage term in the function and §5.6 "Mixing Percentages and
            Dimensions" resolves BOTH terms against §10.2's one basis here — "width: calc(500px + 50%); is
@@ -1198,7 +1269,7 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            facts in the domain, so the wide-viewport arm where the subtraction is positive survives the floor. */
         CssPx declared = css_px_max(len.kind == CSS_LENGTH_ABSOLUTE
                                         ? len.px
-                                        : css_length_resolve_pct(len, used_value_containing_block_width(el)),
+                                        : css_length_resolve_pct(len, basis),
                                     css_px(0.0));
 
         /* §10.3.3, §10.3.5, §10.3.7 and §10.3.9 all agree on this one case and each says it in its own words:
@@ -1226,26 +1297,25 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         if (uv_is_border_box(el)) return uv_border_box_size(el, declared, vertical);
         return declared;
     }
-    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) {
-        DCHECK(vertical, "a horizontal PERCENTAGE size reached the vertical arm — §10.2's resolution above "
-                         "takes every one of them and this branch is what is left");
-        DFAIL("CSS 2.1 §10.5 \"Content height: the 'height' property\": a PERCENTAGE `height` resolves against "
-              "the containing block's HEIGHT, and when that height 'is not specified explicitly (i.e., it "
-              "depends on content height)' the percentage COMPUTES TO `auto` instead — so this is a "
-              "COMPUTED-value rule that reads the parent's own computed `height`, and it has to be decided "
-              "before any used value is asked for. IT IS THE SAME RULE FOR A MATH FUNCTION and not a second "
-              "one: css-values-4 §10.11 \"Computed Value\" says so by name — \"if there are special rules for "
-              "computing percentages in a value (e.g. the height property), they apply whenever a math "
-              "function contains percentages\" — so `height: calc(100% - 2rem)` computes to `auto` under "
-              "exactly the same antecedent, whole, rather than having its percentage half treated separately. "
-              "BUILD it in css_computed_value.c beside `height`'s other computed-value rule, over the kind "
-              "rather than over the percentage, then §10.6.3's content-based height for the `auto` result it "
-              "produces");
-    }
-    DCHECK(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0,
-           "a `width` or `height` computed to a keyword that is not `auto` — CSS 2.1 §10.2 and §10.5 admit "
-           "`<length> | <percentage> | auto`, and css-sizing's `min-content`/`max-content`/`fit-content` "
-           "keywords are a level-3 addition this engine has not recorded a computed-value rule for");
+    /* WHAT FALLS THROUGH IS `auto` OR A PERCENTAGE HEIGHT BEHAVING AS ONE, and the two take the same arms
+       below because css-sizing-3 §3.2.1 "“Behaving as auto”" says they are one case: the property "is said to
+       BEHAVE AS AUTO" both "when width/height computes to auto" and "when it is defined to behave as if auto
+       were specified (as in the case of block percentage heights resolving against an indefinite size, see
+       CSS2§10.5)". So `height: 100%` inside an `auto`-height parent reaches §10.6.3's content-based height,
+       which is what every user agent does with it, and it does so WITHOUT its computed value having been
+       rewritten — §3.1.1's `Computed value: as specified, with <length-percentage> values computed` keeps the
+       percentage, so `getComputedStyle` still reports it.
+       A MATH FUNCTION TAKES THE SAME ROUTE, and css-values-4 §10.11 "Computed Value" says so by name: "if
+       there are special rules for computing percentages in a value (e.g. the height property), they apply
+       whenever a math function contains percentages". `height: calc(100% - 2rem)` therefore behaves as auto
+       WHOLE under the same antecedent rather than having its percentage half treated separately, which is why
+       `pct` above admits both kinds and neither is split. */
+    DCHECK((len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0) || (pct && vertical),
+           "a `width` or `height` reached the `auto` arms as something that is neither `auto` nor a vertical "
+           "percentage behaving as one. CSS 2.1 §10.2 and §10.5 admit `<length> | <percentage> | auto`, a "
+           "horizontal percentage always has §10.2's basis and resolved above, and css-sizing-3 §3.2's "
+           "`min-content`/`max-content`/`fit-content()` are level-3 additions this engine records no "
+           "computed-value rule for");
     /* THE REPLACED QUESTION IS ASKED BEFORE THE BOX TYPE because §10.3 answers it before the box type too:
        five of its ten sections delegate a replaced element's size to §10.3.2, and only the box types §10 does
        not own at all (a table box, a flex or grid item) disagree. It is asked ONLY on this arm — a DECLARED

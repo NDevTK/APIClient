@@ -385,15 +385,23 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
        margin of its parent IF THE PARENT HAS AUTO COMPUTED HEIGHT" — is what lets a placed child's bottom run
        leave. The FOURTH — "top and bottom margins of a box … that has zero computed min-height, ZERO OR AUTO
        computed height, and no in-flow children" — is what makes the box itself collapse through, and a
-       `height: 0` box does that while its bottom margin does not escape a child's. */
+       `height: 0` box does that while its bottom margin does not escape a child's.
+       "AUTO COMPUTED HEIGHT" IS ASKED AS css-sizing-3 §3.2.1's BEHAVES AS AUTO, which is the current spec's
+       own reading of exactly this prose: §3.2.1 exists "to have a common term for both when width/height
+       computes to auto and when it is defined to behave as if auto were specified (as in the case of block
+       percentage heights resolving against an indefinite size, see CSS2§10.5)", its note says legacy CSS2
+       conditions phrased over a computed `auto` "should be interpreted as meaning behaves as auto", and its
+       own test list is `margin-collapse-with-indefinite-block-size-001` through `-005` — these two pairs. The
+       ZERO half stays literal: §3.2.1 speaks only about `auto`, so a `height: 0%` that RESOLVES is a resolved
+       zero and not a case the section widens. */
     bool closed = bf_no_collapse_through_edges(el);
     bool open_top = !closed && bf_edge_is_open(el, true);
     bool open_bottom = !closed && bf_edge_is_open(el, false);
     bool min0 = bf_min_height_is_zero(el);
     bool esc_top = open_top;
-    bool esc_bottom = open_bottom && min0 && bf_length_is(el, "height", "auto");
-    bool through_ok = open_top && open_bottom && min0 &&
-                      (bf_length_is(el, "height", "auto") || bf_length_is_zero(el, "height"));
+    bool auto_h = used_value_height_behaves_as_auto(el);
+    bool esc_bottom = open_bottom && min0 && auto_h;
+    bool through_ok = open_top && open_bottom && min0 && (auto_h || bf_length_is_zero(el, "height"));
     CssPx pos = css_px(0.0);
     BfRun run = bf_run_empty();
     BfRun esc_run = bf_run_empty();
@@ -499,16 +507,16 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
    to its parent's formatting context. For any other declared height the contribution is the used value
    core/layout/used_value.h already derives and two margins — which is why `<div style="height:100px">text</div>`
    stacks and measures with no font in sight, and why its own inline content is never reached.
-   A PERCENTAGE is deliberately on the not-needed side: CSS 2.1 §10.5 makes a percentage `height` a
-   COMPUTED-value question (it computes to `auto` when the containing block's height is not specified
-   explicitly), so it is a rule that must run one stage earlier and used_value.c crashes naming that stage. */
+   A PERCENTAGE IS ON WHICHEVER SIDE ITS CONTAINING BLOCK PUTS IT, and that is not a property of the
+   declaration. css-sizing-3 §3.2.1 "“Behaving as auto”" makes "block percentage heights resolving against an
+   indefinite size" behave as auto, so `height: 100%` inside an `auto`-height parent takes §10.6.3's walk while
+   the same declaration inside a `height: 600px` parent is a resolved length that never looks inside the box.
+   core/layout/used_value.h answers which, over §10.1's chain, reading computed values only — a size-computing
+   answer here would run a layout to decide whether to run a layout. */
 static bool bf_height_needs_content(lxb_dom_element_t *el)
 {
-    CssLength h = css_computed_length(el, "height");
-
-    if (h.kind == CSS_LENGTH_KEYWORD) return true;                 /* `auto` — §10.6.3's walk */
-    if (h.kind == CSS_LENGTH_ABSOLUTE) return h.px.px == 0.0;      /* 0 may still collapse through */
-    return false;
+    /* §10.6.3's walk, and §8.3.1's collapse-through for a box whose margins may meet through it. */
+    return used_value_height_behaves_as_auto(el) || bf_length_is_zero(el, "height");
 }
 
 /* THE RECURSION'S ONE STEP, AND THE PLACE THE TWO COMPONENTS MEET. A box's BORDER-box height is what its
@@ -548,7 +556,10 @@ static BfBox bf_box(lxb_dom_element_t *el)
     b = bf_layout(el, NULL, &sink, &sunk);
     DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
     if (b.collapse_through) return b;
-    b.border_h = bf_length_is(el, "height", "auto")
+    /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
+       walk's own content height; a resolved percentage is a declared length like any other and goes back
+       through used_value.h, which is where §10.4/§10.7's clamp runs for it. */
+    b.border_h = used_value_height_behaves_as_auto(el)
                      ? used_value_border_edge_from_content_px(el, b.content_h, true)
                      : used_value_border_edge_px(el, true);
     return b;

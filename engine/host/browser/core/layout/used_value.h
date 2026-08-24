@@ -79,9 +79,11 @@
  *   - A MARGIN, PADDING OR `width` whose computed value is a PERCENTAGE, which §8.3, §8.4 and §10.2 all resolve
  *     against the same measure: the WIDTH of the containing block, and for §8.3 and §8.4 that is true of the
  *     VERTICAL sides too ("even for 'padding-top' and 'padding-bottom'"). That is the rule most implementations
- *     get wrong, and it is why neither arm below takes an axis. A percentage `height` is the exception and is
- *     not here: §10.5 makes it a COMPUTED-value question (it computes to `auto` when the containing block's
- *     height is not specified explicitly), so it belongs one stage earlier and crashes naming that stage.
+ *     get wrong, and it is why neither arm below takes an axis. A percentage `height` is the exception and it
+ *     IS here, on its own basis: §10.5 resolves it against the containing block's HEIGHT, which unlike a width
+ *     may not exist at all — and when it does not, css-sizing-3 §3.2.1 makes the property BEHAVE AS AUTO and
+ *     the §10.6 arms run instead. `used_value_height_behaves_as_auto` below is that question, and it is a
+ *     used-value question rather than the computed-value rule CSS 2.1's own prose describes.
  *   - AND §10.3.3's CONSTRAINT EQUATION, which is what `width: auto` on an ordinary block-level box resolves
  *     through and is therefore the arm most of the web reaches first. Its seven terms,
  *         margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
@@ -237,6 +239,29 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
    the box above. It is a second entry rather than arithmetic over the first because the first case has no box
    at all, so a caller holding the NULL could not derive it. */
 CssPx used_value_containing_block_width(lxb_dom_element_t *el);
+
+/* css-sizing-3 §3.2.1 "“Behaving as auto”" — DOES `el`'s `height` BEHAVE AS AUTO, which is the question CSS
+   2.1 asks in several places as "a computed value of `auto`" and which is NOT answerable from a computed value.
+   TRUE for a computed `auto`, and for a PERCENTAGE (bare or inside a math function) whose containing block's
+   own height is indefinite — §3.2.1's own words, "block percentage heights resolving against an indefinite
+   size, see CSS2§10.5". FALSE for a length, and for a percentage that resolves, which §4.1 "Percentage Sizing"
+   says is itself definite "because it's a percentage resolved against a definite length".
+   IT IS NOT A COMPUTED-VALUE RULE AND MUST NOT BECOME ONE. CSS 2.1 §10.5's prose says such a percentage
+   "computes to 'auto'", and css-sizing-3 §3.1.1 "Preferred Size Properties: the width and height properties"
+   supersedes it with `Computed value: as specified, with <length-percentage> values computed` — the percentage
+   survives, so `getComputedStyle(el).height` on a `display: none` element declaring `height: 50%` answers
+   `50%`, which is what every user agent answers. Moving this into core/css/css_computed_value.h would break
+   that and would put a layout question in a component that cannot see the layout.
+   EVERY CONDITION PHRASED OVER AN `auto` COMPUTED HEIGHT ASKS THIS ONE, and §3.2.1's note is the instruction:
+   "legacy spec prose defining layout behavior, particularly in [CSS2], might explicitly refer to width/height
+   having a computed value of auto as a condition; some of these cases should be interpreted as meaning behaves
+   as auto". §10.6.3's content-based height and §8.3.1's two collapsing pairs are those cases here — §3.2.1's
+   own test list names the margin-collapsing ones — so core/layout/block_flow.c asks this and never the
+   property. §10.3.2's intrinsic-ratio arms and §10.4's ratio table stay literal: their antecedent needs an
+   intrinsic ratio no box in this build has, so widening them would be a guess nothing can exercise.
+   IT READS COMPUTED VALUES AND WALKS §10.1's CHAIN, computing no size — which is what lets the callers above
+   ask it before deciding whether to run a layout at all. */
+bool used_value_height_behaves_as_auto(lxb_dom_element_t *el);
 
 /* THE SAME RECTANGLE'S `direction` — true for `rtl`. §10.3.3's over-constrained case ("if the 'direction'
    property of the containing block has the value 'ltr', the specified value of 'margin-right' is ignored") and

@@ -102,9 +102,12 @@ bool block_flow_display_is_block_container(const char *display);
 bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
 
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED
-   HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that computed to `auto`.
-   THE CALLER HAS ALREADY ESTABLISHED that `height` is `auto` and that the box is one §10.6.3 or §10.6.6
-   covers; core/layout/used_value.c's `uv_size` is that caller and it has classified the box type first. Every
+   HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that BEHAVES AS AUTO (css-sizing-3
+   §3.2.1, `used_value_height_behaves_as_auto`), which is a computed `auto` and also a percentage whose
+   containing block's height is indefinite.
+   THE CALLER HAS ALREADY ESTABLISHED that the height behaves as auto and that the box is one §10.6.3 or
+   §10.6.6 covers; core/layout/used_value.c's `uv_size` is that caller and it has classified the box type
+   first. Every
    case this component does not lay out crashes naming its own section — see the header. */
 CssPx block_flow_auto_height(lxb_dom_element_t *el);
 
