@@ -864,7 +864,8 @@ function byArea(rel) {
                       .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
   if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, notrun: 0, aborted: 0,
-                              unread: 0, errored: 0, abPass: 0, abFail: 0, abFiles: 0, lines: [] }));
+                              unread: 0, errored: 0, abPass: 0, abFail: 0, abNotrun: 0, abFiles: 0,
+                              lines: [] }));
   return a;
 }
 
@@ -903,9 +904,19 @@ function areaRow(a) {
      only when there IS such a part, because a row where every counted subtest came from a file that ran to
      completion is a row with nothing extra to say, and a line that reads `0` every time is a line nobody reads
      the one time it does not. */
-  if (a.abFail || a.abPass)
-    console.log(`  ${" ".repeat(AREA_W)}    └─ of which ${a.abFail} fail / ${a.abPass} pass came from ` +
-                `${a.abFiles} file(s) that ABORTED — counted, but not a finished measurement of anything`);
+  /* AND `notrun` IS DECOMPOSED HERE TOO, because the column above was added without it and that left the new
+     number as the one thing on the row this line could not account for — which is the defect the column was
+     added to remove, re-created one line below it. A file that ABORTS strands every subtest it had not reached,
+     so an aborted file is a PRODUCER of NOTRUN rather than an unrelated neighbour of one: leaving it out meant
+     an area could read `notrun 40` with nothing saying whether that was forty questions a component declined
+     or one DCHECK firing early in a file that had forty.
+     THE GUARD COUNTS IT AS WELL. It was `abFail || abPass`, so a file that aborted having produced ONLY
+     stranded subtests printed no decomposition at all — the one case where the reader most needs the line, and
+     silence exactly where the ABORT is the whole story. */
+  if (a.abFail || a.abPass || a.abNotrun)
+    console.log(`  ${" ".repeat(AREA_W)}    └─ of which ${a.abFail} fail / ${a.abPass} pass / ` +
+                `${a.abNotrun} notrun came from ${a.abFiles} file(s) that ABORTED — counted, but not a ` +
+                "finished measurement of anything");
 }
 /* An area's failure lines are held only until that area finishes, for the same reason: buffered to the end of
    the RUN they are lost with it; buffered to the end of the AREA they arrive with the row they belong to. */
@@ -1338,7 +1349,9 @@ for (const { file: f, kind, variant } of runs) {
        line saying which part of them belongs to files whose own row already says they did not finish. A number
        that cannot be decomposed into finished and unfinished work is the shape §Testing warns about — an
        artifact of HOW the run went, wearing the shape of a measurement of WHAT ran. */
-    if (abortedHere) { area.abPass += filePass; area.abFail += fileFail; area.abFiles++; }
+    if (abortedHere) {
+      area.abPass += filePass; area.abFail += fileFail; area.abNotrun += fileNotrun; area.abFiles++;
+    }
   } finally {
     /* THE ONE PLACE THE AREA'S PROGRESS IS COUNTED, so that every `continue` above — a missing META script, a
        missing <script src>, an abort, a harness that never completed — still advances it. A count kept at the
