@@ -145,9 +145,11 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
    metric of the modelled face that core/css/font_metrics.h PICKS — so the product carries an environment fact
    where the three above carry none. All ten resolve, through the ONE `CssFontMetrics` pair the caller holding
    the tree answers — one table, because the arithmetic is the same and only the base and the ratio differ.
-   THE REMAINING PAIR STILL CRASHES: `lh`/`rlh` is a computed `line-height` with `normal` resolved "by using
-   only the metrics of the first available font", which needs a metric no reader has yet AND a computed-value
-   rule for a property core/css/css_computed_value.c does not model at all. */
+   THE REMAINING PAIR STILL CRASHES, and no longer for the property's sake: css-inline-3 §5.1's computed
+   `line-height` is modelled now. `lh`/`rlh` waits on §6.1.1's own "converting normal to an absolute length by
+   using only the metrics of the first available font" — CSS 2.1 §10.8.1's `AD`, of which core/css/font_metrics.h
+   has only `A` — and on the rule §6.1.1 states for these two units alone, which resolves them against the
+   PARENT's computed line-height inside `line-height` itself. */
 static const struct { const char *unit; CssFontMetric metric; } CSS_FONT_RELATIVE[] = {
     { "em",  CSS_FONT_METRIC_EM  }, { "rem", CSS_FONT_METRIC_REM },
     { "ex",  CSS_FONT_METRIC_EX  }, { "rex", CSS_FONT_METRIC_REX },
@@ -361,22 +363,25 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
         return css_px_scale(base, num);
     }
     if (css_len_in(CSS_FONT_RECORD_RELATIVE, CSS_LEN_N(CSS_FONT_RECORD_RELATIVE), unit))
-        DFAIL("a length in css-values-4 §6.1.1's `lh` or `rlh` reached absolutization — the one pair among its "
-              "twelve units this engine cannot answer, and the only one §6.1.1 does not state in terms of a "
-              "single metric. §6.1.1 makes it \"the computed value of the LINE-HEIGHT property of the element on "
-              "which it is used, converting normal to an absolute length by using only the metrics of the first "
-              "available font\", which is TWO absences and they are not one problem. (1) The PROPERTY: "
-              "core/css/css_computed_value.c models no entry for `line-height` at all — `css_computed_models` "
-              "does not name it, so asking for its computed value crashes there rather than here — and CSS 2.1 "
-              "§10.8's `Computed value:` line is \"for <length> and <percentage> the absolute value; otherwise as "
-              "specified\", so the length arm is this file's own absolutization and the `normal` and `<number>` "
-              "arms survive to the used value. (2) `normal` ITSELF, which §10.8 leaves to the user agent (\"tells "
-              "user agents to set the used value to a 'reasonable' value based on the font of the element … we "
-              "recommend a used value for 'normal' between 1.0 to 1.2\") and §10.8.1 states over `AD = A + D`. "
-              "core/css/font_metrics.h picks `A` now; what it does not have is `D`, the depth below the "
-              "baseline, which §10.8.1 defines beside it and which nothing yet reads. BUILD `D` there with its "
-              "reader — §10.8.1's leading, `L = 'line-height' - AD` — and `line-height`'s computed value beside "
-              "`font-size`'s, and this unit is their first consumer");
+        DFAIL("a length in css-values-4 §6.1.1's `lh` or `rlh` reached absolutization — the last pair of its "
+              "twelve units this engine cannot answer. THE PROPERTY IS NO LONGER MISSING: css-inline-3 §5.1 "
+              "\"Line Spacing: the line-height property\" is modelled now and `css_computed_line_height` answers "
+              "its three shapes, so a `line-height` that computed to a NUMBER or to a LENGTH is already an "
+              "absolute length or one multiplication away from being one. TWO things are left and they are "
+              "different. (1) `normal`, which is §6.1.1's own \"converting normal to an absolute length by "
+              "using only the metrics of the first available font\" and CSS 2.1 §10.8.1 (Leading and "
+              "half-leading)'s `AD = A + D`: core/css/font_metrics.h picks `A` and has no `D`, and §10.8's own "
+              "\"we recommend a used value for 'normal' between 1.0 to 1.2\" is the assert that arrives with "
+              "the pair. (2) WHICH ELEMENT'S line-height, which for THIS unit is not the element's own in "
+              "every case: §6.1.1 states a rule for `lh` that it states for no other unit — \"when lh or rlh "
+              "units are used in the value of the line-height property or font-affecting properties on the "
+              "element they refer to, they resolve against the computed line-height and font metrics of the "
+              "PARENT element—or the computed metrics corresponding to the initial values of the font and "
+              "line-height properties, if the element has no parent\" — which is the same self-reference guard "
+              "`font-size: 1.2em` needs and is a SECOND predicate beside core/css/font_size_functions.h's "
+              "font-affecting one, because §6.1.1 adds `line-height` to the list for these two units only "
+              "(\"the other font-relative lengths continue to resolve against the element's own metrics when "
+              "used in line-height\"). BUILD `D` with its reader, then that predicate");
     else if (css_len_is_viewport(unit))
         return css_len_viewport(realm, unit, num / 100.0);
     else if (css_len_is_viewport_variant(unit))

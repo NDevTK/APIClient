@@ -736,6 +736,7 @@ bool css_computed_models(const char *name)
            strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
            strcmp(name, "box-sizing") == 0 || strcmp(name, "white-space") == 0 ||
            strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
+           strcmp(name, "line-height") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -764,10 +765,12 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     char *cascaded;
 
     DCHECK(css_computed_models_length(name),
-           "css_computed_length was asked for a property whose `Computed value:` line is a KEYWORD and not a "
-           "length — `display`, `float`, `position`, `box-sizing`, an overflow axis or a `border-*-style`. "
-           "There is nothing to absolutize and nothing for a `CssPx` to carry, so the entry that answers those "
-           "is css_computed_value, and asking this one would report a keyword as the number zero");
+           "css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. For a "
+           "KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, an "
+           "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
+           "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
+           "number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 §5.1), which "
+           "neither of those entries can carry; `css_computed_line_height` is its own");
     css_cv_modelled(el, name);
     side = css_border_side_of(name, "width");
     cascaded = cssom_cascaded_value(el, name);
@@ -811,6 +814,129 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     return computed_length(el, name, cascaded);
 }
 
+/* ---- css-inline-3 §5.1 "Line Spacing: the line-height property" -------------------------------------------- */
+
+/* THE ELEMENT'S OWN COMPUTED `font-size`, which css-fonts-4 §2.5's `Computed value:` line makes an absolute
+   length and nothing else. Two arms below multiply by it — §5.1's percentage at computed-value time and §9's
+   number at used-value time — and both mean THIS element's, never its parent's: `line-height` is not a
+   font-affecting property (css-values-4 §6.1.1's own parenthesis), so there is no walk to redirect. */
+static CssPx css_cv_font_size_px(lxb_dom_element_t *el)
+{
+    CssLength len = css_computed_length(el, "font-size");
+
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "an element's own computed `font-size` came back as something other than an ABSOLUTE LENGTH, which "
+           "css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
+    return len.px;
+}
+
+/* §5.1's `<number>` ARM, TOLD APART FROM ITS `<length-percentage>` ONE BY THE ABSENCE OF A UNIT. CSS Values §6
+   lets a `<length>` omit its unit for ZERO and for nothing else, so a unitless value is a `<number>` — and for
+   `line-height` the two shapes MEAN different things even though `0` and `0px` give the same used value: §5.1's
+   own example note says a number "will lead to different line heights if descendants have different font
+   sizes" while a length "will not be influenced by the font size on descendants", so the distinction is about
+   what the CHILDREN inherit and not about this element's number.
+   IT IS A LOOKUP OVER THE SERIALIZED CASCADED VALUE and not a second grammar: lexbor validated the declaration
+   against §5.1's `Value:` line before it reached the cascade, so what arrives is one of the three forms, and
+   this only has to say which. A trailing `%` is the percentage arm's, which `css_length_parse` resolves. */
+static bool line_height_is_number(const char *v, double *out)
+{
+    char *end;
+    double n;
+
+    DCHECK(v != NULL, "§5.1's number test was asked about a NULL cascaded value");
+    n = strtod(v, &end);
+    if (end == v) return false;
+    while (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\f' || *end == '\r') end++;
+    if (*end != '\0') return false;
+    *out = n;
+    return true;
+}
+
+CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
+{
+    CssLineHeight out = { CSS_LINE_HEIGHT_NORMAL, 0.0, { 0.0, CSS_ENV_NONE, NULL } };
+    lxb_dom_element_t *parent;
+    char *cascaded;
+    CssLength len;
+
+    css_cv_modelled(el, "line-height");
+    cascaded = cssom_cascaded_value(el, "line-height");
+    switch (css_defaulting_of("line-height", cascaded)) {
+    case CSS_DEFAULTING_DECLARED:
+        break;
+    case CSS_DEFAULTING_INHERITED:
+        /* §7.2: "the property's specified and computed values are the inherited value", and §5.1 makes that
+           value one of three shapes — so it is taken WHOLE from the parent's own answer. Serializing it would
+           turn a number into text a reader could not tell from a length, which is precisely the difference
+           §5.1's example says the children see. */
+        free(cascaded);
+        parent = css_cv_parent_element(el);
+        if (parent != NULL) return css_computed_line_height(parent);
+        cascaded = NULL;
+        break;
+    case CSS_DEFAULTING_INITIAL:
+        free(cascaded);
+        cascaded = NULL;
+        break;
+    }
+    /* §7.1's initial value, which is also §7.2's answer at the root: §5.1's `Initial:` line is `normal`. */
+    if (cascaded == NULL) cascaded = cssom_initial_value("line-height");
+    DCHECK(cascaded != NULL,
+           "§7.1 produced no INITIAL value for `line-height` — css-inline-3 §5.1's `Initial:` line is `normal` "
+           "and lexbor's property registry carries it, so the last layer always answers");
+    if (css_cv_is(cascaded, "normal")) { free(cascaded); return out; }
+    if (line_height_is_number(cascaded, &out.number)) {
+        free(cascaded);
+        DCHECK(out.number >= 0.0,
+               "css-inline-3 §5.1 gives `line-height` a `Value:` line of `normal | <number [0,∞]> | "
+               "<length-percentage [0,∞]>` and says of the number arm that \"negative values are illegal\", so "
+               "a negative one is a declaration css-values-4 §5.1 \"Range Restrictions and Range Definition "
+               "Notation\" should have dropped rather than a factor to multiply a font size by");
+        out.kind = CSS_LINE_HEIGHT_NUMBER;
+        return out;
+    }
+    /* §5.1's `<length-percentage>`. The length arm absolutizes through the one unit table, and §6.1.1's own
+       parenthesis is why `line-height` is NOT a font-affecting property there — "the other font-relative
+       lengths continue to resolve against the element's own metrics when used in line-height" — so
+       `line-height: 1.2em` is 1.2 times THIS element's computed font size and not its parent's. */
+    /* THE PREDICATE IS THE `<length-percentage>` ONE AND NOT THE `<length>` ONE, which css_length.h warns is
+       the way to turn one production into the other silently: §5.1's `Value:` line is
+       `<length-percentage [0,∞]>`, and `line-height: 120%` is the commonest declaration this property has. */
+    if (!css_length_is_length_percentage(cascaded)) {
+        free(cascaded);
+        DFAIL("a `line-height` cascaded to a value that is neither `normal`, nor a bare number, nor anything "
+              "css-values-4 §5.6 \"Mixing Percentages and Dimensions\"'s `<length-percentage>` production "
+              "admits — which for this property leaves exactly one "
+              "thing: a MATH FUNCTION whose css-values-4 §10.9 \"Type Checking\" type is `<number>` rather "
+              "than `<length>`, such as `line-height: calc(2 * 1.5)`. css-inline-3 §5.1's `Value:` line admits "
+              "it through the `<number [0,∞]>` branch, and core/css/css_style_declaration.c already knows that "
+              "branch exists — its §10.9 loop names `line-height` as the worked example of a grammar whose "
+              "numeric productions are a disjunction. What is missing is the EVALUATION: core/css/css_math.h "
+              "resolves a math function to a length through core/css/css_length.c's unit table, and a "
+              "number-typed one has no unit to resolve and no entry to answer it. BUILD the `<number>` "
+              "evaluation beside the length one, and this arm becomes the number arm above");
+    }
+    len = computed_length(el, "line-height", cascaded);
+    out.kind = CSS_LINE_HEIGHT_LENGTH;
+    if (len.kind == CSS_LENGTH_ABSOLUTE) {
+        out.px = len.px;
+        return out;
+    }
+    /* §5.1's `<percentage>`: "the preferred line height AND COMPUTED VALUE of the property is this percentage
+       of the element's COMPUTED font-size" — so unlike every box-model percentage, this one resolves at
+       computed-value time and never survives to a used value. §5.1's `Percentages:` line says the same thing
+       in the shorter form, "computed relative to 1em". A math function mixing both terms resolves against the
+       same basis in one step, which is what `css_length_resolve_pct` does for every other property here. */
+    DCHECK(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+           "a `line-height` the `<length-percentage>` test above ADMITTED came back from the parse as a "
+           "keyword. The two are one question asked twice — `css_length_is_length_percentage` and "
+           "`css_length_parse` walk the same productions — so a value that passes the first and is not a "
+           "length, a percentage or a calculation to the second means they have come apart");
+    out.px = css_length_resolve_pct(len, css_cv_font_size_px(el));
+    return out;
+}
+
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
@@ -823,6 +949,19 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
            "text would carry the number while dropping the domain behind it, which is the fork "
            "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length");
     css_cv_modelled(el, name);
+    /* THE THIRD SHAPE LEAVES HERE BY NAME rather than through the as-specified assert below, which would fire
+       with a true message about the wrong thing. css-inline-3 §5.1's `Computed value:` line is "the specified
+       keyword, a number, or a computed <length> value", so `line-height` is neither of this file's two shapes
+       and neither entry can carry it: text drops a length's environment fact and a `CssLength` has no number.
+       Its own entry answers all three (css_computed_value.h). */
+    if (strcmp(name, "line-height") == 0)
+        DFAIL("`line-height`'s computed value was asked for through the TEXT entry. css-inline-3 §5.1 \"Line "
+              "Spacing: the line-height property\" gives it a `Computed value:` of \"the specified keyword, a "
+              "number, or a computed <length> value\" — a union of three shapes, of which this entry can carry "
+              "only the first without losing something: a computed `<length>` serialized to text drops the "
+              "environment fact it derives from (the reader's own default font size reaches a page through "
+              "`line-height: 2em` exactly as it reaches one through `margin: 2em`), and a `<number>` is not a "
+              "length at all. Ask `css_computed_line_height`, which answers the union");
     spec = css_cv_specified(el, name);
     DCHECK(spec != NULL,
            "§7's defaulting produced no SPECIFIED value for a keyword-valued property this component models — "
@@ -1128,8 +1267,9 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
               "`right` a PAIR rather than two values — both `auto` makes both 0, one `auto` makes it the "
               "negation of the other — so the entry has to be asked about the pair. (3) The over-constrained "
               "case of that pair, and §9's own THIRD conjunct which is stated over it, both turn on the "
-              "containing block's `direction`, which the cascade inherits now (core/css/css_defaulting.h) and "
-              "which css_computed_value models no entry for. An "
+              "containing block's `direction` — which is NO LONGER MISSING: this file models it and "
+              "core/layout/used_value.h answers it for a containing block with §10.1's root-element exception "
+              "folded in, so that half is a call rather than a gap. An "
               "ABSOLUTELY positioned box is a fourth thing again: §10.3.7 solves its insets from the same "
               "constraint equation as its width, against the PADDING EDGE of its nearest positioned ancestor, "
               "which used_value.c's §10.1 fourth case crashes for and names in full");
@@ -1200,26 +1340,26 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         /* "The resolved value is normal if the computed value is normal, or the used value otherwise." The
            computed value is asked for through §7's defaulting because `line-height` is an INHERITED property:
            a child of a `line-height: 2` parent that declares none has a computed value of 2, not `normal`. */
-        char *v = css_cv_specified(el, name);
+        CssLineHeight v = css_computed_line_height(el);
 
-        if (css_cv_is(v, "normal")) { out = JS_NewString(ctx, v); free(v); return out; }
-        free(v);
-        DFAIL("CSSOM §9 makes `line-height`'s resolved value the USED value whenever the computed value is not "
-              "`normal` — the absolute length a LAYOUT laid the line boxes out with, which for a number or a "
-              "percentage is that factor times the used font size. THE FONT SIZE CHAIN IS NO LONGER THE "
-              "BLOCKER: css-fonts-4 §2.5's computed `font-size` is derived above and `css_computed_length(el, "
-              "\"font-size\")` answers the absolute length this factor multiplies. What is missing is "
-              "`line-height` itself as a modelled computed value — css-inline-3 §5.1 (Line Spacing: the "
-              "line-height property) gives it a `Value:` of `normal | <number [0,∞]> | <length-percentage "
-              "[0,∞]>`, a `Computed value:` of 'the specified keyword, a number, or a computed <length> "
-              "value', and a `Percentages:` line of 'computed relative to 1em' — so a percentage becomes a "
-              "LENGTH at computed-value time out of the same font size, which is a THIRD shape beside this "
-              "file's two and needs its own arm rather than a row of css_models_length. BUILD it beside "
-              "`font-size`: it is an inherited property whose shorthand set css_shorthand_complete_for already "
-              "records, and past it the only thing left between the computed value and §9's used one is "
-              "css-fonts-4 §2.5's own note that the used font size 'can differ from its computed value due to "
-              "font-size-adjust'");
-        break;
+        if (v.kind == CSS_LINE_HEIGHT_NORMAL) return JS_NewString(ctx, "normal");
+        /* §5.1 resolves a percentage AT COMPUTED-VALUE TIME, so a length arriving here is already the used
+           value and nothing remains to be done to it. It is minted rather than serialized plainly because a
+           `line-height: 2em` is a function of the reader's own default font size exactly as a `margin: 2em`
+           is, and a page reads both through this one member. */
+        if (v.kind == CSS_LINE_HEIGHT_LENGTH) return css_resolved_px(ctx, v.px);
+        /* §5.1's `<number>`: "the preferred line height is this number multiplied by the element's used
+           font-size". WHICH font size that is takes a second module to settle, and it settles it outright:
+           css-fonts-4 §2.6 "Relative sizing: the font-size-adjust property" is the only rule under which a
+           used font size differs from its computed one, and it excludes this case by name — "since numeric
+           values of line-height refer to the COMPUTED size of font-size, font-size-adjust does not affect the
+           used value of line-height". So the multiplicand is the computed value, normatively, and this engine
+           assumes nothing about a property it does not model. */
+        DCHECK(v.kind == CSS_LINE_HEIGHT_NUMBER,
+               "a computed `line-height` is none of the three shapes css-inline-3 §5.1's `Computed value:` "
+               "line admits — the entry that derives it answers exactly those, so this is that enumeration "
+               "and this switch having come apart");
+        return css_resolved_px(ctx, css_px_scale(css_cv_font_size_px(el), v.number));
     }
     case CSS_RESOLVED_TRANSFORM: {
         /* css-transforms §3.2: "When the computed value is a <transform-list>, the resolved value is one

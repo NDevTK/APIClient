@@ -274,9 +274,11 @@ typedef struct {
    cap-height, only that an undeterminable one takes "the font's ascent", and that ascent is a PICKED metric of
    the modelled face rather than a spec constant — so it carries CSS_ENV_FONT_ASCENT while the three above
    carry nothing of their own. The row is the same shape because the multiplication is.
-   `lh` IS ABSENT FOR font_metrics.h's REASON: it is a computed `line-height`, a property core/css/
-   css_computed_value.h models no entry for, so there is nothing for a caller to answer and the unit arm in
-   css_length.c crashes naming it. */
+   `lh` IS ABSENT FOR font_metrics.h's REASON AND FOR ONE OF ITS OWN. The PROPERTY is modelled
+   (`css_computed_line_height`), so what is left is §6.1.1's `normal` conversion — CSS 2.1 §10.8.1's `AD`, and
+   font_metrics.h has only `A` — and the rule §6.1.1 states for `lh` and `rlh` alone: inside `line-height` they
+   resolve against the PARENT's computed line-height, which is a second predicate beside the font-affecting one
+   and would need a second row here to carry. The unit arm in css_length.c crashes naming both. */
 typedef enum {
     CSS_FONT_METRIC_EM = 0,   /* §6.1.1's `em`  — the element the unit is used on */
     CSS_FONT_METRIC_REM,      /* §6.1.1's `rem` — the root element */

@@ -66,9 +66,11 @@
  * CLAUDE.md names, a value that is real, asserted and consumed by nothing. It lands with its reader, which is
  * §10.8.1's leading (`L = 'line-height' - AD`), and THAT is also where CSS 2.1 §10.8's own recommendation
  * becomes checkable — "we recommend a used value for 'normal' between 1.0 to 1.2" is a statement about `AD`
- * and cannot be asserted over `A` alone. `lh` is the computed `line-height` "converting normal to an absolute
- * length by using only the metrics of the first available font", which needs `D` AND a computed-value rule for
- * a property core/css/css_computed_value.c does not model; it crashes in core/css/css_length.c naming both. */
+ * and cannot be asserted over `A` alone. css-values-4 §6.1.1's `lh` is that same conversion under another
+ * name ("converting normal to an absolute length by using only the metrics of the first available font"), and
+ * it is now waiting on `D` ALONE for the `normal` case: the PROPERTY it reads is modelled
+ * (core/css/css_computed_value.h's `css_computed_line_height`). So `D` has a reader the moment it exists, and
+ * that is the order this file's absences are meant to be filled in. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 

@@ -119,4 +119,41 @@ CssResolvedKind css_resolved_kind(const char *name);
    is answered per is the ELEMENT's document's, which core/layout/used_value.c reads for itself. */
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name);
 
+/* css-inline-3 §5.1 "Line Spacing: the line-height property" — THE THIRD SHAPE A COMPUTED VALUE COMES IN, and
+ * the reason this property gets an entry of its own rather than a row in either list above. §5.1's
+ * `Computed value:` line is "the specified keyword, A NUMBER, or a computed <length> value", which is a UNION:
+ * `css_computed_length` answers a `CssLength` and has no number, and `css_computed_value` answers text and
+ * would drop the environment fact a length carries. Both refuse this property by name and say so.
+ * THE THREE ARMS ARE THREE DIFFERENT ANSWERS AND §5.1 STATES EACH SEPARATELY. `normal` is "determine the
+ * preferred line height automatically based on the metrics of the used font" and computes to the keyword. A
+ * `<number>` is "the preferred line height … multiplied by the element's font-size" and "the computed value is
+ * the same as the specified value" — so it stays a NUMBER, which is what makes it inherit differently: §5.1's
+ * own example notes that a number "will lead to different line heights if descendants have different font
+ * sizes" while a length or a percentage "inherit as absolute lengths, which will not be influenced by the font
+ * size on descendants". A `<percentage>` is "this percentage of the element's computed font-size" and §5.1
+ * says outright that the computed value IS that length, which is why there is no percentage arm here.
+ * WHICH FONT SIZE THE NUMBER MULTIPLIES IS SETTLED BY ANOTHER MODULE, and the two specs have to be read
+ * together. §5.1 says "the element's used font-size"; css-fonts-4 §2.6 "Relative sizing: the font-size-adjust
+ * property" says the used and computed font sizes differ only through `font-size-adjust` and then states this
+ * case explicitly — "since numeric values of line-height refer to the COMPUTED size of font-size,
+ * font-size-adjust does not affect the used value of line-height". So the multiplicand is the computed font
+ * size, normatively, and this engine needs no assumption about a property it does not model. */
+typedef enum {
+    CSS_LINE_HEIGHT_NORMAL = 0,  /* §5.1's `normal`, which computes to the keyword */
+    CSS_LINE_HEIGHT_NUMBER,      /* §5.1's `<number [0,∞]>`, whose computed value is the number itself */
+    CSS_LINE_HEIGHT_LENGTH       /* §5.1's `<length-percentage [0,∞]>`, which computes to an absolute length */
+} CssLineHeightKind;
+
+typedef struct {
+    CssLineHeightKind kind;
+    double            number;    /* CSS_LINE_HEIGHT_NUMBER only */
+    CssPx             px;        /* CSS_LINE_HEIGHT_LENGTH only — a length, so it carries its facts */
+} CssLineHeight;
+
+/* §5.1's computed value of `line-height` on `el`, with CSS Cascade §7's defaulting applied. §7.2's inherited
+   value is taken WHOLE — the parent's own answer, in this same shape — because serializing it would turn a
+   number into text that reads like a length and would drop a length's environment fact, which is the same
+   reason `css_computed_length` inherits a `CssLength` rather than a string. */
+CssLineHeight css_computed_line_height(lxb_dom_element_t *el);
+
 #endif
