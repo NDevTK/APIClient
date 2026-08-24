@@ -37,6 +37,9 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+/* §7.1.7's POLICY CONTAINER in the form it crosses a seam — a Document is created with one and a navigable is
+   created with the clone of its creator's, so both entries below take one. */
+#include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/url/origin.h"
@@ -82,10 +85,13 @@
  * to fetch anything; the fetch already happened, above, and the parse is the engine's. That distinction is the
  * whole of what was wrong before: the same argument meant "here is the address, do whatever you think that
  * implies", and one host read it as "fetch and parse this" while the other read it as nothing at all. */
-/* `csp` is the policy this document is CREATED with: the response's `Content-Security-Policy` above, or §7.4's
-   clone of the CREATOR's for an `about:` child, which came from no response at all. NULL when there is neither.
-   It travels with the parsed tree because §7.2.6's container is built from BOTH, and a builder handed only the
-   tree would silently install a document judged against its `<meta>` policies alone. */
+/* `policy` is HTML §7.1.7's POLICY CONTAINER this document is CREATED with — §7.1.7's determine step has
+   already chosen between the response's own and §7.3.2.1's clone of the CREATOR's, so the builder is handed
+   the answer and never the choice. It travels with the parsed tree because a Document's container is built
+   from BOTH (this build merges CSP §3.3's `<meta>` policies into the same CSP list), and a builder handed only
+   the tree would silently install a document judged against its `<meta>` policies alone.
+   ONE ARGUMENT AND NOT ONE PER ITEM: §7.1.7 makes a container one struct whose clone moves every item at once,
+   and a seam that spelled the items separately is a seam the next item never reaches. */
 /* `top_level_url` is HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environment this realm is built with, and
    it is a SEPARATE argument from `url` because the two answer different questions and only sometimes agree.
    `url` is THIS document's address; `top_level_url` is the address of the environment at the top of the
@@ -94,21 +100,21 @@
    inside an `http` page is not a secure context and an `about:blank` iframe of one is not either — so a
    builder handed only `url` would install a platform surface belonging to a document it is not building. */
 /* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET for the Document this realm is being built for, and
-   it is a SEPARATE argument from `csp` because §7.1.7's policy container does not contain one — five sites in
-   this tree used to say it did. What the container contributes is one HALF of it, through the CSP `sandbox`
+   it is a SEPARATE argument from `policy` because §7.1.7's policy container does not contain one — five sites
+   in this tree used to say it did. What the container contributes is one HALF of it, through the CSP `sandbox`
    directive alone (§7.1.5's CSP-derived sandboxing flags); the other half is the navigable's CREATION
    sandboxing flags, which come from the `<iframe sandbox>` attribute and the embedder's own set. Which of the
    two algorithms produced the set depends on WHICH ALGORITHM IS CREATING THE DOCUMENT — §7.2's create hands
    the initial about:blank the creation flags alone, §7.5.1's create-and-initialize hands a navigated Document
    §7.4.5's union — so the caller states the whole set and the builder never re-derives it. */
-/* `csp_self_origin` is CSP §2.2's SELF-ORIGIN of that policy list, serialized — it rides beside `csp` because
-   it is the other half of one CSP list (§2.2 makes the list a struct of policies AND an origin) and because it
-   is the half the bytes do not contain: §2.2.2 states it from the RESPONSE's URL, and §7.4's clone hands the
-   CREATOR's to a document that came from no response. A builder that answered it from `origin` would be right
-   for an unsandboxed document loaded from its own address and wrong for both of those. */
+/* THE CONTAINER'S CSP LIST CARRIES CSP §2.2's SELF-ORIGIN, which is why a builder is never asked to derive
+   one: §2.2 makes a list a struct of policies AND an origin, and the origin is the half the bytes do not
+   contain (§2.2.2 states it from the RESPONSE's URL, while §7.3.2.1's clone hands the CREATOR's to a document
+   that came from no response). A builder that answered it from `origin` would be right for an unsandboxed
+   document loaded from its own address and wrong for both of those. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin,
-                                   const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                                   SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                                    uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 
@@ -153,15 +159,15 @@ void navigable_set_realm_builder(RealmBuilder b);
    compares and the host boundary below takes only its serialization (a host builds a realm; it does not decide
    a principal). It is asserted to be same origin with the agent's, which is what makes that split sound. */
 /* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET for the Document being built, stated by the caller
-   for the same reason `csp` is and answering a question the container cannot: §7.2's create gives the initial
+   for the same reason `policy` is and answering a question the container cannot: §7.2's create gives the initial
    about:blank the navigable's CREATION sandboxing flags, and §7.4.5's navigation gives its Document the UNION
    of those and the response policy's CSP-derived flags. */
 /* `about_base_url` is HTML §7.4's ABOUT BASE URL for the Document this builds — `creatorBaseURL` for §7.2's
    initial `about:blank`, and §7.4.5's INITIATOR base URL for a navigation whose destination is an `about:`
    URL. NULL for every Document that comes from a response, which is §2.4.3's null and the ordinary case. It is
-   a parameter and not a read off anything, for the reason `csp_self_origin` beside it is: whose base URL it is
-   belongs to the OPERATION (the creator's for a create, the initiator's for a navigation) and never to the
-   navigable being filled. */
+   a parameter and not a read off anything, for the reason `policy` beside it is: whose base URL it is belongs
+   to the OPERATION (the creator's for a create, the initiator's for a navigation) and never to the navigable
+   being filled. */
 /* `content_type` is the RESPONSE's `Content-Type` value as Fetch §2.2.2's `get` joined it, and the ONE thing
    read off it here is HTML §13.2.3.2 "Determining the character encoding"'s transport-layer charset (through
    Fetch §3.5's legacy extract an encoding). It is NOT what decides which parse this Document gets — that is
@@ -185,7 +191,7 @@ void navigable_set_realm_builder(RealmBuilder b);
 JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
                            const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
                            const char *content_type, const MimeType *computed_type,
-                           const char *csp, const char *csp_self_origin,
+                           SerializedPolicyContainer policy,
                            const char *about_base_url, SandboxFlags sandbox_flags);
 
 /* THE AGENT'S HALF: §7.4's `open` member, declared once. */

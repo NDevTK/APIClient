@@ -3866,7 +3866,7 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
    globals: a host ADDS to the one list and cannot subtract from it, and adding afterwards is also what lets
    the `eval` sink below stand where the language's own `eval` would. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                             const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                             SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                              uint32_t doc_id, JSValueConst nav_proxy)
 {
     PlatformDocument doc;
@@ -3875,8 +3875,7 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     doc.dom = dom;
     doc.url = url;
     doc.origin = origin;
-    doc.csp = csp;
-    doc.csp_self_origin = csp_self_origin;
+    doc.policy = policy;
     doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
@@ -3912,9 +3911,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                 const char *top_level_url, const char *origin, const char *csp,
-                                 const char *csp_self_origin, SandboxFlags sandbox_flags, uint32_t doc_id,
-                                 JSValueConst nav_proxy)
+                                 const char *top_level_url, const char *origin,
+                                 SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                                 uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
 
@@ -3926,7 +3925,7 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    tf_realm_install(ctx, dom, url, origin, csp, csp_self_origin, sandbox_flags, doc_id, nav_proxy);
+    tf_realm_install(ctx, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -8303,11 +8302,12 @@ int main(int argc, char **argv) {
            traversable has no embedder element and its POPUP sandboxing flag set begins empty — and the
            CSP-derived flags of the policy above, which there is none of. Not a placeholder: an unsandboxed
            document's set IS empty, and this fixture's is. */
-        /* CSP §2.2.2's SELF-ORIGIN, which this fixture's document has even though it has no policy: a CSP
-           list carries one whether or not it holds any policies, and `'self'` in a policy this fixture builds
-           later is measured against it. It is this document's own address's origin, because this document is
-           its own response. */
-        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test", NULL, "https://x.test", 0,
+        /* §7.1.7's POLICY CONTAINER, holding no policies and CSP §2.2.2's SELF-ORIGIN — which this fixture's
+           document has even though it has no policy, because a CSP list carries one whether or not it holds
+           any, and `'self'` in a policy this fixture builds later is measured against it. It is this
+           document's own address's origin, because this document is its own response. */
+        tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test",
+                         serialized_policy_container(NULL, "https://x.test"), 0,
                          world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }

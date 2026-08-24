@@ -6,6 +6,9 @@
 
 #include "quickjs.h"
 #include "core/frame/opener_policy.h"
+/* §7.1.7's POLICY CONTAINER in the form it crosses a seam — a navigable is created with the clone of its
+   creator's, so this unit is a direct user of the type. */
+#include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
 #include "core/url/origin.h"
 
@@ -22,14 +25,18 @@ void window_proxy_free(JSContext *ctx);
 /* `url` is the navigable's initial address — what its REALM is built from on the first read that reaches
    through to the active document (see navigable.h). The proxy owns that realm once built; the navigable's own
    members (window/self/frames/parent/top/opener/closed/name) never need it and never build it. */
-/* `creator_csp` is §7.4's CLONE of the creating document's policy container, as text — what the navigable's
-   INITIAL about:blank Document runs its scripts under, since it has no response of its own to carry one. Every
+/* `creator_policy` is HTML §7.1.7's CLONE OF THE CREATING DOCUMENT'S POLICY CONTAINER, serialized — what the
+   navigable's INITIAL about:blank Document runs under, since it has no response of its own to carry one. Every
    navigable is created with that document (§7.4 creates it before step 14 navigates anywhere), so every
    navigable is created with this. Taken HERE rather than at materialization, because that Document's realm is
    built lazily and the realm that builds it need not be the one that created the navigable. A LATER document —
-   the one step 14's load brings — has a policy of its own, and the load carries it (navigable.c). */
+   the one step 14's load brings — has a container of its own, and the load carries it (navigable.c).
+   IT IS THE CONTAINER AND NOT ITS ITEMS. This used to be two arguments — the CSP list's text and CSP §2.2's
+   self-origin — which is a container flattened, and the flattening was the reason §7.1.4's embedder policy
+   had nowhere to live: an item added to the container would have arrived at this seam and stopped. One value
+   built through one constructor is what makes the next item impossible to drop here. */
 /* `top_level_url` is HTML §8.1.3.1's TOP-LEVEL CREATION URL for the environments of this navigable's
-   documents, and it rides here for the identical reason `creator_csp` does: it is decided by the OPERATION
+   documents, and it rides here for the identical reason `creator_policy` does: it is decided by the OPERATION
    that created the navigable, the realm that will read it is built later, and the document that builds it need
    not be the creator. WHICH url it is, is §7.4 read from both ends — a CHILD navigable is nested, so it
    inherits its creator's (core/realm.h), while an AUXILIARY one is its own top-level traversable and its
@@ -56,28 +63,21 @@ void window_proxy_free(JSContext *ctx);
    creator's document base URL" — which §7.2's create-a-new-browsing-context-and-document gives the initial
    `about:blank` Document as its ABOUT BASE URL. NULL is the real answer for a navigable with no creator (the
    root) and for one created with an address (its Document comes from a response). It rides here for the
-   reason `creator_csp` does: the initial Document is materialized lazily and by whichever same-origin
+   reason `creator_policy` does: the initial Document is materialized lazily and by whichever same-origin
    document reads through the navigable first, whose base URL is not the creator's. It is the creator's BASE
    URL and not its address — a creator that ships `<base href>` passes on the base.
    WITHOUT IT a relative URL in a srcless `<iframe>` or a bare `open()` resolves against `about:blank`, whose
    path is opaque, so the URL parser FAILS rather than producing a wrong answer. */
-/* `creator_csp_self_origin` is CSP §2.2's SELF-ORIGIN of that cloned policy list, SERIALIZED, and it rides
-   here because §2.2 makes a CSP list a struct of policies AND an origin — carrying only the text would hand
-   the initial about:blank a policy with no `'self'` to resolve. It is the CREATOR's and not this navigable's:
-   §2.2's own note says the field exists so that a document which inherited its policy resolves `'self'`
-   against the origin that policy came FROM, and the initial about:blank is exactly such a document. NULL only
-   where `creator_csp` is — the self proxy, whose realm the host already built. */
 /* `opener_policy` is HTML §7.3.2.1's INHERITED OPENER POLICY for the initial about:blank Document this
    navigable is created with: "if creator's origin is same origin with creator's relevant settings object's
    top-level origin, then set document's opener policy to creator's browsing context's TOP-LEVEL browsing
    context's active document's opener policy". §7.1.3's `unsafe-none` otherwise, which is a real answer and not
    an absence — a creator that is cross-origin with its own top inherits nothing. It is the CREATOR's decision
-   and is stated here for the same reason `creator_csp` is: the navigable being created cannot be asked, and by
+   and is stated here for the same reason `creator_policy` is: the navigable being created cannot be asked, and by
    the time its Document is materialized the creator's top may have been navigated. */
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, SandboxFlags creation_sandbox_flags, OpenerPolicyValue opener_policy,
-                         const char *creator_csp,
-                         const char *creator_csp_self_origin, const char *creator_base_url,
+                         SerializedPolicyContainer creator_policy, const char *creator_base_url,
                          const char *top_level_url,
                          const Origin *top_level_origin, JSValueConst parent, JSValueConst opener);
 

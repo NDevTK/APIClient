@@ -27,16 +27,18 @@ void document_install_proto(JSContext *ctx);
    or §7.4's clone of the creator's for a document that came from no response (`about:blank`). NULL when there
    is neither. It is not an optional extra: CSP §3.3's `<meta>` is only HALF of §7.2.6's container, and a
    document whose created-with policy is dropped reports a sink as exploitable that the real page's CSP kills. */
-/* `csp_self_origin` is CSP §2.2's SELF-ORIGIN for that policy list, SERIALIZED — §2.2.2's "response's URL's
-   origin" for a document built from a response, and §7.4's clone of the CREATOR's for one built from none.
-   It is a separate argument from `csp` for the reason `origin` is separate from `url`: a Document's own
-   principal and the origin its policy resolves `'self'` against are two facts, and §2.2's own note exists to
-   say they differ (a document with an opaque origin which inherited its policy still resolves `'self'`
-   against the origin the policy came from). It travels as BYTES because that is how a policy container
-   travels, and the identity a serialization drops decides nothing here: both bullets of §6.7.2.8's `'self'`
-   arm read components an OPAQUE origin has none of, so an opaque self-origin matches nothing whether or not
-   two documents' copies of it are the same record. Never NULL — every document's policy has an origin to be
-   measured against, even when there is no policy. */
+/* `policy` is HTML §7.1.7's POLICY CONTAINER this Document is CREATED WITH — §7.5.1's own creation table row,
+   decided by §7.1.7's determine-navigation-params-policy-container and handed over whole. ONE argument rather
+   than one per item, because §7.1.7 makes it one struct and its clone moves every item at once; a seam that
+   spelled the items separately would drop the item added next, silently.
+   ITS CSP LIST'S SELF-ORIGIN is a separate fact from the Document's `url` and from its principal for the
+   reason those two are separate from each other: §2.2.2 sets it from the RESPONSE's URL, §7.3.2.1's clone
+   carries the CREATOR's into a document built from no response, and §2.2's own note exists to say they differ
+   (a document with an opaque origin which inherited its policy still resolves `'self'` against the origin the
+   policy came from). It travels as BYTES because that is how a policy container travels, and the identity a
+   serialization drops decides nothing here: both bullets of §6.7.2.8's `'self'` arm read components an OPAQUE
+   origin has none of, so an opaque self-origin matches nothing whether or not two documents' copies of it are
+   the same record. */
 /* `sandbox_flags` is §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is CREATED with, and it is a SEPARATE
    argument from `csp` because §7.1.7's policy container has no such field — the two are separate items of the
    Document in §7.5.1's own creation table ("policy container … navigationParams's policy container; active
@@ -45,7 +47,7 @@ void document_install_proto(JSContext *ctx);
    gives the initial about:blank the navigable's CREATION sandboxing flags alone, while §7.5.1 gives a
    navigated Document §7.4.5's union of those and the response policy's CSP-derived flags. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                      SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                       uint32_t doc_id, JSValueConst nav_proxy);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a

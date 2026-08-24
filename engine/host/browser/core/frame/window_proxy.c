@@ -95,25 +95,26 @@ typedef struct {
        of. It is not per-flow: no flow can turn a tab into a popup, so unlike `closed` and `name` there is
        nothing here for the delta to capture. */
     uint8_t is_popup;
-    /* §7.2.6's POLICY CONTAINER THE CREATOR HANDED THIS NAVIGABLE, taken at CREATION and kept as text because
-       that is what §7.4's "clone a policy container" is (policy_container_clone re-parses this same string).
+    /* HTML §7.1.7's POLICY CONTAINER THE CREATOR HANDED THIS NAVIGABLE, taken at CREATION and kept in the form
+       it crosses a seam in — which is what §7.1.7's "clone a policy container" is here, since
+       policy_container_clone re-parses these same bytes.
        It is here rather than read off whichever realm materializes the document because a navigable created
        with no address is materialized LAZILY, on the first read that reaches through it — and the reader may
-       be a different same-origin document with a different policy, which would give the child whichever
+       be a different same-origin document with a different container, which would give the child whichever
        document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
-       NULL for a navigable with an address (its policy comes with its response) and for the root. Owned. */
-    char   *creator_csp;
-    /* CSP §2.2's SELF-ORIGIN of that cloned list, SERIALIZED — the other half of one CSP list, and the half
-       the text does not contain. It is the CREATOR's origin and not this navigable's: §2.2's note says the
-       field exists precisely so that a document which INHERITED its policy resolves `'self'` against the
-       origin the policy came from, and the initial about:blank is that document. A creation fact like the
-       policy beside it, so like `is_popup` there is nothing here for the delta to capture. Owned. */
-    char   *creator_csp_self_origin;
+       ONE VALUE, NOT ONE FIELD PER ITEM. It was the CSP list's two halves as two `char *`, which is a container
+       flattened — and the flattening is why §7.1.4's embedder policy had nowhere to sit: an item added to the
+       container would have reached this struct and stopped, with nothing to say so. The bytes it names are
+       proxy_strdup'd and outlive every flow, exactly as the two strings did; a parked flow resuming onto its
+       saved copy of this POD struct resumes onto live memory.
+       serialized_policy_container_none for a navigable with an address (its container comes with its response)
+       and for the root. */
+    SerializedPolicyContainer creator_policy;
     /* HTML §7.4's `creatorBaseURL` — "if creator is non-null, set creatorBaseURL to creator's DOCUMENT BASE
        URL", which the create-a-new-browsing-context-and-document steps hand the initial `about:blank` as its
        ABOUT BASE URL. Without it a relative URL inside a srcless frame or a bare `open()` resolves against
        `about:blank`, which has an opaque path and cannot be a base, so the parse FAILS outright.
-       IT IS TAKEN AT CREATION, for exactly the reason `creator_csp` above is: the Document is materialized
+       IT IS TAKEN AT CREATION, for exactly the reason `creator_policy` above is: the Document is materialized
        lazily, by whichever same-origin document reads through this navigable first, and that reader's base
        URL is not the creator's. It is also the CREATOR's base URL and not the creator's ADDRESS — a creator
        carrying `<base href>` passes on the base, which is the whole content of the word in §7.4.
@@ -121,7 +122,7 @@ typedef struct {
        Document comes from a response and §2.4.3's about base URL is null for it). Owned. */
     char   *creator_base_url;
     /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS for this navigable, taken at CREATION for exactly the
-       reason `creator_csp` above is: §7.2 hands this set to the initial about:blank Document as its ACTIVE
+       reason `creator_policy` above is: §7.2 hands this set to the initial about:blank Document as its ACTIVE
        SANDBOXING FLAG SET, that Document's realm is materialized LAZILY, and the realm that materializes it
        need not be its creator's. A creation fact like `is_popup` — no flow can re-sandbox a navigable that
        exists — and one WORD, so the byte capture in proxy_of describes it completely. */
@@ -420,15 +421,15 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
     if (!p->realm) {
         DCHECK(p->url != NULL, "a WindowProxy with no realm and no address was read through — a proxy over a "
                                "realm that already exists is minted by window_proxy_new_self, which carries it");
-        /* THE INITIAL about:blank, WHICH CAME FROM NO RESPONSE — so no bytes, and §7.2.6's policy is the clone
-           of its creator's this navigable was CREATED with (see creator_csp). Fetching anything here is not
-           deferred, it is IMPOSSIBLE: this runs inside the property read that reached through the navigable,
+        /* THE INITIAL about:blank, WHICH CAME FROM NO RESPONSE — so no bytes, and §7.1.7's container is the
+           clone of its creator's this navigable was CREATED with (see creator_policy). Fetching anything here
+           is not deferred, it is IMPOSSIBLE: this runs inside the property read that reached through the navigable,
            and a fetch suspends. The document an address serves arrives on the load job instead, which is a
            flow and can park (navigable.c). */
         /* THE ENVIRONMENT'S TOP-LEVEL CREATION URL IS THE NAVIGABLE'S, not the reading realm's — the read that
            materializes an about:blank child may come from any same-origin document, and answering from `ctx`
            would give the child whichever document happened to touch it first. The same sentence as
-           `creator_csp` beside it, and the same field for the same reason. */
+           `creator_policy` beside it, and the same field for the same reason. */
         /* §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT gives this Document its ACTIVE SANDBOXING FLAG
            SET, and what it gives is `sandboxFlags` — the navigable's CREATION sandboxing flags, with NO
            CSP-derived half. That absence is the spec's and it is what `allow-popups-to-escape-sandbox` is
@@ -444,8 +445,7 @@ static JSContext *proxy_realm(JSContext *ctx, JSValueConst proxy, ProxyData *p)
            than loaded, so there is no response for §7.4.5 to compute a type from and §7.4 makes it an HTML
            document outright. The NULL is that statement, not an unknown. */
         p->realm = navigable_realm(ctx, p->doc, p->url, p->top_level_url, p->origin, proxy, NULL, 0, NULL, NULL,
-                                   p->creator_csp, p->creator_csp_self_origin, p->creator_base_url,
-                                   p->creation_sandbox_flags);
+                                   p->creator_policy, p->creator_base_url, p->creation_sandbox_flags);
         p->window = JS_GetGlobalObject(p->realm);
     }
     return p->realm;
@@ -582,8 +582,7 @@ static void proxy_adopt_realm(JSContext *ctx, JSValueConst proxy, JSContext *rea
 
 JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Origin *origin, const char *name,
                          bool is_popup, SandboxFlags creation_sandbox_flags, OpenerPolicyValue opener_policy,
-                         const char *creator_csp,
-                         const char *creator_csp_self_origin, const char *creator_base_url,
+                         SerializedPolicyContainer creator_policy, const char *creator_base_url,
                          const char *top_level_url,
                          const Origin *top_level_origin, JSValueConst parent, JSValueConst opener)
 {
@@ -618,15 +617,20 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
        the navigable's name — including the empty one a `open(url)` with no target gives. */
     p->name_known = 1;
     p->is_popup = is_popup ? 1 : 0;
-    p->creator_csp = creator_csp && *creator_csp ? proxy_strdup(creator_csp) : NULL;
-    /* THE SELF-ORIGIN IS REQUIRED EVEN WHERE THE POLICY IS ABSENT, because §2.2 gives a CSP list an origin
-       whether or not it holds any policies — and because this navigable's initial Document will be installed
-       with it either way. A creator with no CSP still states the origin its (empty) list belongs to. */
-    DCHECK(creator_csp_self_origin != NULL && *creator_csp_self_origin,
-           "§7.4 created a navigable without the CSP self-origin of the policy container it cloned — the "
-           "initial about:blank Document would then resolve `'self'` against nothing, which for an inherited "
-           "policy is the one case CSP §2.2's self-origin exists to answer");
-    p->creator_csp_self_origin = proxy_strdup(creator_csp_self_origin);
+    /* §7.1.7's CLONE OF THE CREATOR'S CONTAINER, COPIED ITEM BY ITEM INTO STORAGE THAT OUTLIVES THE CREATOR'S
+       FRAME. The caller's bytes belong to the operation that is creating this navigable and the initial
+       about:blank is materialized long after it returns, so every item is proxy_strdup'd here. A CONTAINER
+       EXISTS even when it holds no policies — §2.2 gives a CSP list an origin whether or not it has any, and
+       this navigable's initial Document is installed with it either way — so the assert is that there IS a
+       container, never that it carries policy text. */
+    DCHECK(serialized_policy_container_exists(creator_policy),
+           "§7.4 created a navigable with no §7.1.7 POLICY CONTAINER to clone — its initial about:blank "
+           "Document has no response of its own, so a container is the only thing it can be created with, and "
+           "without one it would resolve `'self'` against nothing: the one case §2.2's self-origin exists for");
+    p->creator_policy =
+        serialized_policy_container(creator_policy.csp && *creator_policy.csp
+                                        ? proxy_strdup(creator_policy.csp) : NULL,
+                                    proxy_strdup(creator_policy.self_origin));
     /* §7.4's `let creatorBaseURL be null` is the ABSENCE of a creator, so NULL here is a real state and not a
        caller that forgot: the root navigable has no creator, and a navigable created with an address takes its
        Document from a response, which §2.4.3 gives a null about base URL. */
@@ -723,18 +727,19 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
        for choosing a navigable ever populate. Nothing chose this one. What the ROOT document's own
        `Content-Security-Policy: sandbox` adds
        is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
-    /* NO CREATOR POLICY — this navigable is the one §7.4 did NOT create, so there is nothing to clone — but
-       CSP §2.2's SELF-ORIGIN of its document's list is still a real value and is this agent's own: the root
-       Document is created from the response at this instance's address, which is §2.2.2's answer. Nothing
-       reads it through this proxy (its realm exists from the moment it is adopted, so proxy_realm's lazy
-       materialization is unreachable for it), and it is stated all the same because the field is what makes
-       "every navigable carries the self-origin of the policy its Document runs under" an invariant rather
+    /* NO POLICIES TO CLONE — this navigable is the one §7.4 did NOT create, so there is no creator whose
+       container to clone — but there IS a container, and CSP §2.2's SELF-ORIGIN of its CSP list is this agent's
+       own: the root Document is created from the response at this instance's address, which is §2.2.2's
+       answer. Nothing reads it through this proxy (its realm exists from the moment it is adopted, so
+       proxy_realm's lazy materialization is unreachable for it), and it is stated all the same because the
+       field is what makes "every navigable carries the container its Document runs under" an invariant rather
        than a case analysis at each reader. */
     /* NO CREATOR BASE URL either, and for the same sentence: §7.4 did not create this navigable, so there is
        no creator whose base URL to pass on. Its Document comes from the response at this instance's address,
        which §2.4.3 gives a null about base URL. */
-    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, opener_policy, NULL,
-                           origin_serialized(origin_agent()), NULL, tlus, tlo, JS_UNDEFINED, JS_NULL);
+    obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, opener_policy,
+                           serialized_policy_container(NULL, origin_serialized(origin_agent())),
+                           NULL, tlus, tlo, JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
 

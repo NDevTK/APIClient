@@ -21,15 +21,14 @@
  * half of it, through the CSP `sandbox` directive alone — the function at the bottom of this file, and the only
  * connection between the two.
  *
- * THE EMBEDDER POLICY IS THE ITEM THIS FILE STILL DOES NOT HOLD, AND THE REASON IS TRAVEL, NOT THE ITEM.
+ * THE EMBEDDER POLICY IS THE ITEM THIS FILE STILL DOES NOT HOLD, AND WHAT IS OWED IS NOW THE ITEM ITSELF.
  * §7.1.4's obtain is built (core/frame/embedder_policy.h) and a response's is obtained where a response is read
  * (core/frame/navigation_params.c), which CRASHES BY NAME at any response whose policy this container would
- * drop. Adding the field before a container can travel AS a container would put a value in it that vanishes at
- * the two seams the clone crosses — window_proxy.c's `creator_csp`, for a lazily-materialized about:blank
- * child, and navigable.c's `navigable.create` notice, for a peer instance. BOTH NOW CARRY THE WHOLE CSP
- * LIST (its text AND CSP §2.2's self-origin) and neither carries anything else, so what is still owed is
- * the same step in a smaller form: a serialization of the CONTAINER in place of the two CSP fields, after
- * which this item has somewhere to sit at both ends.
+ * drop. What used to block it was TRAVEL: the seams a clone crosses carried the CSP list's two halves as bare
+ * arguments, so an item added here would have vanished at each of them. They carry a SerializedPolicyContainer
+ * now — one value, built through one constructor that names every item — so the remaining work is to give
+ * `PolicyContainer` and that serialization the §7.1.4 field, at which point every producer stops compiling
+ * until it states one and §7.1.4.2's embedder policy checks have something to read.
  *
  * AND THE CLONE CROSSES INSTANCES. A cross-origin creator and the child it clones from are not in the same
  * heap, so the clone is serialized as CSP TEXT and parsed again on the other side — which is exactly what
@@ -65,6 +64,9 @@
    answer and HTML §2.4.1's about:srcdoc match off a PARSED record, so this unit is a direct user of the URL
    parser and says so. */
 #include "core/url/url.h"
+/* AND OF §7.1.1's SERIALIZATION, for the same reason: turning a live container into the form it crosses a seam
+   in turns its CSP list's self-origin RECORD into the bytes that cross with it. */
+#include "core/url/origin.h"
 
 struct PolicyContainer {
     /* The serialized CSP list, comma-delimited, or NULL for none (OWNED). It is kept because it is what the
@@ -133,38 +135,96 @@ const CspList *policy_container_csp_list(const PolicyContainer *p) { return p ? 
 
 const Origin *policy_container_self_origin(const PolicyContainer *p) { return p ? p->csp.self_origin : NULL; }
 
-SerializedCspList policy_container_determine_navigation_params(const char *response_url,
-                                                               const char *response_csp,
-                                                               const char *response_url_origin,
-                                                               const char *inherited_csp,
-                                                               const char *inherited_self_origin)
+SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin)
 {
-    SerializedCspList out;
+    SerializedPolicyContainer out;
+
+    /* A CONTAINER THAT EXISTS HAS A CSP LIST AND EVERY CSP LIST HAS A SELF-ORIGIN (CSP §2.2). The one shape
+       §2.2 forbids is a list of policies with no origin to resolve `'self'` against, and this is where it is
+       refused — at the ONE constructor, rather than at each of the seams that would otherwise have to. A
+       caller with no container calls serialized_policy_container_none, which is a different function so that
+       "there is no container" cannot be reached by passing NULL to this one. */
+    DCHECK(self_origin != NULL && *self_origin,
+           "§7.1.7's policy container was built with no CSP §2.2 SELF-ORIGIN — every CSP list has one and it "
+           "cannot be recovered from the policy text (§2.2.2 states it from outside the bytes), so a container "
+           "without one resolves `'self'` against nothing and reports the document's own scripts as blocked by "
+           "its own policy; the ABSENCE of a container is serialized_policy_container_none");
+    out.csp = csp;
+    out.self_origin = self_origin;
+    return out;
+}
+
+SerializedPolicyContainer serialized_policy_container_none(void)
+{
+    SerializedPolicyContainer out;
+
+    out.csp = NULL;
+    out.self_origin = NULL;
+    return out;
+}
+
+SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin)
+{
+    /* THE ABSENCE IS AN ABSENT SELF-ORIGIN AND NEVER AN ABSENT POLICY. §2.2 gives every CSP list a self-origin
+       whether or not it holds policies, so a relaying zone that has a container states one either way — and a
+       POLICY arriving without one is that zone having stopped writing the field, which is a broken relay
+       rather than "no container": read as an absence it would silently put the document under a container of
+       its own, and read as a container it would resolve `'self'` against nothing. Neither is survivable, so it
+       crashes here, at the boundary that produced it. */
+    DCHECK(!(csp != NULL && *csp) || (self_origin != NULL && *self_origin),
+           "a §7.1.7 policy container arrived from outside this engine with POLICIES and no CSP §2.2 "
+           "SELF-ORIGIN — the two halves of one CSP list travel together (§2.2 makes the list a struct of "
+           "both), so this is a relay that stopped writing the origin field and not a document with no "
+           "container; `'self'` would resolve against this document's own address instead of the creator's");
+    if (!(self_origin != NULL && *self_origin)) return serialized_policy_container_none();
+    return serialized_policy_container(csp, self_origin);
+}
+
+SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *p)
+{
+    /* THE ONE PLACE A LIVE CONTAINER BECOMES BYTES, which is what makes §7.1.7's clone one operation rather
+       than one per seam. `p` must exist: every Document has a container (document_install builds one for the
+       initial about:blank too), so a NULL here is a caller holding something that is not a document. */
+    DCHECK(p != NULL,
+           "§7.1.7's policy container was serialized from nothing — every Document has one, including the "
+           "initial about:blank §7.3.2.1 clones the creator's into, which is why the clone is an ordinary rule "
+           "rather than an inheritance rule written for CSP; the ABSENCE is serialized_policy_container_none");
+    /* ASKED OF THE RECORD, BEFORE IT IS SERIALIZED. origin_serialized asserts its own argument, and its message
+       is about an origin — the reader of that `@WHY` would be standing at a URL component rather than at the
+       container whose CSP list has no self-origin, which is the fact that is actually wrong. */
+    DCHECK(policy_container_self_origin(p) != NULL,
+           "a policy container's CSP list has no CSP §2.2 SELF-ORIGIN to serialize — every list has one and "
+           "policy_container_new parses it in whether or not there is policy text, so a container without one "
+           "was built somewhere that did not state it");
+    return serialized_policy_container(policy_container_csp(p),
+                                       origin_serialized(policy_container_self_origin(p)));
+}
+
+bool serialized_policy_container_exists(SerializedPolicyContainer c)
+{
+    /* §7.1.7's `is not null`, from the field that answers it — see the type. */
+    return c.self_origin != NULL && *c.self_origin;
+}
+
+SerializedPolicyContainer policy_container_determine_navigation_params(const char *response_url,
+                                                                      SerializedPolicyContainer response,
+                                                                      SerializedPolicyContainer inherited)
+{
     UrlRecord rec;
     bool parsed, local, srcdoc;
-    /* THE SELF-ORIGIN IS WHAT SAYS THERE IS A CONTAINER TO INHERIT, NOT THE POLICY TEXT. §2.2 gives every CSP
-       list a self-origin, so a creator that holds no policies still states one — and this build merges CSP
-       §3.3's `<meta>` policies into the SAME list under the SAME self-origin, so a `data:` child with a `<meta>`
-       CSP resolves `'self'` against its creator's origin when there was a creator and against its own OPAQUE
-       origin when there was not. Reading the presence off `inherited_csp` collapses those two into one. */
-    bool has_inherited = inherited_self_origin != NULL && *inherited_self_origin;
+    bool has_inherited = serialized_policy_container_exists(inherited);
 
     DCHECK(response_url != NULL && *response_url,
            "§7.1.7's determine-navigation-params-policy-container was asked without a responseURL — its third "
            "step turns on whether that URL is LOCAL (Fetch §2.1), so without it there is no algorithm to run");
-    DCHECK(response_url_origin != NULL && *response_url_origin,
-           "a Document was created with no origin for its own response's CSP list — §2.2.2 makes that origin "
-           "the list's self-origin, so without it a response-delivered `'self'` matches nothing this document "
-           "could ever load");
-    /* THE TWO HALVES OF ONE STRUCT ARRIVE TOGETHER OR THE STRUCT DID NOT ARRIVE. A policy with no self-origin
-       beside it is the one shape §2.2 forbids, and it is exactly what the `navigable.create` notice carried
-       before the self-origin had a field on it — so this is the assert that the seam was repaired, stated at
-       the one place both entries reach rather than as a hole a `?:` fills with this document's own origin. */
-    DCHECK(!(inherited_csp != NULL && *inherited_csp) || has_inherited,
-           "a Document was created with an INHERITED CSP list carrying no CSP §2.2 self-origin — the trusted "
-           "zone relays both halves of §7.1.7's clone off the `navigable.create` notice, so a policy without "
-           "one is a relay that stopped writing the field, and `'self'` would resolve against this document's "
-           "own address instead of the creator's origin");
+    /* STEP 4'S RESPONSE CONTAINER IS ALWAYS THERE, INCLUDING WHEN THERE WAS NO RESPONSE. Step 5's "new policy
+       container" is a container too, and the CSP list it holds still needs §2.2's self-origin — which for a
+       Document created at this address is that address's origin, the same answer §2.2.2 would have given. So
+       the absence a caller can have is an absence of POLICIES, never of this container. */
+    DCHECK(serialized_policy_container_exists(response),
+           "a Document was created with no origin for its own CSP list — §2.2.2 makes that origin the list's "
+           "self-origin and §7.1.7 step 5's new container needs one just as a response-delivered list does, so "
+           "without it a `'self'` in this document's own policy matches nothing it could ever load");
 
     url_record_init(&rec);
     parsed = url_parse(&rec, response_url, strlen(response_url), NULL);
@@ -191,15 +251,9 @@ SerializedCspList policy_container_determine_navigation_params(const char *respo
        initiatorPolicyContainer" — which step 2's srcdoc case reaches the same answer through here, since the
        parent IS the creator this seam carries. Everything else is step 4's responsePolicyContainer, whose CSP
        list is §2.2.2's pair; a document with no response at all has an empty one, which is step 5's new
-       container and needs no arm of its own. */
-    if (local && has_inherited) {
-        out.csp = inherited_csp;
-        out.self_origin = inherited_self_origin;
-    } else {
-        out.csp = response_csp;
-        out.self_origin = response_url_origin;
-    }
-    return out;
+       container and needs no arm of its own. THE WHOLE CONTAINER IS RETURNED, not a container assembled from
+       one arm's policy and the other's remainder: §7.1.7 returns a clone of ONE of them. */
+    return (local && has_inherited) ? inherited : response;
 }
 
 SandboxFlags policy_csp_derived_sandboxing_flags(const char *serialized_csp_list, size_t len)

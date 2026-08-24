@@ -46,6 +46,9 @@
 
 #include "quickjs.h"
 #include "core/frame/opener_policy.h"
+/* §7.1.7's POLICY CONTAINER, in the form it crosses this seam — a Document is created with one, so the struct
+   below holds one and this unit is a direct user of the type. */
+#include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
 
 /* THE AGENT'S FACTS — what a declaration needs that is true of the whole similar-origin window agent. */
@@ -84,15 +87,19 @@ typedef struct {
     lxb_html_document_t *dom;    /* the parsed tree this realm's `document` is a wrapper over */
     const char          *url;    /* the document's ADDRESS */
     const char          *origin; /* the document's PRINCIPAL */
-    const char          *csp;    /* §7.2.6's header half, or NULL for a document that came from no response */
-    /* CSP §2.2's SELF-ORIGIN for that policy list, SERIALIZED — the origin `'self'` is measured against.
-       A THIRD FACT beside `url` and `origin`, and not a spelling of either: §2.2.2 sets it from the RESPONSE's
-       URL, §7.4's clone carries the CREATOR's into a document that came from no response, and §2.2's own note
-       says why the distinction is the point — a document with an OPAQUE origin which inherited its policy
-       still resolves `'self'` against the origin that policy came from. A host that passed `origin` here would
-       be right for every unsandboxed top-level document and silently wrong for exactly those two cases.
-       NEVER NULL: every policy list has one, including the empty list a document with no CSP holds. */
-    const char          *csp_self_origin;
+    /* HTML §7.1.7's POLICY CONTAINER this Document is created with — §7.5.1's own creation table row
+       ("policy container … navigationParams's policy container"), decided by §7.1.7's determine step and never
+       re-derived here.
+       IT IS ONE VALUE AND NOT ONE FIELD PER ITEM, which is what makes the container's next item impossible to
+       drop on the way in: it is built through the one constructor that names every item, so a host that stops
+       stating one stops compiling. Its CSP list's SELF-ORIGIN is a THIRD fact beside `url` and `origin` and
+       not a spelling of either — §2.2.2 sets it from the RESPONSE's URL, §7.3.2.1's clone carries the
+       CREATOR's into a document that came from no response, and §2.2's own note says why the distinction is
+       the point: a document with an OPAQUE origin which inherited its policy still resolves `'self'` against
+       the origin that policy came from. A host that passed `origin` for it would be right for every
+       unsandboxed top-level document and silently wrong for exactly those two cases.
+       IT ALWAYS EXISTS: every Document has a container, including the initial about:blank. */
+    SerializedPolicyContainer policy;
     /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is created with. A SEPARATE fact from `csp` for
        the same reason `url` and `origin` are separate from each other: §7.1.7's policy container holds no
        flag set, so a host that derived one from the policy would answer a question the container was never

@@ -2959,7 +2959,7 @@ const char *document_content_type_of(const lxb_dom_document_t *dom)
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                      SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                       uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
@@ -2984,11 +2984,13 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        host stated and start being the types the algorithms are written over. origin_parse is the transport
        core/url/origin.h defines for exactly this — "null" states an OPAQUE origin and mints one, which is what
        a sandboxed document's `'self'` must be measured against and is same origin with nothing. */
-    DCHECK(csp_self_origin != NULL && *csp_self_origin,
-           "a Document was installed with no CSP self-origin — CSP §2.2 gives every CSP list one and §2.2.2 "
-           "states it from the response's URL, so a document without one cannot resolve `'self'` and would "
-           "report every one of its own scripts as blocked by its own policy");
-    d->policy = document_policy_new(dom, csp, origin_parse(csp_self_origin));
+    DCHECK(serialized_policy_container_exists(policy),
+           "a Document was installed with NO §7.1.7 POLICY CONTAINER — every Document has one, and CSP §2.2 "
+           "gives its CSP list a self-origin which §2.2.2 states from the response's URL; a document without "
+           "one cannot resolve `'self'` and would report every one of its own scripts as blocked by its own "
+           "policy. §7.1.7's determine step answers this for every creating operation and always with a "
+           "container, so an absence here is a caller that did not run it");
+    d->policy = document_policy_new(dom, policy.csp, origin_parse(policy.self_origin));
     /* §7.1.5's ACTIVE SANDBOXING FLAG SET, as the creating operation decided it — §7.2's creation flags for
        the initial about:blank, §7.4.5's final flag set for a navigated Document. Beside the policy container
        because §7.5.1 hands the Document both in one breath, and NOT derived from it: the container's only

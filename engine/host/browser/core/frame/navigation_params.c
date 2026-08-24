@@ -58,23 +58,24 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
     /* §7.1.4's obtain, which §7.1.7 step 4 makes the policy container's embedder policy. */
     embedder_policy_obtain(&out->embedder, headers, secure_context);
     /* AND HERE IS WHERE IT STOPS, NAMED AT THE RESPONSE THAT NEEDS IT. §7.1.7 puts this on the POLICY
-       CONTAINER, and this build's container carries a CSP list and nothing else — not because the item is
-       hard, but because of how a container TRAVELS. HTML §7.3.2.1 "Creating browsing contexts" clones the
-       creator's container for a lazily-materialized `about:blank` child, and that clone crosses two seams that
-       carry the CSP LIST — its text AND CSP §2.2's self-origin — and nothing else: `ProxyData`'s creator_csp
-       (core/frame/window_proxy.c) and the `navigable.create` notice a peer instance is provisioned from
-       (core/frame/navigable.c). An embedder policy added to the container today would be silently dropped at
-       both — a field written in one place and absent in the next, which is the defect CLAUDE.md makes
-       greppable. So the ordered step is: make the container travel as a CONTAINER (a serialization those two
-       seams carry, in place of the two CSP fields), then hold this item on it, then §7.1.4.2's
-       check-a-navigation-response's-adherence-to-its-embedder-policy has something to read. */
+       CONTAINER, and this build's container holds a CSP list and nothing else.
+       WHAT USED TO BLOCK IT WAS TRAVEL, AND THAT HALF IS BUILT. HTML §7.3.2.1 "Creating browsing contexts"
+       clones the creator's container for a lazily-materialized `about:blank` child, and that clone used to
+       cross its seams as the CSP list's two bare halves — so an item added to the container would have been
+       silently dropped at each of them. Every seam now carries a `SerializedPolicyContainer` (core/frame/
+       policy_container.h), built through one constructor that names every item, so an item added to the
+       container stops every producer compiling until it is stated. What is left is the ITEM: give
+       `PolicyContainer` and its serialization the §7.1.4 field, install it in core/dom/document.c beside the
+       CSP list, and §7.1.4.2's check-a-navigation-response's-adherence-to-its-embedder-policy then has a
+       parent document's embedder policy to read. */
     DCHECK(!embedder_policy_compatible_with_cross_origin_isolation(out->embedder.value),
            "this response's `Cross-Origin-Embedder-Policy` is compatible with cross-origin isolation, and "
-           "§7.1.7's policy container has no embedder policy item in this build to carry it — so the Document "
+           "§7.1.7's policy container has no embedder policy ITEM in this build to hold it — so the Document "
            "would be created claiming `unsafe-none` for a response that opted into isolation, and every "
-           "cross-origin no-CORS fetch it makes would be judged by the wrong rule. Make the policy container "
-           "travel as a container (window_proxy.c's creator_csp and navigable.c's create notice both carry "
-           "CSP TEXT today), put the embedder policy on it, and build §7.1.4.2's embedder policy checks");
+           "cross-origin no-CORS fetch it makes would be judged by the wrong rule. The container TRAVELS as a "
+           "container already (SerializedPolicyContainer, whose one constructor names every item); what is "
+           "owed is the field itself on PolicyContainer and on that serialization, the install beside the CSP "
+           "list in core/dom/document.c, and then §7.1.4.2's embedder policy checks");
 
     /* §7.1.3's obtain, which §7.5.1's creation table gives the Document as its OPENER POLICY row.
        THE ROW HAS A HOME AND THE SWAP HAS A DECISION NOW, which is what used to be missing here — this line

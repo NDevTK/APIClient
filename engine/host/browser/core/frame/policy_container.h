@@ -70,20 +70,73 @@ const CspList *policy_container_csp_list(const PolicyContainer *p);
    NULL only for a container that does not exist. */
 const Origin *policy_container_self_origin(const PolicyContainer *p);
 
-/* ---- HTML §7.1.7 "Policy containers" — DETERMINE NAVIGATION PARAMS POLICY CONTAINER ------------------------
+/* ---- HTML §7.1.7 "Policy containers" — THE CONTAINER IN THE FORM IT CROSSES A SEAM -------------------------
  *
- * A CSP LIST IN THE FORM IT CROSSES A BOUNDARY IN, which is the two halves CSP §2.2 "Policies" makes a list out
- * of: "A CSP list is a struct consisting of policies (a list of policies) and a self-origin (an origin which is
- * used when matching the 'self' keyword)". The policies travel as their §2.2 serialization and the self-origin
- * as §7.1.1's; both are BORROWED from whoever stated them and neither outlives the call. This is the whole of
- * what a policy container is at an ABI entry today — the day it grows the embedder policy item §7.1.7 also
- * gives it, this struct grows with it, which is why it is a struct and not two returns. */
+ * ONE VALUE, BECAUSE §7.1.7 MAKES IT ONE STRUCT. "A policy container is a struct containing policies that apply
+ * to a Document", and §7.1.7's clone-a-policy-container moves EVERY item of it in one operation. A seam that
+ * carries the items as separate arguments is not carrying a container; it is carrying whichever of them its
+ * author remembered, and the item added NEXT is the one nobody adds to the seam. That is not hypothetical —
+ * §7.1.4's embedder policy is obtained where a response is read and had nowhere to sit, because the two seams a
+ * clone crosses (a lazily-materialized about:blank child's navigable, and the `navigable.create` notice a peer
+ * instance is provisioned from) each carried the CSP list's two halves and nothing else. A field written in one
+ * place and absent in the next is the defect this build makes greppable, and this type is the fix for it.
+ *
+ * IT IS BUILT THROUGH A FUNCTION AND NEVER BY AN INITIALIZER, WHICH IS THE WHOLE FORCING MECHANISM. A
+ * designated initializer zero-fills the member it does not name, so a struct that grows silently hands every
+ * producer a container whose new item is whatever zero happens to mean, with the compiler saying nothing —
+ * exactly the shape of a consumer defaulting a producer's field, one layer earlier. `serialized_policy_container`
+ * below names EVERY item §7.1.7 gives a container that this build holds, so the day another item lands here
+ * every producer STOPS COMPILING until it states one. Nothing may construct this struct any other way.
+ *
+ * EVERYTHING IN IT IS TEXT AND BORROWED. A live value crosses neither an instance, nor a session, nor a park,
+ * so the clone that crosses an instance and the clone that crosses a session are the same operation as the
+ * in-heap one (policy_container_clone re-parses this same text). Nothing here outlives the call it was built
+ * for unless the receiver copies it — window_proxy.c's navigable does, because a navigable outlives its
+ * creator's stack frame.
+ *
+ * THE CSP LIST IS TWO OF THE ITEMS AND NOT ONE, because CSP §2.2 "Policies" makes a list "a struct consisting
+ * of policies (a list of policies) and a self-origin (an origin which is used when matching the 'self'
+ * keyword)" and §2.2.2 states the self-origin from OUTSIDE the bytes ("self-origin is response's URL's
+ * origin"). The policies travel as their §2.2 serialization and the self-origin as §7.1.1's. */
 typedef struct {
-    const char *csp;           /* NULL, or the empty string, for a list with no policies */
-    const char *self_origin;   /* never NULL: §2.2 gives every CSP list one */
-} SerializedCspList;
+    const char *csp;           /* CSP §2.2's policies, serialized. NULL or "" is a list holding none. */
+    /* CSP §2.2's SELF-ORIGIN of that list, serialized — and ALSO WHAT SAYS THERE IS A CONTAINER AT ALL. §2.2
+       gives every CSP list a self-origin whether or not it holds policies, so an absent one means there is no
+       container here, while an empty POLICY with a self-origin beside it is a real container that holds no
+       policies. Those two are not interchangeable — this build merges CSP §3.3's `<meta>` policies into the
+       SAME list under the SAME self-origin (core/dom/document.c's document_policy_new) — and reading the
+       presence off the POLICY collapses them, which is §7.1.7's `initiatorPolicyContainer is not null`
+       answered from the wrong field. Ask serialized_policy_container_exists rather than testing it here. */
+    const char *self_origin;
+} SerializedPolicyContainer;
 
-/* HTML §7.1.7's "determine navigation params policy container", over the containers that reach an ABI ENTRY.
+/* A CONTAINER, stating every item. `self_origin` is REQUIRED and non-empty: a container that exists has a CSP
+   list and every CSP list has one. The ABSENCE of a container is serialized_policy_container_none below, which
+   is a different thing and is spelled differently so that no caller can reach it by passing NULL here. */
+SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin);
+
+/* NO CONTAINER — §7.1.7's `null` for the initiator/parent/history containers its determine step tests against,
+   which is a real state (a Document with no creator) and not a caller that forgot an argument. */
+SerializedPolicyContainer serialized_policy_container_none(void);
+
+/* §7.1.7's "policy container-OR-NULL" AS IT ARRIVES FROM OUTSIDE THIS ENGINE — an ABI entry, or the
+   `navigable.create` notice the trusted zone relays from the instance that created this document. Such a
+   boundary carries FIELDS and cannot carry a null struct, so the absence arrives as an absent SELF-ORIGIN, and
+   this is the ONE place that spelling is read: a host entry that tested it inline would be a second reading of
+   §7.1.7's `is not null`, in a different file, for each entry that has one. */
+SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin);
+
+/* THE SERIALIZATION OF A LIVE CONTAINER — §7.1.7's clone, in the form it crosses a seam. It reads EVERY item
+   off `p`, so a container that grows grows here once and no caller has to be told: this is the one place a
+   live container becomes bytes. `p` must exist; the absence is the function above. The bytes are BORROWED from
+   `p` and from the agent's origin records, so they live as long as the container does. */
+SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *p);
+
+/* IS THERE A CONTAINER — §7.1.7's `is not null`, asked in ONE place so that every seam answers it from the
+   same field. See `self_origin` above for why it is not the policy text. */
+bool serialized_policy_container_exists(SerializedPolicyContainer c);
+
+/* HTML §7.1.7's "determine navigation params policy container", over the containers that reach a seam.
  *
  * THE ALGORITHM IS THE SPEC'S AND ITS PREDICATE IS `responseURL is local` — NOT "the response carried no
  * policy". The standard's steps, in order, are: a history container when the URL requires storing one; the
@@ -98,24 +151,22 @@ typedef struct {
  * WHICH CONTAINER IS "INHERITED" IS THE OPERATION'S ANSWER AND NOT THIS FUNCTION'S. The initiator's and the
  * parent's are one parameter here because the operation that reaches this seam — §7.3.2.1's create, announced
  * as a `navigable.create` — has one creator that is both. A caller with a different operation states a
- * different pair; it does not get a different rule.
+ * different container; it does not get a different rule.
  *
  * `response_url` IS THE ADDRESS THE DOCUMENT IS BEING CREATED AT, and it is parsed here rather than tested with
  * a `strncmp` because Fetch §2.1's local set is `about`, `blob` and `data` — the two beyond `about` being
  * precisely the schemes whose Document has an OPAQUE origin, which is the case CSP §2.2's own note says the
  * self-origin exists for.
- * `response_csp` and `response_url_origin` are §2.2.2's pair for this document's own response — "Return a CSP
- * list whose policies is policies and self-origin is response's URL's origin".
- * `inherited_csp` and `inherited_self_origin` are §7.1.7's CLONE of the creator's container. THE SELF-ORIGIN IS
- * WHAT SAYS THERE IS ONE: §2.2 gives every CSP list a self-origin, so an empty one means no creator, while an
- * empty POLICY with a self-origin beside it is a real creator that holds no policies — and those two are not
- * interchangeable, because this build merges CSP §3.3's `<meta>` policies into the SAME list (core/dom/
- * document.c's document_policy_new) and that list has ONE self-origin for all of them. */
-SerializedCspList policy_container_determine_navigation_params(const char *response_url,
-                                                               const char *response_csp,
-                                                               const char *response_url_origin,
-                                                               const char *inherited_csp,
-                                                               const char *inherited_self_origin);
+ * `response` is §7.1.7's create-a-policy-container-from-a-fetch-response for THIS document's own response — its
+ * CSP list is §2.2.2's pair, "a CSP list whose policies is policies and self-origin is response's URL's origin".
+ * IT IS ALWAYS STATED, including for a Document created from NO response: that one gets step 5's "new policy
+ * container", whose list holds no policies, and the self-origin it still needs is this document's own address's
+ * origin — which is the same answer §2.2.2 would have given had there been a response. So the absence a caller
+ * has is an absence of POLICIES, which this type spells with a NULL `csp`, and never an absent container.
+ * `inherited` is §7.1.7's CLONE of the creator's container, or none. */
+SerializedPolicyContainer policy_container_determine_navigation_params(const char *response_url,
+                                                                      SerializedPolicyContainer response,
+                                                                      SerializedPolicyContainer inherited);
 
 /* WOULD THIS RUN? TWO QUESTIONS, AND THEY ARE TWO FUNCTIONS BECAUSE THEY ARE TWO ALGORITHMS.
  *

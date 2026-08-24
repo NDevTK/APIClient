@@ -184,7 +184,7 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
    `https://site/app/api/users`. They are two FIELDS of the one document record now, which is what makes that
    substitution unspellable rather than merely fixed. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
-                                 const char *csp, const char *csp_self_origin, SandboxFlags sandbox_flags,
+                                 SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
     PlatformDocument doc;
@@ -193,8 +193,7 @@ static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const
     doc.dom = dom;
     doc.url = url;
     doc.origin = origin;
-    doc.csp = csp;
-    doc.csp_self_origin = csp_self_origin;
+    doc.policy = policy;
     doc.sandbox_flags = sandbox_flags;
     doc.doc_id = doc_id;
     doc.nav_proxy = nav_proxy;
@@ -253,13 +252,13 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
 }
 
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
-                                     const char *top_level_url, const char *origin, const char *csp,
-                                     const char *csp_self_origin, SandboxFlags sandbox_flags, uint32_t doc_id,
-                                     JSValueConst nav_proxy)
+                                     const char *top_level_url, const char *origin,
+                                     SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                                     uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = engine_realm_new(rt, top_level_url);
 
-    engine_realm_install(ctx, dom, url, origin, csp, csp_self_origin, sandbox_flags, doc_id, nav_proxy);
+    engine_realm_install(ctx, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
     return ctx;
 }
 
@@ -574,11 +573,13 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            notice by the trusted zone. The self-origin is stated as its own argument rather than taken from
            `origin` beside it because the two are different facts — a Document's principal, and the origin its
            policy resolves `'self'` against — which is precisely what an inherited container makes disagree. */
-        SerializedCspList csp_list =
-            policy_container_determine_navigation_params(url, np.csp, origin,
-                                                         inherited_csp, inherited_csp_self_origin);
+        SerializedPolicyContainer inherited =
+            serialized_policy_container_or_none(inherited_csp, inherited_csp_self_origin);
+        SerializedPolicyContainer response = serialized_policy_container(np.csp, origin);
+        SerializedPolicyContainer policy =
+            policy_container_determine_navigation_params(url, response, inherited);
 
-        engine_realm_install(g_ctx, g_dom, url, origin, csp_list.csp, csp_list.self_origin, np.sandbox_flags,
+        engine_realm_install(g_ctx, g_dom, url, origin, policy, np.sandbox_flags,
                              world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
@@ -748,12 +749,15 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            passed the agent's record for both, which is §2.2.2's answer and is right exactly when the list came
            off this document's own response — and a document that reaches THIS entry is one another instance
            announced, so an inherited container is the case the entry exists for rather than an exotic one. */
-        SerializedCspList csp_list =
-            policy_container_determine_navigation_params(url, np.csp, origin_serialized(origin_agent()),
-                                                         inherited_csp, inherited_csp_self_origin);
+        SerializedPolicyContainer inherited =
+            serialized_policy_container_or_none(inherited_csp, inherited_csp_self_origin);
+        SerializedPolicyContainer response =
+            serialized_policy_container(np.csp, origin_serialized(origin_agent()));
+        SerializedPolicyContainer policy =
+            policy_container_determine_navigation_params(url, response, inherited);
 
-        engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), csp_list.csp,
-                             csp_list.self_origin, np.sandbox_flags, doc, proxy);
+        engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), policy,
+                             np.sandbox_flags, doc, proxy);
         JS_FreeValue(cctx, proxy);
     }
 
