@@ -375,7 +375,92 @@ function assertRendererSandboxed(expectSandbox, rootPid) {
     : `sandbox NOT in use (${sandboxed.length}/${renderers.length} renderer(s) sandboxed) — as explicitly allowed`);
 }
 
+/* THE CALLER AND THE CALLEE ARE TWO FILES AND NOTHING STATED THEIR PAIRING, so a browser launched here can be
+   handed an engine that cannot answer a single one of the calls the extension makes. Measured, on this
+   checkout, against five real sites: every run aborted at `qjs_init` with `native function \`qjs_init\` called
+   with 8 args but expects 5`, because the artifact was built two ABI-widening commits earlier — the document's
+   length and the inherited policy container's self-origin had each been added to the C entry and to
+   renderer.html's placement table, and the wasm beside them was from before either. Five sites, five crashes,
+   one signature, and NOTHING in the output named a stale artifact: the message names an arity, and the reader
+   is 58 commits away from the cause.
+   THE OTHER DIRECTION IS WORSE AND HAS NO MESSAGE AT ALL. Emscripten's own guard is `args.length <= nargs` and
+   its comment says why — "too few can be valid since the missing arguments will be zero filled" — so an
+   artifact that expects MORE than the table places runs happily with NULL for every operand the caller never
+   learned about. A `qjs_init` whose inherited-policy pointers arrive as 0 builds a document with a policy
+   container out of nothing and then reports endpoints and sinks: a plausible datum, which is the one failure
+   this project has no way to see.
+   SO THE PAIRING IS ASSERTED FROM BOTH SIDES BEFORE A BROWSER IS LAUNCHED, and it is asserted out of the two
+   files that are ALWAYS present wherever this harness runs — both live under `extension/`, so a corpus lane
+   (testing/corpus/run.sh copies harness.js + extension/ and nothing else) checks exactly the pair it froze.
+   The engine SOURCE is deliberately not consulted: `engine/host/main.c` is not copied into a lane, and a check
+   that can only be made in the checkout is a check the frozen-artifact runs would have to skip.
+   IT IS EQUALITY, NOT A BOUND, and a shape this cannot read is FATAL rather than skipped. A parser that
+   silently matches nothing reports agreement it never established — the instrument reading zero, which is the
+   defect this whole check exists to stop being invisible. */
+function assertEngineAbiPairing() {
+  const rendererPath = path.join(EXT_DIR, "renderer.html");
+  const gluePath = path.join(EXT_DIR, "lib", "qjs", "qjs.mjs");
+  let rendererSrc, glueSrc;
+  try { rendererSrc = fs.readFileSync(rendererPath, "utf8"); }
+  catch (e) { throw new Error(`cannot read ${rendererPath} — the renderer's ABI table is one half of the engine\n  pairing this refuses to launch without: ${e.message}`); }
+  try { glueSrc = fs.readFileSync(gluePath, "utf8"); }
+  catch (e) { throw new Error(`cannot read ${gluePath} — the built engine glue is the other half of the\n  pairing. Build it: node engine/build.mjs cow  (${e.message})`); }
+
+  /* WHAT THE ARTIFACT ACCEPTS, in its own words. Emscripten writes one `createExportWrapper(name, export,
+     nargs)` per exported entry and `nargs` is the wasm signature's parameter count, baked in at link time —
+     so this is the built program describing itself, not a restatement of it. */
+  const glue = new Map();
+  for (const m of glueSrc.matchAll(/createExportWrapper\(\s*"(\w+)"\s*,[^,]+,\s*(\d+)\s*\)/g)) glue.set(m[1], Number(m[2]));
+  if (!glue.size) throw new Error(`${gluePath} declares no createExportWrapper entries — this harness could not\n  read what the built engine accepts, and reporting that as agreement is the measurement no run could\n  contradict. The glue's shape changed; fix this parse rather than launching.`);
+
+  /* WHAT THE EXTENSION PLACES. renderer.html's table is per-MOJOM-PARAMETER; the two byte placements each
+     expand to TWO C operands (the pointer and its length), which is the whole reason a placement is
+     per-parameter rather than per-type — see the table's own note. An unknown token is fatal for the same
+     reason a zero-entry parse is: counting it as one operand would invent agreement. */
+  const tableSrc = rendererSrc.match(/var ABI = \{([\s\S]*?)\n\s*\};/);
+  if (!tableSrc) throw new Error(`${rendererPath} holds no \`var ABI = {…}\` table — that table IS the caller's\n  half of the engine ABI, so a shape this cannot read is a pairing nothing checked.`);
+  const OPERANDS = { "string-retained": 1, "string": 1, "number": 1, "bytes-pair-retained": 2, "bytes-pair": 2 };
+  const places = new Map();
+  for (const m of tableSrc[1].replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/\bfn:\s*"(\w+)"[\s\S]*?\bplace:\s*\[([\s\S]*?)\]/g)) {
+    let n = 0;
+    for (const tok of m[2].split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean)) {
+      if (!(tok in OPERANDS)) throw new Error(`${rendererPath}: placement \`${tok}\` on ${m[1]} is not one this\n  harness knows how to count into C operands. Teach it here rather than letting an uncounted placement\n  pass as agreement.`);
+      n += OPERANDS[tok];
+    }
+    places.set(m[1], n);
+  }
+  if (!places.size) throw new Error(`${rendererPath}'s ABI table parsed to no entries — see above.`);
+
+  const skew = [];
+  for (const [fn, want] of places) {
+    if (!glue.has(fn)) { skew.push(`  ${fn}: the extension calls it, the built engine does not export it`); continue; }
+    if (glue.get(fn) !== want) skew.push(`  ${fn}: the extension places ${want} operand(s), the built engine accepts ${glue.get(fn)}`);
+  }
+  if (!skew.length) return;
+
+  /* THE STAMP IS A HINT AND IS LABELLED AS ONE. `head` is what the SOURCE TREE was called when the artifact
+     was built, and this tree is edited continuously by other lanes — testing/corpus/site.mjs says the same
+     thing about the same field. It is printed because a wrong name still points at roughly when, and the
+     rebuild command below is the answer regardless of what it says. */
+  let stamp = "(no qjs.mjs.build.json beside the glue)";
+  try {
+    const b = JSON.parse(fs.readFileSync(path.join(EXT_DIR, "lib", "qjs", "qjs.mjs.build.json"), "utf8"));
+    stamp = `built at ${b.at} from a tree then called ${b.head} (qjs ${b.qjsHead})`;
+  } catch (e) { stamp = `(qjs.mjs.build.json unreadable: ${e.message})`; }
+  throw new Error(
+    `the built engine and the extension that calls it are from different generations — REFUSING TO LAUNCH.\n` +
+    `  Every page this browser analysed would abort at the first skewed entry, or worse, run with the\n` +
+    `  operands it never learned about zero-filled and report findings composed out of nulls.\n` +
+    skew.join("\n") + "\n" +
+    `  artifact: ${gluePath}\n            ${stamp}\n` +
+    `  Rebuild it against this tree:  node engine/build.mjs cow\n` +
+    `  (A frozen-artifact lane must freeze BOTH halves — copy extension/ whole, which run.sh does.)`);
+}
+
 async function cmdStart(args) {
+  /* BEFORE ANYTHING ELSE, INCLUDING THE ALREADY-RUNNING SHORTCUT BELOW: a browser that is already up is
+     running the same pair, so returning early would report a healthy launch for the same broken engine. */
+  assertEngineAbiPairing();
   const existing = await readLock();
   if (existing) {
     const ver = await pingPort(existing.port);
