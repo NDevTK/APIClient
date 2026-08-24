@@ -9,10 +9,11 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
-#include "core/css/css_property_applies.h"
 #include "core/dom/document.h"
+#include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 
 /* CSS 2.1 §10.3's OWN LIST OF BOX TYPES, which is the list of algorithms `width` has. The names are the
@@ -389,6 +390,65 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
     return uv_content_size(cb, false, uv_surround(cb, false));
 }
 
+CssPx used_value_content_px(lxb_dom_element_t *el, bool vertical)
+{
+    DCHECK(el != NULL, "a content extent was asked for with no element");
+    return uv_content_size(el, vertical, uv_surround(el, vertical));
+}
+
+/* ---- CSS 2.1 §10.3.2's LAST ARM AND §10.6.2's, WHICH ARE ONE RECTANGLE STATED TWICE ------------------------
+   §10.3.2 "Inline, replaced elements": "Otherwise, if 'width' has a computed value of 'auto', but none of the
+   conditions above are met, then the used value of 'width' becomes 300px. If 300px is TOO WIDE TO FIT THE
+   DEVICE, UAs should use the width of the largest rectangle that has a 2:1 ratio and fits the device instead."
+   §10.6.2 "Inline replaced elements, block-level replaced elements in normal flow, 'inline-block' replaced
+   elements in normal flow and floating replaced elements": "Otherwise, if 'height' has a computed value of
+   'auto', but none of the conditions above are met, then the used value of 'height' must be set to the height
+   of the largest rectangle that has a 2:1 ratio, has a height not greater than 150px, and has a WIDTH NOT
+   GREATER THAN THE DEVICE WIDTH."
+   The two sentences describe ONE 2:1 rectangle — 300 by 150 — capped by the device, which is why they are one
+   function and not a constant written at each of the two arms.
+
+   THE DEVICE IS THE OUTPUT DISPLAY, NOT THE VIEWPORT, and CSS 2.1 says so in its own vocabulary: §9.1.1 "The
+   viewport" defines the viewport as "a window or other viewing area ON THE SCREEN", so the screen is the thing
+   the window is on and the two are different rectangles. This engine already answers "the device" from
+   core/frame/screen.h at the one other place that asks for it — the `device-width` media feature, whose
+   evaluator reads that component and whose own header records that it held a second literal 1920 until it
+   existed — and one fact answered from two places is the defect CLAUDE.md §per-realm names.
+   Reading it from the VIEWPORT would also be a definition of itself here: core/frame/viewport.c derives a
+   child navigable's viewport FROM this number, so a default replaced size that was a function of the viewport
+   would be a function of the default replaced size.
+
+   THE ANSWER CARRIES NO ENVIRONMENT FACT, AND THAT IS THE ASSERT RATHER THAN AN OMISSION. css_length.h makes
+   `CSS_ENV_NONE` a POSITIVE statement — the value's domain is a single point — and it is one here only because
+   the device clause does NOT bind: the modelled display is far larger than the rectangle, so the answer is 300
+   by 150 at every point of the domain the model admits and there is no arm a page could take. The moment a
+   narrower display is modelled that stops being true, and the DCHECK below fires naming what has to be built:
+   the device's own dimensions would then have to become a `CssEnvFact` (core/css/css_length.h) with a row in
+   core/frame/viewport.c's seam, and that row's source key must be screen.c's own `screen.width` rather than a
+   per-document one, because a Screen member IS its own source and a page reading `screen.width` and a page
+   measuring an image would otherwise fork two identities for one fact. */
+#define UV_DEFAULT_REPLACED_WIDTH  300.0
+#define UV_DEFAULT_REPLACED_HEIGHT 150.0
+
+CssPx used_value_default_replaced_size(bool vertical)
+{
+    /* The largest 2:1 rectangle that fits a `w` by `h` device is `min(w, 2h)` wide, so the clause binds
+       exactly when the display is narrower than 300 or shorter than 150. */
+    DCHECK(screen_width() >= UV_DEFAULT_REPLACED_WIDTH && screen_height() >= UV_DEFAULT_REPLACED_HEIGHT,
+           "CSS 2.1 §10.3.2's \"if 300px is TOO WIDE TO FIT THE DEVICE\" and §10.6.2's \"a width not greater "
+           "than the device width\" have become REACHABLE: core/frame/screen.h now models a display smaller "
+           "than the 300 x 150 rectangle, so the default replaced size is the largest 2:1 rectangle that fits "
+           "it and is a FUNCTION OF THE DEVICE. Two things follow and neither is arithmetic. The size is no "
+           "longer a single-point domain, so it must carry the device's dimensions as environment facts — a "
+           "`CssEnvFact` row in core/css/css_length.h and a row in core/frame/viewport.c's seam whose member "
+           "name is screen.c's own `screen.width`/`screen.height` and NOT a per-document key, because a Screen "
+           "member is its own source (core/frame/screen.c) and two spellings of one fact fork one predicate "
+           "twice. And core/frame/viewport.c derives a CHILD NAVIGABLE's viewport from this number, so the "
+           "viewport would become a function of the device too. BUILD the fact, then this becomes "
+           "`css_px_min` over it");
+    return css_px(vertical ? UV_DEFAULT_REPLACED_HEIGHT : UV_DEFAULT_REPLACED_WIDTH);
+}
+
 /* ---- the used value ------------------------------------------------------------------------------------- */
 
 /* CSS 2.1 §10.3.3's rules 2, 4 and 6 — the used value of a horizontal `auto` margin on a block-level box in
@@ -559,6 +619,139 @@ static CssPx uv_block_auto_width(lxb_dom_element_t *el)
     return css_px_add(content, uv_surround_total(s));
 }
 
+/* CSS 2.1 §10.3.2 "Inline, replaced elements", ITS FIVE ARMS IN THE SPEC'S OWN ORDER — reached only with a
+   computed `width` of `auto`, which is the condition every one of them carries and the caller has established.
+   THE ORDER IS LOAD-BEARING AND THE ARMS ARE NOT INDEPENDENT TESTS. Arm 2's second disjunct ("'width' has a
+   computed value of 'auto', 'height' has some other computed value, and the element does have an intrinsic
+   ratio") can be true at the same time as arm 4's condition, and it comes first: a replaced element with an
+   intrinsic width of 50, an intrinsic ratio of 2 and a declared `height: 100px` is 200 wide and not 50.
+   THE ANSWER IS THE CONTENT WIDTH. Every term §10.3.2 names is CSS 2.1's, and CSS 2.1 knows only the content
+   box; css-sizing §5's `box-sizing` conversion is applied to the RESULT by the caller, exactly as it is to
+   §10.3.3's equation. Which is also why arm 2's "(used height)" is read through `uv_content_size` and not
+   through `used_value_px` — under `border-box` the latter is the BORDER box (§5's exposed used value), and
+   multiplying that by an aspect ratio would be a ratio of two different boxes. */
+static CssPx uv_replaced_width(lxb_dom_element_t *el, const ReplacedElement *rep)
+{
+    bool h_auto = uv_length_is(el, "height", "auto");
+
+    /* "If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic
+       width, then that intrinsic width is the used value of 'width'." */
+    if (h_auto && rep->has_width) return rep->width;
+    /* "If 'height' and 'width' both have computed values of 'auto' and the element has no intrinsic width, but
+       does have an intrinsic height and intrinsic ratio; or if 'width' has a computed value of 'auto',
+       'height' has some other computed value, and the element does have an intrinsic ratio; then the used
+       value of 'width' is: (used height) * (intrinsic ratio)."
+       THIS DOES NOT RECURSE, and the reason is the spec's conditions rather than a guard here: §10.6.2's own
+       ratio arm — the one that would ask back for the used width — runs only when its FIRST arm did not, and
+       that first arm takes every case in which both sizes are `auto` and there is an intrinsic height. The
+       both-auto disjunct here REQUIRES an intrinsic height, so it is precisely the case §10.6.2 answers
+       without asking; and the other disjunct has a non-auto `height`, which §10.6.2 never reaches at all. */
+    if ((h_auto && !rep->has_width && rep->has_height && rep->has_ratio) || (!h_auto && rep->has_ratio)) {
+        DCHECK(!h_auto || rep->has_height,
+               "CSS 2.1 §10.3.2's intrinsic-ratio arm was reached with both sizes `auto` and NO intrinsic "
+               "height, which is the one shape that would make it and §10.6.2's ratio arm ask each other for "
+               "the answer forever — the arm's own condition names the intrinsic height, so reaching here "
+               "without one is that condition and this test having come apart");
+        return css_px_scale(uv_content_size(el, true, uv_surround(el, true)), rep->ratio);
+    }
+    /* "If 'height' and 'width' both have computed values of 'auto' and the element has an intrinsic ratio but
+       no intrinsic height or width, then the used value of 'width' is UNDEFINED IN CSS 2.1." */
+    if (h_auto && rep->has_ratio)
+        DFAIL("CSS 2.1 §10.3.2 \"Inline, replaced elements\" reached the one arm it declines to define: both "
+              "`width` and `height` compute to `auto` and the element has an INTRINSIC RATIO but neither an "
+              "intrinsic width nor an intrinsic height — a scalable SVG image is the object css-images-3 §4.1 "
+              "\"Object-Sizing Terminology\" names for this. The spec's words are \"the used value of 'width' "
+              "is undefined in CSS 2.1\", followed by a SUGGESTION and not a rule: \"however, it is suggested "
+              "that, if the containing block's width does not itself depend on the replaced element's width, "
+              "then the used value of 'width' is calculated from the constraint equation used for block-level, "
+              "non-replaced elements in normal flow\". That equation is `uv_block_auto_width` above and it "
+              "would run today. It is NOT written here because nothing in this build can produce an object "
+              "with a ratio and no sizes — there is no image decoder and no SVG document sizing — so the arm "
+              "would be a choice among several UAs' answers with no way to exercise it, which is the plausible "
+              "datum CLAUDE.md refuses. BUILD the object that has this shape first (an SVG image with a "
+              "`viewBox` and no `width`/`height`), then write the suggestion beside a test that fires");
+    /* "Otherwise, if 'width' has a computed value of 'auto', and the element has an intrinsic width, then that
+       intrinsic width is the used value of 'width'." */
+    if (rep->has_width) return rep->width;
+    /* "Otherwise … the used value of 'width' becomes 300px." */
+    return used_value_default_replaced_size(false);
+}
+
+/* CSS 2.1 §10.6.2's FOUR ARMS, in its order and reached only with a computed `height` of `auto`. The section's
+   title names four box types — "Inline replaced elements, block-level replaced elements in normal flow,
+   'inline-block' replaced elements in normal flow and floating replaced elements" — and §10.6.5 "Absolutely
+   positioned, replaced elements" adds the fifth by reference ("the used value of 'height' is determined as for
+   inline replaced elements"), so every replaced box this engine can classify is covered by this one function.
+   ITS SECOND ARM READS THE USED WIDTH AS A CONTENT EXTENT, for the reason `uv_replaced_width` states. */
+static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *rep)
+{
+    bool w_auto = uv_length_is(el, "width", "auto");
+
+    /* "If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic
+       height, then that intrinsic height is the used value of 'height'." */
+    if (w_auto && rep->has_height) return rep->height;
+    /* "Otherwise, if 'height' has a computed value of 'auto', and the element has an intrinsic ratio then the
+       used value of 'height' is: (used width) / (intrinsic ratio)." */
+    if (rep->has_ratio) {
+        DCHECK(rep->ratio > 0.0,
+               "CSS 2.1 §10.6.2 divides the used width by an INTRINSIC RATIO that is not positive. "
+               "css-images-3 §4.1 states that an object with a degenerate ratio — \"at least one part being "
+               "zero or infinity\" — is treated as having NO natural aspect ratio, so a ratio that reached a "
+               "division is one core/layout/replaced_element.c's own test let through");
+        return css_px_scale(uv_content_size(el, false, uv_surround(el, false)), 1.0 / rep->ratio);
+    }
+    /* "Otherwise, if 'height' has a computed value of 'auto', and the element has an intrinsic height, then
+       that intrinsic height is the used value of 'height'." */
+    if (rep->has_height) return rep->height;
+    /* "Otherwise … the height of the largest rectangle that has a 2:1 ratio, has a height not greater than
+       150px, and has a width not greater than the device width." */
+    return used_value_default_replaced_size(true);
+}
+
+/* THE REPLACED-ELEMENT SIZE, WHICH IS ONE ALGORITHM FOR FIVE BOX TYPES — the shape §10.3 does not have anywhere
+   else. §10.3.4 "Block-level, replaced elements in normal flow" ("the used value of 'width' is determined as
+   for inline replaced elements. Then the rules for non-replaced block-level elements are applied to determine
+   the MARGINS"), §10.3.6 "Floating, replaced elements", §10.3.8 "Absolutely positioned, replaced elements" and
+   §10.3.10 "'Inline-block', replaced elements in normal flow" ("exactly as inline replaced elements") every one
+   of them delegates the SIZE to §10.3.2 and keeps only its own MARGIN rules — which is why the box type is not
+   a branch here and is still the branch in `uv_margin`. Two box types genuinely disagree and crash below.
+   §10.4/§10.7's CLAMP IS ASSERTED AS IT IS ON EVERY OTHER PATH, and §10.4 has a whole SECOND algorithm for
+   this case — a table of constraint violations "for replaced elements with an INTRINSIC RATIO and both 'width'
+   and 'height' specified as 'auto'" — rather than its usual three steps. Nothing in this build has an intrinsic
+   ratio, so that table's antecedent is false and the assert below is the ordinary one; the day a decoder makes
+   it true, the table is what `uv_require_unclamped` has to grow. */
+static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep, UvBox box, bool vertical)
+{
+    CssPx content;
+
+    if (box == UV_BOX_TABLE)
+        DFAIL("a REPLACED element whose computed `display` makes it a TABLE BOX. CSS 2.1 §17.5 owns a table's "
+              "width and height and §10.3.2's intrinsic-dimension arms do not apply to it — §17.5.2's two "
+              "algorithms derive the width from the COLUMNS, and a replaced element has none. BUILD §17.2's "
+              "anonymous table-object generation and §17.5's algorithms; what a table box does with a replaced "
+              "element's own natural dimensions is then their question and not this section's");
+    if (box == UV_BOX_ITEM)
+        DFAIL("a REPLACED element that is a FLEX or GRID ITEM, whose used main and cross sizes come from its "
+              "container's algorithm. css-flexbox §9.7 makes a declared size the FLEX BASE SIZE and then "
+              "flexes it, and for an `auto` one §9.2 makes the item's natural size its content contribution — "
+              "so §10.3.2's arms are an INPUT to that algorithm rather than the answer, and returning one here "
+              "would report an unflexed size as the used value. BUILD the flex layout over the container's own "
+              "used content size");
+    uv_require_unclamped(el, vertical);
+    content = vertical ? uv_replaced_height(el, rep) : uv_replaced_width(el, rep);
+    DCHECK(content.px >= 0.0,
+           "CSS 2.1 §10.3.2 or §10.6.2 produced a NEGATIVE used size for a replaced element. Every arm of both "
+           "is either a natural dimension (core/layout/replaced_element.c asserts those non-negative at their "
+           "origin), a product of a non-negative extent with a positive ratio, or the 300 x 150 default — so a "
+           "negative here is a derivation that lost an operand");
+    /* css-sizing §5's conversion, applied to the RESULT — the arms above solve for the CONTENT box, which is
+       the only box CSS 2.1 knows, and §5 makes the used value "as exposed for instance through
+       getComputedStyle()" the border box's. Identical to `uv_block_auto_width`'s last two lines and stated
+       here rather than shared with them because the two solve different equations for the same box. */
+    if (!uv_is_border_box(el)) return content;
+    return css_px_add(content, uv_surround_total(uv_surround(el, vertical)));
+}
+
 static CssPx uv_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool vertical)
 {
     /* CSS 2.1 §10.2: a percentage `width` "is calculated with respect to the width of the generated box's
@@ -609,16 +802,16 @@ static CssPx uv_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool verti
            "a `width` or `height` computed to a keyword that is not `auto` — CSS 2.1 §10.2 and §10.5 admit "
            "`<length> | <percentage> | auto`, and css-sizing's `min-content`/`max-content`/`fit-content` "
            "keywords are a level-3 addition this engine has not recorded a computed-value rule for");
-    if (css_element_may_be_replaced(el))
-        DFAIL("CSS 2.1 §10.3.4 sends a block-level REPLACED element's used width to §10.3.2, and §10.6.2 does "
-              "the same for its height: with a computed value of `auto` the used value is the element's "
-              "INTRINSIC width, or the used height times the INTRINSIC RATIO — the decoded image's dimensions, "
-              "the embedded document's — and this engine has no image decoder and no child-navigable layout to "
-              "ask for either. §10.3.2 states the fallback itself when there is no intrinsic size and no "
-              "ratio: 300px wide, and 150px tall by §10.6.2, which is the very pair core/frame/viewport.c "
-              "already derives a child navigable's viewport from. BUILD the intrinsic-dimension source (the "
-              "image load state for `img`, the child document's own layout for `iframe`), and with it the "
-              "replaced-element predicate css_property_applies.c's DFAIL asks for");
+    /* THE REPLACED QUESTION IS ASKED BEFORE THE BOX TYPE because §10.3 answers it before the box type too:
+       five of its ten sections delegate a replaced element's size to §10.3.2, and only the box types §10 does
+       not own at all (a table box, a flex or grid item) disagree. It is asked ONLY on this arm — a DECLARED
+       length is the used value for a replaced element and a non-replaced one alike, so a `<video
+       style="width:100px">` must not pay for a classification whose answer cannot change its size. */
+    {
+        ReplacedElement rep = replaced_element_of(el);
+
+        if (rep.replaced) return uv_replaced_size(el, &rep, box, vertical);
+    }
     if (vertical) {
         /* CSS 2.1 §10.6.3's CONTENT-BASED HEIGHT — "the distance from its top content edge to … the bottom
            edge of the bottom (possibly collapsed) margin of its last in-flow child" — is core/layout/
@@ -733,10 +926,17 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
     }
     len = css_computed_length(el, name);
     box = uv_box_kind(el);
-    DCHECK(box != UV_BOX_INLINE || group != 2,
-           "CSS 2.1 §10.3.1 and §10.6.1 say `width` and `height` DO NOT APPLY to an inline box, so CSSOM §9's "
-           "first conjunct is false and the resolved value is the computed value — this call should never have "
-           "been made. css_property_applies.c decides it, and the two have come apart");
+    /* CSS 2.1 §10.3.1 "Inline, NON-REPLACED elements" and §10.6.1 are what make `width` and `height` not apply
+       to an inline box, and the word that used to be missing from this assert is the one in their titles:
+       §10.3.2 "Inline, REPLACED elements" gives an inline `img` a real used width, and §10.2's own
+       "Applies to:" line says so too — "all elements but NON-REPLACED inline elements". So the assert is over
+       the pair, and the replaced question is asked only when the first two conjuncts have already failed,
+       which is exactly the shape whose answer it can change. core/css/css_property_applies.c decides the same
+       pair; if these two disagree, one of them read a different image request state than the other. */
+    DCHECK(box != UV_BOX_INLINE || group != 2 || replaced_element_of(el).replaced,
+           "CSS 2.1 §10.3.1 and §10.6.1 say `width` and `height` do not apply to an inline NON-REPLACED box, "
+           "so CSSOM §9's first conjunct is false and the resolved value is the computed value — this call "
+           "should never have been made. css_property_applies.c decides it, and the two have come apart");
     if (group == 0)      out = uv_margin(el, vertical ? NULL : MARGINS[(side + 2) % 4], len, box);
     else if (group == 1) out = uv_padding(el, len);
     else                 out = uv_size(el, len, box, vertical);

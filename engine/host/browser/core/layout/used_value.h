@@ -171,6 +171,29 @@ CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
    the number it already holds. */
 CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx content, bool vertical);
 
+/* THE BOX'S OWN CONTENT EXTENT on one axis, in CSS pixels — CSS 2.1's `width` and `height` in the sense CSS
+   2.1 itself means them, which is NOT always what `used_value_px` answers. css-sizing §5 makes the used value
+   "as exposed for instance through getComputedStyle()" refer to the BORDER box under `box-sizing: border-box`,
+   and a caller doing geometry with it wants the content box — so this is §5's conversion run once, in the one
+   place that owns its four terms, rather than a subtraction each caller would have to know to perform and
+   would double-count in the other mode.
+   TWO SPECS ASK FOR IT BY NAME AND BOTH ARE ABOUT REPLACED CONTENT. css-images-3 §4.5 "Sizing Objects: the
+   object-fit property" defines the CONCRETE OBJECT SIZE under the initial `fill` as "the element's used width
+   and height" — the box the object is drawn into, which is the content box — and that is what HTML
+   §4.8.4.3.11 "Parsing a sizes attribute" step 3.3 substitutes for a `sizes="auto"`. HTML §4.8.3's determine
+   the dimensions asks the same question through "its RENDERED width and height", which is what
+   `HTMLImageElement.width` reports. */
+CssPx used_value_content_px(lxb_dom_element_t *el, bool vertical);
+
+/* CSS 2.1 §10.3.2's AND §10.6.2's DEFAULT REPLACED SIZE — the 300 x 150 rectangle a replaced element with no
+   natural dimensions gets, capped by the device. `vertical` false is the width.
+   IT TAKES NO REALM, DELIBERATELY: the cap is against the OUTPUT DEVICE (core/frame/screen.h) and not against
+   the viewport, so it is one answer for the whole agent. That is also what makes core/frame/viewport.c able to
+   call it — a child navigable's viewport IS this rectangle when its container has no author size, so a value
+   that depended on a viewport would be defining itself. See used_value.c for the citation and for the assert
+   that keeps the answer's domain a single point. */
+CssPx used_value_default_replaced_size(bool vertical);
+
 /* CSS 2.1 §10.1's CONTAINING BLOCK as an ELEMENT — the box whose CONTENT EDGE is the rectangle every
    percentage and every `auto` in §10.3 is stated against. NULL exactly for the ROOT ELEMENT, whose containing
    block is §10.1's first case, the initial containing block, and is no element's box.

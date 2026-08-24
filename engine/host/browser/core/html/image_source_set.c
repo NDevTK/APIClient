@@ -681,11 +681,16 @@ static double iss_parse_sizes(JSContext *ctx, const char *text, size_t len, lxb_
            AUTO-SIZES, then set size to the CONCRETE OBJECT SIZE WIDTH of img, in CSS pixels. If size is still
            auto, then it will be ignored."
            CSS Images 3 §4.5 "Sizing Objects: the object-fit property" is what that width IS under the initial
-           `fill`: "the object's concrete object size is the element's USED WIDTH AND HEIGHT". So the question
-           is asked of the component that owns used values, and whichever arm of CSS 2.1 §10 it cannot compute
-           crashes there rather than being guessed at here. */
+           `fill`: "The replaced content is sized to fill the element's CONTENT BOX: the object's concrete
+           object size is the element's USED WIDTH AND HEIGHT". So the question is asked of the component that
+           owns used values, and whichever arm of CSS 2.1 §10 it cannot compute crashes there rather than being
+           guessed at here.
+           IT IS THE CONTENT EXTENT AND NOT `used_value_px`, which is the half of §4.5's sentence that names a
+           BOX. The two differ under `box-sizing: border-box`, where css-sizing §5 makes the value `width`
+           EXPOSES the border box's — and `* { box-sizing: border-box }` is on most of the modern web, so an
+           img with padding would otherwise select its source against a box the image is not drawn into. */
         if (is_auto && img && element_view_has_box(lxb_dom_interface_node(img)) && iss_allows_auto_sizes(img)) {
-            size = used_value_px(img, "width").px;
+            size = used_value_content_px(img, false).px;
             is_auto = false;
         }
 

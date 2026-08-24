@@ -754,6 +754,66 @@ static const char *HTML =
     "jw.style.setProperty('border-left-style', 'solid');"
     "jw.style.setProperty('border-left-width', '1px');"
     "fetch('/api/cssjoint?w=' + getComputedStyle(jw).width);"
+    /* ---- CSS 2.1 §10.3.2 "Inline, replaced elements" over HTML §15.4.2 "Images" ---------------------------
+       EVERY NUMBER HERE IS A PLAIN INTEGER AND NOT A CONCOLIC, which is what makes `===` legal in this block
+       where the probe above had to emit instead. A replaced element with no natural dimensions is CSS 2.1
+       §10.3.2's and §10.6.2's 300 x 150 rectangle, and core/layout/used_value.c asserts that the one clause
+       that could make it environment-dependent — "if 300px is too wide to fit the device" — does not bind
+       against the modelled display. So the domain is a single point, and a value that started forking here
+       would mean that assert had been softened rather than that the model changed.
+       AN `img` WITH NO `src` AND AN EMPTY `alt` REPRESENTS NOTHING (§4.8.3 "The img element": "if the src
+       attribute is not set and either the alt attribute is set to the empty string or the alt attribute is not
+       set at all: the element represents nothing"), which is §15.4.2's FOURTH rule — "a replaced element whose
+       NATURAL DIMENSIONS ARE 0". §10.3.2's first arm then takes that intrinsic width whole, so the box is 0 by
+       0 and NOT the default rectangle: the two answers differ by 300 pixels and only one of them comes from
+       reading the rules in order. */
+    "var rz = document.createElement('img'); rz.setAttribute('alt', '');"
+    "document.body.appendChild(rz);"
+    "fetch('/api/replacedzero?v=' + (rz.width === 0 && rz.height === 0 &&"
+    " getComputedStyle(rz).width === '0px' && getComputedStyle(rz).height === '0px' ? 'iszero' : 'wrong'));"
+    /* AN `img` WHOSE REQUEST IS STILL OUTSTANDING is §15.4.2's SECOND rule — the user agent "has reason to
+       believe the image will become available", which is a fact about this moment and not about whether this
+       agent owns a decoder. That rule gives the replaced element no natural dimensions at all, so §10.3.2's
+       LAST arm and §10.6.2's last arm size it: 300 by 150.
+       THE ELEMENT IS `display: inline`, which is the whole point of the probe. CSS 2.1 §10.2's "Applies to:"
+       line is "all elements but NON-REPLACED inline elements", so answering this at all is CSSOM §9's first
+       conjunct being decided by HTML §15.4 rather than by a tag list — an inline `<span>` one line below still
+       resolves `width` to the computed `auto`. */
+    "var rd = document.createElement('img'); rd.src = '/api/replaced-pending.png';"
+    "document.body.appendChild(rd);"
+    "fetch('/api/replaceddefault?v=' + (rd.width === 300 && rd.height === 150 &&"
+    " getComputedStyle(rd).width === '300px' && getComputedStyle(rd).height === '150px' ? 'is300' : 'wrong'));"
+    "var rs = document.createElement('span'); document.body.appendChild(rs);"
+    "fetch('/api/replacedspan?v=' + (getComputedStyle(rs).width === 'auto' ? 'isauto' : 'wrong'));"
+    /* §4.8.3's `[CEReactions, ReflectSetter] attribute unsigned long width` — the SETTER is HTML §2.6.1's
+       reflection and the GETTER is determine-the-dimensions, so the two do NOT round-trip and that asymmetry
+       is what this asserts. Writing 64 sets the content attribute; reading back still reports the RENDERED
+       width, which is 300 until core/css/css_presentational_hints.c carries HTML §15.4.3's dimension-attribute
+       mapping. §2.6.1's setter range test is the second half: `unsigned long` converts -1 to 4294967295, which
+       is outside "the range minimum to 2147483647, inclusive", so `newValue` stays at `minimum` and the
+       attribute becomes "0" rather than the huge number. */
+    "rd.width = 64;"
+    "rd.height = -1;"
+    "fetch('/api/replacedsetter?v=' + (rd.getAttribute('width') === '64' &&"
+    " rd.getAttribute('height') === '0' && rd.width === 300 ? 'isreflect' : 'wrong'));"
+    /* AN `img` THAT IS NOT BEING RENDERED takes determine-the-dimensions' THIRD step — "return a width of 0
+       and a height of 0" — which is the algorithm's own answer and not a fallback. `display: none` is the
+       cheapest way to have a connected element with no box. */
+    "var rh = document.createElement('img'); rh.src = '/api/replaced-hidden.png';"
+    "rh.style.setProperty('display', 'none'); document.body.appendChild(rh);"
+    "fetch('/api/replacedunrendered?v=' + (rh.width === 0 && rh.height === 0 ? 'isnobox' : 'wrong'));"
+    /* THE WORDPRESS SHAPE, WHICH IS WHY THIS WHOLE BLOCK EXISTS. §4.8.4.3.11 "Parsing a sizes attribute" step
+       3.3 substitutes the CONCRETE OBJECT SIZE WIDTH for a `sizes="auto"` on an img that is being rendered and
+       ALLOWS AUTO-SIZES (§4.8.3: `loading` in the Lazy state and `sizes` starting `auto,`), and css-images-3
+       §4.5 "Sizing Objects: the object-fit property" makes that the element's used width under the initial
+       `fill`. That is 300 here, so the 400w candidate is the narrowest that still covers it and the selected
+       source is the endpoint this emits. Before §10.3.2 existed this call reached used_value.c and aborted. */
+    "var sa = document.createElement('img');"
+    "sa.setAttribute('loading', 'lazy');"
+    "sa.setAttribute('sizes', 'auto, (max-width: 600px) 100vw, 800px');"
+    "sa.setAttribute('srcset', '/api/sizes-200.png 200w, /api/sizes-400.png 400w, /api/sizes-900.png 900w');"
+    "document.body.appendChild(sa);"
+    "fetch('/api/sizesauto?src=' + encodeURIComponent(sa.currentSrc));"
     /* ---- css-fonts-4 §2.5's computed `font-size` and css-values-4 §6.1.1's `em`/`rem` --------------------
        EVERY VALUE COMPARED HERE IS ROOTED IN A DECLARED ABSOLUTE FONT SIZE, deliberately: an undeclared one is
        §2.5's `medium`, which IS the CSS_ENV_DEFAULT_FONT_SIZE fact, so its computed value is a CONCOLIC and a

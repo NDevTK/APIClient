@@ -42,10 +42,19 @@
  *   - The DECODER itself: `naturalWidth`/`naturalHeight` answer 0 for an image that is not available, which
  *     is §4.8.3's own step 1 and is every image in this build; the step that reads a decoded image's
  *     density-corrected natural dimensions crashes naming what has to exist first.
- *   - §4.8.3's `decode()`, `width`, `height`, `fetchPriority` and `controls` are ABSENT rather than
- *     shape-only, declared as such per realm (idl_members_excluded) so the gap auditor and the next reader
- *     read one answer. `width`/`height` are §4.8.3's "determine the dimensions" algorithm, whose first branch
- *     is the element's RENDERED size, and this file must not answer a layout question.
+ *   - §4.8.3's `decode()`, `fetchPriority` and `controls` are ABSENT rather than shape-only, declared as such
+ *     per realm (idl_members_excluded) so the gap auditor and the next reader read one answer.
+ *
+ * `width` AND `height` ARE NO LONGER AMONG THEM, and the sentence that said they were is the reason this
+ * paragraph is worth rewriting rather than trimming: it said they are "§4.8.3's determine the dimensions
+ * algorithm, whose first branch is the element's RENDERED size, and this file must not answer a layout
+ * question". The second half is still exactly right and is why the members are written the way they are — this
+ * file ASKS core/layout/used_value.h for the rendered size and computes none of it — while the first half had
+ * become a claim about a component that exists. §4.8.3's determine-the-dimensions has three branches and this
+ * build now answers two of them for real: an img that is BEING RENDERED reports its used content extents (CSS
+ * 2.1 §10.3.2 through core/layout/replaced_element.h), and one that is neither being rendered nor available
+ * reports the algorithm's own final step, 0 by 0. The middle branch is the DECODER's and crashes naming it,
+ * which is the same crash `naturalWidth` has always owed.
  *
  * WHAT IS NOT ABSENT AND LOOKS LIKE IT, twice.
  *   §4.8.4.3.3 "The list of available images" is EMPTY in this build and that is a derived fact, not a missing
@@ -63,9 +72,43 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_IMAGE_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_IMAGE_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
+
+/* §4.8.4.3 "Processing model"'s IMAGE REQUEST STATE — the standard's own four values, quoted at their rows
+   below. It is DECLARED HERE rather than kept private to the implementation because it is the fact HTML
+   §15.4.2 "Images" decides its first-applicable-rule list on: whether an `img` is treated as a replaced
+   element at all, and what its natural dimensions are, is a question about the current request's state and not
+   about the tag. core/layout/replaced_element.h is that reader, and a second private copy of the four values
+   there would be two enumerations free to drift into disagreeing about which integer means broken. */
+typedef enum {
+    HTML_IMAGE_UNAVAILABLE = 0,        /* "hasn't obtained any image data, or … hasn't yet decoded enough" */
+    HTML_IMAGE_PARTIALLY_AVAILABLE,    /* "obtained some of the image data and at least the image dimensions" */
+    HTML_IMAGE_COMPLETELY_AVAILABLE,   /* "obtained all of the image data and at least the image dimensions" */
+    HTML_IMAGE_BROKEN                  /* "cannot even decode the image enough to get the image dimensions" */
+} HtmlImageState;
+
+/* THE STATE OF `el`'s CURRENT REQUEST, and — through `complete`, which is required — §4.8.3's `complete`
+   getter's own answer for the same element. Two facts and not one, because §15.4.2's second rule turns on the
+   second: "the user agent has reason to believe the image will become available and be rendered in due course"
+   is true of an img whose request has NOT SETTLED and false of an `<img>` with no `src` at all, and both of
+   those sit in the initial `unavailable` state, so the state alone cannot tell them apart. `complete` is the
+   standard's own name for settled and its four conditions are computed here, by the one function the
+   `complete` MEMBER also uses — a second derivation in the layout would be a second answer, and the one that
+   matters is about a moment (§4.8.4.3.5 writes the current request's URL after a microtask, so any proxy built
+   on that URL reports a loading image as a broken one for the length of one task).
+   IT DOES NOT CREATE THE RECORD, and that is a contract and not an optimisation. §4.8.4.3 states the initial
+   values — "an image request's state is initially unavailable", "an image request's current URL is initially
+   the empty string" — so the ABSENCE of the per-element record IS that answer, exactly. Every other reader
+   here is a member or an algorithm step that is about to WRITE, and minting the record where a flow reaches
+   the element is right for those; a LAYOUT read is not one of them. core/layout/used_value.h derives every
+   used value PER READ precisely so that measuring a box writes nothing into the running flow's COW delta, and
+   a `getComputedStyle(img).width` that minted an image request would put one entry in the delta of every flow
+   that ever measured an image. */
+HtmlImageState html_image_current_request_state(JSContext *ctx, lxb_dom_element_t *el, bool *complete);
 
 /* §4.8.3's AGENT-WIDE DECLARATIONS — the class the per-element state hangs off, the argument declarations of
    the legacy factory function, and the step machine that runs a queued element task. Called once per agent

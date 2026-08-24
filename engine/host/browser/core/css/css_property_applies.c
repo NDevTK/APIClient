@@ -8,6 +8,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_property_applies.h"
+#include "core/layout/replaced_element.h"
 
 static bool css_pa_in(const char *const *set, unsigned n, const char *v)
 {
@@ -19,29 +20,14 @@ static bool css_pa_in(const char *const *set, unsigned n, const char *v)
     return false;
 }
 
-/* css-display Appendix B's own list of HTML elements that "aren't rendered purely by CSS box concepts", copied
-   from the spec rather than re-derived: it is the list `display: contents` has to say something extra about,
-   and it is the superset every candidate for CSS 2.1 §3.1's "replaced element" is drawn from. The header says
-   why membership is not the same question and why an inline member crashes instead of being classified. */
-static const char *const CSS_UNUSUAL_ELEMENTS[] = {
-    "audio", "br", "canvas", "embed", "frame", "frameset", "iframe", "img", "input", "meter",
-    "object", "progress", "select", "textarea", "video", "wbr",
-};
-
-bool css_element_may_be_replaced(lxb_dom_element_t *el)
-{
-    size_t n = 0;
-    const lxb_char_t *tag;
-    unsigned i;
-
-    DCHECK(el != NULL, "the replaced-element question was asked about no element");
-    tag = lxb_dom_element_local_name(el, &n);
-    DCHECK(tag != NULL, "an element with no local name — lexbor gives every element one");
-    for (i = 0; i < sizeof(CSS_UNUSUAL_ELEMENTS) / sizeof(CSS_UNUSUAL_ELEMENTS[0]); i++)
-        if (strlen(CSS_UNUSUAL_ELEMENTS[i]) == n && memcmp(CSS_UNUSUAL_ELEMENTS[i], tag, n) == 0)
-            return true;
-    return false;
-}
+/* WHAT STOOD HERE WAS css-display Appendix B's list of HTML elements that "aren't rendered purely by CSS box
+   concepts", tested as a stand-in for CSS 2.1 §3.1's "replaced element" and CRASHING for an inline member
+   rather than answering. Both halves are gone: the question is HTML §15.4 "Replaced elements"' and it is
+   answered by core/layout/replaced_element.h, which reads the element's actual state rather than its tag. The
+   list is not kept beside it — a superset predicate is exactly the fallback a caller reaches for when the real
+   one crashes, and it disagreed with §15.4 in both directions (it carried `br`, `wbr`, `meter`, `progress`,
+   `select` and `textarea`, which §15.4's own sentence does not list; and it called every `img` replaced, which
+   §15.4.2's third rule contradicts for a broken image with an `alt`). */
 
 /* css-display §2.4's `<display-internal>` TABLE keywords, which is the set every "Applies to:" line below
    names a subset of. `table` and `inline-table` are NOT among them — they are a `<display-inside>` and a
@@ -120,23 +106,20 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
        inner one, which is the computed `display` of `inline` and NOT `inline-block` (that is a
        `<display-legacy>` for `inline flow-root`, and CSS 2.1 §10.3.9 gives it a used width of its own). */
     if (is_size && strcmp(display, "inline") == 0) {
-        if (css_element_may_be_replaced(el)) {
-            free(display);
-            DFAIL("CSS 2.1 §10.2 and §10.5 exclude NON-REPLACED inline elements from `width` and `height`, and "
-                  "this element generates an inline box AND is one css-display Appendix B lists as not "
-                  "rendered purely by CSS box concepts. The two answers differ and both are reachable: as "
-                  "NON-replaced the property does not apply and CSSOM §9 resolves it to the computed value "
-                  "(`auto`), while as REPLACED it applies and §10.3.2 derives the used width from an INTRINSIC "
-                  "WIDTH — the decoded image's, the embedded document's — which this engine has no decoder and "
-                  "no child navigable layout to ask for. BUILD the replaced-element predicate from HTML's own "
-                  "rendering rules (an `img` is replaced only WHEN IT REPRESENTS AN IMAGE, which is a fact "
-                  "about the load state and not about the tag), then §10.3.2's intrinsic-dimension arms, whose "
-                  "default when there is no intrinsic size the spec itself states as 300 x 150 — the same "
-                  "number core/frame/viewport.c already derives a child navigable's viewport from");
-            return false;
-        }
+        /* THE EXCLUSION IS "NON-REPLACED inline elements", so the word `non-replaced` is a second conjunct and
+           this is where it is asked. It used to CRASH here for every element css-display Appendix B listed,
+           on the ground that the answer needed an intrinsic width no component could supply; both halves have
+           been built. HTML §15.4 "Replaced elements" is what decides which element is replaced right now —
+           core/layout/replaced_element.h — and CSS 2.1 §10.3.2's arms are what turn that into a used width,
+           including its own 300 x 150 default for an object with no natural dimensions at all.
+           THE TWO ANSWERS STILL DIFFER AND BOTH ARE COMMON, which is why this is a branch and not a `true`: an
+           inline `<img>` whose image is loading resolves `width` to a used value, and the same `<img>` after
+           the request breaks with an `alt` present is §15.4.2's THIRD rule — a non-replaced phrasing element —
+           whose `width` does not apply and whose resolved value CSSOM §9 makes the computed `auto`. */
+        bool replaced = replaced_element_of(el).replaced;
+
         free(display);
-        return false;   /* a non-replaced inline element: §9 resolves `width`/`height` to the computed value */
+        return replaced;
     }
     if (is_size) {
         bool horizontal = strcmp(name, "width") == 0;

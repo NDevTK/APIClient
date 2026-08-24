@@ -1,6 +1,8 @@
 /* HTML §4.8.3 "The img element" and §4.8.4.3 "Processing model" — see html_image.h for what each half of this
  * component exists for and for what is honestly absent. */
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,7 +18,10 @@
 #include "core/url/url.h"
 #include "core/dom/node.h"
 #include "core/dom/element.h"
+#include "core/dom/element_view.h"   /* §4.8.3's "being rendered", which is §6's "has an associated box" */
 #include "core/dom/document.h"
+#include "core/layout/replaced_element.h" /* HTML §15.4.2's rules, which decide whether §10 applies at all */
+#include "core/layout/used_value.h"  /* §4.8.3's "rendered width and height" — CSS 2.1 §10's used values */
 #include "core/dom/shadow_root.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -29,17 +34,15 @@
 /* §4.8.4.3 "Processing model": "An image request's state is one of the following" — and the two composite
    answers the spec gives names to are derived from it rather than stored, because a stored copy of a derived
    fact is a second thing to keep in step. */
-enum {
-    IMG_UNAVAILABLE = 0,        /* "hasn't obtained any image data, or … hasn't yet decoded enough" */
-    IMG_PARTIALLY_AVAILABLE,    /* "obtained some of the image data and at least the image dimensions" */
-    IMG_COMPLETELY_AVAILABLE,   /* "obtained all of the image data and at least the image dimensions" */
-    IMG_BROKEN                  /* "cannot even decode the image enough to get the image dimensions" */
-};
+/* THE FOUR STATES ARE `HtmlImageState` IN html_image.h — one enumeration, because HTML §15.4.2 "Images"
+   decides an `img`'s whole rendering classification on them (core/layout/replaced_element.h) and a second
+   private copy here would be two lists free to disagree about which integer means broken. */
+
 /* "When an image request's state is either partially available or completely available, the image request is
    said to be available." */
 static bool img_state_available(int state)
 {
-    return state == IMG_PARTIALLY_AVAILABLE || state == IMG_COMPLETELY_AVAILABLE;
+    return state == HTML_IMAGE_PARTIALLY_AVAILABLE || state == HTML_IMAGE_COMPLETELY_AVAILABLE;
 }
 
 /* The private Symbol §4.8.4.3's per-element state hangs off, and the atom for the own-slot read — the store
@@ -50,11 +53,14 @@ static JSAtom  g_atom_state = JS_ATOM_NULL;
 /* Declared once per AGENT; installed into every realm. */
 static int g_id_factory = -1;   /* §4.8.3's `Image(width, height)` argument declaration */
 static int g_task_stepid = -1;  /* the DOM manipulation task that fires `load` or `error` at the element */
+/* §4.8.3's `width` and `height` SETTERS, indexed by the same magic their getters carry — 0 is the horizontal
+   one — so the pair cannot be installed against each other's declaration. */
+static int g_id_set_dimension[2] = { -1, -1 };
 static int g_ready;
 
 /* §4.8.3's members this build does not have, asserted absent per realm rather than left as a silence the
    auditor and the next reader each have to re-derive. */
-static const char *const IMG_ABSENT[] = { "decode", "width", "height", "fetchPriority", "controls" };
+static const char *const IMG_ABSENT[] = { "decode", "fetchPriority", "controls" };
 
 /* ---- the element, and its image requests ------------------------------------------------------------------ */
 
@@ -96,7 +102,7 @@ static JSValue img_state(JSContext *ctx, JSValueConst el)
 
     st = idl_slots_new(ctx);
     CHECK(!JS_IsException(st), "§4.8.4.3: OOM building an img element's image requests");
-    JS_SetPropertyStr(ctx, st, "state", JS_NewInt32(ctx, IMG_UNAVAILABLE));
+    JS_SetPropertyStr(ctx, st, "state", JS_NewInt32(ctx, HTML_IMAGE_UNAVAILABLE));
     JS_SetPropertyStr(ctx, st, "currentURL", JS_NewString(ctx, ""));
     JS_SetPropertyStr(ctx, st, "lastSelected", JS_NULL);
     /* "The pending request is initially set to null" — JS_NULL is that statement and not a hole: an image
@@ -134,6 +140,11 @@ static void st_set_str(JSContext *ctx, JSValueConst st, const char *name, const 
     JS_SetPropertyStr(ctx, (JSValue)st, name, s);
 }
 
+/* See html_image.h: the current request's state and whether it has a URL, WITHOUT minting the record. The
+   absence of the record IS §4.8.4.3's initial pair, so the two answers below are the standard's own words
+   rather than a default this reader chose — which is the distinction CLAUDE.md draws between a positive
+   statement and a hole a `||` filled. */
+
 /* An attribute's value, or NULL — AND NULL MEANS EITHER ABSENT OR EMPTY, which is Lexbor's answer and not this
    function's choice: `lxb_dom_element_get_attribute` returns NULL for an attribute whose VALUE is absent, so
    `<img src="">` and `<img>` are indistinguishable through it. That merge is exactly right for the one
@@ -149,6 +160,75 @@ static const char *img_attr(lxb_dom_element_t *el, const char *name, size_t *out
 
     if (out_n) *out_n = v ? n : 0;
     return (const char *)v;
+}
+
+/* §4.8.3's `complete` GETTER STEPS, over a record that may be ABSENT — the ONE implementation, reached from
+   the member below and from the exported reader above it. It is factored out because HTML §15.4.2 "Images"'
+   second rule asks the same question in different words: "the user agent has reason to believe the image will
+   become available and be rendered in due course" is true of exactly an img whose request has NOT SETTLED, and
+   that is `complete` being false. Deriving it a second time in core/layout/replaced_element.c from some proxy
+   for it — whether the current URL is non-empty, say — gets a DIFFERENT answer at a different moment: §4.8.4.3.5
+   writes the current URL after a microtask, so a layout that ran in the same task as `img.src = u` would see an
+   image with nothing outstanding and classify a LOADING image as a broken one.
+   `st` is JS_UNDEFINED when the element carries no image request record, which §4.8.4.3's initial values make
+   a complete answer rather than a hole: state `unavailable`, current URL the empty string, pending request
+   null. */
+static bool img_is_complete(JSContext *ctx, lxb_dom_element_t *el, JSValueConst st)
+{
+    bool has_src = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3);
+    bool has_srcset = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"srcset", 6);
+    size_t sn = 0;
+    /* "the src attribute's value is the empty string" — PRESENT with no value, which is one question and not
+       the two `img_attr`'s NULL merges (see its note). */
+    bool src_empty = has_src && img_attr(el, "src", &sn) == NULL;
+    int32_t state = HTML_IMAGE_UNAVAILABLE;
+    bool pending_null = true;
+
+    if (!JS_IsUndefined(st)) {
+        JSValue p = JS_GetPropertyStr(ctx, st, "pendingURL");
+
+        state = st_int(ctx, st, "state");
+        pending_null = JS_IsNull(p);
+        JS_FreeValue(ctx, p);
+    }
+    if (!has_src && !has_srcset) return true;
+    if (!has_srcset && src_empty) return true;
+    if (state == HTML_IMAGE_COMPLETELY_AVAILABLE && pending_null) return true;
+    if (state == HTML_IMAGE_BROKEN && pending_null) return true;
+    return false;
+}
+
+/* See html_image.h: the current request's state and §4.8.3's `complete`, WITHOUT minting the record. */
+HtmlImageState html_image_current_request_state(JSContext *ctx, lxb_dom_element_t *el, bool *complete)
+{
+    JSValue wrapper, st = JS_UNDEFINED;
+    int32_t state = HTML_IMAGE_UNAVAILABLE;
+
+    DCHECK(g_ready, "an img element's image request state was read before §4.8.3 was declared");
+    DCHECK(el != NULL && complete != NULL,
+           "§4.8.4.3's image request state was asked for with no element, or with nowhere to report whether "
+           "the request has SETTLED — both facts are required because HTML §15.4.2's second rule turns on the "
+           "second one and a caller holding only the state cannot tell an outstanding fetch from an `<img>` "
+           "with no `src` at all");
+    DCHECK(img_is_node(lxb_dom_interface_node(el)),
+           "§4.8.4.3's image request state was asked about an element that is not an HTML `img` — an image "
+           "request belongs to §4.8.3's element, and an SVG `img` wears none of its members");
+    wrapper = element_wrap(ctx, el);
+    DCHECK(!JS_IsNull(wrapper),
+           "an `img` element has no wrapper to hold its image requests — §4.8.4.3's state is an own property "
+           "of the element's own JS object, which is what makes it per-flow, so an element without one has "
+           "nowhere for the record to live");
+    if (JS_GetOwnSlot(ctx, &st, wrapper, g_atom_state) > 0)
+        state = st_int(ctx, st, "state");
+    else
+        st = JS_UNDEFINED;                                 /* "an image request's state is initially unavailable" */
+    *complete = img_is_complete(ctx, el, st);
+    JS_FreeValue(ctx, st);
+    JS_FreeValue(ctx, wrapper);
+    DCHECK(state >= HTML_IMAGE_UNAVAILABLE && state <= HTML_IMAGE_BROKEN,
+           "§4.8.4.3's image request holds a state that is not one of the four the standard lists — every "
+           "write to it is one of this file's four, so a fifth value is a record assembled past them");
+    return (HtmlImageState)state;
 }
 
 /* §4.8.4.3 "Processing model": "An img element is said to use srcset or picture if it has a srcset attribute
@@ -365,7 +445,7 @@ static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSVa
            "was issued with, and the empty string is what §4.8.4.3.5's NULL-SOURCE arm writes instead of "
            "fetching, so a reply carrying it is a closure built somewhere other than the issue site");
     JS_FreeCString(ctx, u);
-    st_set_int(ctx, st, "state", IMG_BROKEN);
+    st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
     /* "If maybe omit events is not set OR previousURL is not equal to urlString, then … fire an event named
        error." The maybe omit events flag is never set in this build — §4.8.4.3.2 sets it only for an element
        that ALLOWS AUTO-SIZES, which needs `loading=lazy` and `sizes=auto` and so is behind the same absent
@@ -473,7 +553,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     if (!selected) {
         bool named_a_source = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3) ||
                               img_uses_srcset_or_picture(el);
-        st_set_int(ctx, st, "state", IMG_BROKEN);
+        st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
         st_set_str(ctx, st, "currentURL", "");
         if (named_a_source) img_queue_fire(ctx, elv, "error");
         image_source_set_release(ctx, &ss);
@@ -486,7 +566,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        an event named error at the img element. Return." */
     abs = img_url_absolute(ctx, selected, selected_n);
     if (!abs) {
-        st_set_int(ctx, st, "state", IMG_BROKEN);
+        st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
         /* "Change the current request's current URL to SELECTED SOURCE" — the string that would not parse,
            not the empty string, which is the other failure arm's answer. */
         {
@@ -579,7 +659,7 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         /* A blocked request is a NETWORK ERROR, which is "no data could be obtained" — §4.8.4.3's own gloss on
            the broken state — so it takes the same arm the delivery does, without ever owing the host a reply. */
         url_record_free(&rec);
-        st_set_int(ctx, st, "state", IMG_BROKEN);
+        st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
         img_queue_fire(ctx, elv, "error");
         free(abs);
         JS_FreeValue(ctx, st);
@@ -817,6 +897,113 @@ static JSValue js_img_natural(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, 0);
 }
 
+/* §4.8.3's "TO DETERMINE THE DIMENSIONS of an img element image", all three steps, and the ONE algorithm both
+ * `width` and `height` are stated over: "The width getter steps are to return the width of this's dimensions"
+ * and the same sentence for `height`.
+ *   1. "If image is BEING RENDERED, then return its RENDERED WIDTH AND HEIGHT, in CSS pixels."
+ *   2. "If image is AVAILABLE and has density-corrected natural width and height, then return its
+ *      density-corrected natural width and height, in CSS pixels."
+ *   3. "Return a width of 0 and a height of 0."
+ * BEING RENDERED IS "has any associated CSS layout boxes", which core/dom/element_view.h states is the ONE
+ * predicate CSSOM VIEW §6's "associated box" and HTML's "being rendered" are two names for — so step 1 is
+ * `element_view_has_box` and not a second test.
+ * THE RENDERED WIDTH IS THE CONTENT EXTENT, which is why this asks `used_value_content_px` and not
+ * `used_value_px`. The two differ under `box-sizing: border-box`, where css-sizing §5 makes the exposed used
+ * value the BORDER box's; what an image is RENDERED at is the box its content is drawn into, which css-images-3
+ * §4.5 "Sizing Objects: the object-fit property" calls the concrete object size and defines under the initial
+ * `fill` as "the element's used width and height". `* { box-sizing: border-box }` is on most of the modern web,
+ * so the difference is not a corner.
+ * THE ANSWER CROSSES THROUGH viewport.h's ONE SEAM. A used width whose containing-block chain bottoms out in
+ * the initial containing block carries that fact (core/layout/used_value.h), and `img.width < 768` is the same
+ * responsive question `innerWidth < 768` is — so the number is minted as a concolic exactly as CSSOM VIEW §6's
+ * extents are, through the shared conversion that also owns the rounding to an integral IDL value. */
+static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    lxb_dom_element_t *el;
+    JSValue st;
+    bool vertical = magic != 0;
+    int state;
+
+    if (!img_is(this_val))
+        return JS_ThrowTypeError(ctx, "%s called on something that is not an img element",
+                                 vertical ? "height" : "width");
+    el = element_of_value(this_val);
+    if (element_view_has_box(lxb_dom_interface_node(el))) {                     /* step 1 */
+        /* BEING RENDERED IS NOT THE SAME AS BEING REPLACED, and this is the one member where the difference
+           reaches a page as a number. HTML §15.4.2 "Images"' third rule makes an `img` that represents text —
+           a broken image with an `alt` — a NON-REPLACED PHRASING ELEMENT, which still generates a box and is
+           still being rendered; its rendered width is then the width of its INLINE BOXES over the alt text,
+           which CSS 2.1 §10.3.1 "Inline, non-replaced elements" states outright that `width` does not
+           determine. Routing it into §10's used width would answer with an algorithm that does not apply. */
+        if (!replaced_element_of(el).replaced)
+            DFAIL("§4.8.3's determine the dimensions was asked for the RENDERED width of an `img` that HTML "
+                  "§15.4.2 \"Images\"' third rule makes a NON-REPLACED phrasing element — an image that "
+                  "represents the text of its `alt` attribute because its request broke. It is being rendered, "
+                  "so step 1 applies and there is a real answer; that answer is the extent of the LINE BOXES "
+                  "the alt text lays out into, which CSS 2.1 §9.4.2 \"Inline formatting contexts\" defines and "
+                  "which needs a real font to measure — the same operand §10.3.5's shrink-to-fit width is "
+                  "waiting on. BUILD the inline formatting context; every text-sized replaced element in "
+                  "core/layout/replaced_element.c is waiting on the same one");
+        return element_view_length_long(ctx, used_value_content_px(el, vertical));
+    }
+    st = img_state(ctx, this_val);
+    state = st_int(ctx, st, "state");
+    JS_FreeValue(ctx, st);
+    if (img_state_available(state))                                             /* step 2 */
+        DFAIL("§4.8.3's determine the dimensions reached its SECOND step — an image request became AVAILABLE, "
+              "so this element has a DENSITY-CORRECTED NATURAL WIDTH AND HEIGHT to report and there is no "
+              "decoder to have produced one. It is the same absent component `naturalWidth` crashes for one "
+              "member up, and the same one HTML §15.4.2's first rule crashes for in "
+              "core/layout/replaced_element.c; all three are read from the decoded image and must arrive "
+              "together");
+    /* Step 3: "Return a width of 0 and a height of 0." Not a fallback and not a shrug — it is the algorithm's
+       own final step, and it is the answer for every `img` that is not being rendered: one in a document no
+       navigable presents, one whose `display` computes to `none`, one that has never been inserted. */
+    return JS_NewInt32(ctx, 0);
+}
+
+/* THE OTHER HALF OF `[CEReactions, ReflectSetter] attribute unsigned long width`, which is what makes these two
+ * members asymmetric: the GETTER is §4.8.3's determine the dimensions above and the SETTER is an ordinary
+ * reflection, so neither can be a row in core/html/html_element.c's reflection table and neither can be a plain
+ * readonly accessor. Installing only the getter would be worse than the absence it replaces — `img.width = 50`
+ * is how a page sizes an image it just constructed, and a readonly accessor drops it silently in sloppy mode.
+ *
+ * HTML §2.6.1 "Reflecting content attributes in IDL attributes", the `unsigned long` setter steps, which have
+ * no arm this member takes but the last two: it is not limited to only positive numbers, has no default value
+ * and is not clamped to a range, so `minimum` is 0, `newValue` starts at 0, and "if the given value is in the
+ * range minimum to 2147483647, INCLUSIVE, then set newValue to it" is the whole of the decision. That upper
+ * bound is not the `unsigned long` type's — Web IDL's conversion has already run and produced a value modulo
+ * 2^32 — so `img.width = -1` arrives here as 4294967295, falls OUTSIDE the range, and writes `0`. Dropping the
+ * range test would write "4294967295" instead, which is a different attribute value and a different rendered
+ * box. */
+static JSValue js_img_dimension_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    char buf[16];
+    uint32_t v = 0;
+    int wrote;
+
+    if (!img_is(this_val))
+        return JS_ThrowTypeError(ctx, "HTMLImageElement.%s was set on something that is not an img element",
+                                 magic == 0 ? "width" : "height");
+    DCHECK(JS_IsNumber(val),
+           "§4.8.3's `width`/`height` setter was handed something that is not a number — it is declared "
+           "IDL_UNSIGNED_LONG, so Web IDL's `unsigned long` conversion produced one before this body ran");
+    JS_ToUint32(ctx, &v, val);
+    /* Step: "If the given value is in the range minimum to 2147483647, inclusive, then set newValue to it" —
+       otherwise newValue stays at `minimum`, which is 0 for this member. */
+    if (v > 2147483647u) v = 0;
+    wrote = snprintf(buf, sizeof buf, "%u", (unsigned)v);
+    /* "the shortest possible string representing the number as a VALID NON-NEGATIVE INTEGER" — decimal digits
+       with no sign, no leading zero and no exponent, which `%u` is. The widest value that reaches here is
+       2147483647, ten characters, so a truncation is a value that did not come through the conversion and the
+       attribute written would be a DIFFERENT NUMBER rather than an absent one. */
+    DCHECK(wrote > 0 && (size_t)wrote < sizeof buf,
+           "§2.6.1's `unsigned long` setter could not serialise its value — the range test above bounds it at "
+           "2147483647, so a value too wide for the buffer is one that did not come through it");
+    element_attr_set(ctx, this_val, magic == 0 ? "width" : "height", buf);
+    return JS_UNDEFINED;
+}
+
 /* "The complete getter steps are: If any of the following are true: both the src attribute and the srcset
    attribute are omitted; the srcset attribute is omitted and the src attribute's value is the empty string;
    the img element's current request's state is completely available and its pending request is null; or the
@@ -825,31 +1012,16 @@ static JSValue js_img_natural(JSContext *ctx, JSValueConst this_val, int magic)
 static JSValue js_img_complete(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue st = img_state_of(ctx, this_val, "complete");
-    lxb_dom_element_t *el;
-    bool has_src, has_srcset, src_empty, pending_null;
-    size_t sn = 0;
-    int state;
+    bool complete;
 
     (void)magic;
     if (JS_IsException(st)) return st;
-    el = element_of_value(this_val);
-    has_src = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3);
-    has_srcset = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"srcset", 6);
-    /* "the src attribute's value is the empty string" — PRESENT with no value, which is one question and not
-       the two `img_attr`'s NULL merges (see its note). */
-    src_empty = has_src && img_attr(el, "src", &sn) == NULL;
-    state = st_int(ctx, st, "state");
-    {
-        JSValue p = JS_GetPropertyStr(ctx, st, "pendingURL");
-        pending_null = JS_IsNull(p);
-        JS_FreeValue(ctx, p);
-    }
+    /* The four conditions are `img_is_complete` above and are NOT written twice: HTML §15.4.2's second rule
+       asks the same question of the same element through core/layout/replaced_element.c, and two derivations
+       of one getter's steps are two answers free to disagree about a loading image. */
+    complete = img_is_complete(ctx, element_of_value(this_val), st);
     JS_FreeValue(ctx, st);
-    if (!has_src && !has_srcset) return JS_TRUE;
-    if (!has_srcset && src_empty) return JS_TRUE;
-    if (state == IMG_COMPLETELY_AVAILABLE && pending_null) return JS_TRUE;
-    if (state == IMG_BROKEN && pending_null) return JS_TRUE;
-    return JS_FALSE;
+    return complete ? JS_TRUE : JS_FALSE;
 }
 
 /* "The currentSrc IDL attribute must return the img element's current request's current URL." */
@@ -930,6 +1102,11 @@ void html_image_declare(JSContext *ctx)
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
     CHECK(g_atom_state != JS_ATOM_NULL, "§4.8.4.3: the image request slot key could not be interned");
 
+    /* §4.8.3's two `[ReflectSetter] attribute unsigned long` setters. The Web IDL `unsigned long` conversion
+       — ToNumber, then modulo 2^32 — runs the page's own `valueOf` before either body is entered, which is
+       why they are declared rather than written as plain C setters. */
+    g_id_set_dimension[0] = idl_setter_id(ctx, IDL_UNSIGNED_LONG, false, js_img_dimension_set, 0);
+    g_id_set_dimension[1] = idl_setter_id(ctx, IDL_UNSIGNED_LONG, false, js_img_dimension_set, 1);
     g_id_factory = idl_method_id(ctx, FACTORY_ARGS, 2, js_image_factory, 0);
     /* `Image(optional unsigned long width, optional unsigned long height)` — BOTH optional, which is what
        makes the function object's `length` 0 (Web IDL §3.7.2: "the length of the shortest argument list"). */
@@ -946,17 +1123,20 @@ void html_image_install(JSContext *ctx, JSValueConst proto)
        on this prototype. What goes on here is every §4.8.3 member that COMPUTES rather than mirrors. */
     idl_install_accessor(ctx, proto, "naturalWidth", js_img_natural, 0, -1);
     idl_install_accessor(ctx, proto, "naturalHeight", js_img_natural, 1, -1);
+    /* `[CEReactions, ReflectSetter] attribute unsigned long width` and its `height` twin. `ReflectSetter` and
+       not `Reflect` is what keeps them out of core/html/html_element.c's reflection table: only the SETTER is a
+       reflection, and the getter is §4.8.3's determine the dimensions, which is a layout question. */
+    idl_install_accessor(ctx, proto, "width", js_img_dimension, 0, g_id_set_dimension[0]);
+    idl_install_accessor(ctx, proto, "height", js_img_dimension, 1, g_id_set_dimension[1]);
     idl_install_accessor(ctx, proto, "complete", js_img_complete, 0, -1);
     idl_install_accessor(ctx, proto, "currentSrc", js_img_current_src, 0, -1);
     idl_members_excluded(ctx, proto, "HTMLImageElement", IMG_ABSENT,
                          (int)(sizeof(IMG_ABSENT) / sizeof(IMG_ABSENT[0])),
                          "§4.8.3's `decode()` resolves when the image has been decoded and rejects with an "
-                         "`EncodingError` when it cannot be, and `width`/`height` answer §4.8.3's determine "
-                         "the dimensions — whose first branch is the element's RENDERED size and whose second "
-                         "is a decoded image's density-corrected natural size. Both need a component this "
-                         "agent does not have (an image decoder; a layout that gives an img a box), and a "
-                         "number answered without one is a measurement of nothing. `fetchPriority` and "
-                         "`controls` are §2.5.9's and §4.8.3's own attributes with no consumer in this build");
+                         "`EncodingError` when it cannot be, so it needs the DECODER this agent does not have "
+                         "— the same component `naturalWidth` and determine-the-dimensions' second branch "
+                         "crash for, and they must arrive together. `fetchPriority` and `controls` are "
+                         "§2.5.9's and §4.8.3's own attributes with no consumer in this build");
 }
 
 void html_image_install_global(JSContext *ctx, JSValueConst global, JSValueConst proto)
@@ -992,5 +1172,7 @@ void html_image_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_state_key);
     g_state_key = JS_UNDEFINED;
     g_id_factory = -1;
+    g_id_set_dimension[0] = -1;
+    g_id_set_dimension[1] = -1;
     g_task_stepid = -1;
 }

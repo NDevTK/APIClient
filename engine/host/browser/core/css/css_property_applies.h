@@ -27,15 +27,20 @@
  * "positioned elements", so the two are ONE fact. css_computed_value.c asked it for itself, which made the
  * position of `position` in the resolved-value algorithm a thing two files had to agree about.
  *
- * WHAT IT REFUSES TO GUESS. "Non-replaced inline" is the only line above whose answer needs a fact that is not
- * `display`, and CSS 2.1 §3.1's definition of a REPLACED element ("an element whose content is outside the
- * scope of the CSS formatting model") is not a list. css-display Appendix B publishes the list of HTML
- * elements that "aren't rendered purely by CSS box concepts", and that list is what this component tests
- * against — but membership in it is not the same question, so an INLINE element on it CRASHES here rather than
- * being answered either way. Both answers are reachable and they differ: a non-replaced inline `<span>`
- * resolves `width` to the computed `auto`, while an inline `<img>` resolves it to a used value CSS 2.1 §10.3.2
- * derives from an INTRINSIC WIDTH this engine has no image decoder to ask for. Answering "not replaced" for
- * both would report `auto` for an image that is 200 pixels wide. */
+ * ONE LINE NEEDS A FACT THAT IS NOT `display`, AND IT IS ANSWERED ELSEWHERE ON PURPOSE. "Non-replaced inline"
+ * is that line, and CSS 2.1 §3.1's definition of a REPLACED element ("an element whose content is outside the
+ * scope of the CSS formatting model") is not a list — CSS declines to say which elements those are, and HTML
+ * §15.4 "Replaced elements" is where the answer lives. core/layout/replaced_element.h owns it, and this file
+ * ASKS: an inline element's size properties apply exactly when it is replaced.
+ * WHAT STOOD HERE SAID THIS COMPONENT REFUSES TO GUESS AND CRASHES INSTEAD, and named css-display Appendix B's
+ * list of elements that "aren't rendered purely by CSS box concepts" as the superset it tested. That crash is
+ * gone and so is the list, because both were wrong rather than merely incomplete: Appendix B's list is drawn
+ * up for `display: contents` and carries elements §15.4 does not call replaceable at all (`br`, `select`,
+ * `textarea`, `meter`, `progress`), while the fact the line actually needs CHANGES UNDER THE RUNNING FLOW —
+ * §15.4.2's rules make an `img` replaced while its request is outstanding and NON-replaced once it breaks with
+ * an `alt` present. Both answers are common and they differ: a non-replaced inline `<span>` and a broken
+ * `<img alt="…">` resolve `width` to the computed `auto`, while a loading `<img>` resolves it to CSS 2.1
+ * §10.3.2's used width. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_APPLIES_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_PROPERTY_APPLIES_H
 
@@ -47,11 +52,5 @@
    line this component has not recorded crashes rather than being waved through, for css_computed_value.h's
    reason — a default here is a used value computed for a box that never had the property. */
 bool css_property_applies(lxb_dom_element_t *el, const char *name);
-
-/* Is `el` one of the elements css-display Appendix B lists as not rendered purely by CSS box concepts? The
-   question CSS 2.1 §3.1's "replaced element" is asked THROUGH, and deliberately not the same question — see
-   the header. Exported because CSS 2.1 §10.3's box-type split asks it too (§10.3.2 and §10.3.4 are the
-   replaced arms of the used-width algorithm). */
-bool css_element_may_be_replaced(lxb_dom_element_t *el);
 
 #endif

@@ -12,6 +12,7 @@
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
+#include "core/layout/used_value.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "solver/concolic.h"
@@ -24,24 +25,28 @@
 #define VIEWPORT_TOP_HEIGHT   720.0
 
 /* A CHILD NAVIGABLE's viewport is its container's CONTENT BOX, and for an `iframe` with no author size that
-   box is CSS 2.1 §10.3.2's default for a replaced element with no intrinsic dimensions: 300 x 150. That is the
-   spec's own number rather than a second UA choice, which is why it is stated here as a derivation and not as
-   a preference.
+   box is CSS 2.1 §10.3.2's default for a replaced element with no natural dimensions: 300 x 150. That is the
+   spec's own number rather than a second UA choice, which is why it is stated as a derivation and not as a
+   preference — and it is no longer stated HERE. core/layout/used_value.h's `used_value_default_replaced_size`
+   is the one place §10.3.2's and §10.6.2's sentences are read, including the cap against the device that
+   neither this file nor a constant could express, and the two numbers that used to sit here as `#define`s were
+   a second copy of exactly the fact that component owns. HTML §15.4.1 "Embedded content" is what makes the
+   frame replaced at all ("the embed, iframe, and video elements are expected to be treated as replaced
+   elements") and css-images-3 §4.1 "Object-Sizing Terminology" is what gives it no natural dimensions
+   ("embedded documents, such as the iframe element in HTML" are "an example of an object with no natural
+   dimensions at all"); core/layout/replaced_element.c holds both citations.
    AN AUTHOR STYLE THAT RESIZES THE FRAME IS NOT MODELLED, and NAMING WHAT IS MISSING IS THE WHOLE POINT OF
    THIS PARAGRAPH: it used to say `iframe { width: 500px }` "is a cascade this engine has no CSS parser for, so
    the used width it produces does not exist to be read", and that stopped being true. There IS a cascade —
    core/css/css_style_declaration.c resolves an author declaration out of the style sheet OBJECTS §6.2's list
-   holds — and there IS a used value over it: core/layout/used_value.h's `used_value_px(el, "width")`. A
-   sentence that keeps advertising an absent component sends the next reader to build one that is already here,
-   which is the failure mode CLAUDE.md §Disposition names for a stale DFAIL.
+   holds — and there IS a used value over it: core/layout/used_value.h's `used_value_px(el, "width")`, which
+   for a `width: auto` iframe now runs §10.3.2 and lands on this very default.
    WHAT IS ACTUALLY MISSING IS THE REACH, and it is a fact about this file rather than about CSS: the container
    ELEMENT is not obtainable from here. `viewport_width` is asked with a child realm's ctx, walks to its
    WindowProxy, and neither core/frame/window_proxy.h nor core/frame/navigable.h exports the navigable's
    container element — no member of either header names a `lxb_dom_element_t` at all. BUILD THAT: a navigable's
-   container element beside its parent, and this entry becomes `used_value_px(container, "width")` with the
-   300 x 150 below surviving only as §10.3.2's answer for a replaced element the cascade sized `auto`. */
-#define VIEWPORT_CHILD_WIDTH  300.0
-#define VIEWPORT_CHILD_HEIGHT 150.0
+   container element beside its parent, and this entry becomes `used_value_content_px(container, false)`, which
+   answers this same default whenever the cascade sized the frame `auto`. */
 
 /* A modelled non-HiDPI display. See viewport.h. */
 #define VIEWPORT_DPPX           1.0
@@ -87,12 +92,12 @@ bool viewport_exists(JSContext *ctx)
 
 double viewport_width(JSContext *ctx)
 {
-    return viewport_is_top(ctx) ? VIEWPORT_TOP_WIDTH : VIEWPORT_CHILD_WIDTH;
+    return viewport_is_top(ctx) ? VIEWPORT_TOP_WIDTH : used_value_default_replaced_size(false).px;
 }
 
 double viewport_height(JSContext *ctx)
 {
-    return viewport_is_top(ctx) ? VIEWPORT_TOP_HEIGHT : VIEWPORT_CHILD_HEIGHT;
+    return viewport_is_top(ctx) ? VIEWPORT_TOP_HEIGHT : used_value_default_replaced_size(true).px;
 }
 
 double viewport_device_pixel_ratio(JSContext *ctx)
