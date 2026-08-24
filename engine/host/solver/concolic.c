@@ -1419,9 +1419,17 @@ static JSClassExoticMethods g_concolic_exotic = {
     .has_property = concolic_exotic_has,
 };
 
+/* HOW MANY VALUES THE SOURCE OVERLAY HAS MINTED — see concolic_source_wrap for what the number is for. Reset
+   with the agent, because it is a fact about ONE document's run and the result document that reports it is per
+   document; a counter that survived would make the second page in an instance report the first one's reading.
+   DECLARED HERE, ABOVE ITS FIRST USE, and not beside the overlay flag it belongs with three hundred lines
+   down: `concolic_init` zeroes it, so a declaration after that line does not compile at all. The accessor
+   stays beside the overlay, where the reader looking for "who mints these" will be. */
+static long g_source_reads;
+
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
-    g_source_reads = 0;   /* per document: see the counter's own declaration */
+    g_source_reads = 0;   /* per document: see the counter's declaration above */
     if (g_concolic_class == 0) {
         JS_NewClassID(rt, &g_concolic_class);
         DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");
@@ -1781,10 +1789,6 @@ void concolic_install_hooks(void)
    It is not a "mode": the value semantics above are installed unconditionally, so a concolic that reaches this
    host still adds, compares and coerces. This decides only whether one is MINTED. */
 static int g_source_overlay;
-/* …AND HOW MANY VALUES IT HAS MINTED — see concolic_source_wrap for what the number is for. Reset with the
-   agent, because it is a fact about ONE document's run and the result document that reports it is per
-   document; a counter that survived would make the second page in an instance report the first one's reading. */
-static long g_source_reads;
 long concolic_source_reads(void) { return g_source_reads; }
 
 void concolic_install_source_overlay(void)
