@@ -44,6 +44,19 @@ typedef struct {
 } FetchProvider;
 void fetch_set_provider(const FetchProvider *p);
 
+/* OWE THE HOST A REQUEST THAT IS NOT `fetch()`'S — the seam above, reached by the OTHER browser components
+   whose own standards say "fetch request". HTML §4.8.4.3.5 "Updating the image data" is the first: an `img`
+   element's request is a request in every sense this file means one — it goes to the same host, it is subject
+   to the same SOP/CORS decision in the trusted zone, and its address belongs on the same @H surface — and it
+   is not a `fetch()`, so it has no promise and no Response. `deliver` is called with the host's reply record
+   (or JS_NULL for a network error) exactly as the one above is, and what the caller does with it is that
+   caller's standard's processResponse steps.
+   IT IS THIS ENTRY AND NOT THE PROVIDER STRUCT DIRECTLY, because the provider is a STATIC of this component
+   and the assertion that a host installed one belongs with it: a component that reached for `g_provider`
+   itself would each need its own copy of that check, and a request owed to nobody is a flow parked for the
+   rest of the session. */
+void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
+
 /* PARSE A URL A PAGE WROTE, against HTML's API base URL — the one operation every Fetch entry point performs
    on a URL string, so `new Request("/api/users")` and `Response.redirect("/there")` resolve the same address by
    the same rule rather than each reaching for url_parse with whatever base it remembered. Fills `*rec` and

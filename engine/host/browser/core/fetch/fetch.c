@@ -70,6 +70,25 @@ bool fetch_parse_url(JSContext *ctx, UrlRecord *rec, const char *url, size_t len
 
 void fetch_set_provider(const FetchProvider *p) { g_provider = p; }
 
+/* THE SAME SEAM, FOR A COMPONENT WHOSE OWN STANDARD SAYS "FETCH REQUEST" — see fetch.h. `value` is the second
+   parameter the provider takes and is JS_UNDEFINED here for the reason it is at `fetch()`'s own call: the
+   URL form of the park owes its answer to the host, and a value supplied up front is a reply nobody asked
+   for. */
+void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
+{
+    DCHECK(g_provider != NULL && g_provider->owe != NULL,
+           "a browser component owed a request with no host network provider installed — the reply would be "
+           "owed to nobody and the flow that issued it could never finish");
+    DCHECK(req != NULL && req->url != NULL && *req->url,
+           "a request was owed to the host with no address — the reply seam is keyed on (method, url), so a "
+           "request with neither names nothing the host can be asked for");
+    DCHECK(req->method != NULL && *req->method,
+           "a request was owed to the host without stating its METHOD — Fetch §2.2 Requests gives every "
+           "request one (`GET` unless stated otherwise), so a component that reached this seam unnamed "
+           "dropped a field rather than made a request that lacks it");
+    g_provider->owe(ctx, deliver, JS_UNDEFINED, req);
+}
+
 static int    g_fetch_stepid = -1;
 static JSAtom g_atom_method, g_atom_url, g_atom_headers, g_atom_body;
 static JSRuntime *g_fetch_rt;

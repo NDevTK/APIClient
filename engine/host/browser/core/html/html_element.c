@@ -45,6 +45,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"
+#include "core/html/html_image.h"
 #include "core/html/html_base_element.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
@@ -498,6 +499,10 @@ void html_element_init(JSContext *ctx)
     /* §4.8.11's media element state machine — declared here because HTMLMediaElement.prototype is the parent
        of two rows of the table above, so this file is what decides when it must exist. */
     media_element_declare(ctx);
+    /* §4.8.3's image requests, §4.8.4.3.5's update the image data, and Web IDL §3.7.2's `Image` — declared
+       here because HTMLImageElement is a row of the table above and `Image` is a global NAME this file owns
+       the list of, exactly as §4.8.11's three interface objects are. */
+    html_image_declare(ctx);
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
@@ -620,6 +625,11 @@ void html_element_install_protos(JSContext *ctx)
            an attribute — handed the prototype for the reason §4.2.6's `disabled` is. */
         if (!strcmp(HTML_IFACE[i].iface, "HTMLScriptElement"))
             html_script_install(ctx, p);
+        /* §4.8.3's `complete`, `currentSrc` and the two natural dimensions, which are computed from the
+           element's IMAGE REQUESTS rather than mirrored from an attribute — handed the prototype for the
+           reason §4.12.1's `async` is. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLImageElement"))
+            html_image_install(ctx, p);
         /* §4.2.3's `href`, which parses against the document's FALLBACK base URL rather than mirroring an
            attribute or resolving against the document base URL — handed the prototype for the reason
            §4.12.1's `async` is. */
@@ -723,6 +733,12 @@ void html_element_install(JSContext *ctx, JSValueConst global)
         if (j < i) continue;   /* one interface OBJECT per interface, however many tags name it */
         p = JS_GetClassProto(ctx, g_iface_class[i]);
         node_install_interface(ctx, global, HTML_IFACE[i].iface, p);
+        /* Web IDL §3.7.2's LEGACY FACTORY FUNCTION for §4.8.3's `Image`, which is a global name of its own
+           beside `HTMLImageElement` and whose non-configurable `prototype` is the interface prototype object
+           this loop is holding. It goes here rather than beside the interface object's own install because
+           this is where that object is in hand and because this file owns which names the global carries. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLImageElement"))
+            html_image_install_global(ctx, global, p);
         JS_FreeValue(ctx, p);
     }
 }
@@ -752,6 +768,7 @@ void html_element_free(JSRuntime *rt)
     html_form_free(rt);
     html_dialog_free(rt);
     media_element_free(rt);
+    html_image_free(rt);
     element_internals_free(rt);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */

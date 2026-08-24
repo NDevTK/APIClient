@@ -51,6 +51,7 @@
 #include "core/html/html_form.h"    /* §2.1.4's moving steps step 2 — the form owner a move may have to reset */
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
+#include "core/html/html_image.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
@@ -955,6 +956,15 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
            nothing about media, and a media element is created with its attributes whether or not a script
            would have run. */
         media_element_parsed(ctx, s->frag);
+        /* NO §4.8.4.3.2 WALK OVER THIS FRAGMENT, and that is a statement rather than an omission. An `img`'s
+           mutation list already contains "the img HTML element insertion steps", and every node of this
+           fragment that reaches a document goes through §4.2.3 insert step 7's shadow-including inclusive
+           descendant walk — which is the drain a few hundred lines up, where html_image_inserted sits. So
+           `el.innerHTML = '<img src=x onerror=…>'` updates its image data exactly once, at the moment the
+           element enters the tree. A walk here would ALSO update every fragment that never reaches one — a
+           `<template>`'s content, a `createContextualFragment` nobody inserts — whose images a browser does
+           not load, and would then update the inserted ones a second time. The media walk above is not the
+           same case: §4.8.11.2 starts an element created WITH a `src` whether or not it is connected. */
         /* The reference child is fixed BEFORE anything moves: inserting changes `anchor->next`. The clear that
            may follow cannot move it either — it only ever empties an append target, which frag_begin asserts. */
         s->ref = (s->where == PLACE_AFTER) ? s->anchor->next
@@ -2192,6 +2202,13 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                    node's document, not the mutating one) and its position (insert step 7, before step 8's
                    mutation record). */
                 media_element_source_inserted(ctx, el);
+                /* HTML §4.8.4.3.2: "The img or source HTML element insertion steps … count the mutation as a
+                   relevant mutation" — so an `img` created with `createElement`, given a `src` and then
+                   INSERTED updates its image data at the insertion, exactly as one whose `src` was written
+                   after insertion does. It is here rather than on node.c's tree-hook list for the reason the
+                   four above it are: an HTML ELEMENT INSERTION STEPS entry needs this seam's realm (the
+                   inserted node's document, not the mutating one) and its position. */
+                html_image_inserted(ctx, el);
                 /* HTML §4.2.6's SECOND TRIGGER — "the element is not on the stack of open elements ... and it
                    becomes connected". `<style>` is the element whose insertion CREATES a CSS style sheet, and
                    the algorithm decides for itself whether this element is one. It is here rather than on
@@ -2390,6 +2407,12 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        answers for one of them — see core/html/media_element.c. The NEW value goes with it: "(Removing the src
        attribute does not do this)" is a question about the change and not about the element. */
     media_element_attr_changed(rctx, el, ns, local, val);
+    /* HTML §4.8.4.3.2's relevant mutations for an `img`: "The element's src, srcset, width, or sizes
+       attributes are set, changed, or removed", and the `crossorigin`/`referrerpolicy` state changes beside
+       them. Here for the reason the media element's `src` is — a content attribute has more than one spelling
+       (`img.src = u`, `setAttribute`, `attributes.src.value = u`) and the IDL reflection's setter answers for
+       exactly one of them, which is how `<img>` came to reflect its address without ever requesting it. */
+    html_image_attr_changed(rctx, el, ns, local);
     /* HTML §4.12.1's `async` change step: "when an async attribute is added to a script element el, the user
        agent must set el's force async to false". Here for the reason `src` above is: a content attribute has
        more than one spelling, and the IDL setter answers for one of them. */

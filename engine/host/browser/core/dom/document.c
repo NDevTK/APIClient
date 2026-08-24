@@ -34,6 +34,7 @@
 #include "core/html/html_iframe.h"
 #include "core/html/declarative_shadow.h"
 #include "core/html/media_element.h"
+#include "core/html/html_image.h"
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/html_base_element.h"   /* §4.2.3's frozen base URL, whose two facts this record holds */
@@ -3158,6 +3159,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        AFTER the declarative-shadow conversion, because the walk is shadow-including and a `<video src>` in a
        `<template shadowrootmode>` is in the shadow tree by now. */
     media_element_parsed(ctx, lxb_dom_interface_node(dom));
+    /* HTML §4.8.4.3.2 FOR THE SAME TREE AND FOR THE SAME REASON — the list of relevant mutations counts an
+       `img`'s `src` being SET and the img element insertion steps, and a parsed element reaches neither: its
+       attributes arrive with §13.2.6.1's "create an element for a token" and its insertion is the parser's.
+       Without this a document's own `<img src=…>` markup issued no request at all — every image address the
+       page ships was invisible to the endpoint surface, and every markup `onerror` had nothing to fire it. */
+    html_image_parsed(ctx, lxb_dom_interface_node(dom));
     /* HTML §4.2.6 FOR THE TREE THE PARSER BUILT — "the element is popped off the stack of open elements of an
        HTML parser" is update a style block's first trigger, and a Lexbor parse has no per-token seam, so the
        markup's own `<style>` elements get their CSS style sheets here. AFTER the declarative-shadow conversion,

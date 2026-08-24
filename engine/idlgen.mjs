@@ -456,7 +456,10 @@ const INTERFACES = {
   /* §4.12.1's `async` is installed onto HTMLScriptElement's prototype by its own component, beside the `force
      async` boolean its steps read — for the same reason HTMLStyleElement's row names html_style_element.c. */
   HTMLScriptElement:   [...HTML_BASE, "core/html/html_script.c"],
-  HTMLImageElement:    [...HTML_BASE],
+  /* §4.8.3's `complete`, `currentSrc`, `naturalWidth` and `naturalHeight` are installed onto
+     HTMLImageElement's prototype by its own component, beside §4.8.4.3's image requests they are computed
+     from — for the same reason HTMLScriptElement's row names html_script.c. */
+  HTMLImageElement:    [...HTML_BASE, "core/html/html_image.c"],
   /* §4.8.5's navigable members are their own component, for the same reason the hyperlink mixin's are. */
   HTMLIFrameElement:   [...HTML_BASE, "core/html/html_iframe.c"],
   /* §4.10's OWN COMPONENTS, which had to be withheld while the installed side was a string scan: html_form.c,
@@ -1151,14 +1154,31 @@ const exposedOnWindow = (node) => {
    later members into it, so an interface first encountered as a `partial` (which carries no [Exposed]) loses the
    real declaration's extended attributes — that is why Element and HTMLElement went missing from a table built
    off the map. A name is a global if ANY of its declarations says [Exposed=Window]. */
+/* …AND THE THIRD SOURCE, WHICH IS ALSO SPEC TEXT AND WAS MISSING. Web IDL §3.7.2 "Legacy factory functions":
+   a `[LegacyFactoryFunction=id(…)]` extended attribute puts `id` on the global as a built-in function object —
+   it is not the interface's name and it is not a member of Window, so neither source above sees it, and the
+   corpus has three: `Image` (HTMLImageElement), `Option` (HTMLOptionElement) and `Audio` (HTMLAudioElement).
+   Every one of them is a name a page reaches for by writing `new Image()`, and absent from this table each was
+   classified as SERVER-INJECTED APP STATE — so the read answered a concolic and the branch on it FORKED,
+   which is the frontier multiplication this table exists to stop, on three of the most common constructors on
+   the platform. The identifier is taken only where the interface it appears on is itself exposed on Window,
+   because that is what decides whether the function object is created in this global at all. */
+const legacyFactoryNames = (node) =>
+  (node.extAttrs || [])
+    .filter((a) => a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string")
+    .map((a) => a.rhs.value);
+
 const platform = new Set();
 for (const spec of Object.values(all)) {
   let ast;
   try { ast = parse(await spec.text()); } catch { continue; }
-  for (const n of ast)
-    if ((n.type === "interface" || n.type === "namespace" || n.type === "callback interface")
-        && n.name && exposedOnWindow(n))
-      platform.add(n.name);
+  for (const n of ast) {
+    if (!((n.type === "interface" || n.type === "namespace" || n.type === "callback interface")
+          && n.name && exposedOnWindow(n)))
+      continue;
+    platform.add(n.name);
+    for (const f of legacyFactoryNames(n)) platform.add(f);
+  }
 }
 for (const m of members("Window")) platform.add(m);
 

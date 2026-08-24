@@ -1,0 +1,905 @@
+/* HTML §4.8.3 "The img element" and §4.8.4.3 "Processing model" — see html_image.h for what each half of this
+ * component exists for and for what is honestly absent. */
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include <lexbor/dom/dom.h>
+#include <lexbor/html/html.h>
+
+#include "check.h"
+#include "quickjs.h"
+#include "quickjs-step.h"
+#include "solver/dom_cow.h"       /* the `src` a flow wrote out of unknown input, kept beside the attribute */
+#include "solver/endpoint.h"      /* every request host-edge funnels one endpoint into the @H surface */
+#include "core/idl_args.h"
+#include "core/idl_slots.h"
+#include "core/url/url.h"
+#include "core/dom/node.h"
+#include "core/dom/element.h"
+#include "core/dom/document.h"
+#include "core/dom/shadow_root.h"
+#include "core/events/event.h"
+#include "core/events/event_target.h"
+#include "core/fetch/fetch.h"
+#include "core/fetch/port_blocking.h"
+#include "core/frame/policy_container.h"
+#include "core/html/html_image.h"
+
+/* §4.8.4.3 "Processing model": "An image request's state is one of the following" — and the two composite
+   answers the spec gives names to are derived from it rather than stored, because a stored copy of a derived
+   fact is a second thing to keep in step. */
+enum {
+    IMG_UNAVAILABLE = 0,        /* "hasn't obtained any image data, or … hasn't yet decoded enough" */
+    IMG_PARTIALLY_AVAILABLE,    /* "obtained some of the image data and at least the image dimensions" */
+    IMG_COMPLETELY_AVAILABLE,   /* "obtained all of the image data and at least the image dimensions" */
+    IMG_BROKEN                  /* "cannot even decode the image enough to get the image dimensions" */
+};
+/* "When an image request's state is either partially available or completely available, the image request is
+   said to be available." */
+static bool img_state_available(int state)
+{
+    return state == IMG_PARTIALLY_AVAILABLE || state == IMG_COMPLETELY_AVAILABLE;
+}
+
+/* The private Symbol §4.8.4.3's per-element state hangs off, and the atom for the own-slot read — the store
+   core/html/media_element.c keeps §4.8.11's state in, for the same two reasons: it is per ELEMENT and it must
+   be per FLOW, and an ordinary property on the element's own wrapper is both. */
+static JSValue g_state_key = JS_UNDEFINED;
+static JSAtom  g_atom_state = JS_ATOM_NULL;
+/* Declared once per AGENT; installed into every realm. */
+static int g_id_factory = -1;   /* §4.8.3's `Image(width, height)` argument declaration */
+static int g_task_stepid = -1;  /* the DOM manipulation task that fires `load` or `error` at the element */
+static int g_ready;
+
+/* §4.8.3's members this build does not have, asserted absent per realm rather than left as a silence the
+   auditor and the next reader each have to re-derive. */
+static const char *const IMG_ABSENT[] = { "decode", "width", "height", "fetchPriority", "controls" };
+
+/* ---- the element, and its image requests ------------------------------------------------------------------ */
+
+/* WHICH NODES ARE `img` ELEMENTS — the INTERNED TAG ID and the namespace, which is what
+   core/html/media_element.c's media_is_node and core/html/html_script.c's script_is ask, for both of their
+   reasons: an SVG `<img>` is not §4.8.3's element and wears none of its members, and the question is asked of
+   every node of a parsed document. */
+static bool img_is_node(const lxb_dom_node_t *n)
+{
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(n, LXB_TAG_IMG);
+}
+
+/* The same question asked of a VALUE — the brand every member of this file performs, asked of the NODE because
+   that is what the spec says an img element is. */
+static bool img_is(JSValueConst v)
+{
+    return img_is_node(lxb_dom_interface_node(element_of_value(v)));
+}
+
+/* THE STATE RECORD, created where a flow first REACHES the element — core/html/media_element.c's rule for a
+   record a flow may write, and here it is also the record's only creation site, so there is no write site left
+   to miss. Every field is an ordinary property, so every write is captured by the running flow's COW delta and
+   two arms that each set a `src` hold their own image requests.
+   THE INITIAL VALUES ARE §4.8.4.3's OWN: "The current request is initially set to a new image request. The
+   pending request is initially set to null"; "An image request's current URL is initially the empty string";
+   "An image request's state is initially unavailable"; "Each img element has a last selected source, which
+   must initially be null."
+   `gen` IS NOT THE SPEC'S AND IS NOT AN INVENTION EITHER: §4.8.4.3.5 says "If another instance of this
+   algorithm for this img element was started after this instance (even if it aborted and is no longer
+   running), then return", which is a question one instance asks about another, and a counter on the element is
+   what makes "started after" answerable. It is what stops `img.src = a; img.src = b` from issuing two
+   requests, and what tells a reply belonging to an aborted image request from the live one. */
+static JSValue img_state(JSContext *ctx, JSValueConst el)
+{
+    JSValue st;
+
+    DCHECK(g_ready, "an img element's state was reached before §4.8.3 was declared");
+    if (JS_GetOwnSlot(ctx, &st, el, g_atom_state) > 0) return st;
+
+    st = idl_slots_new(ctx);
+    CHECK(!JS_IsException(st), "§4.8.4.3: OOM building an img element's image requests");
+    JS_SetPropertyStr(ctx, st, "state", JS_NewInt32(ctx, IMG_UNAVAILABLE));
+    JS_SetPropertyStr(ctx, st, "currentURL", JS_NewString(ctx, ""));
+    JS_SetPropertyStr(ctx, st, "lastSelected", JS_NULL);
+    /* "The pending request is initially set to null" — JS_NULL is that statement and not a hole: an image
+       request that exists is named by its current URL, so a null here is the absence the spec defines and
+       `complete`'s steps read directly. */
+    JS_SetPropertyStr(ctx, st, "pendingURL", JS_NULL);
+    JS_SetPropertyStr(ctx, st, "gen", JS_NewInt32(ctx, 0));
+    JS_DefinePropertyValue(ctx, (JSValue)el, g_atom_state, JS_DupValue(ctx, st),
+                           JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
+    return st;
+}
+
+static int32_t st_int(JSContext *ctx, JSValueConst st, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, st, name);
+    int32_t n = 0;
+
+    DCHECK(JS_IsNumber(v), "§4.8.4.3's image request answered a numeric field with something that is not a "
+                           "number — every field is written by this file and by nothing else");
+    JS_ToInt32(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
+}
+
+static void st_set_int(JSContext *ctx, JSValueConst st, const char *name, int32_t v)
+{
+    JS_SetPropertyStr(ctx, (JSValue)st, name, JS_NewInt32(ctx, v));
+}
+
+static void st_set_str(JSContext *ctx, JSValueConst st, const char *name, const char *v)
+{
+    JSValue s = JS_NewString(ctx, v);
+
+    CHECK(!JS_IsException(s), "§4.8.4.3: OOM writing an image request's URL");
+    JS_SetPropertyStr(ctx, (JSValue)st, name, s);
+}
+
+/* An attribute's value, or NULL — AND NULL MEANS EITHER ABSENT OR EMPTY, which is Lexbor's answer and not this
+   function's choice: `lxb_dom_element_get_attribute` returns NULL for an attribute whose VALUE is absent, so
+   `<img src="">` and `<img>` are indistinguishable through it. That merge is exactly right for the one
+   question §4.8.4.3.5 asks with a value — "it has a src attribute specified whose value is not the empty
+   string", where both answers are "no candidate" — and exactly wrong for the two that ask about PRESENCE
+   ("the element has a src attribute", and `complete`'s "the src attribute's value is the empty string"),
+   which is why those ask `lxb_dom_element_has_attribute` instead. Reading presence off this is the mistake
+   core/html/html_script.c records making, where it ran `<script src="">`'s child text as a program. */
+static const char *img_attr(lxb_dom_element_t *el, const char *name, size_t *out_n)
+{
+    size_t n = 0;
+    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &n);
+
+    if (out_n) *out_n = v ? n : 0;
+    return (const char *)v;
+}
+
+/* §4.8.4.3 "Processing model": "An img element is said to use srcset or picture if it has a srcset attribute
+   specified or if it has a parent that is a picture element." */
+static bool img_uses_srcset_or_picture(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *p = lxb_dom_interface_node(el)->parent;
+
+    if (lxb_dom_element_has_attribute(el, (const lxb_char_t *)"srcset", 6)) return true;
+    return p != NULL && p->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(p, LXB_TAG_PICTURE);
+}
+
+/* HTML §7.3.1 "Navigables"'s FULLY ACTIVE, asked of THE ELEMENT'S NODE DOCUMENT — which is not the question
+   document_fully_active answers. A realm holds several documents and only its ACTIVE one can be fully active
+   (§7.3.1 defines the term by walking from a navigable's active document), so the element's document is fully
+   active exactly when it IS this realm's active document and that document is. Asking the realm alone answers
+   TRUE for a `DOMParser` document's elements, and §4.8.4.3.5 would then fetch every address in markup a page
+   merely PARSED — requests a browser does not make and a `<template>`'s contents do not make either. */
+static bool img_document_fully_active(JSContext *ctx, lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *root = document_root_node(ctx);
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    DCHECK(n != NULL, "§7.3.1's fully active was asked about no element");
+    if (!root || root->owner_document != n->owner_document) return false;
+    return document_fully_active(ctx);
+}
+
+/* HTML §2.4.2 "Parsing URLs"'s ENCODING-PARSING AND SERIALIZING A URL, relative to the element's node
+   document — the operation §4.8.4.3.5 performs on the selected source, twice. NULL is the standard's failure,
+   which each of its two call sites answers differently and neither of them papers over. */
+static char *img_url_absolute(JSContext *ctx, const char *src, size_t src_len)
+{
+    UrlRecord base, rec;
+    const char *base_url = document_base_url(ctx);
+    bool have_base;
+    char *abs_url = NULL;
+
+    url_record_init(&base);
+    have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
+    url_record_init(&rec);
+    if (url_parse(&rec, src, src_len, have_base ? &base : NULL))
+        abs_url = url_serialize(&rec, /*exclude_fragment*/ false);
+    url_record_free(&rec);
+    url_record_free(&base);
+    return abs_url;
+}
+
+/* ---- the queued element task: §4.8.4.3.5's `load` and `error` -------------------------------------------- */
+
+/* IT IS A TASK, WHICH IS WHAT §4.8.4.3.5 SAYS IT IS — every one of its event fires reads "queue an element
+ * task on the DOM manipulation task source given the img element … to fire an event named load/error at the
+ * img element". A synchronous fire inside the setter or inside the reply's delivery is two things wrong at
+ * once: it is the wrong position in HTML §8.1.7's event loop (a page's `img.src = u` would see its own
+ * `onerror` run before the next statement), and it is unparkable — the listener list is the PAGE's, so the
+ * dispatch runs the page's code and must have a flow base under it. */
+#define IMG_TASK_STAGES(X) \
+    X(IMGT_FIRE, "HTML §4.8.4.3.5 Updating the image data — the queued element task's fire of `load` or `error`")
+enum { IMG_TASK_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const img_task_steps[] = { IMG_TASK_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr   hdr;       /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t     fphase;    /* the dispatch's own phase, held across a suspension */
+    uint8_t     started;
+    JSValue     ev;        /* the Event being dispatched (owned) */
+    EventFireCb cb;        /* §2.9's dispatch request buffer, whose width travels with its type */
+} ImgTask;
+
+static void img_task_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    ImgTask *s = stp;
+    int k;
+
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static int img_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    ImgTask *s = stp;
+    JSValueConst element = step_arg(&s->hdr, 0);
+    JSValueConst name = step_arg(&s->hdr, 1);
+    int r;
+
+    STEP_DISPATCH(IMG_TASK_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IMGT_FIRE);
+        if (!s->started) {
+            const char *type = JS_ToCString(ctx, name);
+            int k;
+
+            s->started = 1;
+            s->fphase = 0;
+            STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            CHECK(type != NULL, "§4.8.4.3.5: OOM reading a queued image task's event name");
+            /* Neither of §4.8.4.3.5's two events bubbles and neither is cancelable — the standard names each
+               fire as "fire an event named e at the img element" and gives no initialiser. */
+            s->ev = event_new(ctx, type, /*bubbles*/ false, /*cancelable*/ false);
+            JS_FreeCString(ctx, type);
+            if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return JS_STEP_ABRUPT; }
+        }
+        r = event_target_fire_run(ctx, &s->fphase, STEP_CB(s->cb), element, s->ev, JS_UNDEFINED, cb_result,
+                                  NULL, out_cb, out_argc);
+        if (r > 0) return r;   /* parked INSIDE the dispatch: a listener is the page's code */
+        JS_FreeValue(ctx, s->ev);
+        s->ev = JS_UNDEFINED;
+        if (r < 0) return JS_STEP_ABRUPT;
+        return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef img_task_def = {
+    sizeof(ImgTask), img_task_step, NULL, 0,
+    .visit = img_task_visit,
+    .algorithm = "HTML §4.8.4.3.5 Updating the image data — a queued element task on the DOM manipulation "
+                 "task source",
+    .steps = img_task_steps
+};
+
+/* "Queue an element task on the DOM manipulation task source given the img element and the following steps:
+   … fire an event named `name` at the img element." */
+static void img_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
+{
+    JSValueConst argv[2];
+    JSValue fn, nm;
+
+    DCHECK(g_task_stepid >= 0, "an img element task was queued before §4.8.3 registered its machine");
+    /* THE CALLEE IS MINTED IN THE ENQUEUING REALM: a C function runs in the realm that DEFINED it (§3.7), and
+       this one fires an event at an element of THIS document. */
+    fn = JS_NewCFunction2(ctx, NULL, "imageElementTask", 2, JS_CFUNC_step, g_task_stepid);
+    CHECK(!JS_IsException(fn), "§4.8.4.3.5: the queued image task's callee could not be allocated");
+    nm = JS_NewString(ctx, name);
+    CHECK(!JS_IsException(nm), "§4.8.4.3.5: OOM allocating a queued image task's event name");
+    argv[0] = el;
+    argv[1] = nm;
+    JS_EnqueueCallTask(ctx, fn, 2, argv);   /* §4.8.4.3.5: the DOM manipulation task source */
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, nm);
+}
+
+/* ---- §4.8.4.3.5's processResponse ------------------------------------------------------------------------- */
+
+/* THE REPLY, AND WHY THERE IS ONLY ONE ARM OF THE SWITCH.
+ *
+ * §4.8.4.3.5 ends "Fetch request. Return from this algorithm, and run the remaining steps as part of the
+ * fetch's processResponse for the response response", and those remaining steps are a three-way jump: a
+ * `multipart/x-mixed-replace` resource, a resource whose "type and data corresponds to a supported image
+ * format", and "Otherwise". THIS USER AGENT SUPPORTS NO IMAGE FORMAT — it has no decoder — so every reply,
+ * including a byte-perfect PNG, lands in the third arm, whose steps are stated in full: "the user agent must
+ * set image request's state to broken, abort the image request for the current request and the pending
+ * request, upgrade the pending request to the current request if image request is the pending request, and
+ * then … queue an element task on the DOM manipulation task source given the img element to fire an event
+ * named error at the img element."
+ * That is not a stub standing in for the other two arms and it is not a shrug: it is the arm the standard
+ * itself names for a resource this agent cannot decode, and it is the same answer a real browser gives for a
+ * corrupt image. What is missing is the DECODER, and the two arms it would unlock are unreachable until one
+ * exists — which is why they are asserted rather than written blind.
+ *
+ * IT RUNS NONE OF THE PAGE'S CODE, which is why it is a data closure and not a step machine: it writes this
+ * element's own image request and ENQUEUES the task above. The page's `onerror` runs when the scheduler
+ * reaches that task, under a flow, exactly as §8.1.7 says.
+ * func_data = [the element's wrapper, urlString, the generation this request was issued at]. */
+static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                           int magic, JSValueConst *func_data)
+{
+    JSValueConst el = func_data[0];
+    JSValueConst url = func_data[1];
+    JSValue st;
+    int32_t issued = 0, live_gen;
+    const char *u;
+
+    (void)this_val; (void)magic;
+    DCHECK(argc >= 1, "an image reply was delivered with no response — the host calls this with the reply "
+                      "record or with null for a network error, and never with nothing");
+    /* THE ENGINE↔HOST CONTRACT, ASSERTED AT THE EDGE IT CROSSES. Every arm below reaches the same broken
+       state, so nothing here READS the record — which is exactly why its shape has to be asserted rather than
+       discovered three frames later by whoever does read it (solver/reply_decode.c learns from this same reply
+       at engine_provide). A network error is the JSON `null`, which is a positive answer and not a hole. */
+    DCHECK(argc < 1 || JS_IsObject(argv[0]) || JS_IsNull(argv[0]),
+           "an image reply arrived as something other than the host's reply record — every host builds one "
+           "with fetch_reply_new or parses the trusted zone's JSON into one, and a bare string here is a host "
+           "still delivering only bytes");
+    JS_ToInt32(ctx, &issued, func_data[2]);
+    st = img_state(ctx, el);
+    live_gen = st_int(ctx, st, "gen");
+    /* "To abort the image request … means to … abort any instance of the fetching algorithm for image request,
+       discarding any PENDING TASKS generated by that algorithm." A later instance of §4.8.4.3.5 aborted this
+       image request, and the reply the trusted zone had already been asked for cannot be un-asked — so the
+       discarding happens here, where the reply arrives, and no event is fired for a request the element is no
+       longer making. Without this a `img.src = a; img.src = b` pair fires two `error` events. */
+    if (live_gen != issued) { JS_FreeValue(ctx, st); return JS_UNDEFINED; }
+
+    /* "Set image request's state to broken", and "upgrade the pending request to the current request IF image
+       request is the pending request" — which it never is here: the issue site asserts that this agent's
+       current request is never available, so every request it makes IS the current one. The reply is still
+       matched to the address it was made for, because a stale one is what the generation above discards. */
+    u = JS_ToCString(ctx, url);
+    CHECK(u != NULL, "§4.8.4.3.5: OOM reading the address an image reply answered");
+    DCHECK(strcmp(u, "") != 0,
+           "an image reply arrived for the empty address — the delivery closes over the urlString the fetch "
+           "was issued with, and the empty string is what §4.8.4.3.5's NULL-SOURCE arm writes instead of "
+           "fetching, so a reply carrying it is a closure built somewhere other than the issue site");
+    JS_FreeCString(ctx, u);
+    st_set_int(ctx, st, "state", IMG_BROKEN);
+    /* "If maybe omit events is not set OR previousURL is not equal to urlString, then … fire an event named
+       error." The maybe omit events flag is never set in this build — §4.8.4.3.2 sets it only for an element
+       that ALLOWS AUTO-SIZES, which needs `loading=lazy` and `sizes=auto` and so is behind the same absent
+       lazy-loading machinery — so the disjunction's first operand is true at every arrival here and the fire
+       is unconditional. */
+    img_queue_fire(ctx, el, "error");
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* ---- §4.8.4.3.5 "Updating the image data" ----------------------------------------------------------------- */
+
+/* THE REST OF THE ALGORITHM, WHICH THE STANDARD PUTS IN A MICROTASK — "Queue a microtask to perform the rest
+ * of this algorithm, allowing the task that invoked this algorithm to continue", followed immediately by "If
+ * another instance of this algorithm for this img element was started after this instance (even if it aborted
+ * and is no longer running), then return", with the standard's own note: "Only the last instance takes effect,
+ * to avoid multiple requests when, for example, the src, srcset, and crossorigin attributes are all set in
+ * succession."
+ * That pair is the whole reason the split exists, and dropping it is not a simplification: a bundle that writes
+ * `img.crossOrigin = "anonymous"; img.src = u` would issue TWO requests for one image, and every one of them
+ * would fire its own event at the element.
+ * It runs none of the page's code — it resolves a URL, records an endpoint and hands the request to the host —
+ * so it is a data closure. func_data = [the element's wrapper, the generation this instance was started at]. */
+static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                               int magic, JSValueConst *func_data)
+{
+    JSValueConst elv = func_data[0];
+    lxb_dom_element_t *el = element_of_value(elv);
+    JSValue st, taint;   /* `taint` is BORROWED from the attribute's shadow — see the read below */
+    int32_t started = 0;
+    const char *selected;
+    size_t selected_n = 0;
+    char *abs = NULL;
+    UrlRecord rec;
+
+    (void)this_val; (void)argc; (void)argv; (void)magic;
+    DCHECK(el != NULL, "§4.8.4.3.5's microtask continuation was queued for something that is not an element");
+    JS_ToInt32(ctx, &started, func_data[1]);
+    st = img_state(ctx, elv);
+    /* "If another instance of this algorithm for this img element was started after this instance … return." */
+    if (st_int(ctx, st, "gen") != started) { JS_FreeValue(ctx, st); return JS_UNDEFINED; }
+
+    /* "Let selected source and selected pixel density be the URL and pixel density that results from SELECTING
+       AN IMAGE SOURCE" — §4.8.4.3.7, whose first step updates the source set (§4.8.4.3.9). For an element that
+       does not use srcset or picture that algorithm reduces to §4.8.4.3.9's own sentence "If el is an img
+       element that has a src attribute, then set default source to that attribute's value", with a pixel
+       density of 1; the whole of the rest of it — the walk over the previous-sibling `source` elements, the
+       `media` and `type` conditions, the density normalisation — is reachable only for an element that DOES.
+       THE PIXEL DENSITY IS NOT CARRIED, and that is a consequence rather than an omission: every consumer of
+       it in §4.8.4.3.5 reads it into the image request's CURRENT PIXEL DENSITY, which is only ever read back
+       by the density-corrected natural dimensions — a decoded image's, which this agent has none of. It comes
+       back with the decoder, beside the dimensions it corrects. */
+    if (img_uses_srcset_or_picture(el)) {
+        DFAIL("an `img` that USES SRCSET OR PICTURE reached §4.8.4.3.5's selection step — HTML §4.8.4.3.9 "
+              "Updating the source set's walk over the element's previous-sibling `source` elements and HTML "
+              "§4.8.4.3.10 Parsing a srcset attribute are what answer for it, and neither is built. Build "
+              "those two (and §4.8.4.3.11 Parsing a sizes attribute for the `sizes` half) here; until then "
+              "this element selects no source and takes the null-source arm below, which fires `error`");
+        selected = NULL;
+    } else {
+        /* An empty `src` makes an empty source set, and `img_attr` already answers NULL for one — see its
+           note, and the assert that keeps that the only spelling of empty this file has to know. */
+        selected = img_attr(el, "src", &selected_n);
+        DCHECK(selected == NULL || selected_n > 0,
+               "Lexbor answered a `src` attribute with a zero-length value — this file reads emptiness as the "
+               "NULL its get_attribute gives an absent VALUE, and a second spelling of empty would make "
+               "`<img src=` with an empty value select a source of no characters and fetch this document's "
+               "own address");
+    }
+
+    /* "If selected source is null: Set the current request's state to broken … Queue an element task … Change
+       the current request's current URL to the empty string. If all of the following are true: the element has
+       a src attribute or it uses srcset or picture; and maybe omit events is not set … then fire an event
+       named error at the img element. Return."
+       An `<img>` with no `src` at all therefore goes broken SILENTLY, which is what a browser does — the
+       error is for an element that named a source and got nowhere. */
+    if (!selected) {
+        bool named_a_source = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3) ||
+                              img_uses_srcset_or_picture(el);
+        st_set_int(ctx, st, "state", IMG_BROKEN);
+        st_set_str(ctx, st, "currentURL", "");
+        if (named_a_source) img_queue_fire(ctx, elv, "error");
+        JS_FreeValue(ctx, st);
+        return JS_UNDEFINED;
+    }
+
+    /* A `src` THIS FLOW COMPOSED OUT OF UNKNOWN EXTERNAL INPUT is an address no host can be asked for, and it
+       is still a request the page makes: it reaches the @H surface as the SHAPE it is rather than disappearing,
+       which is the same answer core/html/html_script.c gives an unknown `<script src>`. The image request is
+       left at its current state — nothing was fetched, so nothing may claim to have been. */
+    taint = dom_cow_attr_taint(el, "src");   /* BORROWED (solver/dom_cow.h) — never freed here */
+    if (!JS_IsUndefined(taint)) {
+        endpoint_record(ctx, "GET", taint, NULL, 0, NULL);
+        JS_FreeValue(ctx, st);
+        return JS_UNDEFINED;
+    }
+
+    /* "Let urlString be the result of encoding-parsing-and-serializing a URL given selected source, relative to
+       the element's node document. If urlString is failure: … Set the current request's state to broken … fire
+       an event named error at the img element. Return." */
+    abs = img_url_absolute(ctx, selected, selected_n);
+    if (!abs) {
+        st_set_int(ctx, st, "state", IMG_BROKEN);
+        /* "Change the current request's current URL to SELECTED SOURCE" — the string that would not parse,
+           not the empty string, which is the other failure arm's answer. */
+        {
+            JSValue s = JS_NewStringLen(ctx, selected, selected_n);
+            CHECK(!JS_IsException(s), "§4.8.4.3.5: OOM keeping an unparseable image source");
+            JS_SetPropertyStr(ctx, st, "currentURL", s);
+        }
+        img_queue_fire(ctx, elv, "error");
+        JS_FreeValue(ctx, st);
+        return JS_UNDEFINED;
+    }
+
+    /* "If the pending request is not null and urlString is the same as the pending request's current URL, then
+       return." The pending request is null throughout this build; the assert two steps down is where that is
+       stated rather than assumed.
+       "If urlString is the same as the current request's current URL and the current request's state is
+       PARTIALLY AVAILABLE: … Return." Reaching that needs a decoded image's dimensions, so it rides with the
+       decoder; the state is asserted below rather than tested here, where a test would read as a live branch.
+
+       "Set image request to a new image request whose current URL is urlString. If the current request's state
+       is unavailable or broken, then set the current request to image request. Otherwise, set the pending
+       request to image request." */
+    /* Read in a DEV block rather than inside the DCHECK's condition, because the read takes a reference and a
+       condition that is unevaluated in release may not own one — the form core/solver/engine.c's own contract
+       asserts use for exactly this. */
+#if APICLIENT_DEV
+    DCHECK(!img_state_available(st_int(ctx, st, "state")),
+           "§4.8.4.3.5 reached an img element whose CURRENT REQUEST IS AVAILABLE — that state means decoded "
+           "image dimensions, which this agent has no decoder to produce, so every request here is the current "
+           "one and the pending request is always null. Build §4.8.4.3.5's pending-request half — the second "
+           "request, the `upgrade the pending request to the current request` step and `complete`'s reads of "
+           "it — beside the decoder that makes the state reachable");
+#endif
+    st_set_str(ctx, st, "currentURL", abs);
+
+    /* THE ADDRESS AS THE @H SURFACE MUST SEE IT, recorded BEFORE the policy checks below for the reason
+       core/fetch/fetch.c records one before its own: the endpoint is what the page's code COMPOSED, and a
+       request a policy refuses is still a request the bundle can make. An image URL is not filtered out here
+       on the grounds that images are static assets — CLAUDE.md §Attacker sources makes that a decision about
+       what a RESOURCE turned out to be ("magic-byte + content-type, not URL suffix"), which is answered on the
+       reply by solver/reply_decode.c and cannot be answered at the request. */
+    {
+        JSValue uv = JS_NewString(ctx, abs);
+        CHECK(!JS_IsException(uv), "§4.8.4.3.5: OOM naming an image request for the endpoint surface");
+        endpoint_record(ctx, "GET", uv, NULL, 0, NULL);
+        JS_FreeValue(ctx, uv);
+    }
+
+    /* §4.8.4.3.5's LAZY BRANCH — "If the will lazy load element steps given the img return true: Set the img's
+       lazy load resumption steps to the rest of this algorithm starting with the step labeled fetch the image.
+       START INTERSECTION-OBSERVING A LAZY LOADING ELEMENT for the img element. Return." — reaches the fetch
+       below immediately in this user agent, and that is this agent's VIEWPORT, not a step skipped.
+       §2.5.7 "Lazy loading attributes"'s will lazy load element steps do return true for `<img loading=lazy>`
+       (scripting is enabled for every document this engine runs, so the attribute's state is the whole
+       question), and its lazy load intersection observer is what runs the resumption steps: an element is
+       observed against the viewport plus a root margin, and one that is already intersecting resumes at the
+       first observation. THIS AGENT PRESENTS THE WHOLE DOCUMENT AT ONCE — it has no scrolling, so there is no
+       part of a document outside the viewport for an element to be below — which makes every connected lazy
+       element intersecting at that first observation and the resumption immediate. That is the same kind of
+       answer §Headless-is-not-valueless gives `matchMedia`'s default viewport and `getComputedStyle`'s
+       UA-default layering: a modelled device rather than an absent one, and the deferral's only observable —
+       WHEN the request is made — is a question about a scroll position this agent does not have.
+       WHAT WOULD CHANGE THIS is a real layout with a scrolled viewport, at which point the branch is written
+       here with the observer that decides it, and its argument is a rectangle rather than an attribute. */
+
+    /* "Let request be the result of creating a potential-CORS request given urlString, `image`, and the current
+       state of the element's crossorigin content attribute" … "Fetch request."
+       WHAT THIS ENGINE MAY DECIDE ABOUT THAT REQUEST AND WHAT IT MAY NOT. Fetch §4.1 "Main fetch" step 7 —
+       "If should request be blocked due to a bad port, should fetching request be blocked as mixed content, or
+       should request be blocked by Content Security Policy returns blocked, then set response to a network
+       error" — runs HERE, in the engine, because a policy is the DOCUMENT's and CSP §6.8.1 gives this request
+       the `image` destination, which is what makes `img-src` the directive that governs it. The CORS mode is
+       NOT decided here: SECURITY.md puts SOP/CORS/credentials behind the trusted zone's `safeFetch`, which is
+       the one chokepoint that may see a cross-origin body, so the mode crosses as the request it is and the
+       zone answers it. */
+    url_record_init(&rec);
+    if (url_parse(&rec, abs, strlen(abs), NULL) &&
+        (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
+         policy_should_block_request(document_policy(ctx), &rec, /*destination*/ "image",
+                                     /*redirect count*/ 0) == CSP_REQUEST_BLOCKED)) {
+        /* A blocked request is a NETWORK ERROR, which is "no data could be obtained" — §4.8.4.3's own gloss on
+           the broken state — so it takes the same arm the delivery does, without ever owing the host a reply. */
+        url_record_free(&rec);
+        st_set_int(ctx, st, "state", IMG_BROKEN);
+        img_queue_fire(ctx, elv, "error");
+        free(abs);
+        JS_FreeValue(ctx, st);
+        return JS_UNDEFINED;
+    }
+    url_record_free(&rec);
+
+    {
+        JSValueConst data[3];
+        JSValue deliver, uv, gv;
+        FetchRequest req;
+
+        uv = JS_NewString(ctx, abs);
+        CHECK(!JS_IsException(uv), "§4.8.4.3.5: OOM keeping an image request's address for its reply");
+        gv = JS_NewInt32(ctx, started);
+        data[0] = elv;
+        data[1] = uv;
+        data[2] = gv;
+        deliver = JS_NewCFunctionData(ctx, img_deliver, 1, 0, 3, data);
+        CHECK(!JS_IsException(deliver), "§4.8.4.3.5: OOM allocating an image reply's processResponse steps");
+        /* §4.8.4.3.5 creates the request and never sets a method, so it is Fetch §2.2 "Requests"'s `GET`.
+           STATED, because the reply seam is keyed on the (method, url) pair and a park that does not say is a
+           park the host's join cannot list. */
+        req.method = "GET";
+        req.url = abs;
+        req.headers = NULL;
+        req.body = NULL;
+        req.body_len = 0;
+        fetch_owe(ctx, deliver, &req);
+        JS_FreeValue(ctx, deliver);
+        JS_FreeValue(ctx, uv);
+        JS_FreeValue(ctx, gv);
+    }
+    free(abs);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+void html_image_update(JSContext *ctx, lxb_dom_element_t *el)
+{
+    JSValue wrap, st, fn, gv;
+    JSValueConst data[2];
+    int32_t gen;
+    const char *selected;
+    size_t selected_n = 0;
+
+    if (!img_is_node(lxb_dom_interface_node(el))) return;
+    DCHECK(g_ready, "an img element's data was updated before §4.8.3 was declared");
+
+    /* STEP 1: "If the element's node document is not fully active: Continue running this algorithm IN PARALLEL.
+       Wait until the element's node document is fully active. … Queue a microtask to continue this algorithm."
+       The wait ends when a Document that is not fully active becomes fully active, and the documents that reach
+       this line and are not — a `DOMParser` document, an `<iframe>`'s after it was removed — are documents no
+       step of this engine ever makes fully active, so the wait is the whole of what happens to them. That is
+       also the answer a browser gives: `new DOMParser().parseFromString(…)`'s images do not load. */
+    if (!img_document_fully_active(ctx, el)) return;
+
+    /* STEP 2: "If the user agent cannot support images, or its support for images has been disabled, then abort
+       the image request … set the current request's state to unavailable … and return."
+       NOT TAKEN, AND THAT IS THE DESIGN DECISION THIS FILE IS ABOUT. This agent supports images: it fetches
+       them, keeps their image requests, and fires their events. What it has no DECODER for is the pixels, and
+       the standard already has an arm for a resource whose data is in no supported format — the one the reply
+       lands in. Taking this exit instead would issue no request and fire no event, which deletes both an
+       endpoint the page named and the auto-firing sink an `onerror` is. */
+
+    wrap = node_wrap(ctx, lxb_dom_interface_node(el));
+    st = img_state(ctx, wrap);
+    /* "Let previousURL be the current request's current URL." It is read only by the maybe omit events
+       comparisons, and that flag is never set in this build (see img_deliver), so nothing is kept: a variable
+       whose every reader is behind a condition that cannot hold is a value nobody has. */
+
+    /* STEPS 3-5: "Let selected source be null and selected pixel density be undefined. If the element does not
+       use srcset or picture and it has a src attribute specified whose value is not the empty string, then set
+       selected source to the value of the element's src attribute and set selected pixel density to 1.0. Set
+       the element's LAST SELECTED SOURCE to selected source." */
+    selected = img_uses_srcset_or_picture(el) ? NULL : img_attr(el, "src", &selected_n);
+    DCHECK(selected == NULL || selected_n > 0,
+           "Lexbor answered a `src` attribute with a zero-length value — see the same assert in the "
+           "continuation; emptiness has exactly one spelling in this file and it is the NULL");
+    if (selected) {
+        JSValue s = JS_NewStringLen(ctx, selected, selected_n);
+        CHECK(!JS_IsException(s), "§4.8.4.3.5: OOM keeping an img element's last selected source");
+        JS_SetPropertyStr(ctx, st, "lastSelected", s);
+    } else {
+        JS_SetPropertyStr(ctx, st, "lastSelected", JS_NULL);
+    }
+
+    /* STEP 6: "If selected source is not null: Let urlString be … Let key be a tuple … If THE LIST OF AVAILABLE
+       IMAGES contains an entry for key: … fire an event named load … Abort the update the image data
+       algorithm."
+       THE LIST IS EMPTY IN THIS BUILD AND THAT IS DERIVED, NOT MISSING. §4.8.4.3.5 adds to it in exactly one
+       place — "Add the image to the list of available images using the key key" in the supported-file-format
+       arm of the reply — and no reply of this agent reaches that arm, so a lookup can never hit and the whole
+       of step 6 is a URL parse whose result is discarded. Nothing is stubbed for it, and the day a decoder
+       lands, §4.8.4.3.3 "The list of available images" is built with the arm that fills it. */
+
+    /* "QUEUE A MICROTASK to perform the rest of this algorithm, allowing the task that invoked this algorithm
+       to continue." The generation is bumped HERE, at the start of the instance, because what the continuation
+       asks is whether another instance was started AFTER it. */
+    gen = st_int(ctx, st, "gen") + 1;
+    st_set_int(ctx, st, "gen", gen);
+    gv = JS_NewInt32(ctx, gen);
+    data[0] = wrap;
+    data[1] = gv;
+    fn = JS_NewCFunctionData(ctx, img_update_rest, 0, 0, 2, data);
+    CHECK(!JS_IsException(fn), "§4.8.4.3.5: OOM allocating the microtask the rest of the algorithm runs in");
+    JS_EnqueueCallJob(ctx, fn, 0, NULL);   /* a MICROTASK, which is what the standard queues */
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, gv);
+    JS_FreeValue(ctx, st);
+    JS_FreeValue(ctx, wrap);
+}
+
+/* ---- §4.8.4.3.2 "Reacting to DOM mutations" --------------------------------------------------------------- */
+
+void html_image_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
+{
+    if (!img_is_node(lxb_dom_interface_node(el))) return;
+    /* A content attribute is the HTML namespace's; a `foo:src` is a different attribute entirely. */
+    if (ns && *ns) return;
+    DCHECK(local != NULL, "§4.8.4.3.2 was asked about an attribute change with no attribute name");
+    /* "The element's src, srcset, width, or sizes attributes are set, changed, or removed", plus "The element's
+       crossorigin attribute's state is changed" and "The element's referrerpolicy attribute's state is
+       changed". `width` is in the list because it feeds the auto-sizes machinery §4.8.4.3.9 reads, and it
+       counts as a relevant mutation whether or not this build acts on the rest of that sentence. */
+    if (strcmp(local, "src") && strcmp(local, "srcset") && strcmp(local, "width") &&
+        strcmp(local, "sizes") && strcmp(local, "crossorigin") && strcmp(local, "referrerpolicy"))
+        return;
+    html_image_update(ctx, el);
+}
+
+void html_image_inserted(JSContext *ctx, lxb_dom_element_t *el)
+{
+    /* "The img or source HTML element insertion steps … count the mutation as a relevant mutation." The
+       `source` half belongs to an element that uses picture, which §4.8.4.3.9's absent walk is what would read
+       — so this asks only about the `img`, and the day that walk exists it gains its own sibling entry. */
+    if (!img_is_node(lxb_dom_interface_node(el))) return;
+    html_image_update(ctx, el);
+}
+
+void html_image_parsed(JSContext *ctx, lxb_dom_node_t *root)
+{
+    lxb_dom_node_t *n;
+
+    DCHECK(root != NULL, "§4.8.4.3.2's parsed-tree walk was given no tree to walk");
+    DCHECK(g_ready, "a parsed tree reached §4.8.4.3.2 before html_image_declare ran");
+    /* SHADOW-INCLUDING, for the reason core/html/media_element.c's walk is: a `<template shadowrootmode>` has
+       by now become a shadow root whose children are in the tree and are not reachable by the ordinary walk. */
+    for (n = root; n; n = shadow_root_next_in_shadow_including(ctx, n, root)) {
+        if (!img_is_node(n)) continue;
+        /* PRESENCE, NOT VALUE — `<img src="">` IS an element that named a source, and §4.8.4.3.5's null-source
+           arm is where the empty string is answered, with the `error` event a browser fires for it. An element
+           with no `src` and no `srcset` has nothing to update and is skipped so a parse of a document full of
+           `<img alt>` placeholders queues nothing. */
+        if (!lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"src", 3) &&
+            !lxb_dom_element_has_attribute(lxb_dom_interface_element(n), (const lxb_char_t *)"srcset", 6))
+            continue;
+        html_image_update(ctx, lxb_dom_interface_element(n));
+    }
+}
+
+/* ---- §4.8.3's members ------------------------------------------------------------------------------------- */
+
+static JSValue img_state_of(JSContext *ctx, JSValueConst this_val, const char *member)
+{
+    if (!img_is(this_val))
+        return JS_ThrowTypeError(ctx, "%s called on something that is not an img element", member);
+    return img_state(ctx, this_val);
+}
+
+/* "The naturalWidth and naturalHeight getter steps are: If the image is not available, then return 0. Return
+   the respective component of the image's density-corrected natural width and height, in CSS pixels." */
+static JSValue js_img_natural(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = img_state_of(ctx, this_val, magic == 0 ? "naturalWidth" : "naturalHeight");
+    int state;
+
+    if (JS_IsException(st)) return st;
+    state = st_int(ctx, st, "state");
+    JS_FreeValue(ctx, st);
+    if (!img_state_available(state)) return JS_NewInt32(ctx, 0);   /* step 1 */
+    DFAIL("§4.8.3's naturalWidth/naturalHeight reached its second step — the DENSITY-CORRECTED NATURAL WIDTH "
+          "AND HEIGHT are a decoded image's, and this agent has no image decoder, so no image request of it "
+          "can be available. Build the decoder and the natural dimensions it produces together; a number "
+          "answered here without one would be a measurement of nothing");
+    return JS_NewInt32(ctx, 0);
+}
+
+/* "The complete getter steps are: If any of the following are true: both the src attribute and the srcset
+   attribute are omitted; the srcset attribute is omitted and the src attribute's value is the empty string;
+   the img element's current request's state is completely available and its pending request is null; or the
+   img element's current request's state is broken and its pending request is null, then return true. Return
+   false." */
+static JSValue js_img_complete(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = img_state_of(ctx, this_val, "complete");
+    lxb_dom_element_t *el;
+    bool has_src, has_srcset, src_empty, pending_null;
+    size_t sn = 0;
+    int state;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    el = element_of_value(this_val);
+    has_src = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"src", 3);
+    has_srcset = lxb_dom_element_has_attribute(el, (const lxb_char_t *)"srcset", 6);
+    /* "the src attribute's value is the empty string" — PRESENT with no value, which is one question and not
+       the two `img_attr`'s NULL merges (see its note). */
+    src_empty = has_src && img_attr(el, "src", &sn) == NULL;
+    state = st_int(ctx, st, "state");
+    {
+        JSValue p = JS_GetPropertyStr(ctx, st, "pendingURL");
+        pending_null = JS_IsNull(p);
+        JS_FreeValue(ctx, p);
+    }
+    JS_FreeValue(ctx, st);
+    if (!has_src && !has_srcset) return JS_TRUE;
+    if (!has_srcset && src_empty) return JS_TRUE;
+    if (state == IMG_COMPLETELY_AVAILABLE && pending_null) return JS_TRUE;
+    if (state == IMG_BROKEN && pending_null) return JS_TRUE;
+    return JS_FALSE;
+}
+
+/* "The currentSrc IDL attribute must return the img element's current request's current URL." */
+static JSValue js_img_current_src(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue st = img_state_of(ctx, this_val, "currentSrc"), out;
+
+    (void)magic;
+    if (JS_IsException(st)) return st;
+    out = JS_GetPropertyStr(ctx, st, "currentURL");
+    DCHECK(JS_IsString(out), "§4.8.3's currentSrc read an image request with no current URL — the record is "
+                             "created with the empty string §4.8.4.3 gives it and written by this file only");
+    JS_FreeValue(ctx, st);
+    return out;
+}
+
+/* ---- §4.8.3's LEGACY FACTORY FUNCTION --------------------------------------------------------------------- */
+
+/* "A legacy factory function is provided for creating HTMLImageElement objects (in addition to the factory
+ * methods from DOM such as createElement()): Image(width, height). When invoked, the legacy factory function
+ * must perform the following steps:
+ *   1. Let document be the CURRENT GLOBAL OBJECT's associated Document.
+ *   2. Let img be the result of CREATING AN ELEMENT given document, "img", and the HTML namespace.
+ *   3. If width is given, then SET AN ATTRIBUTE VALUE for img using "width" and width.
+ *   4. If height is given, then set an attribute value for img using "height" and height.
+ *   5. Return img."
+ *
+ * IT IS NOT `document.createElement("img")`, and the difference is observable twice. The document is the
+ * CURRENT global object's — the realm whose `Image` was called, which for a C function is the realm that
+ * DEFINED it (§3.7), which is why this function object is minted per realm rather than held in a static. And
+ * the width and height are set only WHEN GIVEN: `new Image()` produces an element with no `width` attribute at
+ * all, where a defaulted 0 would put `width="0"` in the serialized markup.
+ *
+ * DOM §4.9 "create an element" rather than §4.5's createElement is also what makes step 2 run no page code —
+ * there is no custom element registry lookup for `img`, and the internal creation is the half that has none. */
+static JSValue js_image_factory(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue img;
+
+    (void)magic;
+    /* Web IDL §3.7.2 "Legacy factory functions" step 1 of the function's steps: "If NewTarget is undefined,
+       then throw a TypeError." JS_CFUNC_step_ctor delivers NEW_TARGET in the receiver slot and undefined for a
+       plain call, which is how `Image()` is told apart from `new Image()`. */
+    if (JS_IsUndefined(this_val))
+        return JS_ThrowTypeError(ctx, "Failed to construct 'Image': please use the 'new' operator");
+    img = document_create_element_internal(ctx, "img", 3);            /* steps 1-2 */
+    if (JS_IsException(img)) return img;
+    DCHECK(img_is_node(lxb_dom_interface_node(element_of_value(img))),
+           "§4.8.3's legacy factory function created something that is not an `img` element — DOM §4.9's "
+           "create an element was given the local name `img` in the HTML namespace, so a node that is not one "
+           "means the element-interface resolution and this brand disagree about what an img is");
+    /* Steps 3-4. DOM §3.2.5 "set an attribute value" goes through the mutation chokepoint, which is what makes
+       the write per-flow AND what runs §4.9's attribute change steps — including this file's own, which is why
+       an `Image(w,h)` whose `width` counts as a relevant mutation is one update rather than a special case.
+       THE VALUE CROSSES AS THE VALUE, not as a C string this function formats: `new Image(cfg.thumbSize)`
+       passes an argument the page computed, and where that is unknown external input the attribute must keep
+       its provenance rather than be stamped with whatever number a coercion invented. element_attr_set_value
+       is the accessor that carries the whole triple into §@S's (element, name) shadow. */
+    if (argc >= 1) element_attr_set_value(ctx, img, "width", argv[0]);
+    if (argc >= 2) element_attr_set_value(ctx, img, "height", argv[1]);
+    return img;                                                        /* step 5 */
+}
+
+/* ---- declaration and installation -------------------------------------------------------------------------- */
+
+void html_image_declare(JSContext *ctx)
+{
+    static const IdlArgType FACTORY_ARGS[2] = { IDL_UNSIGNED_LONG, IDL_UNSIGNED_LONG };
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    DCHECK(!g_ready, "html_image_declare ran twice — §4.8.3's state key and machines are declared once per "
+                     "AGENT, and a second Symbol would leave every element that already carries an image "
+                     "request under the first key answering `unavailable` under the second");
+    g_state_key = JS_NewSymbol(ctx, "imageRequests", false);
+    CHECK(!JS_IsException(g_state_key), "§4.8.4.3: the image request slot key allocation failed");
+    g_atom_state = JS_ValueToAtom(ctx, g_state_key);
+    CHECK(g_atom_state != JS_ATOM_NULL, "§4.8.4.3: the image request slot key could not be interned");
+
+    g_id_factory = idl_method_id(ctx, FACTORY_ARGS, 2, js_image_factory, 0);
+    /* `Image(optional unsigned long width, optional unsigned long height)` — BOTH optional, which is what
+       makes the function object's `length` 0 (Web IDL §3.7.2: "the length of the shortest argument list"). */
+    idl_optional_from(0);
+    g_task_stepid = JS_RegisterStepDef(rt, &img_task_def);
+    g_ready = 1;
+}
+
+void html_image_install(JSContext *ctx, JSValueConst proto)
+{
+    DCHECK(g_ready, "a realm asked for §4.8.3's members before the interface was declared");
+    /* The ten `[Reflect]`ed members — `src`, `srcset`, `sizes`, `alt`, `useMap`, `crossOrigin`,
+       `referrerPolicy`, `loading`, `decoding`, `isMap` — are core/html/html_element.c's R_IMG and are already
+       on this prototype. What goes on here is every §4.8.3 member that COMPUTES rather than mirrors. */
+    idl_install_accessor(ctx, proto, "naturalWidth", js_img_natural, 0, -1);
+    idl_install_accessor(ctx, proto, "naturalHeight", js_img_natural, 1, -1);
+    idl_install_accessor(ctx, proto, "complete", js_img_complete, 0, -1);
+    idl_install_accessor(ctx, proto, "currentSrc", js_img_current_src, 0, -1);
+    idl_members_excluded(ctx, proto, "HTMLImageElement", IMG_ABSENT,
+                         (int)(sizeof(IMG_ABSENT) / sizeof(IMG_ABSENT[0])),
+                         "§4.8.3's `decode()` resolves when the image has been decoded and rejects with an "
+                         "`EncodingError` when it cannot be, and `width`/`height` answer §4.8.3's determine "
+                         "the dimensions — whose first branch is the element's RENDERED size and whose second "
+                         "is a decoded image's density-corrected natural size. Both need a component this "
+                         "agent does not have (an image decoder; a layout that gives an img a box), and a "
+                         "number answered without one is a measurement of nothing. `fetchPriority` and "
+                         "`controls` are §2.5.9's and §4.8.3's own attributes with no consumer in this build");
+}
+
+void html_image_install_global(JSContext *ctx, JSValueConst global, JSValueConst proto)
+{
+    JSValue factory;
+
+    DCHECK(g_ready, "§4.8.3's legacy factory function was installed before the interface was declared");
+    DCHECK(JS_IsObject(proto),
+           "§4.8.3's legacy factory function was installed with no HTMLImageElement.prototype — Web IDL "
+           "§3.7.2 gives F a non-configurable `prototype` naming the interface prototype object of THIS "
+           "realm, and a factory whose `prototype` is not that object makes `new Image() instanceof "
+           "HTMLImageElement` and `Image.prototype === HTMLImageElement.prototype` disagree");
+    /* Web IDL §3.7.2: "Let F be CreateBuiltinFunction(steps, length, id, « », realm)", with length 0 and id
+       `Image`. It is a step-declared constructor so the two `unsigned long` arguments are converted by the
+       declaration before the body runs, and so a call without `new` arrives with an undefined receiver. */
+    factory = idl_step_constructor(ctx, "Image", 0, g_id_factory);
+    CHECK(!JS_IsException(factory), "§4.8.3: the `Image` legacy factory function could not be allocated");
+    /* "Perform ! DefinePropertyOrThrow(F, "prototype", PropertyDescriptor{[[Value]]: proto, [[Writable]]:
+       false, [[Enumerable]]: false, [[Configurable]]: false})." NOT JS_SetConstructor, which would also write
+       `HTMLImageElement.prototype.constructor = Image` — a legacy factory function is not the interface's
+       constructor, and `Image.prototype.constructor` must stay `HTMLImageElement`. Flags 0 is exactly
+       {[[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false}. */
+    JS_DefinePropertyValueStr(ctx, factory, "prototype", JS_DupValue(ctx, proto), 0);
+    JS_SetPropertyStr(ctx, (JSValue)global, "Image", factory);
+}
+
+void html_image_free(JSRuntime *rt)
+{
+    if (!g_ready) return;
+    g_ready = 0;
+    JS_FreeAtomRT(rt, g_atom_state);
+    g_atom_state = JS_ATOM_NULL;
+    JS_FreeValueRT(rt, g_state_key);
+    g_state_key = JS_UNDEFINED;
+    g_id_factory = -1;
+    g_task_stepid = -1;
+}

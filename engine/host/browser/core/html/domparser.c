@@ -59,6 +59,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/media_element.h"
+#include "core/html/html_image.h"
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -216,6 +217,12 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
     html_script_parsed(ctx, root, /*inert*/false);
     html_style_element_parsed(ctx, root);
     media_element_parsed(ctx, root);
+    /* HTML §4.8.4.3.2 for the same tree, beside the media walk and for its reason. It costs a tag test per
+       node and issues nothing here: a `DOMParser` document is not FULLY ACTIVE, which is §4.8.4.3.5's own
+       first step and the reason a browser's `parseFromString` does not load the images in the markup it was
+       given. The walk is still made rather than skipped, because whether a document is fully active is the
+       ALGORITHM's question about the element's node document and not this call site's about its own. */
+    html_image_parsed(ctx, root);
     return doc;
 }
 
