@@ -135,13 +135,42 @@ try {
           : 'clean(asked, nothing differs)';
 } catch (e) { artifact.buildJsonErr = String(e.message); }
 
+/* A RUN SAYS WHICH OF FOUR STATES IT IS IN, AND IT SAYS IT IN `run`. This file asked `r.crashed`, a boolean
+   bridge.js DELETED — its own comment says why, at the site: "IT IS `run` AND NOT `crashed:true`, AND THE
+   BOOLEAN IS DELETED RATHER THAN KEPT BESIDE IT", because a flag that can say one of three states makes the
+   other two the same value. The name survived on THIS side, so every read of it was `undefined`, and the
+   census published `crashedRuns: 0` for pages whose every run aborted at engine creation — a false clean bill
+   on the row a reader trusts most, and the mirror of the eight `|| 0` defaults CLAUDE.md records: a name read
+   here and written nowhere, with nothing to make it crash. `crashWithoutReason`, the flag that exists to catch
+   exactly this class, read `r.crashed` too and so could never raise.
+   IT IS NOT A RENAME. Swapping the spelling would leave the next deletion just as silent, so the row's own
+   producer contract is ASSERTED first: every `_engineLog` entry carries `run` (bridge.js's engineLogWrite
+   writes it unconditionally and DCHECKs the word against RUN_OUTCOMES), so an entry without one is that seam
+   having changed under this probe and must stop the row rather than be counted as a run of some kind.
+   AND "NOT CRASHED" IS NOT WHAT THE COUNTER READS WANT. They want the runs that CARRY counters, which bridge
+   states positively: a crashed run reports none at all, deliberately, "because seven zeroes read as a run that
+   explored nothing". So the filter names the two outcomes that have them rather than negating one that does
+   not. */
+const RUN_WITH_COUNTERS = new Set(['complete', 'partial']);
+for (const r of runs) {
+  if (typeof r.run !== 'string') {
+    console.log('ROW ' + JSON.stringify({ id, url, fatal: 'an _engineLog entry carries no `run` word — the ' +
+      'offscreen’s run-outcome contract changed under this probe, so no count below it means anything', sample: r }));
+    process.exit(0);
+  }
+}
+const counted = myRuns.filter(r => RUN_WITH_COUNTERS.has(r.run));
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
   dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
   runsTotal: runs.length,
   runsMine: myRuns.length,
-  crashedRuns: runs.filter(r => r.crashed).length,
-  crashedMine: myRuns.filter(r => r.crashed).length,
+  crashedRuns: runs.filter(r => r.run === 'crashed').length,
+  crashedMine: myRuns.filter(r => r.run === 'crashed').length,
+  /* WHAT THE RUNS OF THIS ORIGIN ACTUALLY SAID, spelled out rather than summarised into one boolean — the
+     shape that produced this defect. A site whose engine never started and a site that finished with nothing
+     are different findings and this is where they stop looking alike. */
+  runOutcomesMine: myRuns.reduce((m, r) => (m[r.run] = (m[r.run] || 0) + 1, m), {}),
   /* EVERY ENTRY CARRIES THE RUN'S CUMULATIVE TOTAL, so a SUM counts one endpoint once per snapshot and a MAX
      over a log that is never cleared between page loads is non-decreasing by construction. This file reported
      37 for a page that had learned ONE, and reported three repetitions as a rising spread when the instrument
@@ -149,13 +178,13 @@ const row = {
      not a per-run buffer. So: read the LAST entry, which is that run's own total, and count DISTINCT addresses
      for the headline. `endpointSnapshots` keeps the old quantity under a name that says what it is, because it
      is still the right thing to watch a live run advance by. */
-  endpoints: (() => { const ok = myRuns.filter(r => !r.crashed); return ok.length ? ok[ok.length - 1].endpoints : null; })(),
-  endpointSnapshots: myRuns.filter(r => !r.crashed).length,
-  sinks: (() => { const ok = myRuns.filter(r => !r.crashed); return ok.length ? ok[ok.length - 1].sinks : null; })(),
-  flows: (() => { const ok = myRuns.filter(r => !r.crashed); return ok.length ? ok[ok.length - 1].flows : null; })(),
-  switches: (() => { const ok = myRuns.filter(r => !r.crashed); return ok.length ? ok[ok.length - 1].switches : null; })(),
-  jobsRun: (() => { const ok = myRuns.filter(r => !r.crashed); return ok.length ? ok[ok.length - 1].jobsRun : null; })(),
-  parked: (() => { const ok = myRuns.filter(r => !r.crashed); return ok.length ? ok[ok.length - 1].park : null; })(),
+  endpoints: counted.length ? counted[counted.length - 1].endpoints : null,
+  endpointSnapshots: counted.length,
+  sinks: counted.length ? counted[counted.length - 1].sinks : null,
+  flows: counted.length ? counted[counted.length - 1].flows : null,
+  switches: counted.length ? counted[counted.length - 1].switches : null,
+  jobsRun: counted.length ? counted[counted.length - 1].jobsRun : null,
+  parked: counted.length ? counted[counted.length - 1].park : null,
   docsAnswered: mine.filter(d => d.answered).length,
   docsSeenMine: mine.length,
   docsAllOrigins: [...new Set((cur.docs || []).map(d => { try { return new URL(d.url).origin; } catch { return d.url; } }))],
@@ -179,7 +208,7 @@ const row = {
      the loudest thing the engine can say -- was reported as a crash nobody could explain, while the row's own
      `atE` field held the cond and the file:line. Every abort on this corpus that fires a CHECK rather than a
      DCHECK read that way, which is a flag that raises itself precisely where it is least true. */
-  crashWithoutReason: runs.filter(r => r.crashed).length > 0 &&
+  crashWithoutReason: runs.filter(r => r.run === 'crashed').length > 0 &&
                       [...mine.flatMap(d => d.errs || []), ...(j.match(/@WHY[^\n]*/g) || []),
                        ...(j.match(/@E [^\n]*/g) || [])].length === 0,
   crashesFlag: cur.crashes,
