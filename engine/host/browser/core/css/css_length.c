@@ -222,7 +222,7 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
               "answers the computed value for an element that generates no box. BUILD §9's missing conjunct "
               "over the predicate that already decides it, core/dom/element_view.h's `element_view_has_box`, "
               "so the resolved value takes §9's computed-value escape before a length is ever absolutized "
-              "(core/layout/used_value.c's uv_icb_width names the same one)");
+              "(core/layout/used_value.c's uv_icb names the same one)");
     w = viewport_icb_width(realm);
     h = viewport_icb_height(realm);
     /* §6.1.2.1's ONE DIVERGENCE, asserted rather than assumed: "if the value of overflow or scrollbar-gutter on
@@ -603,7 +603,7 @@ CssPx css_length_snap_line_width(JSContext *realm, CssPx len)
               "agent answers the computed value for an element that generates no box, and CSSOM §9 reaches "
               "that answer through a conjunct it does not state: BUILD it over "
               "core/dom/element_view.h's `element_view_has_box`, which is the same one the viewport-percentage "
-              "arm above and core/layout/used_value.c's uv_icb_width name");
+              "arm above and core/layout/used_value.c's uv_icb name");
     ratio = viewport_device_pixel_ratio(realm);
     device = len.px * ratio;
     DCHECK(ratio > 0.0,

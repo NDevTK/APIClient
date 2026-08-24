@@ -300,7 +300,7 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
               "expected to RENDER img elements … according to the first applicable rules\", and this element "
               "is not being rendered by anything. BUILD CSSOM §9's missing conjunct over "
               "core/dom/element_view.h's `element_view_has_box` — the same escape core/layout/used_value.c's "
-              "`uv_icb_width` names in full — so the resolved value takes §9's computed-value arm before any "
+              "`uv_icb` names in full — so the resolved value takes §9's computed-value arm before any "
               "rendering rule is asked");
     return rep_img(dctx, el);
 }

@@ -186,9 +186,12 @@ static bool bf_edge_is_open(lxb_dom_element_t *el, bool top)
 }
 
 /* §8.3.1's `min-height` conjunct, which its third and fourth adjoining pairs both carry: "zero computed
-   min-height". `min-height: auto` is css-sizing §4.1's AUTOMATIC MINIMUM SIZE, which is 0 for every box that is
-   not a flex or grid item — and such an item never reaches this walk, because core/layout/used_value.c
-   classifies it and sends its size to its container's algorithm. */
+   min-height". `min-height: auto` is the initial value css-sizing-3 §3.1.2 "Minimum Size Properties: the
+   min-width and min-height properties" gives the property, and §3.2 "Sizing Values: the <length-percentage>,
+   auto | none, min-content, max-content, and fit-content() values" resolves it: "unless otherwise defined by
+   the relevant layout module, however, it resolves to a used value of 0". The one module that defines
+   otherwise is css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items", and such an item never reaches this
+   walk — core/layout/used_value.c classifies it and sends its size to its container's algorithm. */
 static bool bf_min_height_is_zero(lxb_dom_element_t *el)
 {
     return bf_length_is_zero(el, "min-height") || bf_length_is(el, "min-height", "auto");
@@ -454,11 +457,15 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                the bottom (possibly collapsed) margin of its last in-flow child". */
             pos = css_px_add(pos, bf_run_value(run));
         }
-        /* CSS 2.1 §10.7's CLAMP by `min-height`, for the one limit that is always in effect: its initial value
-           is 0 (css-sizing's `auto` is the same 0 for every box this walk reaches), and §10.6.3's distance can
-           be NEGATIVE — a last in-flow child with a negative bottom margin whose run does not escape is exactly
-           that. So the floor is §10.7 running rather than a guard against it, and core/layout/used_value.c's
-           `uv_require_unclamped` is what asserts that no OTHER limit was declared. */
+        /* §10.6.3's distance can be NEGATIVE — a last in-flow child with a negative bottom margin whose run
+           does not escape is exactly that — and a box's CONTENT HEIGHT cannot be, which is css-sizing-3 §3.3
+           "Box Edges for Sizing: the box-sizing property"'s own sentence ("as the content width and height
+           cannot be negative, this computation is floored at zero"). So this floor belongs to the walk and
+           holds with no limit declared at all. CSS 2.1 §10.7's CLAMP is a SEPARATE pass over the extent this
+           walk returns and is core/layout/used_value.c's — it re-runs the rules with `min-height`/`max-height`
+           substituted, and it runs on this value at every entry that consumes it. Calling this floor "§10.7's
+           min-height running early" was true of the number and wrong about which section owns it, and it made
+           the real clamp look already done. */
         out.content_h = css_px_max(pos, css_px(0.0));
         return out;
     }
@@ -503,13 +510,15 @@ static bool bf_height_needs_content(lxb_dom_element_t *el)
    parent's walk stacks, and where it comes from depends on one thing:
      - a box whose `height` computed to a LENGTH has a used value core/layout/used_value.h already derives, and
        re-deriving it here would be §10.6.3 answering a question §10.6.2 owns. It is asked for, and every arm
-       used_value.c cannot compute — a `box-sizing` conversion, a `min-`/`max-` clamp, an intrinsic size —
-       crashes there naming its own section;
+       used_value.c cannot compute — an intrinsic size, an out-of-flow box's constraint equation — crashes
+       there naming its own section;
      - a box whose `height` is `auto` has the walk's own content height, and §8.1's box model turns it into a
        border-box height by adding the same four terms used_value.h computes for every other edge. ASKING
        used_value.h for it instead would re-enter this walk through its `auto` arm, so every level of the tree
        would be walked twice over and the cost would double with each: the entry that takes the content extent
-       exists precisely so the conversion is stated once without the cycle.
+       exists precisely so the conversion is stated once without the cycle. That entry is ALSO where CSS 2.1
+       §10.7's clamp runs for this box, over the extent handed to it — the substituted pass is a declared
+       length, so it needs no walk and the cycle stays broken.
    A box that COLLAPSES THROUGH has no border box to stack, which is what the flag is for. */
 static BfBox bf_box(lxb_dom_element_t *el)
 {

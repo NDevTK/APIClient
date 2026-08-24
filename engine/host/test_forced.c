@@ -848,6 +848,86 @@ static const char *HTML =
     "sn.setAttribute('srcset', '/api/nest-40.png 40w, /api/nest-4000.png 4000w');"
     "document.body.appendChild(sn);"
     "fetch('/api/sizesnested?src=' + encodeURIComponent(sn.currentSrc));"
+    /* ---- CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" and §10.7 "Minimum and
+       maximum heights: 'min-height' and 'max-height'" --------------------------------------------------------
+       EVERY BOX HERE SITS INSIDE AN EXPLICITLY SIZED ANCESTOR, and that is what makes `===` legal in this block
+       for the same reason the replaced block above states: a used width solved against the INITIAL CONTAINING
+       BLOCK carries the viewport's fact, so comparing one would fork instead of deciding. Rooting the chain in
+       a declared `600px` gives every number below a single-point domain — and the one probe that deliberately
+       does depend on the viewport EMITS, at the end.
+       THE FIRST PAIR IS THE WHOLE POINT OF THE SECTION. §10.4's clamp is not `min(tentative, max-width)`: it
+       re-runs §10.3 "using the computed value of 'max-width' as the computed value for 'width'", and §10.3.3's
+       margin rules BRANCH on that — rule 5 zeroes an `auto` margin when `width` is `auto`, rules 4 and 6 give
+       it the SLACK when it is not. So `margin: 0 auto` under a `max-width` that binds is centred (100px each
+       side of a 400px box in a 600px block) and a clamp on the number alone would leave both margins at 0. */
+    "var cw = document.createElement('div'); document.body.appendChild(cw);"
+    "cw.style.setProperty('width', '600px');"
+    "var cx = document.createElement('div'); cw.appendChild(cx);"
+    "cx.style.setProperty('max-width', '400px');"
+    "cx.style.setProperty('margin-left', 'auto'); cx.style.setProperty('margin-right', 'auto');"
+    "var cxc = getComputedStyle(cx);"
+    "fetch('/api/clampcentre?v=' + (cxc.width === '400px' && cxc.marginLeft === '100px' &&"
+    " cxc.marginRight === '100px' ? 'iscentred' : 'wrong'));"
+    /* §10.4's THREE STEPS ARE ORDERED AND THE ORDER IS OBSERVABLE. Step 3 is stated over "the RESULTING width"
+       — step 2's output — so when the two limits contradict each other `min-width` is the one that wins. A
+       three-argument clamp written in either order gives 300 here; the sequence gives 500. */
+    "var cm = document.createElement('div'); cw.appendChild(cm);"
+    "cm.style.setProperty('min-width', '500px'); cm.style.setProperty('max-width', '300px');"
+    "fetch('/api/clamporder?v=' + (getComputedStyle(cm).width === '500px' ? 'isminwins' : 'wrong'));"
+    /* §10.4's `<percentage>`: "calculated with respect to the width of the generated box's containing block",
+       which is the 600px content box above — and a `min()` is not a second implementation of anything, because
+       core/css/css_math.c resolves a math function inside the COMPUTED value, so `max-width` receives one
+       absolute length. */
+    "var cp = document.createElement('div'); cw.appendChild(cp);"
+    "cp.style.setProperty('max-width', '50%');"
+    "var cf = document.createElement('div'); cw.appendChild(cf);"
+    "cf.style.setProperty('max-width', 'min(500px, 200px)');"
+    "fetch('/api/clamppct?v=' + (getComputedStyle(cp).width === '300px' &&"
+    " getComputedStyle(cf).width === '200px' ? 'ispct' : 'wrong'));"
+    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" — "it affects the interpretation of ALL
+       SIZING PROPERTIES" — so a `max-width` under `border-box` bounds the BORDER box, and §3.3's own floor
+       then applies to the substituted pass exactly as it does to a declared length: "as the content width and
+       height cannot be negative, this computation is floored at zero", so a 50px limit against an 80px
+       surround leaves the border box at 80 and not at 50. This is the case a `min` over two numbers gets
+       wrong in the other direction. */
+    "var cb2 = document.createElement('div'); cw.appendChild(cb2);"
+    "cb2.style.setProperty('box-sizing', 'border-box');"
+    "cb2.style.setProperty('padding-left', '40px'); cb2.style.setProperty('padding-right', '40px');"
+    "cb2.style.setProperty('max-width', '50px');"
+    "fetch('/api/clampborderbox?v=' + (getComputedStyle(cb2).width === '80px' ? 'isfloored' : 'wrong'));"
+    /* §10.7's PERCENTAGE ESCAPE, which is a RULE and not a missing basis: "if the height of the containing
+       block is not specified explicitly (i.e., it depends on content height), and this element is not
+       absolutely positioned, the percentage value is treated as '0' (for 'min-height') or 'none' (for
+       'max-height')." So `max-height: 50%` inside an `auto`-height parent does NOTHING — the box keeps its
+       200px — while the same declaration inside a 400px parent clamps a 200px box up to its 300px floor. The
+       pair is one test because a basis invented for the first case would silently change the first number. */
+    "var ha = document.createElement('div'); document.body.appendChild(ha);"
+    "var hax = document.createElement('div'); ha.appendChild(hax);"
+    "hax.style.setProperty('height', '200px'); hax.style.setProperty('max-height', '50%');"
+    "var hd = document.createElement('div'); document.body.appendChild(hd);"
+    "hd.style.setProperty('height', '400px');"
+    "var hdx = document.createElement('div'); hd.appendChild(hdx);"
+    "hdx.style.setProperty('height', '200px'); hdx.style.setProperty('min-height', '75%');"
+    "fetch('/api/clamppcth?v=' + (getComputedStyle(hax).height === '200px' &&"
+    " getComputedStyle(hdx).height === '300px' ? 'isindefinite' : 'wrong'));"
+    /* §10.7 OVER §10.6.3's CONTENT-BASED HEIGHT, which is the one path where the tentative value comes from a
+       walk rather than from a declaration — and the CHILD's clamp is what this asserts. The inner box has no
+       content and a 120px floor, so its border box is 120; the outer box's `auto` height is that stack. A
+       child that reported its walk's 0 unclamped would make the OUTER height wrong too, with nothing
+       downstream to say so. */
+    "var hw = document.createElement('div'); document.body.appendChild(hw);"
+    "var hwi = document.createElement('div'); hw.appendChild(hwi);"
+    "hwi.style.setProperty('min-height', '120px');"
+    "fetch('/api/clampwalk?v=' + (getComputedStyle(hwi).height === '120px' &&"
+    " getComputedStyle(hw).height === '120px' ? 'iswalk' : 'wrong'));"
+    /* AND THE ONE THAT MUST NOT BE COMPARED. `min(50vw, 400px)` picks 400 at the modelled viewport and 50vw at
+       a narrower one, so css_length.h's rule is that the clamped used width carries the ICB's fact even though
+       400 won here — "the operand that lost at this viewport is the one that wins at another". Emitting it is
+       what states that: a `===` here would fork the world instead of deciding, and a number that had gone
+       CONCRETE would mean `css_px_min`'s union had been dropped somewhere in §10.4's substitution. */
+    "var cv = document.createElement('div'); document.body.appendChild(cv);"
+    "cv.style.setProperty('max-width', 'min(50vw, 400px)');"
+    "fetch('/api/clampviewport?w=' + getComputedStyle(cv).width);"
     /* ---- css-fonts-4 §2.5's computed `font-size` and css-values-4 §6.1.1's `em`/`rem` --------------------
        EVERY VALUE COMPARED HERE IS ROOTED IN A DECLARED ABSOLUTE FONT SIZE, deliberately: an undeclared one is
        §2.5's `medium`, which IS the CSS_ENV_DEFAULT_FONT_SIZE fact, so its computed value is a CONCOLIC and a

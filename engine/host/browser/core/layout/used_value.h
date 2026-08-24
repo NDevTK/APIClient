@@ -32,10 +32,30 @@
  *   - A `width` or `height` whose computed value is an absolute length, for every box type but a table box and
  *     a flex or grid item. §10.3.3's equation solves for `width` only when `width` is `auto`; §10.3.5,
  *     §10.3.7 and §10.3.9 each say the same for their own box type. A TABLE may be widened past it (§17.5.2)
- *     and a FLEX ITEM's size is its container's algorithm and not §10's at all, so both crash. One further
- *     conjunct is ASSERTED rather than assumed, because it is a case in which the declared length is not the
- *     used one and it is not visible as a crash otherwise: §10.4/§10.7's clamp by a declared `min-`/`max-`
- *     limit.
+ *     and a FLEX ITEM's size is its container's algorithm and not §10's at all, so both crash.
+ *   - AND §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" and §10.7 "Minimum and maximum
+ *     heights: 'min-height' and 'max-height'", WHICH ARE A SECOND PASS AND NOT A CLAMP ON THE NUMBER. Both
+ *     sections say the same three sentences about their own axis: the tentative used value is §10.3's answer
+ *     computed WITHOUT the limits, and then "the rules above are applied AGAIN, but this time using the
+ *     computed value of 'max-width' AS THE COMPUTED VALUE FOR 'width'" — so what is substituted is the input
+ *     to the whole of §10.3, which re-solves whichever MARGIN was `auto`. `margin: 0 auto; max-width: 1200px`
+ *     on an `auto`-width block is the case that makes the difference visible: with the substitution the
+ *     margins reach §10.3.3's rules 4 and 6 and split the slack, which is what centres the box; with a clamp
+ *     on the number alone rule 5 still sees `auto` and both margins are 0. The two limits' own used values are
+ *     part of this: a percentage `max-width` resolves against the containing block's WIDTH (§10.4), a
+ *     percentage `max-height` against its HEIGHT — and §10.7 has a rule rather than an omission for the common
+ *     case where that height is indefinite, "the percentage value is treated as '0' (for 'min-height') or
+ *     'none' (for 'max-height')". `min-width: auto` is not CSS 2.1's value at all: css-sizing-3 §3.1.2 makes
+ *     it the INITIAL value and §3.2 resolves it to a used 0 for every box that is not a flex or grid item,
+ *     which is the same 0 CSS 2.1 initialises the property to. A `min()`/`max()`/`clamp()` LIMIT needs nothing
+ *     here — core/css/css_math.h resolves a math function inside the computed value, so it arrives as one
+ *     absolute length already carrying the union of its operands' environment facts.
+ *     §10.4's OTHER algorithm — the constraint-violation table, for a replaced element with an intrinsic ratio
+ *     and both sizes `auto` — is a joint solve over BOTH axes that preserves the ratio, and it CRASHES naming
+ *     itself. Its antecedent is false in this build for a reason that is a fact about the tree rather than
+ *     about the spec: core/layout/replaced_element.h mints an intrinsic ratio nowhere, because the only object
+ *     with natural dimensions is HTML §15.4.2's fourth rule's 0-by-0 one and css-images-3 §4.1's degenerate
+ *     test denies that a ratio. An image DECODER is what makes it reachable.
  *   - AND THE SAME SIZE UNDER `box-sizing: border-box`, which is a COMPUTATION and not a second assertion.
  *     What stood here called it one, on the ground that css-sizing §5 "makes the declared value the BORDER
  *     box's while §10.2 and CSSOM §9 both mean the content box's" — and §5's own next sentence says the
@@ -67,9 +87,11 @@
  *         margin-left + border-left-width + padding-left + width + padding-right + border-right-width +
  *         margin-right = width of containing block
  *     are every one of them read back through the arms above, so the section is a solve for whichever of them
- *     is `auto` (rule 5 for `width`, rules 2/4/6 for the margins) and nothing more — plus §10.4's clamp by
- *     `min-width`, whose initial 0 is always in effect and is therefore part of the answer rather than a
- *     second pass. What §10.3.3 still crashes for is its OVER-CONSTRAINED case, and it is not a layout gap:
+ *     is `auto` (rule 5 for `width`, rules 2/4/6 for the margins) and nothing more. Its own floor at zero is
+ *     css-sizing-3 §3.3's — "as the content width and height cannot be negative, this computation is floored
+ *     at zero" — and NOT §10.4's `min-width: 0` running early, which is what stood here and made §10.4's real
+ *     second pass look already done. What §10.3.3 still crashes for is its OVER-CONSTRAINED case, and it is
+ *     not a layout gap:
  *     WHICH of the two margins is ignored is a fact about the containing block's computed `direction`, and
  *     `direction` is not among the properties core/css/css_computed_value.h models — the cascade inherits it
  *     now (core/css/css_defaulting.h), and there is no entry to read the computed value through.
@@ -162,8 +184,11 @@ CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
 
 /* THE SAME BORDER EDGE, for a caller that has ALREADY derived the box's CONTENT extent on that axis. CSS 2.1
    §8.1's box model is one nesting — content, then padding, then border — so this is that content extent plus
-   the four terms css-sizing §5's conversion is stated over, computed in the one function that owns them.
-   §10.4/§10.7's clamp is asserted here as it is on every other path.
+   the four terms css-sizing-3 §3.3's conversion is stated over, computed in the one function that owns them.
+   §10.7's CLAMP RUNS HERE, over the extent handed in — which IS §10.4/§10.7 step 1's "tentative used height",
+   so this is the same algorithm and not a second copy of it. It must run: this box is being stacked inside its
+   parent's own §10.6.3 walk, and a child that reported an unclamped height would make the parent's height
+   wrong as well as its own, with nothing downstream to say so.
    ITS CALLER IS core/layout/block_flow.c AND A CYCLE IS WHY IT EXISTS. A `height: auto` box's content extent
    IS CSS 2.1 §10.6.3's walk, and `used_value_px(el, "height")` is what RUNS that walk — so a walk that asked
    the entry above for one of its own children's border boxes would re-enter itself one level down, and every
