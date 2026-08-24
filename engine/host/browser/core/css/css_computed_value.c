@@ -589,20 +589,39 @@ static CssLength computed_font_size(lxb_dom_element_t *el, char *spec)
     /* §2.5's `Percentages: refer to parent element's font size` — resolved HERE, because that is a value the
        cascade has and not a containing block a layout would have to produce. A percentage of the parent is
        what makes `em` and `%` two spellings of one thing on this property, which §2.5's own example set says
-       (`em { font-size: 150% }` beside `em { font-size: 1.5em }`). */
-    if (len.kind == CSS_LENGTH_PERCENTAGE)
-        return css_cv_px(css_px_scale(css_cv_parent_font_size(el), len.pct / 100.0));
+       (`em { font-size: 150% }` beside `em { font-size: 1.5em }`).
+       AND `font-size` IS css-values-4 §10.11 "Computed Value"'s OWN WORKED EXAMPLE of the property that
+       resolves them here rather than leaving them in the function: "whereas font-size computes percentage
+       values at computed value time so that font-relative length units can be computed, background-position has
+       layout-dependent behavior for percentage values, and thus does not resolve percentages until used-value
+       time … font-size will compute such expressions directly into a length." So `calc(150% - 2px)` on this
+       property is ONE absolute length, resolved against the same basis §2.5 gives a bare percentage, and the
+       two arms are one because §10.11 makes them one value. */
+    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED)
+        len = css_cv_px(css_length_resolve_pct(len, css_cv_parent_font_size(el)));
     DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
            "a `font-size` cascaded to a value that is neither one of css-fonts-4 §2.5's keywords nor a "
            "`<length-percentage>`. §2.5's `Value:` line is `<absolute-size> | <relative-size> | "
            "<length-percentage [0,∞]> | math` and admits nothing else — no `auto`, no `normal`, no bare "
            "`<number>` — so this is a declaration that reached the cascade without its grammar, which lexbor's "
            "own `font-size` state machine and core/css/css_font_shorthand.c's `<'font-size'>` both refuse");
-    DCHECK(len.px.px >= 0.0,
-           "a NEGATIVE `font-size` reached the computed value. css-fonts-4 §2.5 states the range in the "
-           "property's `Value:` line — `<length-percentage [0,∞]>` — and twice again in words ('negative "
-           "lengths are invalid', 'negative percentages are invalid'), so the declaration should have been "
-           "DROPPED by the grammar that admitted it rather than absolutized here");
+    /* css-values-4 §9.1 "Numeric Functions"'S CLAMP, AND WHY IT IS A CLAMP RATHER THAN THE ASSERT THAT STOOD
+       HERE. §2.5's range is `[0,∞]` and a negative LITERAL is a dropped declaration — §5.1 "Range Restrictions
+       and Range Definition Notation": "if the value is outside the allowed range, then unless otherwise
+       specified, the declaration is invalid and must be ignored" — which is what the assert asserted and is
+       still true. What is no longer true is that nothing else can be negative: §9.1 states the opposite rule
+       for a math function, "as the value of a numeric function can't, generally, be known at parse time when
+       range restrictions are enforced, numeric functions returning out-of-range values NEVER cause a
+       declaration to become invalid. Instead, the value of a numeric function is CLAMPED to the range allowed
+       in the context it is used at computed value time if possible". `font-size: calc(1rem - 20px)` is
+       therefore a valid declaration computing to 0, and asserting it away would report a page's own CSS as an
+       engine invariant. The two are told apart by the derivation and not by a flag: a negative literal cannot
+       reach here, so a negative that does is a top-level calculation's result.
+       IT IS `css_px_max` AND NOT AN `if`, because the clamped-away value's environment facts are the value's:
+       `calc(1rem - 20px)` is a function of the reader's DEFAULT FONT SIZE at every viewport, including the ones
+       where it lands at the floor, and taking the bare 0 would delete the arm where the reader's own preference
+       makes it positive. */
+    len.px = css_px_max(len.px, css_px(0.0));
     return len;
 }
 
@@ -815,9 +834,45 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
             free(pct);
             return out;
         }
+        if (len.kind == CSS_LENGTH_CALCULATED) {
+            char *calc;
+
+            /* css-values-4 §10.13 "Serialization"'s Sum branch — see css_length.h for the shape and for
+               §10.13's own `calc(20px + 0%)` → `calc(0% + 20px)` example that pins it.
+               THE ONE RESIDUE IT CANNOT NAME IS THE ONE WITH NO LENGTH TERM. §10.10.1 "Simplification" ends a
+               Sum with "if root has only a single child at this point, return the child", so `calc(50%)`
+               simplifies to a bare `<percentage>` and serializes as `50%`, while `calc(50% + 0px)` keeps both
+               terms because "zero-valued terms cannot be simply removed from a Sum" — and the pair that arrives
+               here is identical in both cases. A carried ENVIRONMENT FACT settles it whenever there is one
+               (only a `<length>` leaf can put one there, so its presence proves the dimension term is), and a
+               plain zero with no fact does not.
+               THIS IS THE ONLY PLACE THE DISTINCTION IS OBSERVABLE — every used value resolves the two to the
+               same number against every basis — which is why it crashes HERE rather than being carried by
+               every `CssLength` in the engine. */
+            if (len.px.px == 0.0 && len.px.env == CSS_ENV_NONE)
+                DFAIL("css-values-4 §10.13 \"Serialization\" was asked for a math function whose residue is a "
+                      "percentage and a ZERO length carrying no environment fact, and the two values that "
+                      "produce it serialize DIFFERENTLY: `calc(50%)` is §10.10.1's single-child Sum, which "
+                      "\"returns the child\", so its computed value is a bare `<percentage>` and §10.13's step "
+                      "for a root that \"is a numeric value (number, percentage, or dimension)\" writes `50%`; "
+                      "`calc(50% + 0px)` keeps both terms, because \"zero-valued terms cannot be simply removed "
+                      "from a Sum\", and writes `calc(0% + 0px)`. `CssMathValue` records `pct_term` and has no "
+                      "`num_term`, so the Sum's dimension child is not known to have existed. BUILD the "
+                      "symmetric flag in core/css/css_math.c — the same §10.10.1 sentence justifies both, and "
+                      "the producers are the ones that already write `pct_term` — then `css_length_parse` "
+                      "answers CSS_LENGTH_PERCENTAGE for the single-child Sum and this arm has no ambiguity "
+                      "left to crash on");
+            calc = css_length_serialize_calc(len.pct, len.px.px);
+            out = JS_NewString(ctx, calc);
+            free(calc);
+            /* The percentage is unresolved, so what this string DERIVES from is the length term's facts — a
+               `calc(100% - 2rem)` reports a different `calc(100% - Npx)` to a reader whose default font size
+               differs, and that is the same fork `css_resolved_px` mints for a bare `2rem`. */
+            return viewport_env_derived(len.px, out);
+        }
         DCHECK(len.kind == CSS_LENGTH_KEYWORD,
-               "a computed length is none of the three kinds css_length.h defines — the parse answers exactly "
-               "one of them and crashes rather than inventing a fourth");
+               "a computed length is none of the four kinds css_length.h defines — the parse answers exactly "
+               "one of them and crashes rather than inventing a fifth");
         return JS_NewString(ctx, len.keyword);
     }
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);

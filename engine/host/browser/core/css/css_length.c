@@ -442,22 +442,19 @@ CssLength css_length_parse(JSContext *realm, const CssFontMetrics *font, const c
                against a <length>"), so `<length-percentage>` is the production asked for and `calc(25% + 50px)`
                is valid here for exactly the reason `width: 25%` is. */
             if (css_math_eval(p, strlen(p), &res, CSS_MATH_PROD_LENGTH_PERCENTAGE, &v)) {
-                if (v.pct_term)
-                    DFAIL("a length-valued property's value is a math function that resolves to a LENGTH AND A "
-                          "PERCENTAGE together (`width: calc(100% - 2em)`), and `CssLength` has no kind that "
-                          "carries both. css-values-4 §10.11 'Computed Value' is why it must: \"Where "
-                          "percentages are not resolved at computed-value time, they are not resolved in math "
-                          "functions, e.g. calc(100% - 100% + 1px) resolves to calc(0% + 1px), not to 1px\" — "
-                          "so the computed value of one of these IS the pair, and the basis it needs is the "
-                          "containing block, which core/layout/used_value.h owns. The grammar and the type "
-                          "algebra are built (core/css/css_math.h) and `CssMathValue` already answers the pair; "
-                          "what is missing is downstream. BUILD a fourth `CssLengthKind` carrying the "
-                          "`CssPx` and the percentage together, and give it its arm in every used-value "
-                          "algorithm that already has one for CSS_LENGTH_PERCENTAGE — CSS 2.1 §10.3's width "
-                          "resolution, §10.4's min/max clamp, §10.5's height and §10.6.3's auto-height walk — "
-                          "so the two terms are resolved against the SAME basis in one step rather than a "
-                          "percentage being resolved and a length added afterwards");
-                out.kind = CSS_LENGTH_ABSOLUTE;
+                /* §10.11 "Computed Value": "Where percentages are not resolved at computed-value time, they are
+                   not resolved in math functions, e.g. calc(100% - 100% + 1px) resolves to calc(0% + 1px), not
+                   to 1px." So a surviving percentage TERM is the whole test and the percentage's NUMBER is not
+                   — §10.10.1 "Simplification"'s "zero-valued terms cannot be simply removed from a Sum" is why
+                   `css_math_eval` answers `pct_term` beside `pct`, and reading `pct != 0` here would turn that
+                   worked example's `calc(0% + 1px)` into the `1px` the sentence says it is not. */
+                if (v.pct_term) {
+                    out.kind = CSS_LENGTH_CALCULATED;
+                    out.pct = v.pct;
+                }
+                else {
+                    out.kind = CSS_LENGTH_ABSOLUTE;
+                }
                 out.px = v.num;
                 return out;
             }
@@ -724,3 +721,47 @@ static char *css_len_serialize(double v, const char *suffix)
 
 char *css_length_serialize_px(double px)   { return css_len_serialize(px, "px"); }
 char *css_length_serialize_pct(double pct) { return css_len_serialize(pct, "%"); }
+
+/* §10.13's Sum branch over the two-term residue — see css_length.h for why the shape is pinned rather than
+   chosen. The percentage is the FIRST child (sort a calculation's children nodes puts a number, then a
+   percentage, then the dimensions), so the " - " rule is asked only of the length. */
+char *css_length_serialize_calc(double pct, double px)
+{
+    char *pct_s = css_length_serialize_pct(pct);
+    /* "if child is a NEGATIVE numeric value, append ' - ' to s, then serialize the NEGATION of child as
+       normal" — so the sign is carried by the operator and never by the number after it. */
+    char *px_s = css_length_serialize_px(px < 0.0 ? -px : px);
+    size_t n = strlen(pct_s) + strlen(px_s) + sizeof("calc( + )");
+    char *out = malloc(n);
+
+    CHECK(out != NULL, "cssom: OOM serializing css-values-4 §10.13's math-function residue — a dropped one "
+                       "would read as an undeclared property rather than as a `calc()`");
+    snprintf(out, n, "calc(%s %c %s)", pct_s, px < 0.0 ? '-' : '+', px_s);
+    free(pct_s);
+    free(px_s);
+    return out;
+}
+
+/* ---- css-values-4 §10.11 "Computed Value"'s USED-VALUE-TIME SIMPLIFICATION (see css_length.h) ------------- */
+
+CssPx css_length_resolve_pct(CssLength len, CssPx basis)
+{
+    DCHECK(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+           "a value with NO percentage in it was handed css-values-4 §10.11's used-value-time resolution. The "
+           "two kinds that carry one are the whole of what a basis means, and an absolute length resolved "
+           "against a containing block would be scaled by a measure it does not depend on — so this is a "
+           "caller that dispatched on something other than the kind");
+    /* §10.10.1 "Simplification": a Sum's children are combined only "with other values that have IDENTICAL
+       units", so a `<percentage>` residue holds NO length term at all — and this arm's single expression is
+       only right if the pair's unused half is the additive identity WITH AN EMPTY FACT SET. A length term left
+       there by a producer would be added silently; an environment fact left there would be UNIONED into the
+       result's domain and fork a world the value does not depend on. */
+    DCHECK(len.kind != CSS_LENGTH_PERCENTAGE || (len.px.px == 0.0 && len.px.env == CSS_ENV_NONE),
+           "a `<percentage>` computed value carries a LENGTH term. css_length_parse writes the percentage arm "
+           "over a zeroed pair and css-values-4 §5.5 \"Percentages: the <percentage> type\" has no second term "
+           "to write, so this is a producer that set `pct` on a value it had already given a length");
+    /* §5.6's "both values are converted to absolute lengths and added", as ONE expression — the scaled basis
+       carries the basis's facts, the length term carries its own, and `css_px_add` is what makes the answer a
+       joint function of both rather than of whichever operand was resolved last. */
+    return css_px_add(css_px_scale(basis, len.pct / 100.0), len.px);
+}

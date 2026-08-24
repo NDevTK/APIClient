@@ -212,6 +212,22 @@ bool css_length_is_length_unit(const char *unit, size_t unit_len);
 typedef enum {
     CSS_LENGTH_ABSOLUTE = 0,   /* an absolute `<length>`; `px` carries it in CSS pixels */
     CSS_LENGTH_PERCENTAGE,     /* a `<percentage>`; `pct` carries the number, with the `%` removed */
+    /* A LENGTH AND A PERCENTAGE TOGETHER — `width: calc(100% - 2rem)`, where `px` AND `pct` are BOTH the value.
+       css-values-4 §10.11 "Computed Value" is why this is a KIND and not a resolution that should already have
+       happened: "Where percentages are not resolved at computed-value time, they are not resolved in math
+       functions, e.g. calc(100% - 100% + 1px) resolves to calc(0% + 1px), not to 1px." So the computed value
+       of one of these IS the pair, and §5.6 "Mixing Percentages and Dimensions" is the production that admits
+       it — "width: calc(500px + 50%); is allowed — both values are converted to absolute lengths and added"
+       — at USED-value time, against a basis this component does not have and every caller does.
+       IT IS NOT THE SAME FACT AS `pct != 0`, which is the whole reason css_math.h carries `pct_term`: §10.10.1
+       "Simplification" states that "zero-valued terms cannot be simply removed from a Sum", so `calc(100% -
+       100% + 1px)` is this kind with `pct` 0 and NOT an absolute `1px`. A producer that tested the number
+       instead would collapse the two, and §10.11's own worked example is that collapse being wrong.
+       WHAT IT DOES NOT RECORD is whether the surviving Sum HAS a dimension term — `calc(50%)` and
+       `calc(50% + 0px)` reach here identically, because `CssMathValue` has a `pct_term` and no `num_term`.
+       That is unobservable in every USED value (the two resolve to the same number against every basis) and
+       observable in exactly one place, §10.13 "Serialization", which crashes there naming it. */
+    CSS_LENGTH_CALCULATED,
     CSS_LENGTH_KEYWORD         /* not a length at all: `auto`, `none`, `min-content`, `normal`, … */
 } CssLengthKind;
 
@@ -225,8 +241,8 @@ typedef enum {
 
 typedef struct {
     CssLengthKind kind;
-    CssPx         px;                             /* CSS_LENGTH_ABSOLUTE only */
-    double        pct;                            /* CSS_LENGTH_PERCENTAGE only */
+    CssPx         px;                             /* CSS_LENGTH_ABSOLUTE and CSS_LENGTH_CALCULATED */
+    double        pct;                            /* CSS_LENGTH_PERCENTAGE and CSS_LENGTH_CALCULATED */
     char          keyword[CSS_LENGTH_KEYWORD_MAX];/* CSS_LENGTH_KEYWORD only */
 } CssLength;
 
@@ -304,10 +320,49 @@ bool css_length_is_length_percentage(const char *value);
    and the answer carries both. */
 CssPx css_length_snap_line_width(JSContext *realm, CssPx len);
 
+/* css-values-4 §10.11 "Computed Value"'s LAST SENTENCE, performed: "The calculation tree is again simplified at
+   used value time; with used value time information, a math function always simplifies down to a single numeric
+   value." The information that arrives at used-value time is the PERCENTAGE BASIS, and this is the one place
+   the two terms meet it — for BOTH kinds that carry a percentage, because §10.11 makes them one value and §5.6
+   "Mixing Percentages and Dimensions" makes the sum one production ("both values are converted to absolute
+   lengths and added").
+   THE BASIS IS THE CALLER'S AND IS NOT ONE FACT. Each property names its own in its own section, and they are
+   different measures on the two axes and different rules when the measure does not exist: CSS 2.1 §8.3 "Margin
+   properties" and §8.4 "Padding properties" resolve against the containing block's WIDTH on BOTH axes ("note
+   that this is true for 'margin-top' and 'margin-bottom' as well"), §10.2 "Content width: the 'width' property"
+   and §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'" against that same width, and §10.7
+   "Minimum and maximum heights: 'min-height' and 'max-height'" against a HEIGHT whose non-existence is a RULE
+   rather than an omission. So this entry takes the answer and never asks for it — the same layering
+   `CssFontMetrics` above has, for the same reason.
+   THE TWO TERMS ARE RESOLVED IN ONE STEP, which is the shape of the arithmetic and not a convenience: the
+   scaled basis and the length term each carry their own environment facts and the result is a joint function of
+   BOTH, so `calc(100% - 2rem)` on a viewport-derived containing block is a function of the INITIAL CONTAINING
+   BLOCK and of the reader's DEFAULT FONT SIZE at once. Resolving the percentage to a number first and adding a
+   length to it afterwards would produce the same example and the wrong DOMAIN at whichever of the two steps
+   dropped the other's set.
+   IT DOES NOT CLAMP. css-values-4 §9.1 "Numeric Functions" puts the range check AFTER the resolution — "the
+   value of a numeric function is clamped to the range allowed in the context it is used at computed value time
+   if possible, and at USED VALUE TIME otherwise" — and the range is the PROPERTY's, which this component does
+   not know: a `margin` may be negative and a `padding` may not. So the caller that named the basis clamps too. */
+CssPx css_length_resolve_pct(CssLength len, CssPx basis);
+
 /* CSSOM §6.7.2's "serialize a CSS value" for an absolute length and for a percentage: the number, then `px` or
    `%`. The number is css-values §serializing's SHORTEST FORM THAT ROUND-TRIPS, which is what makes `4px` come
    back as "4px" and not "4.000000px". OWNED: the caller frees. */
 char *css_length_serialize_px(double px);
 char *css_length_serialize_pct(double pct);
+
+/* css-values-4 §10.13 "Serialization" for §10.11's two-term residue, whose shape that section pins exactly.
+   The root is a Sum, so "serialize a math function" wraps it in `calc(`; "serialize a calculation tree"'s Sum
+   branch SORTS the children first, and "sort a calculation's children nodes" puts the PERCENTAGE ahead of every
+   dimension — then joins them with " + ", except that "if child is a negative numeric value, append ' - ' to s,
+   then serialize the NEGATION of child". §10.13's own example is the whole answer read back: "A value like
+   calc(20px + 0%) would serialize as calc(0% + 20px), maintaining both terms in the serialized value."
+   IT DOES NOT CLAMP, and that is §10.13's own ordering rather than an omission: the clamp step is stated only
+   for a root that "is a numeric value (number, percentage, or dimension)" — a single term, which is
+   `css_length_serialize_px`'s case — because a Sum with an unresolved percentage has no number to check against
+   a range yet. §9.1 "Numeric Functions" is the same sentence from the other side: at used value time otherwise.
+   OWNED: the caller frees. */
+char *css_length_serialize_calc(double pct, double px);
 
 #endif

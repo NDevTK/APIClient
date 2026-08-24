@@ -421,9 +421,13 @@ static bool uv_cb_height(lxb_dom_element_t *el, CssPx *out)
                "for — so this is a value that reached the cascade without its grammar");
         return false;
     }
-    if (h.kind == CSS_LENGTH_PERCENTAGE)
-        DFAIL("CSS 2.1 §10.7's percentage was asked for the height of a containing block whose OWN `height` is "
-              "a PERCENTAGE, and §10.5 \"Content height: the 'height' property\" decides that one stage "
+    if (h.kind == CSS_LENGTH_PERCENTAGE || h.kind == CSS_LENGTH_CALCULATED)
+        DFAIL("CSS 2.1 §10.7's percentage was asked for the height of a containing block whose OWN `height` "
+              "carries a PERCENTAGE — a bare one, or css-values-4 §10.11 \"Computed Value\"'s unresolved term "
+              "inside a math function, which §10.11 says takes the SAME rule (\"if there are special rules for "
+              "computing percentages in a value (e.g. the height property), they apply whenever a math "
+              "function contains percentages\") — and §10.5 \"Content height: the 'height' property\" decides "
+              "that one stage "
               "earlier: \"if the height of the containing block is not specified explicitly (i.e., it depends "
               "on content height), and this element is not absolutely positioned, the value computes to "
               "'auto'\". So a percentage `height` is either already resolved against a definite grandparent — "
@@ -483,19 +487,31 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
        by core/css/css_math.h inside the computed value (core/css/css_length.c routes any functional value
        through `css_math_eval`), so a `max-width: min(50vw, 400px)` reaches here as ONE absolute length whose
        `CssPx` already carries the ICB's fact — there is nothing for this component to evaluate and a second
-       evaluation here would be the second implementation css_math.h exists to prevent. */
+       evaluation here would be the second implementation css_math.h exists to prevent.
+       AND css-values-4 §9.1 "Numeric Functions"'S CLAMP IS WHY IT IS NO LONGER AN ASSERT. CSS 2.1
+       §10.4 and §10.7 both state the range outright — "negative values for 'min-width' and 'max-width' are
+       illegal" — and §5.1 "Range Restrictions and Range Definition Notation" makes a value outside an allowed
+       range a DROPPED DECLARATION, so a negative LITERAL still cannot reach here and that half of the assert
+       was right. The half that is no longer true is that nothing else can: §9.1 states the opposite rule for a
+       math function — "numeric functions returning out-of-range values NEVER cause a declaration to become
+       invalid. Instead, the value of a numeric function is clamped to the range allowed in the context it is
+       used at computed value time if possible, and at used value time otherwise" — so `max-width: calc(100px -
+       200px)` is VALID CSS whose used value is 0, and a page writing it would have crashed an assert about the
+       engine's own invariants. The two are told apart by that derivation and not by a flag on the value: a
+       negative that reaches here is a top-level calculation's result, because nothing else survives §5.1.
+       `css_px_max` and not an `if`: the clamped-away operand's environment facts are part of the value's
+       domain at every viewport, including the ones where it floors. */
     if (len.kind == CSS_LENGTH_ABSOLUTE) {
-        DCHECK(len.px.px >= 0.0,
-               "a NEGATIVE `min-`/`max-` size reached the used value. CSS 2.1 §10.4 and §10.7 both state it "
-               "outright — \"negative values for 'min-width' and 'max-width' are illegal\" — and css-sizing-3 "
-               "§3.2's `<length-percentage>` says \"negative values are invalid\", so lexbor drops the "
-               "declaration and this is a value that reached the cascade without its grammar");
-        *out = len.px;
+        *out = css_px_max(len.px, css_px(0.0));
         return true;
     }
-    if (len.kind == CSS_LENGTH_PERCENTAGE) {
-        DCHECK(len.pct >= 0.0, "a NEGATIVE percentage `min-`/`max-` size — see the length arm above; the two "
-                               "grammars forbid it in the same sentence");
+    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) {
+        DCHECK(len.kind != CSS_LENGTH_PERCENTAGE || len.pct >= 0.0,
+               "a NEGATIVE percentage `min-`/`max-` size. §5.1's dropped declaration is what makes this "
+               "unreachable for a LITERAL — the two grammars forbid it in the same sentence the length arm "
+               "above quotes — and a math function's negative percentage term is CSS_LENGTH_CALCULATED, which "
+               "this assert deliberately does not cover because §9.1 clamps that one after the basis resolves "
+               "it rather than refusing it here");
         if (!vertical) {
             /* §10.4: "the percentage is calculated with respect to the width of the generated box's
                containing block." */
@@ -516,17 +532,29 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
                get DIFFERENT answers, which is why the escape is turned into a value here rather than in
                `uv_cb_height`. Both answers are the property's own initial value, so `height: auto` on a
                containing block makes a percentage limit on its children vanish — which is why
-               `min-height: 100%` inside an auto-height parent does nothing in every user agent. */
+               `min-height: 100%` inside an auto-height parent does nothing in every user agent.
+               IT TAKES THE MATH FUNCTION WHOLE, and css-values-4 §10.11 "Computed Value" says so in the
+               sentence that exists for exactly this: "if there are SPECIAL RULES for computing percentages in a
+               value (e.g. the height property), THEY APPLY whenever a math function contains percentages." So
+               `min-height: calc(100% - 2rem)` against an indefinite basis is 0 and `max-height: calc(...)` is
+               `none`, rather than the percentage half vanishing and the `-2rem` surviving as a limit the author
+               never wrote. */
             if (is_max) return false;
             *out = css_px(0.0);
             return true;
         }
-        *out = css_px_scale(basis, len.pct / 100.0);
+        /* §10.11's used-value-time simplification, then §9.1's clamp in that order — the range check needs the
+           number the basis produces, which is §9.1's "at used value time otherwise". For a bare percentage both
+           operands are already non-negative and the floor is the identity; for a math function it is the whole
+           of what makes `max-width: calc(50% - 100px)` a valid declaration on a narrow viewport instead of a
+           negative limit that would clamp every box to nothing. */
+        *out = css_px_max(css_length_resolve_pct(len, basis), css_px(0.0));
         return true;
     }
     DCHECK(len.kind == CSS_LENGTH_KEYWORD,
-           "a `min-`/`max-` size computed to a kind that is neither a length, a percentage nor a keyword — "
-           "css-sizing-3 §3.1.2 and §3.1.3's grammars admit exactly those three shapes");
+           "a `min-`/`max-` size computed to a kind that is none of the four css_length.h defines — "
+           "css-sizing-3 §3.1.2 and §3.1.3's grammars admit a length, a percentage, a math function carrying "
+           "both, and a keyword, and the arms above have taken the first three");
     if (is_max && strcmp(len.keyword, "none") == 0) return false;
     if (!is_max && uv_len_is_auto(len)) {
         if (box == UV_BOX_ITEM)
@@ -812,9 +840,16 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
     /* CSS 2.1 §8.3: a percentage margin "is calculated with respect to the WIDTH of the generated box's
        containing block. NOTE THAT THIS IS TRUE FOR 'margin-top' AND 'margin-bottom' AS WELL." So the axis is
        not asked: a vertical margin resolves against the same horizontal measure, which is the counter-intuitive
-       half of the rule and the reason this arm takes no `vertical`. */
-    if (len.kind == CSS_LENGTH_PERCENTAGE)
-        return css_px_scale(used_value_containing_block_width(el), len.pct / 100.0);
+       half of the rule and the reason this arm takes no `vertical`. A math function carrying BOTH terms
+       (`margin-left: calc(50% - 1rem)`) resolves against that same basis in one step — css-values-4 §10.11
+       "Computed Value" left the percentage in the function and §5.6 "Mixing Percentages and Dimensions" adds
+       the two here.
+       AND IT IS THE ONE BOX-MODEL LENGTH THAT IS NOT CLAMPED, which is §8.3's own sentence and not an omission:
+       "negative values for margin properties are allowed, but there may be implementation-specific limits". So
+       css-values-4 §9.1 "Numeric Functions"'s clamp has no range to clamp to on this property, and a
+       `calc(1rem - 100%)` that comes out negative IS the used value. */
+    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED)
+        return css_length_resolve_pct(len, used_value_containing_block_width(el));
     DCHECK(strcmp(len.keyword, "auto") == 0,
            "a margin's computed value is neither a length, nor a percentage, nor `auto` — CSS 2.1 §8.3's "
            "<margin-width> grammar admits exactly those three, and lexbor validates the declaration against "
@@ -881,12 +916,32 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
    depend on the element crash in uv_pass_size below. */
 static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
 {
-    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
-    DCHECK(len.kind == CSS_LENGTH_PERCENTAGE,
-           "a padding's computed value is neither a length nor a percentage. CSS 2.1 §8.4's <padding-width> "
-           "grammar has no `auto` and no keyword at all — a padding is a length or a percentage and nothing "
-           "else — so this is a value lexbor's own validation should have dropped");
-    return css_px_scale(used_value_containing_block_width(el), len.pct / 100.0);
+    CssPx used;
+
+    /* §8.4's THIRD shape, and it is the same sentence as the second: css-values-4 §10.11 "Computed Value"
+       leaves a math function's percentage term unresolved at computed-value time, so `padding: calc(1rem + 2%)`
+       arrives as a length AND a percentage and resolves against §8.4's one basis in one step. */
+    if (len.kind == CSS_LENGTH_ABSOLUTE) {
+        used = len.px;
+    }
+    else {
+        DCHECK(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+               "a padding's computed value is neither a length, a percentage, nor a math function carrying "
+               "both. CSS 2.1 §8.4's <padding-width> grammar has no `auto` and no keyword at all — a padding "
+               "is a length or a percentage and nothing else — so this is a value lexbor's own validation "
+               "should have dropped");
+        used = css_length_resolve_pct(len, used_value_containing_block_width(el));
+    }
+    /* css-values-4 §9.1 "Numeric Functions"'s CLAMP, at §9.1's own "at USED VALUE TIME otherwise" — this is the
+       first point at which the percentage has a basis, so it is the first point at which there is a number to
+       range-check. CSS 2.1 §8.4 states the range in words: "unlike margin properties, values for padding
+       values cannot be negative", and §5.1 "Range Restrictions and Range Definition Notation" makes a negative
+       LITERAL a dropped declaration — so a negative here is a math function's top-level result and §9.1 says
+       outright that one "never cause[s] a declaration to become invalid". `css_px_max` and not an `if`, so the
+       clamped-away operand's environment facts stay in the domain: `calc(2% - 1rem)` is a function of the
+       containing block AND of the reader's default font size at the viewports where it floors as well as at
+       the ones where it does not. */
+    return css_px_max(used, css_px(0.0));
 }
 
 /* CSS 2.1 §10.3.3's RULE 5 — "if 'width' is set to 'auto', any other 'auto' values become '0' and 'width'
@@ -1075,10 +1130,28 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        `box-sizing` conversion. §10.2's other sentence, "if the containing block's width depends on this
        element's width, then the resulting layout is undefined in CSS 2.1", is unreachable for the reason
        uv_padding states. A percentage HEIGHT is not here: §10.5 makes it a computed-value question. */
-    if (len.kind == CSS_LENGTH_ABSOLUTE || (len.kind == CSS_LENGTH_PERCENTAGE && !vertical)) {
-        CssPx declared = len.kind == CSS_LENGTH_ABSOLUTE
-                             ? len.px
-                             : css_px_scale(used_value_containing_block_width(el), len.pct / 100.0);
+    if (len.kind == CSS_LENGTH_ABSOLUTE ||
+        ((len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) && !vertical)) {
+        /* `width: calc(100% - 2rem)` joins §10.2's percentage arm and not the length one, because css-values-4
+           §10.11 "Computed Value" left the percentage term in the function and §5.6 "Mixing Percentages and
+           Dimensions" resolves BOTH terms against §10.2's one basis here — "width: calc(500px + 50%); is
+           allowed — both values are converted to absolute lengths and added". It joins the SAME branch as a
+           bare percentage rather than getting one of its own, so the table-box and flex-item crashes below run
+           for it too; §10.11's own last paragraph is why that matters on a table ("math expressions mixing both
+           percentages and non-zero lengths for widths and heights on table columns … MUST be treated as if auto
+           had been specified"), and a §17.5 that answered without knowing would get that rule wrong silently.
+           THE CLAMP IS css-values-4 §9.1 "Numeric Functions"'s, at its own "at USED VALUE TIME otherwise" — a
+           percentage has no number to range-check before this point. CSS 2.1 §10.2 states the range in words
+           ("negative values for 'width' are illegal") and §5.1 "Range Restrictions and Range Definition
+           Notation" makes a negative LITERAL a dropped declaration, so a negative reaching here is a math
+           function's top-level result, which §9.1 says "never cause[s] a declaration to become invalid" and
+           clamps instead. That is exactly `width: calc(50% - 100px)` on a narrow viewport, which is the single
+           most common thing calc() is written for. `css_px_max` keeps the clamped-away operand's environment
+           facts in the domain, so the wide-viewport arm where the subtraction is positive survives the floor. */
+        CssPx declared = css_px_max(len.kind == CSS_LENGTH_ABSOLUTE
+                                        ? len.px
+                                        : css_length_resolve_pct(len, used_value_containing_block_width(el)),
+                                    css_px(0.0));
 
         /* §10.3.3, §10.3.5, §10.3.7 and §10.3.9 all agree on this one case and each says it in its own words:
            the equation solves for `width` only when `width` is `auto`, so a declared length IS the used value.
@@ -1105,15 +1178,21 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         if (uv_is_border_box(el)) return uv_border_box_size(el, declared, vertical);
         return declared;
     }
-    if (len.kind == CSS_LENGTH_PERCENTAGE) {
+    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) {
         DCHECK(vertical, "a horizontal PERCENTAGE size reached the vertical arm — §10.2's resolution above "
                          "takes every one of them and this branch is what is left");
-        DFAIL("CSS 2.1 §10.5: a PERCENTAGE `height` resolves against the containing block's HEIGHT, and "
-              "when that height 'is not specified explicitly (i.e., it depends on content height)' the "
-              "percentage COMPUTES TO `auto` instead — so this is a COMPUTED-value rule that reads the "
-              "parent's own computed `height`, and it has to be decided before any used value is asked "
-              "for. BUILD it in css_computed_value.c beside `height`'s other computed-value rule, then "
-              "§10.6.3's content-based height for the `auto` result it produces");
+        DFAIL("CSS 2.1 §10.5 \"Content height: the 'height' property\": a PERCENTAGE `height` resolves against "
+              "the containing block's HEIGHT, and when that height 'is not specified explicitly (i.e., it "
+              "depends on content height)' the percentage COMPUTES TO `auto` instead — so this is a "
+              "COMPUTED-value rule that reads the parent's own computed `height`, and it has to be decided "
+              "before any used value is asked for. IT IS THE SAME RULE FOR A MATH FUNCTION and not a second "
+              "one: css-values-4 §10.11 \"Computed Value\" says so by name — \"if there are special rules for "
+              "computing percentages in a value (e.g. the height property), they apply whenever a math "
+              "function contains percentages\" — so `height: calc(100% - 2rem)` computes to `auto` under "
+              "exactly the same antecedent, whole, rather than having its percentage half treated separately. "
+              "BUILD it in css_computed_value.c beside `height`'s other computed-value rule, over the kind "
+              "rather than over the percentage, then §10.6.3's content-based height for the `auto` result it "
+              "produces");
     }
     DCHECK(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0,
            "a `width` or `height` computed to a keyword that is not `auto` — CSS 2.1 §10.2 and §10.5 admit "
