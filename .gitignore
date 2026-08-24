@@ -1,5 +1,9 @@
 node_modules/
-testing/profile/
+# A BROWSER PROFILE, whatever it is called. `testing/profile/` is the shared harness's; a lane driving a
+# second browser concurrently must give its own a different name to avoid colliding with it, and that
+# isolation is correct — so the pattern matches the SHAPE rather than the one name, or every such lane
+# leaves 20-odd MB of Chrome state looking like source.
+testing/profile*/
 testing/reports/
 extension.crx
 testing/harness-dumps
