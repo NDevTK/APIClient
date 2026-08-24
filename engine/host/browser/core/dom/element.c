@@ -765,6 +765,10 @@ static void frag_release(JSContext *ctx, void *st)
            A machine cannot COPY what it does not OWN, so this is also the fork's first subproblem, discharged:
            the sibling arm's copy of the partial tree is exactly the object this statement frees. */
         lxb_dom_node_t *root = lxb_html_parse_fragment_chunk_end(s->parser);
+        /* AND THE DECLARATION THAT NAMED THIS PARSE, released on the abandoned path exactly as on the
+           completed one: the tree it is keyed on is freed by the destroy below, and a record left behind would
+           be found by the next parser allocated at that address and called ITS document. */
+        dom_cow_parse_release(s->parser->tree);
         lxb_html_parser_destroy(s->parser);
         s->parser = NULL;
         /* NULL is chunk_end's failure answer, and it destroyed the root itself on the way out. Otherwise it is
@@ -872,6 +876,16 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
                       lxb_html_interface_document(cn->owner_document), cn->local_name, cn->ns)
                   == LXB_STATUS_OK,
                   "the fragment parse could not be started");
+            /* WHOSE TREE §13.2.6 IS ABOUT TO BUILD — §13.4 "Parsing HTML fragments" step 3's "Let document be
+               a Document node whose type is html", which lexbor creates inside the call above and hangs the
+               root element under. It is FLOW-PRIVATE in the strongest sense available: this statement made it,
+               nothing between the two runs the page's code, and the placement below is what moves its contents
+               into a tree another flow can reach — through the capturing chokepoint, one node at a time. The
+               declaration is keyed on this parse's own tree builder, so it survives the per-byte suspension
+               below rather than standing open while a sibling flow runs. */
+            dom_cow_parse_declare(s->parser->tree,
+                                  lxb_dom_interface_node(s->parser->tree->document),
+                                  DOM_PARSE_ROOT_PRIVATE);
             return JS_STEP_YIELD;
         }
         if (s->off < s->len) {
@@ -883,6 +897,11 @@ static int frag_step(JSContext *ctx, JSStepHdr *hdr, FragState *s)
             return JS_STEP_YIELD;
         }
         s->frag = lxb_html_parse_fragment_chunk_end(s->parser);
+        /* AFTER the end and BEFORE the parser goes: `lxb_html_tree_end` runs the EOF token through the
+           insertion modes, which is §13.2.6 writing this tree one last time, and `lxb_html_parser_destroy`
+           frees the tree the declaration is keyed on. The release reads nothing but that key — the temporary
+           document it declared as its root has already been destroyed by the call above. */
+        dom_cow_parse_release(s->parser->tree);
         lxb_html_parser_destroy(s->parser);
         s->parser = NULL;
         CHECK(s->frag != NULL, "the fragment parse produced no root element");

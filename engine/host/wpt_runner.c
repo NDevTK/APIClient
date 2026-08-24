@@ -1602,7 +1602,9 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            "the runner reached HTML §13.2's parser with a response HTML §7.4.5 loads as some other kind of "
            "document — the type dispatch is above and every arm but the HTML one crashes there, so this is a "
            "second route into the parse that never asked what it fetched");
-    CHECK(html_parse_document(g_wpt_dom, (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
+    /* SHARED, for main.c's reason: this is the runner's ACTIVE document and every flow reads its tree. */
+    CHECK(html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED,
+                              (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
           "the runner's document did not parse");
     free(fetched);
 

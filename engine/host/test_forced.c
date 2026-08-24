@@ -2777,7 +2777,7 @@ static void csp_element_matching_selftest(void)
     const char *S = "p{color:red}";
     size_t slen = strlen(S);
 
-    html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
     /* The two `<style>` elements are the head's only element children, in source order and with no whitespace
        text between them — which is why the fixture is written on one line. */
     for (child = lxb_dom_interface_node(lxb_html_document_head_element(dom))->first_child; child;
@@ -2921,7 +2921,7 @@ static void document_policy_selftest(void)
     lxb_html_document_t *plain;
     const Origin *self_origin = origin_parse("https://x.test");
 
-    html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
     p = document_policy_new(dom, NULL, self_origin);
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
     CHECK(!csp_ok(p, CSP_INLINE_SCRIPT_ATTRIBUTE),
@@ -2932,7 +2932,7 @@ static void document_policy_selftest(void)
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = dom_document_create();
-    html_parse_document(plain, (const lxb_char_t *)"<html><body></body></html>", 26);
+    html_parse_document(plain, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)"<html><body></body></html>", 26);
     empty = document_policy_new(plain, NULL, self_origin);
     CHECK(csp_ok(empty, CSP_INLINE_SCRIPT_ATTRIBUTE), "a document with no meta CSP must permit everything");
 
@@ -6606,7 +6606,7 @@ static void tree_construction_write_selftest(void)
     /* THE INSTALL IS ASSERTED FROM OUTSIDE THE PARSE, because inside it every §13.2.6 write has already
        happened: a table that was still lexbor's would have produced a byte-identical tree here (the default
        IS the vendor's behaviour), so the equality below would pass while nothing this lane built had run. */
-    html_parse_document(dom, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
     CHECK(dom_cow_owns_tree_construction(),
           "§13.2.6's DOM writes are not this engine's after a parse — html_parse_new_parser installs them and "
           "the whole fixture below would be measuring lexbor's own default instead");
@@ -6766,7 +6766,8 @@ int main(int argc, char **argv) {
     g_probe_ctx = ctx;
     g_sess = cold_park_path ? SESS_PARK : cold_resume_path ? SESS_RESUME : SESS_EXPLORE;
     lxb_html_document_t *dom = dom_document_create();
-    html_parse_document(dom, (const lxb_char_t *)doc, strlen(doc));
+    /* SHARED: the fixture's ACTIVE document, whose tree every flow this run seeds reads. */
+    html_parse_document(dom, DOM_PARSE_ROOT_SHARED, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {
         /* The fixture built this document, so the navigable's name is the initial "" and is known. */

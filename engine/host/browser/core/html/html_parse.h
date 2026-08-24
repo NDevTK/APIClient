@@ -85,6 +85,8 @@
 #include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
 
+#include "solver/dom_cow.h"   /* DomParseRootKind — whose tree a parse builds, declared by whoever opens it */
+
 /* THE ONE PLACE AN HTML PARSER IS MADE — `lxb_html_parser_create` + `lxb_html_parser_init` with this
    component's token ownership installed on the tokenizer, and nothing else. NULL comes back exactly as lexbor
    returned it, because each caller's OOM sentence is its own measurement (the same rule `dom_document_create`
@@ -132,8 +134,17 @@ lxb_html_parser_t *html_parse_new_parser(void);
 
 /* THE ONE PLACE A DOCUMENT IS PARSED, WITH ITS INPUT STREAM LEFT OPEN — the parser created here first so the
    tokenizer is owned before its first token, then lexbor's own chunk begin/process over `html`. On return the
-   whole of `html` has been tokenized and the insertion point is just before the end of the input stream. */
-lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_char_t *html, size_t size);
+   whole of `html` has been tokenized and the insertion point is just before the end of the input stream.
+ *
+ * `root_kind` IS THE CALLER'S DECLARATION OF WHOSE TREE THIS IS, and it is a parameter rather than anything
+ * this entry could work out. §13.2.6 tree construction writes the document from inside lexbor, and whether
+ * those writes need a per-flow delta entry turns on whether another flow can reach the target — which is a
+ * fact about the CALLER'S operation (it created this Document a statement ago, with nothing in between that
+ * runs the page's code) and not about the Document, whose node looks identical either way. solver/dom_cow.h
+ * states the whole argument at DomParseRootKind. DOM_PARSE_ROOT_PRIVATE for a Document this same operation
+ * created; DOM_PARSE_ROOT_SHARED for the ACTIVE document, whose tree every flow reads. */
+lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                      const lxb_char_t *html, size_t size);
 
 /* §13.2.3.5's QUESTION, asked of a real parser: is `doc`'s insertion point DEFINED. False for a document with
    no parser at all and for one whose parse has reached §13.2.7 "The end" — both of which are the standard's
@@ -162,8 +173,10 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
    would silently do nothing. */
 lxb_status_t html_parse_document_close(lxb_html_document_t *document);
 
-/* THE COMPLETE PARSE — open then close, in one call. What every caller that wants a finished Document uses. */
-lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t *html, size_t size);
+/* THE COMPLETE PARSE — open then close, in one call. What every caller that wants a finished Document uses.
+   Carries `root_kind` through for the reason the open does. */
+lxb_status_t html_parse_document(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                 const lxb_char_t *html, size_t size);
 
 /* Whether every token `doc`'s parses produced went through this component. TRUE for a document with no parser
    at all, which is a POSITIVE statement rather than a hole: lexbor's entry creates the parser it uses, so a

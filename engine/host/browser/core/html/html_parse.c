@@ -306,7 +306,8 @@ bool html_parse_insertion_point_defined(const lxb_dom_document_t *doc)
     return parser->state == LXB_HTML_PARSER_STATE_PROCESS;
 }
 
-lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_char_t *html, size_t size)
+lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                      const lxb_char_t *html, size_t size)
 {
     lxb_html_document_opt_t opt;
     lxb_dom_document_t *doc;
@@ -327,33 +328,25 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
            "a document that has already been parsed is being parsed again — lexbor cleans it first and that "
            "clean empties the AGENT's two DOM arenas, so every node of every other document in this instance "
            "would be returned to the allocator with its tree still naming it; parse into a new document");
-    /* §13.2.6's WRITES ARE THIS ENGINE'S NOW, AND THE HALF THAT IS STILL UNCAPTURED IS WHAT THIS ASSERTS.
-       HTML §13.2.6 "Tree construction" wrote the document through lexbor's own `_wo_events` primitives at
-       eight sites and, for §13.2.6.1's character merge, through a `lexbor_str_append` into a Text node's own
-       storage that was not a mutator call at all — so none of it had an interception point and FIRING A
-       CALLBACK IS NOT A CAPTURE anyway. The vendored parser now makes every one of those writes through one
-       interposable table and solver/dom_cow.h installs itself as the implementation
-       (dom_cow_install_tree_construction, asserted below on every parse this component opens).
-       WHAT THAT BOUGHT AND WHAT IT DID NOT. The character merge IS captured — §13.2.6.1's own example is the
-       parser appending to a Text node a SCRIPT created, so its target is a node the parse did not build and
-       its undo is a value restore rather than a node removal. The STRUCTURAL writes are not: an entry per node
-       a parse builds is O(everything the flow built) rather than O(shared state it touched), which is the
-       invariant solver/dom_cow.h's private-tree entries exist to keep. They may be written without one only
-       while the tree is one NO OTHER FLOW CAN REACH — every caller here creates the document immediately
-       before parsing into it and wraps it immediately after, so at this line the target has no children and
-       nothing in the agent names it. Open a parse on a document that already HAS a tree and those same
-       insertions become shared-baseline writes belonging to no flow: one flow's markup visible to every
-       sibling and unapplied on every context switch.
-       SO THIS IS THE LINE §8.4.3 `document.write` ARRIVES AT FROM THE OTHER END. Its step 9 needs a live parser
-       on the ACTIVE document — a document whose tree is the page's — and this assert is what says that cannot
-       be had by opening one here. It is checkable rather than argued: the emptiness is the reachability, and
-       solver/dom_cow.c's own members assert the per-write echo of it. */
+    /* AN OPEN IS A PARSE THAT STARTS FROM NOTHING, and that is what this asserts — for BOTH declarations, for
+       two different reasons.
+       A PRIVATE parse's declaration is the caller's statement that it created this Document in the same
+       uninterrupted operation, so a target that already carries a tree falsifies the declaration itself:
+       somebody built that tree, and "no other flow can reach it" is then a claim about a document with a
+       history. A SHARED parse's target is the ACTIVE document, and §8.4.3 "document.write()" does not reach a
+       written document through here at all — its step 10 inserts into the input stream of a parse that is
+       ALREADY OPEN, which is html_parse_document_write. So neither kind has a caller that opens a second parse
+       over standing markup, and the day one appears it is a document being parsed twice rather than a capture
+       question.
+       WHAT CHANGED UNDER THIS LINE is that the capture question is no longer decided HERE. §13.2.6's writes go
+       through one interposable table and solver/dom_cow.h installs itself as the implementation (asserted
+       below); the parse DECLARES whose tree it builds, and dom_cow.c's members route a private parse's writes
+       raw and a shared parse's through the delta. This line no longer stands in for that decision. */
     DCHECK(lxb_dom_interface_node(document)->first_child == NULL,
-           "an HTML parse was opened on a document that already has a tree — §13.2.6's STRUCTURAL writes push "
-           "no delta entry, which is harmless only while the document is one no other flow can observe. Give "
-           "the parse a capture context that declares its root and route those writes at the capturing "
-           "chokepoint (dom_cow_append_child / dom_cow_insert_before / dom_cow_remove_child) before parsing "
-           "into a tree the page already holds");
+           "an HTML parse was OPENED on a document that already has a tree — a private parse's declaration says "
+           "its caller created this Document a statement ago, which a standing tree contradicts, and the active "
+           "document's own parse is re-entered through html_parse_document_write (§8.4.3 step 10) rather than "
+           "opened a second time. Parse into a new document");
     doc = lxb_dom_interface_document(document);
     if (doc->parser == NULL) {
         /* THE CREATION LEXBOR WOULD HAVE MADE, MADE HERE. `lxb_html_document_parser_prepare` is static and
@@ -376,6 +369,12 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
            "DOM table — every character token this parse merges into an existing Text node is then a write the "
            "running flow's delta cannot revert; dom_cow_install_tree_construction runs at html_parse_new_parser, "
            "so something replaced the table after this component installed it");
+    /* …AND WHOSE TREE THIS PARSE BUILDS, stated before its first token. The declaration is keyed on the TREE
+       BUILDER, which is what every one of §13.2.6's writes carries, and it stands until §13.2.7 "The end"
+       releases it in html_parse_document_close — so it survives a parse that suspends between chunks, which
+       §8.4.3 "document.write()" step 11 re-enters. */
+    dom_cow_parse_declare(((lxb_html_parser_t *)doc->parser)->tree,
+                          lxb_dom_interface_node(document), root_kind);
     /* THE `opt` BRACKET IS LEXBOR'S OWN AND IS KEPT BYTE-FOR-BYTE. `lxb_html_document_parse` saves
        `document->opt` across the prepare and the chunk and writes it back on BOTH its exits, while
        `lxb_html_document_parse_chunk_begin` — the entry this pair is built out of — does not. Dropping it
@@ -391,6 +390,12 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, const lxb_c
            "insertion point is the parser standing in PROCESS, which is what `lxb_html_parse_chunk_prepare` "
            "puts it in and only `chunk_end` takes it out of, so an OK status with the stream already shut "
            "means something closed this parse between the two calls above");
+    /* A PARSE THAT NEVER BEGAN HAS NO END TO RELEASE AT. `html_parse_document` returns without closing on a
+       non-OK status — lexbor's own `goto failed` — so the declaration made above would stand for a parse that
+       is over, and the next parser allocated at this tree's address would find it and be called somebody
+       else's document. The declaration is released with the parse that owns it, on both exits. */
+    if (st != LXB_STATUS_OK)
+        dom_cow_parse_release(((lxb_html_parser_t *)doc->parser)->tree);
     return st;
 }
 
@@ -417,14 +422,17 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
                  element until the close and every walk of the tree in between sees an empty document. That is
                  what a browser does too — a still-parsing empty document has a null `documentElement` — so
                  what has to change is each reader that assumes otherwise, not this.
-             (b) THE TREE CONSTRUCTION THIS CALL DRIVES BYPASSES THE PER-FLOW DOM DELTA. solver/dom_cow.h owns
-                 the one place a tree write is captured and it is a convention over the BROWSER components;
-                 lexbor's §13.2.6 inserts through its own mutators, which nothing captures. Every other parse
-                 in this engine is out-of-tree and its result is PLACED through the chokepoint, which is what
-                 keeps the delta honest; a live parser feeding the document's own tree has no placement step,
-                 so its nodes are shared-baseline writes belonging to no flow — one flow's `document.write`
-                 visible to every sibling and unapplied on every context switch. That is the mechanism this
-                 entry is waiting on. */
+             (b) THE NODES THIS CALL'S TREE CONSTRUCTION BUILDS BELONG TO NO FLOW. The WRITES are captured:
+                 §13.2.6 goes through solver/dom_cow.c's members, the parse declared DOM_PARSE_ROOT_SHARED, and
+                 an insert and a removal each push the delta entry that reverts them — so a `document.write`
+                 run inside a slice is isolated per flow exactly like an `appendChild` from script. What is
+                 still owed is OWNERSHIP: every other parse in this engine is out-of-tree and its result is
+                 PLACED through the chokepoint, and dom_cow_take_private is where the flow becomes the owner of
+                 what it placed. A live parser feeding the document's own tree has no placement step, so a
+                 discarded flow detaches its written nodes and nothing frees them. dom_cow.c's shared arm names
+                 the shape of the fix at its own assert (the creation record belongs where §13.2.6 MAKES the
+                 node, never at the insert, because §13.2.6.4.7's adoption agency re-inserts nodes it removed),
+                 and that is the mechanism this entry is waiting on. */
     DCHECK(html_parse_insertion_point_defined(lxb_dom_interface_document(document)),
            "§8.4.3 \"document.write()\" step 10 was reached on a document whose §13.2.3.5 insertion point is "
            "undefined — see the paragraph above this assert for the two ways that happens and for what the "
@@ -443,17 +451,27 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
 
 lxb_status_t html_parse_document_close(lxb_html_document_t *document)
 {
+    lxb_dom_document_t *doc;
+    lxb_status_t st;
+
     DCHECK(document != NULL, "§13.2.7 \"The end\" was reached with no document");
-    DCHECK(html_parse_insertion_point_defined(lxb_dom_interface_document(document)),
+    doc = lxb_dom_interface_document(document);
+    DCHECK(html_parse_insertion_point_defined(doc),
            "§13.2.7 \"The end\" was reached for a document whose input stream is not open — the close is the "
            "ONE moment the insertion point becomes undefined, so a second one would hand lexbor a parser in "
            "the END stage, which answers LXB_STATUS_ERROR_WRONG_STAGE and emits no EOF token at all");
-    return lxb_html_document_parse_chunk_end(document);
+    /* THE EOF TOKEN IS A §13.2.6 WRITE LIKE ANY OTHER — §13.2.6.4.1 'The "initial" insertion mode' onwards
+       build `html`, `head` and `body` out of it when the source produced none — so the parse's declaration is
+       released AFTER the close and not before it. */
+    st = lxb_html_document_parse_chunk_end(document);
+    dom_cow_parse_release(((lxb_html_parser_t *)doc->parser)->tree);
+    return st;
 }
 
-lxb_status_t html_parse_document(lxb_html_document_t *document, const lxb_char_t *html, size_t size)
+lxb_status_t html_parse_document(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                 const lxb_char_t *html, size_t size)
 {
-    lxb_status_t st = html_parse_document_open(document, html, size);
+    lxb_status_t st = html_parse_document_open(document, root_kind, html, size);
 
     /* THE FAILURE PATH DOES NOT CLOSE, which is `lxb_html_document_parse`'s own `goto failed` — a parse that
        did not begin has no EOF token to emit and no stage `chunk_end` would accept. */

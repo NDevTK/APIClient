@@ -284,7 +284,10 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
           "CYCLE (its function objects hold their realm and its Window holds them), the collector breaks it, "
           "and the teardown that follows is split by phase in quickjs.c so the reference releases run inside "
           "the collection and the tables in the sweep after it");
-    CHECK(html_parse_document(dom, body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
+    /* FLOW-PRIVATE: `dom_document_create` above and this parse are one uninterrupted operation, so the child
+       navigable's Document is a tree no other flow can reach while §13.2.6 builds it (solver/dom_cow.h). */
+    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE,
+                              body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
                               body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
     return dom;

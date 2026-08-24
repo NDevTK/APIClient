@@ -326,7 +326,10 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
            "this host reached HTML §13.2's parser with a response HTML §7.4.5 loads as some other kind of "
            "document — the type dispatch is above and every arm but the HTML one crashes there, so this is a "
            "second route into the parse that never asked what it fetched");
-    if (html_parse_document(dom, (const lxb_char_t *)html, html_n) != LXB_STATUS_OK)
+    /* SHARED: this is the ACTIVE document. Its tree is the baseline every flow of this instance reads, so
+       §13.2.6's writes are the ones a live parse would have to capture — which is what makes §8.4.3
+       `document.write()` a lifecycle change here and not a new mechanism (solver/dom_cow.h). */
+    if (html_parse_document(dom, DOM_PARSE_ROOT_SHARED, (const lxb_char_t *)html, html_n) != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
     return dom;
 }

@@ -10,6 +10,7 @@
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
 #include "core/dom/node_interface.h"   /* dom_document_destroy — a document's nodes go back before its arenas do */
+#include "core/dom/node.h"   /* node_template_content — §4.12.3's second tree, which a parse also builds into */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
 #include <lexbor/dom/dom.h>
 
@@ -359,10 +360,28 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
     dom_prop_taint_capture(el, name);
     attr_shadow_set(ctx, el, ATTR_SLOT_PROPERTY, NULL, name, opaque);
 }
-void dom_insert_capture(lxb_dom_node_t *node) {
+/* THE TWO STRUCTURAL CAPTURE PRIMITIVES — record the write BEFORE it happens, and nothing else. They are the
+   whole of what an insert and a removal have to tell the delta, which is why every structural mutation op in
+   this file is one of them plus one lexbor call plus whatever §4.2.3 steps that op owes. They are STATIC: an
+   exported one had no caller outside this file, and a raw capture reached from outside is a write with no
+   mutation beside it — the half of the pair that cannot be checked. */
+static void dom_insert_capture(lxb_dom_node_t *node) {
     if (!g_dom_capture) return;
     DomUndo u; memset(&u, 0, sizeof u); u.kind = 1; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_capture_begin();
+    dom_undo_push(u);
+    dom_capture_end();
+}
+/* The removal twin: the node AND THE POSITION IT SAT AT, read off the live tree before the unlink, because
+   `lxb_dom_node_remove` NULLs `parent`, `next` and `prev` and there is no answer to "where was it" afterwards.
+   Three callers pushed this identical block; a fourth would have been the one that forgot the next sibling. */
+static void dom_remove_capture(lxb_dom_node_t *node) {
+    if (!g_dom_capture) return;
+    DomUndo u; memset(&u, 0, sizeof u);
+    dom_capture_begin();   /* the position is read off the live tree and written down by the push */
+    u.kind = 2; u.node = node;
+    u.parent = node->parent; u.next = node->next;
+    u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
     dom_capture_end();
 }
@@ -651,15 +670,7 @@ void dom_cow_remove_child(lxb_dom_node_t *node) {
     /* BEFORE the detach, because "was it connected" has no answer afterwards. */
     DCHECK(!g_tree_hook || g_cow_ctx, TREE_HOOK_NO_CTX);
     if (g_tree_hook) g_tree_hook(g_cow_ctx, node, node->parent, 0);
-    if (g_dom_capture) {
-        DomUndo u; memset(&u, 0, sizeof u);
-        dom_capture_begin();   /* the position is read off the live tree and written down by the push */
-        u.kind = 2; u.node = node;
-        u.parent = node->parent; u.next = node->next;
-        u.sh_old = u.sh_cur = JS_UNDEFINED;
-        dom_undo_push(u);
-        dom_capture_end();
-    }
+    dom_remove_capture(node);
     {
         /* §4.2.3 remove step 3 detaches, and steps 4-7 run AFTER it — the slot steps recompute a slot's
            assigned nodes, and doing that while the node is still a child finds it again and reports no change.
@@ -702,6 +713,28 @@ static lxb_dom_node_t *dom_root_of(lxb_dom_node_t *n) {
     return n;
 }
 
+/* THE TREE A PARSE BUILDS, WHICH IS NOT THE SAME WALK, because a parse builds MORE THAN ONE tree and only one
+   of them is reached by child links. HTML §13.2.6.4.4 'The "in head" insertion mode' gives a `<template>` its
+   own DocumentFragment for §4.12.3's template contents and tree construction inserts the markup into THAT — so
+   `<template><b>x</b></template>` puts `b` in a root whose parent is null, reachable from the document only
+   through the host element. A walk that stopped there would call every template's contents a tree of its own,
+   and a parse's declared root would match nothing inside one.
+   THE STEP THROUGH THE HOST IS `node_template_content`'s ROUND TRIP and not a type test, which is core/dom/
+   node.h's own reason for exporting it: a shadow root is a DocumentFragment with a host too, and a parse
+   produces none (§13.2.6.4.4's declarative conversion runs at the parse BOUNDARY over the finished fragment),
+   so one appearing under a parse is a tree that parse never built and must not be climbed out of. */
+static lxb_dom_node_t *dom_parse_root_of(lxb_dom_node_t *n) {
+    for (;;) {
+        lxb_dom_element_t *host;
+
+        while (dom_is_attached(n)) n = n->parent;
+        if (n->type != LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) return n;
+        host = lxb_dom_interface_document_fragment(n)->host;
+        if (host == NULL || node_template_content(lxb_dom_interface_node(host)) != n) return n;
+        n = lxb_dom_interface_node(host);
+    }
+}
+
 /* Is this node parked in some flow's delta as REMOVED? Then it is shared-tree state on loan, not private. The
    whole chain, not just the head: a sibling's base segment holds its removals too. Dev-only and O(delta). */
 static bool dom_delta_removed(lxb_dom_node_t *n) {
@@ -738,7 +771,11 @@ void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
 }
 
 /* Insert INTO the private tree — what building a clone is. The child must be nowhere at all: a node that is in
-   any tree is one some flow can reach, and moving it here would be a structural change with no delta entry. */
+   any tree is one some flow can reach, and moving it here would be a structural change with no delta entry.
+   THE DECLARED ROOT IS THE IMMEDIATE TREE and not the whole of what the caller is building: a clone walk that
+   descends into a `<template>`'s content fragment re-declares THAT fragment as its root for the length of the
+   descent, because the fragment is a root with no parent and its own tree in every walk's terms. HTML
+   §13.2.6's members ask a different containment question over the same trees and state it themselves. */
 void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_dom_node_t *child) {
     dom_private_check(root);
     DCHECK(parent && dom_root_of(parent) == root,
@@ -1134,43 +1171,129 @@ void dom_cow_append_text_data(lxb_dom_node_t *node, const char *data, size_t len
           "dom-cow-oom: §13.2.6.1's character merge could not append to the Text node's data");
 }
 
-/* HTML §13.2.6 "Tree construction"'s DOM writes, as this file's own — see dom_cow.h.
+/* ---- HTML §13.2.6 "Tree construction"'s DOM writes, as this file's own — see dom_cow.h ---------------------
  *
- * `tree->document` is what names the parse, and `lxb_html_document_is_original` is what says whose tree it is:
- * false only for §13.4 "Parsing HTML fragments"' temporary document, whose whole contents are the running
- * flow's own product. That is the ONE question these members ask, and it is lexbor's answer rather than a
- * predicate over the node — an unparented root is what a fragment and a subtree some flow REMOVED both look
- * like, and only one of those may be written without an entry. */
-static bool cow_tc_private(lxb_html_tree_t *tree)
+ * ONE RECORD PER PARSE IN FLIGHT, keyed on the `lxb_html_tree_t` every one of §13.2.6's writes carries. That is
+ * the whole of the context these members have and the whole of what they need: the caller that OPENED the parse
+ * knows whose tree it is, and nothing downstream of it can recover that.
+ * THE SCAN IS OVER PARSES, NEVER OVER THE DELTA — a fragment parse yields between bytes, so a flow parked
+ * mid-`innerHTML =` holds one entry, and the walk below is bounded by how many of those exist rather than by
+ * anything the page's markup decides. */
+typedef struct { lxb_html_tree_t *tree; lxb_dom_node_t *root; DomParseRootKind kind; } DomParseDecl;
+static DomParseDecl *g_dom_parse = NULL;
+static int g_dom_parse_n = 0, g_dom_parse_cap = 0;
+
+static DomParseDecl *cow_tc_decl_of(lxb_html_tree_t *tree)
 {
-    DCHECK(tree != NULL && tree->document != NULL,
-           "a §13.2.6 tree-construction write arrived with no tree builder or no document on it — the document "
-           "is what says whose tree is being built, and without it this file cannot tell a fragment parse's "
-           "own product from a write to the page's tree");
-    return !lxb_html_document_is_original(tree->document);
+    int i;
+    for (i = 0; i < g_dom_parse_n; i++)
+        if (g_dom_parse[i].tree == tree)
+            return &g_dom_parse[i];
+    return NULL;
 }
 
-/* THE PER-WRITE ECHO OF THE PARSE ENTRY'S OWN ASSERT. core/html/html_parse.c refuses to OPEN a parse on a
-   document that already has a tree, because §13.2.6's writes are captured by nothing and that is harmless only
-   while the target is a tree no other flow can reach. Capture being OFF is the same statement made per write:
-   the initial document parse runs before the first scheduler slice, so nothing is being recorded and nothing
-   is being missed. A live parser on the ACTIVE document (§8.4.3 `document.write`) runs INSIDE a slice with
-   capture on, so it lands here — which is the crash that says the per-parse capture context has to exist
-   before that parse may be opened. */
-static void cow_tc_structural_check(lxb_html_tree_t *tree)
+void dom_cow_parse_declare(lxb_html_tree_t *tree, lxb_dom_node_t *root, DomParseRootKind kind)
 {
-    DCHECK(cow_tc_private(tree) || !g_dom_capture,
-           "HTML §13.2.6 tree construction wrote the tree of an ORIGINAL document while the running flow's DOM "
-           "delta was recording — every node this parse builds and every reparent its adoption agency performs "
-           "is then a shared-baseline write no delta captured, so one flow's parse is visible to every sibling "
-           "and unapplied by none. Give the parse a capture context that declares its root, and route these "
-           "members at the capturing chokepoint (dom_cow_append_child / dom_cow_insert_before / "
-           "dom_cow_remove_child) for a parse whose target the page already holds");
+    DCHECK(tree != NULL,
+           "a §13.2.6 parse was declared with no tree builder — the tree is the KEY every one of tree "
+           "construction's writes arrives with, so a declaration without one names no parse at all");
+    /* THE ROOT OF A PARSE IS ITS DOCUMENT NODE, for both kinds. §13.4 "Parsing HTML fragments" step 3 makes a
+       Document for the fragment and hangs the `html` element it creates under it; a document parse writes the
+       Document it was opened on. Asserting it is what makes the declaration's own privacy check a ONE-TIME
+       cost: a Document node is never inserted anywhere and never removed from anywhere, so the root cannot
+       drift out of the state dom_private_check just verified, and re-asking per write would buy nothing. */
+    DCHECK(root != NULL && root->type == LXB_DOM_NODE_TYPE_DOCUMENT,
+           "a §13.2.6 parse declared a root that is not a Document node — both parse kinds build a Document's "
+           "tree (§13.4 step 3 makes one for a fragment), and a root that is an ELEMENT is one that can be "
+           "moved and removed, which is exactly what this declaration may not have to re-check");
+    DCHECK(cow_tc_decl_of(tree) == NULL,
+           "a §13.2.6 parse was declared on a tree builder that already has a live declaration — either a "
+           "parse was opened twice, or an earlier parse's release never ran and this tree's address now names "
+           "somebody else's document");
+    if (kind == DOM_PARSE_ROOT_PRIVATE)
+        dom_private_check(root);
+    if (g_dom_parse_n >= g_dom_parse_cap) {
+        int nc = g_dom_parse_cap ? g_dom_parse_cap * 2 : 8;
+        DomParseDecl *n;
+        /* The read this stands on is `root`, held across an allocation that can SELL A FLOW — the same
+           statement every producer in this file makes, and made here even though no delta entry is written,
+           because the scope is defined over the READ (see the capture scope's own comment). */
+        dom_capture_begin();
+        n = reclaim_realloc(g_dom_parse, (size_t)nc * sizeof(DomParseDecl));
+        CHECK(n, "dom-cow-oom: the parse-declaration table could not grow — a §13.2.6 write with no declaration "
+                 "cannot tell the page's own tree from a parse's private one, and guessing either way is a "
+                 "silently wrong document");
+        g_dom_parse = n; g_dom_parse_cap = nc;
+        dom_capture_end();
+    }
+    g_dom_parse[g_dom_parse_n].tree = tree;
+    g_dom_parse[g_dom_parse_n].root = root;
+    g_dom_parse[g_dom_parse_n].kind = kind;
+    g_dom_parse_n++;
+}
+
+void dom_cow_parse_release(lxb_html_tree_t *tree)
+{
+    DomParseDecl *d = cow_tc_decl_of(tree);
+
+    DCHECK(d != NULL,
+           "a §13.2.6 parse was released that was never declared — the declaration is made where the parse is "
+           "opened and released where it ends, so an unmatched release is a second close of one parse or a "
+           "close of a parse some other entry opened");
+    /* `d->root` is deliberately not touched: §13.4's temporary document is destroyed by
+       `lxb_html_parse_fragment_chunk_end`, so by the time a fragment parse says it is finished the root it
+       declared is already freed. Order-preserving compaction, so the table reads in the order parses opened. */
+    memmove(d, d + 1, (size_t)(&g_dom_parse[g_dom_parse_n] - (d + 1)) * sizeof(DomParseDecl));
+    g_dom_parse_n--;
+}
+
+/* WHICH PARSE THIS WRITE BELONGS TO — and a write whose parse nobody declared CRASHES rather than picking a
+   side. Both sides are wrong in different ways: called private, a shared write builds the page's document with
+   no entry and every sibling flow reads a parse it never ran; called shared, a fragment parse puts its whole
+   internal structure in the delta. A crash here names the parse entry that has to declare. */
+static DomParseDecl *cow_tc_decl(lxb_html_tree_t *tree)
+{
+    DomParseDecl *d;
+
+    DCHECK(tree != NULL, "a §13.2.6 tree-construction write arrived with no tree builder — the tree is what "
+                         "names the parse, and without it this file cannot tell whose tree is being written");
+    d = cow_tc_decl_of(tree);
+    DCHECK(d != NULL,
+           "HTML §13.2.6 tree construction wrote through a parse that never declared whose tree it builds. "
+           "Whoever opens the parse states it — dom_cow_parse_declare with the Document node it writes into "
+           "and DOM_PARSE_ROOT_PRIVATE for a tree the same operation created (§13.4's temporary document, a "
+           "scratch Document) or DOM_PARSE_ROOT_SHARED for the ACTIVE document — and releases it where the "
+           "parse ends. There is no default: guessing private writes the page's tree with no delta entry");
+    return d;
+}
+
+/* A SHARED PARSE'S WRITES ARE CAPTURED, AND THE NODES IT BUILDS ARE STILL OWNED BY NOBODY. The capture below
+   is the half this file can state on its own: an insert pushes the entry that detaches the node on unapply, a
+   removal pushes the entry that puts it back, so a §8.4.3 `document.write()` into the page's own tree is
+   isolated per flow exactly like an `appendChild` from script.
+   WHAT IS MISSING IS THE CREATION RECORD. §13.4's fragment parse answers ownership at dom_cow_take_private —
+   the node leaves the private tree, and THAT is where the flow becomes its owner — and a shared parse has no
+   such boundary: its nodes go straight into the page's tree, so a discarded flow detaches them and nothing
+   destroys them. It cannot be noted at the insert, because §13.2.6.4.7's adoption agency re-inserts nodes it
+   removed and a second creation entry is a double free at discard. It has to be noted where §13.2.6 MAKES the
+   node, which is a member `lxb_html_tree_dom_cb_t` does not have yet. Until it does, a shared parse may only
+   run with capture off — which is the ACTIVE document's own parse, opened before the first flow is seeded. */
+static void cow_tc_shared_check(void)
+{
+    DCHECK(!g_dom_capture,
+           "HTML §13.2.6 tree construction wrote the SHARED tree while the running flow's DOM delta was "
+           "recording. The writes below are captured; the nodes are not OWNED — every element, comment and "
+           "Text node this parse builds goes into the page's tree with no creation entry, so a flow that is "
+           "discarded detaches them and nothing frees them. Build the creation record where §13.2.6 makes the "
+           "node (a fifth member on lxb_html_tree_dom_cb_t, calling dom_cow_note_created), NOT at the insert: "
+           "§13.2.6.4.7's adoption agency removes and re-inserts nodes, and a second creation entry for one "
+           "node is a double free when the delta is discarded");
 }
 
 static void cow_tc_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
 {
-    cow_tc_structural_check(tree);
+    DomParseDecl *d = cow_tc_decl(tree);
+
     DCHECK(to != NULL && node != NULL, "§13.2.6 inserted nothing, or inserted into nothing");
     /* EVERY §13.2.6 INSERT IS OF A PARENTLESS NODE, and it is asserted rather than assumed: the insertion
        modes insert elements, comments, Text nodes and the DocumentType they created a statement earlier, and
@@ -1179,13 +1302,29 @@ static void cow_tc_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_d
     DCHECK(node->parent == NULL,
            "§13.2.6 inserted a node that is still in a tree — that is a move, and the removal half of it "
            "reached neither the removing steps nor any delta");
+    /* THE PARSE'S OWN CONTAINMENT QUESTION, asked over dom_parse_root_of: an insertion point inside a
+       `<template>`'s content fragment is still this parse's tree, and the private-tree family's own walk —
+       which stops at the fragment, because a clone declares it as a root in its own right — would call it
+       another tree. dom_private_check ran ONCE at the declaration and is not re-asked: a Document node is
+       never inserted anywhere and never removed from anywhere, so nothing about the root can have changed. */
+    DCHECK(dom_parse_root_of(to) == d->root,
+           "§13.2.6 inserted into a tree its parse never declared — the insertion point climbed out to a root "
+           "that is not the Document this parse was opened on, so either the parse walked into somebody else's "
+           "document or a `<template>`'s content fragment lost the host that reaches it");
     g_dom_version++;
+    if (d->kind == DOM_PARSE_ROOT_PRIVATE) {
+        lxb_dom_node_insert_child(to, node);
+        return;
+    }
+    cow_tc_shared_check();
+    dom_insert_capture(node);
     lxb_dom_node_insert_child(to, node);
 }
 
 static void cow_tc_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
 {
-    cow_tc_structural_check(tree);
+    DomParseDecl *d = cow_tc_decl(tree);
+
     DCHECK(to != NULL && node != NULL, "§13.2.6 inserted nothing, or inserted before nothing");
     DCHECK(node->parent == NULL,
            "§13.2.6 foster-parented a node that is still in a tree — that is a move, and the removal half of "
@@ -1196,31 +1335,65 @@ static void cow_tc_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_
     DCHECK(to->parent != NULL,
            "§13.2.6.1's appropriate place for inserting a node gave a BEFORE position at a node with no "
            "parent — there is no position before a tree's root");
+    DCHECK(dom_parse_root_of(to) == d->root,
+           "§13.2.6.1 foster-parented into a tree its parse never declared — the reference node climbed out to "
+           "a root that is not the Document this parse was opened on");
     g_dom_version++;
+    if (d->kind == DOM_PARSE_ROOT_PRIVATE) {
+        lxb_dom_node_insert_before(to, node);
+        return;
+    }
+    cow_tc_shared_check();
+    dom_insert_capture(node);
     lxb_dom_node_insert_before(to, node);
 }
 
 static void cow_tc_remove(lxb_html_tree_t *tree, lxb_dom_node_t *node)
 {
-    cow_tc_structural_check(tree);
+    DomParseDecl *d = cow_tc_decl(tree);
+
     DCHECK(node != NULL, "§13.2.6 removed nothing");
     DCHECK(node->parent != NULL,
            "§13.2.6.4.7's adoption agency removed a node that is in no tree — its own steps guard every "
            "remove with `if lastNode's parent is non-null`, so reaching here past that guard means the "
            "algorithm lost track of where the node was");
+    DCHECK(dom_parse_root_of(node) == d->root,
+           "§13.2.6.4.7's adoption agency removed a node from a tree its parse never declared — a detach of "
+           "state some other flow's baseline holds must be captured, or that flow's unapply re-inserts memory "
+           "this parse is about to reuse");
     g_dom_version++;
+    if (d->kind == DOM_PARSE_ROOT_PRIVATE) {
+        /* A BARE UNLINK, and no creation record either way: the node stays this parse's own and the algorithm
+           puts it back a step later. §13.2.6.4.7 says "If lastNode's parent is non-null, then remove lastNode"
+           and "Insert lastNode at the appropriate place for inserting a node" as two separate steps over the
+           tree it is repairing, so this is neither dom_cow_take_private (which declares the node has LEFT for
+           the real tree) nor dom_cow_destroy_private (which frees it). */
+        lxb_dom_node_remove(node);
+        return;
+    }
+    cow_tc_shared_check();
+    dom_remove_capture(node);
     lxb_dom_node_remove(node);
 }
 
 static lxb_status_t cow_tc_append_data(lxb_html_tree_t *tree, lxb_dom_character_data_t *chrs,
                                        const lxb_char_t *data, size_t len)
 {
-    /* NO structural check, and that is the difference this member exists to state: the merge captures whichever
-       tree it lands in, so there is nothing here for a live parse on the page's own document to make unsound.
-       `tree` is not consulted for the same reason — the arena the append allocates out of is the TEXT NODE's
-       own document's, which is the one a restore will reach for, and not the one the parse happens to name. */
-    (void)tree;
-    dom_cow_append_text_data(lxb_dom_interface_node(chrs), (const char *)data, len);
+    lxb_dom_node_t *node = lxb_dom_interface_node(chrs);
+    DomParseDecl *d = cow_tc_decl(tree);
+
+    /* NO KIND SPLIT, and that is the difference this member exists to state: the merge captures whichever tree
+       it lands in, so a live parse on the page's own document makes nothing here unsound. Over-capturing a
+       Text node the parse itself built costs one entry that reverts to the same bytes; under-capturing one the
+       baseline owns leaves a page's text written by one flow and visible to every other.
+       WHAT THE DECLARATION IS STILL FOR HERE IS WHERE THE MERGE LANDED. §13.2.6.1's "insert a character" step
+       3 appends to "a Text node immediately before insertionLocation", which is a node of the tree this parse
+       is building — so a target outside the declared root is a parse writing a document it never named. */
+    DCHECK(dom_parse_root_of(node) == d->root,
+           "§13.2.6.1's character merge appended to a Text node outside the tree its parse declared — step 3's "
+           "target is the node immediately before the insertion location, so a node in another tree means the "
+           "insertion location itself belongs to a document this parse never named");
+    dom_cow_append_text_data(node, (const char *)data, len);
     return LXB_STATUS_OK;
 }
 
@@ -1283,15 +1456,7 @@ void dom_cow_move_out(lxb_dom_node_t *node) {
     g_move_in_flight = node;
 #endif
     g_dom_version++;
-    if (g_dom_capture) {
-        DomUndo u; memset(&u, 0, sizeof u);
-        dom_capture_begin();   /* the position is read off the live tree and written down by the push */
-        u.kind = 2; u.node = node;
-        u.parent = node->parent; u.next = node->next;
-        u.sh_old = u.sh_cur = JS_UNDEFINED;
-        dom_undo_push(u);
-        dom_capture_end();
-    }
+    dom_remove_capture(node);
     lxb_dom_node_remove(node);
 }
 

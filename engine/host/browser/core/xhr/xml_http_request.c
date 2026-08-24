@@ -993,7 +993,8 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
        "Character encodings", the list of encodings a user agent must support. Steps 6 and 9 land with it —
        "a known definite encoding" is not Encoding §6.1's `decode`, which lets a BOM overrule the label — and
        both need `document_new` to take an encoding, which is one change to its contract. */
-    CHECK(html_parse_document(dom, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
+    /* FLOW-PRIVATE: the response Document is this operation's own, made immediately above. */
+    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)bytes, len) == LXB_STATUS_OK,
           "XMLHttpRequest: the response document could not be parsed");
     url = JS_ToCString(ctx, d->response_url);
     JS_FreeValue(ctx, d->response_object);

@@ -67,10 +67,10 @@ uint64_t dom_cow_version(void);
    of the build — the first component to reach past this file will do so silently.
    AND THE AUDIT'S SCOPE IS THE ENGINE'S OWN COMPONENTS, WHICH IS NOT EVERY WRITER OF THIS TREE. HTML §13.2.6
    "Tree construction" runs INSIDE lexbor and writes the document without one call to this file. A grep of
-   `engine/host/browser` cannot see it, and it is the reason core/html/html_parse.c's parse entry now ASSERTS
-   that a parse target is a tree no other flow can reach: that unreachability, not any capture, is what makes
-   every parse in this engine sound today, and a LIVE parser on the ACTIVE document (§8.4.3 `document.write`)
-   breaks it by construction.
+   `engine/host/browser` cannot see it, which is why it is not a convention there at all: the vendored parser
+   routes those writes through one interposable table, this file implements it, and each parse DECLARES whose
+   tree it is building (see dom_cow_parse_declare below) so a write into the page's own document is captured
+   and a write into a parse's own private tree is not.
    AND LEXBOR'S OWN MUTATION CALLBACKS DO NOT CLOSE IT — a callback that FIRES is not a write that is CAPTURED,
    and the shapes differ in a way that matters here rather than pedantically:
      - `->mutation->inserted` fires AFTER the link, which is FINE for an insert: a kind-1 entry holds only the
@@ -178,28 +178,63 @@ void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len);
  * of one place. */
 void dom_cow_append_text_data(lxb_dom_node_t *node, const char *data, size_t len);
 
-/* HTML §13.2.6 "Tree construction" — INSTALL THIS FILE AS THE PARSER'S DOM WRITER.
+/* HTML §13.2.6 "Tree construction" — WHOSE TREE A PARSE IS BUILDING, DECLARED BY WHOEVER OPENS THE PARSE.
  *
- * §13.2.6 runs inside lexbor and writes the document without one call to the chokepoint above; that is the gap
- * core/html/html_parse.c's parse entry asserts around rather than closes. The vendored parser now makes every
- * one of those writes through a single interposable table (`lxb_html_tree_dom_cb_t`, html/tree.h) instead of
- * through the raw `_wo_events` primitives and a `lexbor_str_append` into a Text node's storage, and this
- * installs THIS file as the implementation.
+ * §13.2.6's writes arrive at this file with ONE piece of context: the `lxb_html_tree_t` doing the parsing. The
+ * question every one of them must answer first — is this tree one no other flow can reach, or is it the shared
+ * baseline every flow reads — IS NOT ANSWERABLE FROM THAT TREE, from the document on it, or from any node in
+ * it. A Document node is unparented whether the page holds it or the caller made it a statement ago, so the
+ * private-tree predicate says the same thing about both. `lxb_html_document_is_original` — the question these
+ * members used to ask — is false ONLY for §13.4 "Parsing HTML fragments" step 3's temporary document, so it
+ * called every scratch Document a flow builds (§8.5.1's DOMParser, §4.5.1's createHTMLDocument, XHR's
+ * responseXML, an @S witness parse) the page's own and refused all of them.
  *
- * WHAT THE IMPLEMENTATION DOES IS DECIDED BY WHOSE TREE IS BEING BUILT, and lexbor already answers that:
- * `lxb_html_document_is_original` is false exactly for §13.4 "Parsing HTML fragments"' temporary document,
- * whose whole tree is the running flow's own product and therefore flow-private in §state-isolation's sense —
- * so its structural writes push no entry, which is what keeps a delta O(shared state touched) rather than
- * O(everything the parse built). A parse into an ORIGINAL document is today a parse into a tree no other flow
- * can reach, and that is not argued here: it is the condition html_parse.c asserts where the parse opens, and
- * the per-write echo of it is asserted at the members below, so a live parse on the ACTIVE document crashes at
- * its first insertion instead of writing shared tree that no delta recorded.
- * The character merge is the one member that captures either way — see dom_cow_append_text_data.
+ * SO THE PARSE DECLARES IT, AND THE DECLARATION IS ABOUT THE OPERATION RATHER THAN ABOUT THE NODE. "No other
+ * flow can reach this root" holds because the caller CREATED the Document and opened the parse as one
+ * uninterrupted C operation: nothing between the two runs the page's code, so no fork can have produced a
+ * sibling that holds it. That is a fact only that caller has, which is why no predicate here recovers it — and
+ * why a guess would be silent rather than loud. Guessing PRIVATE for a shared tree writes the page's own
+ * document with no delta entry, and every sibling flow then reads a parse it never ran.
  *
- * IT DOES NOT FIRE THE TREE HOOK. §4.2.3's insertion and removing steps are lexbor's per-document `mutation`
- * table's job and this engine already routes them there; the eight sites that used the `_wo_events` primitives
- * were opting OUT of that table, and routing them through the public mutators is what put them back. Firing
- * the chokepoint's own hook here as well would run every parsed element's steps twice. */
+ * IT IS PER PARSE AND NOT PER DOCUMENT, for that same reason. A document's disposition is not fixed for its
+ * life: a flow that creates a Document, FORKS, and only then parses into it has a sibling holding that
+ * document, and a standing per-document claim would go on saying "private". A declaration lives exactly as long
+ * as the parse it was made for — made where the parse opens, released at §13.2.7 "The end" — so it cannot
+ * outlive the operation that vouched for it.
+ *
+ * AND IT IS NOT A SCOPE, for the reason the private-tree entries below are not: §13.4's fragment parse yields
+ * between BYTES, so a declaration held in a global would stand open while another flow ran and opened its own.
+ * Keyed on the parse, there is nothing for a suspension to survive. */
+typedef enum {
+    /* The root is the running flow's OWN product and no other flow can reach it — §13.4's temporary document,
+       and any Document the declaring operation created. Structural writes push NO entry, which is what keeps a
+       delta O(shared state touched) rather than O(everything the parse built). */
+    DOM_PARSE_ROOT_PRIVATE = 0,
+    /* The root is the SHARED baseline every flow reads — the ACTIVE document, whose parse §8.4.3
+       `document.write()` step 11 re-enters. Structural writes are captured. */
+    DOM_PARSE_ROOT_SHARED = 1
+} DomParseRootKind;
+
+void dom_cow_parse_declare(lxb_html_tree_t *tree, lxb_dom_node_t *root, DomParseRootKind kind);
+/* …and the parse is over. Takes only the tree, and dereferences nothing else: §13.4's temporary document is
+   DESTROYED by `lxb_html_parse_fragment_chunk_end`, so by the time a fragment parse can say it has finished,
+   the root it declared is already freed memory. */
+void dom_cow_parse_release(lxb_html_tree_t *tree);
+
+/* …AND INSTALL THIS FILE AS THE PARSER'S DOM WRITER. §13.2.6 runs inside lexbor and writes the document
+ * without one call to the chokepoint above. The vendored parser makes every one of those writes through a
+ * single interposable table (`lxb_html_tree_dom_cb_t`, html/tree.h) instead of through the raw `_wo_events`
+ * primitives and a `lexbor_str_append` into a Text node's storage, and this installs the implementation.
+ * The character merge is the one member that captures whatever the declaration says — see
+ * dom_cow_append_text_data.
+ *
+ * IT DOES NOT FIRE THE TREE HOOK, and that is a statement about §4.2.3's insertion and removing steps rather
+ * than about capture. The hook this file fires is THIS ENGINE's §4.2.3 steps and the chokepoint above is the
+ * only thing that reaches it; the table a parsed node's insert does reach is lexbor's own per-document
+ * `mutation`, whose members are lexbor's per-tag element steps and not the engine's. So a parser-inserted node
+ * runs no §4.2.3 insertion steps here, and the members below leave that exactly where it was. Firing the hook
+ * from HERE would close it for a SHARED parse and not for a private one — one parse behaving two ways
+ * according to a declaration that is about isolation and says nothing about the DOM's steps. */
 void dom_cow_install_tree_construction(void);
 /* Whether that install has happened and still stands — asked by the parse entry on every parser it makes, and
    a POSITIVE statement rather than a hole: a §13.2.6 write reaching lexbor's own table is a write no delta
@@ -262,10 +297,6 @@ void dom_cow_move_before_private(lxb_dom_node_t *root, lxb_dom_node_t *ref, lxb_
    already be empty: everything under it would be freed with it, and this operation exists precisely because
    what was under it went somewhere else. */
 void dom_cow_discard_private(lxb_dom_node_t *root, lxb_dom_node_t *node);
-
-/* Lower-level capture primitives the chokepoint is built on (record a mutation BEFORE it happens). Direct use is
-   reserved for the mutation ops that compose them (the chokepoint above, and node-insert once it lands). */
-void dom_insert_capture(lxb_dom_node_t *node);                    /* an inserted node */
 
 /* Scheduler hooks — swap the running flow's DOM writes. There is no `dom_revert` twin that DISCARDS them: a
    flow that finishes is switched out like any other and then RELEASED, which is the same path an evicted flow
