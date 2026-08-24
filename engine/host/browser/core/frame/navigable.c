@@ -238,14 +238,15 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
            `Char`, §2.3 [3] `S` and §2.11's end-of-line normalization as the reader every production reads its
            input through, core/xml/xml_name.c owns §2.3 [5] `Name` and Namespaces in XML §3 [4] `NCName` / §4
            [7] `QName`, core/xml/xml_ref.c owns §4.1 [66] `CharRef` / [68] `EntityRef` with §4.6's five
-           predefined entities — the layer §3.3.3's normalization is written over — and core/xml/xml_ns.c owns
+           predefined entities — the layer §3.3.3's normalization is written over — core/xml/xml_markup.c owns
+           §2.7 [18] `CDSect`, the construct in which only [21] `CDEnd` is markup, and core/xml/xml_ns.c owns
            §6's scope stack, declaration and expansion (xml_ns_push /
            xml_ns_declare / xml_ns_expand) with every §3 and §5 namespace constraint as a returned error — a
            scope stack is a thing only a parser drives, which is what those were built for. What is missing is
            the GRAMMAR between them: XML §2.8 [22] `prolog`,
            [39] `element` with
            [40] `STag` / [42] `ETag` / [44] `EmptyElemTag`, [43] `content`, §2.5 [15] `Comment`, §2.6 [16] `PI`,
-           §2.7 [18] `CDSect`, and §3.3.3 attribute-value normalization over [10] `AttValue` — producing a
+           and §3.3.3 attribute-value normalization over [10] `AttValue` — producing a
            Lexbor tree through
            element_create_ns (core/dom/element.h, which does NOT case-fold, unlike lexbor's own entry) and
            dom_attr_write (core/dom/attr_list.h), and reporting well-formedness errors for §8.5.1's

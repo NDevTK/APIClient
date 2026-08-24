@@ -1,4 +1,6 @@
 /* See xml_char.h. */
+#include <string.h>
+
 #include <lexbor/encoding/decode.h>
 
 #include "check.h"
@@ -174,4 +176,61 @@ XmlCharError xml_char_read(XmlCharReader *r, uint32_t *out)
            "only value between the check and here is §2.11's replacement, and #xA is a Char");
     *out = (uint32_t)cp;
     return XML_CHAR_OK;
+}
+
+/* §2.11's rule read off the BYTES of a slice — see xml_char.h for why this spelling exists and why bytes are
+   exact. The two functions are written as one loop twice rather than as a measure-then-copy pair sharing a
+   helper, because the shared helper would be a callback per byte and the divergence they are exposed to is a
+   MIS-TRANSCRIPTION of the rule, which a shared helper would hide by making both answers wrong together. The
+   copy asserts the measurement instead, which catches exactly that. */
+size_t xml_char_normalized_len(const char *s, size_t len)
+{
+    size_t i, n = 0;
+
+    DCHECK(s != NULL || len == 0,
+           "§2.11's normalization was measured over a null slice of non-zero length — a run of zero characters "
+           "still stands AT a position in the entity, so a null pointer here is a caller with no slice rather "
+           "than one with an empty slice");
+    for (i = 0; i < len; i++) {
+        /* "the two-character sequence #xD #xA": the #xD is not a character of its own, so it is not counted;
+           the #xA after it is counted and IS the single character the pair becomes. A lone #xD is counted
+           because it BECOMES a #xA — same length, different byte, which is why a caller cannot decide that a
+           slice needs no copy from this number alone. */
+        if ((unsigned char)s[i] == 0x0D && i + 1 < len && (unsigned char)s[i + 1] == 0x0A) continue;
+        n++;
+    }
+    DCHECK(n <= len, "§2.11's normalization measured more characters than the slice has bytes — it only ever "
+                     "removes a byte and never adds one");
+    return n;
+}
+
+size_t xml_char_normalize(const char *s, size_t len, char *dst)
+{
+    size_t i, n = 0;
+
+    DCHECK((s != NULL && dst != NULL) || len == 0,
+           "§2.11's normalization was asked to copy a slice with no source or nowhere to put it");
+    DCHECK(len == 0 || dst >= s + len || dst + len <= s,
+           "§2.11's normalization was asked to write into the slice it is reading — it walks forward and the "
+           "output is shorter than the input, so an overlapping copy would read bytes it had already "
+           "overwritten and the corruption would look like a document that contained them");
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+
+        if (c == 0x0D) {
+            if (i + 1 < len && (unsigned char)s[i + 1] == 0x0A) continue;
+            dst[n++] = 0x0A;                   /* "any #xD that is not followed by #xA" */
+        } else {
+            dst[n++] = (char)c;
+        }
+    }
+    DCHECK(n == xml_char_normalized_len(s, len),
+           "§2.11's normalization wrote a different number of bytes than it measured — the measure and the "
+           "copy are one rule written twice, and a disagreement means one of the two transcriptions is wrong");
+    DCHECK(memchr(dst, 0x0D, n) == NULL,
+           "§2.11's normalization left a carriage return in its output — the whole of the rule is that a "
+           "processor MUST behave as if every #xD in the entity were removed or replaced before any other "
+           "processing, and §2.3's own note says the only #xD a production may ever match comes from a "
+           "character reference, which is a layer above this one");
+    return n;
 }

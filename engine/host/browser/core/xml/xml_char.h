@@ -136,4 +136,27 @@ void xml_char_reader_init(XmlCharReader *r, const char *s, size_t len);
    requires the processor to stop. */
 XmlCharError xml_char_read(XmlCharReader *r, uint32_t *out);
 
+/* §2.11 END-OF-LINE HANDLING OVER A SLICE THIS READER HAS ALREADY READ — the SECOND spelling of a rule this
+ * file implements once, and it is here rather than in the file that needs it because §2.11 is this component's
+ * sentence and two owners is how two spellings drift apart.
+ *
+ * WHY A SECOND SPELLING HAS TO EXIST AT ALL. A production whose content is a RUN of characters — §2.7's [20]
+ * `CData`, §2.5's comment body, §2.6's instruction — hands its caller a BORROWED slice of the entity, because
+ * copying every run would allocate a second copy of every document for the sake of the #xD that is almost
+ * never in one. The slice is therefore BYTES, and §2.11 is what stands between those bytes and the CHARACTERS
+ * the standard says the production matched. A caller that memcpy'd the slice into a DOM node would ship a
+ * carriage return the parser had already removed, and nothing would say so.
+ *
+ * BYTES ARE EXACT HERE FOR THE REASON THE READER'S OWN #xA LOOKAHEAD IS EXACT: #xD and #xA are ASCII, so each
+ * is a single byte in UTF-8, and neither byte can occur as a CONTINUATION byte of some other code point
+ * because every continuation byte is 0x80..0xBF. So "translate #xD#xA and any other #xD to #xA" asked of bytes
+ * and asked of characters are the same question, and a multi-byte character can be neither split nor matched
+ * by accident. The scans that produce these slices hold the two spellings to each other on every call.
+ *
+ * `_len` answers what `_normalize` will write, so a caller can size an exact allocation before making one; it
+ * is never larger than `len` and is smaller by exactly the number of #xD#xA pairs. `_normalize` writes that
+ * many bytes into `dst`, which MUST NOT overlap `[s, s+len)`, and returns the count. */
+size_t xml_char_normalized_len(const char *s, size_t len);
+size_t xml_char_normalize(const char *s, size_t len, char *dst);
+
 #endif

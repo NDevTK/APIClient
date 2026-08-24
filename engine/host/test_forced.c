@@ -10,6 +10,7 @@
 #include "core/crypto/secure_hash.h"
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
+#include "core/xml/xml_markup.h" /* XML §2.7's [18] CDSect — the construct in which nothing else is markup */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -6226,6 +6227,216 @@ static void xml_ref_selftest(void)
     }
 }
 
+/* XML 1.0 (Fifth Edition) §2.7 CDATA Sections — core/xml/xml_markup.h, the construct in which no other markup
+ * is recognized — driven together with §2.11 End-of-Line Handling's SECOND spelling, which that construct is
+ * the first caller of.
+ *
+ * THE ROWS THAT CARRY THE COMPONENT ARE THE ONES A REFERENCE-EXPANDING SCAN WOULD GET WRONG. §2.7's own
+ * sentence is that "within a CDATA section, only the CDEnd string is recognized as markup ... they need not
+ * (and cannot) be escaped", so `<![CDATA[&amp;]]>` is FIVE characters of content and not one, and
+ * `<![CDATA[&foo;]]>` is a well-formed document rather than a [WFC: Entity Declared] fatal error. A scan that
+ * reached core/xml/xml_ref.h from here would answer both the other way, and neither document would look
+ * unusual. The bracket rows are the other half: `]]]>` is a section whose content is one `]`, because [21]
+ * CDEnd is the LAST two brackets before the `>` — a three-character window that started matching at the first
+ * `]` would run off the end of the section it was supposed to close.
+ *
+ * THE §2.11 CROSS-CHECK IS THE POINT OF THE SECOND HALF. The scan hands back a BORROWED slice of bytes while
+ * the standard says the production matched CHARACTERS, and the only thing between them is §2.11 — so every
+ * successful row is read BOTH ways: the reader is driven over the raw slice, and over the normalized copy,
+ * and the two must produce the identical code points with no #xD surviving into the copy. A component that
+ * measured the slice correctly and normalized it wrongly would pass every row above and ship a carriage
+ * return the parser had already removed. */
+static void xml_markup_selftest(void)
+{
+    static const struct { const char *in; size_t n; XmlMarkupError err;
+                          const char *raw; size_t raw_len; size_t after; const char *why; } CD[] = {
+        /* [18] CDSect ::= CDStart CData CDEnd */
+        { "<![CDATA[]]>", 12, XML_MARKUP_OK, "", 0, 12,
+          "[20] CData is `Char*`, so a section with no content at all is one — and its slice still stands AT a "
+          "position in the entity, which is why the pointer is never null" },
+        { "<![CDATA[a]]>", 13, XML_MARKUP_OK, "a", 1, 13, "the shortest section with content in it" },
+        { "<![CDATA[<greeting>Hello, world!</greeting>]]>", 46, XML_MARKUP_OK,
+          "<greeting>Hello, world!</greeting>", 34, 46,
+          "§2.7's own example, in which `<greeting>` and `</greeting>` `are recognized as character data, not "
+          "markup`" },
+        { "<![CDATA[&amp;]]>", 17, XML_MARKUP_OK, "&amp;", 5, 17,
+          "§2.7: an ampersand inside a CDATA section `need not (and cannot)` be escaped — `cannot` is the word "
+          "that makes this five characters of content, and a scan that reached §4.1's reference layer from "
+          "here would hand back one" },
+        { "<![CDATA[&foo;]]>", 17, XML_MARKUP_OK, "&foo;", 5, 17,
+          "and the same sentence makes this a WELL-FORMED document: a reference layer reached from here would "
+          "report [WFC: Entity Declared] about a general entity this document never refers to" },
+        { "<![CDATA[&]]>", 13, XML_MARKUP_OK, "&", 1, 13,
+          "§2.4's `MUST NOT appear in their literal form` names this construct in its own exception clause" },
+        { "<![CDATA[<]]>", 13, XML_MARKUP_OK, "<", 1, 13, "and the left angle bracket with it" },
+        { "<![CDATA[]]]>", 13, XML_MARKUP_OK, "]", 1, 13,
+          "[21] CDEnd is the LAST two brackets and the `>`: a fixed three-character window that began matching "
+          "at the first `]` would take `]]]` for a delimiter and never close the section" },
+        { "<![CDATA[]]]]>", 14, XML_MARKUP_OK, "]]", 2, 14, "and a longer run leaves the extra brackets as content" },
+        { "<![CDATA[a]]>b", 14, XML_MARKUP_OK, "a", 1, 13,
+          "the scan stops immediately after [21] CDEnd, leaving the `b` for the caller — which is what makes a "
+          "CDATA section a construct INSIDE [43] content rather than the whole of it" },
+        { "<![CDATA[<![CDATA[x]]>", 22, XML_MARKUP_OK, "<![CDATA[x", 10, 22,
+          "§2.7: `CDATA sections cannot nest` — the inner delimiter is nine characters of content and the "
+          "FIRST `]]>` closes the one section there is" },
+        { "<![CDATA[]]>]]>", 15, XML_MARKUP_OK, "", 0, 12,
+          "and for the same reason a second `]]>` after a closed section is the caller's business, not a "
+          "second delimiter for this one" },
+        { "<![CDATA[a\r\nb]]>", 16, XML_MARKUP_OK, "a\r\nb", 4, 16,
+          "THE SLICE IS BYTES AND THE PRODUCTION MATCHED CHARACTERS. §2.11 collapses `#xD #xA` to one #xA, so "
+          "this section's content is FOUR bytes and THREE characters — a caller that memcpy'd the slice into a "
+          "DOM node would ship a carriage return the parser had already removed" },
+        { "<![CDATA[a\rb]]>", 15, XML_MARKUP_OK, "a\rb", 3, 15,
+          "and a lone #xD is the case a length comparison alone cannot find: three bytes and three characters, "
+          "and the third character is not the byte it was decoded from" },
+
+        /* [18], the shapes that are not it */
+        { "<![CDATA[a]]", 12, XML_MARKUP_ERR_UNTERMINATED_CDATA_SECTION, NULL, 0, 0,
+          "the entity ends before [21] CDEnd, so [18] never matched" },
+        { "<![CDATA[", 9, XML_MARKUP_ERR_UNTERMINATED_CDATA_SECTION, NULL, 0, 0,
+          "and a section with no content has not closed itself either" },
+        { "<![CDATA[a]] >", 14, XML_MARKUP_ERR_UNTERMINATED_CDATA_SECTION, NULL, 0, 0,
+          "[21] CDEnd is a literal string with nothing between its characters — a space resets the bracket run "
+          "rather than being skipped over" },
+
+        /* The character layer, reached from inside a CDATA section */
+        { "<![CDATA[a\x01" "b]]>", 15, XML_MARKUP_ERR_CHARACTER, NULL, 0, 0,
+          "§2.2: [20] CData is `Char*`, and U+0001 is not [2] Char inside a CDATA section any more than it is "
+          "anywhere else — `only the CDEnd string is recognized as markup` exempts the content from MARKUP, "
+          "not from the character production" },
+        { "<![CDATA[a\xC3]]>", 14, XML_MARKUP_ERR_CHARACTER, NULL, 0, 0,
+          "§4.3.3: and an ill-formed code unit sequence is ill-formed here too" },
+    };
+    /* The peek is the CALLER's and the scan asserts it, so the predicate is exercised on its own — including
+       on the shapes a [43] content dispatcher will actually hand it. */
+    static const struct { const char *in; bool at; const char *why; } PEEK[] = {
+        { "<![CDATA[", true, "[19] CDStart, exactly" },
+        { "<![CDATA[x]]>", true, "and with a section behind it" },
+        { "<![CDATA", false, "an entity that ends inside the delimiter does not stand at it" },
+        { "<![cdata[", false,
+          "§1.2 Terminology's `match`: `No case folding is performed` — this is not [19] CDStart, and a "
+          "predicate that folded case would open a CDATA section in a document that has none" },
+        { "<!--", false, "§2.5's comment opens with a different string" },
+        { "<?x?>", false, "and so does §2.6's processing instruction" },
+        { "<foo>", false, "a start-tag is not this construct" },
+        { "", false, "and an entity that has ended stands at no construct at all" },
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(CD) / sizeof(CD[0]); i++) {
+        XmlCharReader r, start;
+        XmlMarkupText got;
+        XmlMarkupError e;
+
+        /* THE DECLARED LENGTH IS MACHINE-CHECKED AGAINST THE LITERAL. Every row here is NUL-free, so `strlen`
+           is the length the row means — and a row whose count is one out would silently test a different
+           entity than the one its `why` describes. */
+        CHECK(CD[i].n == strlen(CD[i].in), "a CDATA-section row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, CD[i].in, CD[i].n);
+        start = r;
+        CHECK(xml_markup_at_cdsect(&r), "a CDATA-section row does not begin at [19] CDStart");
+        memset(&got, 0, sizeof got);
+        e = xml_markup_scan_cdsect(&r, &got);
+        CHECK(e == CD[i].err, CD[i].why);
+        if (e == XML_MARKUP_OK) {
+            CHECK(got.raw != NULL && got.raw_len == CD[i].raw_len
+                      && memcmp(got.raw, CD[i].raw, got.raw_len) == 0, CD[i].why);
+            CHECK((size_t)(r.p - r.start) == CD[i].after, CD[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful CDATA-section scan left the reader's §1.2 latch set");
+            /* The slice is BORROWED from the entity, which is what makes the whole design allocation-free. */
+            CHECK(got.raw > CD[i].in && got.raw + got.raw_len <= CD[i].in + CD[i].n,
+                  "a CDATA section's content does not point inside the entity it was scanned from — it is a "
+                  "borrowed slice and not a copy, so a pointer outside means the scan measured it against "
+                  "something else");
+            /* §2.11's TWO SPELLINGS, held to each other over the slice this scan produced: the reader's, which
+               is what the parse actually read, and the byte-level one a caller materializes with. */
+            {
+                char norm[64];
+                size_t nl = xml_char_normalized_len(got.raw, got.raw_len);
+                XmlCharReader a, b;
+                uint32_t ca = 0, cb = 0;
+
+                CHECK(nl <= got.raw_len && nl < sizeof norm,
+                      "§2.11's normalization measured a slice as longer than its own bytes, or this row is too "
+                      "long for the fixture's buffer");
+                CHECK(xml_char_normalize(got.raw, got.raw_len, norm) == nl, CD[i].why);
+                CHECK(memchr(norm, 0x0D, nl) == NULL,
+                      "§2.11's normalized copy of a CDATA section still contains a carriage return");
+                xml_char_reader_init(&a, got.raw, got.raw_len);
+                xml_char_reader_init(&b, norm, nl);
+                for (;;) {
+                    CHECK(xml_char_read(&a, &ca) == XML_CHAR_OK && xml_char_read(&b, &cb) == XML_CHAR_OK,
+                          "a CDATA section's content did not read back as characters");
+                    CHECK(ca == cb,
+                          "the characters a CDATA section's RAW slice reads as and the characters its "
+                          "§2.11-normalized copy reads as are not the same — those are one rule written twice, "
+                          "and a caller materializing this content would get a document the parser never read");
+                    if (ca == XML_CHAR_EOF) break;
+                }
+            }
+        } else {
+            CHECK(strcmp(xml_markup_error_message(e), xml_markup_error_message(XML_MARKUP_OK)) != 0, CD[i].why);
+            if (e == XML_MARKUP_ERR_CHARACTER) {
+                /* THE ONE ANSWER THAT DOES NOT REWIND — rewinding would restore the §1.2 latch to OK and
+                   silently un-report the fatal error the character layer just detected. */
+                CHECK(r.fatal != XML_CHAR_OK,
+                      "a CDATA-section scan reported the character layer's fatal error and the reader's §1.2 "
+                      "latch is clear — the caller is told to ask the reader which sentence was violated, and "
+                      "a clear latch has no answer to give");
+                CHECK(r.p != start.p, CD[i].why);
+            } else {
+                /* THE STRUCTURAL PROMISE: a failed scan consumes nothing, so the position a `parsererror`
+                   quotes names the construct and no caller is left standing inside one that failed. */
+                CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                          && r.fatal == start.fatal,
+                      "a CDATA-section scan that reported a §2.7 error did not restore the reader it was "
+                      "handed — a caller reporting the mistake would quote a position inside the failed "
+                      "construct, and a caller that recovered would resume in the middle of one");
+            }
+        }
+    }
+    for (i = 0; i < sizeof(PEEK) / sizeof(PEEK[0]); i++) {
+        XmlCharReader r;
+
+        xml_char_reader_init(&r, PEEK[i].in, strlen(PEEK[i].in));
+        CHECK(xml_markup_at_cdsect(&r) == PEEK[i].at, PEEK[i].why);
+    }
+    /* Every sentence this layer can report is a DIFFERENT sentence — core/xml/xml_char.c's argument for its
+       own two, and core/xml/xml_ref.c's for its five. */
+    {
+        static const XmlMarkupError ALL[] = {
+            XML_MARKUP_OK, XML_MARKUP_ERR_UNTERMINATED_CDATA_SECTION, XML_MARKUP_ERR_CHARACTER,
+        };
+        size_t a, b;
+
+        for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+            for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+                CHECK(strcmp(xml_markup_error_message(ALL[a]), xml_markup_error_message(ALL[b])) != 0,
+                      "two of §2.7's answers carry one message — a section nobody closed and a character that "
+                      "is not [2] Char are different mistakes an author has to be told apart");
+    }
+    /* THE SCAN IS A READER OPERATION, so the peek-and-park copy the parse above it will fork on has to survive
+       one — core/xml/xml_char.h's property, exercised through this layer rather than assumed to compose. */
+    {
+        static const char SRC[] = "<![CDATA[a]]><![CDATA[b]]>";
+        XmlCharReader r, saved;
+        XmlMarkupText got;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw_len == 1 && got.raw[0] == 'a',
+              "the first CDATA section of a known entity");
+        saved = r;
+        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw[0] == 'b' && r.p == r.end,
+              "the second CDATA section of a known entity, read to the end");
+        r = saved;
+        CHECK(xml_markup_at_cdsect(&r), "a reader restored from a copy does not stand where it was copied at");
+        CHECK(xml_markup_scan_cdsect(&r, &got) == XML_MARKUP_OK && got.raw_len == 1 && got.raw[0] == 'b',
+              "a CDATA section scanned again from a reader restored out of a copy did not produce the same "
+              "section — peeking and parking ARE that copy, so a parse that cannot rewind across a construct "
+              "can neither fork an arm nor suspend inside [43] content");
+    }
+}
+
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
  * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
  * stated by reference to.
@@ -6719,6 +6930,7 @@ int main(int argc, char **argv) {
     css_property_grammar_selftest();
     xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
     xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
+    xml_markup_selftest(); /* XML §2.7's [18] CDSect, and §2.11's byte-level spelling that construct needs */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
