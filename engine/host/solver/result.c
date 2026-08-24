@@ -9,6 +9,7 @@
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"   /* what the cross-instance seam materialized here — see world_segment_stats */
+#include "solver/concolic.h"   /* whether this run ever acquired attacker input — see concolic_source_reads */
 #include "solver/cold.h"    /* …and what it PARKED, if the host asked this engine to page out */
 
 /* THE PAGE'S OWN UNCAUGHT ERRORS, deduped. See result.h: a script that throws is the forcing function naming an
@@ -168,17 +169,20 @@ char *result_json(JSContext *ctx) {
 
     if (!eps || !sinks || !errs) { free(eps); free(sinks); free(errs); return NULL; }
     /* THE SLACK COVERS THE WIDEST FORM, not the numbers that happen to occur. Counted rather than estimated,
-       and stated so the count can be re-done: the format's fixed bytes are 227 with its conversion specifiers
-       and 208 without them, and the eight counters' full-width decimals are 115 (five ints at 11, three longs
-       at 20), so the worst case is 323 against this 384. It was 192 for a shape whose widest form was already
-       197 — inside only because the real numbers are small. The DCHECK under the snprintf is the second half of
-       this, not a substitute for it: the arithmetic is what makes the buffer right, the assert is what catches
-       the arithmetic being re-done wrong. */
+       and stated so the count can be re-done: the format's fixed bytes are 298 with its conversion specifiers
+       and 259 without them, and the twelve counters' full-width decimals are 195 (five ints at 11, seven longs
+       at 20), so the worst case is 454 against this 512. It was 192 for a shape whose widest form was already
+       197 — inside only because the real numbers are small — and it was 384 against a worst case that the
+       arrival census took to 454, which is the second time this number has been outgrown by a field added
+       without re-doing it. RE-DO THE ARITHMETIC WHEN YOU ADD A FIELD; it is four counts off the format string
+       and there is no way to be nearly right. The DCHECK under the snprintf is the second half of this, not a
+       substitute for it: the arithmetic is what makes the buffer right, the assert is what catches the
+       arithmetic being re-done wrong. */
     /* THE PARK DOCUMENT RIDES THE RESULT, because it IS a result: it is what this engine has left to say about
        a page it did not finish, and the host already does one JSON.parse of one document. "[]" — the ordinary
        case — tells the host this engine drained rather than paged out, which is what DELETES the origin's cold
        entry instead of leaving a stale residue that would be resumed forever. */
-    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 384;
+    n = strlen(eps) + strlen(sinks) + strlen(errs) + strlen(cold_park_json()) + 512;
     out = malloc(n);
     if (out) {
         /* THE THREE COST NUMBERS, together. A switch count on its own cannot say whether a run that took six
@@ -199,14 +203,27 @@ char *result_json(JSContext *ctx) {
            not world.c) rides along with them. */
         int held = world_segments_held(), made = 0, segf = 0;
         int m;
+        /* AND WHY THE SECURITY ARRAY IS THE LENGTH IT IS, WHICH AN EMPTY ONE CANNOT SAY. `securitySinks: []`
+           has four readings that take opposite actions — no attacker source was ever read, none reached a
+           sink, sinks ran and only the page's own strings arrived, or taint arrived and the search was
+           declined because the check on it was unforgeable — and the last of those is the engine's STRONGEST
+           negative result rendered as the same nothing as never having looked. These four numbers are the
+           split; solver/solve.h and solver/concolic.h state which is which. They ride the result document
+           rather than a log for the reason every other count here does: the renderer does not tee its stdout,
+           so a number a console scrape would have to find is a number nobody reads. */
+        long srcReads = concolic_source_reads(), sinkReached = 0, sinkTainted = 0, sinkSuppressed = 0;
         world_segment_stats(&made, &segf);
+        solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
-                             "\"_worldSegmentsForked\":%d,\"_park\":%s}",
+                             "\"_worldSegmentsForked\":%d,"
+                             "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
+                             "\"_sinkSuppressed\":%ld,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
-                     engine_jobs_queued(), engine_jobs_run(), held, made, segf, cold_park_json());
+                     engine_jobs_queued(), engine_jobs_run(), held, made, segf,
+                     srcReads, sinkReached, sinkTainted, sinkSuppressed, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
            eight, whose widest form is 115 digits beside 208 bytes of literal — inside the slack only because
            the real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host

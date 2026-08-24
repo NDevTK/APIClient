@@ -96,20 +96,28 @@ function assertResultDocument(r) {
   DCHECK(Array.isArray(r.pageErrors),
          "the engine's result document carries no pageErrors array — it is the engine's own record of what " +
          "went wrong while running the page, and the analysis reports it as the run's resolverErrors");
-  /* THE EIGHT COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
+  /* THE COST COUNTERS ARE ONE FIELD, because result.c writes them in ONE snprintf — there is no arm in
      which five arrive and three do not. So the contract is all-of-them, and asserting a subset of a set that
      is emitted atomically is not a weaker check, it is a check on the wrong thing: it passes for exactly the
      document shapes it was meant to reject. `_switches` alone was asserted here while the other six were read
      below with a `|| 0` beside each, which is the file's own recorded defect (see `_orphans` at the return)
      re-spelt: a name the engine stops writing becomes a zero the diagnostic reports forever. The seam's live
-     table and its cumulative history are two of the eight and NOT one field named twice — result.c says why. */
+     table and its cumulative history are two of them and NOT one field named twice — result.c says why.
+     AND THE LAST FOUR ARE NOT COSTS, WHICH IS WHY THEY ARE HERE RATHER THAN MERELY WELCOME. They are what
+     makes an EMPTY securitySinks array readable: whether this run ever acquired attacker input at all, whether
+     a code-execution sink ever ran, whether anything tainted arrived at one, and whether an arrival was
+     DECLINED because the check standing on it was unforgeable. Those are four different pages and one empty
+     array was the evidence for each. A missing one here is the whole split gone, so it is asserted with the
+     rest and never defaulted — the same rule that put the other eight in this loop. */
   for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
-                   "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked"]) {
+                   "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
+                   "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"]) {
     DCHECK(typeof r[k] === "number",
-           "the engine's result document carries no " + k + " count — solver/result.c emits all eight cost " +
-           "counters in one snprintf, so a missing one is that composition having changed under this seam, " +
-           "not a run that happened not to do the thing. They are the only OBSERVABLE that the single BFS " +
-           "context-switches, forks and pumps jobs rather than running its flows FIFO");
+           "the engine's result document carries no " + k + " count — solver/result.c emits every cost " +
+           "counter and the whole @S arrival census in one snprintf, so a missing one is that composition " +
+           "having changed under this seam, not a run that happened not to do the thing. They are the only " +
+           "OBSERVABLE that the single BFS context-switches, forks and pumps jobs rather than running its " +
+           "flows FIFO, and the only thing that tells an empty finding set from a run that never looked");
   }
   DCHECK(Array.isArray(r._park),
          "the engine's result document carries no _park array — that is the PARKED RESIDUE (solver/cold.h), " +
@@ -198,6 +206,13 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         jobsQueued: result._jobsQueued, jobsRun: result._jobsRun,
         worldSegmentsHeld: result._worldSegmentsHeld, worldSegmentsMade: result._worldSegmentsMade,
         worldSegmentsForked: result._worldSegmentsForked,
+        /* …AND WHY THE SECURITY SURFACE IS THE SIZE IT IS. Every counter above is about how much work the run
+           did; these four are about what the work MET, and they are the only thing that distinguishes an
+           analysed page with nothing to find from a page nobody got to. Forwarded rather than left in the
+           result document because the probe watching this seam cannot reach into the moat, and "no findings"
+           is the one answer it must never take at face value. */
+        sourceReads: result._sourceReads, sinkReached: result._sinkReached,
+        sinkTainted: result._sinkTainted, sinkSuppressed: result._sinkSuppressed,
         /* WHAT THE RUN ACTUALLY LEARNED, beside what it cost. The counters above say the BFS switched, forked
            and pumped jobs; these two say it produced something, which is the only question a probe watching an
            engine that now lives behind a frame boundary can ask without reaching into the moat. Both arrays are

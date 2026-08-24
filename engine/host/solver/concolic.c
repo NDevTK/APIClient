@@ -1421,6 +1421,7 @@ static JSClassExoticMethods g_concolic_exotic = {
 
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
+    g_source_reads = 0;   /* per document: see the counter's own declaration */
     if (g_concolic_class == 0) {
         JS_NewClassID(rt, &g_concolic_class);
         DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");
@@ -1780,6 +1781,11 @@ void concolic_install_hooks(void)
    It is not a "mode": the value semantics above are installed unconditionally, so a concolic that reaches this
    host still adds, compares and coerces. This decides only whether one is MINTED. */
 static int g_source_overlay;
+/* …AND HOW MANY VALUES IT HAS MINTED — see concolic_source_wrap for what the number is for. Reset with the
+   agent, because it is a fact about ONE document's run and the result document that reports it is per
+   document; a counter that survived would make the second page in an instance report the first one's reading. */
+static long g_source_reads;
+long concolic_source_reads(void) { return g_source_reads; }
 
 void concolic_install_source_overlay(void)
 {
@@ -1819,6 +1825,18 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
 {
     if (!g_source_overlay)
         return computed;
+    /* THE ONE POINT AT WHICH THIS DOCUMENT'S RUN ACQUIRES ATTACKER-CONTROLLED INPUT, COUNTED THERE. Every
+       component that owns an attacker source mints through this call, so this is the whole of "did the page
+       read one", and it is the first of the two facts an empty @S surface collapses. An @S surface with no
+       entries has at least four readings and they take opposite actions: the page never read an attacker
+       source; it read one and nothing tainted ever reached a code-execution sink; something tainted reached one
+       and was suppressed because the check on it was unforgeable; or no sink ran at all. The last three are
+       counted at the arrival (solver/solve.h); this is the first, and without it "we looked and there is
+       nothing" is spelled exactly like "we never looked".
+       AFTER THE OVERLAY GATE, so it counts values MINTED and not calls made. A conformance host installs no
+       overlay and this function is then the identity — counting above the gate would report a browser run as
+       one that acquired attacker input, which is the direction that manufactures a measurement. */
+    g_source_reads++;
 #if APICLIENT_DEV
     if (src && concolic_source_encodes(src)) {
         char *hole = shapef("{%s}", src);

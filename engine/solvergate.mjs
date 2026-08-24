@@ -46,9 +46,16 @@
  *
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
  * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
- * `_worldSegmentsForked`, `_park`, and a
+ * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
+ * `_sinkTainted`, `_sinkSuppressed`), and a
  * parked search's `tried`. `_switches` exists precisely BECAUSE it differs between an interleaving scheduler
- * and a FIFO one (result.c says so), so comparing it would fail every schedule by construction. Everything
+ * and a FIFO one (result.c says so), so comparing it would fail every schedule by construction. THE ARRIVAL
+ * CENSUS IS ARGUED IN ON THAT SAME GROUND AND NOT WAIVED: each of its four is a count of EVENTS, and the
+ * number of events scales with how many flows and how many candidate re-runs happened — quantities this list
+ * already accepts differ between schedules (`_flows`, `_candidates`). A sink executed by six flows and by
+ * seven is the same DOCUMENT, and the census is about coverage rather than about what was found. What it
+ * costs to drop them is stated plainly: this gate cannot then catch the census itself regressing, which is
+ * correct for a cost surface and would not be for a finding. Everything
  * else is compared BY DEFAULT — a field added to the result document is a field this gate holds invariant
  * until someone argues it into the list above, which is the direction that fails loud rather than quietly.
  *
@@ -301,7 +308,8 @@ async function child(docPath, schedName) {
    about a name that might mean something else somewhere else. */
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun",
-                "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park"])],
+                "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
+                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"])],
   [".securitySinks[]", new Set(["tried"])],
 ]);
 function canonStr(v, path) {

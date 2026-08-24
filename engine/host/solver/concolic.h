@@ -104,6 +104,15 @@ void concolic_install_hooks(void);
    wants the spec's answers and declines this; it still gets the value semantics above. Install after
    concolic_install_hooks. */
 void concolic_install_source_overlay(void);
+/* HOW MANY ATTACKER-SOURCE VALUES THIS DOCUMENT'S RUN MINTED — the first of the facts an EMPTY @S surface
+   collapses, and the one that is not about sinks at all. "No finding" has at least four readings and they take
+   opposite actions: the page never read an attacker source (a driving gap — the code that reads one was never
+   reached); it read one and nothing tainted reached a code-execution sink (a propagation question, or a page
+   that has no such flow); something tainted reached a sink and the search was suppressed because the check on
+   it was unforgeable (a POSITIVE result about the page); or no sink ran at all. Solver/solve.h counts the last
+   three where they happen; this is the first. Zero here with sinks reached is a different page from zero here
+   with none, and one empty array reports both. */
+long concolic_source_reads(void);
 
 /* THE ONE SEAM a browser component hands a computed value through to become an attacker SOURCE. Returns
    `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where

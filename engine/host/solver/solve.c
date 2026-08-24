@@ -33,6 +33,22 @@ enum { SINK_EVAL = 0, SINK_HTML = 1, SINK_URL = 2 };   /* JS / HTML / URL contex
    because each search grew. Reported beside the switch count for that reason: one number cannot decompose. */
 static int g_cands_seeded;
 int solve_candidate_count(void) { return g_cands_seeded; }
+/* THE ARRIVAL CENSUS — what happened UPSTREAM of every entry this file emits, and the numbers that make an
+   EMPTY @S surface readable. See detect_sink for the four states one empty array was the evidence for. They
+   are three counters and not one because each answers a different question and only the triple is a reading:
+   `reached` is sinks executed at all, `tainted` is how many of those arrivals carried attacker-controlled
+   input, `suppressed` is how many of THOSE the unforgeable-principal rule declined to open a search for.
+   THEY ARE READ TOGETHER OR NOT AT ALL, which is why one call fills all three rather than three accessors a
+   caller could use one of. `tainted == 0` beside `reached == 0` and beside `reached == 4000` are opposite
+   findings, and a consumer holding one number cannot tell which it has. */
+static long g_sink_reached, g_sink_tainted, g_sink_suppressed;
+void solve_arrival_census(long *reached, long *tainted, long *suppressed) {
+    DCHECK(reached && tainted && suppressed,
+           "the @S arrival census was asked for fewer than its three numbers — each is uninterpretable alone "
+           "(see the counters' own declaration), so a caller taking one of them is about to report a state it "
+           "cannot distinguish from its opposite");
+    *reached = g_sink_reached; *tainted = g_sink_tainted; *suppressed = g_sink_suppressed;
+}
 
 static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand_verifying; }
 
@@ -415,6 +431,7 @@ static int sink_class_of_name(const char *name) {
 void solve_init(JSContext *ctx) {
     g_pending = NULL; g_pending_n = g_pending_cap = 0;
     g_cands_seeded = 0;
+    g_sink_reached = g_sink_tainted = g_sink_suppressed = 0;
     g_sinks = NULL; g_sinks_n = g_sinks_cap = 0;
     /* EVERY SINK CLASS DECLARES ITS WHOLE ROW. A row IS the sink's contract — where its breakout comes from,
        the CSP question, the Trusted Types question, and the fire semantics a PoC states — and a row added with
@@ -720,9 +737,38 @@ static void record_sink(int cls, const char *source, const char *poc) {
    Every concolic has one (concolic_alloc asserts a provenance and a root are present together), so an absent
    one is a value minted somewhere that does not go through that mint, and what it costs is the envelope. */
 static void detect_sink(JSValueConst arg, int cls) {
-    const char *shape = concolic_shape_c(arg);
-    const char *src   = concolic_src_c(arg);
-    const char *root  = concolic_root_c(arg);
+    const char *shape, *src, *root;
+
+    /* THE THREE ARRIVAL FACTS, COUNTED AT THE ONE POINT ALL THREE SINK CLASSES CONVERGE ON — and the concolic
+     * test is HERE for the same reason, rather than repeated in each caller.
+     *
+     * WHAT AN EMPTY @S SURFACE MEANS IS FOUR DIFFERENT THINGS AND IT REPORTED ONE NUMBER FOR ALL OF THEM. A
+     * page with no entries is one of: no attacker source was ever read (counted upstream, in the component
+     * that mints one — solver/concolic.h); no sink RAN, so nothing could arrive; a sink ran and what reached
+     * it was the page's own strings, never anything tainted; or something tainted DID arrive and the search
+     * was suppressed because the check standing on it was unforgeable. The first two are a driving gap, the
+     * third is a page that may simply have no such flow, and the fourth is a POSITIVE result about the page —
+     * so they take opposite actions, and an empty array is the same evidence for each. That is the defect this
+     * file already ends twice over for `tried`/`reached` and for absence-versus-zero; it stood one layer up,
+     * where it decides which surface is worth working on at all.
+     *
+     * THE COUNTS ARE EXPLORATION-ONLY BY CONSTRUCTION, not by a test written here: every caller returns inside
+     * its own `is_verifying()` branch before reaching this line, so a candidate re-run's arrivals — which are
+     * this engine's own injected bytes coming back — can never be counted as the page delivering taint to a
+     * sink. That is the partition that would otherwise make `tainted` climb with the number of candidates.
+     *
+     * AND THE CONCOLIC TEST MOVED IN WITH THEM. It was three copies of `if (!concolic_is(arg)) return;`, one
+     * per detector, which is the per-caller `if` on a question every caller asks identically — so a fourth
+     * sink class would have had to remember it, and a class that forgot would call this function with a plain
+     * string and abort on the root assert below rather than reporting an untainted arrival. One dispatch, N
+     * callers. */
+    g_sink_reached++;
+    if (!concolic_is(arg)) return;
+    g_sink_tainted++;
+
+    shape = concolic_shape_c(arg);
+    src   = concolic_src_c(arg);
+    root  = concolic_root_c(arg);
 
     DCHECK(root != NULL,
            "an attacker value reached a sink carrying no delivery ROOT — the reproduction envelope is built "
@@ -740,7 +786,11 @@ static void detect_sink(JSValueConst arg, int cls) {
      * one whose search is merely unfinished. The sink stays reportable through any OTHER flow that reaches it
      * without the demand — the false arm of the equality, or a sibling whose gate was a prefix check, which
      * pins nothing and is exactly the forgeable case the rule SOLVES. */
-    if (concolic_principal_pinned()) return;
+    /* COUNTED, BECAUSE THIS RETURN IS A DECISION AND NOT AN ABSENCE. Every other silence on this surface means
+       the engine did not get here; this one means it got here, did the work, and concluded that no
+       cross-document attacker can stand where this flow is standing. Reporting it as the same empty array
+       describes the engine's strongest negative result as if it had never looked. */
+    if (concolic_principal_pinned()) { g_sink_suppressed++; return; }
     add_pending(src ? src : (shape ? shape : "?"), root, cls);
 }
 
@@ -1120,7 +1170,6 @@ void solve_eval_sink(JSContext *ctx, JSValueConst arg) {
         }
         return;                                 /* the marker records the PoC when the engine runs these bytes */
     }
-    if (!concolic_is(arg)) return;              /* detection: not an attacker source -> not a sink */
     detect_sink(arg, SINK_EVAL);   /* record the source; breakout SEARCHED at verify */
 }
 
@@ -1247,7 +1296,6 @@ void solve_url_sink(JSContext *ctx, JSValueConst arg) {
         JS_FreeCString(ctx, url);
         return;
     }
-    if (!concolic_is(arg)) return;
     detect_sink(arg, SINK_URL);
 }
 
@@ -1280,7 +1328,6 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
         }
         return;
     }
-    if (!concolic_is(arg)) return;
     detect_sink(arg, SINK_HTML);
 }
 

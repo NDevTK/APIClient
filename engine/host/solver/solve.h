@@ -53,6 +53,18 @@ int  solve_seed_candidates(JSContext *ctx);   /* seeds whatever each search has 
    the page's cost is most of what an @S search spends — and it is what says whether a run got slower because
    there were more searches or because each search grew. */
 int  solve_candidate_count(void);
+/* WHAT HAPPENED UPSTREAM OF EVERY ENTRY BELOW — the three numbers that make an EMPTY @S surface a measurement
+   instead of a silence. `reached` is how many times a code-execution sink was executed by an EXPLORATION flow
+   (a candidate re-run's arrivals are this engine's own injected bytes and are excluded by construction, not by
+   a test); `tainted` is how many of those arrivals carried an attacker-controlled value; `suppressed` is how
+   many of THOSE the unforgeable-principal rule declined to open a search for.
+   ALL THREE OR NONE, because each is uninterpretable alone. With the source-read count (solver/concolic.h) they
+   separate the four states one empty array was the evidence for: no attacker source read at all; sources read
+   but no sink ever executed; sinks executed and only the page's own strings arrived; and taint arriving at a
+   sink whose check no cross-document attacker can satisfy — which is a POSITIVE result and was rendered as the
+   same nothing. They are costs and not findings: the same document under a different schedule legitimately
+   reaches a sink a different number of times, so the differential must not compare them. */
+void solve_arrival_census(long *reached, long *tainted, long *suppressed);
 void solve_flow_begin(struct Flow *f);
 void solve_flow_end(struct Flow *f);
 
