@@ -128,11 +128,19 @@ class FrameElement {
    emscripten module that calls `createRequire(import.meta.url)` on its first line — a data: URL has no path to
    resolve from, so the program would fail to load for a reason that has nothing to do with what is being
    measured.
+   AND A STAGING FAULT IS A DIFFERENT ACCUSATION FROM A PROGRAM FAULT, WHICH IS WHY THE SHIM CARRIES ITS OWN
+   MARKER. `materialize` below is this gate's substitute for the browser's Blob store, and when a substitute
+   breaks it must say so in its own name: "the module I staged is complete and readable" and "the module I
+   staged exported no factory" are statements about DIFFERENT components, and a harness that delivers both
+   through one signal reports its own machine as a defect in the thing it measures (§Testing, the same defect as
+   a timeout kill and a DCHECK sharing one column).
    ───────────────────────────────────────────────────────────────────────────────────────────────────────── */
+const STAGING_MARK = '@E [harness-staging]';
 const FRAME_SHIM = `
 'use strict';
-const { parentPort, workerData } = require('node:worker_threads');
+const { parentPort, workerData, threadId } = require('node:worker_threads');
 const fs = require('node:fs'), path = require('node:path'), nodeUrl = require('node:url');
+const STAGING_MARK = ${JSON.stringify(STAGING_MARK)};
 globalThis.self = globalThis;
 
 /* THE THIRD ARGUMENT IS OPTIONAL AND ITS ABSENCE IS A POSITIVE STATEMENT — HTML §9.5 "the WindowPostMessage
@@ -163,13 +171,50 @@ URL.createObjectURL = (b) => {
 };
 URL.revokeObjectURL = () => {};
 
+/* THE STAGED MODULE IS NAMED BY THE FRAME AND PUBLISHED ATOMICALLY, and both halves of that are one defect this
+   file shipped: \`process.pid\` is a fact about a PROCESS and every frame here is a THREAD of one process, so
+   \`frame-<pid>-<serial>\` named the SAME FOUR FILES in every frame — and phase 1 forks two renderers
+   CONCURRENTLY, which is the point of phase 1. Both truncated those paths and one imported what the other had
+   opened for writing and not yet filled. An empty module has no default export, so renderer.html's
+   "the engine glue module exported no factory" DCHECK fired against an artifact whose glue exports one: a false
+   red naming the ENGINE, manufactured entirely by this harness, and the busier the machine the wider the window
+   (§Testing — a measurement a loaded machine can falsify is not a measurement). \`threadId\` is the frame's own
+   name, and the temp directory is already this process's own, so the published name is unique by construction.
+   THE PUBLISH IS \`link\` AND NOT \`rename\`, because it must assert that as well as achieve it. Both are atomic
+   within a directory, so no reader can observe a half-written file at the published name; \`link\` additionally
+   REFUSES an existing target in the kernel, with no window between the question and the act — so "no two frames
+   named one file" is checked rather than assumed, and EEXIST is the only errno that means it. Every other errno
+   is this harness's machine breaking and travels on as itself. */
+async function stage(bytes) {
+  const name = 'frame-' + threadId + '-' + (++serial) + '.mjs';
+  const p = path.join(workerData.tmp, name), part = p + '.part';
+  fs.writeFileSync(part, bytes, { flag: 'wx' });
+  try { fs.linkSync(part, p); }
+  catch (e) {
+    if (e.code !== 'EEXIST') throw e;
+    throw new Error(STAGING_MARK + ' two renderer frames staged \`' + name + '\`, so one of them imported a ' +
+                    'module the other was still writing — the name carries the staging frame\\'s own threadId ' +
+                    'and the directory is this process\\'s own, so a collision is this harness minting one ' +
+                    'name twice');
+  }
+  fs.unlinkSync(part);
+  /* THE MODULE I STAGED IS COMPLETE — asserted HERE, where staging happens, so it can never again arrive as a
+     sentence about what the module exported. The link above published a fully written inode, so a short file
+     here is a write that did not write what it was given, which is a statement about this harness and about
+     nothing else. */
+  const got = fs.statSync(p).size;
+  if (got !== bytes.length)
+    throw new Error(STAGING_MARK + ' staged ' + got + ' of ' + bytes.length + ' byte(s) to \`' + name +
+                    '\` — the frame is about to import a truncated module, and an incomplete module and a ' +
+                    'module built without an export are different faults in different components');
+  return nodeUrl.pathToFileURL(p).href;
+}
+
 async function materialize(rec) {
   for (const k of Object.keys(rec)) {
     const v = rec[k];
     if (!(v instanceof Blob) || objectUrls.has(v)) continue;
-    const p = path.join(workerData.tmp, 'frame-' + process.pid + '-' + (++serial) + '.mjs');
-    fs.writeFileSync(p, Buffer.from(await v.arrayBuffer()));
-    objectUrls.set(v, nodeUrl.pathToFileURL(p).href);
+    objectUrls.set(v, await stage(Buffer.from(await v.arrayBuffer())));
   }
 }
 
@@ -225,6 +270,17 @@ function startFrame(f) {
      one failure with no symptom anywhere as a hang with no cause. It is collected AND named. */
   w.on('error', (e) => {
     _workerErrors.push(String((e && e.stack) || e));
+    /* AND A FAULT IN THIS HARNESS'S OWN SUBSTITUTE IS REPORTED AS ONE, THROUGH ITS OWN SENTENCE. The shim's
+       staging asserts (`STAGING_MARK`) fire where this gate stands in for the browser's Blob store, and what
+       they say is "the module I staged is not the module I was handed" — which is a DIFFERENT accusation from
+       renderer.html's "the module exported no factory", and pointing at a different component. Folding both
+       into "a renderer frame died" is how a staging race got read as a broken build for a whole session, and it
+       is §Testing's own example: a kill and a DCHECK reported in one column tell nobody which one happened. */
+    if (String((e && e.message) || e).includes(STAGING_MARK))
+      fail('THIS HARNESS could not stage the renderer\'s program, so no renderer was ever asked anything and ' +
+           'this run states NOTHING about the artifact it was pointed at — the fault is in the substitute this ' +
+           'gate provides for the browser\'s blob: URL store, not in the program that was being staged:\n' +
+           _workerErrors[_workerErrors.length - 1]);
     fail('a renderer frame died on an uncaught throw, so the handshake it owed can never arrive:\n' +
          _workerErrors[_workerErrors.length - 1]);
   });
