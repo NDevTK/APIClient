@@ -654,6 +654,23 @@ void engine_route(JSContext *ctx, const char *record, const char *sender_origin)
    instance that minted it, and two peers may ask this one the same number. Nothing runs inside this call. */
 void engine_perform(JSContext *ctx, const char *token, const char *record);
 
+/* THE THIRD INBOUND STATEMENT, AND THE ONE THE BROWSER MAKES RATHER THAN A PEER: the Document named by `doc` is
+   no longer the active document of its navigable, because the REAL BROWSER navigated that navigable.
+   IT IS HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, and
+   NOT §7.3.1.6 "Navigable destruction" — a navigation destroys no navigable, it replaces the Document active
+   in one. The two meet one step down at §7.5.9/§7.5.10, which is why one machine serves both
+   (core/frame/document_lifecycle.h).
+   IT IS ATTACHED TO EVERY LIVE TIMELINE, exactly as a routed delivery and a cross-agent operation are, and for
+   a reason those two only hint at: a destruction is state a PAGE observes, and every piece of it — the
+   `pagehide`/`unload` listeners, the map of active timers, the navigable's browsing context — belongs to the
+   timeline that produced it. Nothing runs inside this call, and no flow is dropped, starved or paged: a flow
+   suspended inside the replaced document keeps its snapshot and its place on the frontier.
+   `incoming` IS THE DOCUMENT THE NAVIGATION LOADED, and both standards take it — §7.4.6.1 is written over
+   `targetEntry` and §7.5.9 over the optional `newDocument`. It is also the realm the operation's own tasks are
+   queued in, which is what keeps §7.5.10 step 7 from removing the OTHER timelines' unloads along with the
+   destroyed document's tasks. It must already be joined, and the two must differ; both are asserted. */
+void engine_unload_document(uint32_t doc, uint32_t incoming);
+
 /* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>URL` line per outstanding request,
  * newline-terminated, "" for none, DEDUPED BY THE PAIR.
  *

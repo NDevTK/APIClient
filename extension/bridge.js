@@ -855,7 +855,15 @@ function engineReserve(cluster, docId, msg, cold) {
          "the trusted zone states no frontier epoch — it is what tells an advance from this instance apart " +
          "from one observed before the user emptied the store, and without it every finding this engine " +
          "produces would merge into whatever the store holds when it lands");
-  const eng = { state: "booting", cluster, docId, joinedDocIds: [], msg, groupId: msg && msg.groupId,
+  /* `topDocId` IS A DIFFERENT FACT FROM `docId` AND THE TWO MAY NOT BE ONE FIELD. `docId` is the document this
+     instance was ROOTED at and never changes: it is the reservation's identity, what the crash record and the
+     cold recipe are written under, and what `hostHolderOf` answered from the instant the record existed.
+     `topDocId` is which document is the ACTIVE document of this browsing-context group's top-level traversable
+     RIGHT NOW, and a same-origin navigation in the tab changes it — HTML §7.4.6.1 "Updating the traversable"
+     replaces the Document, keeps the navigable. Collapsing them would make a navigated tab report its findings
+     under a document the browser replaced, and would make the reservation's identity move under `finish`. */
+  const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
+                groupId: msg && msg.groupId,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null };
   _pool.push(eng);
@@ -1407,13 +1415,22 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited) {
      reaches both, which is exactly what this pair of asserts existed to keep true. */
   /* HTML §7.1.7's CLONE OF THE CREATOR'S CONTAINER, relayed off the same create notice that sent this
      document here — the two entries take ONE contract, so what a document arrives with reaches both. A join
-     always has a creator (nothing else announces a document to this zone), which is why there is no `null`
-     arm here that engineRoot needs. */
+     ALWAYS carries one where there IS a creator, and the pair is EMPTY where there is not — which is the case
+     a cross-document navigation of a top-level traversable brings here (§7.4.6.1), and the reason this reads
+     the pair rather than demanding a self-origin. There is still no `null` arm: engineRoot takes one because
+     its callers include a rehydrated recipe that has no message at all, and every caller here has a message. */
   DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
-         inherited.selfOrigin !== "",
-         "a document was joined with no inherited policy container — every join in this zone comes off a " +
-         "`navigable.create`, whose creator has a container by construction (HTML §7.1.7 gives every Document " +
-         "one), so an absent one is a relay that dropped it and a child judged under no policy at all");
+         (inherited.selfOrigin !== "" || inherited.csp === ""),
+         "a document was joined with a CSP list and no SELF-ORIGIN for it — CSP §2.2 \"Policies\" makes a list " +
+         "a struct of policies AND the origin `'self'` resolves against, so a policy with no self-origin is " +
+         "half a container and §6.7.2.8 would answer one directive backwards. BOTH EMPTY IS A REAL STATE AND " +
+         "THIS ASSERT USED TO REFUSE IT: it demanded a creator on the ground that `every join in this zone " +
+         "comes off a navigable.create`, and that stopped being true the moment a CROSS-DOCUMENT NAVIGATION " +
+         "of a top-level traversable joined its incoming Document here (HTML §7.4.6.1 \"Updating the " +
+         "traversable\"). That Document has NO creator — HTML §7.1.7 \"Policy containers\" clones a creator's " +
+         "container only where there is one, and this one's is created from its OWN response — so the empty " +
+         "pair is the positive statement the engine already reads it as, and demanding a creator would have " +
+         "made this zone invent one");
   const _join = await eng.r.renderer.join(_doc, msg.sourceUrl, docName,
                                           responseFieldLines(msg.responseHeaders), topLevelUrl,
                                           inherited.csp, inherited.selfOrigin);
@@ -1429,6 +1446,66 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited) {
      instance's linear memory (a whole document) and it seeds that document's scripts as flows on the frontier
      — so both Level-1 facts have moved, and the ranking that picks next must see them. This is the same
      statement engineRoot makes on its last line and the service round makes on its way out. */
+  await engineRecordFacts(eng);
+}
+/* THE DOCUMENT A NAVIGATION REPLACED — HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A
+   CROSS-DOCUMENT NAVIGATION, and the other half of engineJoin above. The two are ONE navigation: the browser
+   loaded a new Document into a navigable of this agent and the old one stopped being active, so the instance
+   is told both halves, in the standard's own order (§7.4.6.1 unloads `displayedDocument` given `targetEntry's
+   document`, so the incoming Document exists first).
+
+   IT IS NOT §7.3.1.6 "Navigable destruction", WHICH IS THE NUMBER THIS ZONE'S OWN ABORT MESSAGE USED TO NAME.
+   §7.3.1.6 destroys a NAVIGABLE — a container removed, a traversable closed — and a navigation destroys none:
+   the navigable is exactly what survives, and what changes is which Document is ACTIVE in it. The two meet one
+   step down, at §7.5.9 "Unloading documents"' "if oldDocument's salvageable state is false, then destroy
+   oldDocument" and the §7.5.10 "Destroying documents" it reaches, which is why the engine serves both entries
+   from one machine. A wrong section number is worse than none because it reads as authoritative, and that one
+   was the standing instruction for what to build next.
+
+   ONLY THIS ZONE KNOWS IT. A navigation the real browser performed leaves no trace inside the instance's heap:
+   the outgoing document's scripts are still queued, its flows are still parked, its Window still answers. What
+   crosses is the browser's own document id and nothing else — every other fact about that document is already
+   in the agent, because the agent is where it was rooted or joined.
+
+   IT SEEDS AND DOES NOT WAIT. The engine attaches the unload to every one of its live timelines and returns;
+   each of them fires that document's `pagehide` and `unload` listeners under its own delta when the scheduler
+   next runs it, which is real surface (a `sendBeacon` in an unload handler is an endpoint this tool exists to
+   find) and is preemptible and parkable like every other job. No flow is dropped, starved or paged for it. */
+async function engineUnload(eng, docName, incomingDocName) {
+  DCHECK(eng.state === "hot" || eng.state === "fetching",
+         "a document was reported replaced to an instance in state `" + eng.state + "` — §7.5.9's unload is a " +
+         "task of every timeline of that document, so an instance whose frontier is not yet seeded has none " +
+         "to attach it to and the destruction would be queued onto nothing");
+  DCHECK(typeof docName === "string" && docName !== "",
+         "a document was reported replaced with no NAME — an instance is an ORIGIN-KEYED AGENT CLUSTER and " +
+         "holds one realm per same-origin document, so the name is the whole of what says which of them the " +
+         "browser navigated away from");
+  DCHECK(eng.docId === docName || eng.joinedDocIds.indexOf(docName) >= 0,
+         "a document this instance never held was reported replaced (" + docName + ") — this zone is what " +
+         "routes a document to an instance and what records which documents each one holds, so a name that " +
+         "is in neither `docId` nor `joinedDocIds` is this table and the agent disagreeing about what is in " +
+         "the agent, and the engine's own `world_doc_hosted` assert is what it would reach");
+  DCHECK(typeof incomingDocName === "string" && incomingDocName !== "" && incomingDocName !== docName,
+         "a navigation was reported with no INCOMING document, or with one document named as both halves — " +
+         "HTML §7.4.6.1 replaces a navigable's active document WITH ANOTHER, and the incoming name is what " +
+         "makes the ORDER checkable at the engine (it must already be joined) and what gives the engine a " +
+         "realm to queue the operation in that is not the one being destroyed; §7.5.10 step 7 removes every " +
+         "queued task of the destroyed document, so the outgoing realm would make the first timeline's " +
+         "destruction drop every other timeline's");
+  DCHECK(eng.joinedDocIds.indexOf(incomingDocName) >= 0,
+         "a navigation named an INCOMING document this instance has not joined (" + incomingDocName + ") — " +
+         "engineJoin is what puts it in the agent and is what pushes the name here, so this is the two halves " +
+         "of one navigation called in the wrong order, and the engine's own `world_doc_hosted` assert on the " +
+         "incoming half is what it would reach");
+  /* THE NAME IS NOT REMOVED FROM `joinedDocIds`, AND THAT IS NOT AN OVERSIGHT. §7.5.10 destroys the DOCUMENT,
+     not the realm: the engine still interns that name, still answers for it, and a peer's route to it must
+     still resolve here — to an instance that reports it as a destroyed navigable, which is the true answer and
+     the one §7.2.2.1's `closed` is read for. Splicing it out would make `hostHolderOf` say no instance holds
+     the name, and the very next arrival spelling that document would try to JOIN it and hit the engine's
+     one-realm-per-document CHECK. */
+  await eng.r.renderer.unload(docName, incomingDocName);
+  /* THE ROUND ENDS HERE, SO IT RECORDS — engineJoin's reason exactly: an unload attaches a job to every live
+     timeline, so the frontier this instance's Level-1 weight is computed from has moved. */
   await engineRecordFacts(eng);
 }
 /* THE LEVEL-1 RANKING'S TWO FACTS, RECORDED WHERE THE INSTANCE ANSWERS THEM RATHER THAN READ WHERE THE RANKING
@@ -2446,8 +2523,14 @@ let _hostDriving = false;
    afterwards and its own cold row then wins it straight back). Nothing here truncates that — it is measured
    so the primitive flow.h asks for, start-time fair queueing's virtual time applied at LEVEL-1, is built
    against a number rather than against a suspicion. */
+/* `navigated` IS ITS OWN NUMBER AND NOT A THIRD KIND OF JOIN. A join ADDS a document to an agent; a navigation
+   adds one AND deactivates the one it replaced (HTML §7.4.6.1 "Updating the traversable"), so folding it into
+   `joinedRooted` would make the count that is supposed to say "how many same-origin sub-frames did this
+   session model" answer with the number of link clicks as well. It is also the one number that says continuous
+   browsing is working at all: this used to be the abort that killed the scheduler, so a session with several
+   tab navigations and a zero here is one where every one of them went somewhere else. */
 const _reserveStats = { made: 0, rooted: 0, failed: 0, joinedBooting: 0, joinedRooted: 0, peakBooting: 0,
-                        evicted: 0, rehydrated: 0 };
+                        evicted: 0, rehydrated: 0, navigated: 0 };
 /* WHICH LIVE DOCUMENTS THESE FINDINGS BELONG TO. The merge in the trusted zone used to be handed a sourceUrl
    and nothing else, so it had no document to merge INTO and built a throwaway view instead — a producer whose
    consumer was an object discarded on return, which is exactly the shape `_emptyDocView`'s own comment
@@ -2655,7 +2738,7 @@ const _hostOps = {
     const _coldRanking = await frontierIndex();
     /* AN INDEX WALK RATHER THAN A SHIFT, because one waiting document can be legitimately UNSEATABLE YET (the
        defer below) and a shift would either drop it or spin this loop forever re-reading it. */
-    let i = 0;
+    let i = 0, swap = null;
     while (i < _waiting.length) {
       const job = _waiting[i];
       /* ONE INSTANCE PER AGENT CLUSTER, ASKED OF THE POOL — which IS the register of who holds what, so nothing
@@ -2685,24 +2768,52 @@ const _hostOps = {
            attaches this caller to the record that is going to hold its document, and the boot answering later
            answers it too. That is the case the counter separates: `joinedBooting` is the window in which this
            branch used to be skipped and a second heap built for one similar-origin window agent. */
-        DCHECK(!isTop || cluster.docId === docId,
-               "the TOP document of a browsing-context group arrived for a cluster whose instance is rooted at " +
-               "a different document — the group's top was REPLACED (a same-origin navigation, or a COOP " +
-               "navigation that severed the group), so the new document is NOT one this instance is running " +
-               "and attaching it reports the page that was replaced. HALF OF WHAT THIS NEEDS NOW EXISTS: " +
-               "`qjs_join` puts the new document in this agent (engineJoin above). The half that does not is " +
-               /* THE NUMBER WAS §7.4, WHICH IS "Navigation and session history" AND DOES NOT DEFINE THIS —
-                  destroy-a-navigable is §7.3.1.6, verified against the spec text rather than recalled, and it
-                  is what the other five sites in this tree that name the same operation already cite
-                  (html_iframe.c, window_proxy.c, document_lifecycle.c x2, navigable.c). A wrong number is worse
-                  than none because it reads as authoritative, and this string is now the one a reader lands on:
-                  it is what the pool probe reports as `scheduler.diedOf`, so it is the instruction for what to
-                  build next and it was pointing at the wrong chapter. The TITLE travels with the number so a
-                  renumbering is visible instead of silent. */
-               "§7.3.1.6 Navigable destruction's DESTROY A NAVIGABLE for the document being replaced, and " +
-               "joining without it leaves the old document's realm, tree and parked flows running and " +
-               "reporting inside the same instance — two tops for one traversable, which is a worse answer " +
-               "than this abort and is why the join is not simply called here");
+        /* THE GROUP'S TOP WAS REPLACED — WHICH IS WHAT BROWSING AN SPA IS, AND USED TO BE THE ABORT THAT KILLED
+           THE SCHEDULER FOR THE REST OF THE SESSION. A same-origin link click in one tab reaches a cluster that
+           already has an instance rooted at the document being replaced, and there was nothing to do about it
+           but crash: joining alone would have left the old document's realm, tree and parked flows running and
+           REPORTING inside the same instance — two tops for one traversable, a worse answer than the abort.
+           BOTH HALVES EXIST NOW AND THEY ARE ONE NAVIGATION IN THE STANDARD'S OWN ORDER. HTML §7.4.6.1
+           "Updating the traversable" unloads `displayedDocument` given `targetEntry's document`, so the
+           incoming Document is created FIRST and the outgoing one is deactivated after it — engineJoin then
+           engineUnload, and never the other way round, which would join a top into an agent whose top had
+           already been destroyed. The unload is §7.4.6.1's deactivate-a-document-for-a-cross-document-
+           navigation and NOT §7.3.1.6 "Navigable destruction": a navigation destroys no navigable, it replaces
+           the Document active in one. (§7.3.1.6 is what this abort's own text used to name, after naming §7.4
+           before that, and the section it should have named defines an operation over a different object.)
+           A COOP NAVIGATION THAT SEVERED THE GROUP IS NOT THIS CASE and does not reach here: §7.3.2.3's swap
+           puts the new Document in a NEW browsing-context group, and the group is half of `clusterKeyOf`, so
+           such a document arrives with a cluster key no instance holds and roots one of its own. */
+        if (isTop && cluster.topDocId !== docId) {
+          /* ONE PER ROUND, WHICH IS THE ADMISSION'S SHAPE AND FOR ITS REASON. A join copies a whole document
+             into an instance's linear memory and an unload seeds a task on every one of its timelines, so this
+             is an ADVANCE and hostSchedule is rank-advance-re-rank. The rest stay in `_waiting` and are looked
+             at again next round, which is also what keeps two navigations of one tab in ORDER — the second
+             cannot be taken until the first has moved `topDocId`. */
+          if (swap) { i++; continue; }
+          /* RECORDED AND SPLICED SYNCHRONOUSLY, BEFORE ANYTHING SUSPENDS — the whole reason this function takes
+             its one suspension first. `topDocId` is what the next arrival for this cluster consults, so a
+             second navigation landing between this decision and the join below would otherwise read the OLD
+             top and record a second swap out of the same, already-replaced document. */
+          swap = { cluster, job, outgoing: cluster.topDocId, docId };
+          cluster.topDocId = docId;
+          cluster._resolvers.push(job);
+          _waiting.splice(i, 1);
+          _reserveStats.navigated++;
+          continue;
+        }
+        /* AND THE ROUTING INVARIANT THE ABORT WAS PROTECTING IS STILL ASSERTED, over what is left of it: every
+           other arrival for a cluster that has an instance is a document that instance is ALREADY running — a
+           same-origin sub-frame the engine created as a realm of its own, or one document delivered twice. A
+           top that is not the cluster's current top has been taken by the branch above, so reaching here with
+           one is the swap having failed to record it, which would attach this caller to an instance reporting
+           the page the browser replaced. */
+        DCHECK(!isTop || cluster.topDocId === docId,
+               "the TOP document of a browsing-context group arrived for a cluster whose instance holds a " +
+               "different top (" + cluster.topDocId + " vs " + docId + ") and the navigation branch above did " +
+               "not take it — that branch is the ONLY thing that may change `topDocId`, so this is either a " +
+               "second writer for that field or an `isTop` computed two different ways in one function, and " +
+               "attaching this caller here reports the page that was replaced");
         cluster._resolvers.push(job);
         _waiting.splice(i, 1);
         if (cluster.state === "booting") _reserveStats.joinedBooting++; else _reserveStats.joinedRooted++;
@@ -2730,6 +2841,45 @@ const _hostOps = {
          document is correctly its own cluster of one and roots it here. */
       if (!isTop && _isRealOrigin(job.msg.origin)) { i++; continue; }
       i++;
+    }
+    /* (1b) THE NAVIGATION, PERFORMED HERE AND NOT IN THE WALK, because it SUSPENDS and the walk may not. The
+       walk's whole property is that it runs in one uninterrupted turn after this function's single await, so
+       that "the pool is the register of who holds what" is true at the moment the register is consulted; an
+       `await` inside it would let a second arrival for the same cluster run against a half-updated register.
+       So the walk DECIDES (synchronously, moving `topDocId` and attaching the caller) and this performs, and
+       it RETURNS afterwards for the same reason the admission arm does: this round's advance is spent.
+       IT IS NOT RAM-GATED, like every other routing decision in this function. A navigation does not create an
+       instance — it puts a second document in one that already exists, and then destroys the one it replaced,
+       which is the direction that RELEASES memory. Gating it would be a cap that made continuous browsing work
+       only while the pool was under the floor, and would leave the replaced document running in the meantime.
+       NULL: the incoming Document of a cross-document navigation has NO CREATOR — HTML §7.1.7 "Policy
+       containers" clones a creator's container only where there is one, and a top-level traversable's new
+       Document is created from its OWN response — so the empty pair is the positive statement, exactly as it
+       is for a root document a content script reported. */
+    if (swap) {
+      /* A CLUSTER MAY STILL BE BOOTING WHEN THE TAB NAVIGATES — a fast second click is not exotic — AND THE
+         NAVIGATION WAITS FOR IT, which is the same suspension the create-notice join takes and for the same
+         reason: `qjs_join` needs both `qjs_init` and `qjs_begin` to have run, and a document joined between
+         them is parsed, given a realm and never executes a line. `_readyP` settling is what says both have. */
+      if (swap.cluster.state === "booting") await swap.cluster._readyP;
+      DCHECK(swap.cluster.state === "hot" || swap.cluster.state === "fetching",
+             "a tab navigated in a cluster whose instance never became one — the reservation holding it failed " +
+             "to boot, so there is no agent for the incoming document to join and nothing to unload the " +
+             "outgoing one out of; the caller was attached to that reservation and has already been answered " +
+             "with the crash record by engineBootFailed, which is why this is a state to assert and not one " +
+             "to report");
+      /* RELEASE PATH UNDER THE ASSERT: the record is out of the pool and its callers are answered, so there is
+         no instance to speak to and nothing here can honestly reach one. */
+      if (swap.cluster.state !== "hot" && swap.cluster.state !== "fetching") return;
+      const _tlu = swap.job.msg.topLevelUrl || swap.job.msg.sourceUrl;
+      DCHECK(typeof _tlu === "string" && _tlu !== "",
+             "a navigated top-level document arrived with no address to be its own TOP-LEVEL CREATION URL — " +
+             "HTML §8.1.3.5 reads it to decide whether this realm is a secure context, so Web IDL §3.3.13's " +
+             "members would exist or not by a guess; a top-level traversable's is its own document address, " +
+             "which is the one thing every arrival at this zone carries");
+      await engineJoin(swap.cluster, swap.job.msg, swap.docId, _tlu, { csp: "", selfOrigin: "" });
+      await engineUnload(swap.cluster, swap.outgoing, swap.docId);
+      return;
     }
     /* (2) THE ONE ADMISSION, over the ONE order. Nothing distinguishes a waiting tab from a parked frontier
        here except its weight, which is the whole of what "Cold-tail resume is the SAME admission step" means.
@@ -3003,7 +3153,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
              "a reservation is in the pool naming no agent cluster or no document — it is answered for by " +
              "both (hostClusterOf for admission, hostHolderOf for routing), so a nameless one is a slot that " +
              "blocks admission while answering nobody");
-      return { name: eng.cluster, docId: eng.docId, state: "booting",
+      return { name: eng.cluster, docId: eng.docId, topDocId: eng.topDocId, state: "booting",
                framed: !!(eng.r && eng.r.frame.parentNode), routingId: eng.r ? eng.r.routingId : null,
                heapBytes: null, topWeight: null, cold: !!eng._cold, joined: eng._resolvers.length,
                joinedDocIds: eng.joinedDocIds.slice() };
@@ -3026,7 +3176,8 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            "a pooled engine's renderer carries no routing id — an id is minted by the renderer registry when " +
            "it decides an agent cluster gets an instance, so an instance without one is a frame this document " +
            "created for itself");
-    return { name: eng.r.name, docId: eng.docId, state: eng.state, framed: !!eng.r.frame.parentNode,
+    return { name: eng.r.name, docId: eng.docId, topDocId: eng.topDocId, state: eng.state,
+             framed: !!eng.r.frame.parentNode,
              routingId: eng.r.routingId, heapBytes: eng.residentBytes, topWeight: eng.topWeight,
              cold: !!eng._cold, joined: eng._resolvers.length, joinedDocIds: eng.joinedDocIds.slice() };
   });
@@ -3097,6 +3248,7 @@ self.rendererPoolProbe = function rendererPoolProbe() {
            reservations: { made: _reserveStats.made, rooted: _reserveStats.rooted, failed: _reserveStats.failed,
                            booting: booting, inFlight: inFlight, peakBooting: _reserveStats.peakBooting,
                            joinedBooting: _reserveStats.joinedBooting, joinedRooted: _reserveStats.joinedRooted,
+                           navigated: _reserveStats.navigated,
                            evicted: _reserveStats.evicted, rehydrated: _reserveStats.rehydrated },
            coldRows: _frontierIndexBuilt ? _frontierIndex.size : null,   // null = the ranking view has not been asked for yet
            runs: self._engineLog.length, recent: self._engineLog.slice(-4),

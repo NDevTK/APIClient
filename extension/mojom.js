@@ -424,6 +424,33 @@
                  "zone BROADCASTS it, and nothing on the receiving side runs page code, so there is no " +
                  "`event.origin` for a stamp to be the truth of" }],
         reply: [WORKING_SET] },
+
+      /* THE OTHER HALF OF `Join`, AND THE TWO ARE ONE NAVIGATION. `Join` adds the Document the browser
+         navigated TO; this names the one it navigated AWAY FROM, so the instance stops running two tops for
+         one traversable. It takes `DOCUMENT_ID` and nothing else because everything else about the outgoing
+         document is already inside the agent — it was rooted or joined there, with its address, its origin,
+         its response and its policy container — and the one fact only this zone holds is WHICH of the several
+         documents an origin-keyed agent cluster contains the browser replaced.
+         IT IS HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION
+         and NOT §7.3.1.6 "Navigable destruction": a navigation destroys no navigable, it replaces the Document
+         active in one. Both reach §7.5.10 "Destroying documents" one step down, which is why the engine serves
+         them from one machine.
+         NO `rc`. Every precondition qjs_unload has is a CHECK or a DCHECK that aborts the instance — the
+         document is one this agent holds, or it is not — so there is no value for a reply field to carry, and
+         the acknowledgement is the working set alone (a void entry still answers, so a WASM abort inside it
+         reaches this zone as a rejection rather than as silence). */
+      { ordinal: 21, name: "Unload",
+        params: [DOCUMENT_ID,
+                 { name: "incomingDocId", type: "string",
+                   why: "the name of the Document the navigation LOADED — HTML §7.4.6.1 is written over " +
+                        "`targetEntry` and hands its Document to the unload, and HTML §7.5.9 \"Unloading " +
+                        "documents\" takes it as the optional `newDocument`. It travels because it is what " +
+                        "makes the ORDER assertable at the engine (the incoming Document is joined first, so " +
+                        "a zone that called Join and Unload the other way round is caught at the entry), and " +
+                        "because the engine queues the operation's own tasks in that document's realm — " +
+                        "§7.5.10 step 7 removes every queued task of the DESTROYED document, so the outgoing " +
+                        "realm would make the first timeline's destruction drop every other timeline's" }],
+        reply: [WORKING_SET] },
     ],
   });
 

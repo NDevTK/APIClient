@@ -649,7 +649,8 @@ if (NATIVE) {
    asserted about — `qjs_perform` and `qjs_host_answer_remote` (the peer's half of the cross-instance seam, the
    only entries by which one instance is ASKED to perform another's operation) were written, linked and left
    off it, and no gate said a word. */
-const QJS_ABI = ["qjs_init", "qjs_join", "qjs_bundle_id", "qjs_begin", "qjs_step", "qjs_result", "qjs_teardown",
+const QJS_ABI = ["qjs_init", "qjs_join", "qjs_unload", "qjs_bundle_id", "qjs_begin", "qjs_step",
+                 "qjs_result", "qjs_teardown",
                  "qjs_pending", "qjs_chunks", "qjs_provide", "qjs_top_weight", "qjs_set_yield_floor",
                  "qjs_request_park", "qjs_emit_partial",
                  "qjs_host_requests", "qjs_host_answer", "qjs_host_notices", "qjs_route",

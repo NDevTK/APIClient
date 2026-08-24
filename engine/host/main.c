@@ -232,7 +232,21 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
 {
     JSContext *ctx = JS_NewContext(rt);
 
-    CHECK(ctx != NULL, "a realm of this agent could not be created");
+    /* NAMED, BECAUSE "OOM" TELLS THE READER OF A `@WHY` NOTHING ABOUT WHAT RAN OUT. A realm is materialized per
+       DOCUMENT of this agent — one per same-origin child navigable, and one per cross-document NAVIGATION of
+       the tab, which in continuous browsing is one per page the user visits. §7.5.10's destruction is a
+       reference DROP (core/frame/navigable.c), so a replaced document's realm goes when nothing holds it; what
+       this host still holds after it is the entry in `g_joined_ctx`/`g_joined_dom` below, released only at
+       `qjs_teardown`. That is the ceiling this line is standing on, and it is a fact about ownership rather
+       than about memory pressure — the reader who arrives here is being told which reference to move, not to
+       find a smaller page. */
+    CHECK(ctx != NULL,
+          "a realm of this agent could not be created — an agent materializes ONE REALM PER DOCUMENT (a "
+          "same-origin child navigable, and every cross-document navigation of the tab), and this host holds a "
+          "reference to each joined one until qjs_teardown, so a long browsing session in one tab accumulates "
+          "them whether or not their Documents have been destroyed. BUILD THE HANDOFF: the realm-teardown hook "
+          "in core/frame/navigable.c is what releases a realm's Document, and the tree a joined document was "
+          "parsed into has to travel with it rather than staying on this host's array");
     CHECK(JS_AddIntrinsicDOMException(ctx) == 0, "the DOMException intrinsic failed to install in a realm");
     realm_install_intrinsics(ctx, top_level_url);
     return ctx;
@@ -769,6 +783,66 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
 
     navigation_params_free(&np);
     return 0;
+}
+
+/* THE DOCUMENT A NAVIGATION REPLACED — the other half of `qjs_join`, and the two are ONE navigation.
+ *
+ * ONLY THE TRUSTED ZONE CAN STATE THIS, which is why it is an entry rather than something the engine notices.
+ * A navigation the REAL BROWSER performed leaves no trace at all inside this heap: the outgoing document's
+ * scripts are still queued, its flows are still parked, its Window still answers every read. The browser's own
+ * document id and `sender.tab.url` are the provenance, exactly as they are for the address, the origin and the
+ * response's header field lines (SECURITY.md) — the zone states what the browser did, and the engine decides
+ * what it means.
+ *
+ * IT IS HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, and
+ * the section is load-bearing rather than decorative. §7.3.1.6 "Navigable destruction" — the number this
+ * engine's own abort message used to name for this operation — destroys a NAVIGABLE: a container removed, a
+ * traversable closed. A navigation destroys none; the navigable is exactly what survives, and what changes is
+ * which Document is ACTIVE in it. Both reach §7.5.10 "Destroying documents" one step down, through §7.5.9
+ * "Unloading documents"' "if oldDocument's salvageable state is false, then destroy oldDocument", which is why
+ * one machine serves both entries (core/frame/document_lifecycle.h).
+ *
+ * THE ORDER IS `qjs_join` THEN THIS, AND IT IS THE STANDARD'S OWN: §7.4.6.1 unloads `displayedDocument` given
+ * `targetEntry's document`, so the incoming Document exists before the outgoing one is unloaded. That order is
+ * CHECKABLE here rather than merely stated, which is the second reason the incoming name crosses: a zone that
+ * called the two the other way round names a document this agent does not yet hold, and the assert that says
+ * so is one line from the entry rather than in whatever ran next.
+ *
+ * NOTHING IS FREED HERE, AND A `JS_FreeContext` ON THIS LINE WOULD BE A USE-AFTER-FREE. The replaced document's
+ * realm is released by the COLLECTOR through quickjs's realm-teardown hook once nothing holds it, and a flow
+ * parked inside it holds it by counted reference (core/frame/navigable.c). Its Lexbor tree is this host's
+ * until `qjs_teardown`, which is the only moment at which every realm that could still name it is gone.
+ *
+ * `incoming_doc_id` IS THE DOCUMENT THE NAVIGATION LOADED, AND BOTH STANDARDS TAKE IT: §7.4.6.1 is written
+ * over `targetEntry` and hands its Document to the unload, and §7.5.9 takes it as the optional `newDocument`.
+ * It is what makes this entry's precondition statable — the incoming Document is joined FIRST, so a zone that
+ * called the two the other way round is caught here rather than by whatever ran next — and it is the realm the
+ * operation's own queued tasks belong to, which is what keeps §7.5.10 step 7 from removing the other
+ * timelines' unloads along with the destroyed document's tasks (solver/engine.h). */
+QJS_EXPORT void qjs_unload(const char *doc_id, const char *incoming_doc_id)
+{
+    uint32_t doc, incoming;
+
+    DCHECK(g_begun,
+           "a Document was reported REPLACED to an engine whose frontier was never seeded — §7.5.9's unload is "
+           "a task of every timeline of that document and this instance has none, so the destruction would be "
+           "queued onto nothing");
+    DCHECK(doc_id != NULL && *doc_id,
+           "a Document was reported replaced with no NAME — an instance is an ORIGIN-KEYED AGENT CLUSTER and "
+           "holds one realm per same-origin document, so the name is the whole of what says WHICH of them the "
+           "browser navigated away from");
+    DCHECK(incoming_doc_id != NULL && *incoming_doc_id,
+           "a navigation was reported with no INCOMING document — §7.4.6.1 replaces a navigable's active "
+           "document WITH ANOTHER, so a navigation with only an outgoing half is a destruction wearing a "
+           "navigation's name, and this entry would have no realm to queue the operation in that is not the "
+           "one being destroyed");
+    doc = world_doc_intern(doc_id);
+    incoming = world_doc_intern(incoming_doc_id);
+    DCHECK(world_doc_hosted(doc),
+           "a Document this agent does not hold was reported replaced — the trusted zone routes on which "
+           "instance holds which document, so this arrival is at the wrong instance, and unloading anything "
+           "here would destroy a document the browser never navigated away from");
+    engine_unload_document(doc, incoming);
 }
 
 /* The frontier KEY's document half. Pure scan, so the host may ask the instant qjs_init returns. */

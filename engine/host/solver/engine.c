@@ -22,6 +22,7 @@
 #include "core/frame/remote_op.h"        /* the receiving half of a cross-agent OPERATION: what performs it */
 #include "core/frame/remote_object.h"    /* …and the grammar its completion crosses back in */
 #include "core/frame/navigable.h"   /* @HEAP's realm count: the one component that holds this agent's realms */
+#include "core/frame/document_lifecycle.h"   /* HTML §7.4.6.1: what a navigation does to the Document it replaces */
 #include "solver/dom_cow.h"   /* the DOM half of time-travel — swapped per-flow alongside the heap COW delta */
 #include "solver/cold.h"      /* what the frontier's parked snapshots are made of — the cold tier's census */
 #include "solver/quantum.h"   /* the cooperative quantum's asynchronous edge, and what THIS host can measure */
@@ -1437,6 +1438,102 @@ static JSContext *doc_realm(uint32_t doc)
            "the navigable whose active document this is — and materialize it here through window_proxy_realm, "
            "exactly as a local read does");
     return realm;
+}
+
+/* THE FLOW A QUEUED CALLBACK BELONGS TO WHEN THE QUEUER IS THE USER AGENT AND NO FLOW IS RUNNING — set ONLY
+   inside engine_unload_document's per-flow bracket, which is the same shape flow_job_external_begin/_end
+   already brackets the other host-time conversion with.
+   IT IS NOT A DISCRIMINATOR AND IT IS NOT A FALLBACK. `flow_running()` is the answer everywhere a PROGRAM
+   queued the callback, which is every enqueue but one; the exception is an operation the TRUSTED ZONE reports
+   between two scheduler steps, where there is no running flow to be the owner and the owner is therefore
+   NAMED. The two are mutually exclusive by construction and the assert below says so, so this is one question
+   with one answer rather than a preference between two mechanisms. */
+static Flow *g_enqueue_owner;
+
+/* HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, made a work
+ * item of EVERY LIVE TIMELINE of this instance — the third seam with engine_route's and engine_perform's shape,
+ * and the one with the least room to be anything else.
+ *
+ * A DESTRUCTION IS PER-FLOW BECAUSE EVERY PIECE OF IT IS STATE A PAGE OBSERVES. §7.5.9 fires `pagehide` and
+ * `unload` at listeners a SCRIPT registered, so they live in the COW delta of the flow that ran that script and
+ * in no baseline; its "clear window's map of active timers" clears the timers the timeline that set them holds;
+ * §7.5.10 step 8's browsing-context-null is a write to the WindowProxy record, which that record's own COW
+ * capture makes per-flow — which is the same reason document_lifecycle.h gives for the subtree wait being a
+ * count on the proxy rather than a shared integer. Run in ONE timeline this would destroy the document there
+ * and leave every other flow running a document the browser replaced: exactly the two-tops state the trusted
+ * zone aborts on, moved inside the engine where nothing would say so.
+ *
+ * NOTHING RUNS INSIDE THIS CALL. Each flow performs its own unload when the scheduler next runs it, under its
+ * own delta and at its own rate — so one arm's `pagehide` listener and another's `unload` listener are two
+ * suspensions of two flows rather than one drive to completion.
+ *
+ * THE OWNER IS NAMED RATHER THAN CURRENT, and that bracket is the whole of what this seam adds to the machine
+ * it drives. §7.5.9 and §7.5.10 queue GLOBAL TASKS, so the operation is expressed the way every other queued
+ * task in this engine is (JS_EnqueueCallTask); that path asks the scheduler WHICH flow owns the callback and
+ * the scheduler's answer is `flow_running()`, which between two steps is nobody. Both alternatives are wrong
+ * and neither is loud: letting the hook DECLINE puts the task on quickjs's global list, which nothing in this
+ * engine drains — a destruction that simply never happens while the document goes on reporting — and seeding a
+ * FRESH flow from the baseline is the shape engine_route names as silently wrong, a timeline in which the
+ * page's own listeners were never registered.
+ *
+ * NO FLOW IS DROPPED, STARVED OR PAGED TO MAKE THIS HAPPEN, and none has to be. A flow suspended inside the
+ * replaced document keeps its snapshot and its place on the ONE frontier; §7.5.10 step 7 removes QUEUED TASKS,
+ * which is work that has not started; and what keeps the realm alive under a suspended continuation is the
+ * counted references that continuation already holds (core/frame/navigable.c's teardown states the argument
+ * beside the assert that rests on it). §NO BOUNDS is untouched: nothing here is a scheduler decision.
+ *
+ * `incoming` IS THE DOCUMENT THE NAVIGATION LOADED, AND IT IS AN ARGUMENT BECAUSE BOTH STANDARDS TAKE IT.
+ * §7.4.6.1 is written over `targetEntry` and hands its Document to the unload; §7.5.9 takes it as the optional
+ * `newDocument`. Here it is also what the operation's own tasks are queued in — never the outgoing document's
+ * realm, because §7.5.10 step 7 removes every queued task whose enqueuing realm is the DESTROYED document's,
+ * so the first timeline to reach its step 7 would drop every other timeline's unload and those timelines would
+ * go on running a document the browser replaced. That the two are different documents is asserted here, where
+ * both names are in one hand. */
+void engine_unload_document(uint32_t doc, uint32_t incoming)
+{
+    JSContext *dctx, *nctx;
+    int n, i;
+
+    DCHECK(g_sess_live,
+           "a Document was reported REPLACED to an instance with no live session — the unload is a task of "
+           "every timeline of that document and there is no scheduler to run one, so the destruction would be "
+           "queued onto nothing and the replaced document would go on answering for this instance");
+    DCHECK(world_doc_hosted(doc),
+           "a Document this agent does not hold was reported replaced — the trusted zone is the only zone that "
+           "knows which instance holds which document, and it named this one to the wrong instance; unloading "
+           "here would destroy a document the browser did not navigate away from");
+    DCHECK(world_doc_hosted(incoming),
+           "a navigation named an INCOMING Document this agent does not hold — §7.4.6.1 unloads the displayed "
+           "document GIVEN the target entry's document, so the incoming one exists first and is joined to this "
+           "agent before this is called; a zone that called them the other way round has an outgoing document "
+           "to destroy and nowhere to put the navigation that replaced it");
+    DCHECK(doc != incoming,
+           "a navigation named ONE Document as both the incoming and the replaced one — §7.4.6.1 replaces the "
+           "active document of a navigable WITH ANOTHER, so this is the trusted zone reporting a navigation "
+           "that did not happen, and running it would destroy the document that had just arrived");
+    dctx = doc_realm(doc);
+    nctx = doc_realm(incoming);
+    n = flow_count();
+    DCHECK(n > 0,
+           "a Document was replaced while every timeline of this instance had already finished — there is no "
+           "flow to run its unload in, so its `pagehide` and `unload` listeners fire in no timeline at all and "
+           "§7.5.10's destruction happens nowhere. A document a navigation can still replace is a document "
+           "whose flows are still live, which is the same statement engine_set_referenced makes for a document "
+           "a peer still holds a reference into");
+    for (i = 0; i < n; i++) {
+        Flow *f = flow_at(i);
+
+        /* THE BRACKET, AND IT IS CLOSED ON EVERY PATH THROUGH THE BODY BECAUSE THE BODY HAS ONE. Anything that
+           aborts between these two lines aborts the process, so there is no unwind that could leave a stale
+           owner naming a flow the registry has since freed. */
+        g_enqueue_owner = f;
+        document_lifecycle_unload_replaced(nctx, document_window_proxy(dctx));
+        g_enqueue_owner = NULL;
+        /* ASKABLE AGAIN, for engine_route's reason exactly: a flow that reported host-owed is out of the pick
+           until the host does something for it, and this IS that something. A flow holding the unload of its
+           own document and never picked is a destruction that never runs. */
+        flow_clear_host_owed(f);
+    }
 }
 
 /* THE SIBLING THIS DELIVERY FORECLOSES — the arm CLAUDE.md §Security asks for by name ("two arms of a fork post
@@ -4419,8 +4516,17 @@ void engine_orphan_claims(long *met, long *unmet) {
 
 static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueConst *argv, bool is_task,
                               JSTaskHandle handle) {
-    Flow *f = flow_running();
+    /* THE OWNER IS NAMED WHEN THE USER AGENT IS THE QUEUER — see g_enqueue_owner, declared beside the one
+       bracket that sets it. Everywhere else the callback belongs to the flow whose program queued it. */
+    Flow *f = g_enqueue_owner;
     g_jobs_q++;
+    if (!f)
+        f = flow_running();
+    else
+        DCHECK(flow_running() == NULL,
+               "a host-time callback was queued into a NAMED flow while another flow was running — the bracket "
+               "names an owner precisely because there is none, so an overlap is one timeline's work landing "
+               "on another timeline's queue, to be run later under a delta that never caused it");
     /* THERE IS NO GLOBAL DRAIN. Declining here hands the job to quickjs's global list, and nothing in this
        engine ever runs that list — so the job is not "deferred to the default", it is DROPPED. Every task
        source goes through here: a window message, a port delivery, a broadcast, a timer callback, a custom

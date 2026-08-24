@@ -946,3 +946,36 @@ void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy)
            "§7.3.1 was asked to destroy something that is not a navigable's WindowProxy");
     descend_enqueue(ctx, proxy, LC_DESTROY, LC_AFTER_NONE);
 }
+
+/* ---- §7.4.6.1's DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION ----------------------------------------
+ *
+ * See the header for why this is not §7.3.1.6's entry and why it carries no continuation, no `pageswap` and no
+ * `beforeunload`. What is left of §7.4.6.1 once those three are accounted for is one line, and it is the same
+ * line §7.3's definitely close reaches at ITS step 3: unload the document and its descendants. */
+void document_lifecycle_unload_replaced(JSContext *ctx, JSValueConst proxy)
+{
+    DCHECK(window_proxy_is(proxy),
+           "§7.4.6.1's deactivate a document for a cross-document navigation was given something that is not a "
+           "navigable's WindowProxy");
+    /* THE REALM THE JOBS ARE QUEUED IN IS NOT THE REALM BEING DESTROYED, and that is asserted rather than
+       trusted because the failure is silent in both directions: queued in the outgoing realm, the first
+       timeline's §7.5.10 step 7 drops every other timeline's unload and those timelines keep running a
+       replaced document; and there is nothing in a JSContext* to say which of the two it is. */
+    DCHECK(JS_VALUE_GET_PTR(document_window_proxy(ctx)) != JS_VALUE_GET_PTR(proxy),
+           "§7.4.6.1's unload of a replaced Document was queued IN THAT DOCUMENT'S OWN REALM — `ctx` is the "
+           "INCOMING document's (§7.5.9 takes it as `newDocument` and §7.4.6.1 as `targetEntry`'s document), "
+           "and with the outgoing one passed instead the first timeline to reach §7.5.10 step 7 removes every "
+           "other timeline's queued unload, leaving them running a document the browser replaced");
+    /* THE OUTGOING DOCUMENT IS NAMED BY THE ZONE THAT WATCHED THE BROWSER NAVIGATE, so a second replacement of
+       one Document is that zone having lost track of which Document is active in this navigable — and
+       descend_enqueue's own early return for a destroyed navigable would swallow it, leaving a navigation
+       reported and nothing done. It is asserted HERE rather than there because there it is a CORRECT skip (a
+       frame removed inside an ancestor's teardown) and here it cannot be one: a navigable whose active
+       document is already destroyed had no document for this navigation to replace. */
+    DCHECK(!window_proxy_destroyed(proxy),
+           "a navigation replaced a Document this navigable had ALREADY destroyed — the outgoing document is "
+           "stated by the trusted zone from what the browser did, so this is that zone naming one Document as "
+           "replaced twice, or naming the wrong one; unloading again would enqueue a walk over a subtree that "
+           "is gone and report a destruction that already happened");
+    descend_enqueue(ctx, proxy, LC_UNLOAD, LC_AFTER_NONE);
+}

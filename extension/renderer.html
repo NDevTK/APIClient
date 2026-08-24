@@ -187,6 +187,13 @@
     hostAnswerRemote: { fn: "qjs_host_answer_remote", ret: null,     out: null,
                         place: ["number", "string", "string"] },
     worldGone:        { fn: "qjs_world_gone",         ret: null,     out: null,       place: ["string"] },
+    /* `string` AND NOT `string-retained`, READ OFF THE C ENTRY LIKE EVERY OTHER PLACEMENT: qjs_unload passes
+       the name to world_doc_intern, which either matches an entry it already holds or strdup's its own copy —
+       so the pointer does not outlive the call, and retaining it would be this table asserting an ownership
+       main.c does not take. That is the same reason the two policy-container arguments of init/join above are
+       transient and their five siblings are not. */
+    unload:           { fn: "qjs_unload",             ret: null,     out: null,
+                        place: ["string", "string"] },
   };
 
   /* WHICH DECLARED TYPES A PLACEMENT MAY PLACE. This is the two-sided assert the table needs to be safe: the
