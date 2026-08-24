@@ -1389,10 +1389,18 @@ static bool proxy_read_permitted(const ProxyData *p, int magic)
  * SO THE LIST IS THE STANDARD'S OWN, AND IT IS NOT THE MEMBER TABLE. §7.2.1.3.1 names THIRTEEN cross-origin
  * accessible window property names, and four of them (`close`, `focus`, `blur`, `postMessage`) are not members
  * of the table above — `close` and `postMessage` are installed as methods by this component and
- * window_message.c, and `focus`/`blur` are honestly ABSENT. A name on this list is therefore answered by
- * whatever owns it, INCLUDING nothing: an absent member is `undefined` at the end of the prototype chain, which
- * is the truthful answer for a member the origins permit and this engine has not built. The two tables are tied
- * to each other by an assert at capture rather than by a reader keeping them in step.
+ * window_message.c, and `focus`/`blur` by core/frame/window.c (§6.6.6's `Window.focus()` through
+ * focus_install_window_members, and `blur` beside it). A name on this list is therefore answered by whatever
+ * owns it, INCLUDING nothing: a member this engine has not built is `undefined` at the end of the prototype
+ * chain, which is the truthful answer for a member the origins permit. The two tables are tied to each other by
+ * an assert at capture rather than by a reader keeping them in step.
+ *
+ * THIS PARAGRAPH SAID `focus`/`blur` WERE "honestly ABSENT", AND THEY ARE NOT: window.c installs both on the
+ * Window, and `Object.getOwnPropertyNames(self)` reports them. That is the stale-claim failure CLAUDE.md names
+ * — true when written, wrong about this tree — and it was load-bearing rather than decorative, because it is
+ * the reason given for the WindowProxy's own surface not having them, which is to say for the two surfaces
+ * disagreeing about two members. Measured: the Window owns all thirteen of §7.2.1.3.1's names, this component's
+ * prototype owns eleven.
  *
  * IT IS DECLARED HERE AND ASKED ONCE, at the object's own [[GetOwnProperty]], because that is where §7.2.3.5
  * puts it — before the prototype walk, so a name outside the list never reaches a member at all. Asking it
