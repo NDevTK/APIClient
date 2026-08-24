@@ -3557,12 +3557,14 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
        DCHECK above says this flow is the one in service, and SFQ's v(t) IS the service of the flow in service.
        Asserted because the two are reached through different functions and only this site knows they must
        meet. */
-    /* BOTH COORDINATES, because the virtual time a flow enters at has two: its own service (the optimism
-       term's) and its FAMILY's (the aging term's). `born` used to be the second half of this assert and it was
-       the same quantity as the first; it is gone with the per-arm charge, and what stands in its place is the
-       real second term — an orphan drive that founded a family of its own would carry the discovering flow's
-       reward with none of its aging, which is exactly the promotion this line exists to forbid. */
-    DCHECK(sib->cpu == f->cpu && sib->family == f->family,
+    /* EVERY COORDINATE, because the virtual time a flow enters at has as many as the weight has terms: the
+       completed-unit count (the optimism term's), its own service and its FAMILY's (the aging term's two
+       halves). `born` used to be the second half of this assert and it was the same quantity as the first; it
+       is gone with the per-arm charge. An orphan drive that founded a family of its own would carry the
+       discovering flow's reward with none of its aging, and one entering at zero units would carry the full
+       optimism bonus — either is the promotion this line exists to forbid, and a bundle ships thousands of
+       uncalled functions to do it with. */
+    DCHECK(sib->cpu == f->cpu && sib->visits == f->visits && sib->family == f->family,
            "a driven orphan entered the frontier at a virtual time that is not the running flow's — it was "
            "ranked against a clock nobody chose, and a page with many uncalled functions can then promote the "
            "work it manufactures above every flow already waiting");
@@ -4235,18 +4237,24 @@ static int64_t engine_now_ms(void);   /* the WALL clock, for the gap census belo
    O(flows) scan for it still happens only on a change. The running flow's own weight is recomputed at every
    consultation: two divisions beside a clock read the hook already performs, and exact rather than stale. */
 static unsigned g_seen_gen = 0; static Flow *g_seen_cur = NULL; static double g_rival_w = -1.0 / 0.0;
-/* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the three quantities the value yield's
+/* WHAT THE FLOW HOLDING THE THREAD WAS RANKED ON WHEN IT TOOK IT — the quantities the value yield's
    verdict is a pure function of, recorded at the switch-in and read by the assertion in the hook's value
    clause. They are not policy and they are not a cache: nothing is decided from them, and the hook's answer is
    identical with them removed. They exist so that the sentence "a top-ranked flow runs on at ~zero switch
    cost" is a check rather than a claim, at the one point where it can be false. */
-static unsigned g_ranked_gen = 0; static int64_t g_ranked_notch = 0; static double g_ranked_val = 0.0;
-/* …AND THE FAMILY'S NOTCH, which is the FOURTH thing that can move a weight and used to be the same number
-   as the second. flow_weight's aging reads the flow's FORK FAMILY's service (solver/flow.c), and a family's
-   notch and one arm's own notch quantise at different instants — the running flow burns both at once, so
-   the family crosses a quantum boundary while the arm has not. Snapshotting only `g_ranked_notch` would
-   make the assertion below fire on a rank change that is entirely legitimate. */
-static int64_t g_ranked_fam = 0;
+static unsigned g_ranked_gen = 0; static double g_ranked_val = 0.0;
+/* …AND THE AGING TERM'S NOTCH — this flow's silence, its own thread time since its last emission plus its fork
+   family's since any arm of it last emitted, in whole emitted findings (solver/flow.h's flow_silence_notch).
+   Two separate snapshots stood here, the flow's service quantum and its family's, and they are ONE now because
+   the weight reads one quantity: the sum, at the price FLOW_AGE_RATE states. Keeping two would be keeping the
+   coordinates of a formula this file no longer computes. */
+static int64_t g_ranked_silence = 0;
+/* …AND THE COMPLETED-UNIT COUNT, which is the optimism term's whole quantity (solver/flow.h's `visits`). It
+   moves at an instant no clock names — the scheduler credits it after a step that left the flow between units,
+   and a flow can be re-picked without a switch-in, so this snapshot can be several units old while the silence
+   notch stands still. Omitting it would make the assertion below fire on the most ordinary rank change there
+   is: a flow finished a program, its bonus halved, and a sibling passed it. */
+static int64_t g_ranked_visits = 0;
 /* SUSPEND POINTS REACHED — every call to this hook IS one, which is the number the seam assertion needs and
    the one quickjs's counters do not give. g_flow_preempt_requested is incremented only where the hook returns
    TRUE, so it counts preempts WANTED, not points offered: a step showing requested=1 may have reached one
@@ -4337,23 +4345,26 @@ static int preempt_hook(int kind) {
            IN CLAUDE.md. §scheduler says the yield fires "the moment a parked flow outranks (or on an emit/fork/
            suspension that changes ranks)" and that "a top-ranked flow runs on at ~zero switch cost" — so a flow
            that was picked to run, and against which NOTHING has since changed, must still be running.
-           FOUR THINGS CAN CHANGE THE ANSWER and they are exactly the four snapshotted at the switch-in: the
+           WHAT CAN CHANGE THE ANSWER IS EXACTLY WHAT IS SNAPSHOTTED AT THE SWITCH-IN: the
            frontier GENERATION (a fork or a finish added or removed a member, and an emission bumps it too), the
-           running flow's own SERVICE NOTCH (it consumed a whole quantum — a published change, and the same
-           edge the cooperative yield fires on), its FORK FAMILY's service notch (the quantity the aging term
-           reads — flow.c), and its own REWARD. Nothing else moves either side of the comparison: a parked flow
+           running flow's SILENCE NOTCH (its own thread time since its last emission plus its fork family's,
+           crossing a whole emitted finding's worth — flow.c), its COMPLETED-UNIT COUNT (the optimism term's
+           whole quantity, which moves at no clock's instants), and its own REWARD. Nothing else moves either
+           side of the comparison: a parked flow
            burns no CPU, and its `val` cannot change without it running, which cannot happen while this one
-           holds the thread. So the comparison is a pure function of those four, and a yield with all four
+           holds the thread. So the comparison is a pure function of those, and a yield with all of them
            unchanged means the WFQ answered two different things about one unchanged state.
-           IT WAS THREE, AND THE FOURTH IS NOT A LOOSENING. The aging used to read the running flow's OWN `cpu`,
-           so its notch and its weight moved together and the list was complete. With the aging on the family,
-           one arm's charge advances the family's notch on a schedule of its own — the same microseconds,
-           quantised against a much larger accumulated total — so the weight can move with the arm's own notch
-           standing still. Naming it here is what keeps this an assertion about a STATE rather than about a
-           formula that has since gained a term, which is precisely the failure it was written to catch.
-           AND THE FIFTH TERM IS NOT A WEIGHT AT ALL — IT IS THE ELIGIBLE SET, which is why counting weight
+           THE LIST IS RE-DERIVED EVERY TIME THE FORMULA MOVES, AND EACH REVISION IS WHY THIS ASSERTION IS WORTH
+           HAVING. It was three clauses when the aging read the running flow's OWN service, four when the aging
+           moved to the fork family (one arm's charge advances the family's notch on a schedule of its own, so
+           the weight could move with the arm's own notch standing still), and it is four again now that the two
+           service clauses have collapsed into ONE silence notch and the optimism term has become a count of
+           completed units. Each of those edits would have made this fire on a perfectly legitimate rank change
+           had the clause not moved with it, which is precisely the discipline it exists to enforce: the
+           assertion is about a STATE, and a state is whatever the weight is currently a function of.
+           AND ONE TERM IS NOT A WEIGHT AT ALL — IT IS THE ELIGIBLE SET, which is why counting weight
            terms could never have found it. This clause list is complete for `flow_weight(cur)`, which is a pure
-           function of `val`, the service notch and the family notch; the comparison it appears in is
+           function of `val`, the completed-unit count and the silence notch; the comparison it appears in is
            `best-eligible-OTHER > cur`, and the SET that "eligible" ranges over is a term of that answer exactly
            as the three weights are. A host-owed mark decides membership of it, and neither laying one nor
            clearing one raised the frontier generation — so a clear during the running flow's first step handed
@@ -4371,12 +4382,12 @@ static int preempt_hook(int kind) {
            moves with something this list does not name. Any of those is a swap of two COW deltas bought with
            nothing, and at 512 flows that was 1.28 million of them for one document. */
         DCHECK(flow_frontier_gen() != g_ranked_gen ||
-               flow_service_notch(cur) != g_ranked_notch ||
-               flow_family_notch(cur) != g_ranked_fam || cur->val != g_ranked_val,
+               flow_silence_notch(cur) != g_ranked_silence ||
+               cur->visits != g_ranked_visits || cur->val != g_ranked_val,
                "the VALUE YIELD fired on a flow whose rank nothing changed since the scheduler switched it in — "
-               "same frontier generation, same service notch, same family notch, same reward on both sides of "
-               "the comparison, so the pick and the hook are answering one unchanged state two different ways "
-               "and every swap this buys is a COW delta swap for no ranking decision at all");
+               "same frontier generation, same silence notch, same completed-unit count, same reward on both "
+               "sides of the comparison, so the pick and the hook are answering one unchanged state two "
+               "different ways and every swap this buys is a COW delta swap for no ranking decision at all");
         return 1;
     }
     /* (2) COOPERATIVE-QUANTUM floor — thread-sharing, not value. The same expiry the scheduler loop returns to
@@ -5305,10 +5316,11 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
     flow_set_running(f);
     /* WHAT THIS FLOW WAS RANKED ON WHEN IT TOOK THE THREAD. Recorded HERE because this is the moment the WFQ's
        answer was "this one" — the pick that led here compared it against every runnable member and found none
-       strictly better, so from this instant the value yield may only fire if one of these three moves. The
+       strictly better, so from this instant the value yield may only fire if one of these moves. The
        hook's assertion reads them; nothing decides from them. */
-    g_ranked_gen = flow_frontier_gen(); g_ranked_notch = flow_service_notch(f); g_ranked_val = f->val;
-    g_ranked_fam = flow_family_notch(f);   /* the aging term's coordinate — see the assertion in preempt_hook */
+    g_ranked_gen = flow_frontier_gen(); g_ranked_val = f->val;
+    g_ranked_silence = flow_silence_notch(f);  /* the aging term — see the assertion in preempt_hook */
+    g_ranked_visits = f->visits;               /* …and the optimism term's, which is a count and not a clock */
 }
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
@@ -6250,6 +6262,25 @@ static int engine_sched_slice(void) {
                    "holding its rank");
             now = quantum_thread_us();
             flow_age_running(now - t0);
+            /* …AND THE OTHER TERM'S CHARGE, WHICH IS A COUNT AND NOT A CLOCK. §scheduler's optimism bonus is
+               "∝ 1/(visits+1)", and a VISIT is a completed unit of work — a program that ended, a job that ran,
+               a delivery, a lifecycle stage — never a slice of thread time. The two are charged here together
+               and stay two calls because they measure two quantities: the line above bills every microsecond,
+               this one bills only a step that finished what it was doing.
+               THE PREDICATE IS HTML §8.1.4.4 "Calling scripts"'s, step 3 of clean up after running script: "if
+               the JavaScript execution context stack is now empty". `Flow::frame` is that stack for a page
+               script and the runtime's parked slot is the other half of it (solver/flow.h, and the checkpoint
+               hook three lines above asks the identical pair for the identical reason), so a flow preempted in
+               the middle of a program is NOT credited — it is the same trial, still running. That is the whole
+               of the fix: charged per quantum instead, a flow was strictly outranked by every arm it had forked
+               as soon as it crossed one, so no flow ever reached the end of a program, and flow_step can only
+               reach a flow's queued jobs with `frame == NULL`. 217 jobs queued and none run, on a page whose
+               fetch surface is entirely promise reactions.
+               A FINISHED FLOW IS CREDITED TOO and that is deliberate: `r == FLOW_STEP_DONE` is the largest
+               completed unit there is, and the flow is about to leave the frontier, so the count is read only
+               by the census that reports what the order was made of. Excluding it would mean the ONE step whose
+               completion is certain is the one step not counted as one. */
+            if (!cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx))) flow_credit_visit(cur);
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend
@@ -6964,11 +6995,21 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
                           family's silence. It decides nothing — it is here so the next change to flow_weight
                           starts from a number instead of from this paragraph. */
                        "\"svcFamMax\":%lld,"
+                       /* …AND THE OPTIMISM TERM'S OWN COORDINATE, WHICH IS THE ROW THIS LINE HAD NO ANALOGUE OF
+                          AND NEEDED MOST. Everything else here is thread time; `visMax` is COMPLETED UNITS OF
+                          WORK, and `visMax == 0` on a frontier of thousands says that no member has reached the
+                          end of a program — so no queued job can have run, whatever `switches` and `forks` say.
+                          That state is what a busy engine with an empty API surface looks like from inside, and
+                          before this row nothing in any stream could distinguish it from healthy interleaving.
+                          Read `visMin` beside it: equal to `visMax` is turns being handed round, far below it
+                          is the order concentrating, and both at 0 is nothing finishing at all. */
+                       "\"visMin\":%lld,\"visMax\":%lld,"
                        "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,"
                        "\"decMax\":%ld,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f}\n",
                        w.members, w.val_min, w.val_max, w.val_top,
                        w.val_zero, w.self_emit, w.unrun, (long long)w.svc_max,
                        (long long)w.svc_fam_max,
+                       (long long)w.vis_min, (long long)w.vis_max,
                        w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max,
                        w.dec_max, w.w_top, w.w_min, w.cand_w_max);
             }

@@ -187,7 +187,15 @@ void flow_credit_emit(double v) {
            "a flow holds more inherited reward than reward — its birth mark was written after its account, so "
            "the census cannot tell what this flow emitted from what it was handed");
     g_running->val += v;
-    g_running->cpu = 0;   /* emitted -> a fresh visit count for the optimism term */
+    g_running->cpu = 0;   /* emitted -> this flow's own half of the aging is forgiven with the family's below */
+    /* …AND THE OPTIMISM TERM'S OWN QUANTITY, which is what the line above used to be doing under a comment that
+       said so ("a fresh visit count") while `cpu` was a clock. A flow that has just produced something is not
+       one the frontier needs protecting from, so it is restored to the full bonus exactly as a never-run flow
+       carries it — and it then leads by its REWARD, which is the term that is supposed to decide between two
+       flows the optimism term has nothing left to say about. Without this reset a productive flow's bonus
+       decays monotonically for the whole session and the only thing keeping it in front is `val`, so the moment
+       it stops emitting it falls behind every arm it forked while it was working. */
+    g_running->visits = 0;
     /* …AND THE FAMILY'S AGING WITH IT, which is the forgiveness that actually moves a rank now. The reward this
        emission raises is the FAMILY's — flow_fork_inherit copies `val` to every arm — so the aging it is
        weighed against has to be forgiven at the same granularity, or an arm that emits carries the silence of
@@ -219,12 +227,15 @@ void flow_age_running(int64_t us) {
     DCHECK(us >= 0, "a NEGATIVE thread-time charge reached the WFQ — the aging clock ran backwards, which does "
                     "not slow a monopolizer down, it promotes it");
     g_running->cpu += us;
-    /* …AND THE SAME MICROSECONDS ON THE FAMILY, which is the charge the AGING term reads. Two quantities, two
-       reset points, and they are not two copies of one number: `cpu` is what THIS FLOW has been handed since
-       its own last emission and the UCB reads it as a visit count, while `fam_us` is what the whole fork family
-       has burned since ANY of its arms last emitted, which is what §scheduler's monopolizer is made of. There
-       is deliberately no ordering between them — a sibling's emission forgives the family while this flow's own
-       `cpu` stands, and that is the policy rather than a drift. */
+    /* …AND THE SAME MICROSECONDS ON THE FAMILY. Both are the AGING term's — it is their SUM — and they are not
+       two copies of one number, because they have two reset points: `cpu` is what THIS FLOW has burned since
+       its OWN last emission, while `fam_us` is what the whole fork family has burned since ANY of its arms last
+       emitted. The first is what orders a family's members against each other and the second is what orders one
+       family against another, and a term with only the second has nothing to say on a frontier that is a single
+       family — which a real page's is. There is deliberately no ordering between the resets: a sibling's
+       emission forgives the family while this flow's own `cpu` stands, and that is the policy rather than a
+       drift. Neither of them is the OPTIMISM term's quantity; that one is a count of completed units of work
+       and is charged by flow_credit_visit, which is why it is a separate call from this one. */
     DCHECK(g_running->family != NULL && g_running->family->up == NULL,
            "the running flow's family tag is not the ROOT of a fork tree — an arm whose tag points at its own "
            "node has FOUNDED a family instead of joining its parent's, which is precisely the reset by "
@@ -233,13 +244,32 @@ void flow_age_running(int64_t us) {
     g_running->family->fam_us += us;
 }
 
-/* A FORKED SIBLING IS A CONTINUATION, NOT A NEWCOMER — so it inherits BOTH terms of its parent's account, and
+/* A FLOW COMPLETED A UNIT OF WORK — the OPTIMISM term's quantity, and the one thing in this file that is a count
+   rather than a clock. See flow.h's `visits` for what a unit is and why the term may not be thread time.
+   IT IS A SEPARATE CALL FROM flow_age_running AND THAT IS THE POINT. The two are charged at the same moment by
+   the same caller and it would be one function if they measured one thing; they measure the two quantities
+   §scheduler names separately, and collapsing them is exactly the substitution that made the aging term
+   unreachable. A step that burned a quantum inside a program charges the first and NOT the second.
+   THE FLOW IS NOT ASSERTED TO BE THE RUNNING ONE, unlike the charge above: the scheduler credits the flow it
+   just stepped, and the finish path can have cleared `g_running` by then. What IS asserted is the property that
+   makes the count a trial count. */
+void flow_credit_visit(Flow *f) {
+    DCHECK(f != NULL, "a completed unit of work was credited to no flow — the optimism term's whole quantity is "
+                      "per flow, so a charge with no owner is a turn nobody is recorded as having had");
+    DCHECK(f->frame == NULL,
+           "a flow was credited a completed unit of work while it is still INSIDE a program — a preempt is the "
+           "middle of a trial, not the end of one, and counting it makes this term a second clock beside the "
+           "aging: the flow is then outranked by its own arms after one quantum and no program ever finishes");
+    f->visits++;
+}
+
+/* A FORKED SIBLING IS A CONTINUATION, NOT A NEWCOMER — so it inherits EVERY term of its parent's account, and
  * this is the one place that says so.
  *
  * A fork is "append an arm to a decision vector" (flow.h): the sibling holds the parent's frame snapshot, the
  * parent's COW delta, the parent's DOM base, the parent's queued jobs and the parent's outstanding replies —
- * every field of the parent's HISTORY is copied at the fork except the two the WFQ ranks by, which were left at
- * the constructor's zeros. Both zeros are false statements about that flow, and each is false in the direction
+ * every field of the parent's HISTORY is copied at the fork except the ones the WFQ ranks by, which were left at
+ * the constructor's zeros. Each zero is a false statement about that flow, and each is false in the direction
  * that promotes it:
  *
  *   `val` — the sibling has, by construction, executed every emission the parent made before the branch; they
@@ -251,13 +281,19 @@ void flow_age_running(int64_t us) {
  *   and was answering it differently.
  *
  *   `cpu` — the sibling has burned the parent's CPU, through the parent, on the prefix it is resuming. Zeroing
- *   it hands a flow that has been running since boot a service notch of 0, which is the FULL optimism bonus
- *   (1.0) that flow_weight reserves for a flow the scheduler has never given the thread to. That is the hole
- *   the aging term cannot close from the other side: a flow that burns the thread without emitting sinks, but a
- *   flow that BRANCHES while burning it hands its debt to a child born debt-free, so a forking loop — the
- *   `Array.from(state.items)` walk FLOW_AGE_RATE was written against — ages forever and never sinks.
+ *   it hands a flow that has been running since boot a silence of ZERO, which is the aging the term reserves
+ *   for a flow that has just emitted. That is the hole the aging term cannot close from the other side: a flow
+ *   that burns the thread without emitting sinks, but a flow that BRANCHES while burning it hands its debt to a
+ *   child born debt-free, so a forking loop — the `Array.from(state.items)` walk FLOW_AGE_RATE was written
+ *   against — ages forever and never sinks.
  *
- * WHAT THE TWO ZEROS DID TOGETHER, measured on the smoke fixture: every fork minted a flow at weight 1.0, the
+ *   `visits` — the sibling has, by construction, completed every unit of work its parent completed before the
+ *   branch, so zeroing it hands a flow that has finished programs the FULL optimism bonus (1.0) that
+ *   flow_weight reserves for a flow the scheduler has never picked. It is the same reset-by-splitting as the
+ *   `cpu` zero, arriving through the term that replaced the clock, and it is the one the aging cannot reach at
+ *   all: a flow inside a program completes no unit, so a bonus it can refresh by branching would never decay.
+ *
+ * WHAT THE ZEROS DID TOGETHER, measured on the smoke fixture: every fork minted a flow at weight 1.0, the
  * maximum a val-0 flow can hold and strictly above every flow that had consumed a quantum (bonus <= 0.5, since
  * one notch of aging is 0.012 against half a point of optimism). So a newborn strictly outranked the whole
  * backlog, the value yield fired at the fork, and the thread went to the newest flow while every flow that had
@@ -300,7 +336,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     /* NOTHING MAY HAVE BEEN CREDITED OR CHARGED FIRST, because the inheritance ASSIGNS both terms. A caller
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
-    DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 &&
+    DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0,
            "a forked sibling was credited or charged before it inherited its parent's account — it was ranked, "
            "and possibly run, at a weight that belongs to no flow, and this assignment throws that away");
@@ -317,6 +353,14 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        it describes, so a term the fork carries cannot acquire one without acquiring the other. */
     sib->val_born = parent->val;
     sib->cpu = parent->cpu;
+    /* …AND THE COMPLETED UNITS, which is the optimism term's coordinate and the same sentence a third time: an
+       arm has, by construction, finished every program, job, delivery and lifecycle stage its parent finished
+       before the branch, because it IS that execution with one more arm on it. Zeroing it would hand a flow
+       that has been working since boot the bonus reserved for one the scheduler has never picked, and — unlike
+       the `cpu` zero this file already describes — the aging term could not close it from the other side,
+       because a flow that never finishes a unit never decays at all. Branch-to-reset-your-own-optimism is the
+       same reset-by-splitting the family charge forbids, arriving through the term that replaced the clock. */
+    sib->visits = parent->visits;
     /* AND THE FAMILY IT JOINS — the term the AGING reads, and the one line that makes "a fork chain is one
        monopolizer wearing N names" true of the arithmetic rather than only of this comment. The arm does not
        FOUND a family: flow_new minted it a root of its own (that is what the precondition above checks), and
@@ -339,10 +383,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        banned fix for this defect takes (a depth bonus, a script-index term, a separate visit counter, a
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
-       RE-DERIVED FOR THE FAMILY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `val + 1/(1+cpu/Q) − fam_us*RATE`, so a fork must carry THREE things for this to hold and it carries
-       exactly three: `val` (copied above), `cpu` (copied above — the UCB's visit count, still the flow's OWN),
-       and the family tag (joined above — the aging's). This assertion is what FORCES the join: had the arm kept
+       RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
+       `val + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must carry FOUR things for this to hold and it
+       carries exactly four: `val` (copied above), `visits` (copied above — the optimism term's), `cpu` (copied
+       above — the aging's own half), and the family tag (joined above — the aging's other half). Each addition
+       to the formula has arrived through this line firing, which is the whole reason it is written as an
+       equality over flow_weight rather than as a list of fields. This assertion is what FORCES the join: had the arm kept
        the fresh root flow_new minted it, its `fam_us` would be 0 against a parent family that has burned, so
        the sibling would be born STRICTLY better than its parent and this line would fire at the very first
        fork. That is the reset-by-splitting the whole of this accounting forbids, and it is caught here rather
@@ -667,7 +713,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     /* …and the register's own context, named HERE because this is the one point every flow passes through.
        Putting it in each host's setup would be the hand-copied list build.mjs warns about. */
     pending_set_ctx(ctx);
-    f->val = 0.0; f->cpu = 0;
+    f->val = 0.0; f->cpu = 0; f->visits = 0;
     /* …AND ITS PLACE IN THE FORK TREE, minted HERE because this is the one point every flow passes through, so
        no flow can exist without a node for its arms to be charged to. A from-baseline flow's node is a ROOT
        (`up` NULL); flow_fork_inherit is the only thing that ever attaches one under another. */
@@ -717,7 +763,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * IT CANNOT INVERT A PAIR THAT ALREADY EXISTS. Every weight in the frontier is untouched; the only thing that
  * changes is where a NEW member is placed among them, so no existing ordering decision can be reversed by this.
  *
- * IT IS TWO TAGS NOW AND IT WAS ONE, WHICH IS THE HALF THE FAMILY CHARGE MADE VISIBLE. `cpu` used to carry both
+ * IT IS THREE TAGS NOW AND IT WAS ONE, WHICH IS THE HALF THE FAMILY CHARGE MADE VISIBLE. `cpu` used to carry both
  * of flow_weight's non-reward terms, so copying it placed the newcomer in both dimensions at once. With the
  * aging reading the FAMILY (FlowAcct's `fam_us`), a from-baseline flow founds a family whose service is ZERO —
  * so copying `cpu` alone would hand it the incumbent's spent optimism and none of the incumbent's aging, and it
@@ -728,7 +774,7 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * the rule assigns every term the weight is made of, which is what "enters at the system's virtual time" means
  * once the system's virtual time has two coordinates. */
 static void flow_arrive_at_virtual_time(Flow *f) {
-    DCHECK(f->cpu == 0 && f->family == f->acct && f->family->fam_us == 0,
+    DCHECK(f->cpu == 0 && f->visits == 0 && f->family == f->acct && f->family->fam_us == 0,
            "a from-baseline flow was charged or handed an account before it arrived — the arrival rule ASSIGNS "
            "every term, so a caller that wrote one first has ranked this flow at a virtual time nobody chose "
            "and this assignment throws that away");
@@ -736,8 +782,9 @@ static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(flow_is_member(g_running),
            "the flow holding the thread is not a member of the frontier, so the virtual time a newcomer would "
            "enter at is a tag belonging to no queue — a newcomer placed against it is placed against nothing");
-    f->cpu = g_running->cpu;                              /* the optimism term's coordinate */
-    f->family->fam_us = acct_family_us(g_running);        /* …and the aging term's */
+    f->visits = g_running->visits;                        /* the optimism term's coordinate */
+    f->cpu = g_running->cpu;                              /* …and the aging term's own half */
+    f->family->fam_us = acct_family_us(g_running);        /* …and its family half */
     /* THE RULE ITSELF, ASSERTED WHERE IT IS APPLIED. A newcomer may tie with the flow in service — that is what
        "enters at the system's virtual time" means, and flow_pick's STRICT comparison is what then leaves the
        thread where it is — but it may never be worth MORE, because the only way to be worth more than the flow
@@ -1388,112 +1435,180 @@ int flow_owes_answer(const Flow *f) {
  * ceased to exist while the walker was charged only for the per-position ask. 22 of 26 probe rows on the minimal
  * fixture read 0 and were flat from sample 16 of 113. A departing flow now hands its service to the flow that
  * forked it (FlowAcct), so "V + 1 seconds of unproductive thread time" counts the seconds the CHAIN spent. */
-#define FLOW_AGE_RATE 1e-6
+/* HOW MANY MICROSECONDS OF SILENCE ONE EMITTED FINDING IS WORTH — the exchange stated as an INTEGER, because it
+ * is also the unit the aging term steps in and a rank may not be quantised on the FPU. One second, which is the
+ * price the paragraph above argues for; FLOW_AGE_RATE below is now its reciprocal rather than a second number,
+ * so the two cannot drift and there is one place to change the price.
+ * IT MUST NOT BE FINER THAN THE COOPERATIVE QUANTUM, which is what makes it a legal quantisation at all: a
+ * weight that can move inside one slice moves between two consultations of the preempt hook, which is the
+ * sub-quantum thrash the service notch exists to prevent. Asserted at COMPILE time, because it is a relation
+ * between two constants and no run can tell you it broke. */
+#define FLOW_SILENCE_US ((int64_t)1000000)
+typedef char flow_silence_covers_quantum[(FLOW_SILENCE_US >= FLOW_SERVICE_US) ? 1 : -1];
+#define FLOW_AGE_RATE (1.0 / (double)FLOW_SILENCE_US)
 
-/* HOW MANY WHOLE QUANTA OF THE THREAD THIS FLOW HAS ACTUALLY CONSUMED — the ONE quantised reading of `cpu`,
- * the OPTIMISM term's "visits", and half of what a rank CHANGE is made of. Public because engine.c's seam
- * assertion is written against it: between two notches this half of the weight cannot move. */
+/* HOW MANY WHOLE QUANTA OF THE THREAD THIS FLOW HAS ACTUALLY CONSUMED — the ONE quantised reading of `cpu`, and
+ * a CENSUS quantity: it says who is consuming the thread, at the granularity the thread is handed out in. It is
+ * no longer a term of the weight, which is the correction this comment carries: it used to be the OPTIMISM
+ * term's "visits", and a microsecond is not a visit (see flow_weight). */
 int64_t flow_service_notch(const Flow *f) { return f->cpu / FLOW_SERVICE_US; }
 
-/* …AND THE OTHER HALF, IN THE SAME UNIT: how many whole quanta this flow's FORK FAMILY has burned since any of
- * its arms last emitted — the AGING term's reading. Two functions because they are two quantities with two
- * reset points (flow_age_running says why), and public for the same reason as the first: a weight can move
- * because THIS notch crossed while the flow's own did not, so a seam assertion that snapshots only the first
- * would fire on a rank change that is entirely legitimate. */
+/* …AND THE SAME READING OF THE FORK FAMILY'S: how many whole quanta this flow's family has burned since any of
+ * its arms last emitted. Two functions because they are two quantities with two reset points (flow_age_running
+ * says why), and both are the census's — read together, their RATIO is the fork factor of the widest family in
+ * the frontier, which is a fact about the document's branching. The AGING term reads neither: it reads the sum
+ * of the microseconds behind them, in a different unit, below. */
 int64_t flow_family_notch(const Flow *f) { return acct_family_us(f) / FLOW_SERVICE_US; }
+
+/* HOW MANY WHOLE EMITTED FINDINGS THIS FLOW'S SILENCE IS WORTH — the AGING term itself, and the only reading of
+   it the weight makes. The two notches above are the CENSUS's unit (they say who is consuming the thread, at
+   the granularity the thread is handed out in); this is the ORDER's, and they are deliberately different
+   quantities rather than one number read twice.
+   THE SUM IS THE SILENCE. `cpu` is what THIS FLOW has burned since its own last emission and `fam_us` is what
+   its whole fork family has burned since ANY of its arms last emitted, and the aging is both because each
+   answers a comparison the other cannot: the family half orders one fork chain against another (without it a
+   family that emitted V and wears N names pays for V once and presents it N times), and the own half orders a
+   family's members against each other (without it every arm reads the identical number, so on a frontier that
+   IS one family — which a real page's is, every flow descending from the boot flow — the term cancels out of
+   every comparison it appears in and §scheduler's monopolizer sentence has nothing left to compare).
+   THE DIVISION IS BY THE RATE'S RECIPROCAL, so the result is in POINTS. See flow_weight for why the unit may
+   not be the service quantum. `int64_t` throughout: at 1e-6 per microsecond this is seconds of silence, so it
+   cannot overflow anything a session can reach, and it is exact — the multiply-then-floor form would round a
+   flow's rank on the FPU. */
+int64_t flow_silence_notch(const Flow *f) {
+    return (f->cpu + acct_family_us(f)) / FLOW_SILENCE_US;
+}
 
 /* Anytime-bandit priority: reward + UCB optimism − CPU aging. Additive (never a value/cpu ratio — the aging
    term already yields value-per-CPU behaviour without the 0/0 degeneracy on an unrun flow). */
 double flow_weight(const Flow *f) {
     double reward = f->val;
-    /* OPTIMISM DECAYS WITH SERVICE, NOT WITH BEING PICKED — and SERVICE IS WHAT WAS ACTUALLY CONSUMED, which is
-       a FLOOR of the cooperative quantum, the unit this scheduler hands the thread out in. Keyed on the
-       DISPATCH COUNT it fell by 0.167 the first time the scheduler chose a flow, so the act of switching to a
-       flow was enough to make it no longer the best one; keyed on service it moves because of WORK.
-       IT WAS A CEILING, AND THE CEILING IS WHAT MADE THIS SCHEDULER STOP EXECUTING. `(cpu + Q - 1) / Q` puts
-       ONE MICROSECOND of consumed CPU in the same notch as a whole quantum, so the first charge a flow ever
-       takes — flow_age_running runs after its very first step — costs it 0.5, HALF the entire optimism range,
-       while every flow that has not run yet and every flow that has just emitted (flow_credit_emit zeroes cpu)
-       stands at 1.0. A flow that has run AT ALL is therefore STRICTLY outranked by every fresh fork and every
-       recent emitter, so the value yield fires at its next back-edge, the pick hands the thread on, and that
-       flow's own first charge does the same to it one step later. Measured on one document, two frozen
-       worktrees, same box, same wall time: 1,286,199 context switches against 11,878, the frontier frozen at
-       512 flows (the complete 2^9 fork tree of that document's decisions, nothing forked past it), NOT ONE flow
-       ever finishing (live == flows at every sample), the heap unchanged across 1,288 progress samples and zero
-       @S candidates found. A perfect round robin at one back-edge per flow: it satisfies every fairness rule in
-       this file and executes nothing.
-       THE GUARANTEE THE CEILING WAS ADDED FOR SURVIVES THE FLOOR, and the paragraph that argued otherwise had
-       the mechanism right and the conclusion backwards. With a floor a never-run flow TIES with a flow that has
-       burned a quantum-minus-one, and a tie does not dislodge the incumbent — the value yield asks whether a
-       rival is STRICTLY greater, and flow_pick seeds its scan with the incumbent for the same reason. That is
-       not starvation, it is the service quantum doing the one thing it exists to do: the incumbent holds the
-       thread until it has consumed a whole quantum, at which point its notch advances, its bonus halves, and
-       every never-run sibling outranks it STRICTLY and is picked. A never-run flow waits at most one quantum per
-       flow ahead of it, which is what "never starved" can mean for a scheduler that hands the thread out in
-       quanta at all — and it is the only reading under which "a top-ranked flow runs on at ~zero switch cost"
-       (§scheduler) is true of anything. */
-    int64_t served = flow_service_notch(f);
-    double ucb     = 1.0 / (1.0 + (double)served);
-    /* THE AGING IS THE FAMILY'S, AND THAT IS THE WHOLE OF THIS CHANGE. It used to read `served` — this flow's
-       own notch — and be weighed against a `reward` that flow_fork_inherit COPIES to every arm. One term stated
-       once per family, the other charged once per NAME: a family that emitted V with N live arms presented V N
-       times and had to burn N * V / FLOW_AGE_RATE before the lowest of them stopped outranking a reward-0
-       member. §NO BOUNDS refuses to bound N, so the thread time to reach a from-baseline flow — every @S
-       candidate session, every joined document's boot flow, every cold-tier resume — grew with the fork tree.
-       MEASURED BEFORE IT WAS CHANGED: 686 members, `svcMax` 1124 notches against `svcFamMax` 8910, so the
-       family had burned 7.93 times what its largest single arm showed, against `valMax` 10.0 and an optimism
-       term whose entire range is 1.0. `candSvcMax` was 1 — the eight @S candidates had about one quantum each
-       across a fifteen-minute run, `candDecMax` 0 of 13 gates. The security half was not losing a race, it was
-       not in one.
-       THE TWO TERMS NOW ANSWER THE TWO QUESTIONS THEY ARE NAMED FOR. §scheduler: the optimism bonus is
-       "∝ 1/(visits+1) so a never-run flow is never starved" — VISITS, which is this flow's own service and is
-       why `ucb` above still reads `served`; the aging is "so a MONOPOLIZER that burns CPU without emitting
-       sinks below productive+unrun flows" — and this file already named the monopolizer: "a fork chain is one
-       monopolizer wearing N names, so it enters at one place and it is charged as one thing."
-       IT IS STILL QUANTISED, so a flow's weight is constant between two of ITS FAMILY'S service quanta, which
-       is what lets the preempt hook's cached rival stay exact at O(1) — and it is why that hook's seam
-       assertion now snapshots the family notch beside the flow's own (engine.c). O(1) to read: every flow
-       points straight at its family's root, so this adds one indirection to the pick and no walk. */
-    double aging   = (double)flow_family_notch(f) * ((double)FLOW_SERVICE_US * FLOW_AGE_RATE);
-    return reward + ucb - aging;
+    /* §scheduler'S THREE QUANTITIES, AND THIS FUNCTION USED TO HOLD TWO. "accumulated emitted VALUE + a UCB
+       optimism bonus ∝ 1/(visits+1) − CPU-AGING" names emitted value, VISITS and CPU; the optimism term read
+       `cpu / FLOW_SERVICE_US`, so thread time was in both non-reward terms at two scopes and the visit count
+       did not exist. The consequence is not a rounding difference, it is which term GOVERNS. FLOW_AGE_RATE
+       prices one second of unproductive CPU at one finding, so the aging term gives a silent flow about a
+       second before an unrun sibling passes it; the optimism term keyed on service did it after ONE quantum,
+       12 ms. The priced budget was dominated eighty-three to one and decided nothing, and what a flow actually
+       got was 12 ms to reach its first emission.
+       WHAT THAT COST, MEASURED ON REAL PAGES rather than a fixture. A flow reaches its queued jobs only with
+       `frame == NULL` (engine.c: every job arm is under that test), so a promise reaction runs only after its
+       holder finishes the program it is inside, and a modern bundle's whole fetch surface hangs off reactions.
+       Under the service-keyed bonus a flow was strictly outranked by every arm it forked as soon as it crossed
+       one quantum, and those arms were outranked by the arms they forked inside their own first quantum, so the
+       set of members at notch 0 was refilled by branching faster than a quantum drained it and no flow ever
+       received a SECOND quantum. One real login page: 4650 flows, 3093 switches — under one turn per flow —
+       217 jobs QUEUED and ZERO run in ninety seconds, no endpoints. A page whose frontier stayed at 13 flows
+       ran all 32 of its jobs and learned 4 endpoints, and a third at 17947 flows learned none: the correlation
+       is with jobs RUN and the anti-correlation is with frontier size, which is exactly this arithmetic. */
+    /* OPTIMISM DECAYS WITH COMPLETED UNITS OF WORK — §scheduler's own word is "visits", and a visit is a TRIAL.
+       A flow that was handed the thread and preempted in the middle of a program has not completed one: it is
+       the same trial, still running, and charging it as a visit is what made the term a second clock. What a
+       flow has actually finished is the quantity this reads (flow.h's `visits`, credited by the scheduler at
+       the one boundary that can see it), and the two guarantees §scheduler names then belong to two terms
+       instead of one.
+       IT IS NOT THE DISPATCH COUNT THIS FILE ONCE MEASURED, and the distinction is the whole of why that
+       measurement does not refute this. Keyed on dispatches the bonus fell 0.167 the first time the scheduler
+       CHOSE a flow, so the act of switching was enough to make it no longer the best one; a dispatch is a
+       decision by the scheduler and says nothing about the flow. A completed unit is a fact about the flow, and
+       it is the fact the reward is a function of: a program that ends is a program whose fetches were reached,
+       whose microtask checkpoint is due and whose queued reactions can now run.
+       THE TIE IS WHAT MAKES THIS FAIR RATHER THAN GREEDY. An arm inherits its parent's count, so at the branch
+       the two are equal and flow_pick's STRICT comparison leaves the thread where it is; the parent finishes
+       the unit it is inside, its count advances, and every arm — and every never-run member — then STRICTLY
+       outranks it and is picked. So a flow monopolises exactly one unit of work and no more, which is
+       §scheduler's "a deep loop suspends and yields so siblings run, then resumes" measured in the unit the
+       page's own code is written in. What it may NOT do is monopolise a unit that never ends, and that is the
+       aging term's job below — not this one's. */
+    int64_t visits = f->visits;
+    double ucb     = 1.0 / (1.0 + (double)visits);
+    /* THE AGING IS THE FLOW'S OWN SILENCE **AND** ITS FAMILY'S, and the second half is what the family charge
+       could never do alone. The family reading was landed for a real defect and stays: `val` is copied to every
+       arm (flow_fork_inherit), so a family that emitted V with N live arms presented V exactly N times, and the
+       aging meant to cancel it was charged to whichever arm held the thread — measured at 686 members, `svcMax`
+       1124 notches against `svcFamMax` 8910, a factor of 7.93, with `candSvcMax` 1 (the whole @S search got
+       about one quantum in fifteen minutes). Charged to the family, a fork chain is one accounting unit against
+       every OTHER family, which is what that reading required.
+       AND IT IS BLIND INSIDE ONE, WHICH IS WHERE THE MONOPOLIZER ACTUALLY IS. Every arm of a family reads the
+       identical `fam_us`, so the term is a constant added to every member's weight and CANCELS out of every
+       within-family comparison. On a real page the whole frontier is one family — every flow descends from the
+       boot flow — so §scheduler's "a monopolizer that burns CPU without emitting sinks below productive+unrun
+       flows" was, exactly where it is needed, a sentence with nothing left to compare. The flow's OWN service
+       since its last emission is what restores the comparison, and it is the same currency and the same reset
+       point (flow_credit_emit zeroes both), so the two halves are one quantity read at two scopes rather than
+       two policies.
+       IT IS ALSO WHAT KEEPS THE OPTIMISM TERM HONEST NOW THAT IT COUNTS UNITS. A flow inside a program that
+       never ends completes no unit, so its bonus never decays; without an own-service charge it would hold the
+       thread for ever and the visit count would be the reset-by-not-finishing that this file forbids the fork
+       tree. With it, such a flow sinks one point per second of unproductive CPU and is passed by its siblings —
+       FLOW_AGE_RATE's price, finally governing the case it was written for.
+       IT IS QUANTISED IN WHOLE REWARD POINTS AND IT USED TO BE IN SERVICE QUANTA, WHICH IS THE HALF THAT
+       DECIDES WHETHER ANY OF THIS WORKS. Quantising at all is required — a weight that moves continuously falls
+       below a tied rival between two consultations of the preempt hook, which is thrash at a finer grain — but
+       the UNIT is not free to be the cooperative slice. flow_pick takes a STRICT comparison, so ANY positive
+       gap moves the thread, and a term that steps every 12 ms therefore hands the thread on every 12 ms no
+       matter how small each step is: 0.012 dislodges exactly as surely as 0.5 did. That is the same round robin
+       the optimism term was producing, arriving through the other term, and adding the own-service half at
+       quantum resolution would have reintroduced it whole.
+       THE UNIT IS THE ONE FLOW_AGE_RATE ALREADY NAMES: one second of unproductive thread time costs ONE
+       EMITTED FINDING, and an emission is worth exactly 1.0 (flow_credit_emit asserts it). So the aging moves
+       in whole POINTS — the currency it is subtracted from — and a flow holds the thread for a whole point's
+       worth of silence before anything can pass it on aging alone. It is not a magic constant and not a
+       hysteresis margin: it is the rate's own reciprocal, and a term that moved in units finer than the reward
+       is integral in would create orderings no emission could ever answer.
+       WHAT THAT BUYS, TERM BY TERM. A flow that finishes its unit of work inside its point of silence keeps the
+       thread to the end of it and hands over on its VISIT — which is the optimism term doing the fairness. A
+       flow inside a unit that never ends completes no visit, so the optimism term can never demote it, and this
+       is what does: it sinks one point per second and its arms, which inherited a smaller silence, pass it.
+       Neither term can do the other's job and the two units are why.
+       O(1) to read: every flow points straight at its family's root, so this adds one indirection to the pick
+       and no walk. It is why the preempt hook's seam assertion snapshots this notch and the visit count
+       (engine.c) — between two of them a flow's weight cannot move except through an emission. */
+    return reward + ucb - (double)flow_silence_notch(f);
 }
 
-/* THE CPU AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's sentence
-   claims exists, computed from the flow's OWN reward rather than a fixed threshold that could fire falsely on a
-   very productive flow. A never-run flow carries the full optimism bonus and no aging, so its weight is its
-   reward + 1.0 and therefore at least 1.0; a serviced flow's is at most val + 1.0 − aging, and aging is at least
-   (cpu − one quantum) * RATE. Past this charge the second is at or below ZERO and the comparison cannot go the
-   other way for any reward — the margin was half a point while the optimism term used a ceiling (a serviced
-   flow's bonus could not exceed 0.5) and it is the never-run flow's own bonus now, which is what the assertion
-   compares against and is why the crossing still closes strictly.
-   AND WHAT IT IS COMPARED AGAINST IS THE FAMILY'S SERVICE, not one flow's `cpu` — which is what makes this
-   assertion able to catch a fork chain at all. A walker whose arms burn the document and depart, or simply one
-   with N live arms, shows a per-arm `cpu` that is a sliver of what the family has consumed: read against that
-   sliver this was an identity that held for a family monopolising the thread for hours, which is exactly what
-   it did (svcMax 1124 against svcFamMax 8910 on the frontier this replaced).
+/* THE SILENCE AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's
+   sentence claims exists, computed from the flow's OWN reward rather than a fixed threshold that could fire
+   falsely on a very productive flow. A never-run flow carries the full optimism bonus and no aging, so its
+   weight is its reward + 1.0 and therefore at least 1.0; past this charge a serviced flow's aging has eaten its
+   whole reward and the comparison cannot go the other way for any reward, which is why the crossing closes
+   strictly.
+   AND IT IS COMPARED AGAINST BOTH HALVES OF THE SILENCE — this flow's own and its FAMILY's — which is what
+   makes the assertion able to catch a fork chain AND one of its arms. A walker whose arms burn the document and
+   depart, or simply one with N live arms, shows a per-arm `cpu` that is a sliver of what the family has
+   consumed (svcMax 1124 against svcFamMax 8910 on the frontier the family charge was added for); read against
+   that sliver alone this was an identity that held for a family monopolising the thread for hours. Read against
+   the family alone it is an identity that holds for every member of a one-family frontier at once, which is the
+   ordinary state of a real page. The sum is the only reading that is neither.
 
-   THE `+ 1.0` IS GONE AND IT WAS A MILLION MICROSECONDS OF SLACK IN THE ONE GUARD THIS FILE HAS. Derive the bound
-   from flow_weight rather than from the sentence about it: if any candidate is unrun — meaning BOTH terms at
-   zero, its own service and its family's, which is what flow_pick's `unrun` now tests — its weight is its own
-   reward + 1.0 and hence at least 1.0, so the MAXIMUM the pick returns is at least 1.0 too. Write that out for
-   the picked flow, with `s` its own service notch and `F` its family's: `val + 1/(1+s) − F*Q*RATE >= 1`, and
-   since `1/(1+s) <= 1` it forces `F*Q*RATE <= val`, i.e. `F <= val / (Q*RATE)`, i.e. `fam_us < val/RATE + Q`.
-   That is this expression with no `+ 1.0` in it, and the extra point the old form allowed was a whole second of
-   unpriced thread time per member: at val 0 the true bound is ONE QUANTUM and the old one was 1.012 SECONDS,
-   eighty-four times looser than the arithmetic it claimed to be a consequence of. The EXPRESSION is unchanged
-   by the family charge — it converts a reward into microseconds and knows nothing about whose they are — and
-   what changed is the quantity the assertion measures against it, which is why this is renamed rather than
-   left reading `cpu` under a name that would then be a lie.
-   AND THE COMMENT AT THE ASSERTION IS CORRECTED WITH IT. It says this "FIRES on the tree this replaced" — true
-   of a tree whose aging was one unit per scheduler STEP, where cpu could reach millions while the weight stayed
-   high, and false of this one: the derivation above is an identity under the current formula, so it can only
-   fire on an EDIT that breaks the derivation (a clamped or capped aging term, an optimism term without a
-   ceiling of 1, a reward that grows with the CPU it is weighed against). That is still exactly what the guard
-   is for and it is now tight enough to catch one, but it is not a thing that fires on today's tree and saying
-   so was the stale-DFAIL shape wearing an assertion.
+   THE BOUND IS DERIVED FROM flow_weight, NEVER FROM THE SENTENCE ABOUT IT, AND THE DERIVATION IS REDONE
+   WHENEVER THE FORMULA MOVES — which is the only reason this stays a check rather than becoming a number
+   somebody once believed. If any candidate is unrun — ALL of its terms at zero, its visit count, its own
+   service and its family's, which is what flow_pick's `unrun` tests — its weight is its own reward + 1.0 and
+   hence at least 1.0, so the MAXIMUM the pick returns is at least 1.0 too. Write that out for the picked flow,
+   with `v` its visit count and `A` its silence notch: `val + 1/(1+v) − A >= 1`, and since `1/(1+v) <= 1` it
+   forces `A <= val`. `A` is a FLOOR of `(cpu + fam_us) / S`, so `cpu + fam_us < (val + 1) * S`. That is this
+   expression.
+   THE `+ 1` IS BACK AND IT IS EARNED THIS TIME, which is worth saying because a previous revision deleted one
+   as unpriced slack and was right to. That `+ 1.0` was a whole SECOND allowed by a formula whose aging stepped
+   in 12 ms, i.e. eighty-three notches of unmeasured silence; this one is exactly the width of the aging's own
+   step, because the term now steps in whole points of reward (flow_weight says why it must). A bound cannot be
+   tighter than the resolution of the quantity it bounds, and claiming otherwise is how a guard starts firing on
+   healthy runs.
+   THE QUANTITY IT MEASURES IS THE SILENCE, WHICH IS BOTH HALVES OF THE AGING AND USED TO BE ONE. It read the
+   family's service alone, which is the half that CANNOT order a family's own members, so on a frontier that is
+   one family this was an identity with the interesting case removed. The name says which quantity it bounds,
+   because a bound named for one of two summands is the shape that goes quietly wrong when the other is added.
+   WHAT IT CATCHES IS AN EDIT, NOT A STATE. The derivation above is an identity under the current formula, so it
+   can only fire on a change that breaks it — a clamped or capped aging term, an optimism term without a ceiling
+   of 1, a reward allowed to grow with the CPU it is weighed against, or an optimism term keyed on something a
+   never-run flow does not stand at zero of. Each of those is exactly the shape a "fix" for a thrashing
+   scheduler takes, which is why the guard is worth its arithmetic; it is not a thing that fires on today's
+   tree, and an earlier comment saying it FIRES on the tree it replaced was the stale-DFAIL shape wearing an
+   assertion.
    `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
-static inline int64_t flow_family_us_to_sink(const Flow *f) {
-    return (int64_t)(f->val / FLOW_AGE_RATE) + FLOW_SERVICE_US;
+static inline int64_t flow_silence_us_to_sink(const Flow *f) {
+    return (int64_t)((f->val + 1.0) * (double)FLOW_SILENCE_US);
 }
 
 /* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
@@ -1598,13 +1713,15 @@ void flow_clear_host_owed_all(void) {
 static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only, int worst) {
     Flow *best = NULL; double bw = 0.0;
     /* A MEMBER CARRYING THE FULL BONUS AND NO AGING — its weight is its reward + 1.0 and hence at least 1.0,
-       which is the only property the assertion below needs.
-       IT IS BOTH TERMS AND IT USED TO BE ONE. `cpu == 0` alone was the whole test while `cpu` carried the
-       aging too; with the aging on the FAMILY a flow can stand at `cpu == 0` — never run, or just emitted —
-       inside a family a SIBLING has since burned, and such a flow's weight is `val + 1.0 − aging`, which is not
-       at least 1.0 and can be deeply negative. Testing only the first half would leave the assertion resting on
-       a premise the frontier stops satisfying the moment any family has two arms, and it would then fire on
-       healthy runs. Both halves, and the population it names is exactly the one the sentence is about. */
+       which is the only property the assertions below need, and the test is written as exactly that premise:
+       EVERY non-reward term of flow_weight at zero, read through the same functions the weight reads.
+       IT USED TO BE `cpu == 0` ALONE, which was the whole test while `cpu` was the whole of both non-reward
+       terms. The family charge made it two coordinates and the visit count made it three, and each time,
+       testing fewer than all of them left the assertions resting on a premise the frontier stops satisfying —
+       a flow at `cpu == 0` inside a family a SIBLING has since burned is worth `val + 1.0 − aging`, which can
+       be deeply negative — so the guard would have started firing on healthy runs. Reading the notch rather
+       than its summands is what makes this survive the next such change: the population named here is the one
+       the derivation is about, however many quantities the notch is built from. */
     int unrun = 0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
                              "keeps the THREAD, and the flow the pager gives up is not a question about that");
@@ -1613,7 +1730,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        incumbent must NOT keep the thread: keeping it is the spin the mark exists to end. */
     if (seed && flow_is_member(seed) && !(runnable_only && flow_host_owed(seed))) {
         best = (Flow *)seed; bw = flow_weight(seed);
-        if (seed->cpu == 0 && acct_family_us(seed) == 0) unrun = 1;
+        if (seed->visits == 0 && flow_silence_notch(seed) == 0) unrun = 1;
     }
     for (int i = 0; i < g_flows_n; i++) {
         double w;
@@ -1622,7 +1739,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
         if (runnable_only && flow_host_owed(g_flows[i])) continue;
         w = flow_weight(g_flows[i]);
-        if (g_flows[i]->cpu == 0 && acct_family_us(g_flows[i]) == 0) unrun = 1;
+        if (g_flows[i]->visits == 0 && flow_silence_notch(g_flows[i]) == 0) unrun = 1;
         /* THE TAIL IS THIS SCAN READ THE OTHER WAY, which is the whole of why the pager has no ranking of its
            own. The flow the cold tier gives up first must be the flow the WFQ would have run last, or the
            engine would page out a member the scheduler still wanted and keep one it was starving; a size
@@ -1634,15 +1751,34 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        without emitting sinks below productive+unrun flows". This is the one line in the engine that decides
        which flow runs, so it is where the claim is either true or a comment. WHAT IT CATCHES IS AN EDIT TO
        flow_weight, not a state of today's frontier: the bound is DERIVED from that function (see
-       flow_family_us_to_sink), so under the formula as it stands it is an identity, and it fires the moment an edit
+       flow_silence_us_to_sink), so under the formula as it stands it is an identity, and it fires the moment an edit
        breaks the derivation — a clamped or capped aging term, an optimism term whose ceiling is no longer 1, a
        reward allowed to grow with the CPU it is weighed against. Each of those is exactly the shape a "fix" for
        the thrash this quantum handles would take, and each would let the walk this rate was priced against be
        re-picked for 227 seconds with unrun siblings waiting, which is what it did on the tree this replaced. */
-    DCHECK(worst || !best || !unrun || acct_family_us(best) < flow_family_us_to_sink(best),
-           "the WFQ re-picked a flow whose fork chain has burned more thread time since its last emit than its "
-           "entire accumulated reward is worth, while a never-run flow was waiting — the aging term is no longer "
-           "commensurate with the reward it is subtracted from, so a monopolizer cannot sink");
+    DCHECK(worst || !best || !unrun ||
+           best->cpu + acct_family_us(best) < flow_silence_us_to_sink(best),   /* see the derivation there */
+           "the WFQ re-picked a flow that has burned more thread time since its last emit — its own plus its "
+           "fork chain's — than its entire accumulated reward is worth, while a never-run flow was waiting — "
+           "the aging term is no longer commensurate with the reward it is subtracted from, so a monopolizer "
+           "cannot sink");
+    /* …AND THE OTHER HALF OF §scheduler'S PAIR, WHICH NOTHING WAS ASSERTING: "a UCB optimism bonus ∝
+       1/(visits+1) so a NEVER-RUN FLOW IS NEVER STARVED". The bound above says a silent monopolizer sinks; it
+       says nothing about the term that is supposed to lift the flow waiting behind it, and the two are separate
+       claims that can break separately. It is the same KIND of guard as the one above and it is written the
+       same way — an identity derived from flow_weight, so what it catches is an EDIT rather than a state: an
+       untouched member's weight is `val + 1.0` with both aging halves and the visit count at zero, hence at
+       least 1.0, and `best` is the maximum over the very scan that set `unrun`, so the floor holds by
+       arithmetic. It is FALSE the moment the optimism bonus is keyed on a quantity a never-run flow does not
+       stand at ZERO of — which is precisely what a bonus keyed on thread time was, since a from-baseline flow
+       arrives at the running flow's service (flow_arrive_at_virtual_time) rather than at nothing — or given a
+       range other than 1.0, or made to depend on anything the aging term already prices. Each of those is a
+       way for "never starved" to stop meaning anything while every other assertion in this file still passes,
+       and one of them is how a frontier of 4650 members came to have under one turn each. */
+    DCHECK(worst || !best || !unrun || flow_weight(best) >= 1.0,
+           "the WFQ picked a flow worth less than an untouched member of its own frontier — a never-run flow "
+           "carries the whole optimism bonus and no aging, so nothing may be picked ahead of it below that "
+           "floor; the optimism term is no longer the one §scheduler prices a never-starved flow against");
     return best;
 }
 
@@ -1652,7 +1788,8 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
  * up and is deliberate: flow_pick's four questions are all the ORDER, so they must share one comparator or
  * they can disagree about which flow runs. This one decides nothing and reads the order's INPUTS, so sharing
  * that scan would mean giving the pick accumulators it does not need and a shape a census could drift into
- * steering. It calls flow_weight for nothing at all — it reports the two terms, never their sum.
+ * steering. It reports the terms AND their sum — flow.h says why the sum had to be added, and the sentence that
+ * stood here ("it calls flow_weight for nothing at all") had already stopped being true of the loop below.
  *
  * `val_top` IS flow_best's OWN reward, so the top of the census and the top of the order are the same flow by
  * construction rather than by two scans agreeing. */
@@ -1665,6 +1802,7 @@ void flow_wfq_census(WfqCensus *out) {
     out->val_min = out->val_max = out->val_top = 0.0;
     out->val_zero = out->self_emit = out->unrun = 0;
     out->svc_max = out->svc_min = out->svc_fam_max = 0;
+    out->vis_min = out->vis_max = 0;
     out->cand_members = out->cand_unrun = out->cand_dec_max = 0;
     out->cand_svc_max = 0;
     out->dec_max = 0;
@@ -1693,6 +1831,12 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->val == 0.0) out->val_zero++;
         if (f->val > f->val_born) out->self_emit++;
         if (f->cpu == 0) out->unrun++;
+        /* THE OPTIMISM TERM'S OWN COORDINATE — completed units of work, which no service row can stand in for
+           (flow.h). `vis_max == 0` on a frontier of thousands is the statement that not one member has reached
+           the end of a program, and therefore that not one queued job can have run, whatever the switch and
+           fork counts say. It is the number that separates "being served fairly" from "finishing nothing". */
+        if (i == 0 || f->visits < out->vis_min) out->vis_min = f->visits;
+        if (f->visits > out->vis_max) out->vis_max = f->visits;
         if (s > out->svc_max) out->svc_max = s;
         /* …AND THE FAMILY THIS MEMBER BELONGS TO, in the SAME notch — which is now the notch the AGING term
            actually reads, so `svc_fam_max` against `svc_max` is no longer a diagnostic beside the order, it is
