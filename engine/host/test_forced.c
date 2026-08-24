@@ -7683,6 +7683,11 @@ static void css_math_selftest(void)
         { "calc(1px+1px)", CSS_MATH_PROD_LENGTH, false,
           "§10.8: `whitespace is required on both sides of the + and - operators`" },
         { "calc(1px - 1px)", CSS_MATH_PROD_LENGTH, true, "and with it on both sides the same sum is valid" },
+        { "calc(1px * 2 - 3px)", CSS_MATH_PROD_LENGTH, true,
+          "§10.8's whitespace rule is a fact about the INPUT, and `<calc-product>` has to skip whitespace to "
+          "look for its own `*` — so by the time `<calc-sum>` sees the `-` the whitespace before it is already "
+          "consumed. A sum that re-read that fact off the tokenizer instead of carrying it refuses this and "
+          "every other spaced sum, `calc(100vw - 20px)` included" },
         { "calc(pi)", CSS_MATH_PROD_NUMBER, true, "§10.7.1: `Both of these keywords are <number>s`" },
         { "calc(InFiNiTy)", CSS_MATH_PROD_NUMBER, true,
           "§10.7.2: `As usual for CSS keywords, these are ASCII case-insensitive. Thus, calc(InFiNiTy) is "
@@ -7775,6 +7780,32 @@ static void css_math_selftest(void)
           "because -0.0 and 0.0 compare EQUAL and a comparison alone could not see this" },
         { "calc(NaN)", CSS_MATH_PROD_NUMBER, 0.0, CSS_ENV_NONE,
           "§10.9.2: `NaN does not escape a top-level calculation; it's censored into a zero value`" },
+        { "calc(1px * 2 - 3px)", CSS_MATH_PROD_LENGTH, -1.0, CSS_ENV_NONE,
+          "§10.1's precedence with §10.8's whitespace rule in one value — the product runs first and the sum "
+          "still sees the space before its `-`" },
+        { "min(1px, calc(NaN * 1px))", CSS_MATH_PROD_LENGTH, 0.0, CSS_ENV_NONE,
+          "§10.5.1's note makes NaN INFECTIOUS in every function, and §10.9.2 then censors it to zero at the "
+          "top level. It is a row because the ORDERING must not be asked at all once a NaN is present: "
+          "§10.9.2's zero-aware comparison asserts it never sees one (answering false would be JS's `Math.min` "
+          "behavior, the divergence that note says CSS does not have), so a min() that folded first and "
+          "checked afterwards would abort on a page's own value" },
+    };
+    /* VALUES §10.9's LAST RULE REFUSES, asked through the EVALUATING entry because that is the one with a
+       resolver under it and therefore the one where an unresolvable leaf could abort. Every row is a page's own
+       invalid declaration, and the whole point is that none of them reaches a crash: an author's mistake
+       reported as an unbuilt capability is the stale-`DFAIL` failure with the blame reversed. */
+    static const struct { const char *v; CssMathProduction want; const char *why; } REFUSED[] = {
+        { "calc(1fr)", CSS_MATH_PROD_LENGTH,
+          "css-grid-2 §7.2.4's `fr` types as «[\"flex\" → 1]», which §10.9's last rule refuses where a "
+          "`<length>` is wanted — so the leaf's absent VALUE must be carried to the top and discarded there, "
+          "not crashed on at the leaf, or `width: calc(1fr)` aborts a page instead of being dropped" },
+        { "calc(50% * 50%)", CSS_MATH_PROD_LENGTH_PERCENTAGE,
+          "«[\"percent\" → 2]» matches no production a math function can resolve to, so §10.10.1's "
+          "unrepresentable Product residue is refused as invalid CSS rather than reported as a missing "
+          "calculation tree" },
+        { "rgb(1, 2, 3)", CSS_MATH_PROD_LENGTH, "a function that is not one of §10.8's twenty-one" },
+        { "calc(1px + 1s)", CSS_MATH_PROD_LENGTH,
+          "§10.9: a calculation whose type is failure makes the math function invalid" },
     };
     unsigned i;
 
@@ -7801,6 +7832,19 @@ static void css_math_selftest(void)
         CHECK(EVAL[i].env == CSS_ENV_NONE ? v.num.realm == NULL : v.num.realm != NULL,
               "css_length.h's pairing — a length carries facts and a realm together or neither — did not "
               "survive the math component's arithmetic");
+    }
+    for (i = 0; i < sizeof(REFUSED) / sizeof(REFUSED[0]); i++) {
+        CssMathResolver res;
+        CssMathValue v;
+
+        res.length_px = css_math_fixture_length;
+        res.ctx = NULL;
+        res.realm = (JSContext *)(void *)&css_math_fixture_realm_token;
+        v.num = css_px(-99999.0);
+        CHECK(!css_math_eval(REFUSED[i].v, strlen(REFUSED[i].v), &res, REFUSED[i].want, &v), REFUSED[i].why);
+        /* §10.9's refusal writes NOTHING — a caller that read the result anyway would find its own sentinel
+           rather than a plausible number, which is the difference between a refusal and a hole. */
+        CHECK(v.num.px == -99999.0, "a refused math function still wrote a value");
     }
     /* §10.9.2's two halves that a value comparison cannot see, because -0.0 == 0.0 and because a nested
        calculation is NOT censored: `calc(1 / calc(-5 * 0)) produces −∞, same as calc(1 / (-5 * 0)) — the inner

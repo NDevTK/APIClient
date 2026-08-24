@@ -258,17 +258,35 @@ static bool mth_less(double a, double b)
 
 /* ---- what a calculation has simplified to (see css_math.h) ----------------------------------------------- */
 
-typedef struct {
-    CssMathType type;
-    CssPx       num;       /* the non-percentage term, in §5.4.1's canonical unit for `type` */
-    double      pct;       /* the `<percentage>` term, as a number of percent */
-    bool        pct_term;  /* §10.10.1: a zero-valued Sum term is not removable, so this is not `pct != 0` */
-    /* §10.10.1 LEFT A LIVE TREE NODE HERE and this file holds no tree — a Product of two percentage-carrying
+/* WHY A VALUE HAS NO NUMBER, WHICH IS TWO DIFFERENT ABSENCES AND MUST NOT BE ONE FLAG. Both are carried to the
+   top rather than crashed at once, because the calculation may still turn out to be INVALID CSS — `calc(50% *
+   50%)` types to «["percent" → 2]» and `width: calc(1fr)` to «["flex" → 1]», and neither matches a production,
+   so both are refused as an author's mistake and never reach a crash. What they must not share is the MESSAGE:
+   a `1fr` aborting with a message about a Product of percentages is the stale-`DFAIL` failure, sending the next
+   reader to build a calculation tree when what is missing is a grid track sizer. */
+typedef enum {
+    MTH_RESOLVED = 0,
+    /* §10.10.1 left a LIVE TREE NODE and this file holds no tree — a Product of two percentage-carrying
        operands, or a Min whose children cannot be compared because "percentages might resolve against a
-       negative basis". It is carried rather than crashed at once because the calculation may still turn out to
-       be INVALID CSS (`calc(50% * 50%)` types to «["percent" → 2]» and matches no production), and refusing an
-       author's invalid value must never be reported as an unbuilt capability. */
-    bool        blocked;
+       negative basis". */
+    MTH_UNRESOLVED_TREE,
+    /* css-grid-2 §7.2.4's `fr`, whose value exists only inside css-grid-2 §12's track sizing. */
+    MTH_UNRESOLVED_FLEX
+} MthUnresolved;
+
+/* The FIRST reason wins, so the innermost absence is the one reported — a `min(1fr, 50% * 50%)` names the track
+   sizer rather than the tree, because the `fr` is what the reader meets first when they open the value. */
+static MthUnresolved mth_worse(MthUnresolved a, MthUnresolved b)
+{
+    return a != MTH_RESOLVED ? a : b;
+}
+
+typedef struct {
+    CssMathType   type;
+    CssPx         num;      /* the non-percentage term, in §5.4.1's canonical unit for `type` */
+    double        pct;      /* the `<percentage>` term, as a number of percent */
+    bool          pct_term; /* §10.10.1: a zero-valued Sum term is not removable, so this is not `pct != 0` */
+    MthUnresolved blocked;
 } MthVal;
 
 static MthVal mth_val(CssMathType type, double n)
@@ -279,8 +297,14 @@ static MthVal mth_val(CssMathType type, double n)
     v.num = css_px(n);
     v.pct = 0.0;
     v.pct_term = false;
-    v.blocked = false;
+    v.blocked = MTH_RESOLVED;
     return v;
+}
+
+/* Record that this value has no number, keeping whichever reason was recorded first (see `mth_worse`). */
+static void mth_block(MthVal *v, MthUnresolved why)
+{
+    v->blocked = mth_worse(v->blocked, why);
 }
 
 /* ---- the parse (§10.8's grammar), simplifying as it goes (§10.10.1's eager reduction) -------------------- */
@@ -290,26 +314,53 @@ typedef struct {
     const CssMathResolver      *res;      /* NULL is §10.9's TYPE-ONLY question — no leaf is resolved */
     int                         pct_base; /* §10.9.1's calculation context */
     unsigned                    depth;
+    /* §10.8's WHITESPACE RULE, CARRIED RATHER THAN RE-DERIVED FROM THE CURSOR — true exactly when whitespace
+       immediately precedes the current token. It is a field and not a return value because `<calc-sum>` asks
+       the question about a position `<calc-product>` has already walked past: that production must skip
+       whitespace to look for its own `*` or `/`, so by the time the sum sees the `+` the whitespace before it
+       has been CONSUMED, and a sum that asked the tokenizer would find none and refuse `calc(100vw - 20px)`.
+       That is CLAUDE.md's own named defect — an operation whose input is read back off the object it acts on
+       is read at the wrong TIME — and the fix is the same one: the input travels with the operation. */
+    bool                        ws_before;
 } Mth;
 
 static bool mth_sum(Mth *m, MthVal *out);
 
 static lxb_css_syntax_token_t *mth_peek(Mth *m) { return lxb_css_syntax_token(m->tkz); }
-static void mth_take(Mth *m) { lxb_css_syntax_token_consume(m->tkz); }
 
-/* Skip whitespace, reporting whether any was there — §10.8: "whitespace is required on both sides of the + and
-   - operators. (The * and / operators can be used without white space around them.)" */
+/* Consume one NON-WHITESPACE token, which clears the flag above because whitespace no longer precedes the
+   cursor. That whitespace is never consumed here is the two-sided half of the invariant: `mth_skip_ws` is the
+   ONLY place a whitespace token is taken, so a production that grew its own skip — which is exactly how
+   `calc(100vw - 20px)` came to be refused — trips this rather than silently erasing the evidence §10.8's rule
+   is about. */
+static void mth_take(Mth *m)
+{
+    lxb_css_syntax_token_t *t = mth_peek(m);
+
+    DCHECK(t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN_WHITESPACE,
+           "a WHITESPACE token was consumed through the math parser's non-whitespace take. css-values-4 §10.8 "
+           "'Syntax' requires whitespace on both sides of `+` and `-`, and the only record that it was there "
+           "is the flag `mth_skip_ws` sets — so a second place that eats whitespace destroys that record for "
+           "whichever production asks next, which is a REFUSAL of valid CSS and not a crash. Route the skip "
+           "through `mth_skip_ws`");
+    lxb_css_syntax_token_consume(m->tkz);
+    m->ws_before = false;
+}
+
+/* Skip whitespace, reporting whether any immediately precedes the cursor NOW — which includes whitespace an
+   enclosing production already stepped over, for the reason the `ws_before` field carries. §10.8: "whitespace
+   is required on both sides of the + and - operators. (The * and / operators can be used without white space
+   around them.)" */
 static bool mth_skip_ws(Mth *m)
 {
     lxb_css_syntax_token_t *t = mth_peek(m);
-    bool any = false;
 
     while (t != NULL && t->type == LXB_CSS_SYNTAX_TOKEN_WHITESPACE) {
-        any = true;
-        mth_take(m);
+        m->ws_before = true;
+        lxb_css_syntax_token_consume(m->tkz);   /* not `mth_take`, which is the entry that CLEARS the flag */
         t = mth_peek(m);
     }
-    return any;
+    return m->ws_before;
 }
 
 static bool mth_is_delim(lxb_css_syntax_token_t *t, char c)
@@ -391,13 +442,11 @@ static CssPx mth_canonical(const Mth *m, CssMathBase base, double n, const char 
     case CSS_MATH_FREQUENCY:  if (css_frequency_hz(unit, len, n, &out))  return css_px(out); break;
     case CSS_MATH_RESOLUTION: if (css_resolution_dppx(unit, len, n, &out)) return css_px(out); break;
     case CSS_MATH_FLEX:
-        DFAIL("a math function contains a `<flex>` value (css-grid-2 §7.2.4 'Flexible Lengths: the fr unit') "
-              "and this engine has no grid track sizer to give one a number. `1fr` is not a length and is not "
-              "convertible to one: §7.2.4 makes it \"a fraction of the leftover space in the grid container\", "
-              "so its value exists only inside css-grid-2 §12 'Grid Sizing' once the free space of a track "
-              "list is known. TYPING it is right and is done — §10.9's base types include \"flex\" and "
-              "`calc(1fr + 1fr)` IS a `<flex>` — so what is missing is the sizer and not this table. BUILD "
-              "css-grid-2 §12's track sizing algorithm, and resolve an `fr` from the free space it computes");
+        DFAIL("a `<flex>` leaf reached the canonical-unit conversion. It has no conversion at all — css-grid-2 "
+              "§7.2.4's `fr` is \"a fraction of the leftover space in the grid container\" and gets a number "
+              "only from css-grid-2 §12's track sizing — so `<calc-value>`'s own dimension arm marks it "
+              "unresolved and never calls this, which is what lets `width: calc(1fr)` be REFUSED as invalid "
+              "CSS rather than aborted on. One arriving here is that arm having stopped deciding");
         break;
     case CSS_MATH_PERCENT:
     case CSS_MATH_BASE_COUNT:
@@ -460,7 +509,14 @@ static bool mth_value(Mth *m, MthVal *out)
            lexbor keeps a token's cooked string only until the next one is requested. */
         if (!mth_unit_base((const char *)u->data, u->length, &base)) return false;
         *out = mth_val(mth_type_of(base), 0.0);
-        if (m->res != NULL) out->num = mth_canonical(m, base, n, (const char *)u->data, u->length);
+        /* §10.9's TYPE is answered for every family; only the VALUE splits. css-grid-2 §7.2.4's `fr` has no
+           number outside css-grid-2 §12's track sizing, so it is marked unresolved and carried — the type
+           still says `<flex>`, so `width: calc(1fr)` is refused by §10.9's last rule as invalid CSS and the
+           crash below is reached only by a caller that genuinely asked for a `<flex>` value. */
+        if (m->res != NULL) {
+            if (base == CSS_MATH_FLEX) out->blocked = MTH_UNRESOLVED_FLEX;
+            else out->num = mth_canonical(m, base, n, (const char *)u->data, u->length);
+        }
         mth_take(m);
         return true;
     }
@@ -517,7 +573,7 @@ static bool mth_add(const MthVal *a, const MthVal *b, MthVal *out)
     out->num = css_px_add(a->num, b->num);
     out->pct = a->pct + b->pct;
     out->pct_term = a->pct_term || b->pct_term;
-    out->blocked = a->blocked || b->blocked;
+    out->blocked = mth_worse(a->blocked, b->blocked);
     return true;
 }
 
@@ -543,7 +599,7 @@ static bool mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
 
     if (!mth_type_mul(&a->type, &b->type, &ty)) return false;
     out->type = ty;
-    out->blocked = a->blocked || b->blocked;
+    out->blocked = mth_worse(a->blocked, b->blocked);
     if (!a->pct_term && !b->pct_term) {
         out->num = css_px_mul(a->num, b->num);
         out->pct = 0.0;
@@ -568,7 +624,7 @@ static bool mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
     out->num = css_px(0.0);
     out->pct = 0.0;
     out->pct_term = a->pct_term || b->pct_term;
-    out->blocked = true;
+    mth_block(out, MTH_UNRESOLVED_TREE);
     return true;
 }
 
@@ -581,12 +637,17 @@ static bool mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
 {
     MthVal inv;
 
+    /* THE RECIPROCAL IS TAKEN RAW AND NOT THROUGH `css_px_div`, which asserts a non-zero divisor. That assert
+       is right for its own callers — Intersection Observer §3.2.10 step 12 states its non-zero branch itself —
+       and wrong here, because §10.9.2 DEFINES division by zero: "Dividing a value by zero produces either +∞
+       or −∞, according to the standard sign rules", which is IEEE-754's answer and is what `calc(1 / 0)` must
+       give rather than a crash. The environment facts still ride the operand, so the union is unaffected. */
     inv = *b;
     inv.type = mth_type_inv(&b->type);
     if (b->pct_term) {
         inv.num = css_px(0.0);
         inv.pct = 0.0;
-        inv.blocked = true;
+        mth_block(&inv, MTH_UNRESOLVED_TREE);
     } else {
         inv.num = b->num;
         inv.num.px = 1.0 / b->num.px;
@@ -638,6 +699,9 @@ static bool mth_sum(Mth *m, MthVal *out)
         if (mth_is_delim(t, '+')) minus = false;
         else if (mth_is_delim(t, '-')) minus = true;
         else break;
+        /* §10.8's whitespace rule, over the state BEFORE the operator is consumed and the state after — the
+           `mth_take` between them is what clears the flag, so the two reads are of two different positions and
+           both are the positions the rule names. */
         mth_take(m);
         if (!ws_before || !mth_skip_ws(m)) return false;
         if (!mth_product(m, &rhs)) return false;
@@ -843,13 +907,18 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
             acc.type = ty;
         }
         if (a.pct_term) any_pct = true;
-        if (a.blocked) acc.blocked = true;
+        acc.blocked = mth_worse(acc.blocked, a.blocked);
         if (m->res != NULL) {
             facts = mth_join(facts, a.num, 0.0);
             if (mth_is_nan(&a)) saw_nan = true;
             else if (isinf(a.num.px)) saw_inf = true;
             if (kind == 2) fold += a.num.px * a.num.px;
             else if (n == 0) fold = a.num.px;
+            /* §10.5.1's note makes NaN INFECTIOUS in every function, so once one has been seen the result is
+               decided and NO ORDERING IS ASKED. That is not an optimisation: `mth_less` asserts it is never
+               handed a NaN, because a comparison that quietly answered false would be JS's `Math.min` behavior,
+               and `min(1px, calc(NaN * 1px))` is a page's own value rather than a broken invariant. */
+            else if (saw_nan) { /* the fold below is superseded by §10.5.1's NaN */ }
             else if (kind == 0) fold = mth_less(a.num.px, fold) ? a.num.px : fold;
             else fold = mth_less(fold, a.num.px) ? a.num.px : fold;
         }
@@ -869,7 +938,7 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
        `min(50%)` is `50%` and needs no comparison at all. hypot() has no such arm: with one argument it "gives
        the ABSOLUTE VALUE of its input" (§10.5), which is a sign question a percentage cannot answer either. */
     if (any_pct) {
-        if (n > 1 || kind == 2) out->blocked = true;
+        if (n > 1 || kind == 2) mth_block(out, MTH_UNRESOLVED_TREE);
         return true;
     }
     out->pct = 0.0;
@@ -941,13 +1010,14 @@ static bool mth_clamp(Mth *m, MthVal *out)
                     "clamp with no calculation at all could not have parsed");
     *out = arg[1];
     out->type = ty;
-    out->blocked = arg[1].blocked || (present[0] && arg[0].blocked) || (present[2] && arg[2].blocked);
+    out->blocked = mth_worse(arg[1].blocked, mth_worse(present[0] ? arg[0].blocked : MTH_RESOLVED,
+                                                       present[2] ? arg[2].blocked : MTH_RESOLVED));
     if (m->res == NULL) return true;
     /* §10.2: "clamp(MIN, VAL, MAX) ... represents exactly the same value as max(MIN, min(VAL, MAX))", so the
        minimum wins over the maximum when the two are in the wrong order — which §10.2 states as a rule and not
        as a consequence ("clamp(100px, ..., 50px) will resolve to 100px, exceeding its stated 'max' value"). */
     if (arg[1].pct_term || (present[0] && arg[0].pct_term) || (present[2] && arg[2].pct_term)) {
-        if (present[0] || present[2]) out->blocked = true;
+        if (present[0] || present[2]) mth_block(out, MTH_UNRESOLVED_TREE);
         return true;
     }
     {
@@ -1014,9 +1084,12 @@ static bool mth_round(Mth *m, MthVal *out)
     }
     *out = a;
     out->type = ty;
-    out->blocked = a.blocked || (have_b && b.blocked);
+    out->blocked = mth_worse(a.blocked, have_b ? b.blocked : MTH_RESOLVED);
     if (m->res == NULL) return true;
-    if (a.pct_term || (have_b && b.pct_term)) { out->blocked = true; return true; }
+    if (a.pct_term || (have_b && b.pct_term)) {
+        mth_block(out, MTH_UNRESOLVED_TREE);
+        return true;
+    }
     /* §10.3's `line-width` strategy ends in css-values-4 §6's SNAP A LENGTH AS A LINE WIDTH — with B omitted
        that is the whole of it ("If B is omitted, A is snapped as a line width"), and with B present it is
        applied to the rounded result ("the final result is snapped as a line width"). The snap is defined over
@@ -1107,9 +1180,9 @@ static bool mth_function(Mth *m, MthVal *out)
         if (!mth_type_add(&arg[0].type, &arg[1].type, &ty)) goto done;
         *out = arg[0];
         out->type = ty;
-        out->blocked = arg[0].blocked || arg[1].blocked;
+        out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
         if (m->res != NULL) {
-            if (arg[0].pct_term || arg[1].pct_term) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
             out->num = mth_join(arg[0].num, arg[1].num, 0.0);
             out->num.px = mth_name_is(name, nlen, "mod") ? mth_mod_value(arg[0].num.px, arg[1].num.px)
                                                          : mth_rem_value(arg[0].num.px, arg[1].num.px);
@@ -1133,7 +1206,7 @@ static bool mth_function(Mth *m, MthVal *out)
         if (m->res != NULL) {
             double r;
 
-            if (arg[0].pct_term) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
             r = mth_to_radians(&arg[0], is_angle);
             /* §10.4.1: "In sin(A), cos(A), or tan(A), if A is infinite, the result is NaN." C's `sin` already
                answers NaN there, and its NaN propagation is the same; the guard is written so the rule is
@@ -1161,7 +1234,7 @@ static bool mth_function(Mth *m, MthVal *out)
         if (m->res != NULL) {
             double v = arg[0].num.px, r;
 
-            if (arg[0].pct_term) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
             if (v != v) r = NAN;
             else if (mth_name_is(name, nlen, "asin")) r = asin(v);   /* §10.4.1: |A| > 1 is NaN, which C gives */
             else if (mth_name_is(name, nlen, "acos")) r = acos(v);
@@ -1182,9 +1255,9 @@ static bool mth_function(Mth *m, MthVal *out)
         if (!mth_make_consistent(&ty, &sum)) goto done;
         *out = arg[0];
         out->type = ty;
-        out->blocked = arg[0].blocked || arg[1].blocked;
+        out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
         if (m->res != NULL) {
-            if (arg[0].pct_term || arg[1].pct_term) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term || arg[1].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
             out->num = mth_join(arg[0].num, arg[1].num, 0.0);
             out->num.px = (mth_is_nan(&arg[0]) || mth_is_nan(&arg[1]))
                             ? NAN : atan2(arg[0].num.px, arg[1].num.px) * 180.0 / MTH_PI;
@@ -1211,9 +1284,13 @@ static bool mth_function(Mth *m, MthVal *out)
         if (have_b && !mth_make_consistent(&ty, &arg[1].type)) goto done;
         *out = arg[0];
         out->type = ty;
-        out->blocked = arg[0].blocked || (have_b && arg[1].blocked);
+        out->blocked = mth_worse(arg[0].blocked, have_b ? arg[1].blocked : MTH_RESOLVED);
         if (m->res != NULL) {
-            if (arg[0].pct_term || (have_b && arg[1].pct_term)) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term || (have_b && arg[1].pct_term)) {
+                mth_block(out, MTH_UNRESOLVED_TREE);
+                ok = true;
+                goto done;
+            }
             out->num = have_b ? mth_join(arg[0].num, arg[1].num, 0.0) : arg[0].num;
             out->num.px = is_pow ? mth_pow_value(arg[0].num.px, arg[1].num.px)
                                  : mth_log_value(arg[0].num.px, have_b ? arg[1].num.px : 0.0, have_b);
@@ -1233,7 +1310,7 @@ static bool mth_function(Mth *m, MthVal *out)
         *out = arg[0];
         out->type = ty;
         if (m->res != NULL) {
-            if (arg[0].pct_term) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
             out->num.px = mth_name_is(name, nlen, "sqrt") ? sqrt(arg[0].num.px) : exp(arg[0].num.px);
             out->pct = 0.0;
             out->pct_term = false;
@@ -1247,7 +1324,7 @@ static bool mth_function(Mth *m, MthVal *out)
         if (m->res != NULL) {
             /* §10.6's own note: "an expression like 10% might be positive or negative once it's resolved,
                depending on what value it's resolved against", so a surviving percentage blocks the sign. */
-            if (arg[0].pct_term) out->blocked = true;
+            if (arg[0].pct_term) mth_block(out, MTH_UNRESOLVED_TREE);
             else out->num.px = fabs(arg[0].num.px);
         }
         ok = true;
@@ -1263,7 +1340,7 @@ static bool mth_function(Mth *m, MthVal *out)
         if (m->res != NULL) {
             double v = arg[0].num.px;
 
-            if (arg[0].pct_term) { out->blocked = true; ok = true; goto done; }
+            if (arg[0].pct_term) { mth_block(out, MTH_UNRESOLVED_TREE); ok = true; goto done; }
             if (v != v) out->num.px = NAN;
             else if (v < 0.0) out->num.px = -1.0;
             else if (v > 0.0) out->num.px = 1.0;
@@ -1291,7 +1368,7 @@ done:
 static bool mth_top(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
                     CssMathValue *out)
 {
-    Mth m = { NULL, res, CSS_MATH_HINT_NULL, 0 };
+    Mth m = { NULL, res, CSS_MATH_HINT_NULL, 0, false };
     lxb_css_syntax_token_t *t;
     MthVal v = mth_val(mth_type_number(), 0.0);
     bool ok = false;
@@ -1333,7 +1410,16 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
     if (!mth_type_matches(&v.type, want)) goto done;
     ok = true;
     if (res == NULL || out == NULL) goto done;
-    if (v.blocked)
+    if (v.blocked == MTH_UNRESOLVED_FLEX)
+        DFAIL("a VALID math function resolves to a `<flex>` and this engine has no grid track sizer to give one "
+              "a number. css-grid-2 §7.2.4 'Flexible Lengths: the fr unit' makes `1fr` \"a fraction of the "
+              "leftover space in the grid container\", so its value exists only inside css-grid-2 §12 'Grid "
+              "Sizing' once the free space of a track list is known — it is not a length and must not be built "
+              "out of one. TYPING it is right and is done: §10.9's base types include \"flex\" and "
+              "`calc(1fr + 1fr)` IS a `<flex>`, which is why every caller that asks for a `<length>` refuses "
+              "one before reaching here. BUILD css-grid-2 §12's track sizing algorithm, and resolve an `fr` "
+              "from the free space it computes");
+    else if (v.blocked == MTH_UNRESOLVED_TREE)
         DFAIL("a VALID math function simplified to a residue this engine cannot represent. css-values-4 "
               "§10.10.1 'Simplification' reduces a calculation tree eagerly and leaves a LIVE NODE where it "
               "cannot — a Product of two operands that both still carry a `<percentage>` (`calc(50% * 1em / "
