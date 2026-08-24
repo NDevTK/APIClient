@@ -1025,6 +1025,32 @@ function renderDeepStatus() {
          "GET_STATE answered without an analysisRun field — serializeTabData writes it on every path " +
          "(lib/serialize.js), so its absence is that serializer broken and a page whose engine crashed would " +
          "render exactly like one that was analysed and found clean");
+  /* SAID BEFORE THE RUN, BECAUSE A RUN THAT NEVER STARTED IS NOT A RUN THAT FOUND NOTHING. `analysisRun`
+     answers what the engine did; this answers whether the engine was ever given anything to do. The reader's
+     question on opening the popup over an empty panel is "did this fail, or is there nothing here", and until
+     this row existed the popup had no way to distinguish them — the whole of reddit.com rendered as a clean
+     page with zero endpoints. `undefined` is refused rather than skipped: serializeTabData writes the field on
+     every path, so its absence is that relay broken, which is exactly when a page would go back to reading
+     clean. */
+  DCHECK(tabData.pageSource === null || (tabData.pageSource && typeof tabData.pageSource.state === "string"),
+         "GET_STATE answered without a pageSource field — serializeTabData writes it on every path " +
+         "(lib/serialize.js), so its absence is that serializer broken and a page whose bundle could never be " +
+         "fetched would render exactly like one that was analysed and found clean");
+  if (tabData.pageSource && tabData.pageSource.state === "unavailable") {
+    const ps = tabData.pageSource;
+    DCHECK(ps.kind === "status" || ps.kind === "empty" || ps.kind === "network",
+           "an unavailable pageSource reached the popup with kind `" + ps.kind + "` — serialize.js admits " +
+           "exactly three and asserts them, so a fourth here is that seam broken and this row would state " +
+           "that the page could not be analysed without saying why, which is the silence it replaces");
+    const reason = ps.kind === "status" ? `the server answered ${esc(String(ps.status))} to it`
+                 : ps.kind === "empty"  ? "the server answered with an empty body"
+                 : `the request failed: ${esc(String(ps.detail).slice(0, 160))}`;
+    html += `<div class="deep-row"><span class="deep-label"><strong>This page was NOT analysed.</strong> `
+          + `The content script asked the server for the document again — the only way to get the bundle as `
+          + `shipped, with its real response headers — and ${reason}. Nothing below was learned by running `
+          + `this page's code. A single-use URL (a bot challenge, a one-time token) cannot be fetched twice, `
+          + `and neither can a document that was reached by anything other than a plain GET.</span></div>`;
+  }
   if (tabData.analysisRun === "crashed") {
     html += `<div class="deep-row"><span class="deep-label"><strong>The engine crashed while analysing this `
           + `page.</strong> What is shown below is what it had already learned when it died — a PARTIAL `

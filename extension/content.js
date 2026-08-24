@@ -1,7 +1,9 @@
 // Content script: ships RAW materials to the analyser — ONE CONTENT_HTML per
-// document (the page's server-rendered HTML) + raw network response bodies
-// relayed from intercept.js (RESPONSE_BODY). Does NOT ship script sources or
-// run any regex / heuristic pre-scan: HTML parsing is Lexbor's job in the
+// document (the page's server-rendered HTML), or ONE CONTENT_HTML_UNAVAILABLE
+// naming why that HTML could not be obtained, so a document that cannot be
+// analysed is a stated fact in the trusted zone rather than a silence there —
+// plus raw network response bodies relayed from intercept.js (RESPONSE_BODY).
+// Does NOT ship script sources or run any regex / heuristic pre-scan: HTML parsing is Lexbor's job in the
 // worker, and the document's scripts are run by QuickJS (qjs_run_doc_scripts)
 // under forced execution — endpoint/API-key discovery is real fetch/XHR
 // observed at the host edge, with method/args/call site. Also acts as a fetch
@@ -239,7 +241,23 @@
   // come through the proper path: Lexbor parses the HTML → bundle
   // executes under forced exec → @H records observe real fetch/XHR
   // with method, args, call site.
-  function _sendPageHtml(why) {
+  /* EVERY INVOCATION SENDS EXACTLY ONE MESSAGE, and that is the whole contract this function has with the
+     trusted zone. It used to have two exits that sent NOTHING — a non-OK status and an empty body each threw
+     into this realm's console, and a rejected fetch was an unhandled rejection — and the reasoning written
+     here was that a throw is "loud" and therefore not a silent no-analysis. It is loud in the UNTRUSTED
+     zone, whose console the trusted zone deliberately does not read (SECURITY.md's trust table; and a hot
+     engine's traffic would bury it). So from every extension surface the throw was indistinguishable from
+     "no content script ever ran here" and from "the engine ran and found nothing" — the three-states-behind-
+     one-answer defect at the outermost layer of the product.
+     MEASURED, on real Chrome: reddit's JS bot challenge navigates to the SAME path carrying a single-use
+     `token`/`solution` in the query, and a second GET of that address answers 403 three times out of three.
+     The re-fetch below CANNOT succeed on such a document by construction, so this is not an exotic edge —
+     it is a class of target, and the product's answer to it must be a REPORT rather than a console line.
+     THE THROWS ARE DELETED, NOT KEPT BESIDE THE REPORT. A superseded mechanism kept "as well" is what makes
+     the new one's gaps invisible: the report carries the same fact to a reader that exists, so the throw is
+     the strictly weaker half of a pair and goes. What is NOT relaxed is the refusal itself — a 404/500 error
+     page is still never smuggled in as "the bundle", and there is still no `r.ok` fallback. */
+  function _sendPageHtml() {
     // REAL server response, not the rendered DOM: fetch(location.href) returns the UNMODIFIED HTML the
     // server shipped PLUS the real response headers — and because location.href is same-origin, EVERY
     // header is readable (Content-Security-Policy, Content-Type), unlike a cross-origin offscreen fetch.
@@ -248,40 +266,74 @@
     // headers — so the engine analysed a rendered page, not the shipped bundle, and judged XSS against
     // meta-CSP only (missing the primary header CSP). This is the moat's ground truth: the bundle + its
     // real policy. (Same-origin credentialed by default = the actual document the browser received.)
-    // OFFENSIVE: a non-OK status, a failed fetch, or an empty body is an UNEXPECTED state — the bundle is
-    // unfetchable — so it THROWS (unhandled rejection, loud in the console), never a silent no-analysis and
-    // never a 404/500 error-page body smuggled in as "the bundle". No .catch, no try/catch, no r.ok fallback:
-    // if this surfaces, the target (or the dev fixture server) is broken and MUST be seen, not papered over.
+    // AND THERE IS NO SECOND SOURCE FOR EITHER HALF: Chrome exposes the navigation's response body to no
+    // content-script API at all (chrome.debugger's Network.getResponseBody is the only route and it takes a
+    // permission this extension does not hold and puts a banner on the user's browser), and this extension
+    // holds no `webRequest` permission, so the navigation's real header CSP is reachable only by asking for
+    // the document again. "The content script is in the document, it already has the bytes" is FALSE — what
+    // it has is the parsed, script-mutated DOM, which is a different document.
     // The DOCUMENT's navigation URL — NOT location.href. An SPA (the tool's PRIMARY target) calls
     // history.pushState/replaceState, which MUTATES location.href to a client-route that the server does not
-    // serve — so fetch(location.href) would GET a 404 for /dashboard and, being offensive, THROW, silently
+    // serve — so fetch(location.href) would GET a 404 for /dashboard and report the bundle as unavailable,
     // losing the ENTIRE analysis of the real bundle. PerformanceNavigationTiming.name is the actual URL the
     // browser navigated to (the doc that shipped the bundle), immutable by pushState. Fallback to location.href
     // only if the timing entry is unavailable.
     var docUrl = location.href;
     try { var _nav = performance.getEntriesByType("navigation")[0]; if (_nav && _nav.name) docUrl = _nav.name; } catch (_e) {}
-    fetch(docUrl, { credentials: "same-origin" }).then(function (r) {
-      if (!r.ok) throw new Error("page fetch (" + why + ") " + r.status + " for " + docUrl + " — refusing to analyse a non-OK response as the bundle");
-      var headers = {};
-      r.headers.forEach(function (v, k) { headers[k.toLowerCase()] = v; });
-      return r.text().then(function (html) {
-        if (!html) throw new Error("empty page body (" + why + ") for " + docUrl + " — no bundle to analyse");
-        /* THIS MESSAGE CARRIES MATERIAL, NEVER A PRINCIPAL. `origin: location.origin` and `pageUrl: docUrl`
-           stood here and NOTHING has ever read either one — the offscreen mints every browser fact from the
-           MessageSender (`_browserFacts`) and asserts the brand on it (`_statedFacts`). They were worse than
-           dead: they are the two fields SECURITY.md's removed hole was spelled in, sitting on the wire under
-           exactly the names a future consumer would reach for, and offscreen-brain.js already carries a
-           standing warning that the one value in the trusted zone ever spelled `pageUrl` is this one. An
-           UNTRUSTED zone does not get to state an origin or an address, so it does not get to send a field
-           shaped like one — the trap is deleted rather than documented. `reason` went with them (a writer
-           with no reader); the diagnostic it carried is in the two throws above, which do have a reader. */
-        _sendChunked({
-          type: "CONTENT_HTML",
-          html: html,
-          responseHeaders: headers,
-        }, "html");
-      });
-    });
+    /* THE TRY HOLDS THE FETCH AND NOTHING ELSE. A network error is a Fetch §2.2.6 Responses outcome — a
+       real answer from a hostile network, not our own logic being wrong — so turning it into a report is not
+       swallowing an invariant. Widening this catch over the message-building would be: a failure to REACH the
+       trusted zone (an invalidated extension context) is a different fact and must not be re-reported as the
+       page's own response having failed. */
+    var r = null, html = null, netErr = null;
+    (async function () {
+      try {
+        r = await fetch(docUrl, { credentials: "same-origin" });
+        if (r.ok) html = await r.text();
+      } catch (e) { netErr = String((e && e.message) || e); }
+      /* THE CHAIN ASSIGNS, IT DOES NOT RETURN, AND THERE IS EXACTLY ONE SEND BELOW IT. That is the whole
+         enforcement of "one message per invocation", and it is STRUCTURAL rather than asserted on purpose:
+         an assertion in this file would fire in the untrusted realm's console, which is the very place the
+         old throws were loud in and nobody read. A chain of early returns is one edit away from a silent
+         exit again; a chain that must produce a value cannot fall out of this function without one. */
+      var msg;
+      if (netErr !== null) {
+        msg = { type: "CONTENT_HTML_UNAVAILABLE", kind: "network", detail: netErr };
+      } else if (!r.ok) {
+        msg = { type: "CONTENT_HTML_UNAVAILABLE", kind: "status", status: r.status };
+      } else if (!html) {
+        msg = { type: "CONTENT_HTML_UNAVAILABLE", kind: "empty" };
+      } else {
+        var headers = {};
+        r.headers.forEach(function (v, k) { headers[k.toLowerCase()] = v; });
+        msg = { type: "CONTENT_HTML", html: html, responseHeaders: headers };
+      }
+      _shipPageSource(msg);
+    })();
+  }
+
+  /* THE ONE SEND, AND WHAT BOTH ITS MESSAGES MAY CARRY.
+     CONTENT_HTML is the bundle as shipped. CONTENT_HTML_UNAVAILABLE is this document stating that the bundle
+     could not be obtained, WITH the reason — a report that cannot say which failure it was re-collapses the
+     states it exists to separate, so `kind` is one of a closed set that this file and the offscreen's arm
+     both spell out: `status` (the server answered, not OK — carries `status` and nothing else), `empty` (OK
+     with a zero-length body — carries neither), `network` (Fetch §2.2.6 Responses' network error — carries `detail`).
+     An absent `status` is a POSITIVE statement, "this kind has no status", which the offscreen reads as one
+     rather than defaulting it to a plausible number; it REFUSES a status on a kind that has none.
+     MATERIAL ONLY, on both: no origin, no address. `origin: location.origin` and `pageUrl: docUrl` stood on
+     CONTENT_HTML and NOTHING ever read either — the offscreen mints every browser fact from the MessageSender
+     (`_browserFacts`) and asserts the brand on it (`_statedFacts`). They were worse than dead: they are the
+     two fields SECURITY.md's removed hole was spelled in, sitting on the wire under exactly the names a
+     future consumer would reach for, and offscreen-brain.js carries a standing warning that the one value in
+     the trusted zone ever spelled `pageUrl` is this one. An UNTRUSTED zone does not get to state an origin or
+     an address, so it does not get to send a field shaped like one — the trap is deleted rather than
+     documented, and the new message inherits the rule rather than being an exception to it.
+     `_sendPageHtml` USED TO TAKE A `why` ("init" / "reship") and it is deleted with the throws that were its
+     only consumers: it never reached the wire, so no zone that could act on it ever saw which ship point ran.
+     A parameter whose every reader is gone is the same broken half-contract as a field nobody writes. */
+  function _shipPageSource(msg) {
+    if (msg.type === "CONTENT_HTML") { _sendChunked(msg, "html"); return; }
+    chrome.runtime.sendMessage(msg);
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -391,7 +443,7 @@
       // so we re-send the document HTML (the cold-start delivery race — the
       // offscreen wasn't alive when content.js shipped at document_idle, so the
       // brain missed our CONTENT_HTML). Idempotent: the brain dedups by document.
-      _sendPageHtml("reship");
+      _sendPageHtml();
       sendResponse({ ok: true });
       return;
     }
@@ -462,7 +514,7 @@
   // server-rendered DOM (custom elements with their attributes, data
   // islands, the structure the bundle's connectedCallback / React
   // effects depend on).
-  _sendPageHtml("init");
+  _sendPageHtml();
 
   // Forms are NOT scanned here — Lexbor in the engine worker parses
   // the same HTML and __hostDrive calls form.submit() on each form,
@@ -476,7 +528,7 @@
      never shipped as a separate snapshot from the page context. */
 
   // SCRIPTS_LOADED + the MutationObserver removed. One message per document: the
-  // single CONTENT_HTML (_sendPageHtml("init") above) is the whole input. The
+  // single CONTENT_HTML (_sendPageHtml() above) is the whole input. The
   // engine (Lexbor + qjs_run_doc_scripts) parses it and runs EVERY script in
   // document order in one realm — inline + external <script src>; scripts a page
   // inserts dynamically are discovered by forced exec's createElement host edge,

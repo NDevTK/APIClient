@@ -82,6 +82,14 @@ has to remember:
   removed hole was spelled in, waiting for a consumer. They are deleted. The rule is the general one: a
   message from an untrusted zone carries MATERIAL (html, response bytes, the address the page is posting
   TO) and never identity.
+  `CONTENT_HTML_UNAVAILABLE` — a document stating that its own bundle could not be re-fetched, so that a page
+  the analysis never saw is a stated fact in this zone rather than a silence — is held to the same rule and is
+  the case where obeying it takes an extra step: it names a `kind`, an HTTP `status` and a network-error
+  `detail`, and NOT the address it failed to fetch, because that address is `_browserFacts`' answer and the
+  untrusted side restating it is the removed hole under a third name. Its three fields are also the shape a
+  compromised renderer would reach for, so the arm VALIDATES them against a closed set and DROPS on a
+  mismatch — it does not assert, because a `DCHECK` on a hostile input hands any web renderer an abort of the
+  only trusted zone in the extension.
 - **Same-origin principal for a CREDENTIALED read is a stricter value: the *requesting frame's*
   `MessageSender.origin`** (documentId-keyed, opaque-unique via `_senderOrigin`), **never** the top
   frame and **never** parsed from a URL. A page can sandbox its own iframe, giving it an opaque

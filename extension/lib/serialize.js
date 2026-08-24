@@ -270,5 +270,40 @@ function serializeTabData(tab) {
              "{context, message} records into it and the popup's diagnostic view iterates them");
       return tab._resolverErrors;
     })(),
+    /* WHETHER THIS DOCUMENT'S BUNDLE EVER REACHED THE ANALYSIS, WHICH `analysisRun` ABOVE CANNOT SAY. A page
+       whose page source could not be obtained never starts a run, so `analysisRun` is `null` for it — and
+       `null` is also what a page still being explored carries, and what a page nobody has reported on
+       carries. Three facts, one value, and the one that reads worst is the failure: reddit.com's bot
+       challenge makes its own document unfetchable a second time, so the whole site rendered here exactly
+       like a page that was analysed and found nothing.
+       `null` here is still a real statement and a NARROWER one: nothing has been reported about this
+       document's page source at all (an unknown document, through _emptyDocView, is the same). It is not
+       defaulted to a plausible "delivered" — offscreen-brain.js writes the record on BOTH content arms, so a
+       missing one where a content script has run is that relay broken, and the shape it would break into is
+       the false clean bill this field exists to stop. */
+    pageSource: (function () {
+      if (tab._pageSource === undefined) return null;   // nothing has been reported about this document's source
+      const ps = tab._pageSource;
+      DCHECK(ps.state === "delivered" || ps.state === "unavailable",
+             "a DocView's _pageSource is present but its state is `" + ps.state + "` — offscreen-brain.js's " +
+             "_setPageSource writes exactly two, so anything else is that writer bypassed and the popup " +
+             "would render a document whose analysability it cannot state");
+      if (ps.state === "delivered") return { state: "delivered" };
+      DCHECK(ps.kind === "status" || ps.kind === "empty" || ps.kind === "network",
+             "an unavailable page source reached the popup seam with kind `" + ps.kind + "` — the arm that " +
+             "writes it admits exactly three, and a report that cannot say WHICH failure it was is the " +
+             "silence it exists to replace wearing a field name");
+      DCHECK((ps.kind === "status") === (ps.status !== undefined),
+             "an unavailable page source carries kind `" + ps.kind + "` with status `" + ps.status + "` — a " +
+             "status rides the `status` kind and no other, so this pair is the two halves of one report " +
+             "disagreeing about which failure it describes");
+      DCHECK((ps.kind === "network") === (ps.detail !== undefined),
+             "an unavailable page source carries kind `" + ps.kind + "` with detail `" + ps.detail + "` — a " +
+             "detail rides the `network` kind and no other");
+      const out = { state: "unavailable", kind: ps.kind };
+      if (ps.status !== undefined) out.status = ps.status;
+      if (ps.detail !== undefined) out.detail = ps.detail;
+      return out;
+    })(),
   };
 }

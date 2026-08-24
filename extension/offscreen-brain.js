@@ -351,6 +351,10 @@ function _clearDocLearning() {
     doc._valueIndex = createValueIndex();
     doc._pageHtml = null;
     doc._reclaimed = false;
+    /* The page-source record goes with the page source. Clear bins what was inferred AND what was delivered;
+       leaving "delivered" behind would have the popup state that this document's bundle arrived while the
+       bytes it names are gone, which is the one thing this field exists to stop being said wrongly. */
+    delete doc._pageSource;
     delete doc._responseHeaders;
     delete doc._astResults;
     delete doc._astRun;
@@ -774,10 +778,22 @@ async function _dispatchDocument(docKey) {
          "runs under is read off this record, so a mis-filed one analyses a document under another " +
          "document's identity");
   DCHECK(!!buf.pageHtml, "a document reached the analysis with no page HTML — content.js refuses to ship an " +
-                         "empty body (it throws), so this is the bundle that was fetched being lost on the " +
-                         "way here, and analysing nothing would report the page as clean");
+                         "empty body (it reports it as unavailable instead), so this is the bundle that was " +
+                         "fetched being lost on the way here, and analysing nothing would report the page " +
+                         "as clean");
   var tabId = facts.tabId;
   var tab = getDoc(docKey);
+  /* THE OTHER HALF OF THE PAGE-SOURCE PAIR, ASSERTED WHERE THE ZONE COMMITS TO ANALYSING. Both writers are
+     the two content arms and this is the only path out of the delivering one, so a document being analysed
+     while its record says anything but "delivered" is those two writers disagreeing — and the popup would
+     then describe a page the engine is running as one whose bundle never arrived, or the reverse. The pairing
+     is what makes the silence unreachable: no document is analysed without this positive record, and no
+     document is refused analysis without a REASON (the unavailable arm validates one before it writes). */
+  DCHECK(!!tab._pageSource && tab._pageSource.state === "delivered",
+         "a document reached the analysis with page-source record `" + JSON.stringify(tab._pageSource) +
+         "` — the CONTENT_HTML arm writes {state:\"delivered\"} immediately before handing over, so anything " +
+         "else here is that write lost between the two lines, and the reviewer would be told this page's " +
+         "bundle never arrived while its engine was running");
   var _ep = _dataEpoch;   // a Clear during the engine round-trip invalidates this run
 
   // This run's merge re-registers every AST-derived endpoint, so drop the previous round's first — a
@@ -997,7 +1013,60 @@ function _handleFormSubmit(documentId, msg, tabId, frameId) {
   notifyPopup(tabId);
 }
 
-/* THE FOUR TYPES `CONTENT_TYPES` ADMITS, AND NOTHING ELSE — the dispatch below is exhaustive over that set
+/* WHAT A DOCUMENT'S PAGE SOURCE IS, AS A THREE-VALUED FACT — and the reason it is a field rather than
+   something read off `_pageHtml`. The reclaim sweep NULLS `_pageHtml` the moment a run returns, so a page
+   that delivered and was analysed and one that never delivered at all both hold `null` a second later; the
+   record below is written once at the arrival and is not reclaimed with the bytes.
+     • absent            — no content script has reported on this document's page source YET. Not "clean",
+                           not "failed": nothing has been said. A document registered by its own live traffic
+                           (RESPONSE_BODY) and nothing else sits here.
+     • {state:"delivered"}   — the bundle arrived; the analysis owns the outcome from there (`_astRun`).
+     • {state:"unavailable", kind, …} — a content script ran, asked for the bundle, and did not get it.
+   MEASURED, and the reason this exists: reddit.com answers 403 to the second GET of a document whose URL
+   carries its bot challenge's single-use token, so `_sendPageHtml` threw in the untrusted realm and this zone
+   held ONE registered document with no HTML, no buffer, no error and no engine — the same picture as a page
+   still loading and as a page nobody visited. §@S: "a candidate killed by a gate MUST be distinguishable
+   from one a filter ate and from one that was never scheduled". */
+function _setPageSource(doc, record) {
+  DCHECK(record.state === "delivered" || record.state === "unavailable",
+         "a document's page-source record was written with state `" + record.state + "`, which is neither of " +
+         "the two this zone speaks — serialize.js renders this field verbatim, so a third state reaches the " +
+         "reviewer as a page whose analysability is simply not stated");
+  /* NO TIMESTAMP. One stood here and serialize.js dropped it, so it was a writer with no reader — the exact
+     half-contract §Architecture names, and the one that is hardest to notice because the value is real. What
+     a reader wants to know about this record is WHICH state it is, and the record is overwritten rather than
+     accumulated, so there is no ordering question for a clock to answer. */
+  doc._pageSource = record;
+}
+
+/* WHAT THE UNTRUSTED SIDE IS ALLOWED TO HAVE SAID, checked here and NOT asserted. A content script is a
+   hostile input (SECURITY.md's trust table), so a malformed report is a compromised renderer and not this
+   zone's invariant broken: it is DROPPED, closed, exactly like a content message with no documentId. A DCHECK
+   here would hand any web renderer an abort of the only trusted zone in the extension.
+   THE KINDS ARE A CLOSED SET AND `status` RIDES EXACTLY ONE OF THEM, because that pairing is the whole
+   content of the report — "unavailable" with no distinguishing reason is the silence this arm replaces,
+   spelled as a message. An absent `status` on `network`/`empty` is the positive statement "this kind has no
+   status" and is stored absent, never as a plausible 0. */
+var _PAGE_SOURCE_KINDS = ["status", "empty", "network"];
+function _pageSourceUnavailableRecord(msg) {
+  if (_PAGE_SOURCE_KINDS.indexOf(msg.kind) < 0) return null;
+  var rec = { state: "unavailable", kind: msg.kind };
+  if (msg.kind === "status") {
+    if (!Number.isInteger(msg.status) || msg.status < 100 || msg.status > 599) return null;
+    rec.status = msg.status;
+  } else if (msg.status !== undefined) {
+    return null;   // a status on a kind that has none: the two halves of the report disagree
+  }
+  if (msg.kind === "network") {
+    if (typeof msg.detail !== "string") return null;
+    rec.detail = msg.detail;
+  } else if (msg.detail !== undefined) {
+    return null;
+  }
+  return rec;
+}
+
+/* THE FIVE TYPES `CONTENT_TYPES` ADMITS, AND NOTHING ELSE — the dispatch below is exhaustive over that set
    and DFAILs past it, so the router's admission and this function's arms cannot drift apart in silence.
    CONTENT_KEYS / CONTENT_ENDPOINTS were removed (heuristic regex scans over HTML text, which is Lexbor's
    parsing job); CONTENT_DOM / CONTENT_FORMS / SCRIPT_SOURCE went with the per-script shipping the engine
@@ -1063,6 +1132,24 @@ function handleContentMessage(msg, sender) {
     return;
   }
 
+  /* A DOCUMENT STATING THAT IT COULD NOT HAND OVER ITS BUNDLE. The registration above already happened, which
+     is the half that matters most: a page whose source is unobtainable and which makes no other request now
+     APPEARS, where before it was absent from this zone entirely and therefore identical to a page nobody
+     opened. Nothing is dispatched — there is nothing to analyse — and no `_astError` is written either: that
+     field is what an engine RUN failed with, and claiming a run failed when none was ever started would swap
+     one wrong story for another. */
+  if (msg.type === "CONTENT_HTML_UNAVAILABLE") {
+    var _rec = _pageSourceUnavailableRecord(msg);
+    if (!_rec) {
+      console.debug("[brain:content] CONTENT_HTML_UNAVAILABLE dropped — kind=%s status=%s is not a report this " +
+                    "zone speaks (a content script is an untrusted input; fail closed)", msg.kind, msg.status);
+      return;
+    }
+    _setPageSource(doc, _rec);
+    notifyPopup(tabId);
+    return;
+  }
+
   if (msg.type === "CONTENT_HTML") {
     // ONE MESSAGE PER DOCUMENT. The engine (Lexbor) parses this HTML and runs EVERY
     // script in document order in one realm — inline directly, external <script src>
@@ -1076,6 +1163,11 @@ function handleContentMessage(msg, sender) {
     doc._pageHtml = String(msg.html || "");
     doc._responseHeaders = msg.responseHeaders || {};   // real navigation response headers (CSP, Content-Type) — same-origin fetch(location.href), so all readable
     doc._reclaimed = false;   // a re-delivered document holds a page source again, so the reclaim owes it one more pass
+    /* THE POSITIVE HALF OF THE SAME FACT, WRITTEN HERE AND NOT DERIVED. It cannot be read off `_pageHtml`
+       later: the reclaim sweep nulls that the moment the run returns. A document that reported unavailable
+       and is then re-delivered (the RESHIP path, or a challenge that has since been solved) OVERWRITES the
+       earlier record rather than accumulating both — the latest report is the fact. */
+    _setPageSource(doc, { state: "delivered" });
     var _dk = documentId;
     var _buf = _scriptBuffers.get(_dk);
     if (!_buf) { _buf = {}; _scriptBuffers.set(_dk, _buf); }
@@ -1612,6 +1704,7 @@ const EXTENSION_ORIGIN = `chrome-extension://${chrome.runtime.id}`;
    browser's answer rather than a page's claim about itself. */
 const CONTENT_TYPES = new Set([
   "CONTENT_HTML",
+  "CONTENT_HTML_UNAVAILABLE",
   "CONTENT_FORM_SUBMIT",
   "RESPONSE_BODY",
   "PROBE_HIT",
