@@ -6626,7 +6626,13 @@ static void xml_markup_selftest(void)
           "instruction does not depend on how many spaces the author typed" },
         { "<?t\r\n a?>", 9, XML_MARKUP_OK, "t", "a", 9,
           "and §2.11 has already made that run one #xA and a space before [3] S is asked about it" },
-        { "<?t a??>", 8, XML_MARKUP_OK, "t", "a?", 8,
+        /* `?\?>` NOT `??>`: the latter is C's trigraph for `]`. This row's whole claim is that §2.6's `?>` is a
+           ONE-character lookahead — the PI closes on its LAST `?` with content `a?` — so the bytes are the
+           assertion. A compiler honouring trigraphs would hand the scanner `<?t a]`, six bytes, and the row
+           would test a different document while its declared 8 stayed unchanged. The escape is invisible to
+           the string's value and the row's length is still 8. The declared-length check that machine-verified
+           these rows decodes ESCAPES, and a trigraph is not one, so it and the compiler could disagree. */
+        { "<?t a?\?>", 8, XML_MARKUP_OK, "t", "a?", 8,
           "`?>` is found on a ONE-character lookahead, unlike §2.7's `]]>` run: this instruction closes with "
           "its LAST `?`, so the instruction is `a?`" },
         { "<?t >?>", 7, XML_MARKUP_OK, "t", ">", 7,
