@@ -500,8 +500,8 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         return JS_UNDEFINED;
     }
     /* THE SELECTED SOURCE HAS BEEN COPIED INTO `abs` AND IS NOT READ AGAIN, so the set is released here rather
-       than at each of the three remaining returns — `selected` points INTO it and every use of that pointer is
-       above this line. */
+       than at each return below it — `selected` points INTO the set and every read of that pointer is above
+       this line, which is what the two assignments after the release keep true. */
     image_source_set_release(ctx, &ss);
     selected = NULL;
     selected_n = 0;
