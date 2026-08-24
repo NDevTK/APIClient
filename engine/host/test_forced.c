@@ -829,6 +829,25 @@ static const char *HTML =
     "sc.setAttribute('srcset', '/api/calc-320.png 320w, /api/calc-640.png 640w, /api/calc-1280.png 1280w');"
     "document.body.appendChild(sc);"
     "fetch('/api/sizescalc?src=' + encodeURIComponent(sc.currentSrc));"
+    /* A COMMA INSIDE A FUNCTION, WHICH IS THE COMPONENT-VALUE BOUNDARY ITSELF and is a different assertion from
+       the row above it. §4.8.4.3.11 step 1 cuts the attribute into a COMMA-SEPARATED LIST OF COMPONENT VALUES,
+       and CSS Syntax Level 3 §5.5.8 "Consume a component value" makes a `<function-token>` ONE of them —
+       §5.5.10 "Consume a function" runs it to its `)` — so the comma in `min(40px, 40px)` separates nothing.
+       THE TWO CUTS ARE DISTINGUISHABLE IN WHAT THIS EMITS, which is why the trailing `99999px` is here rather
+       than being tidied away: cut correctly, the list is ONE entry, the source size is 40 and the narrow
+       candidate is selected; cut on every comma it is THREE (`calc(min(40px`, `40px))`, `99999px`), the first
+       two fail to parse, and §4.8.4.3.11 falls through to a source size of 99999 and the wide one. So the URL
+       in this call names which walk ran.
+       IT EMITS RATHER THAN COMPARING for the reason the row above states — which candidate wins is a joint
+       function of the modelled viewport and device pixel ratio, and pinning it would assert this fixture's
+       environment rather than the cut. What it holds unconditionally is that the path ANSWERS: this shape is
+       what fired iss_source_size_value's own two-sided assert the hour `calc()` started parsing, because the
+       span check consumed ONE TOKEN where the cut had consumed one COMPONENT VALUE. */
+    "var sn = document.createElement('img');"
+    "sn.setAttribute('sizes', 'calc(min(40px, 40px)), 99999px');"
+    "sn.setAttribute('srcset', '/api/nest-40.png 40w, /api/nest-4000.png 4000w');"
+    "document.body.appendChild(sn);"
+    "fetch('/api/sizesnested?src=' + encodeURIComponent(sn.currentSrc));"
     /* ---- css-fonts-4 §2.5's computed `font-size` and css-values-4 §6.1.1's `em`/`rem` --------------------
        EVERY VALUE COMPARED HERE IS ROOTED IN A DECLARED ABSOLUTE FONT SIZE, deliberately: an undeclared one is
        §2.5's `medium`, which IS the CSS_ENV_DEFAULT_FONT_SIZE fact, so its computed value is a CONCOLIC and a

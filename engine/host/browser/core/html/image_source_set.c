@@ -414,7 +414,17 @@ static void iss_parse_srcset(const char *input, size_t len, ImageSourceSet *out)
    IT TOKENIZES WITH LEXBOR'S OWN TOKENIZER for core/css/css_at_rule_prelude.h's reason — a tokenizer is
    standalone, it decides strings and escapes, and this engine already has one. What is kept is only the SPAN,
    because every consumer below re-reads the source: a `<media-condition>` is handed to the media query grammar
-   as text, and a `<source-size-value>` is one token this file re-tokenizes on its own. */
+   as text, and a `<source-size-value>` is re-read from its own span.
+   WHAT ONE COMPONENT VALUE IS, IS ANSWERED IN EXACTLY ONE PLACE BELOW, AND THAT IS A FIX RATHER THAN TIDINESS.
+   This was written as TWO walks over the same bytes: the cut ran CSS Syntax Level 3 §5.5.8 "Consume a component
+   value" in full, and the span check that verified the cut ran only its "anything else" arm — one token. The
+   two agreed for as long as the only multi-token component value a `<source-size-value>` could be was a
+   FUNCTION and a function CRASHED; the hour core/css/css_math.c made `calc(100vw - 40px)` a value instead, the
+   check consumed `calc(` and asserted on `100vw`. §5.5.10 "Consume a function" is the sentence that settles it
+   — a `<function-token>` is consumed to its `)` (or to EOF) and returns ONE component value — and the assert
+   that fired was right about the disagreement and said nothing about which side was wrong, which is why it is
+   kept and why both sides now run the SAME walk. Two implementations of one boundary cannot be kept in step;
+   one cannot disagree with itself. */
 typedef struct {
     size_t                      begin, end;
     lxb_css_syntax_token_type_t lead;   /* the type of the component value's FIRST token */
@@ -438,19 +448,165 @@ static void cv_add(IssCvList *l, size_t begin, size_t end, lxb_css_syntax_token_
     l->n++;
 }
 
-static bool cv_opens_block(lxb_css_syntax_token_type_t t)
+/* CSS Syntax Level 3 §5.5.8 "Consume a component value"'s FIRST TWO ARMS, as one predicate: "`<{-token>`
+   `<[-token>` `<(-token>` — Consume a simple block. `<function-token>` — Consume a function." They are one
+   question here because §5.5.9 and §5.5.10 differ only in what they call the ending token. */
+static bool iss_opens_block(lxb_css_syntax_token_type_t t)
 {
     return t == LXB_CSS_SYNTAX_TOKEN_FUNCTION || t == LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS ||
            t == LXB_CSS_SYNTAX_TOKEN_LS_BRACKET || t == LXB_CSS_SYNTAX_TOKEN_LC_BRACKET;
 }
 
-static lxb_css_syntax_token_type_t cv_mirror(lxb_css_syntax_token_type_t t)
+/* §5.5.9 "Consume a simple block"'s ENDING TOKEN — "the mirror variant of the next token. (E.g. if it was
+   called with `<[-token>`, the ending token is `<]-token>`.)" — and §5.5.10 "Consume a function"'s, which the
+   spec does not name because a function has only one: its steps end at `<)-token>`. A `<function-token>`
+   CARRIES ITS OWN OPENING PARENTHESIS (lexbor spans `name(` in the token), so it needs no separate `(`. */
+static lxb_css_syntax_token_type_t iss_ending_token(lxb_css_syntax_token_type_t t)
 {
     if (t == LXB_CSS_SYNTAX_TOKEN_LS_BRACKET) return LXB_CSS_SYNTAX_TOKEN_RS_BRACKET;
     if (t == LXB_CSS_SYNTAX_TOKEN_LC_BRACKET) return LXB_CSS_SYNTAX_TOKEN_RC_BRACKET;
     DCHECK(t == LXB_CSS_SYNTAX_TOKEN_FUNCTION || t == LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS,
-           "CSS Syntax's consume a simple block was asked for the mirror of a token that opens none");
+           "CSS Syntax §5.5.9's ENDING TOKEN was asked for a token that opens neither a simple block nor a "
+           "function — §5.5.8 sends only `{`, `[`, `(` and a `<function-token>` here");
     return LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS;
+}
+
+/* ONE TOKEN STREAM BEING WALKED, with §5.5.9's ENDING TOKEN stack it and §5.5.10 share. `base`/`len` is the
+   buffer the tokenizer was set from, so every offset below is subtraction rather than a second cursor that
+   could drift.
+   THE WALK IS ITERATIVE THOUGH §5.5.8-§5.5.10 ARE MUTUALLY RECURSIVE, and that is deliberate: the nesting
+   depth is the page's, a C recursion over it is a stack this engine does not bound, and CLAUDE.md's answer to
+   depth is never a cap. The explicit stack grows. */
+typedef struct {
+    lxb_css_syntax_tokenizer_t  *tkz;
+    const char                  *base;
+    size_t                       len;
+    lxb_css_syntax_token_type_t *ends;
+    int                          n, cap;
+} IssStream;
+
+static bool iss_stream_open(IssStream *s, const char *text, size_t len)
+{
+    s->base = text;
+    s->len = len;
+    s->ends = NULL;
+    s->n = s->cap = 0;
+    s->tkz = lxb_css_syntax_tokenizer_create();
+    CHECK(s->tkz != NULL, "§4.8.4.3.11: the sizes attribute tokenizer allocation failed");
+    if (lxb_css_syntax_tokenizer_init(s->tkz) != LXB_STATUS_OK) {
+        lxb_css_syntax_tokenizer_destroy(s->tkz);
+        s->tkz = NULL;
+        return false;
+    }
+    lxb_css_syntax_tokenizer_buffer_set(s->tkz, (const lxb_char_t *)text, len);
+    return true;
+}
+
+static void iss_stream_close(IssStream *s)
+{
+    free(s->ends);
+    s->ends = NULL;
+    if (s->tkz) lxb_css_syntax_tokenizer_destroy(s->tkz);
+    s->tkz = NULL;
+}
+
+/* The current token, NEVER consumed. NULL is the tokenizer's own allocation failure.
+   COMMENTS ARE DROPPED HERE and nowhere else: CSS Syntax §4.3.1 "Consume a token" consumes comments inside the
+   tokenizer and emits no token for one, and lexbor's own header marks its COMMENT type "not in specification".
+   Dropping it in the peek is what keeps it from being counted as the component value it is not — by EITHER
+   caller, which is the point of there being one peek. */
+static lxb_css_syntax_token_t *iss_peek(IssStream *s)
+{
+    lxb_css_syntax_token_t *t = lxb_css_syntax_token(s->tkz);
+
+    while (t && t->type == LXB_CSS_SYNTAX_TOKEN_COMMENT) {
+        lxb_css_syntax_token_consume(s->tkz);
+        t = lxb_css_syntax_token(s->tkz);
+    }
+    return t;
+}
+
+static size_t iss_at(const IssStream *s, lxb_css_syntax_token_t *t)
+{
+    const lxb_char_t *b = lxb_css_syntax_token_base(t)->begin;
+
+    DCHECK(b >= (const lxb_char_t *)s->base && b <= (const lxb_char_t *)s->base + s->len,
+           "a CSS token names a span outside the buffer it was tokenized from — the tokenizer's buffer IS that "
+           "string, so a pointer outside it means the buffer was set from something else");
+    if (b < (const lxb_char_t *)s->base) return 0;
+    if (b > (const lxb_char_t *)s->base + s->len) return s->len;
+    return (size_t)(b - (const lxb_char_t *)s->base);
+}
+
+static size_t iss_end_of(const IssStream *s, lxb_css_syntax_token_t *t)
+{
+    size_t end = iss_at(s, t) + lxb_css_syntax_token_base(t)->length;
+
+    return end > s->len ? s->len : end;
+}
+
+static void iss_push_end(IssStream *s, lxb_css_syntax_token_type_t e)
+{
+    if (s->n == s->cap) {
+        int grow = s->cap ? s->cap * 2 : 8;
+        lxb_css_syntax_token_type_t *a = realloc(s->ends, (size_t)grow * sizeof *a);
+
+        CHECK(a != NULL, "§4.8.4.3.11: OOM tracking a sizes attribute's nested blocks");
+        s->ends = a;
+        s->cap = grow;
+    }
+    s->ends[s->n++] = e;
+}
+
+/* CSS Syntax Level 3 §5.5.8 "Consume a component value" — THE one implementation, run by the cut and by the
+   check that verifies the cut.
+   "Process input: `<{-token>` `<[-token>` `<(-token>` — Consume a simple block from input and return the
+   result. `<function-token>` — Consume a function from input and return the result. anything else — Consume a
+   token from input and return the result."
+   Answers the component value's SOURCE SPAN and the type of its first token. FALSE for the tokenizer's own
+   failure and for an `<eof-token>` — there is no component value at the end of the stream, and every caller
+   tests for one before asking. */
+static bool iss_consume_component_value(IssStream *s, size_t *pbegin, size_t *pend,
+                                        lxb_css_syntax_token_type_t *plead)
+{
+    lxb_css_syntax_token_t *t = iss_peek(s);
+    int base_depth = s->n;
+
+    if (!t || t->type == LXB_CSS_SYNTAX_TOKEN__EOF) return false;
+    *pbegin = iss_at(s, t);
+    *plead = t->type;
+    if (!iss_opens_block(t->type)) {                    /* "anything else — Consume a token" */
+        *pend = iss_end_of(s, t);
+        lxb_css_syntax_token_consume(s->tkz);
+        return true;
+    }
+    iss_push_end(s, iss_ending_token(t->type));
+    lxb_css_syntax_token_consume(s->tkz);
+    for (;;) {
+        t = iss_peek(s);
+        if (!t) { s->n = base_depth; return false; }
+        /* §5.5.9 and §5.5.10 BOTH end at `<eof-token>` as well as at the ending token, so an unterminated
+           block or function is a component value that runs to the end of the input rather than one that is
+           discarded. That is the arm `sizes="calc(100vw"` takes. */
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) { s->n = base_depth; *pend = s->len; return true; }
+        /* Only the token that mirrors the INNERMOST open block ends it. §5.5.9's other arm is "anything else —
+           Consume a component value", so a `]` inside a `(…)` is a preserved token and not a close: matching
+           it against anything but the top of the stack is how a mismatched bracket eats the rest of a value. */
+        if (t->type == s->ends[s->n - 1]) {
+            size_t e = iss_end_of(s, t);
+
+            lxb_css_syntax_token_consume(s->tkz);
+            s->n--;
+            if (s->n == base_depth) { *pend = e; return true; }
+            continue;
+        }
+        if (iss_opens_block(t->type)) {
+            iss_push_end(s, iss_ending_token(t->type));
+            lxb_css_syntax_token_consume(s->tkz);
+            continue;
+        }
+        lxb_css_syntax_token_consume(s->tkz);
+    }
 }
 
 /* THE TOP-LEVEL COMPONENT VALUES of `text`, in order. `false` is the tokenizer's own failure, which every
@@ -458,72 +614,36 @@ static lxb_css_syntax_token_type_t cv_mirror(lxb_css_syntax_token_type_t t)
    valid source size list, which is §4.8.4.3.11's last step (`Return 100vw`) and not an error to report. */
 static bool iss_component_values(const char *text, size_t len, IssCvList *out)
 {
-    lxb_css_syntax_tokenizer_t *tkz = lxb_css_syntax_tokenizer_create();
-    lxb_css_syntax_token_type_t *stack = NULL;
-    int depth = 0, cap = 0;
-    size_t begin = 0;
-    lxb_css_syntax_token_type_t lead = LXB_CSS_SYNTAX_TOKEN_UNDEF;
+    IssStream s;
     bool ok = true;
 
-    CHECK(tkz != NULL, "§4.8.4.3.11: the sizes attribute tokenizer allocation failed");
-    if (lxb_css_syntax_tokenizer_init(tkz) != LXB_STATUS_OK) {
-        lxb_css_syntax_tokenizer_destroy(tkz);
-        return false;
-    }
-    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t *)text, len);
+    if (!iss_stream_open(&s, text, len)) return false;
+    /* CSS Syntax §5.5.7 "Consume a list of component values" in the shape §5.4.10's comma-separated variant
+       needs: repeatedly consume ONE component value until the stream is at `<eof-token>`. The COMMAS are not
+       cut here — they arrive as ordinary preserved-token component values and `iss_parse_sizes` groups on
+       them, because §5.4.2's own note is that a sizes attribute wants each comma-separated part to fail
+       SEPARATELY ("typically ignoring them, such as in `<img sizes>`") and a group boundary is therefore a
+       thing that algorithm decides rather than something the cut can throw away. */
     for (;;) {
-        lxb_css_syntax_token_t *t = lxb_css_syntax_token(tkz);
-        const lxb_char_t *b;
-        size_t at, end;
+        lxb_css_syntax_token_t *t = iss_peek(&s);
+        size_t begin = 0, end = 0;
+        lxb_css_syntax_token_type_t lead = LXB_CSS_SYNTAX_TOKEN_UNDEF;
 
         if (!t) { ok = false; break; }
         if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
-        /* CSS Syntax §4 consumes comments in the tokenizer and emits no token for them; lexbor's own header
-           marks this type "not in specification", so it is dropped here rather than counted as a component
-           value it is not. */
-        if (t->type == LXB_CSS_SYNTAX_TOKEN_COMMENT) { lxb_css_syntax_token_consume(tkz); continue; }
-        b = lxb_css_syntax_token_base(t)->begin;
-        DCHECK(b >= (const lxb_char_t *)text && b <= (const lxb_char_t *)text + len,
-               "a CSS token names a span outside the sizes attribute it was tokenized from — the tokenizer's "
-               "buffer IS that string, so a pointer outside it means the buffer was set from something else");
-        at = (size_t)(b - (const lxb_char_t *)text);
-        end = at + lxb_css_syntax_token_base(t)->length;
-        if (end > len) end = len;
-
-        if (depth == 0) {
-            begin = at;
-            lead = t->type;
-            if (!cv_opens_block(t->type)) {
-                cv_add(out, at, end, t->type);
-                lxb_css_syntax_token_consume(tkz);
-                continue;
-            }
-        }
-        if (cv_opens_block(t->type)) {
-            if (depth == cap) {
-                int grow = cap ? cap * 2 : 8;
-                lxb_css_syntax_token_type_t *s2 = realloc(stack, (size_t)grow * sizeof *s2);
-
-                CHECK(s2 != NULL, "§4.8.4.3.11: OOM tracking a sizes attribute's nested blocks");
-                stack = s2;
-                cap = grow;
-            }
-            stack[depth++] = cv_mirror(t->type);
-        } else if (depth > 0 && t->type == stack[depth - 1]) {
-            depth--;
-            if (depth == 0) {
-                cv_add(out, begin, end, lead);
-                lxb_css_syntax_token_consume(tkz);
-                continue;
-            }
-        }
-        lxb_css_syntax_token_consume(tkz);
+        if (!iss_consume_component_value(&s, &begin, &end, &lead)) { ok = false; break; }
+        DCHECK(out->n == 0 || begin >= out->v[out->n - 1].end,
+               "§5.5.8's walk cut a component value that starts BEFORE the previous one ended — the spans are "
+               "one forward pass over one buffer, so an overlap is the offsets and the cursor disagreeing");
+        DCHECK(end >= begin && end <= len,
+               "§5.5.8's walk cut a component value that ends before it starts or past the input");
+        cv_add(out, begin, end, lead);
     }
-    /* CSS Syntax's consume a simple block ends at EOF as well as at the mirror, so an unterminated block is a
-       component value that runs to the end of the input rather than one that is discarded. */
-    if (ok && depth > 0) cv_add(out, begin, len, lead);
-    free(stack);
-    lxb_css_syntax_tokenizer_destroy(tkz);
+    DCHECK(!ok || s.n == 0,
+           "§5.5.8's walk finished with §5.5.9's ENDING-TOKEN stack unbalanced — every arm that leaves the "
+           "walk pops back to the depth it entered at, including the `<eof-token>` arm, so a residue here is "
+           "a block this cut believes is still open at the end of the input");
+    iss_stream_close(&s);
     return ok;
 }
 
@@ -570,20 +690,18 @@ static CssPx iss_math_length(void *ctx, double n, const char *unit, size_t unit_
    `*is_auto` is the keyword arm, which carries no number; `*px` is the length in CSS pixels otherwise. */
 static bool iss_source_size_value(JSContext *ctx, const char *text, size_t len, bool *is_auto, double *px)
 {
-    lxb_css_syntax_tokenizer_t *tkz = lxb_css_syntax_tokenizer_create();
+    IssStream s;
     lxb_css_syntax_token_t *t;
     bool ok = false;
 
     *is_auto = false;
     *px = 0.0;
-    CHECK(tkz != NULL, "§4.8.4.3.11: the source size value tokenizer allocation failed");
-    if (lxb_css_syntax_tokenizer_init(tkz) != LXB_STATUS_OK) {
-        lxb_css_syntax_tokenizer_destroy(tkz);
-        return false;
-    }
-    lxb_css_syntax_tokenizer_buffer_set(tkz, (const lxb_char_t *)text, len);
-    t = lxb_css_syntax_token(tkz);
-    if (!t) { lxb_css_syntax_tokenizer_destroy(tkz); return false; }
+    if (!iss_stream_open(&s, text, len)) return false;
+    /* PEEKED AND NOT CONSUMED: every arm below reads the token's own payload (lexbor cooks a string into a temp
+       buffer that the NEXT token request overwrites), and the walk that verifies the span is one component
+       value runs afterwards, from this same cursor. */
+    t = iss_peek(&s);
+    if (!t) { iss_stream_close(&s); return false; }
     switch (t->type) {
     case LXB_CSS_SYNTAX_TOKEN_FUNCTION: {
         /* §4.8.4.2.2 admits the MATH FUNCTIONS here and nothing else — "must not use CSS functions other than
@@ -651,17 +769,27 @@ static bool iss_source_size_value(JSContext *ctx, const char *text, size_t len, 
         break;
     }
     if (ok) {
-        /* A component value is ONE token or one block, and this span was cut at a component value boundary, so
-           there must be nothing after it. A second token means the walk that produced the span and this
-           re-tokenization disagree about where one ends. */
-        lxb_css_syntax_token_consume(tkz);
-        t = lxb_css_syntax_token(tkz);
-        DCHECK(t != NULL && t->type == LXB_CSS_SYNTAX_TOKEN__EOF,
-               "a `<source-size-value>` span held more than one component value — the span was cut by "
-               "iss_component_values at a top-level boundary, so a second token here means those two walks "
-               "read the same bytes as different component values");
+        size_t begin = 0, end = 0;
+        lxb_css_syntax_token_type_t lead = LXB_CSS_SYNTAX_TOKEN_UNDEF;
+
+        /* THE WHOLE COMPONENT VALUE, through the SAME §5.5.8 walk that cut this span — never one token. That
+           distinction is the bug this replaces: a `<function-token>` is one component value made of MANY
+           tokens (§5.5.10 "Consume a function" runs to `)` or to `<eof-token>`), so consuming a single token
+           left the cursor on `100vw` inside `calc(100vw - 40px)` and the assert below fired on the function's
+           own operand. It was sound only while the FUNCTION arm above could not succeed. */
+        if (iss_consume_component_value(&s, &begin, &end, &lead)) {
+            DCHECK(begin == 0,
+                   "a `<source-size-value>` span does not start at its own first token — iss_component_values "
+                   "cuts a span AT a token, so a non-zero offset here is the cut and this read disagreeing "
+                   "about where the component value begins");
+            t = iss_peek(&s);
+            DCHECK(t != NULL && t->type == LXB_CSS_SYNTAX_TOKEN__EOF,
+                   "a `<source-size-value>` span held more than one component value — the span was cut by "
+                   "iss_component_values as ONE, through the very walk this line just re-ran over the same "
+                   "bytes, so a token after it means that walk is not deterministic over its own output");
+        }
     }
-    lxb_css_syntax_tokenizer_destroy(tkz);
+    iss_stream_close(&s);
     return ok;
 }
 
