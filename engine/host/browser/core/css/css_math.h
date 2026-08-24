@@ -142,6 +142,17 @@ bool css_math_is_function(const char *name, size_t len);
    failure, for one whose type matches a different production, and for text that is not a math function. */
 bool css_math_matches(const char *text, size_t len, CssMathProduction want);
 
+/* §10.8 "Syntax" WITHOUT §10.9's last rule: is `text` ONE math function and nothing else, whatever type it
+   resolves to? TRUE for `calc(1px + 1s)`, whose type is FAILURE and which `css_math_matches` therefore refuses
+   for every production — and that pair is the whole reason this exists. A caller that must tell "this value is
+   a math function this property does not admit" (an authoring mistake, and a dropped declaration) from "this
+   value is not a lone math function at all" (which may be a longer value with a math function INSIDE it, and
+   so a grammar this component cannot judge) cannot get that from `css_math_matches`, which answers false to
+   both and to `calc(2em) hanging` besides.
+   IT IS THE SAME WALK, which is the point: §10.8's nesting, comma arities and `<calc-value>` productions are
+   answered once and the type gate is simply not applied, so there is no second parser to drift. */
+bool css_math_is_lone_function(const char *text, size_t len);
+
 /* §10.10.1's "if root is a dimension that is not expressed in its canonical unit, and there is enough
    information available to convert it to the canonical unit, do so" — asked of the CALLER, because WHICH
    number a dimension is worth is a fact about the caller's context and not about §10's arithmetic. The pattern

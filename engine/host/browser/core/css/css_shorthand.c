@@ -380,17 +380,42 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
         return NULL;   /* a border shorthand this component does not expand, or one that does not set this side */
     }
     if (strcmp(shorthand, "margin") == 0 || strcmp(shorthand, "padding") == 0) {
-        int comp;
+        bool is_margin = strcmp(shorthand, "margin") == 0;
+        int comp, k;
 
         side = box_side_index(shorthand, longhand);
         if (side < 0) return NULL;   /* this shorthand does not name that longhand */
+        /* CSS Cascade §Shorthand Properties: a CSS-wide keyword "sets all of its sub-properties to that
+           keyword", so it is the ENTIRE value and precedes the shorthand's own grammar — the same order the
+           border arms above state, and required here for the same reason now that the grammar below refuses
+           what is not a `<margin-width>`: `margin: inherit` is not one, and §7's DEFAULTING step is what
+           resolves it one property along. */
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
         n = css_words(value, w, wl, 4);
-        DCHECK(n >= 1 && n <= 4,
-               "a `margin`/`padding` declaration serialized to a component count outside the {1,4} multiplier "
-               "CSS 2.1 §8.3 and §8.4 give it — lexbor parses the shorthand into a FOUR-SLOT typed value and "
-               "serializes only the slots that were set, so neither an empty value nor a fifth word can come "
-               "out of a declaration its own parser accepted");
-        if (n < 1) return NULL;      /* in release, an invalid declaration simply sets no longhand */
+        /* THE COUNT IS NO LONGER LEXBOR'S TO GUARANTEE, so it is a refusal and not an assertion. This used to
+           DCHECK that the count was within CSS 2.1 §8.3 and §8.4's `{1,4}` on the grounds that lexbor parses
+           the shorthand into a four-slot typed value and can serialize nothing else — which was true while
+           every value reaching here had been through lexbor's own grammar. A declaration lexbor REFUSED now
+           reaches here too (a `margin: calc(1rem) 2px`, whose only defect in its eyes is a math function it has
+           never heard of), and its value is the RAW SOURCE SPAN with no slot count behind it. A fifth component
+           there is a page's own invalid declaration, which CSS Syntax 3 §5.5.6 "Consume a declaration" drops. */
+        if (n < 1) return NULL;
+        /* AND SO IS THE GRAMMAR. Nothing validated a refused declaration's components, so each is put through
+           the longhand's own production before any of them sets anything — css-box-4 §3.1 makes a margin
+           `<length-percentage> | auto` and §4.1 makes a padding `<length-percentage [0,∞]>`, which is why
+           `auto` is admitted for one and not the other. It runs for a lexbor-typed value too, where it is a
+           re-check that cannot fail, rather than being made conditional on which door the value came through:
+           a validation that only some callers get is the shape whose gaps are invisible.
+           §10.12 "Range Checking" is deliberately not applied — a negative `calc()` is a VALID declaration that
+           computes to the clamped value, so refusing one here would drop `padding: calc(1rem - 2rem)`. */
+        for (k = 0; k < n; k++) {
+            char *probe = css_sh_dupn(w[k], wl[k]);
+            bool ok = css_length_is_length_percentage(probe) ||
+                      (is_margin && strcmp(probe, "auto") == 0);
+
+            free(probe);
+            if (!ok) return NULL;
+        }
         comp = SIDE_OF[n][side];
         return css_sh_dupn(w[comp], wl[comp]);
     }

@@ -1362,11 +1362,17 @@ done:
     return ok;
 }
 
-/* ---- the two public questions ---------------------------------------------------------------------------- */
+/* ---- the three public questions -------------------------------------------------------------------------- */
 
-/* Parse the whole of `text` as ONE math function, in §10.9's type-only mode when `res` is NULL. */
+/* Parse the whole of `text` as ONE math function, in §10.9's type-only mode when `res` is NULL.
+   `type_gated` says whether §10.9's LAST RULE is part of the answer. It is for both questions that ask what a
+   math function IS; it is not for the one that asks only whether the text is one at all, and the difference is
+   exactly the SYNTAX/TYPE split §10 draws between §10.8 "Syntax" and §10.9 "Type Checking". The flag exists so
+   that split is made in ONE walk: a second scan written to answer "is this one math function" would have to
+   re-derive §10.8's nesting, its comma arities and its `<calc-value>` productions, and the day the two
+   disagreed the caller would be told a value is not a math function by one and refused by the other. */
 static bool mth_top(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
-                    CssMathValue *out)
+                    bool type_gated, CssMathValue *out)
 {
     Mth m = { NULL, res, CSS_MATH_HINT_NULL, 0, false };
     lxb_css_syntax_token_t *t;
@@ -1407,7 +1413,7 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
     if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto done;
     /* §10.9's last rule: "A math function resolves to <number>, <length>, ... according to which of those
        productions its type matches ... If it can't match any of these, the math function is invalid." */
-    if (!mth_type_matches(&v.type, want)) goto done;
+    if (type_gated && !mth_type_matches(&v.type, want)) goto done;
     ok = true;
     if (res == NULL || out == NULL) goto done;
     if (v.blocked == MTH_UNRESOLVED_FLEX)
@@ -1464,7 +1470,16 @@ done:
 
 bool css_math_matches(const char *text, size_t len, CssMathProduction want)
 {
-    return mth_top(text, len, NULL, want, NULL);
+    return mth_top(text, len, NULL, want, true, NULL);
+}
+
+bool css_math_is_lone_function(const char *text, size_t len)
+{
+    /* `want` is unread on this path — `type_gated` is what decides whether it is consulted at all — and it is
+       passed as `CSS_MATH_PROD_NUMBER` rather than left indeterminate because §10.9's own rounding step reads
+       it, and a value chosen to be harmless is a value a later edit could make load-bearing without noticing.
+       `res` is NULL, so that step is not reached either. */
+    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, false, NULL);
 }
 
 bool css_math_eval(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
@@ -1474,5 +1489,5 @@ bool css_math_eval(const char *text, size_t len, const CssMathResolver *res, Css
            "a math function was evaluated with no resolver or nowhere to write the result — the TYPE question "
            "needs neither and is `css_math_matches`, so an absent one here is a caller that meant to ask that "
            "one instead");
-    return mth_top(text, len, res, want, out);
+    return mth_top(text, len, res, want, true, out);
 }

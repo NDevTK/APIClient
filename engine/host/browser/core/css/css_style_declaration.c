@@ -70,7 +70,9 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_keyframes.h"
+#include "core/css/css_math.h"
 #include "core/css/css_page.h"
+#include "core/css/css_property_numeric.h"
 #include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
 #include "core/css/css_shorthand.h"
@@ -390,11 +392,181 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
 {
     int at = cssd_decls_index(d, name);
 
+    /* THE ONE POINT EVERY DECLARATION ENTERING A BLOCK CONVERGES ON, which is why the math-function invariant
+       is asserted here and not at any of the three call sites. A longhand arrives from the declaration as
+       written, from a shorthand's expansion, or from a `__UNDEF` this file re-judged, and each of those has its
+       own reason to believe the value is valid — so the ASSERTION that they agree belongs where they meet.
+       WHAT IT CATCHES is a math function reaching the cascade under a property whose grammar does not name its
+       type: `border-top-width: calc(50% + 2px)` produced by an expansion that asked `<length-percentage>` where
+       css-backgrounds-3 §3.3's `<line-width>` is `<length [0,∞]>`. That is not a dropped declaration and not a
+       crash downstream — it is a value that flows all the way to a used value and answers a layout question
+       with a number the page never wrote, which is the failure this whole path exists to end.
+       IT IS A LONE MATH FUNCTION ONLY, because a longer value's components are the owning grammar's to split
+       and this file holds no splitter; the crash for the case that needs one stands in
+       cssd_undef_is_declaration, where the value is still whole.
+       AND IT IS SCOPED TO THE PROPERTIES SOMETHING IN THIS ENGINE ACTUALLY VALIDATES, which is what
+       `css_property_numeric_audited` answers. The invariant is that a producer which VALIDATED a value asked
+       the right production, so it says nothing about a value no producer ever judged — and most of CSS is in
+       that state here, because lexbor's registry stops well short of it: `border-radius: calc(4px)` and
+       `gap: calc(1rem)` are typed by nothing, collected as raw tokens, and reach the cascade unexamined (which
+       is why they have always worked). Asserting over those would abort on two of the commonest declarations
+       on the web while proving nothing. A custom property is outside it for the stronger reason that CSS
+       Properties and Values API 1 owns its grammar — `--x: calc(1s)` is a valid declaration whatever it says. */
+#if APICLIENT_DEV
+    if (value != NULL && !(name[0] == '-' && name[1] == '-') &&
+        css_property_numeric_audited(name) && css_math_is_lone_function(value, strlen(value))) {
+        unsigned prods, p;
+        bool ok = false;
+
+        (void)css_property_numeric(name, &prods);
+        for (p = 0; !ok && (prods >> p) != 0; p++)
+            ok = (prods & CSS_NUMERIC_BIT(p)) != 0 && css_math_matches(value, strlen(value), (CssMathProduction)p);
+        DCHECK(ok,
+               "a MATH FUNCTION is entering a declaration block under a property whose grammar names no "
+               "numeric production its css-values-4 §10.9 'Type Checking' type matches. §10's opening sentence "
+               "is the invariant — a math function \"can be used wherever such a value would be valid\", and "
+               "nowhere else — so this is a producer that asked the WRONG production, and the answer it "
+               "produced is a plausible number rather than a dropped declaration. The productions are per "
+               "property and the neighbours disagree (core/css/css_property_numeric.h): whoever validated this "
+               "value asked `<length-percentage>` for a `<line-width>`, or `<number>` for a `<percentage>`. "
+               "Find the producer — the shorthand expansion in core/css/css_shorthand.c, or the `__UNDEF` "
+               "re-judge in this file — and make it ask this property's own production");
+    }
+#endif
     if (at >= 0) {
         if (d->v[at].important && !important) { free(value); return; }
         cssd_decls_remove_at(d, (unsigned)at);
     }
     cssd_decls_append(d, cssd_strdup(name), value, important);
+}
+
+/* ---- css-values-4 §10's MATH FUNCTIONS AS A DECLARATION'S VALUE -------------------------------------------
+ *
+ * WHY THIS IS HERE AT ALL. §10 "Mathematical Expressions" opens: "A math function represents a numeric value,
+ * one of: <length>, <frequency>, <angle>, <time>, <flex>, <resolution>, <percentage>, <number>, <integer>
+ * ...or the <length-percentage>/etc mixed types, AND CAN BE USED WHEREVER SUCH A VALUE WOULD BE VALID." The
+ * vendored parser has no math functions in it at all — `calc` appears nowhere under its css module — so every
+ * property whose grammar it DOES carry rejects one, and CSS Syntax 3 §5.5.6 "Consume a declaration"'s last
+ * step ("If decl is valid in the current context, return it; otherwise return nothing") then drops the
+ * declaration. `width: calc(100vw - 20px)` therefore never reached a length parser, and the property fell back
+ * to its initial value with nothing anywhere reporting it — the failure mode CSS is worst at, because an
+ * initial value is a plausible value and every layout answer derived from it looks like a measurement.
+ *
+ * CSS 2.1 §4.2 "Rules for handling parsing errors" IS THE WARRANT, not an exception to it. Its whole framing
+ * is forward compatibility — "To ensure that new properties and NEW VALUES FOR EXISTING PROPERTIES can be
+ * added in the future, user agents are required to obey the following rules" — and it closes the illegal-value
+ * rule with "A user agent conforming to a future CSS specification may accept one or more of the other rules
+ * as well." A math function is exactly a new value for an existing property, and this engine is exactly the
+ * later user agent. So re-judging here is not a loosening of §4.2's "user agents must ignore a declaration
+ * with an illegal value"; it is the recognition that the value was never illegal, and that the parser deciding
+ * so is one edition behind the value.
+ *
+ * WHAT IS NOT WIDENED. A declaration whose value carries no math function is lexbor's verdict and stands —
+ * `display: bogus` is dropped here exactly as it was, and so is a math function whose §10.9 "Type Checking"
+ * type does not match the production this property's grammar names. Both of those are §5.5.6's "return
+ * nothing", and neither becomes a crash: a page's own invalid declaration is not an engine gap.
+ * The property's production is core/css/css_property_numeric.h's, and it is PER PROPERTY because the spec is:
+ * css-fonts-4 §2.5's `font-size` is a `<length-percentage [0,∞]>` and css-backgrounds-3 §3.3's `<line-width>`
+ * is `<length [0,∞]> | thin | medium | thick`, so `font-size: calc(50% + 2px)` is a declaration and
+ * `border-top-width: calc(50% + 2px)` is not. Asking one question for both silently does one of them wrong. */
+
+/* Does `value` contain a math function at all? CSS Syntax 3 §4.3.4 "Consume an ident-like token" is the whole
+   rule — a FUNCTION token is an ident sequence "immediately followed by a U+0028 LEFT PARENTHESIS" — so the
+   name is the ident run ending at a `(`, and WHICH names are math functions is core/css/css_math.h's closed
+   list of §10.8 "Syntax"'s twenty-one notations rather than a second one written here.
+   IT IS DELIBERATELY NOT A PARSE. The question this answers is only "is a math function why lexbor refused
+   this", which decides whether to ASK the grammar at all; the grammar itself then decides validity, and a
+   false yes here costs one refused `css_math_matches` rather than an accepted declaration. */
+static bool cssd_has_math_function(const char *value)
+{
+    const char *p;
+
+    if (!value) return false;
+    for (p = value; *p; p++) {
+        const char *start;
+
+        if (*p != '(') continue;
+        start = p;
+        /* §4.3.4's ident sequence, scanned backwards from the parenthesis. `-` and `_` are ident code points
+           and a digit is one after the first, which is why the run is taken by CHARACTER CLASS and not by an
+           `isalpha` that would cut `atan2` in half and ask about `atan`. */
+        while (start > value &&
+               (isalnum((unsigned char)start[-1]) || start[-1] == '-' || start[-1] == '_')) start--;
+        if (start < p && css_math_is_function(start, (size_t)(p - start))) return true;
+    }
+    return false;
+}
+
+/* IS THIS A DECLARATION AFTER ALL — asked only of a declaration lexbor's own grammar refused, and answering
+   TRUE only for a value a LATER LEVEL OF CSS defines than the grammar that refused it. Two forms qualify and
+   each is named by a specification rather than recognised by a pattern; anything else keeps lexbor's verdict.
+   THE SECOND ARM IS SPLIT BY WHERE THE NUMERIC PRODUCTION STANDS IN THE GRAMMAR, because that is what decides
+   whether this file can judge the value. A CSS_NUMERIC_WHOLE property's grammar makes the numeric production
+   the ENTIRE value, so `css_math_matches` — which parses one math function and requires the stream to end
+   after it — decides it in full. A CSS_NUMERIC_COMPONENT property's value is a SEQUENCE of component values
+   whose grammar says which position is which, and that grammar lives in the component that owns the shorthand;
+   a value that is nonetheless one lone math function is still decided here, because a `{1,4}` repetition or an
+   omitted optional makes the one-component spelling legal (`margin: calc(1rem)`, `text-indent: calc(2em)`). */
+static bool cssd_undef_is_declaration(const char *name, const char *value)
+{
+    CssNumericShape shape;
+    unsigned prods, p;
+
+    DCHECK(name != NULL && value != NULL,
+           "a refused declaration was re-judged with no property name or no value — lexbor keeps both on the "
+           "`__UNDEF` it converts one into (the real property id, and the raw source span of the value), so an "
+           "absent one is a caller that lost it rather than a declaration that never had it");
+    /* css-cascade-5 §7.3 "Explicit Defaulting": "As specified in CSS Values and Units, all CSS properties can
+       accept these values." The vendored grammar carries `initial`/`inherit`/`unset`/`revert` and predates
+       §7.3.5 "Rolling Back Cascade Origins: the revert keyword"'s companion §7.3.6 `revert-layer`, so which
+       CSS-wide keywords survive its parse depends on which properties it happens to type — a wrong answer per
+       property rather than a missing capability. */
+    if (css_wide_keyword(value)) return true;
+    if (!cssd_has_math_function(value)) return false;
+    shape = css_property_numeric(name, &prods);
+    /* The grammar names no numeric production anywhere, so a math function is not a value of this property and
+       §5.5.6 drops the declaration. This is a real answer and not an absence — see the table. */
+    if (shape == CSS_NUMERIC_NONE) return false;
+    /* A shorthand core/css/css_shorthand.h expands: its own grammar splits the value into component values and
+       validates each against the longhand it sets, which is the judgement this file cannot make. It is routed
+       there whole, and a component outside its grammar drops the declaration exactly as one that carried no
+       math function does. */
+    if (shape == CSS_NUMERIC_COMPONENT && css_shorthand_is_shorthand(name)) return true;
+    /* §10.9's last rule asked once per production the grammar names, because a grammar spelled with `|` names
+       as many as it has numeric branches and a math function is valid there when its type matches ANY of them
+       (css-inline-3 §5.1's `line-height` is a `<number>` OR a `<length-percentage>`, and §4.3.2's algebra makes
+       those disjoint). The loop is bounded by the MASK rather than by the last enum member, so a production
+       added to CssMathProduction after `CSS_MATH_PROD_LENGTH_PERCENTAGE` cannot silently fall outside it. */
+    for (p = 0; (prods >> p) != 0; p++)
+        if ((prods & CSS_NUMERIC_BIT(p)) && css_math_matches(value, strlen(value), (CssMathProduction)p))
+            return true;
+    /* THE VALUE CARRIES A MATH FUNCTION AND IS NOT ONE THAT MATCHES, and the two reasons for that are a page's
+       mistake and an engine gap — so they are told apart rather than sharing an answer.
+       For a CSS_NUMERIC_WHOLE property there is only the first: its grammar makes the numeric production the
+       ENTIRE value, so a second component value, or a type §10.9 resolves to a production the property does not
+       name, is out of the grammar and §5.5.6 drops it.
+       For a CSS_NUMERIC_COMPONENT property, a value that IS one lone math function is likewise just invalid —
+       `text-indent: calc(1s)` is a math function whose type is a `<time>`, and no position in that grammar
+       takes one. It is only a value that is NOT a lone math function, and yet contains one, that this file
+       cannot judge; that is the crash below, and `css_math_is_lone_function` is what keeps a page's typo out of
+       it (it answers TRUE for a math function whose type is FAILURE, which `css_math_matches` cannot). */
+    if (shape == CSS_NUMERIC_WHOLE || css_math_is_lone_function(value, strlen(value))) return false;
+    DFAIL("a declaration lexbor refused carries a MATH FUNCTION as ONE COMPONENT of a multi-component value, "
+          "for a property whose grammar puts a numeric production in a component position and which "
+          "core/css/css_shorthand.h does not expand — `text-indent: calc(2em) hanging` (css-text-3 §8.1's "
+          "\"[ <length-percentage> ] && hanging? && each-line?\"), `font-style: oblique calc(10deg)` "
+          "(css-fonts-4 §2.4), `flex: 1 1 calc(100% - 10px)` (css-flexbox-1 §7.1), `border-image-width: "
+          "calc(1px) 2px` (css-backgrounds-3 §6). Every one of those is VALID CSS and dropping it would be the "
+          "same silent initial value this whole path exists to stop, so it crashes instead. WHAT IS MISSING is "
+          "a split of a declaration's value into CSS Syntax 3 §5.5.8 \"Consume a component value\"'s component "
+          "values, and a per-property grammar that says which production each POSITION takes — the second half "
+          "is the real work, and core/css/css_shorthand.h already holds it for the shorthands it expands, "
+          "which is exactly why those are routed there one branch above rather than reaching here. BUILD that "
+          "positional grammar for the properties this table marks CSS_NUMERIC_COMPONENT, or expand the "
+          "shorthand in css_shorthand.c so this name takes the branch above; a value whose math components "
+          "match is NOT enough on its own, because the components that are NOT math functions would then "
+          "enter the block with nothing having validated them");
+    return false;
 }
 
 /* IS THIS DECLARATION IN THIS RULE'S BLOCK AT ALL — the three restrictions css_style_declaration.h names,
@@ -498,18 +670,20 @@ static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, Cs
            properties the vendored parser happens to know, which is a wrong answer per property rather than a
            missing capability. `undef->type` carries the real property id and `undef->value` the raw source
            span (the `!important` is a separate offset and is already on the declaration), so both halves of
-           the declaration survive. */
+           the declaration survive.
+           AND THE SAME IS TRUE OF A MATH FUNCTION, FOR THE SAME REASON ONE LEVEL WIDER. The CSS-wide keyword
+           arm was written because a value's validity was being decided by which properties the vendored parser
+           happens to type; a `calc()` is that defect at the scale of the whole modern web, because the parser
+           types `width`, `height` and `font-size` and has no math functions at all. Both arms are one
+           question — is this a value a LATER LEVEL OF CSS defines than the grammar that refused it — and
+           cssd_undef_is_declaration is where it is asked. */
         if (d->type == LXB_CSS_PROPERTY__UNDEF) {
             char *raw = cssd_decl_value(d);
-            bool wide = raw != NULL && css_wide_keyword(raw);
 
-            if (wide) {
-                name = cssd_decl_name(d);   /* NULL when lexbor has no id for the property either */
-                if (name) {
-                    cssd_decls_collect_declaration(out, name, raw, d->important);
-                    free(name);
-                }
-            }
+            name = raw ? cssd_decl_name(d) : NULL;   /* NULL when lexbor has no id for the property either */
+            if (name && cssd_undef_is_declaration(name, raw))
+                cssd_decls_collect_declaration(out, name, raw, d->important);
+            free(name);
             free(raw);
             continue;
         }
@@ -2581,6 +2755,10 @@ void cssom_init(JSContext *ctx)
        in both directions and the cascade walks it in one, so a row that disagrees with itself is a wrong
        string and a wrong computed value at once. */
     css_shorthand_init();
+    /* The numeric-production table's, likewise before anything reads it: it is read by BINARY SEARCH, so an
+       out-of-order row is not a slow answer but a row the search never reaches — reported as a property the
+       table has never heard of, two lines below the row that holds it. */
+    css_property_numeric_init();
     /* The UA stylesheet's own invariants, for the same reason: it is scanned first-match-wins, so a duplicated
        row is a declaration that can never be reported and a transcription error nothing else would surface. */
     cssd_ua_table_check();
