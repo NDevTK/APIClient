@@ -232,9 +232,14 @@ static bool wp_closed(const ProxyData *p) { return p->closing != 0 || wp_bc_null
 
 static JSClassID g_proxy_class;
 static JSRuntime *g_wp_rt;
-/* §7.2.3's member surface. A WindowProxy has no own properties: it FORWARDS to its navigable, answering from
-   the navigable's own state where that is what the member is, and suspending on the host where the member reads
-   the active document. See the member table lower down for which is which.
+/* §7.2.3's member surface. It answers from the navigable's own state where that is what the member is, and
+   suspends on the host where the member reads the active document. See the member table lower down for which
+   is which.
+   EVERY NAME ON IT IS AN OWN PROPERTY OF THE PROXY, because §7.2.3 has no interface object: §7.2.3.5 answers
+   each of these names and §7.2.3.10 lists it, so this object is where the descriptor is READ FROM and never
+   what a prototype walk reaches for a same-origin W (proxy_surface_desc). The walk still reaches it for a
+   CROSS-ORIGIN one, which is §7.2.3.5 steps 4-6 and this engine's stand-in for §7.2.1.3.4's per-realm
+   anonymous functions — one object, two ways in, one answer either way.
    IT IS PER REALM, in quickjs's own class-proto slot, and that is an ANSWER and not an identity: a member runs
    in the realm that DEFINED it, so one shared object would answer `parent`, `name` and `close()` for every
    document out of whichever realm built it first — and the whole point of these members is that they read the
@@ -244,7 +249,7 @@ static JSRuntime *g_wp_rt;
 /* TWO GETTER IDS OVER ONE STEP DECLARATION, and they are two because a pool entry carries the MEMBER MAGIC —
    the step body reads it back with idl_step_magic to know which question it was asked. */
 static int g_wp_len_getter_id = -1, g_wp_closed_getter_id = -1;
-static int g_wp_name_setter_id = -1, g_wp_close_id = -1;
+static int g_wp_name_setter_id = -1, g_wp_opener_setter_id = -1, g_wp_close_id = -1;
 
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
@@ -1630,38 +1635,61 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * forward below answers every member that is where the standard puts it, and the two gaps close in either
  * order: a class-level [[GetPrototypeOf]] here, or the [Global] placement there. */
 
-/* Does §7.2.3's own surface answer this name? The PROTOTYPE is that surface — an ordinary object, so the
-   query runs none of the page's code and no walk: its OWN properties only, because Object.prototype's members
-   are exactly the ones the forward should be answering out of the other realm. */
-static bool proxy_surface_owns(JSContext *ctx, JSAtom prop)
+/* §7.2.3's OWN SURFACE FOR ONE NAME, AND IT IS AN OWN PROPERTY OF THIS OBJECT — not a prototype hit.
+ *
+ * §7.2.3 The WindowProxy exotic object says it in one line: "There is no WindowProxy interface object." Every
+ * name a WindowProxy answers is answered by §7.2.3.5's own [[GetOwnProperty]] and listed by §7.2.3.10's own
+ * [[OwnPropertyKeys]], so a member reachable ONLY up a prototype chain is a member
+ * `Object.getOwnPropertyDescriptor(w, n)` answers `undefined` for while `w.n` answers a value, and one
+ * `Object.getOwnPropertyNames(w)` never mentions. That is ONE FACT ANSWERED FROM TWO PLACES — the Window owns
+ * all thirteen of §7.2.1.3.1's names and this object's surface owned eleven of them — and the two had already
+ * disagreed about `name` once (window.c's own comment records it).
+ *
+ * THE OBJECT IS STILL THE CLASS PROTO, and that is a second ROLE rather than a second surface: §7.2.3.5's
+ * cross-origin branch (steps 4-6) answers `0` for §7.2.1.3.1's names and lets the walk reach the same members,
+ * which is this engine's stand-in for §7.2.1.3.4 CrossOriginGetOwnPropertyHelper's "anonymous built-in
+ * function, created in the current realm". One object, two ways in, one answer either way.
+ *
+ * The query runs none of the page's code and no walk: its OWN properties only, because Object.prototype's
+ * members are exactly the ones the forward should be answering out of the other realm.
+ * 1 = the surface answers it (*desc filled and OWNED when desc != NULL), 0 = it does not. */
+static int proxy_surface_desc(JSContext *ctx, JSPropertyDescriptor *desc, JSAtom prop)
 {
-    JSValue proto = JS_GetClassProto(ctx, g_proxy_class);
+    JSValue surface = JS_GetClassProto(ctx, g_proxy_class);
     JSPropertyDescriptor d;
     int has;
 
-    DCHECK(JS_IsObject(proto),
+    DCHECK(JS_IsObject(surface),
            "a WindowProxy property was read in a realm that never ran window_proxy_install_proto — §7.2.3's "
-           "surface is the prototype, so a realm without one cannot say which names are its own");
-    has = JS_GetOwnSlotDesc(ctx, &d, proto, prop);
-    if (has > 0) {
+           "surface is per realm, so a realm without one cannot say which names it answers");
+    has = JS_GetOwnSlotDesc(ctx, &d, surface, prop);
+    JS_FreeValue(ctx, surface);
+    DCHECK(has >= 0,
+           "§7.2.3's own surface threw on an own-property read of an ORDINARY object — the surface is built by "
+           "window_proxy_install_proto and holds nothing but installed members, so a throw here means the "
+           "class-proto slot holds something that is not that object");
+    if (has <= 0) return 0;
+    if (desc) {
+        *desc = d;
+    } else {
         JS_FreeValue(ctx, d.value);
         JS_FreeValue(ctx, d.getter);
         JS_FreeValue(ctx, d.setter);
     }
-    JS_FreeValue(ctx, proto);
-    return has > 0;
+    return 1;
 }
 
-/* W — the ACTIVE DOCUMENT'S Window this operation is performed on, or JS_UNINITIALIZED when the operation is
-   this object's own: a cross-origin proxy (§7.2.1 filters its members instead), a name §7.2.3's own surface
-   answers, or a destroyed navigable, which has no active document to perform anything on.
+/* W — the ACTIVE DOCUMENT'S Window every one of §7.2.3's internal methods is performed on, or JS_UNINITIALIZED
+   when there is none to perform anything on: a cross-origin proxy (§7.2.1 filters its members instead), or a
+   destroyed navigable, which has no active document.
+   IT ASKS NO PROPERTY NAME, because §7.2.3.10 asks this same question without one — the key list is W's whole
+   own-key list and there is no name to test it against.
    BORROWED — the proxy holds it, and the ProxyData record it lives in rides the COW delta, so the answer is the
    RUNNING FLOW's: an arm that navigated the frame forwards to the Window it navigated to and its sibling to the
    one it did not. */
-static JSValueConst proxy_forward_window(JSContext *ctx, JSValueConst obj, ProxyData *p, JSAtom prop)
+static JSValueConst proxy_target_window(JSContext *ctx, JSValueConst obj, ProxyData *p)
 {
     if (!proxy_same_origin(p)) return JS_UNINITIALIZED;
-    if (proxy_surface_owns(ctx, prop)) return JS_UNINITIALIZED;
     if (wp_closed(p)) return JS_UNINITIALIZED;
     /* MATERIALIZED HERE, INCLUDING FROM THE CAPTURE, and that uniformity is deliberate: `delete otherW.x`
        captures at the head of the delete before anything walks, so a capture that refused to build would name
@@ -1676,6 +1704,15 @@ static JSValueConst proxy_forward_window(JSContext *ctx, JSValueConst obj, Proxy
            "a same-origin WindowProxy whose realm this agent holds carries no Window — proxy_realm sets the "
            "two together, so one without the other is a binding something else assembled");
     return p->window;
+}
+
+/* The same W, for a KEYED operation — JS_UNINITIALIZED additionally for a name §7.2.3's own surface answers,
+   which is this object's own and is not performed on W. */
+static JSValueConst proxy_forward_window(JSContext *ctx, JSValueConst obj, ProxyData *p, JSAtom prop)
+{
+    if (!proxy_same_origin(p)) return JS_UNINITIALIZED;
+    if (proxy_surface_desc(ctx, NULL, prop)) return JS_UNINITIALIZED;
+    return proxy_target_window(ctx, obj, p);
 }
 
 /* WHERE A FORWARDED WRITE LANDS, for the COW delta — see JSClassExoticMethods.forwarded_object. The delta must
@@ -1724,7 +1761,8 @@ static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVal
 }
 
 /* HTML §7.2.3.9 [[Delete]] — the same three arms. Reached only after the ordinary own-property scan found
-   nothing, which on this object is always: a WindowProxy has no own properties of its own. */
+   nothing, which on this object is always unless a page has already replaced one of §7.2.3's own surface names
+   through the define above. */
 static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     ProxyData *p = proxy_of(obj);
@@ -1739,7 +1777,25 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     }
     if (proxy_atom_index(ctx, prop, &idx)) return 0;                    /* step 2.1 */
     w = proxy_forward_window(ctx, obj, p, prop);
-    if (JS_IsUninitialized(w)) return 1;   /* the surface is the PROTOTYPE's: nothing here to delete, which is true */
+    if (JS_IsUninitialized(w)) {
+        /* A DESTROYED navigable and a name §7.2.3's own surface does not answer: there is no active document
+           to perform step 2.2 on and nothing here to remove, which is the truthful `true`. */
+        if (!proxy_surface_desc(ctx, NULL, prop)) return 1;
+        /* §7.2.3's OWN SURFACE, AND IT IS NOW AN OWN PROPERTY (see proxy_surface_desc), so `true` here is the
+           answer that used to be true and is not any more: [[GetOwnProperty]] keeps reporting a CONFIGURABLE
+           own property that [[Delete]] just claimed to remove. The surface object is shared by every proxy in
+           the realm, so there is no per-proxy entry a delete could take out of it. What closes this is the same
+           thing that closes §7.2.3.6's local define: route the operation to W (which owns every one of these
+           names — proxy_own_keys asserts it) and let W's own descriptor be what §7.2.3.5 step 3 answers, which
+           needs the reading realm's Window/WindowProxy identity mapping applied to the forwarded VALUE
+           (win_or_proxy read backwards for a value produced in ANOTHER realm). */
+        DFAIL("`delete` of one of §7.2.3's own surface names on a WindowProxy. The surface answers the name as "
+              "an OWN, configurable property and is shared by every proxy in the realm, so nothing here can "
+              "remove it and reporting success would leave [[Delete]] and [[GetOwnProperty]] disagreeing. "
+              "Build §7.2.3.9 step 2.2's forward: perform the delete on W, and give §7.2.3.5 step 3 the "
+              "identity mapping that lets W's own descriptor answer these names in the READING realm");
+        return 1;
+    }
     return JS_DeleteProperty(ctx, w, prop, 0);                          /* step 2.2 */
 }
 
@@ -1772,9 +1828,13 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
     w = proxy_forward_window(ctx, obj, p, prop);
     if (!JS_IsUninitialized(w))
         return JS_GetOwnPropertyNoUserCode(ctx, desc, w, prop);
-    /* Same origin and NOT forwarded means §7.2.3's own surface owns the name (or the navigable is destroyed):
-       no own property here, and the prototype's member answers exactly as it always has. */
-    if (proxy_same_origin(p)) return 0;
+    /* Same origin and NOT forwarded means §7.2.3's own surface answers the name (or the navigable is
+       destroyed, whose readable members are answered out of this record). IT IS THIS OBJECT'S OWN PROPERTY:
+       §7.2.3 has no interface object, so §7.2.3.5 is where every one of these names is answered and
+       §7.2.3.10 is where every one is listed. Reporting `0` here and letting the prototype walk answer is
+       what made `Object.getOwnPropertyDescriptor(popup, "opener")` undefined while `popup.opener` was the
+       opener, and what left `Object.getOwnPropertyNames(popup)` empty for an object with fourteen members. */
+    if (proxy_same_origin(p)) return proxy_surface_desc(ctx, desc, prop);
 
     /* STEPS 4-6, WHICH ONLY A CROSS-ORIGIN W REACHES. A name on the standard's list is answered by whatever
        owns it — including nothing at all, which is the truthful `undefined` for a member the origins permit
@@ -1799,16 +1859,167 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
     return -1;
 }
 
-/* THE FOUR OF §7.2.3's INTERNAL METHODS THIS OBJECT ANSWERS, and one declaration about all of them: no page
+/* §7.2.3's OWN SURFACE AS A KEY LIST — the answer for a navigable with no active document to walk. */
+static int proxy_surface_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen)
+{
+    JSValue surface = JS_GetClassProto(ctx, g_proxy_class);
+    int r;
+
+    DCHECK(JS_IsObject(surface),
+           "§7.2.3's own surface was listed in a realm that never ran window_proxy_install_proto");
+    r = JS_GetOwnPropertyNames(ctx, ptab, plen, surface, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK);
+    JS_FreeValue(ctx, surface);
+    return r;
+}
+
+/* THE ONE-SURFACE INVARIANT, ASSERTED WHERE THE TWO SURFACES ARE RECONCILED. §7.2.3.10's key list below is W's
+   own key list and nothing else contributes to it, while §7.2.3.5 answers §7.2.3's own surface names out of the
+   reading realm's surface object. Those are two member surfaces for one navigable, and they are only ONE fact
+   as long as every name the surface answers is also an own property of W: a name on the surface that W does not
+   own is a property this object REPORTS and never LISTS — the JS-visible half of the defect that had the
+   Window owning all thirteen of §7.2.1.3.1's names while this component's surface owned eleven, and that had
+   already made the two disagree about `name`. Side-effect-free: it reads two key lists and frees them. */
+static bool proxy_surface_within(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len)
+{
+    JSPropertyEnum *stab = NULL;
+    uint32_t slen = 0, i, j;
+    bool ok = true;
+
+    if (proxy_surface_keys(ctx, &stab, &slen) < 0) return false;
+    for (i = 0; i < slen && ok; i++) {
+        ok = false;
+        for (j = 0; j < len; j++)
+            if (stab[i].atom == tab[j].atom) { ok = true; break; }
+    }
+    JS_FreePropertyEnum(ctx, stab, slen);
+    return ok;
+}
+
+/* AND THE INDEX PREFIX IS THE RANGE §7.2.3.5 STEP 2 WALKS — the other half of the same one-list rule, over the
+   same document's child navigables. A gap or a duplicate in it is a frame this object lists twice or not at
+   all, against a [[GetOwnProperty]] that answers for every index in the range exactly once. Side-effect-free:
+   it re-reads atoms it was handed. */
+static bool proxy_index_prefix_is_range(JSContext *ctx, const JSPropertyEnum *tab, uint32_t len, uint32_t n)
+{
+    uint32_t i;
+
+    if (len < n) return false;
+    for (i = 0; i < n; i++) {
+        uint32_t idx = 0;
+        if (!proxy_atom_index(ctx, tab[i].atom, &idx) || idx != i) return false;
+    }
+    return true;
+}
+
+/* HTML §7.2.3.10 [[OwnPropertyKeys]] ( ) — and it is not decoration beside §7.2.3.5, it is the half that makes
+ * §7.2.3.5's answers checkable. An object that answers [[GetOwnProperty]] for a name it never LISTS is one
+ * whose `Object.getOwnPropertyNames` and whose `Object.getOwnPropertyDescriptor` disagree, and a page reads the
+ * difference directly: `assert_own_property(popup, "opener")`.
+ *
+ * THE LIST HAS ONE SOURCE, WHICH IS THE POINT. §7.2.3.10's step 4 is "the concatenation of keys and
+ * OrdinaryOwnPropertyKeys(W)" (step 5 is its cross-origin twin), and steps 2-3's `keys` is the range 0 to W's
+ * associated Document's document-tree child navigables's size. THIS ENGINE'S WINDOW ANSWERS THAT RANGE: §7.2.2.2 Indexed
+ * access on the Window object says "indexed access to document-tree child navigables is defined through the
+ * [[GetOwnProperty]] internal method of the WindowProxy object", and window.c answers the same range for the
+ * GLOBAL spelling of the same navigable out of the same walk (win_own_names). So the range is already IN the
+ * list below, and re-deriving it here would be the second answer that disagrees with the first for exactly the
+ * documents whose frame count changed between the two walks.
+ *
+ * WHAT §7.2.3.10 STATES THAT THE MERGE DOES NOT IS THE ORDER. quickjs appends a class's exotic keys AFTER the
+ * object's ordinary ones, so the range comes out last; §7.2.3.10 puts it first, and so does ECMA-262
+ * 10.1.11.1 OrdinaryOwnPropertyKeys, whose step 2 lists every integer index in ascending numeric order before
+ * any string key. A stable partition plus an ascending sort of the prefix is the whole of it. */
+static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    ProxyData *p = proxy_of(obj);
+    JSValueConst w;
+    JSPropertyEnum *tab = NULL;
+    uint32_t len = 0, i, j, k, n;
+
+    *ptab = NULL;
+    *plen = 0;
+    if (!p) return 0;
+
+    if (!proxy_same_origin(p)) {
+        /* §7.2.3.10 step 5, AND THE TWO THINGS IT NEEDS THAT DO NOT EXIST. Step 2's maxProperties is the child
+           count of an active document this instance does not hold, which is the same cross-instance read
+           proxy_indexed_get_own already names — an exotic [[OwnPropertyKeys]] is a C hook that must return a
+           list, so it cannot park the flow the way an IDL accessor driven as a step machine can. And
+           §7.2.1.3.7 CrossOriginOwnPropertyKeys's list is §7.2.1.3.1's thirteen names, of which §7.2.3.5's
+           cross-origin branch answers eleven (`focus` and `blur` are window.c's, and this surface installs
+           neither) — so publishing the list here would name keys whose descriptors are `undefined`, which is a
+           plausible datum in place of a measurement rather than a partial answer. */
+        DFAIL("§7.2.3.10 [[OwnPropertyKeys]] of a CROSS-ORIGIN WindowProxy. Two things are missing and both "
+              "are named: step 2's maxProperties is the child-navigable count of an active document ANOTHER "
+              "instance holds (route this onto the keyed entry's GP_GETOWNPROP so the flow suspends, exactly "
+              "as proxy_indexed_get_own names for §7.2.3.5 step 2), and §7.2.1.3.7's key list may only be "
+              "published once §7.2.1.3.4 CrossOriginGetOwnPropertyHelper answers a DESCRIPTOR for all "
+              "thirteen of §7.2.1.3.1's names — `focus` and `blur` are not on this surface");
+        return 0;
+    }
+
+    w = proxy_target_window(ctx, obj, p);
+    if (JS_IsUninitialized(w))
+        /* A DESTROYED navigable has no active document, so steps 2-4 have nothing to walk. What it still owns
+           is exactly what §7.2.3.5 still answers out of this record: §7.2.3's own surface. */
+        return proxy_surface_keys(ctx, ptab, plen);
+
+    if (JS_GetOwnPropertyNames(ctx, &tab, &len, w, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+        return -1;
+    DCHECK(proxy_surface_within(ctx, tab, len),
+           "a name §7.2.3's own surface answers is NOT an own property of the Window this proxy forwards to. "
+           "The key list is W's and the descriptors are the surface's, so that name is a property this object "
+           "reports to `Object.getOwnPropertyDescriptor` and never lists in `Object.getOwnPropertyNames` — one "
+           "navigable with two member surfaces, which is the shape §7.2.1.3.1's list and this component's "
+           "member table are already tied together by an assert to prevent");
+
+    /* Steps 2-3's `keys` FIRST: a stable partition of the array-index property names to the front. */
+    for (i = 0, j = 0; i < len; i++) {
+        uint32_t idx;
+        if (!proxy_atom_index(ctx, tab[i].atom, &idx)) continue;
+        if (i != j) {
+            JSPropertyEnum t = tab[i];
+            memmove(&tab[j + 1], &tab[j], (size_t)(i - j) * sizeof *tab);
+            tab[j] = t;
+        }
+        j++;
+    }
+    /* ASCENDING, which the partition does not give on its own: the shape's own numeric keys and the Window
+       exotic's range are two ascending runs laid end to end. An insertion sort over the prefix — j is the
+       document's frame count, so this is a walk of the frames and not of the whole surface. */
+    for (i = 1; i < j; i++) {
+        JSPropertyEnum t = tab[i];
+        uint32_t ti = 0, ki;
+        proxy_atom_index(ctx, t.atom, &ti);
+        for (k = i; k > 0; k--) {
+            ki = 0;
+            proxy_atom_index(ctx, tab[k - 1].atom, &ki);
+            if (ki <= ti) break;
+            tab[k] = tab[k - 1];
+        }
+        tab[k] = t;
+    }
+    /* AND THE RANGE IS THE ONE §7.2.3.5 STEP 2 WALKS. Two lists over one document's child navigables, and the
+       whole reason this hook takes W's rather than building its own: a key `Object.getOwnPropertyNames` reports
+       and `[[GetOwnProperty]]` refuses (or the reverse) is the two-answer defect one level down. */
+    n = (uint32_t)iframe_child_navigable_count(p->realm);
+    DCHECK(proxy_index_prefix_is_range(ctx, tab, len, n),
+           "§7.2.3.10 steps 2-3's `keys` is not the range 0 to maxProperties at the head of the key list — the "
+           "range and §7.2.3.5 step 2's indexed answers are one walk of one document's child navigables, so a "
+           "gap, a duplicate or a short list here is a frame this object answers for and never lists");
+    *ptab = tab;
+    *plen = len;
+    return 0;
+}
+
+/* THE FIVE OF §7.2.3's INTERNAL METHODS THIS OBJECT ANSWERS, and one declaration about all of them: no page
    code, so the engine's own accessor walks may run them from C with no flow base under them. That claim now
    covers the FORWARD as well as the filter, and it still holds — the Window it forwards to declares the same
    thing of its own hook (window.c's WINDOW_EXOTIC, whose named access is a walk of the document tree), and
-   materializing an initial about:blank Document runs no script because there is none to run.
-   §7.2.3.10's [[OwnPropertyKeys]] is NOT here: `Object.keys(otherW)` still answers this object's own keys
-   rather than the Window's supported indices plus its own — a gap this component had before the forward and
-   still has, named here because the forward is what makes the two answers disagree. */
+   materializing an initial about:blank Document runs no script because there is none to run. */
 static const JSClassExoticMethods PROXY_EXOTIC = {
     .get_own_property = proxy_get_own,
+    .get_own_property_names = proxy_own_keys,
     .delete_property = proxy_delete,
     .define_own_property = proxy_define_own,
     .get_own_property_no_user_code = true,
@@ -2004,6 +2215,38 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "the origins do not permit setting the name of that Window");
     return window_proxy_name_assign(ctx, this_val, v);
+}
+
+/* §7.2.2.4's `opener` SETTER, THROUGH THE PROXY — `attribute any opener`, and it had none here at all, so
+   `popup.opener = "blah"` was a silent no-op through a WindowProxy while the same write on the Window spelling
+   of the same navigable disowned or replaced. It is the SAME two branches window.c's spelling has, because it
+   is the same member on the same navigable:
+     null  -> DISOWN: the navigable's opener link is severed and NO own property is defined, so everything that
+              reads the navigable sees the cut rather than a `null` that only the page can see;
+     other -> Web IDL's CreateDataPropertyOrThrow(this, "opener", V), which is what makes the write OBSERVABLE:
+              the data property lands on THIS object and quickjs finds a shape property before it reaches the
+              exotic hook, so §7.2.3.5 answers the page's value from then on.
+   THE NAVIGABLE IS `this_val`'s, not the reading realm's — the one difference from window.c's spelling, and
+   the whole reason a second body exists rather than a shared one: that one answers for `document_window_proxy`
+   because the Window it is installed on IS its realm's navigable, and this one is handed the target. */
+static JSValue proxy_opener_set(JSContext *ctx, JSValueConst this_val, JSValueConst v, int magic)
+{
+    ProxyData *p = proxy_of(this_val);
+
+    (void)magic;
+    if (!p) return JS_UNDEFINED;
+    /* §7.2.1.3.1 lists `opener` with [[NeedsSetter]] FALSE, so a cross-origin write of it is not a member of
+       the cross-origin surface at all — §7.2.1.3.6 CrossOriginSet ( O, P, V, Receiver ) calls the setter only
+       when the descriptor §7.2.1.3.4 built HAS one, and its last step throws a SecurityError. proxy_read_permitted
+       answers the read side's list, which for `opener` is `true`; the WRITE side is this line. */
+    if (!proxy_same_origin(p))
+        return JS_ThrowDOMException(ctx, "SecurityError",
+                                    "the origins do not permit setting the opener of that Window");
+    if (JS_IsNull(v)) {
+        window_proxy_disown_opener(ctx, this_val);
+        return JS_UNDEFINED;
+    }
+    return idl_replace_with_value(ctx, this_val, "opener", v) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
 /* §7.2.2.1's `close()`. THE WHOLE METHOD IS document_lifecycle.c's, and this member is one of its two
@@ -2254,6 +2497,8 @@ void window_proxy_install_proto(JSContext *ctx)
             idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_closed_getter_id, -1);
         else if (i == WP_NAME)
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_name_setter_id);
+        else if (i == WP_OPENER)
+            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_opener_setter_id);
         else
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
     }
@@ -2283,6 +2528,9 @@ void window_proxy_init(JSContext *ctx)
     g_wp_len_getter_id    = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_LENGTH);
     g_wp_closed_getter_id = idl_getter_id_step(ctx, &PROXY_GET_DECL, WP_CLOSED);
     g_wp_name_setter_id = idl_setter_id(ctx, IDL_DOMSTRING, false, proxy_name_set, WP_NAME);
+    /* §7.2.2.4's `attribute any opener` — IDL_ANY, so the value reaches the body unconverted: every one of
+       opener-setter.window.js's seven values (a symbol among them) is stored as it stands. */
+    g_wp_opener_setter_id = idl_setter_id(ctx, IDL_ANY, false, proxy_opener_set, WP_OPENER);
     g_wp_close_id       = idl_method_id(ctx, NULL, 0, proxy_close, 0);
     realm_declare_intrinsic(window_proxy_install_proto);
 }
