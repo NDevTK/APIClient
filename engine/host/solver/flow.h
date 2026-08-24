@@ -165,6 +165,31 @@ typedef struct Flow {
        only firing proves it, so the replay re-observes or nothing is recorded. See cold.c's park_rec_cand. */
     int cand_fired;        /* this flow's X9 marker executed */
     int cand_verifying;    /* this flow is a candidate run: the sink takes the concrete arg */
+    /* HOW FAR THIS CANDIDATE'S OWN BYTES HAVE GOT — §@S's fitness read as a COMPARATOR, which is a different
+       quantity from the reward beside it and is the half `val` structurally cannot be.
+       A REWARD IS A LEDGER AND A FITNESS IS A COMPARATOR, and the two obey opposite rules. A ledger records
+       what a search has LEARNED, so it must be paid at most once for one observation — a second payment for
+       ground already covered reorders the frontier on nothing. A comparator states where an item stands NOW,
+       so it must be readable off EVERY item, including the ones standing exactly where an earlier item already
+       stood. Pay a distance into the ledger and the rule that keeps the ledger honest is precisely the rule
+       that erases the comparison: the first candidate of a search to travel nine tenths of the way is paid for
+       it and every later candidate that travels the same nine tenths is worth what an unstarted flow is worth.
+       §@S's "a near-miss is mutated toward the gap; a dead candidate starves" is then true of nothing — not
+       because the distance is unmeasured, but because the only place it was written was a ledger.
+       SO THIS IS NEVER ACCUMULATED AND NEVER PAID. It is the best fraction of THIS flow's own payload that any
+       re-execution has been observed to deliver, in [0,1], overwritten upward and read at the pick. It cannot
+       double-count because there is nothing to count: two flows at the same distance simply compare equal, and
+       one that falls behind another is passed. It shares the optimism term's entire range, so it is priced
+       against the same aging and buys a candidate the same order of thread time a never-run flow gets.
+       IT IS CARRIED BY A FORK for the reason every weight term is: an arm of a candidate is that candidate's
+       run continued under one more arm, carrying the same payload to the same sink, so a fork that dropped it
+       would let a candidate improve its own rank by branching. flow_fork_inherit's rank-neutrality assertion is
+       what forces that and fires the moment it is forgotten.
+       IT DOES NOT CROSS THE COLD TIER, and that is the same decision `cand_fired` records one field up: a
+       distance is an OBSERVATION of a re-execution, and a resumed session has not made it. A parked candidate
+       comes back at zero and re-earns it from its first arrival, which is what keeps the number a measurement
+       of this session's runs rather than a rank inherited from a run nobody watched. */
+    double cand_dist;
 
     /* IS THIS FLOW A DRIVEN ORPHAN — a flow whose frame is a CALL of a function the page defined and nothing
        ever called (engine.c's engine_orphan_fork). It is not a different KIND of flow in any way the scheduler
@@ -926,6 +951,13 @@ unsigned flow_frontier_gen(void);
 void  flow_set_running(Flow *f);
 Flow *flow_running(void);
 void  flow_credit_emit(double v);   /* a NEW @H/@S from the running flow: raise reward, reset aging */
+/* THE RUNNING CANDIDATE'S OWN BYTES WERE OBSERVED THIS FAR ALONG — §@S's fitness written where a fitness goes.
+   `d` is the fraction of this flow's payload a re-execution delivered, in [0,1]. It RAISES `cand_dist` and does
+   nothing when the flow already stands further along, so the quantity is monotone per flow and an observation
+   can never demote the flow that made it. Not a credit: nothing is added, nothing accumulates, and this may be
+   called for the same distance any number of times. It bumps the frontier generation exactly as an emission
+   does, because a weight that moves without one is a rank the value-yield cannot see changing. */
+void  flow_set_distance(Flow *f, double d);
 /* CHARGE THE RUNNING FLOW FOR THE THREAD TIME A STEP JUST BURNED, in MICROSECONDS — the same currency as the
    reward above, which is the only reason the aging term can ever outweigh it. Charged AFTER the step, because
    the quantity is not known before it, and by the scheduler alone (it is the only caller that holds both ends

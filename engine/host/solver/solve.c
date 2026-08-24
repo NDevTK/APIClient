@@ -978,6 +978,18 @@ static void filter_survived(const char *out) {
 
     solve_filter_survival(out, f->cand_payload, &o);
     DCHECK(o.len > 0, "a candidate flow carries an empty payload — see solve_filter.c's own assert");
+    /* THE FITNESS, WRITTEN WHERE A FITNESS IS WRITTEN — on THIS FLOW, before the search-level ratchet, and as a
+       reading rather than a payment. The ratchet below is the LEDGER: it records what this SEARCH has learned
+       and is therefore paid at most once for one distance, which is what keeps the reward term honest and is
+       exactly what makes it unable to order two candidates of one search — the second flow to travel nine
+       tenths of the way is paid nothing and ranks with a flow that has not started. §@S calls the search
+       DISTANCE-DIRECTED and says a dead candidate starves; a ledger cannot express either, because both are
+       statements about candidates STANDING at different distances at the same moment.
+       SO IT IS TAKEN FIRST AND UNCONDITIONALLY, above the `run == 0` return and above the ratchet's
+       improvement test. A zero run is an observation with a value of zero and flow_set_distance discards it as
+       a non-improvement; a run that ties the search's best is no news to the ledger and is the whole news to
+       the comparator, because it says THIS candidate is where the best one got. */
+    flow_set_distance(f, (double)o.run / (double)o.len);
     if (o.run == 0) return;                  /* none of this candidate is in this string: an OBSERVATION */
     /* WHICH CANDIDATE THIS IS, recorded before the search-level ratchet because the ratchet is what erases the
        distinction. A NEGATIVE index is a POSITIVE statement and not a miss: solve_resume_candidate raises

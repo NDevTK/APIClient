@@ -209,6 +209,37 @@ void flow_credit_emit(double v) {
     frontier_rank_changed();   /* rank changed: re-rank at this flow's next opcode */
 }
 
+/* THE OTHER KIND OF QUANTITY IN THE WEIGHT, and the whole of why it is a separate function from the one above.
+ * flow_credit_emit is a LEDGER entry: it records that something was LEARNED, so it is paid once and adds. This
+ * is a COMPARATOR reading: it records where a candidate STANDS, so it is written, not added, and it says the
+ * same thing however many times it is taken. Conflating them is not a style question — a distance paid into a
+ * ledger has to be paid at most once per search to keep the ledger honest, and that is exactly the rule that
+ * makes every candidate after the first indistinguishable from one that never started.
+ * MONOTONE, AND THAT IS THE INVARIANT AND NOT A CLAMP. A flow's payload is fixed for its life, so the longest
+ * run of it any re-execution has delivered can only be discovered, never undone: a later observation on a
+ * different string is another sample of the same fixed question, and taking the smaller one would let a page
+ * that writes the payload twice demote the flow for its second write. So a lower reading is DISCARDED as the
+ * non-observation it is, and the early return is what keeps the generation from moving for a rank that did not.
+ * NOT KEYED ON THE RUNNING FLOW, unlike the credit above: the observation is made about a specific flow's own
+ * bytes and the caller already holds that flow, so passing it is what stops this becoming a second way to ask
+ * which flow is running. */
+void flow_set_distance(Flow *f, double d) {
+    DCHECK(f != NULL,
+           "an @S candidate's travelled distance was recorded against no flow — the distance is a fact about "
+           "ONE flow's own payload, so a caller with no flow measured somebody else's bytes");
+    DCHECK(d >= 0.0 && d <= 1.0,
+           "an @S candidate's travelled distance is not a fraction — it is the surviving run over the payload's "
+           "own length, so a value outside [0,1] is a run measured against a denominator that is not this "
+           "candidate's, and it enters the weight beside an optimism term whose entire range is 1.0");
+    DCHECK(f->cand_payload != NULL,
+           "a travelled distance was recorded for a flow carrying no payload — the fraction's denominator IS "
+           "the payload, so a flow with none has nothing this number could be a fraction of and would rank "
+           "above every exploration flow on a measurement of nothing");
+    if (d <= f->cand_dist) return;   /* not an improvement: the rank did not move, so nothing may re-rank on it */
+    f->cand_dist = d;
+    frontier_rank_changed();
+}
+
 /* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
    emitting sinks below productive + unrun flows — see FLOW_AGE_RATE for the exchange that makes that true.
    IT IS NOT THE ONLY CHARGE ON `cpu`: a DEPARTING flow hands what it burned to the flow that forked it (see
@@ -337,6 +368,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
     DCHECK(sib->val == 0.0 && sib->val_born == 0.0 && sib->cpu == 0 && sib->visits == 0 &&
+           sib->cand_dist == 0.0 &&
            sib->family == sib->acct && sib->family->fam_us == 0,
            "a forked sibling was credited or charged before it inherited its parent's account — it was ranked, "
            "and possibly run, at a weight that belongs to no flow, and this assignment throws that away");
@@ -361,6 +393,14 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        because a flow that never finishes a unit never decays at all. Branch-to-reset-your-own-optimism is the
        same reset-by-splitting the family charge forbids, arriving through the term that replaced the clock. */
     sib->visits = parent->visits;
+    /* …AND THE DISTANCE, which is the same sentence about the term that is not a ledger. An arm of a candidate
+       carries the SAME payload to the SAME sink (engine.c copies the substitution to the sibling), so it stands
+       exactly where its parent stood: the bytes that survived to a sink survived on the prefix both arms share.
+       Zeroing it would let a candidate refresh its own rank by branching — the reset-by-splitting this
+       accounting forbids everywhere else, arriving through the one term that is read rather than accumulated —
+       and the rank-neutrality assertion below is what catches it. For a NON-candidate parent this copies zero
+       to zero, which is the truth about an arm of a flow that has no payload. */
+    sib->cand_dist = parent->cand_dist;
     /* AND THE FAMILY IT JOINS — the term the AGING reads, and the one line that makes "a fork chain is one
        monopolizer wearing N names" true of the arithmetic rather than only of this comment. The arm does not
        FOUND a family: flow_new minted it a root of its own (that is what the precondition above checks), and
@@ -384,9 +424,10 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
        RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `val + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must carry FOUR things for this to hold and it
-       carries exactly four: `val` (copied above), `visits` (copied above — the optimism term's), `cpu` (copied
-       above — the aging's own half), and the family tag (joined above — the aging's other half). Each addition
+       `val + cand_dist + 1/(1+visits) − (cpu + fam_us)*RATE`, so a fork must carry FIVE things for this to hold
+       and it carries exactly five: `val` (copied above), `cand_dist` (copied above — the fitness comparator's),
+       `visits` (copied above — the optimism term's), `cpu` (copied above — the aging's own half), and the
+       family tag (joined above — the aging's other half). Each addition
        to the formula has arrived through this line firing, which is the whole reason it is written as an
        equality over flow_weight rather than as a list of fields. This assertion is what FORCES the join: had the arm kept
        the fresh root flow_new minted it, its `fam_us` would be 0 against a parent family that has burned, so
@@ -1520,6 +1561,26 @@ double flow_weight(const Flow *f) {
        §scheduler's "a deep loop suspends and yields so siblings run, then resumes" measured in the unit the
        page's own code is written in. What it may NOT do is monopolise a unit that never ends, and that is the
        aging term's job below — not this one's. */
+    /* §@S'S FITNESS, READ WHERE A FITNESS IS READ. "The search is DISTANCE-DIRECTED (a fitness of
+       {filter-survived, sink-reached, context-escaped, handler-fires} the WFQ reads)" — and this function read
+       `val`, so what the WFQ actually read was a LEDGER of what each search had learned. The two are different
+       quantities and the difference is not academic: a ledger must be paid at most once per observation or it
+       reorders the frontier on repetition, and that same rule makes every candidate that merely EQUALS an
+       earlier one worth exactly what an unstarted flow is worth. So a search's second, third and tenth
+       breakouts — the ones a derivation produced precisely because the first did not fire — ran with the
+       ordering blind to how far each of them got, and §@S's "a near-miss is mutated toward the gap; a dead
+       candidate starves" had no comparison anywhere to be true of. This term is that comparison, and the
+       ledger above is untouched by it: nothing is paid here, nothing accumulates, and two flows standing at
+       the same distance rank equal, which is the correct answer and the one a once-only credit cannot give.
+       IT IS BOUNDED BY THE OPTIMISM TERM'S OWN RANGE for the reason that term is bounded by one emission: a
+       fitness says how promising an item is, not how much it has produced, so it may never outweigh a finding.
+       At its maximum a candidate whose bytes arrive intact ranks with a never-run flow — enough to be picked
+       out of a saturated frontier, not enough to hold the thread against a flow that has emitted. It is
+       charged the same aging as everything else, so it buys a candidate turns, never a monopoly.
+       ZERO FOR EVERY FLOW THAT IS NOT A CANDIDATE, which is not a special case in the arithmetic: a flow with
+       no payload has no distance to be a fraction of, and flow_set_distance asserts that rather than allowing
+       one to be recorded. */
+    double dist    = f->cand_dist;
     int64_t visits = f->visits;
     double ucb     = 1.0 / (1.0 + (double)visits);
     /* THE AGING IS THE FLOW'S OWN SILENCE **AND** ITS FAMILY'S, and the second half is what the family charge
@@ -1564,15 +1625,15 @@ double flow_weight(const Flow *f) {
        O(1) to read: every flow points straight at its family's root, so this adds one indirection to the pick
        and no walk. It is why the preempt hook's seam assertion snapshots this notch and the visit count
        (engine.c) — between two of them a flow's weight cannot move except through an emission. */
-    return reward + ucb - (double)flow_silence_notch(f);
+    return reward + dist + ucb - (double)flow_silence_notch(f);
 }
 
 /* THE SILENCE AT WHICH A FLOW IS GUARANTEED TO RANK BELOW ANY NEVER-RUN SIBLING — the crossing §scheduler's
    sentence claims exists, computed from the flow's OWN reward rather than a fixed threshold that could fire
    falsely on a very productive flow. A never-run flow carries the full optimism bonus and no aging, so its
-   weight is its reward + 1.0 and therefore at least 1.0; past this charge a serviced flow's aging has eaten its
-   whole reward and the comparison cannot go the other way for any reward, which is why the crossing closes
-   strictly.
+   weight is its reward plus its fitness distance plus 1.0 and therefore at least 1.0; past this charge a
+   serviced flow's aging has eaten its whole reward and the comparison cannot go the other way for any reward,
+   which is why the crossing closes strictly.
    AND IT IS COMPARED AGAINST BOTH HALVES OF THE SILENCE — this flow's own and its FAMILY's — which is what
    makes the assertion able to catch a fork chain AND one of its arms. A walker whose arms burn the document and
    depart, or simply one with N live arms, shows a per-arm `cpu` that is a sliver of what the family has
@@ -1584,31 +1645,37 @@ double flow_weight(const Flow *f) {
    THE BOUND IS DERIVED FROM flow_weight, NEVER FROM THE SENTENCE ABOUT IT, AND THE DERIVATION IS REDONE
    WHENEVER THE FORMULA MOVES — which is the only reason this stays a check rather than becoming a number
    somebody once believed. If any candidate is unrun — ALL of its terms at zero, its visit count, its own
-   service and its family's, which is what flow_pick's `unrun` tests — its weight is its own reward + 1.0 and
-   hence at least 1.0, so the MAXIMUM the pick returns is at least 1.0 too. Write that out for the picked flow,
-   with `v` its visit count and `A` its silence notch: `val + 1/(1+v) − A >= 1`, and since `1/(1+v) <= 1` it
-   forces `A <= val`. `A` is a FLOOR of `(cpu + fam_us) / S`, so `cpu + fam_us < (val + 1) * S`. That is this
+   service and its family's, which is what flow_pick's `unrun` tests — its weight is its own reward plus its
+   own distance plus 1.0, both of which are non-negative, and hence at least 1.0; so the MAXIMUM the pick
+   returns is at least 1.0 too. Write that out for the picked flow,
+   with `v` its visit count, `D` its fitness distance and `A` its silence notch: `val + D + 1/(1+v) − A >= 1`,
+   and since `1/(1+v) <= 1` it forces `A <= val + D`. `D` is a FRACTION (flow_set_distance asserts [0,1]), so
+   `A <= val + 1`. `A` is a FLOOR of `(cpu + fam_us) / S`, so `cpu + fam_us < (val + 2) * S`. That is this
    expression.
-   THE `+ 1` IS BACK AND IT IS EARNED THIS TIME, which is worth saying because a previous revision deleted one
-   as unpriced slack and was right to. That `+ 1.0` was a whole SECOND allowed by a formula whose aging stepped
-   in 12 ms, i.e. eighty-three notches of unmeasured silence; this one is exactly the width of the aging's own
-   step, because the term now steps in whole points of reward (flow_weight says why it must). A bound cannot be
-   tighter than the resolution of the quantity it bounds, and claiming otherwise is how a guard starts firing on
-   healthy runs.
+   BOTH POINTS OF THE `+ 2` ARE EARNED AND THEY ARE EARNED SEPARATELY, which is worth writing out because a
+   previous revision deleted an unpriced `+ 1.0` and was right to: that one was a whole SECOND allowed by a
+   formula whose aging stepped in 12 ms, i.e. eighty-three notches of unmeasured silence. One point here is the
+   width of the aging's OWN step, because the term steps in whole points of reward (flow_weight says why it
+   must) and a bound cannot be tighter than the resolution of the quantity it bounds. The other is the ENTIRE
+   RANGE of the fitness comparator, which is a term in the weight and is therefore in the derivation: a
+   candidate whose bytes arrive intact ranks a full point above one whose bytes died, so it may outlast one by
+   a point's worth of silence and that is the term doing exactly its job. Neither point is slack, and if the
+   comparator's range ever stops being 1 this arithmetic is what has to be redone.
    THE QUANTITY IT MEASURES IS THE SILENCE, WHICH IS BOTH HALVES OF THE AGING AND USED TO BE ONE. It read the
    family's service alone, which is the half that CANNOT order a family's own members, so on a frontier that is
    one family this was an identity with the interesting case removed. The name says which quantity it bounds,
    because a bound named for one of two summands is the shape that goes quietly wrong when the other is added.
    WHAT IT CATCHES IS AN EDIT, NOT A STATE. The derivation above is an identity under the current formula, so it
    can only fire on a change that breaks it — a clamped or capped aging term, an optimism term without a ceiling
-   of 1, a reward allowed to grow with the CPU it is weighed against, or an optimism term keyed on something a
-   never-run flow does not stand at zero of. Each of those is exactly the shape a "fix" for a thrashing
+   of 1, a reward allowed to grow with the CPU it is weighed against, a fitness comparator that is not a
+   fraction, or an optimism term keyed on something a never-run flow does not stand at zero of. Each of those
+   is exactly the shape a "fix" for a thrashing
    scheduler takes, which is why the guard is worth its arithmetic; it is not a thing that fires on today's
    tree, and an earlier comment saying it FIRES on the tree it replaced was the stale-DFAIL shape wearing an
    assertion.
    `static inline` so release (where the DCHECK's condition is unevaluated) does not warn. */
 static inline int64_t flow_silence_us_to_sink(const Flow *f) {
-    return (int64_t)((f->val + 1.0) * (double)FLOW_SILENCE_US);
+    return (int64_t)((f->val + 2.0) * (double)FLOW_SILENCE_US);
 }
 
 /* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
