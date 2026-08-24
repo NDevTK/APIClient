@@ -47,6 +47,7 @@
 #include "core/realm.h"
 #include "core/html/html_iframe.h"
 #include "core/frame/navigable.h"
+#include "core/frame/window.h"
 #include "core/frame/location.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
@@ -2199,6 +2200,58 @@ JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v)
     is_global = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, g);
     return is_global ? document_window_proxy(ctx) : JS_UNDEFINED;
+}
+
+/* WEB IDL §3.7.6 "Attributes"' `jsValue`, RESOLVED TO THE NAVIGABLE THE MEMBER IS ABOUT — and it is a
+ * MECHANISM rather than a convenience, because the thing it replaces is a whole class of wrong answer.
+ *
+ * §3.7.6's create-an-attribute-getter says it in one sentence: "Let jsValue be the this value, if it is not
+ * null or undefined, or realm's global object otherwise", and then "Let R be the result of running the getter
+ * steps of attribute with idlObject as this". So a member of a [Global] interface is answered about the
+ * RECEIVER, and the realm's own global is what a MISSING receiver falls back to — one arm of the rule, not
+ * the whole of it. §3.7.7 Operations carries the identical step for a method.
+ *
+ * WINDOW.C ANSWERED EVERY RECEIVER OUT OF ITS REALM, which is the null/undefined arm applied to all of them:
+ * `document_window_proxy(ctx)` with `(void)this_val` beside it. That is CLAUDE.md's ONE FACT ANSWERED FROM
+ * ONE PLACE FOR MANY AGENTS with the agents being RECEIVERS instead of realms — a member installed once
+ * answering for whichever navigable its realm has, whoever asks. A page reads the difference directly:
+ * §7.2.3.5 step 3 performs a same-origin WindowProxy's [[GetOwnProperty]] ON W, so the getter it hands back
+ * is the OTHER document's and is invoked with the proxy as its receiver, and
+ * `Object.getOwnPropertyDescriptor(self, "opener").get.call(popup)` — opener-string.window.js's last
+ * assertion — is that same call written out by hand. Both answered about the READING document's navigable.
+ *
+ * FOUR ARMS AND EACH IS A DIFFERENT FACT:
+ *   a WindowProxy IS the navigable (win_or_proxy's mapping read backwards, window_proxy_navigable_of);
+ *   this realm's GLOBAL is this realm's navigable, which is the same mapping and the same one place;
+ *   null or undefined is §3.7.6's fallback to the DEFINING realm's global — `ctx` here, because
+ *     js_call_c_function sets it to the member's own realm, which is exactly the realm §3.7.6 names;
+ *   anything else does not implement Window and is §3.7.6's TypeError, thrown rather than answered, because
+ *     a page distinguishes a throw from an answer about the wrong window.
+ * Returns the navigable BORROWED, or JS_UNINITIALIZED with a TypeError pending. */
+JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val)
+{
+    JSValueConst nav;
+
+    if (JS_IsUndefined(this_val) || JS_IsNull(this_val))
+        return document_window_proxy(ctx);
+    nav = window_proxy_navigable_of(ctx, this_val);
+    if (!JS_IsUndefined(nav)) return nav;
+    /* IT IS A Window, AND NOT ONE THIS MAPPING CAN NAME. §3.7.6's TypeError is for a receiver that does not
+       IMPLEMENT the interface, and this one does — so throwing here would be a wrong answer with a plausible
+       shape, which is the one thing the arm below exists to avoid. The missing piece is an edge from a Window
+       object to its navigable that does not go through a realm: `window_proxy_navigable_of` reads THIS realm's
+       global out of `ctx`, and a foreign realm's global is the same question asked of a realm it has no handle
+       to. Every other spelling of another navigable in this engine already IS the proxy (`contentWindow`,
+       `defaultView`, `parent`/`top`/`opener`, and §7.2.3's own `window`/`self`/`frames`/`globalThis`), which
+       is why nothing reaches this today and why the day something does it must say so rather than throw. */
+    DCHECK(!window_is(this_val),
+           "a Web IDL attribute of the Window interface was invoked with ANOTHER realm's Window object as its "
+           "receiver. §3.7.6's TypeError is for a receiver that does not implement the interface and this one "
+           "does, so the answer is that navigable rather than a throw — build the Window -> navigable edge "
+           "that does not go through a realm (document_window_proxy reads THIS realm's global out of its ctx, "
+           "which cannot name a foreign one), and route window_proxy_navigable_of onto it");
+    JS_ThrowTypeError(ctx, "a Window member was read on an object that is not a Window");
+    return JS_UNINITIALIZED;
 }
 
 /* §7.2.1's WRITE SIDE of `name` — the origin check, which is the whole of what this member adds over the

@@ -254,6 +254,17 @@ JSValue window_proxy_proto(JSContext *ctx);
    member). */
 void window_proxy_install_proto(JSContext *ctx);
 
+/* WEB IDL §3.7.6 "Attributes"' `jsValue` FOR A MEMBER WHOSE ANSWER IS A NAVIGABLE — "the this value, if it is
+   not null or undefined, or realm's global object otherwise", mapped onto the navigable it names. §3.7.7
+   Operations carries the identical step, so `close()` uses it too.
+   IT IS THE RECEIVER'S, NEVER THE REALM'S. A member of a [Global] interface installed once and answered out of
+   `document_window_proxy(ctx)` answers for whichever navigable its realm has, whoever asks — and HTML §7.2.3.5
+   step 3 hands a same-origin WindowProxy the OTHER document's getter with the proxy as receiver, so that is not
+   a corner case but the ordinary cross-document read. The realm is the fallback for a MISSING receiver only.
+   BORROWED, or JS_UNINITIALIZED with §3.7.6's TypeError pending — a receiver that does not implement Window is
+   a throw and not an answer about some other window. */
+JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val);
+
 /* §7.2.2.1's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same answer.
    It is the spec's OR: true if the browsing context is null (the destruction ran) or is closing is true.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */

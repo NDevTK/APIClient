@@ -49,10 +49,8 @@
 #include "core/html/html_iframe.h"
 #include "core/html/focus.h"
 #include "core/dom/selection.h"
-#include "core/frame/window_proxy.h"
 #include "core/events/event_target.h"
 #include "core/dom/collections.h"
-#include "core/dom/document.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
 #include "solver/cow.h"
@@ -64,8 +62,11 @@
    §7.2.3 gives a navigable exactly one proxy — so reading it there is reading the one answer. */
 static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
-    return JS_NewBool(ctx, window_proxy_closed(ctx, document_window_proxy(ctx)));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return JS_NewBool(ctx, window_proxy_closed(ctx, nav));
 }
 
 /* HTML §8.1.7.1's WindowOrWorkerGlobalScope: `readonly attribute boolean isSecureContext`. "The
@@ -81,7 +82,21 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
    global survives, and a byte written at install would then be the previous document's answer. */
 static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    /* "THIS's relevant settings object", and `secure_context_is` answers for a REALM. The two agree for every
+       receiver that is this realm's own navigable and for §3.7.6's missing-receiver fallback, which is every
+       way this member is reached today; a receiver naming ANOTHER navigable is a question about that
+       document's environment, and answering it out of this realm would be a boolean about the wrong document
+       — indistinguishable, at the call site, from the right one. What it needs is the environment of the
+       navigable's ACTIVE DOCUMENT, which is the same realm-of-a-navigable edge §7.2.2.2's `length` wants one
+       member down. */
+    DCHECK(JS_VALUE_GET_PTR(nav) == JS_VALUE_GET_PTR(document_window_proxy(ctx)),
+           "§8.1.7.1's isSecureContext was read with ANOTHER navigable as its receiver — §8.1.3.5 answers for "
+           "THIS's relevant settings object and secure_context_is answers for a realm, so build the edge from "
+           "a navigable to its active document's realm and ask that one");
     return JS_NewBool(ctx, secure_context_is(ctx));
 }
 
@@ -94,8 +109,11 @@ static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, i
    unloads the subtree and then destroys it. */
 static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    (void)this_val; (void)argc; (void)argv; (void)magic;
-    document_lifecycle_window_close(ctx, document_window_proxy(ctx));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    document_lifecycle_window_close(ctx, nav);
     return JS_UNDEFINED;
 }
 
@@ -118,7 +136,22 @@ static JSValue js_win_noeffect(JSContext *ctx, JSValueConst this_val, int argc, 
    for any page that tests it. */
 static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    /* THE WALK IS A REALM'S AND THE MEMBER IS A NAVIGABLE'S, and for `length` those are not the same question
+       the moment the receiver is another navigable: §7.2.2.2 counts THIS's associated Document's child
+       navigables, and this realm's walk counts this document's. The WindowProxy spelling of the same member
+       already answers it for any navigable (§7.2.3's WP_LENGTH), but it does so as a STEP MACHINE because the
+       document may live in another instance, and a plain getter has no driver to run one on. So the receiver
+       is resolved and the one case this body cannot answer CRASHES rather than counting the wrong
+       document's frames. */
+    DCHECK(JS_VALUE_GET_PTR(nav) == JS_VALUE_GET_PTR(document_window_proxy(ctx)),
+           "§7.2.2.2's `length` was read with ANOTHER navigable as its receiver, and this body counts THIS "
+           "realm's child navigables. The proxy spelling answers it for any navigable and suspends where the "
+           "document is a peer's — declare this member a step machine over that same body so both spellings "
+           "are one answer, which is what §7.2.2.1's `closed` already is");
     return JS_NewInt32(ctx, iframe_child_navigable_count(ctx));
 }
 
@@ -140,9 +173,12 @@ static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
    not in this heap at all. */
 static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue parent = window_proxy_parent_navigable(ctx, document_window_proxy(ctx));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+    JSValue parent;
 
-    (void)this_val; (void)magic;
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    parent = window_proxy_parent_navigable(ctx, nav);
     if (JS_IsUndefined(parent)) return JS_NULL;   /* nested through nothing */
     JS_FreeValue(ctx, parent);
     DFAIL("§7.2.2.4's frameElement was read in a CHILD navigable, whose container element this engine cannot "
@@ -151,26 +187,43 @@ static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int m
     return JS_NULL;
 }
 
-/* §7.2.2.4's BROWSING-CONTEXT LINKS, each answered by this realm's navigable — see window_proxy.h.
+/* §7.2.2.4's BROWSING-CONTEXT LINKS — see window_proxy.h. The mapping between a window's two spellings
+ * (another navigable is its PROXY, this one is the global) is window_proxy.c's `win_or_proxy`, applied by
+ * every member that can answer with a navigable.
  *
- * The mapping between a window's two spellings — another navigable is its PROXY, this one is the global — is
- * window_proxy.c's `win_or_proxy`, applied by every member that can answer with a navigable. */
+ * §7.2.2's NAVIGABLE-SCOPED MEMBERS ARE ANSWERED ABOUT THEIR RECEIVER, and every one below reads it through
+ * the one place that resolves it: Web IDL §3.7.6 Attributes' `jsValue` — "the this value, if it is not null or
+ * undefined, or realm's global object otherwise" — mapped onto the navigable it names (§3.7.7 Operations says
+ * the same for `close()`). Each of these used to carry `(void)this_val;` and `document_window_proxy(ctx)`,
+ * which is that rule's MISSING-RECEIVER arm applied to every receiver: one member answering for whichever
+ * navigable its realm has, whoever asks. HTML §7.2.3.5 step 3 is what makes that ordinary rather than exotic —
+ * a same-origin WindowProxy performs [[GetOwnProperty]] ON W, so the getter a cross-document read invokes is
+ * the OTHER document's, with the proxy as its receiver. */
 static JSValue js_win_parent(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
-    return window_proxy_parent(ctx, document_window_proxy(ctx));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return window_proxy_parent(ctx, nav);
 }
 
 static JSValue js_win_top(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
-    return window_proxy_top_of(ctx, document_window_proxy(ctx));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return window_proxy_top_of(ctx, nav);
 }
 
 static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
-    return window_proxy_opener(ctx, document_window_proxy(ctx));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return window_proxy_opener(ctx, nav);
 }
 
 /* §7.2.2.4's `opener` SETTER, and it has TWO branches that do different things — which is why it is written out
@@ -182,9 +235,12 @@ static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
               reached through the same one implementation. */
 static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
     (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
     if (JS_IsNull(val)) {
-        window_proxy_disown_opener(ctx, document_window_proxy(ctx));
+        window_proxy_disown_opener(ctx, nav);
         return JS_UNDEFINED;
     }
     return idl_replace_with_value(ctx, this_val, "opener", val) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
@@ -197,8 +253,11 @@ static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueC
    target name"; window_proxy_name_value is where that is computed, including whether it is known at all. */
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
-    return window_proxy_name_value(ctx, document_window_proxy(ctx));
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return window_proxy_name_value(ctx, nav);
 }
 
 /* §7.2.2.1's `name` is SETTABLE, and it was not — the accessor had no setter at all, so `window.name = "x"` was a
@@ -211,8 +270,11 @@ static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int magic)
    window_proxy_name_assign's own concolic DCHECK is written against. */
 static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    (void)this_val; (void)magic;
-    return window_proxy_name_assign(ctx, document_window_proxy(ctx), val);
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    return window_proxy_name_assign(ctx, nav, val);
 }
 
 /* §7.2.2.2's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
