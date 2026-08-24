@@ -240,11 +240,14 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
            [7] `QName`, core/xml/xml_ref.c owns §4.1 [66] `CharRef` / [68] `EntityRef` with §4.6's five
            predefined entities — the layer §3.3.3's normalization is written over — core/xml/xml_markup.c owns
            §2.5 [15] `Comment`, §2.6 [16] `PI` with [17] `PITarget` and §2.7 [18] `CDSect`, the three
-           constructs §2.4 names as the places a literal `<` or `&` may stand, and core/xml/xml_ns.c owns
+           constructs §2.4 names as the places a literal `<` or `&` may stand, core/xml/xml_decl.c owns
+           §2.8 [23] `XMLDecl` with §2.9 [32] `SDDecl` and §4.3.1 [77] `TextDecl`, core/xml/xml_literal.c
+           owns §2.3 [11] `SystemLiteral`, [12] `PubidLiteral` and [13] `PubidChar`, and core/xml/xml_ns.c owns
            §6's scope stack, declaration and expansion (xml_ns_push /
            xml_ns_declare / xml_ns_expand) with every §3 and §5 namespace constraint as a returned error — a
            scope stack is a thing only a parser drives, which is what those were built for. What is missing is
-           the GRAMMAR between them: XML §2.8 [22] `prolog` with [23] `XMLDecl`,
+           the GRAMMAR between them: XML §2.8 [22] `prolog` around the declaration and around
+           [28] `doctypedecl` with [28b] `intSubset`, §4.2 [70] `EntityDecl` with §4.5's replacement text,
            [39] `element` with
            [40] `STag` / [42] `ETag` / [44] `EmptyElemTag`, [43] `content`,
            and §3.3.3 attribute-value normalization over [10] `AttValue` — producing a
