@@ -863,7 +863,7 @@ function byArea(rel) {
   const p = AREA_PATHS.filter((d) => rel === d || rel.startsWith(d + "/"))
                       .reduce((a, b) => (b.length > a.length ? b : a), rel.split("/")[0]);
   let a = areas.get(p);
-  if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, aborted: 0,
+  if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, notrun: 0, aborted: 0,
                               unread: 0, errored: 0, abPass: 0, abFail: 0, abFiles: 0, lines: [] }));
   return a;
 }
@@ -896,7 +896,8 @@ const AREA_W = Math.max(...[...areas.keys()].map((n) => n.length));
    mutation and an area whose component is absent look identical in a total. */
 function areaRow(a) {
   console.log(`  ${a.name.padEnd(AREA_W)}  runs ${String(a.runs).padStart(5)}  pass ${String(a.pass).padStart(7)}` +
-              `  fail ${String(a.fail).padStart(7)}  aborted ${String(a.aborted).padStart(3)}` +
+              `  fail ${String(a.fail).padStart(7)}  notrun ${String(a.notrun).padStart(6)}` +
+              `  aborted ${String(a.aborted).padStart(3)}` +
               `  errored ${String(a.errored).padStart(3)}  unread ${String(a.unread).padStart(3)}`);
   /* WHICH PART OF THE ROW ABOVE IS WORK THAT DID NOT FINISH — see the accumulation for the incident. Printed
      only when there IS such a part, because a row where every counted subtest came from a file that ran to
@@ -1015,7 +1016,7 @@ async function substituted(dep) {
   return out;
 }
 
-let pass = 0, fail = 0, aborted = 0, unread = 0, errored = 0;
+let pass = 0, fail = 0, notrun = 0, aborted = 0, unread = 0, errored = 0;
 /* THE CENSUS BELOW IS A VERDICT, so it needs a home outside its own block: a test file on disk that neither list
    accounts for is an excluded test, and an excluded test is a failure — not a row a reader may skip. */
 let g_undecided = 0;
@@ -1047,7 +1048,7 @@ for (const { file: f, kind, variant } of runs) {
         throw new Error(`[wpt] ${key} read as unreadable with no recorded reason — readCorpus records every ` +
                         "failure it returns null for, so this driver's own accounting is broken");
       unread++; area.unread++;
-      failures.push(`  UNREAD ${rel}\n         the corpus file could not be read: ${g_unreadable.get(key)} — ` +
+      failures.push(`  UNREAD  ${rel}\n         the corpus file could not be read: ${g_unreadable.get(key)} — ` +
                     "nothing about the engine was measured by this run");
       continue;
     }
@@ -1060,7 +1061,7 @@ for (const { file: f, kind, variant } of runs) {
                          .map((d) => "/" + relative(WPT, d).split(sep).join("/"));
     if (unserved.length) {
       aborted++; area.aborted++;
-      failures.push(`  ABORT  ${rel}\n         a .sub META script the corpus server would not serve: ` +
+      failures.push(`  ABORT   ${rel}\n         a .sub META script the corpus server would not serve: ` +
                     unserved.map((p) => `${p} (HTTP ${g_unserved.get(p)})`).join(", ") +
                     "\n         it is a TEMPLATE, so its bytes on disk are not the file this test is written " +
                     "against — see the wptserve log named above for the traceback");
@@ -1071,7 +1072,7 @@ for (const { file: f, kind, variant } of runs) {
       /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
          against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
       aborted++; area.aborted++;
-      failures.push(`  ABORT  ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
+      failures.push(`  ABORT   ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
       continue;
     }
     /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
@@ -1167,7 +1168,7 @@ for (const { file: f, kind, variant } of runs) {
          could see that it is a per-FILE boolean over SEVERAL universal leaks, so fixing one of them could not
          move it at all. This is what tells the difference. */
       const census = out.split("\n").filter((l) => /^\[(gcleak|gcroot|stepleak|atomleak)\]/.test(l));
-      failures.push(`  ABORT  ${rel}\n         ${cause}` + census.map((l) => `\n         ${l}`).join(""));
+      failures.push(`  ABORT   ${rel}\n         ${cause}` + census.map((l) => `\n         ${l}`).join(""));
     }
     /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
        back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
@@ -1188,7 +1189,7 @@ for (const { file: f, kind, variant } of runs) {
     const noscript = out.match(/^@WPTERR .*<script src> did not load: (.*)$/m);
     if (noscript && !abortedHere) {
       aborted++; area.aborted++;
-      failures.push(`  ABORT  ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
+      failures.push(`  ABORT   ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
       continue;
     }
     /* WHAT THE RUNNER STREAMED, AND IT IS TWO POPULATIONS BECAUSE THE DIFFERENCE BETWEEN THEM IS THE DIAGNOSIS.
@@ -1209,18 +1210,52 @@ for (const { file: f, kind, variant } of runs) {
       let t; try { t = JSON.parse(m[1]); } catch { continue; }
       settled.set(keyOf(t), t);
     }
-    let filePass = 0, fileFail = 0;
+    /* testharness's OWN Test.statuses, and the split is this gate's own §Testing rule applied one level down.
+       This was `t.status === 0 ? pass : fail`, which folded FOUR verdicts into two and inflated exactly the
+       column a reader compares two runs on. NOTRUN is the one that does the damage and it is not rare: it is
+       what the harness stamps on every subtest a file never reached, so ONE subtest timing out early marks all
+       its siblings — `clear-window-name.https.html` read 1 pass and 11 fails when what happened was 1 pass, 1
+       TIMEOUT and 10 subtests that never ran and said nothing about this engine. A component that answered ten
+       questions wrong and one that was never asked them are the same number in that column, which is the
+       collapsed verdict this file's header refuses for aborts and kills.
+       WHAT COUNTS AS A FAILURE IS WHAT THE ENGINE OWED AND DID NOT DELIVER: FAIL is a wrong answer and TIMEOUT
+       is an answer that never came — both are this engine's. NOTRUN is a consequence of a sibling's verdict and
+       PRECONDITION_FAILED is the TEST declining to run (testharness stamps it for an OptionalFeatureUnsupported
+       throw), so neither is a measurement of the engine and neither may sit in `fail`.
+       THE KIND IS NAMED ON THE LINE TOO. Every one of these used to print `FAIL`, so a subtest that hung and a
+       subtest that computed the wrong string were the same row and the reader had to infer which from the
+       message — and a NOTRUN carries no message at all, so it inferred as a silent wrong answer. */
+    const ST = { 0: "PASS", 1: "FAIL", 2: "TIMEOUT", 3: "NOTRUN", 4: "PRECONDITION_FAILED" };
+    let filePass = 0, fileFail = 0, fileNotrun = 0;
     for (const t of settled.values()) {
-      if (t.status === 0) { filePass++; }
-      else { fileFail++; failures.push(`  FAIL   ${rel} :: ${t.name}\n         ${(t.message || "").slice(0, 200)}`); }
+      const kind = ST[t.status];
+      /* A STATUS THIS GATE DOES NOT KNOW IS NOT SILENTLY A FAILURE. testharness owns this enum and may add to
+         it; counting an unknown code as a wrong answer is the defaulted-field defect — a plausible datum where
+         there is none — so it is reported by NUMBER and counted with the failures it cannot be distinguished
+         from, saying so on its own line. */
+      if (t.status === 0) { filePass++; continue; }
+      if (t.status === 3 || t.status === 4) {
+        fileNotrun++;
+        failures.push(`  ${kind === "NOTRUN" ? "NOTRUN " : "PRECOND"} ${rel} :: ${t.name}\n         ` +
+                      (kind === "NOTRUN"
+                        ? "the harness never ran this subtest — a sibling ended the file first, so it says " +
+                          "nothing about the engine"
+                        : "the test declined to run: an optional feature it needs is unsupported") +
+                      ((t.message || "") ? `: ${(t.message || "").slice(0, 200)}` : ""));
+        continue;
+      }
+      fileFail++;
+      failures.push(`  ${(kind || "STATUS " + t.status).padEnd(7)} ${rel} :: ${t.name}\n         ` +
+                    (kind ? "" : "testharness reported a subtest status this gate does not know — ") +
+                    (t.message || (kind === "TIMEOUT" ? "the subtest never settled" : "")).slice(0, 200));
     }
     const err = out.match(/^@WPTERR (.*)$/m);
-    if (!abortedHere && err && !filePass && !fileFail) {
+    if (!abortedHere && err && !filePass && !fileFail && !fileNotrun) {
       /* NOT AN ABORT. The file ran and threw before registering a subtest — a result about the PAGE, where an
          abort is a capability the engine does not have. Folding it in is the very thing the column rule above
          forbids, and it is what made that column exceed the run count. */
       errored++; area.errored++;
-      failures.push(`  ERROR  ${rel}\n         ${err[1].slice(0, 200)}`);
+      failures.push(`  ERROR   ${rel}\n         ${err[1].slice(0, 200)}`);
       continue;
     }
     /* A FILE THAT NEVER COMPLETED IS NOT A FILE WITH NOTHING IN IT — and the two used to read alike, which is a
@@ -1248,7 +1283,7 @@ for (const { file: f, kind, variant } of runs) {
           ? `it registered no subtest at all and threw on the way: ${err[1].slice(0, 200)}`
           : "it registered no subtest and never completed — testharness.js itself never ran, or the report hook " +
             "is not installed in this run's programs";
-      failures.push(`  ABORT  ${rel}\n         the harness never completed — no @WPTDONE. ${cause}`);
+      failures.push(`  ABORT   ${rel}\n         the harness never completed — no @WPTDONE. ${cause}`);
       continue;
     }
     /* THE FILE-LEVEL VERDICT, WHICH THIS DRIVER USED TO PARSE AND THROW AWAY. @WPTDONE carries testharness's own
@@ -1265,13 +1300,13 @@ for (const { file: f, kind, variant } of runs) {
       if (d) { try { h = JSON.parse(d[1]); } catch { h = null; } }
       if (d && !h) {
         aborted++; area.aborted++;
-        failures.push(`  ABORT  ${rel}\n         @WPTDONE carried no readable JSON: ${d[1].slice(0, 200)}`);
+        failures.push(`  ABORT   ${rel}\n         @WPTDONE carried no readable JSON: ${d[1].slice(0, 200)}`);
         continue;
       }
       const NAME = { 0: "OK", 1: "ERROR", 2: "TIMEOUT", 3: "PRECONDITION_FAILED" };
       if (h && h.status !== 0) {
         fileFail++;
-        failures.push(`  FAIL   ${rel} :: <harness>\n         testharness status ` +
+        failures.push(`  FAIL    ${rel} :: <harness>\n         testharness status ` +
                       `${NAME[h.status] || h.status}: ${(h.message || "").slice(0, 200)}`);
       }
       /* `count` IS HOW MANY SUBTESTS THE HARNESS HOLDS, cross-checked because losing a line is the one failure
@@ -1280,14 +1315,16 @@ for (const { file: f, kind, variant } of runs) {
          line already says so. */
       if (h && !abortedHere && h.count !== settled.size) {
         fileFail++;
-        failures.push(`  FAIL   ${rel} :: <harness>\n         the harness holds ${h.count} subtest(s) and ` +
+        failures.push(`  FAIL    ${rel} :: <harness>\n         the harness holds ${h.count} subtest(s) and ` +
                       `${settled.size} reached this driver — the report and the run disagree about the file`);
       }
     }
     pass += filePass;
     fail += fileFail;
+    notrun += fileNotrun;
     area.pass += filePass;
     area.fail += fileFail;
+    area.notrun += fileNotrun;
     /* AND HOW MUCH OF THAT COLUMN CAME FROM A FILE THAT DID NOT FINISH — the fact whose absence turned this
        area's row into a number about nothing. Counting an aborted file's subtests is right and stays (see the
        paragraph at the abort above); what was missing is that the row never said it had done so, and the two
@@ -1438,8 +1475,15 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
   console.log(moved ? `[rev] AND IT MOVED WHILE THIS RAN — ${moved}`
                     : "[rev] the engine did not move during this run");
 }
+/* `subtests` IS WHAT THE ENGINE WAS MEASURED ON, so it is pass+fail and not pass+fail+notrun: a NOTRUN subtest
+   produced no verdict about this engine, and adding it to the denominator would move the ratio every time an
+   unrelated sibling timed out. It is printed beside them, never inside them.
+   IT IS NOT AN EXIT CONDITION EITHER, and that is not leniency: a NOTRUN is always DOWNSTREAM of something that
+   already fails this gate — the timeout, abort or harness error that ended the file first — so failing on it
+   again would report one defect twice and make the count of failing areas depend on how many siblings each
+   defect happened to strand. */
 console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
-            `   fail ${fail}   aborted-runs ${aborted}   errored-runs ${errored}   unreadable-runs ${unread}` +
-            `   undecided-files ${g_undecided}`);
+            `   fail ${fail}   notrun ${notrun}   aborted-runs ${aborted}   errored-runs ${errored}` +
+            `   unreadable-runs ${unread}   undecided-files ${g_undecided}`);
 console.log("===========================================================");
 process.exit(fail || aborted || unread || g_undecided ? 1 : 0);
