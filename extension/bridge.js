@@ -2691,10 +2691,18 @@ const _hostOps = {
                "navigation that severed the group), so the new document is NOT one this instance is running " +
                "and attaching it reports the page that was replaced. HALF OF WHAT THIS NEEDS NOW EXISTS: " +
                "`qjs_join` puts the new document in this agent (engineJoin above). The half that does not is " +
-               "§7.4's DESTROY A NAVIGABLE for the document being replaced, and joining without it leaves the " +
-               "old document's realm, tree and parked flows running and reporting inside the same instance — " +
-               "two tops for one traversable, which is a worse answer than this abort and is why the join is " +
-               "not simply called here");
+               /* THE NUMBER WAS §7.4, WHICH IS "Navigation and session history" AND DOES NOT DEFINE THIS —
+                  destroy-a-navigable is §7.3.1.6, verified against the spec text rather than recalled, and it
+                  is what the other five sites in this tree that name the same operation already cite
+                  (html_iframe.c, window_proxy.c, document_lifecycle.c x2, navigable.c). A wrong number is worse
+                  than none because it reads as authoritative, and this string is now the one a reader lands on:
+                  it is what the pool probe reports as `scheduler.diedOf`, so it is the instruction for what to
+                  build next and it was pointing at the wrong chapter. The TITLE travels with the number so a
+                  renumbering is visible instead of silent. */
+               "§7.3.1.6 Navigable destruction's DESTROY A NAVIGABLE for the document being replaced, and " +
+               "joining without it leaves the old document's realm, tree and parked flows running and " +
+               "reporting inside the same instance — two tops for one traversable, which is a worse answer " +
+               "than this abort and is why the join is not simply called here");
         cluster._resolvers.push(job);
         _waiting.splice(i, 1);
         if (cluster.state === "booting") _reserveStats.joinedBooting++; else _reserveStats.joinedRooted++;
