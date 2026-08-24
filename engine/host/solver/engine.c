@@ -1440,14 +1440,22 @@ static JSContext *doc_realm(uint32_t doc)
     return realm;
 }
 
-/* THE FLOW A QUEUED CALLBACK BELONGS TO WHEN THE QUEUER IS THE USER AGENT AND NO FLOW IS RUNNING — set ONLY
-   inside engine_unload_document's per-flow bracket, which is the same shape flow_job_external_begin/_end
-   already brackets the other host-time conversion with.
+/* THE FLOW A QUEUED CALLBACK BELONGS TO WHEN THE QUEUER IS THE USER AGENT — set ONLY inside
+   engine_unload_document's per-flow bracket, which is the same shape flow_job_external_begin/_end already
+   brackets the other host-time conversion with.
    IT IS NOT A DISCRIMINATOR AND IT IS NOT A FALLBACK. `flow_running()` is the answer everywhere a PROGRAM
    queued the callback, which is every enqueue but one; the exception is an operation the TRUSTED ZONE reports
-   between two scheduler steps, where there is no running flow to be the owner and the owner is therefore
-   NAMED. The two are mutually exclusive by construction and the assert below says so, so this is one question
-   with one answer rather than a preference between two mechanisms. */
+   between two scheduler steps, where the flow the stamp names did not cause this callback and so cannot be its
+   owner. So the owner is NAMED, and the naming WINS — this is one question with one answer rather than a
+   preference between two mechanisms.
+   AND "NO FLOW IS RUNNING" IS NOT WHY, which is where the version of this paragraph that said so sent the
+   assert below and the whole product path with it. Between two steps `flow_running()` STILL NAMES whichever
+   flow was last switched in — engine_sched_step returns the cooperative-quantum yield without switching it
+   out, because §scheduler requires that flow to resume byte-identically, and this file states the same fact
+   plainly at engine_host_answer ("`cow_delta_fork` would freeze the delta CURRENTLY APPLIED"). Two paragraphs
+   of one file disagreed about one register; the one that was wrong was the one an assert rested on, so it
+   aborted every instance that was still working when a navigation arrived. What makes the named owner correct
+   is CAUSATION, not vacancy: the host's operation is a task of the flow the bracket names and of no other. */
 static Flow *g_enqueue_owner;
 
 /* HTML §7.4.6.1 "Updating the traversable"'s DEACTIVATE A DOCUMENT FOR A CROSS-DOCUMENT NAVIGATION, made a work
@@ -1470,7 +1478,9 @@ static Flow *g_enqueue_owner;
  * THE OWNER IS NAMED RATHER THAN CURRENT, and that bracket is the whole of what this seam adds to the machine
  * it drives. §7.5.9 and §7.5.10 queue GLOBAL TASKS, so the operation is expressed the way every other queued
  * task in this engine is (JS_EnqueueCallTask); that path asks the scheduler WHICH flow owns the callback and
- * the scheduler's answer is `flow_running()`, which between two steps is nobody. Both alternatives are wrong
+ * the scheduler's answer is `flow_running()`, which between two steps is whichever flow the last slice left
+ * switched in — a flow that did not cause this operation and holds no more claim to it than any other member,
+ * which is precisely why the owner has to be stated. Both alternatives are wrong
  * and neither is loud: letting the hook DECLINE puts the task on quickjs's global list, which nothing in this
  * engine drains — a destruction that simply never happens while the document goes on reporting — and seeding a
  * FRESH flow from the baseline is the shape engine_route names as silently wrong, a timeline in which the
