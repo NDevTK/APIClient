@@ -80,8 +80,14 @@ function snapshot(pg) {
   }));
 }
 
+/* WHAT THE RUN COST, AND — the last four — WHAT ITS WORK MET. bridge.js forwards the @S arrival census onto
+   every run record for the reason solver/result.c emits it: an empty `securitySinks` array has four readings
+   that take opposite actions, and a probe that reports only `sinks: 0` cannot tell "no attacker source was
+   ever read" from "taint arrived at a sink and the search was declined as unforgeable". This driver was
+   reporting the cost columns and dropping the four that say whether there was anything to find. */
 const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun",
                   "worldSegmentsHeld", "worldSegmentsMade", "worldSegmentsForked",
+                  "sourceReads", "sinkReached", "sinkTainted", "sinkSuppressed",
                   "endpoints", "sinks", "park", "resumed"];
 
 async function oneRun(browser, pg, url, budgetMs) {
@@ -154,6 +160,11 @@ async function oneRun(browser, pg, url, budgetMs) {
     counters: mine.map((r) => {
       const o = { run: r.run };
       for (const k of COUNTERS) o[k] = (k in r) ? r[k] : null;   // null = the crash arm carries none
+      /* THE CRASH ARM CARRIES NO COUNTERS AND IT DOES CARRY ITS CAUSE, which is the whole reason a live site
+         is worth running: the ROOT @WHY on it names the capability that is missing. Read off the run record
+         rather than scraped from a console — the renderer does not tee its stdout, so a console scrape is
+         the wrong surface by construction. */
+      if (r.run === "crashed") o.err = r.err;
       return o;
     }),
     storeEndpointsDelta: (last.endpoints === null || before.endpoints === null)
@@ -214,6 +225,10 @@ async function main() {
         switches: spread(rs, first("switches")),
         jobsQueued: spread(rs, first("jobsQueued")),
         jobsRun: spread(rs, first("jobsRun")),
+        sourceReads: spread(rs, first("sourceReads")),
+        sinkReached: spread(rs, first("sinkReached")),
+        sinkTainted: spread(rs, first("sinkTainted")),
+        sinkSuppressed: spread(rs, first("sinkSuppressed")),
         park: spread(rs, first("park")),
         storeEndpointsDelta: spread(rs, (r) => r.storeEndpointsDelta),
       }));

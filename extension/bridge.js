@@ -155,6 +155,11 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   let result = null;
   const extraErrors = [];
   let resumed = 0;
+  /* THE CAUSE OF A CRASH, READ OFF THE SAME LINES EVERY OTHER FACT ABOUT THE RUN IS READ FROM. Both producers
+     of a crashed record put an `@E {"phase":"engine-crash",…,"err":…}` line in `lines` before calling here —
+     engineCrash for a live instance (with the ROOT @WHY appended) and crashRecord for a boot that never got
+     one — so this is not a new channel, it is the existing one being read where the RUN LOG is composed. */
+  let crashErr = "";
   for (const raw of lines) {
     const ln = String(raw);
     if (ln.startsWith("@RESUMED ")) { resumed = parseInt(ln.slice(9), 10) || 0; continue; }
@@ -170,6 +175,14 @@ function linesToAnalysis(lines, msg, outcome, eng) {
       }
     } else if (ln.startsWith("@E ")) {
       extraErrors.push({ context: "engine", message: ln.slice(3) });
+      /* A `@E` LINE IS TEXT UNTIL SOMEBODY PARSES IT, AND EXACTLY ONE SHAPE OF IT IS THE RUN'S OWN DEATH.
+         Parsed here rather than string-matched: the phase is the field the two producers write, so a shape
+         that stops carrying it stops being read as a crash instead of matching a substring of a page's own
+         error text. A non-JSON `@E` is the engine's other diagnostics, which have their own entry above. */
+      try {
+        const o = JSON.parse(ln.slice(3));
+        if (o && o.phase === "engine-crash" && typeof o.err === "string") crashErr = o.err;
+      } catch (_) { /* not the crash line; it is already recorded as an engine error above */ }
     } else if (ln.startsWith("@WHY ")) {
       // engine diagnostic for a zero-result/resource path (e.g. reg_oom) — surface it so an OOM or
       // aborted flow never fails SILENTLY (CLAUDE.md: every zero-result path emits @WHY).
@@ -234,7 +247,24 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        and log as a complete run with a full set of counters, because the only question asked was "is there a
        document". Its findings still travel (they are on the returned analysis, labelled `_run:"crashed"`);
        what does not travel is a COST record for a run that did not finish. */
-    : { run: outcome, resumed: resumed, url: (msg && msg.sourceUrl) || "" };
+    /* …AND IT REPORTS ITS CAUSE, WHICH IS NOT A COUNTER AND IS THE ONE THING THE ROW OWED A READER. The rule
+       one paragraph up is about COST counters: seven zeroes claim a run explored nothing, so a crashed run
+       carries none. `err` claims nothing about how much was explored — it says WHY the run ended — and its
+       absence here was the crash announcing itself in a place nobody reads while the record every consumer
+       DOES read (the popup's GET_ENGINE_RUNS, testing/live-run.js) could say only the word "crashed". The
+       banner has carried the ROOT @WHY since engineCrash was written; this is the same string, on the row.
+       A crash whose cause lives only in a console the renderer does not tee is a crash that names no
+       capability, which is the whole value a live site has. */
+    : { run: outcome, resumed: resumed, url: (msg && msg.sourceUrl) || "", err: crashErr };
+  /* AND THE CAUSE IS ASSERTED, NOT HOPED FOR. There are exactly two producers of a crashed record and each
+     one writes the `engine-crash` line into `lines` before it calls here, so an empty `err` on this arm is
+     that composition having changed under this seam — a third crash path, or a producer that stopped writing
+     the line — and the symptom would be a row that says "crashed" and nothing else, which is the state this
+     field exists to end. It is not defaulted for the same reason no other field on this record is. */
+  DCHECK(outcome !== "crashed" || (typeof crashErr === "string" && crashErr !== ""),
+         "a crashed run reached the run log with no `engine-crash` line among its output — every crash path " +
+         "writes one (engineCrash appends the ROOT @WHY to it, crashRecord constructs it), so a crash with " +
+         "no cause here is a producer that stopped announcing itself and a row a reader cannot act on");
   // A per-run LOG (not a single overwritten global): concurrent cold-kick engines each report here, so the
   // full park->persist->rehydrate->resume SEQUENCE across all engines is observable, not just the last one.
   /* AND THERE IS NO `self._engineMeta` BESIDE IT. It held the LAST record — a page URL and its counters — in a

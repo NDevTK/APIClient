@@ -1081,6 +1081,15 @@ function renderEngineRuns() {
     ["jobsQueued", "jobs queued"], ["jobsRun", "jobs run"],
     ["worldSegmentsHeld", "cross-instance world segments held"],
     ["worldSegmentsMade", "…made (cumulative)"], ["worldSegmentsForked", "…forked"],
+    /* THE FOUR THAT MAKE AN EMPTY @S SURFACE READABLE, and they were written by bridge.js and read by nobody.
+       solver/result.c emits them for one reason: `securitySinks: []` has four readings that take opposite
+       actions — no attacker source was ever read, none reached a sink, sinks ran and only the page's own
+       strings arrived, or taint arrived and the search was DECLINED because the check on it was unforgeable —
+       and the last of those is the engine's strongest negative result. bridge.js asserts all four onto the
+       record; this list is where a reader meets them, and without them the popup showed a run's COST and
+       never what its work MET. A computed value with a writer and no reader is not a mechanism. */
+    ["sourceReads", "attacker-source reads"], ["sinkReached", "sinks reached"],
+    ["sinkTainted", "…with tainted input"], ["sinkSuppressed", "…search declined (unforgeable check)"],
   ];
   const rows = engineRuns.slice().reverse().map((m) => {
     DCHECK(typeof m.url === "string" && typeof m.resumed === "number",
@@ -1096,10 +1105,19 @@ function renderEngineRuns() {
            "and a snapshot of a page still being analysed would be shown as a finished run of it");
     const where = esc(m.url ? _shortUrl(m.url) : "(no source url)");
     if (m.run === "crashed") {
-      // The honest report of a crashed run is that it has no numbers, said in those words.
+      /* AND IT SAYS WHY, because the reader of this row is the one person who can act on the answer. The row
+         used to state the absence of counters and stop there, so the cause — which bridge.js has always had,
+         and which carries the engine's ROOT @WHY naming the capability that is missing — lived only in an
+         offscreen console the renderer does not tee. A crash that announces itself without pointing at its
+         cause is the half of the crash contract this view was not keeping. */
+      DCHECK(typeof m.err === "string" && m.err !== "",
+             "a crashed engine run reached the popup with no `err` — bridge.js reads the `engine-crash` line " +
+             "off the run's own output and asserts it there, so an absent one here is that relay broken and " +
+             "the user is shown a crash with no cause");
       return `<div class="deep-row"><span class="deep-label">${where} — <strong>the engine crashed</strong>`
            + `; this run reported no result document, so it has no counters at all (not zeroes)`
-           + `${m.resumed ? `, ${m.resumed} parked flow(s) had been resumed into it` : ""}</span></div>`;
+           + `${m.resumed ? `, ${m.resumed} parked flow(s) had been resumed into it` : ""}`
+           + ` — ${esc(m.err)}</span></div>`;
     }
     const live = m.run === "partial";
     const parts = FULL.map(([k, label]) => {
