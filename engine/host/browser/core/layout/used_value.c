@@ -321,20 +321,24 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
               "answers, so the WIDTH is not what is missing — what is missing is everything else about a fixed "
               "box: §10.3.7's constraint equation between `left`, `width` and `right` is what turns that "
               "rectangle into a used width, and its `auto` cases need the STATIC POSITION, which is where the "
-              "box would have been in normal flow and therefore a real flow layout. BUILD §10.3.7 over §9.4's "
-              "flow layout; this case and the fourth one below are then the same code with a different "
+              "box would have been in normal flow. §9.4.1's normal flow is BUILT for IN-FLOW boxes "
+              "(core/layout/flow_position.h); what is missing is a would-be position for an OUT-OF-FLOW one, "
+              "which §10.6.3 keeps out of core/layout/block_flow.c's walk. EXTEND that walk, then BUILD "
+              "§10.3.7 over it; this case and the fourth one below are then the same code with a different "
               "rectangle");
     if (uv_computed_is(el, "position", "absolute"))
         DFAIL("CSS 2.1 §10.1's FOURTH case: an absolutely positioned box's containing block is established by "
               "'the nearest ancestor with a position of absolute, relative or fixed', and is formed by that "
               "ancestor's PADDING EDGE — not its content edge, which is the second case's rectangle and the "
-              "only one this component computes. Two pieces are missing and they are different: the padding "
-              "edge as a RECTANGLE (core/layout/used_value.h computes a padding edge's EXTENT on one axis, and "
-              "an extent locates nothing), and §10.1's own exception for an INLINE ancestor, whose containing "
-              "block is 'the bounding box around the padding boxes of the first and the last inline boxes' and "
-              "is undefined in CSS 2.1 when that ancestor is split across lines. BUILD the box POSITIONS: "
-              "§9.4's normal flow places each in-flow box within its containing block, and that is what turns "
-              "every extent this component computes into a rectangle");
+              "only one this component computes. THE BOX POSITIONS ARE NOT WHAT IS MISSING ANY MORE — "
+              "core/layout/flow_position.h places every in-flow block-level box, so an ancestor's padding edge "
+              "is a rectangle assembled from that origin and this component's two extents. Three pieces are, "
+              "and they are different: that assembly as an ENTRY (this component answers an ELEMENT, and this "
+              "case's rectangle is no element's content edge); §10.1's own exception for an INLINE ancestor, "
+              "whose containing block is 'the bounding box around the padding boxes of the first and the last "
+              "inline boxes' and is undefined in CSS 2.1 when that ancestor is split across lines; and the "
+              "STATIC POSITION §10.3.7's and §10.6.4's `auto` cases fall back to, which is a would-be position "
+              "for a box §10.6.3 tells core/layout/block_flow.c's walk to skip");
     /* §10.1's SECOND case: "For other elements, if the element's position is 'relative' or 'static', the
        containing block is formed by the CONTENT EDGE of the nearest BLOCK CONTAINER ANCESTOR BOX." The walk
        asks for a BOX, so an ancestor whose computed `display` is `contents` is stepped over rather than
@@ -387,6 +391,27 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
 
     if (cb == NULL) return uv_icb(el, false);
     return uv_content_size(cb, false, uv_surround(cb, false));
+}
+
+/* THE CONTAINING BLOCK'S `direction`, with §10.1's FIRST-case exception stated once. "The 'direction' property
+   of the initial containing block is the same as for the root element" is that section's own sentence, so the
+   root's containing block answers with the ROOT'S OWN computed value rather than with an initial value the
+   rectangle would otherwise have to carry separately. */
+bool used_value_containing_block_is_rtl(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *cb = used_value_containing_block(el);
+    char *d = uv_computed(cb == NULL ? el : cb, "direction");
+    bool rtl = strcmp(d, "rtl") == 0;
+    bool ltr = strcmp(d, "ltr") == 0;
+
+    free(d);
+    DCHECK(rtl || ltr,
+           "a computed `direction` is neither `ltr` nor `rtl`. css-writing-modes-4 §2.1 \"Specifying "
+           "Directionality: the direction property\" gives the property the `Value:` line `ltr | rtl` and "
+           "nothing else, and its `Computed value:` line is `specified value` — so a third spelling here is a "
+           "declaration that reached the cascade without its grammar, which lexbor's own `direction` state "
+           "machine refuses");
+    return rtl;
 }
 
 /* CSS 2.1 §10.7's OTHER BASIS, and the reason it is a `bool` and not a `CssPx`: "If the height of the
@@ -807,34 +832,54 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
         /* §10.3.3's OVER-CONSTRAINED case is the one configuration in CSS 2.1 in which a non-auto margin's
            used value differs from its computed value: a block-level non-replaced box in normal flow whose
            `width` and both horizontal margins are all non-auto cannot satisfy the equation, and the spec
-           resolves it by IGNORING one of the two — `margin-right` when the containing block's `direction` is
-           `ltr`, `margin-left` when it is `rtl` — and recomputing it so the equality holds. It crashes on the
-           half that is still missing: WHICH margin is ignored is a fact about the containing block's computed
-           `direction`, and `direction` is inherited. The recomputed VALUE is no longer missing at all.
+           resolves it by IGNORING one of the two — "if the 'direction' property of the containing block has
+           the value 'ltr', the specified value of 'margin-right' is ignored and the value is calculated so as
+           to make the equality true. If the value of 'direction' is 'rtl', this happens to 'margin-left'
+           instead" — and recomputing it so the equality holds.
            ALL THREE HAVE TO BE NON-AUTO for the box to be over-constrained, which is why the OTHER margin is
            read: "if there is exactly one value specified as 'auto', its used value follows from the equality",
            so `margin-left: 10px; margin-right: auto; width: 100px` is not over-constrained at all and
-           `margin-left`'s used value is the 10px it computed to. */
+           `margin-left`'s used value is the 10px it computed to.
+           THE `width` HERE MAY BE §10.4's SUBSTITUTED ONE: a declared `max-width` that bound turns an `auto`
+           width into a length for the whole second pass, so a box that was not over-constrained on step 1 can
+           be over-constrained on step 2 — which is the case the spec's own "the rules above are applied again"
+           creates and is why this test reads the pass's length rather than the property.
+           THE MARGIN THAT IS *NOT* IGNORED KEEPS ITS COMPUTED VALUE, which is why this arm returns before the
+           equality is solved for the other one. The ignored margin's used value is the containing block's
+           width minus the six terms the equation's other side names, and every one of those is read HERE
+           rather than through `used_value_px` — that entry would re-run §10.4's whole algorithm for values
+           this pass has already fixed, and its own §10.3.3 pass would re-enter this test with the two margins'
+           roles swapped, which is a recursion with no base case. */
         if (!vertical && box == UV_BOX_BLOCK_FLOW && !uv_len_is_auto(*size_len) &&
-            !uv_length_is(el, opposite, "auto"))
-            DFAIL("CSS 2.1 §10.3.3: this is a block-level box in normal flow whose `width` and horizontal "
-                  "margins are all non-auto, so its used values are OVER-CONSTRAINED and one horizontal "
-                  "margin's used value is NOT its computed value — the spec ignores the specified "
-                  "`margin-right` (`margin-left` when the containing block's `direction` is `rtl`) and "
-                  "recomputes it to make the constraint equation true. ONE thing is missing and it is which "
-                  "margin: it is the containing block's computed `direction`, and `direction` is not among the "
-                  "properties css_computed_value.c models, so there is nothing to read it through. THE "
-                  "CASCADE'S INHERITANCE IS NO LONGER THE BLOCKER — CSS Cascade §7 is built "
-                  "(core/css/css_defaulting.h) and it knows `direction` inherits — and neither is the VALUE: "
-                  "the recomputed margin is the containing block's width minus the other six terms, and "
-                  "§10.1's chain answers that width. What is left is one row: css-writing-modes gives "
-                  "`direction` the `Computed value: specified keyword` line, so it is a row of "
-                  "css_computed_models' as-specified arm and a row of css_shorthand_complete_for, and this "
-                  "crash then becomes a branch. THE `width` HERE MAY BE §10.4's SUBSTITUTED ONE: a declared "
-                  "`max-width` that bound turns an `auto` width into a length for the whole second pass, so a "
-                  "box that was not over-constrained on step 1 can be over-constrained on step 2 — which is "
-                  "the case the spec's own \"the rules above are applied again\" creates and is why this test "
-                  "reads the pass's length rather than the property");
+            !uv_length_is(el, opposite, "auto")) {
+            bool rtl = used_value_containing_block_is_rtl(el);
+            bool ignored = strcmp(name, rtl ? "margin-left" : "margin-right") == 0;
+
+            DCHECK(strcmp(name, "margin-left") == 0 || strcmp(name, "margin-right") == 0,
+                   "§10.3.3's over-constrained case was reached for a margin that is not one of the two the "
+                   "equation names. The horizontal pair is `margin-left` and `margin-right`; the caller's own "
+                   "`vertical` test is what separates the axes, so the two have come apart");
+            if (ignored) {
+                UvSurround s = uv_surround(el, false);
+                CssPx used_size = uv_pass_size(el, *size_len, box, false);
+                CssPx inner = uv_is_border_box(el) ? used_size : css_px_add(used_size, uv_surround_total(s));
+                CssLength ol = css_computed_length(el, opposite);
+                CssPx other = ol.kind == CSS_LENGTH_ABSOLUTE
+                                  ? ol.px
+                                  : css_length_resolve_pct(ol, used_value_containing_block_width(el));
+
+                DCHECK(ol.kind == CSS_LENGTH_ABSOLUTE || ol.kind == CSS_LENGTH_PERCENTAGE ||
+                           ol.kind == CSS_LENGTH_CALCULATED,
+                       "§10.3.3's over-constrained case read the OPPOSITE margin and found a keyword. The test "
+                       "above has already established that it is not `auto`, and CSS 2.1 §8.3's <margin-width> "
+                       "grammar admits a length, a percentage and `auto` and nothing else");
+                /* NOT FLOORED AT ZERO, and that is §10.3.3's own arithmetic rather than an omission: the
+                   sentence is "the value is calculated so as to make the equality true", and a box whose
+                   declared width and other margin already exceed the containing block makes that value
+                   negative. css-sizing-3 §3.3's floor is stated of the CONTENT box, which this is not. */
+                return css_px_sub(css_px_sub(used_value_containing_block_width(el), inner), other);
+            }
+        }
         return len.px;
     }
     /* CSS 2.1 §8.3: a percentage margin "is calculated with respect to the WIDTH of the generated box's
@@ -900,10 +945,13 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
           "ordered rules: an `auto` `left` or `right` replaces an `auto` margin with 0 first, both `auto` "
           "margins then get EQUAL values 'unless this would make them negative', and an over-constrained set "
           "ignores one offset depending on the containing block's `direction`. Three things are missing and "
-          "none of them is the containing block's WIDTH, which §10.1's chain answers now: the used `left` and "
-          "`right` (CSSOM §9's inset arm crashes on the same equation), the STATIC POSITION its `auto` cases "
-          "fall back to, which is where the box would have been in normal flow, and `direction`, which is "
-          "inherited. BUILD §9.4's flow layout, then §10.3.7 over it");
+          "none of them is the containing block's WIDTH, which §10.1's chain answers now, and none is "
+          "`direction`, which core/css/css_computed_value.c models now: the used `left` and `right` (CSSOM §9's "
+          "inset arm crashes on the same equation), and the STATIC POSITION its `auto` cases fall back to. "
+          "§9.4.1's NORMAL FLOW IS BUILT (core/layout/flow_position.h) and it places every IN-FLOW block-level "
+          "box; what no part of it produces is a position for an OUT-OF-FLOW one, because §10.6.3 tells "
+          "core/layout/block_flow.c's walk to skip exactly those children and it does. EXTEND that walk to "
+          "report where a skipped child WOULD have been placed, then §10.3.7 over it");
     return css_px(0.0);
 }
 
@@ -1226,7 +1274,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "content-based height instead. TWO things are missing and the walk is not one of them: the "
                   "used `top` and `bottom` (CSSOM §9's inset arm crashes on the same equation) and the STATIC "
                   "POSITION its `auto` cases fall back to, which is where the box would have been in normal "
-                  "flow. BUILD §9.4's flow layout for out-of-flow boxes, then §10.6.4 over it");
+                  "flow. §9.4.1's normal flow is BUILT for IN-FLOW boxes (core/layout/flow_position.h) and "
+                  "§10.6.3 is what keeps an out-of-flow child out of its walk, so EXTEND core/layout/"
+                  "block_flow.c to report a skipped child's would-be position, then §10.6.4 over it");
         if (box == UV_BOX_TABLE)
             DFAIL("a TABLE box with `height: auto` is CSS 2.1 §17.5.3's, not §10.6.3's: the table's height is "
                   "distributed over its ROWS, each row's height comes from the content of its cells, and a "

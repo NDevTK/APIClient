@@ -226,10 +226,15 @@ static bool bf_text_is_all_whitespace(const lxb_dom_node_t *n)
    it is inside. §16.6's table gives the answer per value: `normal` and `nowrap` collapse a sequence of white
    space, `pre`, `pre-wrap` and `pre-line` preserve it (css-text-3 adds `break-spaces`), and a preserved run is
    real inline content with a real line box. */
-static BfChildKind bf_text_child(lxb_dom_element_t *parent, const lxb_dom_node_t *n)
+bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *n)
 {
     char *ws;
     bool collapses;
+
+    DCHECK(parent != NULL && n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT,
+           "§9.2.2.1's white-space question was asked about something that is not a TEXT node inside an "
+           "element — the rule is about a run of character data and the property it reads is the containing "
+           "element's inherited `white-space`");
 
     if (!bf_text_is_all_whitespace(n))
         DFAIL("CSS 2 §9.4.2 'Inline formatting contexts' owns a TEXT run, and this block container has one "
@@ -245,7 +250,7 @@ static BfChildKind bf_text_child(lxb_dom_element_t *parent, const lxb_dom_node_t
     ws = bf_computed(parent, "white-space");
     collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
     free(ws);
-    if (collapses) return BF_CHILD_NO_BOX;
+    if (collapses) return false;
     DFAIL("CSS 2.1 §9.2.2.1 generates no anonymous inline box for white space 'that would subsequently be "
           "collapsed away according to the white-space property', and this element's computed `white-space` "
           "PRESERVES it (§16.6 gives `pre`, `pre-wrap` and `pre-line` that line, and css-text-3 adds "
@@ -254,7 +259,7 @@ static BfChildKind bf_text_child(lxb_dom_element_t *parent, const lxb_dom_node_t
           "preserved run measured with a real font. BUILD §9.4.2's inline formatting context; this is the same "
           "missing component a non-white-space text run names above, reached through the one property that "
           "decides whether the run exists at all");
-    return BF_CHILD_NO_BOX;
+    return false;
 }
 
 static BfChildKind bf_element_child(lxb_dom_element_t *el)
@@ -337,7 +342,7 @@ static BfChildKind bf_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *n)
     case LXB_DOM_NODE_TYPE_ELEMENT:
         return bf_element_child(lxb_dom_interface_element(n));
     case LXB_DOM_NODE_TYPE_TEXT:
-        return bf_text_child(parent, n);
+        return block_flow_text_child_generates_box(parent, n) ? BF_CHILD_BLOCK : BF_CHILD_NO_BOX;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:

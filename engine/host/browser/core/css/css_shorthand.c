@@ -1010,6 +1010,12 @@ bool css_shorthand_complete_for(const char *longhand)
        `white-space` is a LONGHAND here on CSS 2.1 §16.6's statement of it, and no shorthand in this table sets
        it; css-text-4's decomposition into `white-space-collapse`/`text-wrap-mode` names two properties lexbor's
        registry does not carry, so there is no expansion for this file to take apart.
+       `direction` and `writing-mode` — NO shorthand in CSS sets either. css-writing-modes-4 declares both as
+       standalone properties (§2.1 "Specifying Directionality: the direction property", §3.2 "Block Flow
+       Direction: the writing-mode property"), each with its own `Value:` line and its own `Computed value:`
+       line, and the module states no shorthand over them — its own §3.2.1 "Obsolete SVG1.1 writing-mode Values"
+       is about VALUES of `writing-mode` and not about a second property that sets it. The `text-orientation`
+       §5.1 declares is a sibling longhand, not a container.
 
        THE FONT LONGHANDS, and the SEVEN that are deliberately absent. css-fonts-4 §2.7's `font` is the only
        shorthand in CSS that sets `font-size`, `line-height`, `font-family`, `font-style`, `font-weight` or
@@ -1023,6 +1029,7 @@ bool css_shorthand_complete_for(const char *longhand)
        matters — a `font-variant: small-caps` two lines above a `font-variant-caps` read would be invisible. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
+        "direction", "writing-mode",
         "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",
         "font-feature-settings", "font-kerning", "font-language-override", "font-optical-sizing",
         "font-size-adjust", "font-variation-settings",

@@ -102,7 +102,9 @@
  *     cases crash, and for reasons that are not this one's: a `fixed` box's containing block is the viewport
  *     (the same rectangle, but §10.3.7's equation is what turns it into a used width) and an `absolute` box's
  *     is the PADDING EDGE of the nearest positioned ancestor — a RECTANGLE, where this component computes
- *     extents, so it is waiting on box positions and §9.4's flow layout rather than on anything here.
+ *     extents. That rectangle's ORIGIN is answered now: core/layout/flow_position.h places every in-flow
+ *     block-level box under §9.4.1. What both cases still wait on is the STATIC POSITION their `auto` offsets
+ *     fall back to, which is a would-be position for a box §10.6.3 tells the flow walk to skip.
  *
  * A GEOMETRY IS CONCRETE AND A GEOMETRY DERIVED FROM THE VIEWPORT IS NOT, WHICH IS WHY A USED VALUE IS A
  * `CssPx` AND NOT A `double`. c35f1fed decided the first half and it is right: viewport.h's test is whether the
@@ -161,10 +163,12 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name);
    the vertical one for true. CSSOM VIEW §6's `clientWidth` and `clientHeight` step 3 is its caller, and the
    header above derives it: the content box on that axis plus the two paddings, with css-sizing §5 deciding
    which box `used_value_px` handed back.
-   IT IS AN EXTENT AND NOT AN EDGE POSITION, which is the whole reason these two §6 members can be answered
-   while `getClientRects()` cannot: a POSITION is a coordinate in the ICB's own space and needs §9.4's flow
-   layout to place each box inside the containing block §10.1 gives it, and a distance between two parallel
-   edges of ONE box needs none of that — only the chain's WIDTH, which §10.1 answers.
+   IT IS AN EXTENT AND NOT AN EDGE POSITION, and the two are different components for that reason: a POSITION
+   is a coordinate in the ICB's own space that §9.4's flow layout produces by placing each box inside the
+   containing block §10.1 gives it (core/layout/flow_position.h), while a distance between two parallel edges
+   of ONE box needs none of that — only the chain's WIDTH, which §10.1 answers. CSSOM VIEW §6's `clientWidth`
+   is the extent and its `scrollWidth` is a right-most POSITION over this box and every descendant's
+   (core/layout/scrolling_area.h), which is why one member of one section reaches both.
    The caller has already established §6's step 1 — the element has an associated box and that box is not
    inline — which is what makes the size properties apply to it at all. Every arm CSS 2.1 §10 defines and this
    component does not compute crashes through `used_value_px` naming its own section. */
@@ -233,5 +237,16 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
    the box above. It is a second entry rather than arithmetic over the first because the first case has no box
    at all, so a caller holding the NULL could not derive it. */
 CssPx used_value_containing_block_width(lxb_dom_element_t *el);
+
+/* THE SAME RECTANGLE'S `direction` — true for `rtl`. §10.3.3's over-constrained case ("if the 'direction'
+   property of the containing block has the value 'ltr', the specified value of 'margin-right' is ignored") and
+   CSS 2 §9.4.1's horizontal placement ("each box's left outer edge touches the left edge of the containing
+   block (for right-to-left formatting, right edges touch)") both name THE CONTAINING BLOCK's value and not the
+   box's own, so both ask this and neither reads the property directly.
+   IT IS A THIRD ENTRY FOR THE SAME REASON THE WIDTH IS A SECOND ONE: §10.1's FIRST case has no box, and the
+   section answers it in its own sentence — "the 'direction' property of the initial containing block is the
+   same as for the root element" — so a caller holding the NULL could not derive it and would have to carry a
+   second copy of that exception. */
+bool used_value_containing_block_is_rtl(lxb_dom_element_t *el);
 
 #endif

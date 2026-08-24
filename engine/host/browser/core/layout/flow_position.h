@@ -35,10 +35,16 @@
  * of every preceding in-flow sibling with §8.3.1's collapsing between them, which is the walk §10.6.3's
  * content-based height was blocked on as well — one subproblem, and building it built both.
  *
+ * WHICH OF §9.4.1's TWO HORIZONTAL TOUCHINGS APPLIES is the CONTAINING BLOCK's computed `direction`, which
+ * core/layout/used_value.h answers with §10.1's own first-case exception folded in. The two are not a slack
+ * apart: they are the same distance measured from opposite edges, so an `rtl` box's border box begins at the
+ * containing block's width less its own `margin-right` and less its border box's width, and an over-constrained
+ * box differs between them exactly where §10.3.3 says it does.
+ *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
  * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an inline box is
- * §9.4.2's line boxes, and a box whose margin box does not FILL its containing block waits on the one row —
- * `direction` — that decides which of §9.4.1's two horizontal touchings applies.
+ * §9.4.2's line boxes, and a box whose computed `writing-mode` is not `horizontal-tb` waits on
+ * css-writing-modes-4 §7.4's flow-relative restatement of the two rules this file implements physically.
  *
  * THE ANSWER IS A `CssPx` PAIR FOR used_value.h's REASON. §10.1's base case is the viewport, so a coordinate
  * derived from it carries the ICB's environment fact and `rect.left < 768` is the same responsive gate

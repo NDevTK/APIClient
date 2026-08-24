@@ -643,6 +643,7 @@ bool css_computed_models(const char *name)
     return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
            strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
            strcmp(name, "box-sizing") == 0 || strcmp(name, "white-space") == 0 ||
+           strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -747,9 +748,22 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        line ("Computed value: specified keyword") and is asked for by CSS 2.1 §9.2.2.1's question about which
        inter-element white space is collapsed away — the one the block-flow walk asks of a text child. css-text-4
        redefines it as a shorthand of `white-space-collapse`/`text-wrap-mode`, neither of which lexbor's property
-       registry carries, so §16.6's longhand is the one this engine can answer. */
+       registry carries, so §16.6's longhand is the one this engine can answer.
+       css-writing-modes-4 §2.1 "Specifying Directionality: the direction property" and §3.2 "Block Flow
+       Direction: the writing-mode property" both state `Computed value: specified value` over a keyword-only
+       `Value:` line (`ltr | rtl`, and `horizontal-tb | vertical-rl | vertical-lr | sideways-rl | sideways-lr`),
+       so the as-specified arm is the whole of their rule too. THEY ARE HERE BECAUSE THREE ALGORITHMS ASK FOR
+       ONE OF THEM BY NAME and could not: CSS 2.1 §10.3.3's over-constrained case ignores `margin-right` "if the
+       'direction' property of the containing block has the value 'ltr'" and `margin-left` if it is `rtl`, CSS 2
+       §9.4.1 touches a box's LEFT outer edge to its containing block's left edge "(for right-to-left
+       formatting, right edges touch)", and CSSOM VIEW §2's scrolling area is stated over a scrolling box's
+       OVERFLOW DIRECTIONS, which css-writing-modes-4 §6.2 "Flow-relative Directions" derives from the two
+       together — "determining the inline-start and inline-end sides of a box depends not only on the
+       writing-mode property but also the direction property". Each of those three crashed for want of this one
+       row. */
     DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
-               strcmp(name, "white-space") == 0 || css_border_side_of(name, "style") >= 0,
+               strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
+               strcmp(name, "writing-mode") == 0 || css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");

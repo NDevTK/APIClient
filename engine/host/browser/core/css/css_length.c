@@ -257,14 +257,15 @@ static CssPx css_len_viewport(JSContext *realm, const char *unit, double k)
            "CSS_VIEWPORT_RELATIVE are one list and have come apart");
     DFAIL("`vi` and `vb` are 1% of the viewport IN THE BOX'S INLINE AND BLOCK AXIS (css-values §6.1.2.2), so "
           "which of the two ICB dimensions they are a percentage of is a fact about the element's WRITING MODE "
-          "— css-writing-modes §6's `writing-mode` and `direction`, whose mapping from logical to physical this "
-          "engine does not have. Both properties are INHERITED, and CSS Cascade §7's step that would carry "
-          "them is built now (core/css/css_defaulting.h) — what is missing is that neither is among the "
-          "properties css_computed_value.c models, so there is no computed `writing-mode` and no computed "
-          "`direction` to read. BOTH ARE `Computed value: specified keyword` lines, so each is a row of "
-          "css_computed_models' as-specified arm plus a row of css_shorthand_complete_for. BUILD the two rows, "
-          "then css-writing-modes §6's logical-to-physical mapping, which the logical box-model properties in "
-          "CSSOM §9's own used-value list need before §10 can be asked about them either");
+          "— css-writing-modes-4 §3.2 \"Block Flow Direction: the writing-mode property\" and §2.1 \"Specifying "
+          "Directionality: the direction property\". BOTH VALUES ARE READABLE NOW: each is a `Computed value: "
+          "specified value` line that core/css/css_computed_value.c models and core/css/css_defaulting.h "
+          "inherits. WHAT IS MISSING IS THE MAPPING — css-writing-modes-4 §6.4 \"Abstract-to-Physical "
+          "Mappings\", which turns the box's inline and block axes into the physical pair this resolution has "
+          "to pick an ICB dimension from. BUILD §6.4 as its own component: CSSOM §9's used-value list carries "
+          "the LOGICAL box-model properties and needs the same mapping before §10 can be asked about them "
+          "either (core/css/css_property_applies.c crashes for them by name), and core/layout/flow_position.c "
+          "crashes for a vertical writing mode because §9.4.1's rules are stated physically");
     return css_px(0.0);
 }
 

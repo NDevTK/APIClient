@@ -36,17 +36,21 @@
  *   not as a geometry at all. `clientWidth`/`clientHeight` ask for "the unscaled width of the PADDING EDGE",
  *   which is an extent, and are answered. `scrollWidth`/`scrollHeight` and the `scrollTop`/`scrollLeft` setter
  *   reach for the element's SCROLLING AREA, which §2 defines by four edges over this box AND every
- *   descendant's, so they are positions over a whole subtree and still crash. `getClientRects()` asks for a
+ *   descendant's — a rectangle over a whole SUBTREE, which is core/layout/scrolling_area.h and is why
+ *   `scrollWidth` is a member of this section that reaches a different component from `clientWidth`'s.
+ *   `getClientRects()` asks for a
  *   BORDER AREA, which is one box's extent at one box's position, and is now written as exactly that: both
  *   operands are asked for, in that order, and whichever is unbuilt is the crash. An extent cannot stand in for
  *   a position, which is the one way this component could go wrong now that it has one.
  *   THE EXTENTS ARE NO LONGER BLOCKED ON THE SAME THING THE POSITIONS ARE, and that is what separated the two
  *   queues: a `width: auto` box is CSS 2.1 §10.3.3's constraint equation, which used_value.c now solves against
  *   §10.1's containing block down to the ICB at its base, so `clientWidth` answers for an ordinary box. THE
- *   POSITIONS HAVE SINCE CAUGHT UP for the ordinary box as well (§9.4.1's stacking, above), which is why the
- *   §6 members that still crash here name a rectangle over a SUBTREE or a term the cascade never carried
- *   rather than "there is no layout": `scrollWidth` wants the right-most margin edge of every descendant's box,
- *   and `getClientRects()` wants step 3's transforms APPLIED. CSSOM VIEW §7's offset family is the measure of
+ *   POSITIONS HAVE SINCE CAUGHT UP for the ordinary box as well (§9.4.1's stacking, above), and the rectangle
+ *   over a SUBTREE has followed them: §2's scrolling area is derived, so `scrollWidth` answers and the setter's
+ *   step 10 decides its own overflow disjunct out of it. What still crashes here names a term the cascade never
+ *   carried or an algorithm outside this section rather than "there is no layout": `getClientRects()` wants
+ *   step 3's transforms APPLIED, and the setter's last step wants §3.1's SCROLL AN ELEMENT and a scroll
+ *   position held as per-flow state. CSSOM VIEW §7's offset family is the measure of
  *   how far that is: core/html/html_element_view.c reports `offsetWidth` and `offsetTop` for an ordinary box
  *   out of these same two components, because §7's own text says UNSCALED and IGNORING TRANSFORMS where §6's
  *   step 3 says apply them.
@@ -111,8 +115,9 @@
  * between naming a missing capability and shrugging at "there is no layout". The fragment COUNT is decided
  * first (an inline box is one fragment per line box, a `table` is step 3's own table-plus-caption pair, and
  * nothing else in this model is more than one); then the border area's two EXTENTS, which crash inside
- * used_value.h for a `height: auto` box naming §10.6.3; then its POSITION, which crashes inside
- * flow_position.h for every box but the root naming §9.4.1; then step 3's FIRST CONSTRAINT, "apply the
+ * used_value.h for a box §10 does not size; then its POSITION, which flow_position.h answers for an in-flow
+ * block-level box and refuses for a float, an out-of-flow box, an inline box and a vertical writing mode, each
+ * naming its own section; then step 3's FIRST CONSTRAINT, "apply the
  * transforms that apply to the element and its ancestors", which has no computed `transform` to apply and
  * crashes naming the computed-value rule css_computed_value.c's own transform crash already asks for. A
  * rectangle reported without that last one would be a WRONG rectangle rather than an absent one — an author's

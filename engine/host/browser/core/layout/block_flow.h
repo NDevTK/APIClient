@@ -87,6 +87,20 @@
    and is not a block container (§17.4 makes the CELL and the CAPTION the block containers inside one). */
 bool block_flow_display_is_block_container(const char *display);
 
+/* CSS 2.1 §9.2.2.1 "Anonymous inline boxes"'s WHITE-SPACE RULE for one TEXT child of a block container:
+   "White space content that would subsequently be collapsed away according to the 'white-space' property does
+   not generate any anonymous inline boxes." FALSE is that sentence — a run this element's computed
+   `white-space` collapses away, which is most of the character data in a pretty-printed document — and the
+   two ways a text run DOES generate a box both CRASH naming §9.4.2, because a line box needs the text
+   measured with a real font and this engine has none.
+   IT IS EXPORTED BECAUSE EVERY WALK OVER A BLOCK CONTAINER'S CHILDREN MUST ASK IT. The height walk below is
+   one; CSSOM VIEW §2's scrolling area (core/layout/scrolling_area.h) is another, and it asks for a reason the
+   height walk cannot cover — a box with a DECLARED height never reaches the walk at all, so its own text
+   would be invisible to a caller that only measured heights, and a text run that overflows a declared-height
+   box is exactly what `scrollHeight` is asked about. A second copy of §9.2.2.1 would be one rule with two
+   answers about whether a page's white space is content. */
+bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
+
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED
    HEIGHT of `el`'s box, in CSS pixels — the used value of a `height` that computed to `auto`.
    THE CALLER HAS ALREADY ESTABLISHED that `height` is `auto` and that the box is one §10.6.3 or §10.6.6

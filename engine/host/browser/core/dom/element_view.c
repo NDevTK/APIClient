@@ -23,6 +23,7 @@
 #include "core/geometry/dom_rect_list.h"
 #include "core/idl_args.h"
 #include "core/layout/flow_position.h"
+#include "core/layout/scrolling_area.h"
 #include "core/layout/used_value.h"
 #include "solver/concolic.h"
 
@@ -182,9 +183,10 @@ static JSValue ev_length_long(JSContext *ctx, CssPx px)
     DCHECK(px.px >= 0.0,
            "a CSSOM VIEW §6 length member was handed a NEGATIVE length. A padding edge is a content box floored "
            "at zero (css-sizing §5) plus two paddings CSS 2.1 §8.4 forbids to be negative, and a border width "
-           "is a non-negative <length> css-values §6 snapped towards zero, so a negative one is a derivation "
-           "that lost an operand — and it would also make this conversion's tie-break observable, which the "
-           "derivation above says it is not for THIS section's members");
+           "is a non-negative <length> css-values §6 snapped towards zero; a SCROLLING AREA's extent is §2's "
+           "extreme taken over that same padding edge, so it is at least as large again. A negative one is "
+           "therefore a derivation that lost an operand — and it would also make this conversion's tie-break "
+           "observable, which the derivation above says it is not for THIS section's members");
     return element_view_length_long(ctx, px);
 }
 
@@ -320,6 +322,26 @@ static JSValue ev_scroll_position(JSContext *ctx, const EvTarget *t, bool vertic
     return JS_NewFloat64(ctx, 0.0);
 }
 
+/* "THE ELEMENT HAS NO OVERFLOW" — the third disjunct of the setter's step 10, derived from §2's own edges
+   rather than from a property. The scrolling area's beginning edges ARE the element's two leading padding
+   edges and its ending edges are the extreme over the trailing ones, so the area equals the padding box on an
+   axis exactly when no descendant's margin edge lies outside it — and the element overflows when either axis
+   is larger. Both operands are the same box's, so nothing here compares two different rectangles.
+   THE COMPARISON RUNS ON THE EXAMPLE, which is css_length.h's stated layering and not a shortcut past it: both
+   extents may be functions of the initial containing block, so which is larger is a question the environment
+   could answer either way, and it is decided on the modelled viewport exactly as CSS 2.1 §10.3.3's own
+   slack test is. */
+static bool ev_has_overflow(const EvTarget *t)
+{
+    lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
+
+    DCHECK(t->has_box, "the overflow question was asked about an element that generates no box — §2's scrolling "
+                       "area is stated over a box's padding edge, and the caller's own step has already "
+                       "terminated for an element that has none");
+    return scrolling_area_extent_px(el, false).px > used_value_padding_edge_px(el, false).px ||
+           scrolling_area_extent_px(el, true).px > used_value_padding_edge_px(el, true).px;
+}
+
 /* THE SETTER — the same algorithm, and it RUNS rather than dropping the write. What makes the write a no-op is
    §4's scroll() clamping the requested position into a scrolling area that is exactly the viewport, which is
    the spec deciding and not this engine ignoring; viewport_scroll asserts it at the step that decides. */
@@ -368,19 +390,28 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
         viewport_scroll(t.dctx, x, y);
         return JS_UNDEFINED;
     }
-    /* step 10 */
+    /* Step 10 — "if the element does not have any associated box, THE ELEMENT HAS NO ASSOCIATED SCROLLING BOX,
+       or THE ELEMENT HAS NO OVERFLOW, terminate these steps". The three are disjuncts of one termination, so
+       each one this engine can decide is a real answer and only an element that survives all of them reaches
+       the crash below. The last of them is decidable now: §2's scrolling area is derived
+       (core/layout/scrolling_area.h) and its four edges reduce to the element's own padding box exactly when
+       no descendant's margin edge lies outside it, which IS the element having no overflow. */
     if (!t.has_box) return JS_UNDEFINED;
+    if (!ev_has_overflow(&t)) return JS_UNDEFINED;
     /* step 11 */
-    DFAIL("CSSOM VIEW §6's scrollTop/scrollLeft setter's last step SCROLLS THE ELEMENT, and the step before it "
-          "asks whether it has a scrolling box and whether it has any overflow. All three are the SCROLLING "
-          "AREA, and §2 defines that one by its four EDGES: the element's own top and left padding edges, and "
-          "the right-most and bottom-most of its padding edge and the margin edges of all of its descendants' "
-          "boxes. Every one of those is a POSITION, which is the half of a box this engine still does not have "
-          "— core/layout/used_value.h computes a padding edge's EXTENT (`clientWidth` above reports one) and an "
-          "extent locates nothing. BUILD the positions: §10.1's containing block is answered now, so what is "
-          "left is CSS 2.1 §9.4's NORMAL FLOW placing each in-flow box inside the rectangle §10.1 gives it, "
-          "which needs every preceding sibling's used HEIGHT and §8.3.1's margin collapsing between them. Then "
-          "make an element's scroll position per-flow state in the COW delta");
+    DFAIL("CSSOM VIEW §6's scrollTop/scrollLeft setter's last step SCROLLS THE ELEMENT — 'scroll the element to "
+          "scrollLeft,y, with the scroll behavior being \"auto\"' — and the step before it also asks whether "
+          "the element has an ASSOCIATED SCROLLING BOX. §2's SCROLLING AREA is no longer what is missing: "
+          "core/layout/scrolling_area.h derives it, and the overflow disjunct above is answered out of it. TWO "
+          "things are: (1) the SCROLLING BOX itself, which is a fact about the used `overflow` — §2's own note "
+          "says a potentially scrollable body 'might not have a scrolling box … it could have a used value of "
+          "overflow being auto but not have its content overflowing its content area' — so it is css-overflow's "
+          "scroll container decided over this element's used overflow and the area above; and (2) §3.1's SCROLL "
+          "AN ELEMENT, whose result is a scroll POSITION the element then holds. That position is per-flow "
+          "state: two flows that scrolled one element differently must read back different values, so it "
+          "belongs in the COW delta with solver/dom_cow.h's capture at its accessor, exactly as a browser "
+          "component's own C record does — and step 8 of the GETTER above reads it, so building one without the "
+          "other would hand every flow the same number");
     return JS_UNDEFINED;
 }
 
@@ -416,18 +447,13 @@ static JSValue ev_scroll_extent(JSContext *ctx, const EvTarget *t, bool vertical
                          : ev_long(ctx, 0.0);
     /* step 6 */
     if (!t->has_box) return ev_long(ctx, 0.0);
-    /* step 7 */
-    DFAIL("CSSOM VIEW §6's scrollWidth/scrollHeight step 7 returns THE WIDTH OF THE ELEMENT'S SCROLLING AREA — "
-          "§2's box, whose right edge is 'the right-most edge of the element's right padding edge and the right "
-          "margin edge of all of the element's descendants' boxes, excluding boxes that have an ancestor of the "
-          "element as their containing block'. THAT IS NOT THE PADDING EDGE'S EXTENT, which "
-          "core/layout/used_value.h now computes and `clientWidth` above reports: it is a right-most POSITION "
-          "over the element's box and every descendant's, so it needs each of those boxes PLACED. It also needs "
-          "to know WHICH CONTAINING BLOCK each of them has, and that half is answered — core/layout/used_value.c "
-          "decides it per element for the exclusion this step states. BUILD the other half: CSS 2.1 §9.4's flow "
-          "layout, which positions a box inside the rectangle §10.1 gives it. There is no answer to derive from "
-          "the viewport for an element that is not the root, and an extent cannot stand in for one");
-    return ev_long(ctx, 0.0);
+    /* Step 7 — "return the width of the element's scrolling area", which is §2's own term and is
+       core/layout/scrolling_area.h's: a right-most POSITION over this element's padding edge and every one of
+       its descendants' margin edges, and NOT the padding edge's extent `clientWidth` above reports. The two
+       differ exactly when the element's content overflows it, which is the state a page asks this member
+       about. The extent is a length like `clientWidth`'s and takes the same conversion, so a box whose chain
+       bottoms out in the initial containing block reports a `long` carrying the viewport's domain. */
+    return ev_length_long(ctx, scrolling_area_extent_px(lxb_dom_interface_element(t->node), vertical));
 }
 
 /* ---- §6's `clientWidth`, `clientHeight`, `clientTop` and `clientLeft` ------------------------------------- */

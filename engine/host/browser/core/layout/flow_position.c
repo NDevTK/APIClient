@@ -27,11 +27,29 @@ static bool fp_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-static bool fp_length_is(lxb_dom_element_t *el, const char *name, const char *kw)
+/* §9.4.1's TWO RULES ARE STATED IN PHYSICAL AXES — "laid out one after the other, VERTICALLY" and "each box's
+   LEFT outer edge touches the LEFT edge of the containing block" — and those are the physical axes of a
+   `horizontal-tb` writing mode and of no other. css-writing-modes-4 §3.2 "Block Flow Direction: the
+   writing-mode property" is what makes the block flow direction a property at all, and §7.4 "Flow-Relative
+   Mappings" is what re-states §9.4.1's rules over the flow-relative axes so a vertical mode can be laid out.
+   THE VALUE IS READABLE NOW, WHICH IS WHY THIS IS AN ASSERT AND NOT A SILENCE: this component stacked
+   downwards for every box while nothing could read the property, and a `vertical-rl` box got a coordinate
+   computed by the wrong rule with nothing to say so. */
+static void fp_require_horizontal_tb(lxb_dom_element_t *el)
 {
-    CssLength len = css_computed_length(el, name);
-
-    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, kw) == 0;
+    if (!fp_computed_is(el, "writing-mode", "horizontal-tb"))
+        DFAIL("this box's computed `writing-mode` is not `horizontal-tb`, so its BLOCK FLOW DIRECTION is not "
+              "downwards and its inline axis is not horizontal — css-writing-modes-4 §3.2 \"Block Flow "
+              "Direction: the writing-mode property\" gives `vertical-rl` and `sideways-rl` a right-to-left "
+              "block flow and `vertical-lr` and `sideways-lr` a left-to-right one. CSS 2 §9.4.1's two rules are "
+              "written in the PHYSICAL axes of a horizontal-tb mode ('one after the other, vertically' and "
+              "'each box's left outer edge touches the left edge of the containing block'), and this component "
+              "implements them physically, so placing a vertical-mode box by them would answer a coordinate "
+              "from the wrong axis rather than fail. BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", "
+              "which restates §9.4.1 over the block and inline axes, and then this file's stacking and "
+              "touching become the flow-relative pair with §6.4 \"Abstract-to-Physical Mappings\" applied once "
+              "at the end. core/layout/block_flow.c's own vertical walk is the same subproblem seen from the "
+              "height side and lands with it");
 }
 
 /* "The containing block in which the root element lives is a rectangle called the initial containing block"
@@ -64,41 +82,23 @@ static CssPx fp_icb_width(lxb_dom_element_t *el)
 }
 
 /* §9.4.1's HORIZONTAL RULE, which is one rule with two answers: "each box's left outer edge touches the left
-   edge of the containing block (for right-to-left formatting, right edges touch)". The two agree exactly when
-   the margin box FILLS the containing block, which is what §10.3.3's rule 5 makes true of every `width: auto`
-   box in normal flow, and they differ by the slack otherwise — so this asserts the agreement rather than
-   picking one. Which one applies is the containing block's computed `direction`, and `direction` is not among
-   the properties core/css/css_computed_value.h models. */
+   edge of the containing block (for right-to-left formatting, right edges touch)". WHICH ONE APPLIES IS THE
+   CONTAINING BLOCK'S COMPUTED `direction`, which core/layout/used_value.h answers with §10.1's own first-case
+   exception folded in ("the 'direction' property of the initial containing block is the same as for the root
+   element").
+   THE TWO ANSWERS ARE NOT A SLACK APART — they are the SAME DISTANCE measured from opposite edges, and stating
+   them that way is what makes the rule one rule. In `ltr` the box's left MARGIN edge is at the containing
+   block's left content edge, so its border box begins one `margin-left` in. In `rtl` its right margin edge is
+   at the right content edge, so its border box begins at the block's width less its own `margin-right` and
+   less its border box's width. Where §10.3.3's constraint equation held exactly — every `width: auto` box in
+   normal flow, and every over-constrained box now that used_value.c recomputes the ignored margin — the two
+   answers COINCIDE, which is the agreement this function used to assert and no longer needs to: an
+   over-constrained `rtl` box now differs from an `ltr` one exactly where the spec says it does. */
 static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
 {
-    CssPx ml, mr, outer;
-
-    if (!fp_length_is(el, "width", "auto"))
-        DFAIL("CSS 2 §9.4.1 says 'each box's left outer edge touches the left edge of the containing block (for "
-              "right-to-left formatting, right edges touch)', and this box declares a `width`, so its margin "
-              "box does NOT fill its containing block and the two answers differ by the slack. CSS 2.1 §10.1 "
-              "states which applies — for the root element, 'the direction property of the initial containing "
-              "block is the same as for the root element' — and `direction` is not among the properties "
-              "css_computed_value.c models, so there is nothing to read it through. ONE ROW is missing and it "
-              "is the same row §10.3.3's over-constrained margin case asks for in core/layout/used_value.c: "
-              "css-writing-modes gives `direction` the `Computed value: specified keyword` line, so it is a row "
-              "of css_computed_models' as-specified arm and a row of css_shorthand_complete_for. RECORD it, and "
-              "this crash becomes a branch between `margin-left` and the containing block's width minus the "
-              "margin box");
-    ml = used_value_px(el, "margin-left");
-    mr = used_value_px(el, "margin-right");
-    outer = css_px_add(css_px_add(ml, mr), used_value_border_edge_px(el, false));
-    if (outer.px > cb_width.px)
-        DFAIL("CSS 2 §10.3.3's rule 5 solved this box's `width` from the constraint equation, so its MARGIN BOX "
-              "should exactly fill its containing block — and it is WIDER than that block, which happens only "
-              "when css-sizing §5's floor of the content box at zero cut the solve short: the margins, borders "
-              "and paddings alone exceed the containing block. The margin box then does not fill it, §9.4.1's "
-              "left-touching and right-touching answers differ by the overflow, and the containing block's "
-              "computed `direction` is what chooses between them — the same one row the declared-`width` crash "
-              "above names in full");
-    /* The two formattings agree: the margin box fills the containing block, so its left outer edge is at that
-       block's left content edge under either. */
-    return ml;
+    if (!used_value_containing_block_is_rtl(el)) return used_value_px(el, "margin-left");
+    return css_px_sub(css_px_sub(cb_width, used_value_px(el, "margin-right")),
+                      used_value_border_edge_px(el, false));
 }
 
 /* CSS 2 §8.1's two edges between a box's BORDER box and its CONTENT box on the leading side of one axis — the
@@ -218,6 +218,7 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
               "core/layout/used_value.c crashes on for want of an intrinsic size, so the extent and the "
               "position are blocked on two different components. BUILD §9.5.1's float placement over the line "
               "boxes it interacts with");
+    fp_require_horizontal_tb(el);
     fp_require_placeable(el);
 
     /* §10.1's FIRST CASE, which is §9.4.1's base case as well: the root element's containing block is the ICB,
