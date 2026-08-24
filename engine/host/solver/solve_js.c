@@ -339,7 +339,12 @@ static size_t num_end(const char *s, size_t n, size_t i) {
    longest possible sequence of code points as the next input element". `/`, `{` and `}` are handled by the
    caller (a comment, a regular expression literal, and §12.9.6's substitution tail all begin with one). */
 static const char *const PUNCT[] = {
-    ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
+    /* `?\?=` NOT `??=`: the latter is C's trigraph for `#`, so a compiler in a mode that honours trigraphs
+       reads this entry as the one-character string "#" and §12.8's longest match then never sees the nullish
+       assignment operator — the hole would land in `a ??= tainted` looking like an unrecognised punctuator.
+       GNU mode ignores trigraphs and warns, which is why this is a latent semantic change rather than a live
+       defect; the escape makes the bytes say what they mean under either mode. */
+    ">>>=", "...", "===", "!==", "**=", "<<=", ">>=", ">>>", "&&=", "||=", "?\?=",
     "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "++", "--", "+=", "-=", "*=", "%=", "**", "<<", ">>",
     "&=", "|=", "^=",
     "(", ")", "[", "]", ".", ";", ",", "<", ">", "+", "-", "*", "%", "&", "|", "^", "!", "~", "?", ":", "="
