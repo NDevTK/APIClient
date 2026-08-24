@@ -147,6 +147,23 @@ function _parkedProgress(item) {
     return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
          + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is a '
          + 'scheduling state and not a search that failed';
+  // THE STATE THE OTHER FOUR CANNOT SAY, AND IT IS CHECKED BEFORE THEM BECAUSE THEY ARE WRONG ABOUT IT. When
+  // every candidate this search has run is an inert probe, no breakout has been CONSTRUCTED — so `reached:0`
+  // is not a distance question and not a filter question, and the two branches below state both of those as
+  // if they were the only possibilities. Measured on an `innerHTML` sink fed the RAW fragment: `turns:2,
+  // reached:0, survived:14, survivedOf:14`, and the card said the bytes "were cut down by the page's own
+  // FILTER" or had "not re-traversed the document yet". Neither happened. The fragment percent-encode set
+  // (URL §1.3 "Percent-encoded bytes") holds SPACE, `"`, `<`, `>` and backtick, the delivery probe MEASURED
+  // that none of them arrives, and the derivation therefore built nothing to send — which is the search
+  // working, not failing, and the one reading that tells the user this page needs a DECODE in it before any
+  // markup breakout is possible at all. `probes` is the producer's own count (solve.h); it is never derived
+  // here from position, because the marker vocabulary that tells a probe apart is the engine's.
+  if (item.payloads.length && item.payloads.length === item.probes)
+    return held + ' and every one of them was an inert PROBE — this search has not constructed a breakout at '
+         + 'all, so there is nothing yet that could arrive. The probes measure the context and which of the '
+         + 'source\'s declared bytes survive delivery, and a derivation that builds nothing from them is the '
+         + 'search reporting that the bytes an escape needs cannot reach this sink through this source. That '
+         + 'is neither a scheduling nor a filter question: it is answered by a decode, or by another source';
   if (item.reached === 0 && item.survived === 0)
     return held + ' and NONE of their bytes has been seen at any sink — the flows run and do not get this far '
          + 'through the document, so this is still a distance question and not one about the payload';
@@ -265,9 +282,15 @@ function renderSecurityPanel() {
       // that same collision one level down. `fires` is carried as itself, not as a boolean: absent (the eval
       // class, which queues nothing) and 0 (arrived, nothing executable) are the two statements the parked
       // card renders differently, and `!!s.fires` collapses them onto each other.
+      // `probes` RIDES ALONG BECAUSE THE CARD'S FIRST SENTENCE IS COMPUTED FROM IT. A search whose derivation
+      // finally builds an escape moves `payloads` too, so the pair is usually redundant — but a single-context
+      // class seeds its written-down vectors with `probes:0` from the start, and a derived one that gains a
+      // probe without gaining an escape (a delivery probe pushed after the context probe) moves ONLY this. A
+      // key missing a field the card reads is the cache in front of the fix, which is the defect the comment
+      // above records twice.
       fpParts.push([findings[i].sourceUrl, s.sink, s.source, s.search, s.tried, s.poc,
                     !!s.cspBlocks, !!s.trustedTypes,
-                    s.reached, s.turns, s.fires === undefined ? null : s.fires, s.payloads]);
+                    s.reached, s.turns, s.fires === undefined ? null : s.fires, s.probes, s.payloads]);
     }
   }
   const fp = JSON.stringify(fpParts);
@@ -344,8 +367,8 @@ function renderSecurityPanel() {
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
     // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, survived,
-    // survivedOf, escaped, fires?, payloads, survivedBy, sourceEncodes?, delivery?, deliveryPrefix?} for a
-    // parked one. This card used to read `shape`,
+    // survivedOf, escaped, fires?, probes, payloads, survivedBy, sourceEncodes?, delivery?, deliveryPrefix?}
+    // for a parked one. This card used to read `shape`,
     // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
     // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
     // `shape`) could not appear for any finding the engine has ever emitted. A bridge edge asserts its
@@ -536,6 +559,27 @@ function renderSecurityPanel() {
         "a parked @S record reports a candidate surviving more bytes than that candidate has — the run is a "
         + "substring of its own payload, so this column was measured against a different string (sink="
         + pit.sink + " survivedBy=" + JSON.stringify(pit.survivedBy) + ")");
+      // `probes` IS ASSERTED AGAINST `payloads` FOR THE SAME REASON `survivedBy` IS: the two are one fact, and
+      // the card's FIRST sentence is now computed from the pair. solve_json_array writes it unconditionally
+      // and 0 is a real value (a single-context class has no probe), so a `|| 0` here would turn "the relay
+      // dropped the field" into "every entry is an attack" — which is precisely the confident wrong
+      // instruction this card exists to end, in the direction that manufactures a search that never happened.
+      // A count above the list length is the producer's own cursor and the list having come apart.
+      DCHECK(typeof pit.probes === "number" && pit.probes >= 0 && pit.probes <= pit.payloads.length,
+        "a parked @S record reached the popup without its probe count, or with more probes than payloads — "
+        + "solve_json_array emits `probes` on every parked entry and the probes are the LEADING entries of the "
+        + "list, so the card is about to state whether this search ever constructed an escape out of a number "
+        + "it does not have (sink=" + pit.sink + " probes=" + JSON.stringify(pit.probes)
+        + " payloads=" + pit.payloads.length + ")");
+      // AND THE IMPLICATION THAT TIES IT TO THE ARRIVAL RUNG. A probe carries no marker by construction, so a
+      // search holding nothing but probes cannot have had a breakout ARRIVE — `reached` is raised only where
+      // a marker-carrying candidate is seen at the sink. The pair disagreeing means the probe cursor and the
+      // arrival counter were measured on different searches.
+      DCHECK(!(pit.payloads.length && pit.payloads.length === pit.probes) || pit.reached === 0,
+        "a parked @S record reports a breakout ARRIVING at a sink while every candidate it has run is an inert "
+        + "probe — a probe carries no marker by construction, so nothing this search ran could have raised "
+        + "`reached` (sink=" + pit.sink + " reached=" + pit.reached + " probes=" + pit.probes
+        + " payloads=" + pit.payloads.length + ")");
       DCHECK(pit.fires === undefined || typeof pit.fires === "number",
         "a parked @S record carries a `fires` that is not a count — the field is emitted only for a sink class "
         + "whose breakout becomes a QUEUED program, and its absence is the statement that this class evaluates "

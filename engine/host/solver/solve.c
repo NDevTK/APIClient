@@ -1723,6 +1723,24 @@ char *solve_json_array(JSContext *ctx) {
             json_buf_puts(&b, ",\"fires\":");
             snprintf(t, sizeof t, "%d", g_pending[i].fires); json_buf_puts(&b, t);
         }
+        /* HOW MANY OF `payloads`' LEADING ENTRIES ARE PROBES — the producer fact that splits `reached:0` one
+           more time, and the one state of this search the report could not say at all. `npl > nprobe` is
+           stated at the field's declaration as exactly "this search has constructed an escape", and it is
+           asserted at queue_derived; it was never emitted, so a reader had the two halves of the question and
+           not the question. The consumer must not re-derive it: the probe is told apart by carrying no marker,
+           the marker vocabulary is this engine's, and deciding it from POSITION would be a view restating a
+           producer fact it cannot check — which is why popup-security.js declines to, twice, in its own words.
+           WITHOUT IT A MEASURED PAGE IS DESCRIBED WRONG, not merely described thinly. An `innerHTML` sink fed
+           the RAW fragment seeds two probes and NO escape, because the fragment percent-encode set holds the
+           bytes every escape needs and the delivery probe measures that none arrives — the correct answer, and
+           the derivation's whole point. The card computed from `turns>0, reached:0, survived:14/14` then told
+           the reader the breakout had "not re-traversed the document yet" or "was cut down by the page's own
+           FILTER": two questions, both false, and the true one — nothing was ever built to arrive — absent.
+           EMITTED UNCONDITIONALLY, because 0 is a real value it must be able to say: a single-context class
+           states its written-down vectors at detection and has no probe at all, so `probes:0` beside a
+           non-empty list is the positive statement that every entry is an attack. */
+        json_buf_puts(&b, ",\"probes\":");
+        snprintf(t, sizeof t, "%d", g_pending[i].nprobe); json_buf_puts(&b, t);
         json_buf_puts(&b, ",\"payloads\":[");
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_puts(&b, ",");

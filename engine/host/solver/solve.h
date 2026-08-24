@@ -97,7 +97,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
-                      "survivedOf":L,"escaped":E[,"fires":F],"payloads":[..],"survivedBy":[..]
+                      "survivedOf":L,"escaped":E[,"fires":F],"probes":P,"payloads":[..],"survivedBy":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -176,6 +176,18 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    the delivery probe where the source declares a percent-encode set for that probe to measure — and each is
    one of the runs `tried` counts, so omitting them would make the list disagree with the count; they are told
    apart by carrying no marker.
+   `probes` IS HOW MANY OF THEM THOSE ARE, and it is what makes the sentence above READABLE rather than merely
+   true. `payloads.length > probes` is exactly "this search has constructed an escape"; equal is the state
+   nothing else in the record can express — the derivation RAN and built nothing, because the bytes an escape
+   needs cannot arrive through this source at all. That is not a thin reading, it is the difference between
+   two opposite instructions: an `innerHTML` sink fed the RAW fragment reports `turns:2, reached:0,
+   survived:14, survivedOf:14`, from which a reader concludes the page's FILTER ate a breakout or the flows
+   never re-traversed the document, and BOTH are false — the fragment percent-encode set holds every byte the
+   escape needs, the delivery probe measured that none arrives, and the search correctly has nothing to try.
+   The consumer may not re-derive it: the probe is told apart by carrying no marker, the marker vocabulary is
+   this engine's, and reading it off the ORDER would be a view restating a producer fact it cannot check.
+   UNCONDITIONAL, and `0` is a real value: a single-context class states its written-down vectors at detection
+   and has no probe, so `probes:0` says every entry in the list is an attack.
    `fires` SEPARATES A SOLVER FAILURE FROM A SCHEDULING ONE, because ARRIVING at a sink is not reaching an
    EXECUTABLE position. A markup breakout becomes a program only if the real parse put its marker in an
    auto-firing handler and a URL one only if the delivered address survived as a `javascript:` URL, so
