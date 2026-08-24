@@ -60,6 +60,47 @@ const fail = (why) => { console.error(`${TAG} FAILED: ` + why); shutdown(); proc
 globalThis.self = globalThis;
 
 const TMP = mkdtempSync(join(tmpdir(), 'apiclient-renderer-gate-'));
+
+/* THE REVISION OF THE PROGRAM UNDER TEST, STATED BEFORE ANYTHING CAN FAIL. §Testing: a result quoted without
+   the revision it came from is not a measurement — and this gate does not build, it IMPORTS a program some
+   EARLIER build linked, so the revision its verdict belongs to is that build's and not whatever the checkout
+   holds while the gate runs. It is read HERE, above every `fail` in the file, so the revision is the first line
+   of output and therefore stands above the verdict whichever verdict it turns out to be; carrying it INTO
+   `fail` instead would put a `const` in the reach of the earliest failure's own temporal dead zone, and a
+   ReferenceError there replaces the message naming what actually broke (the trap this file's opening paragraph
+   is about).
+   THE ARTIFACT'S REVISION AND THE CHECKOUT'S LEGITIMATELY DIFFER — build.mjs rebuilds on a CONE and this gate
+   is outside it — so a mismatch is not a failure and must not be made one. What IS a failure is a verdict
+   nobody can attach to a revision at all, and `dirty` is the same statement one step further: a program linked
+   from an edited tree is one no revision contains, so every verdict below it would be about nothing. */
+const BUILT = (() => {
+  let raw = null;
+  try { raw = readFileSync(join(EXT, 'lib', 'qjs', 'qjs.mjs.build.json'), 'utf8'); }
+  catch (e) {
+    /* ENOENT IS "NOBODY HAS BUILT THIS" AND EVERY OTHER ERRNO IS NOT — the same split this file's `fetch` shim
+       makes, and for the same reason: a permission error reported as a missing build accuses the wrong thing. */
+    if (e.code !== 'ENOENT') throw e;
+    fail('the artifact this gate was pointed at carries no `lib/qjs/qjs.mjs.build.json` — that record is what ' +
+         'says WHICH revision the program under test was linked from, and a browser-process verdict with no ' +
+         'revision beside it is not a measurement of anything (§Testing)');
+  }
+  const b = JSON.parse(raw);
+  /* NO DEFAULTS ON THE PRODUCER'S FIELDS. build.mjs writes all three on every build, so an absent `head` is
+     that contract broken — never an artifact that merely happens not to know its own revision, which is what a
+     `|| "unknown"` here would turn it into. */
+  if (typeof b.head !== 'string' || typeof b.qjsHead !== 'string' || !Array.isArray(b.dirty))
+    fail('the artifact\'s build record does not carry the revision build.mjs writes (`head`, `qjsHead`, ' +
+         '`dirty`) — a field defaulted here would turn "this program came from nowhere nameable" into a ' +
+         'plausible revision, which is indistinguishable afterwards from a real one');
+  if (b.dirty.length)
+    fail(`the program under test was linked from an EDITED tree (${b.dirty.length} dirty path(s): ` +
+         `${b.dirty.join(' ')}), so it is a program no revision of this tree contains and every verdict this ` +
+         'gate could reach would be about nothing (§Testing)');
+  return b;
+})();
+const REV = `host ${BUILT.head.slice(0, 12)} qjs ${BUILT.qjsHead.slice(0, 12)}`;
+console.log(`${TAG} the program under test was linked at ${REV} (${BUILT.at})`);
+
 const RENDERER_SCRIPT = (() => {
   const html = readFileSync(join(EXT, 'renderer.html'), 'utf8');
   const m = html.match(/^<script>\r?\n([\s\S]*?)\r?\n<\/script>\s*$/m);
@@ -698,7 +739,7 @@ try {
 if (_workerErrors.length)
   fail(`${_workerErrors.length} renderer frame(s) died on an uncaught throw:\n` + _workerErrors.join('\n'));
 
-console.log(`${TAG} OK — two cross-origin renderers provisioned through the registry (bundle ids ` +
+console.log(`${TAG} OK at ${REV} — two cross-origin renderers provisioned through the registry (bundle ids ` +
             `${probe.peers.map((p) => p.bundleId).join(' ')}), all three CHECK-class refusals fired and cost ` +
             `nothing (a second renderer for a live cluster, an id never minted, a renderer reported dead ` +
             `twice), a flow ran behind the frame boundary and its navigable.create notice crossed the typed ` +
