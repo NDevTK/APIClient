@@ -3095,29 +3095,46 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
     for (i = 0; i < n; i++) {
         JSValue e = pending_entry(f->pending, i), av = JS_UNDEFINED, aw = JS_UNDEFINED, se;
         JSValue *clone;
+        void *parked;
+        int in_program, in_job;
         Flow *sib;
         int completion;
 
         if (pending_extra_count(e) == 0) { JS_FreeValue(ctx, e); continue; }
         DCHECK(flow_running() == f, "an answer fork was taken while another flow was switched in — the arm would "
                                     "clone that flow's delta and DOM head and call the result the asker's");
-        DCHECK(f->frame != NULL,
-               "a flow holding a peer's second answer has no suspended frame — the arm exists to resume the "
-               "call site that asked, and a flow with no frame has already left it, so the answer belongs to a "
-               "timeline that cannot be re-entered");
-        /* THE PARK HAS TWO HOMES AND THIS ASKED THE ONE THAT IS ALWAYS EMPTY HERE. A parked continuation rides
-           the Flow while the flow is switched OUT (flow_switch_out's JS_TakeParkedFlows) and sits in the
-           RUNTIME's pump queue while it is switched IN (flow_switch_in's JS_PutParkedFlows, which clears
-           `f->parked` as it hands the set over) — and this runs with the flow switched in, on every iteration
-           of flow_step's loop, so `f->parked` is NULL at this line whatever the flow is holding. An assert that
-           cannot fire is not a weaker assert, it is the read-side of the same defect a defaulted field is: it
-           reads as a guarantee and states nothing. Both homes are asked, which is the form the two other
-           readers of this fact in this file already use (flow_finish's, and the checkpoint guard's). */
-        DCHECK(!JS_HasParkedFlow(JS_GetRuntime(ctx)) && f->parked == NULL,
-               "a flow whose blocked machine holds a parked continuation got a peer's second answer — the "
-               "frame clone below copies the flow's own chain and not that continuation, so the arm would "
-               "resume without the activation that asked the question. Carry the parked continuations into the "
-               "clone (JS_TakeParkedFlows is what the context switch already does with them)");
+        /* WHERE THIS FLOW'S SUSPENSION ACTUALLY IS, ASKED OF BOTH HOMES — and it was asked of one, which is
+           what made a correct assert fire on a correct fixture. A flow suspended inside a PROGRAM holds its
+           call site in `frame`; a flow suspended inside a JOB holds no frame AT ALL, because flow_step runs a
+           job only under `!f->frame`, and its call site is the PARKED CONTINUATION of the activation that job
+           entered. Both are one activation held at one point, and which of the two it is is a fact about what
+           the flow was running rather than about whether it may branch. The frame-only reading called the
+           second "a flow that has already left the call site", which is the opposite of the truth: a `.then`
+           handler that makes a cross-instance read is exactly the shape that reaches this — the read is
+           answered once per peer timeline, so it is also the shape with the MOST arms to build.
+           The park rides the Flow while it is switched OUT (flow_switch_out's JS_TakeParkedFlows) and sits in
+           the RUNTIME's pump queue while it is switched IN, and this runs switched in — so the runtime is the
+           home that answers here and `f->parked` is empty whatever the flow is holding. Both are asked, so a
+           set that reached the flow's own slot without a switch-out says so instead of being read as none. */
+        in_program = f->frame != NULL;
+        in_job = JS_HasParkedFlow(JS_GetRuntime(ctx));
+        DCHECK(f->parked == NULL,
+               "a flow holds parked continuations on its own slot while it is SWITCHED IN — the switch hands "
+               "the whole set to the runtime and clears the slot, so a set here belongs to a switch-out that "
+               "did not happen and the arm below would fork the runtime's set instead of this flow's");
+        DCHECK(in_program || in_job,
+               "a flow holding a peer's second answer is suspended in NEITHER of the two homes — it has no "
+               "program frame and no parked continuation, so the call site the arm exists to resume is gone "
+               "and the answer belongs to a timeline that cannot be re-entered");
+        /* AND NOT IN BOTH, which is an invariant of flow_step rather than a convenience: a job runs only while
+           the flow holds no frame, and the resume arm at the top of that loop drains a parked continuation
+           BEFORE any program is compiled, so a flow can never carry a park into a program. If this fires the
+           two homes have become one flow's two live suspensions and the arm needs both cloned — which is
+           buildable (each clone is independent) and must not be guessed at. */
+        DCHECK(!(in_program && in_job),
+               "a flow is suspended in BOTH homes at once — it holds a program frame AND a parked "
+               "continuation, so the arm below would resume one of two live suspensions and silently abandon "
+               "the other. Clone both onto the arm, in the order flow_step resumes them");
         /* A ROUTED DELIVERY IS NOT REFUSED HERE ANY MORE, because the thing the refusal asked for is built:
            it said "the arm is that timeline continued, so the message that arrived in it arrived in the arm
            too, and the assembly does not carry the record. Give the arm its own copy" — engine_sibling_assemble
@@ -3127,13 +3144,33 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
         completion = pending_extra_pop(e, &av, &aw);
         JS_FreeValue(ctx, e);
 
-        clone = JS_FlowClone(ctx, (JSValue *)f->frame);
-        CHECK(clone != NULL, "engine: a flow suspended on a cross-instance read could not be cloned — the "
-                             "peer's other timeline has an answer and no arm to carry it");
+        /* THE ARM IS A CLONE OF WHICHEVER HOME HOLDS THE SUSPENSION. Neither call is conditional on the other
+           being absent — the asserts above have already established that exactly one is present — and each is
+           a CHECK because a clone this engine cannot build is a peer timeline dropped off the frontier. */
+        clone = in_program ? JS_FlowClone(ctx, (JSValue *)f->frame) : NULL;
+        parked = in_job ? JS_CloneParkedFlows(ctx) : NULL;
+        CHECK(!in_program || clone != NULL,
+              "engine: a flow suspended on a cross-instance read could not be cloned — the peer's other "
+              "timeline has an answer and no arm to carry it");
+        CHECK(!in_job || parked != NULL,
+              "engine: a flow PARKED on a cross-instance read inside a job could not have its continuation "
+              "cloned — the peer's other timeline has an answer and no activation to resume with it");
         sib = engine_sibling_assemble(ctx, f, clone,
                                       decide_fork_same_path("(a peer's answer arrived — no predicate was "
                                                             "asked)"),
                                       concolic_pins_suspend());
+        /* …AND ITS OWN CONTINUATION, ON THE SLOT A SWITCHED-OUT FLOW KEEPS IT IN. The arm is not switched in,
+           so its set belongs on the Flow and not in the runtime; its first switch-in hands it to the pump and
+           flow_step's resume arm re-enters it before anything else the arm could do — which is where it reads
+           the answer written below off its own register. The assembly does not take it because a frame is what
+           the assembly is handed: the two homes are the same fact and only one of them has a parameter, which
+           is a shape to correct the day a third caller needs a park (an orphan drive and a branch arm both
+           carry none, and a branch inside a job is assembled frameless by design). */
+        DCHECK(sib->parked == NULL,
+               "a freshly assembled arm already holds parked continuations — the assembly builds a flow that "
+               "has never run, so a set on it came from somewhere that is not this fork and the write below "
+               "would drop it");
+        sib->parked = parked;
         /* THE ARM'S OWN ANSWER, AND THE ONE RECORD IT CANNOT SHARE. pending_fork shares an ANSWERED entry
            deliberately — an answer that arrived before a fork was computed in a world both arms were in — and
            this is the case that is not: the two arms hold DIFFERENT answers to one question, which is exactly
