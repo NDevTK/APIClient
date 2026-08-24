@@ -101,11 +101,23 @@ async function oneRun(browser, pg, url, budgetMs) {
   const onErr = (e) => pageConsole.push("pageerror: " + String(e && e.message || e));
   page.on("pageerror", onErr);
 
+  /* EVERY RUN GETS ITS OWN DOCUMENT, AND THE RUN BEFORE IT IS WHY THAT NEEDS SAYING. A `goto` to the
+     URL the tab is ALREADY at, when that URL carries a fragment, is a same-document navigation: no
+     request, no response, no new Document, so nothing admits an engine — and the run then reports no
+     engine row, which is indistinguishable in the table from a document that was admitted and never
+     provisioned. That is the silent-zero-run shape, manufactured by the instrument: three runs of one
+     fixture read as crash / nothing / nothing, and the two nothings were the browser declining to
+     navigate. Going through about:blank first makes the next goto a real cross-document navigation
+     whatever the previous run left in the tab. */
+  try { await page.goto("about:blank", { waitUntil: "domcontentloaded", timeout: 15000 }); } catch (e) {}
   let nav = null;
   const t0 = Date.now();
   try {
     const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-    nav = resp ? resp.status() : null;
+    /* A NULL RESPONSE IS NOT A STATUS, AND IT IS NOT A RUN. puppeteer returns null when no navigation
+       actually happened, so this is reported under its own token rather than folded into the status
+       column — an absent document and a document that produced nothing are different facts. */
+    nav = resp ? resp.status() : "nav-noop(no document created)";
   } catch (e) {
     nav = "navfail:" + String(e && e.message || e).split("\n")[0];
   }
@@ -131,7 +143,12 @@ async function oneRun(browser, pg, url, budgetMs) {
     // ABSENT and ZERO are different facts. No row at all is `rows: 0` with a null
     // outcome — a document that was admitted and never provisioned an engine, which is
     // NOT the same as an engine that ran and found nothing.
-    verdict: terminal ? "terminal" : (mine.length ? "budget-elapsed(partial)" : "budget-elapsed(no-row)"),
+    /* THE VERDICT NAMES WHICH OF THE THREE NOTHINGS THIS IS. A run with no engine row is only a finding
+       about the ENGINE when a document actually arrived for it to run on; when the navigation itself
+       produced nothing, the run measured the browser, not the engine, and says so. */
+    verdict: typeof nav !== "number" ? "no-navigation"
+           : terminal ? "terminal"
+           : (mine.length ? "budget-elapsed(partial)" : "budget-elapsed(no-row)"),
     rows: mine.length,
     outcomes: mine.map((r) => r.run),
     counters: mine.map((r) => {
