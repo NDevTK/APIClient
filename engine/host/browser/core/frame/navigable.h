@@ -247,13 +247,22 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url);
    reach it after parsing a features string, and §4.6.3's FOLLOWING A HYPERLINK reaches it from an `<a>`'s
    activation behaviour with `noopener` read off `rel`. The rules for choosing a navigable are ONE algorithm; a
    second copy in the hyperlink path would be the second answer that is always subtly wrong.
-   `target` IS THE RAW TARGET — the attribute's value, or the string the page passed — and NULL or the empty
-   string means "no target", which §7.3.1.7 step 4 answers with the CURRENT navigable. A caller wanting the
-   other meaning states it: §7.2.2.1 step 5 maps an empty target to "_blank" before applying these rules, and
-   that mapping lives at that caller because it is that algorithm's step and not this one's.
+   `target` IS THE TARGET ITS OWN ALGORITHM PRODUCED — the string the page passed to `window.open`, or the
+   result of §4.2.3's GET AN ELEMENT'S TARGET — and NULL or the empty string means "no target", which §7.3.1.7
+   step 4 answers with the CURRENT navigable. A caller wanting the other meaning states it: §7.2.2.1 step 5
+   maps an empty target to "_blank" before applying these rules, and that mapping lives at that caller because
+   it is that algorithm's step and not this one's.
+   `source_element` IS §4.6.5 step 11's sourceElement — the `a`, `area` or `form` this navigation came from,
+   and NULL for a script-initiated one. IT IS NOT DECORATION AND IT IS NOT OPTIONAL. §7.3.1.7's rules take any
+   string, so the ONE difference between the two callers is invisible in the name they hand over: an element's
+   target has passed §4.2.3 step 2's dangling-markup reset and `window.open`'s deliberately has not
+   (`dangling-markup-window-name.html` asserts both halves). Without the element there is nothing here to assert
+   against, and a call site that reads a `target` attribute raw joins the algorithm silently — which is how a
+   window came to be named after smuggled markup. With it, that call site CRASHES.
    Answers the chosen navigable's WindowProxy (owned), or JS_UNDEFINED when the url does not parse — which
    §7.2.2.1 turns into a SyntaxError and §4.6.3 discards, because a click is not a place a page can catch one. */
-JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat);
+JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
+                       lxb_dom_node_t *source_element);
 void navigable_free(JSContext *ctx);
 
 /* HOW MANY CHILD REALMS ARE LIVE — the working set child_document's OOM `CHECK` names, asked of the only

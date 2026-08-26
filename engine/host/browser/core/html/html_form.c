@@ -40,6 +40,7 @@
 #include "core/html/form_data.h"
 #include "core/html/form_data_event.h"
 #include "core/html/form_entry_list.h"
+#include "core/html/html_base_element.h"   /* §4.2.3's get an element's target, which step 18 runs */
 #include "core/html/html_dialog.h"
 #include "core/html/html_form.h"
 #include "core/html/input_picker.h"
@@ -662,37 +663,35 @@ static bool form_no_validate(JSContext *ctx, JSValueConst submitter, lxb_dom_ele
     return has_attr(form, "novalidate");
 }
 
-/* §4.6.3's "GET AN ELEMENT'S TARGET", which step 20 runs given the submitter's form owner and step 19's
-   `formtarget`: the given target when there is one, otherwise the element's own `target` attribute, otherwise
-   the value of the `target` attribute of the FIRST `base` element in the element's node document that has one,
-   otherwise the empty string. The `base` leg is not decoration — `<base target=_blank>` retargets every form
-   and link in the document at once, and an engine that skipped it would decide the rows below in the wrong
-   navigable while looking like it had asked. */
-static const char *form_base_target(lxb_dom_node_t *form_node, size_t *plen)
+/* §4.10.22.3 steps 16-18. THE ALGORITHM IS §4.2.3's AND IT IS CALLED, NOT RESTATED — what is left here is the
+ * two steps that belong to a form: "Let formTarget be null. If the submitter element is a submit button and it
+ * has a `formtarget` attribute, then set formTarget to the formtarget attribute value" (steps 16-17), and then
+ * step 18 hands that, with the submitter's FORM OWNER, to get an element's target.
+ *
+ * WHAT WAS HERE WAS A SECOND COPY, AND IT DISAGREED WITH THE FIRST IN BOTH DIRECTIONS. It walked for a
+ * `<base target>` where core/html/hyperlink.c did not look for one at all, and neither ran §4.2.3 step 2's
+ * dangling-markup reset — so `<form target>` and `<a target>` answered two different questions and both
+ * honoured a name a browser refuses. The walk moved to core/html/html_base_element.c, which is where §4.2.3 is
+ * and where the `<base>` half of this engine already lives.
+ *
+ * THE FALL-THROUGH IS NOT submitter_attr's. That helper answers own-attribute-then-form-attribute as ONE
+ * lookup, which is right for `formmethod`/`method` and wrong here: §4.2.3 step 1 consults the FORM's `target`
+ * only when formTarget is null, and then a `<base target>` only when the form has none — three levels, and the
+ * middle one is inside the algorithm rather than in front of it. */
+static const char *form_element_target(JSContext *ctx, JSValueConst submitter, lxb_dom_node_t *form_node,
+                                       size_t *plen)
 {
-    lxb_dom_node_t *root, *n;
+    lxb_dom_element_t *button = html_form_is_submit_button(ctx, submitter) ? form_elem_of(submitter) : NULL;
+    const char *form_target = NULL;
+    size_t ft_len = 0;
 
-    *plen = 0;
-    if (!form_node || !form_node->owner_document) return NULL;
-    root = lxb_dom_interface_node(form_node->owner_document);
-    for (n = node_next_in(root, root); n; n = node_next_in(n, root)) {
-        /* "the FIRST such base element" — the first one that HAS the attribute, which is a presence question
-           like the one submitter_attr_from asks, not a question about its value being non-empty. */
-        if (tag_is(n, "base") && has_attr(lxb_dom_interface_element(n), "target")) {
-            const char *v = attr_of(lxb_dom_interface_element(n), "target", plen);
-            return v ? v : "";
-        }
+    /* Steps 16-17: PRESENCE on the submit button, so `formtarget=""` is an explicit empty target that stops the
+       form's own attribute being consulted — the same reason submitter_attr_from asks §4.9's list. */
+    if (button && has_attr(button, "formtarget")) {
+        form_target = attr_of(button, "formtarget", &ft_len);
+        if (!form_target) { form_target = ""; ft_len = 0; }
     }
-    return NULL;
-}
-
-static const char *form_element_target(JSContext *ctx, JSValueConst submitter, lxb_dom_element_t *form,
-                                       lxb_dom_node_t *form_node, size_t *plen)
-{
-    const char *v = submitter_attr(ctx, submitter, form, "formtarget", "target", plen);
-
-    if (v) return v;   /* NULL only when NEITHER element carries the attribute — see submitter_attr_from */
-    return form_base_target(form_node, plen);
+    return html_base_element_get_target(form_node, form_target, ft_len, plen);   /* step 18 */
 }
 
 /* §7.1's RULES FOR CHOOSING A NAVIGABLE, for the only answer this engine can act in: `_self` and the empty
@@ -1154,7 +1153,7 @@ static void submit_run_cell(JSContext *ctx, JSSubmitState *s, UrlRecord *parsed,
 
 /* §4.10.22.3's PLAN TO NAVIGATE, which every cell ends in, dispatched on the scheme that chose the row. */
 static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord *parsed, int method,
-                                    int enctype, lxb_dom_element_t *form)
+                                    int enctype)
 {
     const char *scheme = parsed->scheme;
     size_t tlen = 0;
@@ -1186,14 +1185,15 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
        hand-offs affect none. `_self` and the empty string are the one target whose chosen navigable is the
        form's own, which is this document, so that is the case the rows below can act in and the rest is named
        as the work it is. */
-    target = form_element_target(ctx, s->submitter, form, node_of(s->hdr.this_val), &tlen);
+    target = form_element_target(ctx, s->submitter, node_of(s->hdr.this_val), &tlen);
     if (strcmp(scheme, "javascript") == 0) {
         if (!form_target_is_self(target, tlen))
             /* WHAT THIS ASKED FOR HAS PARTLY ARRIVED, AND A DFAIL THAT KEEPS ASKING IS THE STALE ONE
                CLAUDE.md NAMES. It used to instruct the next reader to "build steps 18-21 (get an element's
                target, get an element's noopener, the rules for choosing a navigable)", and TWO of those three
-               are in this tree: get-an-element's-target is form_element_target, twenty lines up and already
-               called on the line above; the rules for choosing a navigable are HTML §7.3.1.7's, implemented as
+               are in this tree: get-an-element's-target is §4.2.3's, in core/html/html_base_element.c, reached
+               through form_element_target and already called on the line above; the rules for choosing a
+               navigable are HTML §7.3.1.7's, implemented as
                navigable_open in core/frame/navigable.c and reached by both `window.open` and §4.6.3. So the
                instruction sent its reader to write a third copy of an algorithm whose whole point is that
                there is one. What is genuinely absent is named instead. */
@@ -1201,9 +1201,9 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
                   "`formtarget` — §4.10.22.3 steps 18-21 choose that navigable and §7.4.2.3.2 evaluates the "
                   "URL in ITS active document, under ITS settings object and API base URL, while "
                   "navigable_evaluate_javascript_url below runs it in THIS one. Build §4.10.22.3 step 19's "
-                  "get-an-element's-noopener for a form, hand the target and that flag to navigable_open "
-                  "(core/frame/navigable.c, which already runs §7.3.1.7's rules), and evaluate the URL in the "
-                  "realm of the navigable it answers with");
+                  "get-an-element's-noopener for a form, hand the target, that flag and the FORM as §4.6.5 step "
+                  "11's sourceElement to navigable_open (core/frame/navigable.c, which already runs §7.3.1.7's "
+                  "rules), and evaluate the URL in the realm of the navigable it answers with");
         serialized = url_serialize(parsed, /*exclude_fragment*/ false);
         CHECK(serialized != NULL, "form: OOM serializing a javascript: action URL");
         navigable_evaluate_javascript_url(ctx, serialized);
@@ -1296,7 +1296,7 @@ static int submit_request(JSContext *ctx, JSSubmitState *s)
     enctype = form_enctype_state(ctx, s->submitter, form);          /* step 17 */
     cell = submit_cell_for(parsed.scheme, method);                  /* step 26's row and column */
     submit_run_cell(ctx, s, &parsed, cell, method, enctype);
-    submit_plan_to_navigate(ctx, s, &parsed, method, enctype, form);
+    submit_plan_to_navigate(ctx, s, &parsed, method, enctype);
     url_record_free(&parsed);
     return JS_STEP_DONE;
 }

@@ -1,5 +1,5 @@
-/* HTML §4.2.3 "The base element" — see html_base_element.h for why the frozen base URL is STORED and why the
-   `target` half's walk-per-ask is right for that member and wrong for this one. */
+/* HTML §4.2.3 "The base element" — see html_base_element.h for why the frozen base URL is STORED while the
+   `target` half is a walk performed at each ask, and for what §4.2.3 step 2's reset is defending. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +18,7 @@
 #include "core/html/html_base_element.h"
 #include "core/idl_args.h"
 #include "core/url/url.h"
+#include "solver/dom_cow.h"   /* §4.9's (element, name) taint shadow: what a raw attribute read cannot see */
 
 /* §4.2.3's `href` SETTER — `[CEReactions, ReflectSetter] attribute USVString href`, which is the ORDINARY
    reflection setter (write the content attribute) even though the getter is not the ordinary getter. It is
@@ -254,6 +255,111 @@ void html_base_element_parsed(JSContext *ctx, lxb_dom_node_t *root)
            "over the document ('the first base element in document … in tree order'), and a subtree root would "
            "answer for a different tree");
     base_element_process(lxb_dom_interface_document(root), NULL);
+}
+
+/* ---- §4.2.3's OTHER algorithm: GET AN ELEMENT'S TARGET (see html_base_element.h) ---------------------------- */
+
+/* One attribute read for both of step 1's branches, as BORROWED BYTES — which is what this algorithm hands its
+ * callers and what §7.3.1.7's rules for choosing a navigable compare. Answers NULL for an attribute that is not
+ * in §4.9's list, and the empty string for one that is there with no value buffer (the HTML parser stores
+ * `<a target>` that way, and `setAttribute('target','')` stores a zero-length one — §4.9 makes them the same
+ * attribute, so a value-pointer test would call the parsed one absent).
+ *
+ * THE TAINT IS ASSERTED HERE BECAUSE THE BYTES CANNOT CARRY IT. core/dom/element.c's element_attr_get holds
+ * this same assert for the JSValue path, and reading Lexbor's buffer directly walks around it — so the flow
+ * that stashed an attacker string in `a.target` would arrive at the rules for choosing a navigable as a plain
+ * name with its source identity gone. Named at the read rather than left to the navigation, because it is the
+ * READ that drops the triple. */
+static const char *target_attr_of(lxb_dom_element_t *el, const char *name, size_t *plen)
+{
+    const lxb_char_t *v;
+
+    *plen = 0;
+    if (!dom_attr_get_ns(el, NULL, name)) return NULL;
+    /* THE NAMESPACE-KEYED READ, which is §4.9's own key and the one the presence test above just used — the
+       by-name form resolves a qualified name and allocates to do it, and a DCHECK's condition does neither. */
+    DCHECK(JS_IsUndefined(dom_cow_attr_taint_ns(el, NULL, name)),
+           "§4.2.3's get an element's target read a `target`/`formtarget` attribute holding unknown external "
+           "input — the algorithm answers BYTES, so the source identity and the constraint domain come off the "
+           "triple here and the navigable this names reads as one the page chose. Carry the concolic through "
+           "get-an-element's-target and into navigable_open's destination, the mechanism core/html/hyperlink.c "
+           "already names for a tainted `href`");
+    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), plen);
+    if (!v) { *plen = 0; return ""; }
+    return (const char *)v;
+}
+
+/* §4.2.3 step 1's SECOND branch: "if element's node document contains a base element with a target attribute,
+   set target to the value of the target attribute of the FIRST such base element". PRESENCE, exactly as the
+   href half's walk asks it — `<base target="">` is a base element WITH a target and names the empty string,
+   which §7.3.1.7 step 4 answers with the current navigable, and that is a different answer from there being no
+   `<base target>` at all (which lets the element's own absent target mean the same thing by a different
+   route — the two agreeing is not the two being one question). */
+static const char *first_base_target(lxb_dom_document_t *doc, size_t *plen)
+{
+    lxb_dom_node_t *root = lxb_dom_interface_node(doc), *n;
+
+    *plen = 0;
+    /* THE NAMESPACE IS PART OF THE QUESTION here for the same reason base_element_is makes it one, and the walk
+       is the LIGHT tree: a `<base>` inside a shadow root is not in this document's tree. */
+    for (n = root; n; n = node_next_in(n, root))
+        if (base_element_is(n) && dom_attr_get_ns(lxb_dom_interface_element(n), NULL, "target"))
+            return target_attr_of(lxb_dom_interface_element(n), "target", plen);
+    return NULL;
+}
+
+bool html_base_element_target_is_dangling(const char *target, size_t len)
+{
+    size_t i;
+    bool tab_or_newline = false, lt = false;
+
+    /* BOTH, NOT EITHER. §4.2.3 step 2 is "contains an ASCII tab or newline AND a U+003C (<)" — a target holding
+       only a newline is a name a page may legitimately have given a window, and only the pair is the tail of an
+       unterminated attribute value that swallowed the markup after it. The scan does not stop at the first hit
+       of one kind because the other may be anywhere, before or after it. */
+    for (i = 0; i < len; i++) {
+        char c = target[i];
+
+        if (c == '\t' || c == '\n' || c == '\r') tab_or_newline = true;   /* Infra §4.6: TAB, LF, CR */
+        else if (c == '<') lt = true;
+    }
+    return tab_or_newline && lt;
+}
+
+const char *html_base_element_get_target(lxb_dom_node_t *element, const char *target, size_t explicit_len,
+                                         size_t *plen)
+{
+    size_t len = target ? explicit_len : 0;
+
+    DCHECK(element != NULL && element->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§4.2.3's get an element's target was handed something that is not an element — the algorithm is "
+           "written over an `a`, `area` or `form` element, and step 1 reads that element's own attribute");
+    DCHECK(element->owner_document != NULL,
+           "§4.2.3's get an element's target reached an element with no node document — step 1's second branch "
+           "walks that document for a `<base target>`, and every node has one");
+
+    /* STEP 1: "If target is null" — the caller supplied none, so the element's own attribute answers, and a
+       document `<base target>` answers when the element has none. §4.10.22.3 step 17's formTarget is the one
+       caller that arrives with a target already, and it must NOT be overridden by either. */
+    if (!target) {
+        target = target_attr_of(lxb_dom_interface_element(element), "target", &len);   /* step 1.1 */
+        if (!target) target = first_base_target(element->owner_document, &len);        /* step 1.2 */
+    }
+
+    /* STEP 2: "If target is not null, and contains an ASCII tab or newline and a U+003C (<), then set target to
+       `_blank`." IT IS `_blank` AND NOT THE EMPTY STRING, which are opposite answers: §7.3.1.7 step 4 reads the
+       empty string as the CURRENT navigable, so resetting to it would navigate the page itself where the spec
+       opens a fresh window. What makes the reset LOOK like an empty string is one step further on — §7.3.1.7
+       step 8 gives a `_blank` request a created navigable whose targetName is the empty string, so the window
+       that opens has no name, which is what `dangling-markup-window-name.html` reads back. */
+    if (target && html_base_element_target_is_dangling(target, len)) { target = "_blank"; len = 6; }
+
+    /* STEP 3: "Return target" — null when neither the element nor a `<base>` named one. Answered as the empty
+       string, which is the value §4.6.5 step 2 and §4.10.22.3 step 18 both put into a STRING variable, and
+       which §7.3.1.7 step 4 already has an answer for. */
+    if (!target) { target = ""; len = 0; }
+    *plen = len;
+    return target;
 }
 
 /* WEB IDL §3.7.6's BRAND CHECK — "if `this` does not implement the interface, throw a TypeError". A member is

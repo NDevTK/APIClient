@@ -29,6 +29,7 @@
 #include "quickjs.h"
 #include "solver/concolic.h"   /* href is a slot a SOURCE can be stashed in — the members keep its provenance */
 #include "core/html/hyperlink.h"
+#include "core/html/html_base_element.h"   /* §4.2.3's get an element's target — see §4.6.5 step 3 below */
 #include "core/dom/element.h"
 #include "core/dom/document.h"
 #include "core/url/url.h"
@@ -252,9 +253,10 @@ static bool link_has_activation(JSContext *ctx, JSValueConst el)
 static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev, uint8_t *phase, uint32_t *req)
 {
     JSValue hrefv = element_attr_get_value(ctx, el, "href");
-    char *target = element_attr_get(ctx, el, "target");
     char *rel = element_attr_get(ctx, el, "rel");
-    const char *href;
+    const char *href, *tv;
+    size_t tlen = 0;
+    char *target;
     WindowFeatures feat = { false, false, false };
     JSValue r;
 
@@ -280,19 +282,37 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
         feat.noopener = strstr(rel, "noopener") != NULL || strstr(rel, "noreferrer") != NULL;
         feat.noreferrer = strstr(rel, "noreferrer") != NULL;
     }
-    /* §4.6.3's "get an element's target": the `target` attribute's value, and the empty string when there is
-       none. It is handed over AS IT IS — this line used to substitute the literal "_self" for an absent or
+    /* §4.6.5 "Following hyperlinks" steps 2-3: "Let targetAttributeValue be the empty string. If subject is an
+       `a` or `area` element, then set targetAttributeValue to the result of GETTING AN ELEMENT'S TARGET given
+       subject." Both words of that are the algorithm's and neither was here: this read the `target` attribute
+       raw, so it never looked for the document's `<base target>` (§4.2.3 step 1.2), and it never applied
+       §4.2.3 step 2's reset — a `target` carrying both an ASCII tab/newline and a `<` is the tail of an
+       unterminated attribute in an HTML injection, and this engine named a window after it where a browser
+       refuses to. That is a smuggling primitive on the security half, and it is fixed by CALLING the algorithm
+       rather than by adding its steps here: `window.open` must NOT reset (§7.2.2.1 does not run this), so the
+       two paths differ by which algorithm supplies the name and by nothing else.
+       It is still handed over AS IT IS — this line used to substitute the literal "_self" for an absent or
        empty target, which is HTML §7.3.1.7 "Navigable target names" step 4 written a second time in a caller.
-       The rules for choosing a navigable answer the current navigable for the empty string themselves, and a
-       caller that pre-translates is the second copy navigable_open's own header warns is always subtly wrong:
-       this one hid that navigable_open read an empty target as CREATE, so the day anything else passed one
-       through it opened a popup. */
+       The rules for choosing a navigable answer the current navigable for the empty string themselves.
+       COPIED BECAUSE THE POINTER IS BORROWED from a Lexbor attribute buffer that the navigation below outlives,
+       and NUL-terminated because navigable_open takes a C string — which is where a name holding an embedded
+       U+0000 loses its tail today (`targeting-with-embedded-null-in-target.html` reads `abc` for `abc\0def`).
+       That is the navigable NAME's representation and not this call's: it is a DOMString the whole way down and
+       the fix is to hold it as a JSValue, which the same length is already carried past here for. */
+    tv = html_base_element_get_target(node_of(el), NULL, 0, &tlen);
+    target = malloc(tlen + 1);
+    CHECK(target != NULL, "§4.6.5 step 3: OOM copying a hyperlink's target");
+    memcpy(target, tv, tlen);
+    target[tlen] = '\0';
     /* §7.4 STEPS 6 AND 14. `phase` and `req` are this behaviour's suspension, held by the dispatch machine that
        called it: the navigate inside here FETCHES, and when that fetch becomes the host request it already has
        to be (navigable.h), it is these two words the wait lives in and this line that returns JS_STEP_YIELD.
        It does not park yet — navigable_open reaches the host's synchronous fetcher — so this always finishes in
        one entry, and the contract is what makes the change to child_document a change to child_document. */
-    r = navigable_open(ctx, href, target, &feat);
+    /* §4.6.5 step 11 navigates "with … sourceElement set to subject" — the element is what makes this an
+       ELEMENT-initiated navigation, which is the one thing §7.3.1.7's rules cannot ask of the name alone and
+       the fact the assert at their entry is about. */
+    r = navigable_open(ctx, href, target, &feat, node_of(el));
     JS_FreeCString(ctx, href);
     JS_FreeValue(ctx, hrefv);
     free(target);

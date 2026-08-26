@@ -12,10 +12,13 @@
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/frame/opener_policy.h"   /* §7.1.3's policy and §7.1.3.2's group-switch decision */
+#include "core/frame/embedder_policy.h" /* §7.1.4's obtain, which §7.1.7 step 4 makes a container's own item */
 #include "core/frame/browsing_context_group.h"   /* and §7.1.3.2's swap, which is what that decision reaches */
 #include "core/frame/secure_context.h"  /* §8.1.3.5, which §7.1.3 step 2 asks of the reserved environment */
 #include "core/fetch/headers.h"         /* the response's header list, as the field lines it crosses the ABI in */
 #include "core/dom/document.h"
+#include "core/html/html_base_element.h"  /* §4.2.3 step 2's shape, which the rules below assert an element's
+                                             target has already been through — see navigable_open */
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
 #include "core/html/html_parse.h"    /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/html/html_script.h"   /* §4.12.1.1's encoding-parse of `src`, stated once for its three callers */
@@ -1770,12 +1773,36 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
  * read an empty target as "create", which is neither caller's rule. §7.2.2.1's window open steps map "" to
  * "_blank" in their own step 5 BEFORE applying these rules, so `window.open(url, "")` still opens a window:
  * that mapping belongs to §7.2.2.1 and now lives there. */
-JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat)
+JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
+                       lxb_dom_node_t *source_element)
 {
     const char *name = target ? target : "";
     const bool noopener = feat && feat->noopener;
+    JSValue chosen;
+
+    /* THE ASSERT AT THE CONSUMER, and the question it closes is the one this algorithm structurally cannot ask:
+       §7.3.1.7 takes ANY string, so a name carrying smuggled markup is legal here — for `window.open`, which is
+       what §7.2.2.1 specifies and what the corpus asserts by name. It is NOT legal from an element: §4.2.3's
+       get an element's target resets exactly this shape to "_blank" before the name ever reaches these rules,
+       so an element-sourced name that still has it is a name that never went through the algorithm. That was
+       the whole defect — `<a target>` read its attribute raw and this function had no way to tell, so a page
+       could name a navigable after the tail of an HTML injection and every later `window.open("", "<name>")`
+       from the injected document addressed it.
+       IT IS ASSERTED HERE RATHER THAN AT EACH CALLER because a caller that would forget the algorithm is
+       exactly a caller that would forget the check: this is where every navigation converges, so a route added
+       later FIRES instead of silently widening the old wrong answer. The predicate is §4.2.3's own, exported by
+       core/html/html_base_element.h, so the shape this crashes on and the shape that algorithm resets cannot
+       drift apart. */
+    DCHECK(source_element == NULL || !html_base_element_target_is_dangling(name, strlen(name)),
+           "§7.3.1.7's rules for choosing a navigable were given an ELEMENT's target that still contains both "
+           "an ASCII tab or newline and a U+003C (<) — §4.2.3's get an element's target resets that shape to "
+           "\"_blank\", so this name reached here without it. Route the call site through "
+           "html_base_element_get_target (core/html/html_base_element.h); honouring the name is a "
+           "dangling-markup smuggling primitive that no browser reproduces");
+    (void)source_element;
+
     /* Steps 4-6: the empty string and the three keywords that answer with a navigable that already exists. */
-    JSValue chosen = navigable_choose_keyword(ctx, name);
+    chosen = navigable_choose_keyword(ctx, name);
 
     /* Step 7: "if name is not an ASCII case-insensitive match for `_blank` and noopener is false, then set
        chosen to the result of finding a navigable by target name". Both halves are conditions on the SEARCH. */
@@ -1866,7 +1893,11 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        argument takes the same branch because the IDL's default for it IS "_blank"
        (open(optional USVString url = "", optional DOMString target = "_blank", …)), so the two spellings of
        "no target" reach one answer here rather than two further down. */
-    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat);
+    /* NO SOURCE ELEMENT, and that is §7.2.2.1's own statement rather than a hole: the window open steps are
+       reached from script, never from an element, so §4.2.3's get an element's target does not run and the
+       target is NOT reset. `dangling-markup-window-name.html`'s first subtest is named for exactly that —
+       "Dangling Markup in target is not reset when set by window.open". */
+    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL);
     if (url) JS_FreeCString(ctx, url);
     if (target) JS_FreeCString(ctx, target);
     if (features) JS_FreeCString(ctx, features);
