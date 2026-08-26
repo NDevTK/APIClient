@@ -1534,7 +1534,8 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
 }
 
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
-                         const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags)
+                         const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
+                         JSValueConst container)
 {
     const PolicyContainer *creator_container = document_policy(ctx);
     /* §7.1.7's CLONE OF THE CREATOR'S CONTAINER, in the form it travels — the ONE value this whole function
@@ -1598,6 +1599,16 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            "§7.4's AUXILIARY navigable was created with an IFRAME SANDBOXING FLAG SET — an auxiliary navigable "
            "has no embedder element for one to come from, and §7.1.5 answers its creation flags from the POPUP "
            "sandboxing flag set instead");
+    /* §7.3.1.3: "To create a new child navigable, given an ELEMENT element". A child navigable IS the content
+       navigable of a navigable container, so the two halves of `is_child` are one fact and they are asserted
+       against each other here rather than trusted separately — a child created without its element would leave
+       §7.2.2.4's `frameElement` with nothing to return and §7.1.5's own flag set above with an embedder that
+       cannot be named, and an auxiliary one created WITH an element would be presented by a frame it is not in.
+       This is the same reason the sandbox assert above it exists, one link along. */
+    DCHECK(is_child == JS_IsObject(container),
+           "§7.4's create was given a navigable container element for an AUXILIARY navigable, or none for a "
+           "CHILD one — §7.3.1.3 takes the element by name for a child and §7.3.1.7 step 8 creates an auxiliary "
+           "navigable out of a target name with no element anywhere in the algorithm");
     embedder.iframe_flags = iframe_sandbox_flags;
     embedder.document_flags = document_active_sandbox_flags(ctx);
     creation_flags = sandbox_creation_flags(is_child ? &embedder : NULL,
@@ -1868,6 +1879,16 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                                                                  : document_window_proxy(ctx));
         CHECK(!JS_IsException(proxy), "a navigable's WindowProxy could not be allocated");
     }
+    /* §7.3.1.3's create-a-new-child-navigable: "Set element's content navigable to navigable." The ELEMENT's
+       half of that link is the wrapper slot core/html/html_iframe.c writes when this returns; this is the
+       NAVIGABLE's half, and it is written here — in the algorithm that was handed the element — for both arms,
+       because a CROSS-ORIGIN child is presented by an element in THIS document exactly as a same-origin one is.
+       Whose active document lives where is a fact about the child; which element presents it is a fact about
+       this document, and the two are unrelated.
+       AFTER THE MINT AND BEFORE ANYTHING CAN OBSERVE IT: the only code between the mint and this line is the
+       group append and the load ENQUEUE, neither of which runs a program or reads through the navigable, so
+       there is no moment at which a page sees a child navigable with no container. */
+    if (is_child) window_proxy_set_container(ctx, proxy, container);
     JS_FreeCString(ctx, creator_tlu_s);
     JS_FreeValue(ctx, creator_tlu);
     free(addr);
@@ -1950,7 +1971,10 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     DCHECK(*name, "§7.3.1.7 step 4 answers the CURRENT navigable for an empty name, so nothing empty can reach "
                   "step 8 — an empty target arriving here would mint an unnamed window where the spec navigates "
                   "this one, which is how `<a target=\"\">` used to open a popup");
-    return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0);
+    /* §7.3.1.3's container is JS_NULL here and that is the whole difference between step 8's navigable and
+       §4.8.5's: the rules for choosing a navigable are given a target NAME, never an element, so nothing
+       presents the traversable they create and §7.2.2.4's `frameElement` is null in it for ever. */
+    return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0, JS_NULL);
 }
 
 /* HTML §7.2.2.1 "Opening and closing windows" — `window.open`'s WINDOW OPEN STEPS, AS A STEP MACHINE, and it is

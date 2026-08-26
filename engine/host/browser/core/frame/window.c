@@ -155,36 +155,59 @@ static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewInt32(ctx, iframe_child_navigable_count(ctx));
 }
 
-/* §7.2.2.4's `frameElement` getter steps: "Let current be this's node navigable. If current is null, then
-   return null. Let container be current's container. If container is null, then return null. If container's
-   node document's origin is not same origin-domain with the current settings object's origin, then return
-   null. Return container."
-   A TOP-LEVEL NAVIGABLE IS NESTED THROUGH NOTHING, so its container is null and so is the answer — that half
-   is a real computation and it is the one this engine can make. The other half is not a value: a CHILD
-   navigable HAS a container element and this engine holds no edge from a navigable back to it (html_iframe.c
-   carries element -> navigable and nothing carries the reverse), so there is nothing here to return.
+/* HTML §7.2.2.4 "Accessing related windows"' `frameElement` getter steps, in the standard's own order: "Let
+   current be this's node navigable. If current is null, then return null. Let container be current's container.
+   If container is null, then return null. If container's node document's origin is not same origin-domain with
+   the current settings object's origin, then return null. Return container."
    IT WAS A FIXED `JS_NULL` INSTALLED ON EVERY REALM, which answered the top-level case correctly and every
-   child navigable WRONGLY, as a plain data property, with a comment calling null "the real answer for what
-   this is". It is the real answer for a top-level navigable and a lie for a frame — and the engine grew child
-   navigables under it. The missing edge is named at the read rather than papered over with the answer that
-   happens to be right at the top of the tree.
-   §7.2.1 same origin-domain: within one instance the question cannot fail, because an instance IS an
-   origin-keyed agent cluster — a cross-origin child navigable is a different instance and its container is
-   not in this heap at all. */
+   child navigable WRONGLY, as a plain data property, with a comment calling null "the real answer for what this
+   is". Then it was a DFAIL naming the edge to build. The edge is built — §7.3.1.3's container, recorded by
+   create-a-new-child-navigable and confirmed against the element's own content navigable
+   (window_proxy_container) — so the four steps are four lines.
+   STEP 5 IS SAME ORIGIN-DOMAIN AND IT CAN FAIL INSIDE ONE INSTANCE, which is why it is asked rather than argued
+   away. The comment this replaces claimed the question could not fail here, on the grounds that an instance is
+   an origin-keyed agent cluster and a cross-origin child lives in a peer. Same ORIGIN is what that argument is
+   about; §7.1.1's same origin-domain is a different algorithm, and two documents of one agent cluster differ
+   under it the moment one of them runs §7.1.1.2's `document.domain` setter and the other does not — the
+   standard's own fourth table row, and the same distinction §7.3.1's `content document` filter already draws
+   one file over. The origin compared is the CONTAINER's node document's, which §7.3.1.3's `container document`
+   defines as exactly that: "Return navigable's container's node document" — the active document of the
+   navigable this one is nested in. */
 static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
-    JSValue parent;
+    JSValue container, parent;
+    bool same_origin_domain;
 
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
+    /* Steps 1-2. A Document §7.5.10 destroyed is no navigable's active document any more, so §7.3.1's "the
+       navigable whose active document is document" has no answer and this Window's node navigable is null. */
+    if (window_proxy_destroyed(nav)) return JS_NULL;
+    /* Steps 3-4: §7.3.1.3's container, null for a navigable nested through nothing. */
+    container = window_proxy_container(ctx, nav);
+    if (JS_IsNull(container)) return JS_NULL;
+    /* Step 5. The container's node document is the parent navigable's active document (§7.3.1.3's container
+       document). THE ACCESSOR SIDE IS THIS REALM, and that IS §7.2.2.4's "current settings object" wherever
+       this body can run at all: a direct `window.frameElement` makes the two the same object, and a
+       cross-document `otherW.frameElement` only reaches this getter through §7.2.3.5 step 3, which performs
+       [[GetOwnProperty]] on W after IsPlatformObjectSameOrigin(W) already held — so the reading script and this
+       realm are same origin-domain before step 5 is asked, and §7.1.1's relation is an equivalence within each
+       of its two classes (both domains set and equal, or both unset and same origin), which carries the answer
+       across. Outside that check the getter is not invoked: `frameElement` is not on §7.2.1's cross-origin
+       list, so a cross-origin read is a SecurityError at the proxy and never a null from here. */
     parent = window_proxy_parent_navigable(ctx, nav);
-    if (JS_IsUndefined(parent)) return JS_NULL;   /* nested through nothing */
+    DCHECK(window_proxy_is(parent),
+           "§7.2.2.4 found a navigable with a §7.3.1.3 CONTAINER and no parent navigable — every child "
+           "navigable is nested in the one its container's node document belongs to, and the create writes "
+           "both links in one step (core/frame/navigable.c)");
+    same_origin_domain = window_proxy_same_origin_domain_of(ctx, parent);
     JS_FreeValue(ctx, parent);
-    DFAIL("§7.2.2.4's frameElement was read in a CHILD navigable, whose container element this engine cannot "
-          "reach: html_iframe.c holds element -> navigable and nothing holds navigable -> element. Build that "
-          "edge (the container is what §7.2.6's create was handed) and return it here");
-    return JS_NULL;
+    if (!same_origin_domain) {
+        JS_FreeValue(ctx, container);
+        return JS_NULL;
+    }
+    return container;   /* Step 6 */
 }
 
 /* §7.2.2.4's BROWSING-CONTEXT LINKS — see window_proxy.h. The mapping between a window's two spellings

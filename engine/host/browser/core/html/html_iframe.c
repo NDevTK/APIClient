@@ -89,10 +89,14 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        the whole of how §7.1.5's set becomes per-flow without anything having to capture the set itself. */
     sandbox = element_attr_get(ctx, wrap, "sandbox");
     iframe_flags = sandbox ? sandbox_parse_directive(sandbox, strlen(sandbox)) : 0;
-    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags);
+    /* §7.3.1.3 "Child navigables": "To create a new child navigable, given an element element" — THIS element,
+       handed over rather than looked up, because the container link the create makes is a link back to it and
+       §7.2.2.4's `frameElement` is the read that follows it. The slot written below is the same link's other
+       half; they are one step of one algorithm and both are written here. */
+    proxy = navigable_create(ctx, src, name, true, NULL, iframe_flags, wrap);
     /* §4.8.5 has no "did not parse" branch the way §7.4 does: an `<iframe src="::">` still has a navigable,
        holding the initial about:blank it was created with. */
-    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags);
+    if (JS_IsUndefined(proxy)) proxy = navigable_create(ctx, NULL, name, true, NULL, iframe_flags, wrap);
     free(src);
     free(name);
     free(sandbox);

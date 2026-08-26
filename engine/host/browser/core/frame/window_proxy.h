@@ -316,6 +316,27 @@ JSValue window_proxy_parent(JSContext *ctx, JSValueConst proxy);
 /* THE NAVIGABLE THIS ONE IS NESTED IN, for an ENGINE walk rather than for `window.parent`: JS_UNDEFINED at the
    top instead of the proxy itself, because a walk up the tree wants "nothing above this". Owned. */
 JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy);
+/* HTML §7.3.1.3 "Child navigables"' CONTAINER OF A NAVIGABLE — "the navigable container whose content
+   navigable is navigable, or null if there is no such element". The container ELEMENT's wrapper (owned), or
+   JS_NULL for a navigable nested through nothing (a top-level traversable, and every auxiliary one §7.3.1.7
+   step 8 creates).
+   IT IS RECORDED AT THE CREATE AND CONFIRMED AGAINST THE FORWARD EDGE, and both halves of that are what make
+   it §7.3.1.3's relation rather than a second copy of it. RECORDED, because create-a-new-child-navigable is
+   handed the element ("To create a new child navigable, given an element element") and sets the link as one of
+   its own steps — so the reverse edge is written there, by the operation that has the element in hand, and is
+   never searched for down a document tree afterwards. CONFIRMED, because §7.3.1.6's destroy-a-child-navigable
+   severs the relation by clearing the ELEMENT's content navigable, which in this engine is a per-flow write on
+   the wrapper (core/html/html_iframe.c) — so a stored pointer READ ALONE would keep naming an element the
+   running flow has already detached, and would keep naming it in a sibling arm that detached it while this one
+   did not. Reading the forward slot back IS the definition above, it costs one own-property read, and it is
+   the only spelling in which the answer is per-flow without a second write to capture. */
+JSValue window_proxy_container(JSContext *ctx, JSValueConst proxy);
+/* §7.3.1.3's create-a-new-child-navigable step "Set element's content navigable to navigable", from the
+   NAVIGABLE's side — the half html_iframe.c's slot on the wrapper cannot hold. ONE WRITER: §7.4's create
+   (core/frame/navigable.c), which is the one algorithm that is handed a container element, and which asserts
+   the pairing between having one and being a child navigable so a child cannot be created without it. */
+void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst element);
+
 /* AND §7.2.2.4's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
    navigable onto the GLOBAL, which is the right answer for a page reading the member and the wrong one for an
    engine walk — a Window is not a WindowProxy, so a walk handed it asks "is this a proxy", is told no, and

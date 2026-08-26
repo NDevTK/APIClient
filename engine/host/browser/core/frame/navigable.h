@@ -290,7 +290,19 @@ int navigable_realm_count(void);
    per-flow without anything here having to capture it. Must be empty for an AUXILIARY navigable (`is_child`
    false), which has no embedder element at all — §7.1.5 answers that case from the POPUP sandboxing flag set,
    which this function derives from the creator's own active set. */
+/* `container` is HTML §7.3.1.3 "Child navigables"' NAVIGABLE CONTAINER — the ELEMENT wrapper this navigable is
+   presented by, which create-a-new-child-navigable is handed by name ("To create a new child navigable, given
+   an element element") and links in one of its own steps. JS_NULL for §7.3.1.7 step 8's AUXILIARY navigable,
+   which no element presents.
+   IT IS AN ARGUMENT AND NEVER A LATER SETTER, for the reason every other creation fact on this seam is one:
+   §7.3.1.3 defines the container as the element whose content navigable is this navigable, so the only place
+   the answer exists without a search down a document tree is the algorithm that was given the element. A create
+   that recorded nothing would leave §7.2.2.4's `frameElement` to hunt for its own answer, and a navigable
+   materialized in a flow that never walked that tree would not have one to find.
+   THE PAIRING WITH `is_child` IS ASSERTED, so a child navigable cannot be created with no element to present
+   it and an auxiliary one cannot be created with one. */
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
-                         const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags);
+                         const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
+                         JSValueConst container);
 
 #endif

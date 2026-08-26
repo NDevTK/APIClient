@@ -81,6 +81,21 @@ typedef struct {
        and `parent`/`opener` are values a fork must carry. */
     JSValue parent;    /* the parent navigable's proxy (or the creator's Window); JS_UNDEFINED = top-level */
     JSValue opener;    /* §7.2.2.4's opener — the navigable that opened this one, or JS_NULL */
+    /* HTML §7.3.1.3's CONTAINER — the navigable container ELEMENT this navigable is presented by, as its
+       wrapper, or JS_NULL for one nested through nothing. §7.3.1.3 defines it as a DERIVED relation ("the
+       navigable container whose content navigable is navigable"), which a browser answers with a stored back
+       pointer and this engine could otherwise only answer by walking a document tree looking for the element
+       whose slot names this proxy — a search whose cost is the tree and whose answer is already known at the
+       one place that can state it: create-a-new-child-navigable is GIVEN the element.
+       IT IS A STRONG REFERENCE AND IT CLOSES A CYCLE, deliberately: the element's wrapper holds this proxy in
+       its own hidden slot, so the two name each other and neither can be collected while the other is reachable
+       from a root. That is what proxy_gc_mark is for, and the pair is no different in kind from `window`, which
+       holds the proxy back through the realm's global.
+       THE READER CONFIRMS IT AGAINST THAT FORWARD SLOT (window_proxy_container) rather than trusting it, which
+       is what makes this per-flow with nothing to capture: §7.3.1.6's destroy-a-child-navigable severs the
+       relation by clearing the ELEMENT's content navigable, and that clear is an ordinary property write the
+       DOM COW delta already isolates. */
+    JSValue container;
     char   *name;      /* §7.2.2.1's name: the BROWSING CONTEXT's, not the element's (owned; see proxy_of) */
     /* WHETHER ANYONE STATED THIS NAVIGABLE'S NAME, which is what decides whether `name` is a computed value or
        unknown external input. §7.4 STATES it — `open(url, "chan42")` names the navigable it creates, and the
@@ -255,8 +270,8 @@ static int g_wp_name_setter_id = -1, g_wp_opener_setter_id = -1, g_wp_close_id =
 
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
-static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener) };
-static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 3 };
+static const uint16_t PROXY_VALS[] = { WP_OFF(window), WP_OFF(parent), WP_OFF(opener), WP_OFF(container) };
+static const CowRecord PROXY_REC = { sizeof(ProxyData), PROXY_VALS, 4 };
 
 /* THE CAPTURE IS IN THE ACCESSOR, as it is for every other component record: a record a flow has reached is one
    it may write, and there is then no write site to miss. `origin` is a POD pointer and `doc` a POD id inside the
@@ -384,6 +399,7 @@ static void proxy_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, p->window);
     JS_FreeValueRT(rt, p->parent);
     JS_FreeValueRT(rt, p->opener);
+    JS_FreeValueRT(rt, p->container);
     free(p);   /* the strings are the component's, released at teardown — see proxy_of */
 }
 
@@ -397,6 +413,10 @@ static void proxy_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, p->window, mark_func);
     JS_MarkValue(rt, p->parent, mark_func);
     JS_MarkValue(rt, p->opener, mark_func);
+    /* §7.3.1.3's container closes a cycle of its own, and a tighter one than the three above: the element's
+       wrapper holds this proxy in a hidden own slot and this record holds the wrapper back, so an unmarked
+       container would leak every `<iframe>` a page ever inserted together with the navigable it presents. */
+    JS_MarkValue(rt, p->container, mark_func);
 }
 
 /* MATERIALIZE THE ACTIVE DOCUMENT — THE ONE PLACE A REALM IS BUILT. Every member that reads THROUGH to the
@@ -685,6 +705,12 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->top_level_origin = top_level_origin;   /* BORROWED — an origin lives for the agent */
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
+    /* §7.3.1.3: A NAVIGABLE IS CREATED WITH NO CONTAINER AND IS GIVEN ONE, in that order and by that
+       algorithm — "Let navigable be a new navigable … Set element's content navigable to navigable" — so this
+       mint states the pre-operation value and §7.4's create writes the link (window_proxy_set_container).
+       It is the state an AUXILIARY navigable keeps: §7.3.1.7 step 8 creates one from a target name and there is
+       no element anywhere in that algorithm for it to be presented by. */
+    p->container = JS_NULL;
     p->doc = doc;
     JS_SetOpaque(obj, p);
     return obj;
@@ -805,6 +831,7 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     p->name_known = 1;   /* §7.4 named it, in this instance, before the notice crossed */
     p->parent = JS_DupValue(ctx, parent);
     p->opener = JS_DupValue(ctx, opener);
+    p->container = JS_NULL;   /* §7.3.1.3's link is written by the create, exactly as it is for a local one */
     p->doc = doc;
     JS_SetOpaque(obj, p);
     return obj;
@@ -2182,6 +2209,50 @@ JSValue window_proxy_parent_navigable(JSContext *ctx, JSValueConst proxy)
     ProxyData *p = proxy_of(proxy);
     DCHECK(p != NULL, "the containing navigable of something that is not a WindowProxy was asked for");
     return JS_DupValue(ctx, p->parent);
+}
+
+/* §7.3.1.3's create-a-new-child-navigable step "Set element's content navigable to navigable", from the
+   navigable's side. It is a WRITE OF A CREATION STEP and not a mutable property: §7.3.1.6 severs the relation
+   by clearing the ELEMENT's slot, never by rewriting this one, so a second write here would be a navigable
+   changing which element presents it — which no algorithm in §7.3 does. Asserted rather than assumed. */
+void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst element)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§7.3.1.3's container was set on something that is not a WindowProxy");
+    DCHECK(JS_IsObject(element),
+           "§7.3.1.3's create-a-new-child-navigable was given something that is not an element wrapper as its "
+           "navigable container — the algorithm takes an ELEMENT and every step of it reads that element");
+    DCHECK(JS_IsNull(p->container),
+           "a navigable was given a SECOND §7.3.1.3 container — the relation is created once, and §7.3.1.6's "
+           "destroy-a-child-navigable severs it by clearing the ELEMENT's content navigable rather than by "
+           "moving this one, so a navigable never changes which element presents it");
+    p->container = JS_DupValue(ctx, element);
+}
+
+/* §7.3.1.3's CONTAINER OF A NAVIGABLE, as the standard defines it: "the navigable container whose content
+   navigable is navigable, or null if there is no such element". The recorded element is the CANDIDATE and the
+   forward slot is the DEFINITION, so the answer is asked of the element every time.
+   THAT IS NOT BELT-AND-BRACES, IT IS THE PER-FLOW ANSWER. The forward slot is an ordinary own property on the
+   wrapper, so §7.3.1.6's clear rides the running flow's heap delta: an arm that removed the `<iframe>` has no
+   container from that point on and its sibling, which never removed it, still has one — out of ONE recorded
+   pointer, with nothing here to capture and no second write to keep in step. */
+JSValue window_proxy_container(JSContext *ctx, JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+    JSValue held;
+
+    DCHECK(p != NULL, "§7.3.1.3's container of something that is not a WindowProxy was asked for");
+    if (JS_IsNull(p->container)) return JS_NULL;
+    held = iframe_navigable(ctx, p->container);
+    if (JS_VALUE_GET_PTR(held) != JS_VALUE_GET_PTR(proxy)) {
+        /* The element's content navigable is null, or is some other navigable: §7.3.1.3 answers null, and this
+           is the ONLY way that happens — §7.3.1.6's destroy-a-child-navigable, in this flow. */
+        JS_FreeValue(ctx, held);
+        return JS_NULL;
+    }
+    JS_FreeValue(ctx, held);
+    return JS_DupValue(ctx, p->container);
 }
 
 JSValue window_proxy_top_of(JSContext *ctx, JSValueConst proxy)
