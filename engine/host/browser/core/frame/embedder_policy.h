@@ -120,4 +120,31 @@ void embedder_policy_adopt(EmbedderPolicy *out, SerializedEmbedderPolicy s);
  * into, and the caller frees it. */
 void embedder_policy_obtain(EmbedderPolicy *out, const HeaderList *headers, bool secure_context);
 
+/* HTML §7.1.4.2 "Embedder policy checks"' CHECK A NAVIGATION RESPONSE'S ADHERENCE TO ITS EMBEDDER POLICY, over
+ * the two policies its steps 3-6 read. TRUE is the standard's "the response adheres"; FALSE is §7.4.5
+ * "Populating a session history entry" BLOCKING the navigation before its Document is created — the frame gets
+ * §7.5.7 "Loading a document for inline content that doesn't have a DOM"'s Document, made unsalvageable, and
+ * never the response's own.
+ *
+ * ITS STEPS 1 AND 2 ARE THE CALLER'S, WHICH IS THE SPLIT core/frame/opener_policy.h ALREADY MAKES. Step 1 asks
+ * whether the navigable is a CHILD NAVIGABLE — §7.3.1.3 "Child navigables": a navigable "is a child navigable",
+ * "which means that its parent is non-null" — and step 2 reads parentPolicy off "navigable's CONTAINER
+ * DOCUMENT's policy container". Both are questions about the navigable TREE, and this file holds none of it:
+ * §7.1.4 is a policy, a parse and a decision, exactly as §7.1.3.2's group-switch decisions take a navigable's
+ * `isInitialAboutBlank` from the site that has the navigable. A caller whose navigable has no parent does not
+ * call this at all; step 1's `return true` IS that absence.
+ *
+ * parentPolicy IS READ LIVE AT THE CHECK AND NEVER CARRIED FROM THE ENQUEUE. §7.4.5 runs this where the
+ * response arrives and hands it the NAVIGABLE, so the container document it dereferences is the one presenting
+ * that navigable at that moment. The load job standing beside this call carries an INITIATOR's policy container
+ * (§7.1.7's clone, which the operation decided), and the two name different documents the moment a THIRD
+ * document navigates a frame — `frames[0].location = …`, a form with a `target` — because the initiator is
+ * whoever's script ran while the container document is whoever's element presents the navigable. Substituting
+ * the carried one is CLAUDE.md's work-item defect with the operands reversed: a real policy, belonging to a real
+ * document, answering a different question, and identical to the right answer in every case anyone tests first.
+ *
+ * ITS REPORTING ARMS CRASH — see embedder_policy.c, which is where what has to be built is named. */
+bool embedder_policy_check_navigation_response(SerializedEmbedderPolicy parent_policy,
+                                               SerializedEmbedderPolicy response_policy);
+
 #endif

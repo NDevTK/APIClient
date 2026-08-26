@@ -17,6 +17,7 @@
 #include "core/frame/secure_context.h"  /* §8.1.3.5, which §7.1.3 step 2 asks of the reserved environment */
 #include "core/fetch/headers.h"         /* the response's header list, as the field lines it crosses the ABI in */
 #include "core/dom/document.h"
+#include "core/dom/node.h"           /* §7.3.1.3's container is an ELEMENT, and §7.1.4.2 wants its node document */
 #include "core/html/html_base_element.h"  /* §4.2.3 step 2's shape, which the rules below assert an element's
                                              target has already been through — see navigable_open */
 #include "core/html/html_iframe.h"   /* §7.2.2.2's document-tree child navigables — §7.1's walk descends them */
@@ -612,6 +613,90 @@ typedef struct {
 enum { NAV_LOAD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NAV_LOAD_STEPS[] = { NAV_LOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
+/* HTML §7.1.4.2 "Embedder policy checks"' STEPS 1 AND 2 — the half of check-a-navigation-response's-adherence-
+ * to-its-embedder-policy that is about the NAVIGABLE — and then the check itself, which is §7.1.4's
+ * (core/frame/embedder_policy.h states why the algorithm is split exactly here).
+ *
+ * BOTH READS HAPPEN AT THE CHECK, OFF THE NAVIGABLE THE STANDARD HANDS THE ALGORITHM, and neither is taken
+ * from the job. That is the one thing to get right here. The load job carries an INITIATOR's policy container
+ * — §7.1.7's clone, whose owner the OPERATION decides — and reading its embedder policy as parentPolicy would
+ * be right for every navigation a parent starts in its own frame and WRONG for `frames[0].location = …` or a
+ * `target`ed form, where the initiator is a third document and the container document is whoever's element
+ * presents this navigable. §7.1.4.2 dereferences the navigable, so the answer is the container document THIS
+ * MOMENT: an arm of a fork that removed the `<iframe>` reaches no container at all, and its sibling still does,
+ * out of the one per-flow relation window_proxy_container already answers.
+ *
+ * WHAT THE NAVIGABLE'S OWN STATE DECIDES IS EXACTLY THIS — which tree it hangs in — and nothing about the
+ * response, which is why the response's policy arrives as an argument from the frame that fetched it. */
+static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst proxy,
+                                                SerializedEmbedderPolicy response_policy)
+{
+    JSValue parent_nav, container;
+    const lxb_dom_node_t *n;
+    const PolicyContainer *container_policy;
+    bool adheres;
+
+    /* Step 1: "If navigable is not a child navigable, then return true." §7.3.1.3 "Child navigables" defines
+       the term over the PARENT — a navigable "is a child navigable", "which means that its parent is non-null"
+       — not over the container, so this is asked of the parent link. The two agree for everything §7.3 creates
+       (§7.3.1.3's create-a-new-child-navigable is the only algorithm handed an element, and §7.3.1.7 step 8's
+       auxiliary navigable is a top-level traversable nested through nothing), and asking the one the definition
+       names is what keeps them from having to. */
+    parent_nav = window_proxy_parent_navigable(ctx, proxy);
+    if (!window_proxy_is(parent_nav)) {
+        JS_FreeValue(ctx, parent_nav);
+        return;
+    }
+    JS_FreeValue(ctx, parent_nav);
+    /* Step 2: "Let parentPolicy be navigable's CONTAINER DOCUMENT's policy container's embedder policy."
+       §7.3.1.3's container document is "navigable's container's node document" — the active document of the
+       navigable this one is nested in, reached through the element rather than through the parent navigable
+       because that is what the definition says and because the element is what a per-flow detach clears. */
+    container = window_proxy_container(ctx, proxy);
+    DCHECK(!JS_IsNull(container),
+           "§7.1.4.2 step 2 needs the CONTAINER DOCUMENT of a navigable whose parent is non-null, and "
+           "§7.3.1.3's container reads back null — a child navigable IS the content navigable of its container, "
+           "so the two halves of that sentence have come apart. Either §7.3.1.6's destroy-a-child-navigable "
+           "severed the relation and this navigation is being populated into a destroyed navigable, or a child "
+           "navigable was created somewhere that did not record its element (core/frame/navigable.c's create is "
+           "the one writer)");
+    n = node_of(container);
+    /* The node belongs to the container document's tree and not to the wrapper, so it outlives the reference
+       released here — an element that is a navigable's container is by definition still in that tree. */
+    JS_FreeValue(ctx, container);
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->owner_document != NULL,
+           "§7.3.1.3's container of a navigable is a NAVIGABLE CONTAINER ELEMENT in a document, and what this "
+           "navigable holds is not one — the create that records it is handed the element itself, so anything "
+           "else is a slot written by something that is not that algorithm");
+    container_policy = document_policy_of(n->owner_document);
+    DCHECK(container_policy != NULL,
+           "§7.1.4.2 step 2 read the policy container of a navigable's CONTAINER DOCUMENT and there is none — "
+           "§7.1.7 gives every Document a policy container, initially a new one holding a new embedder policy, "
+           "so an absent one is a Document created by a path that did not state it rather than a document "
+           "without policies");
+    adheres = embedder_policy_check_navigation_response(
+                  serialized_embedder_policy_of(policy_container_embedder(container_policy)), response_policy);
+    /* §7.1.4.2's own steps QUEUE before they answer, so the call is not side-effect-free and must not stand
+       inside a DCHECK's condition — a release build compiles the condition away and the check would then never
+       run at all. It is made here, unconditionally, and its answer is read below. */
+    (void)adheres;
+    /* §7.1.4.2 step 6's FALSE, which §7.4.5 turns into a blocked navigation: "set entry's document state's
+       document to the result of creating a document for INLINE CONTENT THAT DOESN'T HAVE A DOM … make document
+       unsalvageable given … \"navigation-failure\"". None of that exists here — §7.5.7 is named by
+       core/loader/document_load_type.c's DOC_LOAD_EXTERNAL arm and built by nothing — so a false answer would
+       otherwise fall through to child_document below and load the frame a browser refuses.
+       IT SITS BEHIND THE CRASH INSIDE THE CHECK, and that is §7.1.4.2's own order rather than dead code: step 5
+       queues the enforce report before step 6 returns, so whoever builds Reporting arrives here next. */
+    DCHECK(adheres,
+           "HTML §7.4.5 \"Populating a session history entry\" BLOCKS this navigation — §7.1.4.2's check a "
+           "navigation response's adherence to its embedder policy returned false, because the container "
+           "document enforces a `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation and this "
+           "response opted into none. The navigable must get §7.5.7 \"Loading a document for inline content "
+           "that doesn't have a DOM\"'s Document instead of the response's, marked unsalvageable with "
+           "\"navigation-failure\", with the reserved environment discarded — build that error Document as a "
+           "value this load carries, the same shape §7.4.5's network-error arm above still needs");
+}
+
 /* THE RESPONSE IS `{body, headers}` — one answer, because everything §7.5.1 creates a Document from is a
    property of THE RESPONSE and asking for any of it separately is asking a second time and may get a second
    answer. It was `{body, csp}`, one policy the trusted zone had pulled out of the list, and that is why a
@@ -963,6 +1048,23 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     }
     header_list_free(&response_headers);
     if (!swapped) {
+        /* HTML §7.4.5 "Populating a session history entry", from the list of conditions that block a navigation
+           before its Document is created: "navigationParams's RESERVED ENVIRONMENT is non-null and the result
+           of checking a navigation response's adherence to its embedder policy given navigationParams's
+           response, navigable, and navigationParams's POLICY CONTAINER's embedder policy is false".
+           `fetches` IS THE RESERVED-ENVIRONMENT TEST. §7.4.5 builds navigation params three ways and only
+           create-navigation-params-BY-FETCHING states one ("reserved environment … request's reserved client");
+           its srcdoc and non-fetch-scheme constructors both state null. An `about:` destination here made no
+           request and has no response, which is the same fact from the other side — and also why there would be
+           nothing for the violation this check reports to name.
+           THE POLICY IS THE CONTAINER'S, NEVER `response_ep`. §7.1.7's determine step above may have chosen the
+           INITIATOR's container for a local URL, and §7.4.5 names the container the Document is created WITH;
+           judging a Document against a policy it is not created under is the same substitution one item along
+           that the self-origin travelling beside the CSP text exists to prevent.
+           IT RUNS AFTER §7.1.3.2's SWAP, in the standard's order: the swap happens while navigationParams is
+           being built and this list is asked of the finished params — and a swapped navigation creates no
+           Document in this heap for the check to be about. */
+        if (fetches) nav_check_embedder_policy_adherence(ctx, proxy, policy.embedder);
         if (window_proxy_materialized(proxy)) {
             doc = world_mint_doc(window_proxy_doc(proxy));
             world_doc_adopt(doc);

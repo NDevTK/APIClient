@@ -160,3 +160,63 @@ void embedder_policy_obtain(EmbedderPolicy *out, const HeaderList *headers, bool
        own sentence; see embedder_policy.h for why it is reproduced rather than corrected here. */
     ep_read(headers, "cross-origin-embedder-policy-report-only", &out->report_only_value, &out->endpoint);
 }
+
+/* §7.1.4.2's CHECK A NAVIGATION RESPONSE'S ADHERENCE TO ITS EMBEDDER POLICY, steps 3-6. Steps 1 and 2 belong to
+ * the caller — see embedder_policy.h for why, and for why parentPolicy is read live rather than carried.
+ *
+ * THE TWO QUEUE STEPS CRASH, AND THEY CRASH UNCONDITIONALLY, WHICH IS WHERE THIS DIFFERS FROM THE CSP VIOLATION
+ * REFUSALS one file over. core/frame/policy_container.c and core/html/html_base_element.c refuse only when the
+ * violated policy DECLARES a reporting endpoint, on the ground that a report nobody named an endpoint for
+ * reaches nobody. Reporting §3.4.1 "Generate report of type with data" makes that ground false here: its
+ * generate-and-queue-a-report runs §4.2 "Notify reporting observers" on the global BEFORE any endpoint is
+ * looked at, and it is §3.5.1's send-reports — a later, separate step — that drops a report whose destination
+ * names no endpoint. §7.1.4 states the consequence in as many words: the "coep" report type "is visible to
+ * ReportingObservers". So a page holding a ReportingObserver observes this violation whether or not the parent
+ * sent `report-to`, and an endpoint-gated refusal here would swallow exactly that page's observation. */
+bool embedder_policy_check_navigation_response(SerializedEmbedderPolicy parent_policy,
+                                               SerializedEmbedderPolicy response_policy)
+{
+    /* Step 3: "If parentPolicy's report-only value is compatible with cross-origin isolation and
+       responsePolicy's value is not, then queue a cross-origin embedder policy inheritance violation with
+       response, "navigation", parentPolicy's REPORT ONLY REPORTING ENDPOINT, "reporting", and navigable's
+       container document's relevant settings object." It does not decide the return value — step 4 is asked
+       afterwards either way, and a parent that sends the report-only header alone still loads its frame.
+       THE ENDPOINT THIS STEP NAMES IS ONE §7.1.4's OWN OBTAIN NEVER WRITES, and that is the standard's text
+       rather than a gap here: both branches of obtain set "policy's ENDPOINT" (see embedder_policy.h), so
+       `report_only_endpoint` holds its initial empty string for every policy this engine parses. Whoever builds
+       the report below reads it anyway — implementing the sentence, not the evident intention, is what keeps
+       the divergence visible on the day that sentence is corrected. */
+    if (embedder_policy_compatible_with_cross_origin_isolation(parent_policy.report_only_value) &&
+        !embedder_policy_compatible_with_cross_origin_isolation(response_policy.value))
+        DFAIL("HTML §7.1.4.2 \"Embedder policy checks\" reached QUEUE A CROSS-ORIGIN EMBEDDER POLICY "
+              "INHERITANCE VIOLATION with disposition \"reporting\" — this navigable's container document sent "
+              "a `Cross-Origin-Embedder-Policy-Report-Only` compatible with cross-origin isolation and the "
+              "response being loaded into the frame opted into none, so the standard owes the page a \"coep\" "
+              "report and this engine has no Reporting to give it one. The navigation itself is UNAFFECTED "
+              "(step 4 still returns true for a report-only parent), so nothing here is a wrong answer — what "
+              "is missing is an observable: Reporting §3.4.1's generate-and-queue-a-report notifies "
+              "ReportingObservers before any endpoint is consulted, and §7.1.4 says the \"coep\" report type "
+              "is visible to them. Build §7.1.4.2's queue-a-cross-origin-embedder-policy-inheritance-violation "
+              "(a type/blockedURL/disposition object whose blockedURL is Fetch §2.2.5 \"Requests\"' serialize-"
+              "a-response-URL-for-reporting, which takes URL list[0] rather than the response's URL so a "
+              "redirect target does not leak), on top of Reporting §3.4.1 \"Generate report of type with "
+              "data\" and §4's ReportingObserver");
+    /* Step 4: "If parentPolicy's value is not compatible with cross-origin isolation or responsePolicy's value
+       is compatible with cross-origin isolation, then return true." */
+    if (!embedder_policy_compatible_with_cross_origin_isolation(parent_policy.value) ||
+        embedder_policy_compatible_with_cross_origin_isolation(response_policy.value))
+        return true;
+    /* Step 5: the same queue with parentPolicy's REPORTING ENDPOINT and disposition "enforce" — and this one
+       precedes a `return false`, so the report and the blocked navigation are two separate unbuilt things and
+       this is the first of them. */
+    DFAIL("HTML §7.1.4.2 \"Embedder policy checks\" reached QUEUE A CROSS-ORIGIN EMBEDDER POLICY INHERITANCE "
+          "VIOLATION with disposition \"enforce\" — this navigable's container document ENFORCES a "
+          "`Cross-Origin-Embedder-Policy` compatible with cross-origin isolation and the response being loaded "
+          "into the frame opted into none, so §7.1.4.2 step 6 returns false and §7.4.5 blocks this navigation. "
+          "TWO things are unbuilt and this is the earlier: the \"coep\" report (Reporting §3.4.1's "
+          "generate-and-queue-a-report plus §4's ReportingObserver, which §7.1.4 makes this report type visible "
+          "to), and then the blocked navigation's own Document — see the assert at this function's caller for "
+          "that half");
+    /* Step 6. */
+    return false;
+}
