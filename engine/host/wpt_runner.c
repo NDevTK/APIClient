@@ -1247,10 +1247,14 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             }
             free(rec);
         }
-        /* §7.4 STEP 14'S FETCH, which this runner answers itself because the document being loaded belongs to
-           the instance that asked — routing it to a peer would be answering a same-origin load out of another
-           agent. `{body, csp}` is ONE answer because a policy is a property of THE RESPONSE; a body of null is
-           a fetch that did not load, which is still a document the navigable gets. */
+        /* HTML §7.4.5 Populating a session history entry's CREATE NAVIGATION PARAMS BY FETCHING, which this
+           runner answers itself because the document being loaded belongs to the instance that asked — routing
+           it to a peer would be answering a same-origin load out of another agent. A body of null is a fetch
+           that did not load, which is still a document the navigable gets.
+           THIS CITATION WAS `§7.4 step 14` AND THAT IS NOT A CITATION ANYBODY CAN CHECK: §7.4 is the section
+           "Navigation and session history", not an algorithm, so it has no step 14 — and the algorithm the
+           number was reaching for, §7.3.1.3 Child navigables' create-a-new-child-navigable, has thirteen steps
+           and does not fetch. The fetch is §7.4.5's, verified against the spec text rather than recalled. */
         else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
             FetchRequest req;
             HeaderList none = { 0 };
@@ -1260,10 +1264,10 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                                   "so the buffer is what has to grow");
             memcpy(op, tab + 1, n); op[n] = 0;
             /* ASKED, NOT AWAITED — and this is the site where the difference is a DEADLOCK rather than a
-               delay: §7.4 step 14 loads a document whose own instance this process has yet to fork, so a host
-               that stood in the read could not spawn it, could not route to it, and could not run the flow
-               that would. The answer is built at the completion (wpt_request_finish's DOCUMENT arm), which is
-               where the response's header list and its bytes arrive together. */
+               delay: what §7.4.5 is fetching is a document whose own instance this process has yet to fork, so
+               a host that stood in the read could not spawn it, could not route to it, and could not run the
+               flow that would. The answer is built at the completion (wpt_request_finish's DOCUMENT arm),
+               which is where the response's header list and its bytes arrive together. */
             if (!wpt_request_asked_id(id)) {
                 req.method = "GET";
                 req.url = strchr(op, '\t') + 1;
