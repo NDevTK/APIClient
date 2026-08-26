@@ -12,6 +12,7 @@
 #include "core/css/css_length.h"
 #include "core/dom/document.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
 static char *bf_computed(lxb_dom_element_t *el, const char *name)
@@ -201,7 +202,8 @@ static bool bf_min_height_is_zero(lxb_dom_element_t *el)
 
 typedef enum {
     BF_CHILD_NO_BOX = 0,   /* generates no box at all, or is out of flow: §10.6.3 ignores it */
-    BF_CHILD_BLOCK         /* an in-flow block-level box this walk places */
+    BF_CHILD_BLOCK,        /* an in-flow block-level box this walk places */
+    BF_CHILD_INLINE        /* in-flow inline-level content: §9.4.2's, not this walk's */
 } BfChildKind;
 
 static bool bf_text_is_all_whitespace(const lxb_dom_node_t *n)
@@ -219,13 +221,19 @@ static bool bf_text_is_all_whitespace(const lxb_dom_node_t *n)
     return true;
 }
 
-/* CSS 2.1 §9.2.2.1: "White space content that would subsequently be collapsed away according to the
-   'white-space' property does not generate any anonymous inline boxes." So a run of white space between two
-   block-level children is a box or is nothing, and which one it is is the INHERITED `white-space` of the
-   element the anonymous inline box would belong to — the parent, since an anonymous box inherits from the box
-   it is inside. §16.6's table gives the answer per value: `normal` and `nowrap` collapse a sequence of white
-   space, `pre`, `pre-wrap` and `pre-line` preserve it (css-text-3 adds `break-spaces`), and a preserved run is
-   real inline content with a real line box. */
+/* CSS 2.2 §9.2.2.1 "Anonymous inline boxes": "White space content that would subsequently be collapsed away
+   according to the 'white-space' property does not generate any anonymous inline boxes." So a run of white
+   space is a box or is nothing, and which one it is is the INHERITED `white-space` of the element the
+   anonymous inline box would belong to — the parent, since an anonymous box inherits from the box it is
+   inside. §16.6's table gives the answer per value: `normal` and `nowrap` collapse a sequence of white space,
+   `pre`, `pre-wrap` and `pre-line` preserve it (css-text-3 adds `break-spaces`), and a preserved run is real
+   inline content with a real line box.
+   THIS PREDICATE ANSWERS §9.2.2.1 AND MEASURES NOTHING, which is the whole of its contract and was not always
+   so: it used to CRASH for a run that generates a box, naming the glyph advance a line box needs. That put one
+   component's missing input inside another component's classification, and the classification is right for
+   both — the run either generates an anonymous inline box or it does not. The measurement crash now lives in
+   core/layout/line_box.c, at the walk that would have to place the glyphs, which is where the advance is
+   actually the missing operand and where the ONE line reporting it can name what to build. */
 bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *n)
 {
     char *ws;
@@ -236,44 +244,20 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
            "element — the rule is about a run of character data and the property it reads is the containing "
            "element's inherited `white-space`");
 
-    if (!bf_text_is_all_whitespace(n))
-        DFAIL("CSS 2 §9.4.2 'Inline formatting contexts' owns a TEXT run, and this block container has one "
-              "beside its block-level children — so §9.2.1.1 wraps it in an ANONYMOUS BLOCK BOX ('if a block "
-              "container box has a block-level box inside it, then we force it to have only block-level boxes "
-              "inside it'), and that anonymous box's height is §10.6.3's first bullet, 'the bottom edge of the "
-              "last line box'. WHAT IS MISSING IS ONE HALF OF THE MEASUREMENT AND NOT THE WHOLE OF IT, and "
-              "saying otherwise sends the next reader to build what is here. The VERTICAL half is answered: "
-              "CSS 2 §10.8.1 'Leading and half-leading''s `A` and `D` — 'a characteristic height above the "
-              "baseline and a depth below it' — are core/css/font_metrics.h's, `AD` with them, and §10.8 "
-              "'Line height calculations: the line-height and vertical-align properties''s "
-              "step 1 reads an inline box's `line-height` through core/css/css_computed_value.h's "
-              "`css_computed_line_height`, whose `normal` arm IS that `AD`. §10.8's step 2 aligns those boxes "
-              "'according to their vertical-align property', and that is answered too: css-inline-3 §4.2 "
-              "'Transverse Box Alignment: the vertical-align property' makes it a shorthand of "
-              "`baseline-source`, `alignment-baseline` and `baseline-shift`, core/css/css_shorthand.c expands "
-              "it and css_computed_value.c derives all three. So §10.8.1's leading (L = 'line-height' - AD, "
-              "half above `A` and half below `D`) is arithmetic over values this engine holds. "
-              "WHAT IS ABSENT IS THE HORIZONTAL half: the ADVANCE of an arbitrary glyph, which is what decides "
-              "the break opportunities and therefore HOW MANY line boxes there are. font_metrics.h holds the "
-              "advance of exactly two glyphs — css-values-4 §6.1.1's assumed '0' for `ch` and '水' for `ic` — "
-              "and no measurement of a run of text, so the count of line boxes is the one term of §10.6.3's "
-              "first bullet with nothing to derive it from, and a zero here would be an invented height every "
-              "ancestor's geometry would then be stated over. BUILD the per-glyph advance beside `A` and `D` "
-              "in core/css/font_metrics.h, then §9.4.2's line boxes over it with §10.8's calculation for their "
-              "heights, then §9.2.1.1's anonymous block generation so this walk has a box to place");
+    /* A run that is not entirely white space has content §9.2.2.1's sentence says nothing about collapsing
+       away, so it generates a box whatever `white-space` says. */
+    if (!bf_text_is_all_whitespace(n)) return true;
     ws = bf_computed(parent, "white-space");
     collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
     free(ws);
-    if (collapses) return false;
-    DFAIL("CSS 2.1 §9.2.2.1 generates no anonymous inline box for white space 'that would subsequently be "
-          "collapsed away according to the white-space property', and this element's computed `white-space` "
-          "PRESERVES it (§16.6 gives `pre`, `pre-wrap` and `pre-line` that line, and css-text-3 adds "
-          "`break-spaces`) — so the white space between these block-level children is real inline content, "
-          "§9.2.1.1 wraps it in an anonymous block box, and that box's height is a LINE BOX whose extent is the "
-          "preserved run measured with a real font. BUILD §9.4.2's inline formatting context; this is the same "
-          "missing component a non-white-space text run names above, reached through the one property that "
-          "decides whether the run exists at all");
-    return false;
+    /* THE COLLAPSED ARM IS §9.2.2.1's SENTENCE AND NOT A SHORTCUT PAST ONE, and it is exact only because of
+       what §16.6 makes `normal` and `nowrap` do: a collapsible run between two BLOCK-LEVEL boxes is removed
+       entirely, so there is no anonymous inline box and nothing to place. Inside an INLINE formatting context
+       the same run may survive as a single space, and core/layout/line_box.c is where that difference is
+       decided — it is a fact about the whole formatting context (css-text-3 §4.1.2 "Phase II: Trimming and
+       Positioning" removes a collapsible sequence only at the beginning or the end of a LINE), which is not a
+       question a per-node predicate can answer and must not pretend to. */
+    return !collapses;
 }
 
 static BfChildKind bf_element_child(lxb_dom_element_t *el)
@@ -321,18 +305,10 @@ static BfChildKind bf_element_child(lxb_dom_element_t *el)
     table = strcmp(d, "table") == 0 || strncmp(d, "table-", 6) == 0;
     free(d);
     if (block) return BF_CHILD_BLOCK;
-    if (inline_level)
-        DFAIL("this child's computed `display` makes it an INLINE-LEVEL box, so CSS 2 §9.4.2's inline "
-              "formatting context places it on a LINE BOX and §9.2.1.1 wraps the run of them in an ANONYMOUS "
-              "BLOCK BOX before this walk has anything block-level to place. Its height is then the line "
-              "boxes', which needs the text measured with a real font. ONE OF THE TWO WAYS TO REACH THIS IS NOT "
-              "AN AUTHOR'S DOING and should be checked first: core/css/css_style_declaration.c's UA_DEFAULT "
-              "table carries §15.3.1's `display: none` rule entire and about two dozen `display: block` rows, "
-              "and html.css has many more — `blockquote, pre, dl, dt, dd, hr, address, fieldset, figcaption, "
-              "details, summary, dialog, legend, center, dir, menu, xmp, plaintext, listing` are block-level in "
-              "every user agent and reach this line as `inline`, which is that table's own default for an "
-              "element it does not name. ADD the rows, and BUILD §9.4.2 for the elements that are genuinely "
-              "inline");
+    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes": this child is inline-level, so it is not on
+       §9.4.1's stack at all — §9.4.2's line boxes hold it, and which of the two formatting contexts this block
+       container establishes is decided over the WHOLE child list rather than here (bf_content_kind). */
+    if (inline_level) return BF_CHILD_INLINE;
     if (table)
         DFAIL("this child generates a TABLE box, whose height is CSS 2.1 §17.5.3's and not §10.6.3's: the "
               "table's height is distributed over its ROWS and each row's height comes from its cells' content, "
@@ -356,7 +332,10 @@ static BfChildKind bf_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *n)
     case LXB_DOM_NODE_TYPE_ELEMENT:
         return bf_element_child(lxb_dom_interface_element(n));
     case LXB_DOM_NODE_TYPE_TEXT:
-        return block_flow_text_child_generates_box(parent, n) ? BF_CHILD_BLOCK : BF_CHILD_NO_BOX;
+        /* §9.2.2.1's anonymous inline box is INLINE-level — the box that text generates is an inline box, not
+           a block-level one, and calling it block-level here is what used to make a text run look like
+           something §9.4.1's stack could place. */
+        return block_flow_text_child_generates_box(parent, n) ? BF_CHILD_INLINE : BF_CHILD_NO_BOX;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
     case LXB_DOM_NODE_TYPE_DOCUMENT_TYPE:
@@ -386,6 +365,52 @@ typedef struct {
 } BfBox;
 
 static BfBox bf_box(lxb_dom_element_t *el);
+
+/* ---- WHICH FORMATTING CONTEXT THIS BLOCK CONTAINER ESTABLISHES ------------------------------------------
+   CSS 2.2 §9.4.2 states the condition and §9.2.1 states the alternative in the same breath: a block container
+   "either contains only block-level boxes or establishes an inline formatting context", and §9.4.2's own first
+   sentence is that an inline formatting context "is established by a block container box THAT CONTAINS NO
+   BLOCK-LEVEL BOXES". So the question is answered over the WHOLE child list, ONCE, before either algorithm
+   runs — never per child, which is what a walk that classified as it stacked would be doing. */
+typedef enum {
+    BF_CONTENT_NONE = 0,   /* no in-flow children: §10.6.3's fourth bullet, and §9.4.2 creates no line box */
+    BF_CONTENT_BLOCK,      /* §9.4.1's block formatting context: the walk below */
+    BF_CONTENT_INLINE      /* §9.4.2's inline formatting context: core/layout/line_box.h */
+} BfContent;
+
+static BfContent bf_content_kind(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
+    bool block = false, inl = false;
+
+    for (c = n->first_child; c != NULL; c = c->next) {
+        switch (bf_child_kind(el, c)) {
+        case BF_CHILD_NO_BOX: break;
+        case BF_CHILD_BLOCK:  block = true; break;
+        case BF_CHILD_INLINE: inl = true; break;
+        }
+    }
+    if (block && inl)
+        DFAIL("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" applies to this block container: it holds BOTH "
+              "inline-level content and a block-level box, and \"if a block container box (such as that "
+              "generated for the DIV above) has a block-level box inside it (such as the P above), then we "
+              "FORCE IT TO HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT\" — an anonymous block box around each run of "
+              "inline-level content, which §9.4.1's stack below then places like any other child. The box this "
+              "walk would place therefore DOES NOT EXIST IN THE ELEMENT TREE, which is why this is a crash and "
+              "not a skipped child: the anonymous box's own height is §10.6.3's over the line boxes inside it "
+              "and its margins are zero (\"the properties of anonymous boxes are inherited from the enclosing "
+              "non-anonymous box … non-inherited properties have their initial value\"). "
+              "BUILD §9.2.1.1's GENERATION as a box-tree step this walk iterates, not as a special case here — "
+              "the same list core/layout/used_value.c's containing-block walk and css-display §3's `contents` "
+              "flattening both need, and the same place §9.2.1.1's last paragraph is enforced (\"anonymous "
+              "block boxes are ignored when resolving percentage values that would refer to it: the closest "
+              "non-anonymous ancestor box is used instead\"). The RUN this container establishes for the "
+              "anonymous box is then core/layout/line_box.h's, which already measures a line box that needs no "
+              "glyph advance and crashes naming one where it does");
+    if (block) return BF_CONTENT_BLOCK;
+    if (inl) return BF_CONTENT_INLINE;
+    return BF_CONTENT_NONE;
+}
 
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container. It answers this
    box's own contribution, and on the way it hands the caller the offset of `want`'s top border edge from this
@@ -422,10 +447,61 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
     bool escaping = esc_top, placed = false;
     BfBox out;
 
+    out.top = bf_run_of(used_value_px(el, "margin-top"));
+    out.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
+    out.border_h = css_px(0.0);
+    out.collapse_through = false;
+    if (bf_content_kind(el) == BF_CONTENT_INLINE) {
+        /* §9.4.2's INLINE FORMATTING CONTEXT. Nothing below this branch applies to it: §8.3.1's adjoining
+           margins are stated over boxes that "both belong to in-flow BLOCK-LEVEL boxes participating in the
+           same block formatting context", and there is no such box here — an inline box's vertical margins are
+           not adjoining margins at all, so no run enters or leaves through this container's edges. */
+        bool any_line_box = false;
+        CssPx h;
+
+        DCHECK(want == NULL,
+               "CSS 2 §9.4.1's placement was asked for a box whose containing block establishes §9.4.2's "
+               "INLINE formatting context, so the box on the line is inline-level and its position is a "
+               "position ALONG a line box rather than a distance down a stack. core/layout/flow_position.c "
+               "takes an inline-level box out through its own section before asking, so the two "
+               "classifications have come apart — and answering a vertical offset here would be a coordinate "
+               "in the right units measured against the wrong axis");
+        h = line_box_content_height(el, &any_line_box);
+        if (any_line_box) {
+            DCHECK(h.px >= 0.0,
+                   "CSS 2.2 §10.8's step 3 produced a NEGATIVE line box height. It is \"the distance between "
+                   "the uppermost box top and the lowermost box bottom\", and every box on the line "
+                   "contributes `A' + D'` = its own `line-height`, which css-inline-3 §5.1 makes "
+                   "`<number [0,∞]>` / `<length-percentage [0,∞]>` and says outright that \"negative values "
+                   "are illegal\" — so a negative maximum is a declaration that should have been dropped by "
+                   "css-values-4 §5.1's range restriction reaching the arithmetic");
+            out.content_h = h;
+            return out;
+        }
+        /* §9.4.2: a line box holding nothing but empty inline boxes "must be treated as ZERO-HEIGHT … and must
+           be treated as NOT EXISTING for any other purpose", and §8.3.1 asks exactly that in both places it
+           mentions line boxes — its adjoining test excepts them by name ("note that certain zero-height line
+           boxes (see 9.4.2) are ignored for this purpose") and its collapse-through note requires that the box
+           "does not contain a line box". So this container behaves for §8.3.1 as one with no line box at all,
+           and `<div><span></span></div>` collapses through exactly as `<div></div>` does. */
+        if (through_ok) {
+            out.collapse_through = true;
+            out.top = bf_run_merge(out.top, out.bottom);
+            out.bottom = out.top;
+        }
+        out.content_h = css_px(0.0);
+        return out;
+    }
+
     for (c = n->first_child; c != NULL; c = c->next) {
+        BfChildKind kind = bf_child_kind(el, c);
         BfBox b;
 
-        if (bf_child_kind(el, c) == BF_CHILD_NO_BOX) continue;
+        if (kind == BF_CHILD_NO_BOX) continue;
+        DCHECK(kind == BF_CHILD_BLOCK,
+               "§9.4.1's stack reached an INLINE-LEVEL child, which bf_content_kind above has already "
+               "established this block container has none of — the two walks read the same child list through "
+               "the same classifier, so they can only disagree if the tree changed between them");
         b = bf_box(lxb_dom_interface_element(c));
         /* §8.3.1's second adjoining pair — "bottom margin of box and top margin of its next in-flow following
            sibling" — and its first, "top margin of a box and top margin of its first in-flow child": both are
@@ -468,10 +544,6 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         placed = true;
     }
 
-    out.top = bf_run_of(used_value_px(el, "margin-top"));
-    out.bottom = bf_run_of(used_value_px(el, "margin-bottom"));
-    out.border_h = css_px(0.0);
-    out.collapse_through = false;
     if (placed) {
         if (esc_top) out.top = bf_run_merge(out.top, esc_run);
         if (esc_bottom) {

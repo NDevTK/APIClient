@@ -28,11 +28,11 @@ double font_metrics_em_ratio(FontMetricsEmRatio which)
     DFAIL("a metric of the first available font was asked for that css-values-4 §6.1.1 states no MUST-ASSUME "
           "value for, so this table has no row to answer it with and must not invent one. §6.1.1 fixes exactly "
           "three — an undeterminable x-height is 0.5em, an undeterminable \"0\" glyph is \"0.5em wide by 1em "
-          "tall\", and an undeterminable ideographic advance measure is 1em — and every other metric a font "
-          "carries (its descent, its line gap, the advance of any other glyph) is a measurement of a real face "
-          "— the ASCENT below is this file's one picked number and takes its own entry for exactly that "
-          "reason, because it answers a `CssPx` carrying a fact where these three answer a bare ratio carrying "
-          "none. BUILD the rest of the face there, beside it");
+          "tall\", and every other metric a font carries (its line gap, the advance of any glyph other than "
+          "the two §6.1.1 assumes) is a measurement of a real face — which is why the ASCENT and the DESCENT "
+          "below are PICKED and take entries of their own, answering a `CssPx` that carries the fact it was "
+          "picked where these three answer a bare ratio carrying none. BUILD the rest of the face there, "
+          "beside them");
     return 0.0;
 }
 
@@ -105,6 +105,25 @@ CssPx font_metrics_normal_line_height_px(JSContext *realm, CssPx font_size)
        the two lengths rather than over the two ratios so that BOTH facts reach the result — a page reads the
        ascent through `1cap` and the sum through `1lh`, and a domain naming only one of them would leave the
        arm where the other reader's face differs unexplored. */
-    descent = css_px_mul(font_size, css_px_env(CSS_ENV_FONT_DESCENT, realm, FONT_METRICS_DESCENT_EM));
+    descent = font_metrics_descent_px(realm, font_size);
     return css_px_add(font_metrics_ascent_px(realm, font_size), descent);
+}
+
+CssPx font_metrics_descent_px(JSContext *realm, CssPx font_size)
+{
+    if (realm == NULL)
+        DFAIL("CSS 2.2 §10.8.1 (Leading and half-leading)'s `D` was asked for with no realm — the same "
+              "question the ascent above answers, for the same reason: the two metrics are a source key each, "
+              "and a key is keyed on the document that read it");
+    /* THE SUM'S BOUND IS ASSERTED WHERE THE SUM IS FORMED and not here, because §10.8's recommendation is a
+       statement about `normal` and therefore about `AD` — a bound restated over one term would be this file
+       deciding how the pair splits, which is exactly the free choice the two picked numbers ARE. What is
+       asserted about `D` alone is the one thing §10.8.1's own definition fixes: it is a DEPTH BELOW the
+       baseline, so a face whose depth is negative has its baseline outside its own em box and every A' / D'
+       split below it comes out on the wrong side of the line. */
+    DCHECK(FONT_METRICS_DESCENT_EM >= 0.0,
+           "the first available font's picked `D` is NEGATIVE. CSS 2.2 §10.8.1 defines it as \"a depth below\" "
+           "the baseline, so a negative one puts the baseline below the bottom of the face and makes every "
+           "half-leading split in core/layout/line_box.c place a box above a line it sits below");
+    return css_px_mul(font_size, css_px_env(CSS_ENV_FONT_DESCENT, realm, FONT_METRICS_DESCENT_EM));
 }

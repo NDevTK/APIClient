@@ -40,10 +40,12 @@
  * children are all block-level, over the used values core/layout/used_value.h already computes. Everything
  * else names its own section and aborts, because a zero from an unimplemented box passes a presence test and
  * is indistinguishable from a real one:
- *   - INLINE-LEVEL CONTENT of any kind — a non-collapsing text run, an `inline`, `inline-block`,
- *     `inline-flex` or `inline-grid` child — is §9.4.2's inline formatting context, whose line boxes need the
- *     text measured with a real font, and §9.2.1.1's anonymous block boxes around it. That is a different
- *     component and this one must not guess at its height.
+ *   - INLINE-LEVEL CONTENT is §9.4.2's inline formatting context and core/layout/line_box.h's, which this
+ *     walk ROUTES TO rather than measures: §9.2.1 makes the two exclusive ("either contains only block-level
+ *     boxes or establishes an inline formatting context"), so the choice is made once over the whole child
+ *     list and each algorithm then sees only its own boxes. What is still absent is the MIXTURE — a container
+ *     holding both — which is §9.2.1.1's anonymous block generation and a box-tree step rather than a case
+ *     for either walk, and which crashes here naming it.
  *   - A FLOAT in the formatting context is §9.5's own placement, and it is not enough to note that §10.6.3
  *     ignores floats: §9.5.2's `clear` on a LATER sibling introduces CLEARANCE, which §8.3.1 makes
  *     non-adjoining, so one float invalidates every collapse below it.
@@ -87,20 +89,22 @@
    and is not a block container (§17.4 makes the CELL and the CAPTION the block containers inside one). */
 bool block_flow_display_is_block_container(const char *display);
 
-/* CSS 2.1 §9.2.2.1 "Anonymous inline boxes"'s WHITE-SPACE RULE for one TEXT child of a block container:
+/* CSS 2.2 §9.2.2.1 "Anonymous inline boxes"'s WHITE-SPACE RULE for one TEXT child of a block container:
    "White space content that would subsequently be collapsed away according to the 'white-space' property does
    not generate any anonymous inline boxes." FALSE is that sentence — a run this element's computed
-   `white-space` collapses away, which is most of the character data in a pretty-printed document — and the
-   two ways a text run DOES generate a box both CRASH naming §9.4.2, because a line box needs the text
-   measured and the ADVANCE of an arbitrary glyph is the metric of the first available font that
-   core/css/font_metrics.h does not hold — its `A`, `D` and `AD` answer how TALL a line box is, and nothing
-   answers where the run BREAKS, which is what decides how many there are.
-   IT IS EXPORTED BECAUSE EVERY WALK OVER A BLOCK CONTAINER'S CHILDREN MUST ASK IT. The height walk below is
-   one; CSSOM VIEW §2's scrolling area (core/layout/scrolling_area.h) is another, and it asks for a reason the
-   height walk cannot cover — a box with a DECLARED height never reaches the walk at all, so its own text
-   would be invisible to a caller that only measured heights, and a text run that overflows a declared-height
-   box is exactly what `scrollHeight` is asked about. A second copy of §9.2.2.1 would be one rule with two
-   answers about whether a page's white space is content. */
+   `white-space` collapses away, which is most of the character data in a pretty-printed document — and TRUE
+   is a run that generates an anonymous inline box.
+   IT CLASSIFIES AND DOES NOT MEASURE, which is the contract each caller then has to satisfy for itself. Both
+   of them need something further about a run that IS a box and they need DIFFERENT things: this file's walk
+   needs the line boxes it flows into (core/layout/line_box.h, which crashes for a run naming the one metric
+   it lacks), while CSSOM VIEW §2's scrolling area needs the run's INLINE-AXIS extent and crashes for itself.
+   Folding either crash into this predicate would put one caller's missing input inside the other's
+   classification, and the classification is right for both.
+   IT IS EXPORTED BECAUSE EVERY WALK OVER A BLOCK CONTAINER'S CHILDREN MUST ASK IT, and the scrolling area
+   asks for a reason the height walk cannot cover — a box with a DECLARED height never reaches the walk at all
+   (`bf_height_needs_content`), so its own text would be invisible to a caller that only measured heights, and
+   a text run that overflows a declared-height box is exactly what `scrollHeight` is asked about. A second
+   copy of §9.2.2.1 would be one rule with two answers about whether a page's white space is content. */
 bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_dom_node_t *text);
 
 /* CSS 2.1 §10.6.3's (and, for a box that establishes a block formatting context, §10.6.7's) CONTENT-BASED

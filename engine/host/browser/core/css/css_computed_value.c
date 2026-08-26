@@ -411,7 +411,7 @@ static bool css_cv_metric_is_root(CssFontMetric which)
    and `normal` is CSS 2.1 §10.8.1's `AD` at that size, which core/css/font_metrics.h forms.
    WHICH ELEMENT is the caller's question and not this function's — §6.1.1 sends the unit to a PARENT inside
    `line-height` itself, and the arm below decides that before calling. */
-static CssPx css_cv_line_height_px(lxb_dom_element_t *el)
+CssPx css_used_line_height_px(lxb_dom_element_t *el)
 {
     CssLineHeight v = css_computed_line_height(el);
     CssPx size = css_cv_font_size_px(el);
@@ -423,6 +423,29 @@ static CssPx css_cv_line_height_px(lxb_dom_element_t *el)
            "admits — the entry that derives it answers exactly those, so this is that enumeration and this "
            "conversion having come apart");
     return font_metrics_normal_line_height_px(css_cv_realm(el), size);
+}
+
+/* CSS 2.2 §10.8.1 "Leading and half-leading"'s `A` AND `D` FOR ONE ELEMENT — "the A and D of the element's
+   first available font", at that element's own computed `font-size`.
+   THEY ARE ONE CALL EACH AND NOT A PAIR OF FACTS THE CALLER UNIONS, which is the same argument
+   core/css/font_metrics.h makes about the ratio one level down. §10.8.1's metric is a joint function of the
+   FACE (this user agent's picked ascent and descent) and of the ELEMENT (its computed font size, resolved in
+   its own document's realm), and both of those are answered here — `css_cv_font_size_px` walks §7.2's
+   inheritance for the size and `css_cv_realm` names the document the picked fact is keyed under. A layout
+   component handed those two separately would have to remember to multiply, and could take the size from one
+   element and the realm from another with nothing to say so; taking the product here makes that impossible
+   and lets css_length.h's arithmetic carry the union.
+   WHY THEY LIVE IN THIS FILE rather than beside the face: font_metrics.c must not ask a question about an
+   ELEMENT — it is the face's own record, and core/css/css_computed_value.h is what it would have to include
+   to resolve one, which is the cycle back into this file's own font-size derivation. */
+CssPx css_font_ascent_px(lxb_dom_element_t *el)
+{
+    return font_metrics_ascent_px(css_cv_realm(el), css_cv_font_size_px(el));
+}
+
+CssPx css_font_descent_px(lxb_dom_element_t *el)
+{
+    return font_metrics_descent_px(css_cv_realm(el), css_cv_font_size_px(el));
 }
 
 /* §6.1.1's "THE COMPUTED METRICS CORRESPONDING TO THE INITIAL VALUES of the font and line-height properties",
@@ -469,7 +492,7 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
         from = (f->lh_affecting && on == f->el) ? css_cv_parent_element(on) : on;
         /* §6.1.1's own no-parent clause, which is the same base case §7.2's inheritance falls to. */
         if (from == NULL) return css_cv_initial_line_height_px(realm);
-        return css_cv_line_height_px(from);
+        return css_used_line_height_px(from);
     }
     /* §6.1.1's OTHER EIGHT FONT-METRIC UNITS ARE A METRIC OVER ONE OF THE TWO FONT SIZES BELOW, so each is
        answered by recursing into this same callback for its base — which is what makes `ex` and `rex` one

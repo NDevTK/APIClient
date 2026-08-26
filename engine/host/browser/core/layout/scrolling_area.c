@@ -122,8 +122,8 @@ static CssPx sa_descendant_edge(lxb_dom_element_t *d, bool vertical, bool ending
    agent — and a walk over ELEMENTS alone would report the padding box and be wrong in the one direction that
    matters, because `scrollWidth > clientWidth` is precisely what a page asks this to decide. The walk
    therefore asks core/layout/block_flow.h's §9.2.2.1 rule about every text node it passes: collapsible white
-   space contributes nothing, and a real run CRASHES there naming §9.4.2 and the font metrics under it. THIS
-   IS NOT THE HEIGHT WALK ASKED TWICE — that walk never sees the contents of a box with a declared height
+   space contributes nothing, and a real run CRASHES BELOW naming the inline-axis measurement it would need.
+   THIS IS NOT THE HEIGHT WALK ASKED TWICE — that walk never sees the contents of a box with a declared height
    (core/layout/block_flow.c's `bf_height_needs_content`), and a text run overflowing a declared-height box is
    exactly the case this member exists for. */
 static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool ending_at_hi, CssPx seed)
@@ -144,10 +144,24 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool e
             DCHECK(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
                    "a TEXT node inside an element's subtree has no element parent — the walk started at an "
                    "element and descends only through its children, so a text node here belongs to one");
-            /* Returns false for white space §9.2.2.1 collapses away and crashes for a real run; a run this
-               engine could measure would need its anonymous inline box's margin edge folded into `best`
-               here, which is the line §9.4.2's line boxes land on. */
-            (void)block_flow_text_child_generates_box(lxb_dom_interface_element(n->parent), n);
+            /* §9.2.2.1's rule answers whether the run is a box at all; collapsible white space is not and
+               contributes nothing. A run that IS a box needs its anonymous inline box's MARGIN EDGE folded
+               into `best`, and that edge is a position ALONG a line box — which is the crash below, stated
+               here rather than borrowed from the predicate, because the predicate answers a classification
+               and this member needs a coordinate. */
+            if (block_flow_text_child_generates_box(lxb_dom_interface_element(n->parent), n))
+                DFAIL("CSSOM VIEW §2's scrolling area takes the extreme over \"all of the element's "
+                      "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1) "
+                      "holding this text run — so this walk needs the run's own INLINE-AXIS EXTENT, which is "
+                      "the sum of its glyphs' advances, and its position on the line box §9.4.2 flowed it "
+                      "into. core/layout/line_box.h computes a line box's HEIGHT without any advance and says "
+                      "why; nothing computes an advance, and a zero here would report "
+                      "`<div style=\"width:50px\">verylongword</div>` as having no overflow at all — which is "
+                      "the exact comparison `scrollWidth > clientWidth` is asked to decide. BUILD the "
+                      "per-glyph advance in core/css/font_metrics.h and the inline-axis placement over it "
+                      "(css-text-3 §5 \"Line Breaking and Word Boundaries\" for where the run breaks, CSS 2.2 "
+                      "§9.4.2 for which line box each fragment lands on), then fold each fragment's margin "
+                      "edge into `best` here");
         }
         if (n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;

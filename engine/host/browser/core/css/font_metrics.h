@@ -61,12 +61,15 @@
  * and a concolic over it would model an ignorance this engine does not have, while a value the model picked
  * has a real range behind it and a bare number there deletes the arm another reader's font takes.
  *
- * `D` IS THE SECOND PICKED METRIC AND IT ARRIVED WITH ITS READER, which is the order this file's absences are
- * meant to be filled in. §10.8.1 defines the pair together — `A`, `D`, and `AD = A + D`, "the distance from
- * the top to the bottom" — and a `D` with nothing reading it would have been the mirror of the defect
- * CLAUDE.md names, real and asserted and consumed by nothing. Its reader is `font_metrics_normal_line_height`,
- * which is CSS 2.1 §10.8's `normal` and css-values-4 §6.1.1's "converting normal to an absolute length by
- * using only the metrics of the first available font" under two names for one number.
+ * `D` IS THE SECOND PICKED METRIC AND EACH OF ITS TWO READERS ARRIVED BEFORE THE ENTRY IT NEEDED, which is
+ * the order this file's absences are meant to be filled in. §10.8.1 defines the pair together — `A`, `D`, and
+ * `AD = A + D`, "the distance from the top to the bottom" — and a `D` with nothing reading it would have been
+ * the mirror of the defect CLAUDE.md names, real and asserted and consumed by nothing. Its first reader was
+ * `font_metrics_normal_line_height_px`, which is CSS 2.1 §10.8's `normal` and css-values-4 §6.1.1's
+ * "converting normal to an absolute length by using only the metrics of the first available font" under two
+ * names for one number, and which needs only the SUM. Its second is §10.8.1's half-leading, which needs the
+ * two APART because §10.8's step 3 takes a maximum over each side of the baseline separately — and that is
+ * the reader `font_metrics_descent_px` exists for.
  * AND `AD` IS WHERE §10.8's OWN RECOMMENDATION FINALLY BECOMES AN ASSERT: "we recommend a used value for
  * 'normal' between 1.0 to 1.2" is a statement about the SUM, so it could not be checked over `A` alone and is
  * checked over the pair now. That is what makes the two picked numbers falsifiable rather than merely stated —
@@ -117,10 +120,18 @@ CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size);
    §5.1 states as "determine the preferred line height automatically based on the metrics of the used font",
    and it is css-values-4 §6.1.1's `lh` conversion ("converting normal to an absolute length by using only the
    metrics of the first available font"). Three sentences, one number, one entry — so a page cannot read two
-   different answers for `line-height: normal` through `getComputedStyle` and through `1lh`.
-   `D` HAS NO ENTRY OF ITS OWN because nothing asks for a depth on its own: §10.8.1's leading splits `L` in
-   half around `A` and `D` separately, and THAT is the caller that will want them apart. Exporting it before
-   then would be the constant-with-no-reader this component already refused once. */
+   different answers for `line-height: normal` through `getComputedStyle` and through `1lh`. */
 CssPx font_metrics_normal_line_height_px(JSContext *realm, CssPx font_size);
+
+/* CSS 2.2 §10.8.1 "Leading and half-leading"'s `D` — the first available font's "depth below the baseline" —
+   at `font_size`, in CSS pixels. IT IS THE HALF OF THE PAIR §10.8.1 NEEDS APART, and its reader is the reason
+   it exists: "half the leading is added above A and the other half below D, giving the glyph and its leading a
+   total height above the baseline of A' = A + L/2 and a total depth of D' = D + L/2", and §10.8's step 3
+   takes the line box height as "the distance between the uppermost box top and the lowermost box bottom" —
+   which is max(A') plus max(D') over the boxes on the line, two maxima that cannot be taken over a sum. So
+   `AD` above answers `line-height: normal` and this answers where the BASELINE sits inside it; a caller that
+   subtracted one from the other would be re-deriving a picked number through arithmetic instead of reading
+   the face. core/layout/line_box.h is that caller. */
+CssPx font_metrics_descent_px(JSContext *realm, CssPx font_size);
 
 #endif

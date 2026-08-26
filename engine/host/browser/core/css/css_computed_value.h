@@ -156,4 +156,24 @@ typedef struct {
    reason `css_computed_length` inherits a `CssLength` rather than a string. */
 CssLineHeight css_computed_line_height(lxb_dom_element_t *el);
 
+/* THE THREE TERMS CSS 2.2 §10.8 "Line height calculations: the 'line-height' and 'vertical-align' properties"
+ * AND §10.8.1 "Leading and half-leading" ARE ARITHMETIC OVER, each for ONE element.
+ *
+ * §10.8's step 1 takes an inline box's height to be "their 'line-height'", and §10.8.1 splits the leading
+ * `L = 'line-height' - AD` in half around `A` and `D` — so a line box needs the USED `line-height` and the two
+ * font metrics APART. `css_computed_line_height` above answers the COMPUTED value, which is §5.1's union of a
+ * keyword, a number and a length; none of those three is a distance, and turning them into one is what these
+ * entries do. The first is also CSSOM §9's `CSS_RESOLVED_LINE_HEIGHT` used value, which is why there is one
+ * conversion and not one per reader: a page comparing `getComputedStyle(el).lineHeight` against a measured box
+ * must not be able to read two different numbers for one element.
+ *
+ * THE TWO METRICS ARE ANSWERED PER ELEMENT AND NOT PER FACE because §10.8.1 states them that way — "the A and
+ * D of the element's first available font", "for a given font AT A GIVEN SIZE" — so each is the picked ratio
+ * core/css/font_metrics.h owns times THIS element's computed `font-size`, resolved in THIS element's
+ * document's realm. Both of those are this file's own derivations, which is why the product is formed here;
+ * see the definitions for why font_metrics.c must not form it instead. */
+CssPx css_used_line_height_px(lxb_dom_element_t *el);
+CssPx css_font_ascent_px(lxb_dom_element_t *el);
+CssPx css_font_descent_px(lxb_dom_element_t *el);
+
 #endif
