@@ -114,6 +114,18 @@ static int  is_verifying(void)   { Flow *f = flow_running(); return f && f->cand
    the sink CLASS, with nothing measuring it. */
 typedef struct {
     char *src; char *root; int sink; int tried; int reached; int turns; int fires;
+    /* THE LEDGER'S OWN LATCH FOR THE ARRIVAL RUNG, AND IT IS SPLIT OFF `reached` BECAUSE ONE NUMBER WAS
+       ANSWERING TWO QUESTIONS AND ONE OF THE ANSWERS STOPPED BEING TRUE. `reached` is a REPORT counter — how
+       many times ANY breakout's bytes turned up at this sink — and it was ALSO the WFQ's 0->1 crossing. Those
+       coincide only while every queued breakout is one the search still holds as viable, and they do not: the
+       delivery table is measured AFTER a breakout is queued, so a spelling this search's own observation has
+       since contradicted still arrives, still raises `reached`, and took the whole rung with it — leaving
+       nothing for the spelling that can actually fire.
+       THE ARRIVAL IS REAL AND STAYS COUNTED; what the LEDGER pays for is the observation the rung NAMES. The
+       rung is a distance to FIRING, so "a breakout reached this sink" is worth a point because it is progress
+       TOWARD a fire; a candidate whose bytes this search has measured cannot arrive intact has made no such
+       progress, and paying it is paying for ground the search already knows leads nowhere. */
+    int reach_credited;
     int surv_run, surv_len; int escaped;
     /* THE BREAKOUTS THIS SINK'S SEARCH HAS, IN ORDER, AND HOW MANY OF THEM ARE ALREADY FLOWS. A derived-context
        sink does not KNOW its breakouts when it is detected — a probe run reads them off the sink's own parse —
@@ -531,6 +543,9 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->sink = sink;
     e->tried = 0;
     e->reached = 0;
+    /* SAME LINE AND SAME REASON AS THE FIELDS AROUND IT: the array is realloc'd and never zeroed, and a latch
+       left holding whatever the allocator had would silently spend a rung this search has never been paid. */
+    e->reach_credited = 0;
     e->turns = 0;
     e->fires = 0;
     /* THE TWO NEW RUNGS TAKE THE SAME LINE AS THE OTHER FOUR, and the comment above this block is why: the
@@ -839,7 +854,15 @@ static void queue_derived(void *user, const char *breakout) {
        byte the table says does not deliver is a derivation that read the constraint and ignored it — and what
        it costs is a whole document re-run whose only possible outcome is the candidate arriving percent-encoded
        at its own sink. Asserted rather than filtered here, because a filter at this end would let the two
-       sides disagree silently and leave the derivation constructing escapes nobody ever sees declined. */
+       sides disagree silently and leave the derivation constructing escapes nobody ever sees declined.
+       AND THIS IS NOT THE LAST WORD ON THE QUESTION, WHICH IS THE HALF THAT USED TO BE MISSING. The table is
+       MEASURED and narrows after this line has run, so an escape pushed while everything still delivered can be
+       one this same search later contradicts — and the entry stayed in `pl`, was seeded a full document re-run,
+       arrived, and took the arrival rung with it. Deliverability is therefore asked again at the two moments it
+       can have changed under a queued spelling: at the seeding, where the payload becomes a flow
+       (solve_seed_candidates withdraws it), and at the arrival, where the ledger would otherwise pay for it
+       (breakout_arrived). Same constraint, same table, three sites — because the constraint is a measurement
+       and a measurement asked once is a constraint that expires. */
     DCHECK(solve_delivered_ok(&e->deliv, breakout),
            "a derived @S breakout carries a byte this search has OBSERVED does not reach its sink — the "
            "derivation is given the same table and emits nothing outside it, so this escape was constructed "
@@ -950,7 +973,15 @@ static void derive_from_witness(Cand *e) {
    escape that would have fired. Uncertainty keeps the arm.
    AND A CHANGE IS WHAT DRIVES THE MUTATION. The table narrows monotonically, so it either narrowed — in which
    case the derivation is re-run on the witness and whatever spelling the tightened constraint permits joins
-   the search — or it did not, in which case nothing happens at all. */
+   the search — or it did not, in which case nothing happens at all.
+   A NARROWING ALSO WITHDRAWS, AND THAT IS NOT PERFORMED HERE ON PURPOSE. Every spelling already in `pl` was
+   pushed under a table this line has just replaced, so some of them are now contradicted arms — but WHICH
+   entries those are is a pure function of `pl` and this table, with no moment attached, so recomputing it at
+   the two sites that would otherwise spend something on one (solve_seed_candidates, breakout_arrived) keeps
+   ONE source of truth. A withdrawal flag written here would be a second copy of an answer this table already
+   gives, free to be behind it — and it would have to be written for every search sharing the source rather
+   than only the one whose probe happened to run. Monotonicity is what makes that safe: a byte never becomes
+   deliverable again, so an entry withdrawn at one reading is withdrawn at every later one. */
 static void observe_delivery(Cand *e, const char *out) {
     const char *enc;
     size_t tl = sizeof SOLVE_BYTES_LOCATOR - 1, n, i;
@@ -990,7 +1021,18 @@ static void observe_delivery(Cand *e, const char *out) {
    produced the bytes that just arrived — and a single-context class states its vectors at detection and has no
    probe, so it is exempt BY CONSTRUCTION rather than by an exception written into the condition. */
 static void breakout_arrived(Cand *e) {
+    /* THE BYTES THAT ARRIVED ARE THE RUNNING FLOW'S OWN SUBSTITUTION, so they are asked of that flow and not
+       of the sink. It is the SAME flow whose `cand_src`/`cand_sink` resolved `e` one call up (candidate_search),
+       and filter_survived has already CHECKed the triple on the same string — asking anywhere else would be
+       asking about a different flow's bytes, which is the mistake the search-level ratchet makes by
+       construction and the reason `survivedBy` had to exist. `CHECK` because it is dereferenced below. */
+    Flow *f = flow_running();
+
     DCHECK(e != NULL, "a breakout arrived at no search — the caller resolved one before reading the bytes");
+    CHECK(f != NULL && f->cand_payload != NULL,
+          "solve: a breakout arrived at a sink with no candidate substitution on the running flow — nothing but "
+          "a candidate run injects a marker, and the rung below is paid on whether THIS search still holds "
+          "these exact bytes as viable, so an arrival with no payload cannot be told from one it withdrew");
     DCHECK(e->npl > e->nprobe,
            "a sink recorded a BREAKOUT arriving while its search holds nothing but its own probes — a derived "
            "class's breakout exists only because a probe run returned one, and a single-context class's "
@@ -1005,8 +1047,33 @@ static void breakout_arrived(Cand *e) {
        ONCE PER SEARCH, at the 0→1 crossing, and that is what "NEW" means in §WFQ's "accumulated emitted VALUE
        (new @H+@S)" — the same shape sink_search uses one function up, where only the call that CREATED the
        search credits it. It is not a seen-set and truncates nothing: every later arrival still derives, still
-       fires and still raises `reached`; what is not repeated is the CREDIT for an observation already made. */
-    if (e->reached == 0) flow_credit_emit(1.0);
+       fires and still raises `reached`; what is not repeated is the CREDIT for an observation already made.
+       AND IT IS NOT PAID TO AN ARM THIS SEARCH HAS ALREADY CONTRADICTED — which is the whole of what the
+       latch beside `reached` is for. queue_derived asserts deliverability at PUSH time and the table narrows
+       afterwards, so a breakout constructed under the permissive table and seeded before the delivery probe
+       came back still arrives here. Its bytes really are in the string (the marker survived; the escape did
+       not), so `reached` counts it — but the RUNG is a distance to firing, and a candidate the search's own
+       measurement has since ruled out has travelled none of that distance. Paid to it, the one-time crossing
+       was then unavailable to the spelling that CAN fire: measured on the attribute-context markup sink, where
+       two of three constructed escapes carry the marker into an attribute NAME (`%3e%3csvg%20onload=`) and can
+       never reach a handler, while the third lands in a real `onerror` and does.
+       THIS IS PRUNING A CONTRADICTED ARM AND NOT A BOUND. Nothing here counts runs, ages a candidate, or
+       remembers that it has been seen; the ONE question is whether this search has POSITIVELY OBSERVED that
+       these bytes do not arrive (solve_filter.c narrows only on a token the delivery probe's own run put in
+       front of the byte, so uncertainty keeps the arm). It is the same constraint solve_html.c and solve_js.c
+       construct under and the same one queue_derived asserts — asked again at the moment the ledger would
+       otherwise spend on it, because the table is not the table it was asked against.
+       A CROSSING ALREADY PAID IS NOT TAKEN BACK. If the arriving candidate was viable when it crossed and the
+       table contradicted it later, the payment stood for an observation that was TRUE when it was made, which
+       is the whole rule a ledger obeys; un-paying it would revise a record on hindsight and would charge
+       whichever flow happens to be running now for a credit some other flow was given. What the search loses
+       there is one rung, once, and the COMPARATOR still separates the two candidates — filter_survived writes
+       each flow's own surviving fraction, so the spelling that arrives intact stands at 1.0 and the one that
+       arrives as an attribute name stands at its marker's four bytes. */
+    if (solve_delivered_ok(&e->deliv, f->cand_payload) && e->reach_credited == 0) {
+        e->reach_credited = 1;
+        flow_credit_emit(1.0);
+    }
     e->reached++;
 }
 
@@ -1470,11 +1537,48 @@ int solve_seed_candidates(JSContext *ctx) {
            install below reads. Declining the append alone would leave that window open. */
         if (!search_seeds(e)) continue;
         for (; e->seeded < e->npl; e->seeded++) {
-            Flow *f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
+            Flow *f;
+            /* WITHDRAWN — the search's OWN measurement has since contradicted this spelling, so it does not
+               become a flow. queue_derived asks solve_delivered_ok at PUSH time and the table narrows
+               afterwards (observe_delivery, on a token the delivery probe put in front of the byte), so a
+               breakout constructed while everything still delivered stays in `pl` while the constraint that
+               permitted it is gone. Left alone it is seeded a WHOLE DOCUMENT RE-RUN whose only possible
+               outcome is the candidate arriving transformed — the exact cost queue_derived's own assert says
+               it exists to prevent, arriving one moment later through a door that never re-asked.
+               IT IS PRUNING A CONTRADICTED ARM, WHICH §Solver-half LICENSES, AND IT IS NOT A BOUND. There is
+               no count, no age, no retry limit and no seen-set here: the ONE question is whether a positive
+               observation of this search's own says these bytes do not arrive. The table narrows only on
+               evidence (a token that never showed up says nothing about its byte, so uncertainty keeps the
+               arm) and it never widens, so a withdrawal is permanent and the cursor stays a cursor — nothing
+               is re-examined, nothing is seeded twice, and a spelling the tightened table still permits is
+               seeded exactly as before.
+               THE ENTRY STAYS IN `pl`, AND THAT IS THE REPORT'S HALF OF THE SAME FACT. A search that
+               CONSTRUCTED an escape and withdrew it is not a search that constructed none — `probes ==
+               payloads` means the second, and compacting the list would say it. `withdrawn` (solve_json_array)
+               is what tells the two apart per entry, and it is also what keeps `tried` and `payloads`
+               readable together now that they legitimately differ.
+               PROBES ARE NOT ESCAPES AND ARE NEVER WITHDRAWN. solve_filter.c's own header says the question is
+               asked of "a constructed escape"; the DELIVERY probe is built OUT OF the very bytes in question,
+               so a table it narrowed would contradict the instrument that measured it, and the CONTEXT probe
+               is ASCII alphanumeric precisely so it cannot change the parse it reads. Both are measurements,
+               not attacks, and `nprobe` is where that line already is. */
+            if (e->seeded >= e->nprobe && !solve_delivered_ok(&e->deliv, e->pl[e->seeded])) continue;
+            f = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);   /* a candidate session runs from the baseline */
             f->cand_src     = strdup(e->src);
             f->cand_payload = strdup(e->pl[e->seeded]);
             f->cand_sink    = sink_name(e->sink);
             CHECK(f->cand_src && f->cand_payload, "solve: OOM seeding a candidate flow");
+            /* THE OTHER SIDE OF THE WITHDRAWAL, ASSERTED WHERE THE COST IS TAKEN RATHER THAN WHERE THE
+               DECISION IS MADE. This line is the moment a payload becomes a document re-run, so it is the one
+               place at which "a contradicted candidate is still queued" stops being a list state and starts
+               costing a traversal — and the push-time check being the ONLY check is exactly what let that
+               happen once. A route into flow creation that does not pass the skip above crashes here instead
+               of quietly spending the run and the rung. */
+            DCHECK(e->seeded < e->nprobe || solve_delivered_ok(&e->deliv, f->cand_payload),
+                   "a candidate flow was created for a payload this search has OBSERVED cannot reach its sink — "
+                   "the delivery table narrows after a breakout is queued, so deliverability asked once at the "
+                   "derivation is a constraint that has expired by the time the flow is made, and this run can "
+                   "only end with the candidate arriving transformed at its own sink");
             /* …AND ON THE PATH THE DETECTION ALREADY PROVED REACHES THIS SINK. The flow still re-runs the
                document from the baseline — the payload enters at the source read and there is no earlier point
                to start from — but it CONSUMES the recorded arms at each branch it re-reaches instead of forking
@@ -1878,6 +1982,32 @@ char *solve_json_array(JSContext *ctx) {
         for (int c = 0; c < g_pending[i].npl; c++) {
             if (c) json_buf_puts(&b, ",");
             snprintf(t, sizeof t, "%d", g_pending[i].surv_pl[c]); json_buf_puts(&b, t);
+        }
+        json_buf_puts(&b, "]");
+        /* …AND WHICH OF THEM THE SEARCH'S OWN MEASUREMENT HAS SINCE WITHDRAWN, one entry per `payloads` entry
+           and in the same order as the two lists above it.
+           IT EXISTS BECAUSE THE WITHDRAWAL WOULD OTHERWISE BE A SILENT DROP, and a silent drop on this record
+           reads as the opposite of what happened. A withdrawn entry is never seeded, so it never raises
+           `tried` and its `survivedBy` column stays 0 — which is byte-for-byte the report of a breakout that
+           WAS run and got nowhere. Those are opposite verdicts: one says the page's code ate the candidate and
+           the search should keep looking, the other says the SOURCE cannot carry these bytes at all and the
+           search correctly declined to spend a document re-run on them. §@S names that tell exactly — a rung
+           whose absence and whose zero read alike — and it applies to a payload's row as much as to a count.
+           IT IS ALSO WHAT KEEPS `tried` AND `payloads` READABLE TOGETHER. solve.h says the probes are listed
+           because omitting them "would make the list disagree with the count"; a withdrawal makes them
+           disagree in the other direction, and this column is the arithmetic that reconciles it — `tried` is
+           the entries not marked here (plus any candidate this session resumed out of the cold tier, whose
+           bytes ride the flow and have no row).
+           THE PRODUCER STATES IT AND THE CONSUMER MAY NOT RE-DERIVE IT, for the reason `probes` gives one
+           field up: the constraint is a MEASURED table held on this search, a reader has no access to it, and
+           reading a withdrawal off the payload's SHAPE would be a view restating a producer fact it cannot
+           check. A `1` is a positive statement about the SOURCE's transform; `0` is a positive statement that
+           this spelling is still on the table. */
+        json_buf_puts(&b, ",\"withdrawn\":[");
+        for (int c = 0; c < g_pending[i].npl; c++) {
+            if (c) json_buf_puts(&b, ",");
+            json_buf_puts(&b, (c >= g_pending[i].nprobe &&
+                               !solve_delivered_ok(&g_pending[i].deliv, g_pending[i].pl[c])) ? "1" : "0");
         }
         json_buf_puts(&b, "]");
         /* The parked entry carries the DECLARATION, not the envelope: a search that has not solved has no

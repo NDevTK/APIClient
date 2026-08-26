@@ -110,7 +110,7 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       [,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
                       "survivedOf":L,"escaped":E[,"fires":F][,"witnessed":W],"probes":P,"payloads":[..],
-                      "survivedBy":[..]
+                      "survivedBy":[..],"withdrawn":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -134,6 +134,13 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    middle of a document nobody has explored far enough, and one reporting `tried:5,reached:5` had every
    breakout delivered and broke out of nothing — opposite verdicts, needing opposite work, which the single
    number reported identically.
+   `reached` IS A REPORT COUNTER AND NOT THE WFQ's CROSSING, and it used to be both. Every arrival raises it,
+   including one by a spelling `withdrawn` marks — those bytes really did turn up at the sink, the marker
+   survived and the escape did not, and hiding that would make the number a claim about viability rather than
+   a count of arrivals. What is NOT paid for such an arrival is the LEDGER rung: it is a distance to FIRING,
+   and a candidate the search has measured cannot arrive intact has travelled none of it, so paying it there
+   spent the one-time crossing on an arm and left nothing for the spelling that can fire. The two questions are
+   separate state inside solve.c for that reason.
    `reached` COUNTS BREAKOUTS AND NOT CONTEXT PROBES, and the distinction is the whole value of the field: a
    probe carries an inert locator and cannot fire by construction, so counting its arrival makes `reached:1`
    mean either "the probe got here and the breakout has not run" or "the breakout got here and failed" — the
@@ -194,6 +201,22 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    this session's record does not hold — a cold-resumed one, whose bytes ride the resumed FLOW rather than the
    record, which is the same reason `payloads` can be empty beside a non-zero `tried` — contributes to
    `survived` and to no column here, because there is no row of this session's for it.
+   `withdrawn` IS THE THIRD COLUMN OF THAT SAME TABLE, and it exists because the row it describes is otherwise
+   the exact report of its own opposite. The deliverability table a breakout is constructed under is MEASURED,
+   by a delivery probe that has to run, so it narrows AFTER escapes have already been queued: a spelling built
+   while everything still delivered can be one this search's own observation later contradicts. Such a spelling
+   is WITHDRAWN — never seeded, so it never raises `tried` and its `survivedBy` entry stays 0, which is
+   byte-for-byte what a breakout that WAS run and travelled nowhere reports. Those are opposite verdicts taking
+   opposite work: `survivedBy:0, withdrawn:0` is the page's own code eating a candidate the search should keep
+   mutating, and `survivedBy:0, withdrawn:1` is the SOURCE's percent-encode set making this exit unsatisfiable
+   by construction, which is the joint solve's correct and final answer for that spelling. It is also the
+   arithmetic that keeps `tried` and `payloads` readable together — `tried` counts the entries NOT marked here,
+   plus any candidate resumed out of the cold tier, which has no row at all.
+   WITHDRAWING IS PRUNING A CONTRADICTED ARM AND NOT A BOUND: no count, no age, no retry limit and no seen-set
+   decides it — only whether a positive observation of this search's own says these bytes do not arrive, and
+   the table narrows solely on evidence (an unobserved byte keeps its arm). A PROBE is never marked: the
+   context probe is inert ASCII and the delivery probe is built OUT OF the bytes in question, so both are the
+   instruments the measurement is made with rather than escapes made under it.
    `payloads` IS THE ONE FIELD THAT IS NOT A COUNT, and the search's most common state is the one
    that needs it: a breakout that ARRIVED and did not fire is a question about the BYTES, and no quantity
    answers it. The LEADING entries of a derived class are its probes — the inert context probe, and beside it

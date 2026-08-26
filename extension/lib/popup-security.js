@@ -158,12 +158,30 @@ function _parkedProgress(item) {
   // it cannot check, which is the drift these cards exist to end. A count needs no such claim and answers the
   // question anyway: with `survived` saturated at a full-length run, "and N of its M candidates have never
   // been seen at a sink" is what says the run belongs to one candidate and the others never travelled.
-  var unseen = item.survivedBy.filter(function (n) { return n === 0; }).length;
-  var alsoUnseen = unseen
+  // …AND A ZERO THERE IS TWO OPPOSITE FACTS UNTIL `withdrawn` SPLITS THEM, which is the same producer-states-it
+  // rule one paragraph up. A candidate the search WITHDREW was never seeded at all — the delivery table it was
+  // constructed under narrowed afterwards and its bytes are now known not to arrive — so its `survivedBy` entry
+  // is 0 for a reason that has nothing to do with distance, while the branch below tells the reader a
+  // never-seen candidate "has not re-traversed the document yet". That is the wrong instruction: nothing is
+  // going to re-traverse anything, and what the page needs is a decode or another source. So the two are
+  // counted apart and only the SENT ones are called unseen.
+  // The column's presence and its length are asserted once, in the parked block that calls this — restating
+  // them here would be the same contract in two places, free to disagree.
+  var withdrawn = 0, unseen = 0;
+  item.survivedBy.forEach(function (n, i) {
+    if (item.withdrawn[i]) withdrawn++;
+    else if (n === 0) unseen++;
+  });
+  var alsoUnseen = (unseen
     ? ', and ' + unseen + ' of its ' + item.survivedBy.length + ' candidate'
       + (item.survivedBy.length === 1 ? "" : "s") + ' ' + (unseen === 1 ? 'has' : 'have')
       + ' never been seen at a sink at all'
-    : "";
+    : "")
+    + (withdrawn
+    ? ', and ' + withdrawn + ' more ' + (withdrawn === 1 ? 'was' : 'were') + ' WITHDRAWN before running — the '
+      + 'search measured that the bytes ' + (withdrawn === 1 ? 'it needs' : 'they need') + ' do not survive '
+      + 'delivery through this source, so ' + (withdrawn === 1 ? 'it was' : 'they were') + ' never sent'
+    : "");
 
   if (item.turns === 0)
     return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
@@ -310,9 +328,15 @@ function renderSecurityPanel() {
       // probe without gaining an escape (a delivery probe pushed after the context probe) moves ONLY this. A
       // key missing a field the card reads is the cache in front of the fix, which is the defect the comment
       // above records twice.
+      // `withdrawn` RIDES ALONG FOR THE SAME REASON AND IT IS THE ONE THAT CAN MOVE ALONE. A search's measured
+      // delivery table narrowing withdraws candidates already in `payloads` — the list does not change, `tried`
+      // does not change (a withdrawn candidate is never seeded), and the card's own sentence about them flips
+      // from "never been seen at a sink" to "withdrawn before running". A key without it is the cache in front
+      // of exactly the correction this column was added to make.
       fpParts.push([findings[i].sourceUrl, s.sink, s.source, s.search, s.tried, s.poc,
                     !!s.cspBlocks, !!s.trustedTypes,
-                    s.reached, s.turns, s.fires === undefined ? null : s.fires, s.probes, s.payloads]);
+                    s.reached, s.turns, s.fires === undefined ? null : s.fires, s.probes, s.payloads,
+                    s.withdrawn]);
     }
   }
   const fp = JSON.stringify(fpParts);
@@ -389,7 +413,8 @@ function renderSecurityPanel() {
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
     // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, reached, turns, survived,
-    // survivedOf, escaped, fires?, probes, payloads, survivedBy, sourceEncodes?, delivery?, deliveryPrefix?}
+    // survivedOf, escaped, fires?, probes, payloads, survivedBy, withdrawn, sourceEncodes?, delivery?,
+    // deliveryPrefix?}
     // for a parked one. This card used to read `shape`,
     // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
     // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
@@ -581,6 +606,19 @@ function renderSecurityPanel() {
         "a parked @S record reports a candidate surviving more bytes than that candidate has — the run is a "
         + "substring of its own payload, so this column was measured against a different string (sink="
         + pit.sink + " survivedBy=" + JSON.stringify(pit.survivedBy) + ")");
+      // AND `withdrawn` IS THE THIRD COLUMN OF THAT SAME TABLE, asserted for the reason the second one is: it
+      // is read by index beside the other two, and a zero in `survivedBy` means opposite things depending on
+      // it. A candidate marked here was never SENT — the search's measured delivery table contradicted its
+      // bytes after it was constructed — so reporting it as one that ran and was never seen tells the reader
+      // to wait for a traversal that is never going to happen. Presence is asserted rather than defaulted:
+      // solve_json_array writes the column unconditionally on every parked entry, so an absent one is the
+      // relay dropping a field and not an engine that had nothing to say.
+      DCHECK(Array.isArray(pit.withdrawn) && pit.withdrawn.length === pit.payloads.length,
+        "a parked @S record's per-candidate withdrawal column does not line up with its payload list — "
+        + "solve_json_array writes payloads, survivedBy and withdrawn in one order and the card reads all "
+        + "three by index, so a mismatch reports a candidate the search declined to send as one that ran and "
+        + "travelled nowhere (sink=" + pit.sink + " payloads=" + pit.payloads.length + " withdrawn="
+        + JSON.stringify(pit.withdrawn) + ")");
       // `probes` IS ASSERTED AGAINST `payloads` FOR THE SAME REASON `survivedBy` IS: the two are one fact, and
       // the card's FIRST sentence is now computed from the pair. solve_json_array writes it unconditionally
       // and 0 is a real value (a single-context class has no probe), so a `|| 0` here would turn "the relay
