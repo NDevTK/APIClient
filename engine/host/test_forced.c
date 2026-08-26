@@ -16,6 +16,7 @@
 #include "core/xml/xml_literal.h" /* XML §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] PubidChar */
 #include "core/xml/xml_tag.h"    /* XML §3.1's [40] STag, [42] ETag, [44] EmptyElemTag and §3.3.3's values */
 #include "core/xml/xml_element.h" /* XML §3's [39] element over §3.1's [43] content — the element stack */
+#include "core/xml/xml_document.h"/* XML §2.1's [1] document with §2.8's [22] prolog and [27] Misc */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -8357,8 +8358,13 @@ static void xml_element_selftest(void)
             CHECK(strcmp(xml_element_error_message(e), xml_element_error_message(XML_ELEMENT_OK)) != 0,
                   DOC[i].why);
             if (r.fatal != XML_CHAR_OK) {
-                /* THE ONE ANSWER THAT DOES NOT REWIND, keyed on the LATCH and not on the error value. */
-                CHECK(r.p != before.p, DOC[i].why);
+                /* THE ONE ANSWER THAT DOES NOT REWIND, and the LATCH is what says so rather than the cursor.
+                   core/xml/xml_char.h does not advance on a fatal error — that is what makes line/column name
+                   the offending character — so a failing call can legitimately end where it began, and a
+                   check for a moved cursor would be testing the wrong thing. What must be true is that the
+                   §1.2 latch SURVIVED: restoring a saved reader would put it back to XML_CHAR_OK and
+                   un-report the error the character layer just detected. */
+                CHECK(r.p >= before.p, DOC[i].why);
             } else {
                 /* THE STRUCTURAL PROMISE, whose unit is the ITEM: a failed call leaves the reader at the
                    failing construct's first byte, which is the position a `parsererror` has to quote. */
@@ -8433,6 +8439,287 @@ static void xml_element_selftest(void)
               "constraint doing its job on a stack this probe deliberately unbalanced");
         xml_element_walk_destroy(w);
     }
+}
+
+/* XML 1.0 (Fifth Edition) §2.1 Well-Formed XML Documents' [1] `document` with §2.8's [22] `prolog` and [27]
+ * `Misc` — core/xml/xml_document.h, the whole of what an XML entity is.
+ *
+ * THE ROWS THAT CARRY IT ARE THE ONES WHERE THE SAME BYTES MEAN DIFFERENT THINGS IN DIFFERENT POSITIONS.
+ * `<?xml version="1.0"?>` at offset zero is §2.8's [23] XMLDecl and becomes no node; the same string anywhere
+ * else is §2.6's [16] PI whose [17] PITarget is the subtracted `xml`, so it is the reserved-target fatal
+ * error — which is why `<a/><?xml v?>` is a row. `<?xml?>` is the boundary from the third side: [23]'s next
+ * component begins with a REQUIRED [3] S, so a `<?xml` with none is never a declaration however early it
+ * stands, and §2.6 then answers it. And `<?xml-stylesheet ...?>` in the prolog is an ordinary processing
+ * instruction, because [17] subtracts only the THREE-character spellings of `xml`.
+ *
+ * WHAT IS AN ITEM AND WHAT IS MERELY CONSUMED IS THE OTHER HALF. [27]'s `S` outside the document element
+ * becomes no node in any tree an XML parser builds, so `  <a/>  ` has exactly the stream `<a/>` has; [27]'s
+ * Comment and PI DO become Document children, so they are items on both sides of the root. The declaration is
+ * neither: it is asked for by name, and a document with none answers NULL — which is a question this fixture
+ * asks on every row, because "there is no declaration" and "nobody has looked yet" would otherwise be the same
+ * NULL and the walk asserts they are not.
+ *
+ * THE `<a/>\001` ROW IS THE ONE A LOOKAHEAD GETS WRONG. After the root closes, the walk reads [1]'s trailing
+ * `Misc*` to decide whether the document is over — and reading [3] S goes through §2.2's [2] Char, so it can
+ * latch §1.2's fatal error. A lookahead that latched the CALLER's reader would make the element's own close
+ * unreportable, discarding a construct the document really contains because of a byte after it. Here the close
+ * IS delivered and the next call reports the character where it stands.
+ *
+ * §2.8's [28] doctypedecl HAS NO ROW AND CANNOT HAVE ONE. It is a CHECK_FAIL — the parse aborts in dev and in
+ * release alike, because nothing here reads a DTD and that is exactly what lets both entity sites answer §4.1's
+ * [WFC: Entity Declared]. A fixture row for it would be a fixture row for an abort. What this file can check,
+ * and does, is the boundary beside it: a `<!` in the prolog that is NOT `<!DOCTYPE` is a document's own mistake
+ * (§2.8 puts every markup declaration inside [28]'s intSubset), so `<!ENTITY x "y">` standing loose is
+ * XML_DOCUMENT_ERR_PROLOG and reaches no crash. */
+static void xml_document_selftest(void)
+{
+    typedef struct { XmlContentKind kind; const char *s; uint32_t cp; } XmlDocItemExp;
+    static const XmlDocItemExp D_ROOT[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_ELEMENT_END, "a", 0 } };
+    static const XmlDocItemExp D_LEAD[] = {
+        { XML_CONTENT_COMMENT, "c", 0 },
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_ELEMENT_END, "a", 0 } };
+    static const XmlDocItemExp D_TRAIL[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_ELEMENT_END, "a", 0 },
+        { XML_CONTENT_COMMENT, "c", 0 } };
+    static const XmlDocItemExp D_STYLE[] = {
+        { XML_CONTENT_PI, "xml-stylesheet", 0 },
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_ELEMENT_END, "a", 0 } };
+    static const XmlDocItemExp D_FULL[] = {
+        { XML_CONTENT_COMMENT, "c", 0 },
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_CHARDATA, "x", 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0 },
+        { XML_CONTENT_PI, "pi", 0 } };
+    static const XmlDocItemExp D_NEST[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0 }, { XML_CONTENT_ELEMENT_START, "b", 0 },
+        { XML_CONTENT_ELEMENT_END, "b", 0 },   { XML_CONTENT_ELEMENT_END, "a", 0 } };
+    static const XmlDocItemExp D_COMMENT[] = { { XML_CONTENT_COMMENT, "c", 0 } };
+    static const XmlDocItemExp D_START[] = { { XML_CONTENT_ELEMENT_START, "a", 0 } };
+
+    static const struct { const char *in; const XmlDocItemExp *exp; size_t n_exp; XmlDocumentError err;
+                          const char *version; const char *encoding; XmlStandalone standalone;
+                          XmlDeclError d_decl; XmlMarkupError d_misc; XmlElementError d_element;
+                          const char *why; } DOC[] = {
+        { "<a/>", D_ROOT, 2, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.8's own second printed example, `<greeting>Hello, world!</greeting>`, is a complete document "
+          "with no declaration at all — [22] writes `XMLDecl?` and NULL is that absence rather than a record "
+          "of defaults nobody wrote" },
+        { "<?xml version=\"1.0\"?><a/>", D_ROOT, 2, XML_DOCUMENT_OK, "1.0", NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.8's FIRST printed example, and the declaration is not an item: it is a statement about the "
+          "entity and becomes no node, so it is asked for by name" },
+        { "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><a/>", D_ROOT, 2, XML_DOCUMENT_OK,
+          "1.0", "UTF-8", XML_STANDALONE_YES, XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[23] with all three components. `standalone='yes'` is the third alternative of §4.1's [WFC: Entity "
+          "Declared], so this is the fact that constraint will need the day §2.8's [28] is read" },
+        { "<!--c--><a/>", D_LEAD, 3, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[22]'s `Misc*` before the element — a comment there is a Document child and therefore an item" },
+        { "<a/><!--c-->", D_TRAIL, 3, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "and [1]'s own `Misc*` after it, which is a different production in the same standard and admits "
+          "the same three" },
+        { "  <a/>  ", D_ROOT, 2, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[27] Misc ::= Comment | PI | S, and the S becomes NOTHING — white space outside the document "
+          "element is in no tree an XML parser builds, so this document's stream is the bare `<a/>`'s" },
+        { "<?xml-stylesheet h=\"x\"?><a/>", D_STYLE, 3, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "THE PROLOG PI THAT IS NOT A DECLARATION, and the most common one on the web. [17] PITarget "
+          "subtracts only the three-character spellings of `xml`, so this is an ordinary [16] PI and an "
+          "ordinary Document child — a prolog that treated every `<?xml` prefix as [23] would reject it" },
+        { "<?xml version=\"1.0\"?><!--c--><a>x</a><?pi d?>", D_FULL, 5, XML_DOCUMENT_OK, "1.0", NULL,
+          XML_STANDALONE_ABSENT, XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[1] document ::= prolog element Misc* end to end: a declaration, a prolog comment, the root with "
+          "its content, and a trailing processing instruction" },
+        { "<a><b/></a>", D_NEST, 4, XML_DOCUMENT_OK, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "the element in the middle is §3's [39] delegated whole — this walk contributes nothing to what is "
+          "inside the root and re-derives none of it" },
+
+        /* The shapes that are not [1], one row per sentence. */
+        { "", D_ROOT, 0, XML_DOCUMENT_ERR_NO_ELEMENT, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.1: matching [1] implies \"It contains one or more elements\", so an entity with none matches no "
+          "document at all — and an EMPTY entity is a thing this reader answers about rather than the absence "
+          "of one" },
+        { "   ", D_ROOT, 0, XML_DOCUMENT_ERR_NO_ELEMENT, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "and [27]'s `S` does not make one — the prolog may be all white space and the element is still "
+          "required" },
+        { "<!--c-->", D_COMMENT, 1, XML_DOCUMENT_ERR_NO_ELEMENT, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "nor does a prolog `Misc*` that ran to the end of the entity — the comment IS delivered first, "
+          "because it is a construct the document really contains" },
+        { "x<a/>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.4 puts character data inside the document element and nowhere else, and [22] admits no "
+          "alternative that could match it" },
+        { "&amp;<a/>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "and §4.1's [67] Reference is [43] content's alternative, not [27] Misc's" },
+        { "</a>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "AN END-TAG BEFORE ANY ELEMENT IS THE PROLOG'S REPORT AND NOT THE ELEMENT WALK'S. That walk's first "
+          "call asserts it was handed a [40]/[44] start, so routing a `</` into it would crash the engine on "
+          "a document's own mistake — which is why the prolog asks core/xml/xml_tag.h's two peeks rather than "
+          "one" },
+        { "<![CDATA[x]]><a/>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.7 says CDATA sections \"may occur anywhere character data may occur\", and §2.4 says that is "
+          "inside the document element — so a section in the prolog matches no production of [22]" },
+        { "<!ENTITY x \"y\"><a/>", D_ROOT, 0, XML_DOCUMENT_ERR_PROLOG, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "THE BOUNDARY BESIDE THE ONE CONSTRUCT THAT CRASHES. §2.8 puts every markup declaration inside "
+          "[28] doctypedecl's `intSubset`, so an entity declaration standing loose in the prolog is a "
+          "document's own mistake and reaches no missing capability — only `<!DOCTYPE` itself is the "
+          "unbuilt one" },
+        { "<a/><b/>", D_ROOT, 2, XML_DOCUMENT_ERR_TRAILING, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "§2.1: \"There is exactly one element, called the root, or document element, no part of which "
+          "appears in the content of any other element\" — a second one at the top level is not a sibling "
+          "this grammar has, and the first is complete and delivered before the report" },
+        { "<a/>x", D_ROOT, 2, XML_DOCUMENT_ERR_TRAILING, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "and [1]'s trailing `Misc*` admits [27]'s three and character data is none of them" },
+        { "<?xml version=\"2.0\"?><a/>", D_ROOT, 0, XML_DOCUMENT_ERR_DECL, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_ERR_VERSION_NUM, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "[26] VersionNum ::= '1.' [0-9]+ — §2.8's own note says an XML 1.0 processor encountering a 1.x "
+          "version other than 1.0 processes it as a 1.0 document, and 2.0 is not a 1.x at all" },
+        { "<?xml?><a/>", D_ROOT, 0, XML_DOCUMENT_ERR_MISC, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_ERR_PI_TARGET_RESERVED, XML_ELEMENT_OK,
+          "THE THIRD SIDE OF THE `<?xml` BOUNDARY. [23]'s next component is [24] VersionInfo, which begins "
+          "with a REQUIRED [3] S — so there is no `<?xml?>` in the grammar however early it stands, and what "
+          "it IS is §2.6's reserved target. A prolog that recognised [23] by its first five characters would "
+          "report a missing VersionInfo instead" },
+        { "<!--x<a/>", D_ROOT, 0, XML_DOCUMENT_ERR_MISC, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_ERR_UNTERMINATED_COMMENT, XML_ELEMENT_OK,
+          "§2.5's layer reported it from inside [27] Misc — a comment ends at `-->` and the start-tag inside "
+          "one is comment content" },
+        { "<a/><?xml v?>", D_ROOT, 2, XML_DOCUMENT_ERR_MISC, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_ERR_PI_TARGET_RESERVED, XML_ELEMENT_OK,
+          "and the same string AFTER the root is the reserved target rather than a declaration — [22] puts "
+          "`XMLDecl?` at offset zero, so nowhere else is even asked the question" },
+        { "<a></b>", D_START, 1, XML_DOCUMENT_ERR_ELEMENT, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH,
+          "§3's [WFC: Element Type Match] comes back through the detail as the ELEMENT WALK's own sentence — "
+          "flattening it into this component's enum would be that component's rules re-spelled here" },
+        { "<a>", D_START, 1, XML_DOCUMENT_ERR_ELEMENT, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_ERR_UNCLOSED,
+          "and so does the entity ending with the root still open" },
+        { "<a/>\001", D_ROOT, 2, XML_DOCUMENT_ERR_CHARACTER, NULL, NULL, XML_STANDALONE_ABSENT,
+          XML_DECL_OK, XML_MARKUP_OK, XML_ELEMENT_OK,
+          "THE ROW THE END-OF-DOCUMENT LOOKAHEAD GETS WRONG IF IT READS THE CALLER'S READER. Deciding whether "
+          "[1] is over means reading [1]'s trailing `Misc*`, and reading [3] S goes through §2.2's [2] Char, "
+          "so it can latch §1.2's fatal error — on the caller's reader that would make the root's own close "
+          "unreportable because of a byte AFTER it. Both element items arrive, and the character is reported "
+          "on the call that stands at it" },
+    };
+    static const XmlDocumentError ALL[] = {
+        XML_DOCUMENT_OK, XML_DOCUMENT_ERR_NO_ELEMENT, XML_DOCUMENT_ERR_PROLOG, XML_DOCUMENT_ERR_TRAILING,
+        XML_DOCUMENT_ERR_DECL, XML_DOCUMENT_ERR_MISC, XML_DOCUMENT_ERR_ELEMENT, XML_DOCUMENT_ERR_CHARACTER
+    };
+    size_t i, a, b;
+
+    for (i = 0; i < sizeof(DOC) / sizeof(DOC[0]); i++) {
+        XmlDocumentWalk *w = xml_document_walk_create();
+        XmlCharReader r, before;
+        XmlContentItem it;
+        XmlDocumentDetail d;
+        XmlDocumentError e = XML_DOCUMENT_OK;
+        const XmlDecl *got;
+        size_t n = 0, len = strlen(DOC[i].in);
+
+        CHECK(!xml_document_ended(w), "a fresh XML document walk claims [1] has already matched");
+        xml_char_reader_init(&r, DOC[i].in, len);
+        for (;;) {
+            before = r;
+            memset(&it, 0, sizeof it);
+            e = xml_document_next(w, &r, &it, &d);
+            if (e != XML_DOCUMENT_OK) break;
+            CHECK(d.decl == XML_DECL_OK && d.misc == XML_MARKUP_OK && d.element == XML_ELEMENT_OK,
+                  "a successful XML document item carries a layer's error report");
+            CHECK(n < DOC[i].n_exp, DOC[i].why);
+            CHECK(it.kind == DOC[i].exp[n].kind, DOC[i].why);
+            switch (it.kind) {
+            case XML_CONTENT_ELEMENT_START:
+                CHECK(it.tag.name_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.tag.name, DOC[i].exp[n].s, it.tag.name_len) == 0, DOC[i].why);
+                break;
+            case XML_CONTENT_ELEMENT_END:
+                CHECK(it.name_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.name, DOC[i].exp[n].s, it.name_len) == 0, DOC[i].why);
+                break;
+            case XML_CONTENT_CHARDATA:
+            case XML_CONTENT_CDSECT:
+            case XML_CONTENT_COMMENT:
+                CHECK(it.text.raw_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.text.raw, DOC[i].exp[n].s, it.text.raw_len) == 0, DOC[i].why);
+                break;
+            case XML_CONTENT_PI:
+                CHECK(it.pi.target_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.pi.target, DOC[i].exp[n].s, it.pi.target_len) == 0, DOC[i].why);
+                break;
+            case XML_CONTENT_REFERENCE:
+                CHECK(it.ref.cp == DOC[i].exp[n].cp, DOC[i].why);
+                break;
+            }
+            n++;
+            if (xml_document_ended(w)) break;
+        }
+        CHECK(e == DOC[i].err, DOC[i].why);
+        CHECK(n == DOC[i].n_exp, DOC[i].why);
+        CHECK(d.decl == DOC[i].d_decl && d.misc == DOC[i].d_misc && d.element == DOC[i].d_element,
+              DOC[i].why);
+
+        /* §2.8's [23], ASKED ON EVERY ROW — a declaration nobody wrote and a declaration nobody looked for
+           would otherwise be the same NULL, which is the defaulted-field defect performed by a producer. */
+        got = xml_document_declaration(w);
+        if (DOC[i].version == NULL) {
+            CHECK(got == NULL, DOC[i].why);
+        } else {
+            CHECK(got != NULL && got->version != NULL && got->version_len == strlen(DOC[i].version)
+                      && memcmp(got->version, DOC[i].version, got->version_len) == 0, DOC[i].why);
+            CHECK((got->encoding != NULL) == (DOC[i].encoding != NULL), DOC[i].why);
+            CHECK(DOC[i].encoding == NULL
+                      || (got->encoding_len == strlen(DOC[i].encoding)
+                          && memcmp(got->encoding, DOC[i].encoding, got->encoding_len) == 0), DOC[i].why);
+            CHECK(got->standalone == DOC[i].standalone, DOC[i].why);
+        }
+
+        if (e == XML_DOCUMENT_OK) {
+            CHECK(xml_document_ended(w), DOC[i].why);
+            /* [1] matched to the LAST BYTE — a walk that ended with input left is one that stopped reading a
+               document rather than one that finished it. */
+            CHECK(r.p == r.end && r.fatal == XML_CHAR_OK, DOC[i].why);
+        } else {
+            CHECK(!xml_document_ended(w),
+                  "an XML document walk reported a fatal error and also claims [1] matched to the end of the "
+                  "entity — a `parsererror` document and a parsed one are the two answers §8.5.1 chooses "
+                  "between, and they cannot both be true");
+            CHECK(strcmp(xml_document_error_message(e), xml_document_error_message(XML_DOCUMENT_OK)) != 0,
+                  DOC[i].why);
+            if (r.fatal != XML_CHAR_OK) {
+                /* The latch surviving IS the check — see the element fixture above on why a moved cursor is
+                   not, and note that `<a/>\001` is a row where the failing call moves nothing at all. */
+                CHECK(r.p >= before.p, DOC[i].why);
+            } else {
+                CHECK(r.p == before.p && r.line == before.line && r.column == before.column
+                          && r.fatal == before.fatal,
+                      "an XML document scan that reported an error did not restore the reader it was handed — "
+                      "a caller reporting the mistake would quote a position inside the failed construct");
+            }
+        }
+        xml_document_walk_destroy(w);
+    }
+
+    /* ONE MESSAGE PER SENTENCE. */
+    for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+        for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+            CHECK(strcmp(xml_document_error_message(ALL[a]), xml_document_error_message(ALL[b])) != 0,
+                  "two XML document errors share one message, so a `parsererror` would name the wrong "
+                  "sentence for one of them");
 }
 
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
@@ -9249,9 +9536,12 @@ int main(int argc, char **argv) {
                               Attribute-Value Normalization — AFTER the reference fixture, because every
                               value row is built through §4.1's layer and a failure there must be read as
                               that component's rather than as this one's */
-    xml_element_selftest();/* XML §3's [39] element over §3.1's [43] content — LAST of this family, because
-                              its item stream is produced by every one of the layers above and a failure in
-                              any of them must be read where that layer's own fixture reports it */
+    xml_element_selftest();/* XML §3's [39] element over §3.1's [43] content — AFTER every leaf, because its
+                              item stream is produced by all of them and a failure in any one must be read
+                              where that layer's own fixture reports it */
+    xml_document_selftest();/* XML §2.1's [1] document with §2.8's [22] prolog — AFTER the element fixture,
+                              because it delegates §3's [39] whole and a failure there must be read as that
+                              component's rather than as this one's */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);

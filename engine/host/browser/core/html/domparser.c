@@ -14,8 +14,9 @@
  *
  * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because no component here yet parses a DOCUMENT — core/xml/
  * holds the character, name, reference, markup, declaration, literal and namespace layers, §3.1's three tags,
- * and §3's [39] element walk over §3.1's [43] content, and what
- * stands between them and a Document is the crash's own list, in spec order. Lexbor ships no
+ * §3's [39] element walk over §3.1's [43] content, and §2.1's [1] document over §2.8's [22] prolog — so what
+ * stands between them and a Document is a TREE BUILDER and the report it fails into, which is the crash's own
+ * list, in spec order. Lexbor ships no
  * `xml` module — `engine/build.mjs` states which release this tree pins and `ls source/lexbor` in the vendored
  * checkout is the whole of the check — so CLAUDE.md's bind-before-build order has nothing at the "existing
  * Lexbor module" rung and what is owed is a faithful spec port. THE RELEASE NUMBER THAT STOOD IN THIS SENTENCE
@@ -311,20 +312,24 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
               "[39] and it is about a PAIR of tags. It is a PULL walk over an explicit heap stack (§C-stack: "
               "[43] contains [39], so C recursion would put a page's own nesting depth on the C stack) and it "
               "reports [43]'s five alternatives plus the two boundaries of [39] as items — so DO NOT WRITE A "
-              "SECOND CONTENT WALK EITHER. "
-              "WHAT IS STILL OWED, IN SPEC ORDER: (1) §2.1's [1] document ::= prolog element Misc*, with "
-              "§2.8's [22] prolog ::= XMLDecl? Misc* (doctypedecl Misc*)? around its [23] XMLDecl (xml_decl.h "
-              "answers it), its [27] Misc ::= Comment | PI | S and its [28] doctypedecl. (2) THE DOM "
+              "SECOND CONTENT WALK EITHER. AND SO IS THE WHOLE OF WHAT AN ENTITY IS: xml_document.h is "
+              "§2.1's [1] document ::= prolog element Misc* with §2.8's [22] prolog ::= XMLDecl? Misc* "
+              "(doctypedecl Misc*)? and its [27] Misc ::= Comment | PI | S, delegating [39] whole, holding "
+              "the [23] XMLDecl for a caller to ask by name, consuming the white space that becomes no node, "
+              "and deciding §2.1's `there is exactly one element, called the root`. "
+              "WHAT IS STILL OWED, IN SPEC ORDER: (1) THE DOM "
               "CONSTRUCTION: each [39] element becomes a Lexbor node, its attributes are expanded through "
               "xml_ns.h's scope (push at the STag, pop at the ETag) and Namespaces in XML 1.0 3e §6.3 "
               "Uniqueness of Attributes' expanded-name half is checked there, since xml_tag.c can only answer "
               "§3.1's literal-Name half. THAT is the component that must be a STEP MACHINE — a parse over "
-              "attacker-length input is unbounded, and the walk beneath it is re-enterable at every construct "
-              "because its whole state is the caller's POD reader plus a stack whose owner it asserts. (3) "
+              "attacker-length input is unbounded, and the walks beneath it are re-enterable at every "
+              "construct because their whole state is the caller's POD reader plus stacks whose owner they "
+              "assert. It drives xml_document.h's pull walk: one item per call, until xml_document_ended. (2) "
               "§8.5.1 step 3's parsererror element in the "
               "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace, built from the error record — "
               "every component in core/xml/ already reports its sentence as a message, so nothing new has to "
-              "be worded. (4) Route this arm to it, and route §3.6.6's arm to it too. "
+              "be worded — xml_document_error_message and the layers its detail chains down to already word "
+              "every sentence. (3) Route this arm to it, and route §3.6.6's arm to it too. "
               "THE DOCTYPE IS A SECURITY DECISION AND MUST CRASH RATHER THAN BE SKIPPED. Nothing here reads "
               "§2.8's [28] doctypedecl, which is why an [68] EntityRef outside §4.6's five is answered "
               "[WFC: Entity Declared] — in a document without any DTD that IS the standard's answer, and it is "
@@ -337,8 +342,12 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
               "WITH §3.1's [WFC: No External Entity References] and §4.4.4 Forbidden's third bullet in the "
               "same diff: an attribute value MUST NOT reference an external entity, and a parser that resolves "
               "one has put an XXE inside a security tool. Until then a [28] doctypedecl is an unbuilt "
-              "capability and belongs in the prolog walk as its own DFAIL, never as a construct skipped to "
-              "reach the element — which is also why xml_element.c reports a `<!DOCTYPE` standing in [43] "
+              "capability, and the prolog walk is where it crashes: xml_document.c holds the `'<!DOCTYPE'` "
+              "delimiter and the CHECK_FAIL beside it, so building [28] moves the peek and the crash together "
+              "and cannot leave one behind. It is a CHECK and not a DCHECK because a release build with the "
+              "crash compiled out would report the declaration as [22]'s `matches none of these constructs`, "
+              "which is a plausible diagnosis of the wrong thing about a document that matches [22] exactly. "
+              "This is also why xml_element.c reports a `<!DOCTYPE` standing in [43] "
               "content as a fatal error rather than reading one: §2.8 says the document type declaration MUST "
               "appear before the first element, so in content it is a document's mistake and not this build's "
               "missing capability");
