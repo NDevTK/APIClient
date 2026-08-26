@@ -1,161 +1,97 @@
-# Quality Harness
+# The live-Chrome harness
 
-End-to-end quality harness for the API Security Researcher extension.
-Drives a real Chrome with the unpacked extension loaded across a list of
-complex popular sites, pulls the extension's learned state out, and
-scores it.
+`testing/harness.js` drives ONE real Chrome with the unpacked extension loaded, and lets you
+read the extension's own state out of it. It is a set of COMMANDS you run against a browser you
+started and left running — not a batch scorer.
 
-No harness code lives inside `extension/` — the extension runs
-unchanged. All driving, extraction, and scoring sits here.
+No harness code lives inside `extension/` — the extension runs unchanged.
+
+## What this file used to say, and why that mattered
+
+Every section below replaced prose describing a program that was deleted long ago: a batch
+runner that walked `testing/sites.json`, wrote `testing/reports/<ISO>/<site>.json`, and scored
+the result offline through `classify.js` + `extractors.js`. The runner and its three suites went
+out when the harness became interactive; the analyzer, the extractor and this document did not,
+and `npm run classify` stayed in `package.json` pointing at all of it.
+
+That is worse than clutter, and it is the reason the whole pipeline is now gone rather than
+repaired. `classify.js` read `report.dump` — a field nothing in the tree wrote — and read the
+analysis record's `valueConstraints` / `protoFieldMaps` / `protoEnums` / `sourceMap` /
+`dangerousPatterns`, five names the engine has never emitted and the offscreen stopped
+fabricating as constant empties. Every one of those reads carried `|| []`, so the analyzer's
+verdict line — `reqs=… learned=… findings=…` — was composed out of absences and would have
+printed a clean bill for a page nothing had looked at. A document that describes a measurement
+apparatus that cannot measure is the same defect as the defaults inside it: it reads as
+authoritative and sends the next reader to run something that answers nothing.
 
 ## Setup
 
 ```
-npm install
+npm install          # puppeteer; first install fetches a bundled Chrome (~150 MB)
+node engine/build.mjs
 ```
 
-(Installs `puppeteer` as a devDependency. First install fetches a bundled
-Chrome, ~150 MB.)
+The Chrome profile lives at `testing/profile/` and is gitignored. It persists across runs —
+cookies, the extension's IndexedDB, everything. Delete the directory to start fresh.
 
-The extension needs its Babel bundle built once:
-
-```
-node build.js
-```
-
-## Run
+## Commands
 
 ```
-npm run harness                            # all sites
-npm run harness -- --only github_home      # one site
-npm run harness -- --only github_home,reddit_home --dwell 25
+node testing/harness.js <command> [args…]
 ```
 
-Output:
+| Command | What it does |
+|---|---|
+| `restart` | Kill any harness Chrome and start a fresh one. **Use this, not `start`** — `start` reuses a stale wasm and a poisoned IDB. |
+| `restart-keep` | Same, but keeps IndexedDB. |
+| `start` | Launch only if nothing is running. |
+| `goto <url>` | Navigate the active tab. A dead fixture server CRASHES here rather than quietly loading a Chrome error page. |
+| `page <expr>` | Evaluate in the page under analysis. |
+| `popup <expr>` | Evaluate in the extension popup. Dogfood the RENDERED popup DOM here, not offscreen internals. |
+| `pocrun [ms]` | Click a finding's PoC and poll the card for REAL EXPLOIT / NOT REPRO. |
+| `offscreen <expr>` | Evaluate in the offscreen document (`ast-worker.html`) — where the brain, `globalStore` and `state.docs` live. |
+| `sweval <expr>` | Evaluate in the MV3 service worker (`background.js`), which holds no state. |
+| `capture <out.js>` | Save the page's served HTML. |
+| `diag [secs] [reload]` | List CDP targets, then tee every extension console for N seconds. |
+| `multitab <url…>` | Open each url in its own tab and poll learned endpoints per host — the concurrent-scheduler measurement. |
+| `netdiff [--all] [--assets] [--unused]` | The moat's headline diagnostic. See below. |
 
-```
-testing/reports/<ISO>/
-  run.json              run metadata + per-site status
-  <site>.json           full state dump for that site
-  <site>.scripts/       script sources referenced by security findings
-                        (refetched so we can review the actual JS)
-```
+## `netdiff`
 
-The Chrome profile lives at `testing/profile/` and is gitignored.
-It persists across runs — cookies, IndexedDB for the extension, etc.
-Delete the directory to start fresh.
+Diffs what the page's live traffic did against what forced execution learned, read-only, over
+the brain's own state.
 
-## Analyze
+* default — LIVE-NOT-LEARNED: requests that fired and were not learned. A coverage gap.
+* `--unused` — LEARNED-NOT-LIVE: the API surface forced execution found and the page never
+  fired, with the parameter keys and example values it recovered. **This is the value**;
+  CLAUDE.md names it a diagnostic that the solver dominates the live page, never the thing to
+  optimize.
 
-```
-npm run classify                           # newest run
-npm run classify -- --dir testing/reports/2026-04-16T...
-npm run classify -- --site github_home
-```
+Every run prints a `runs` census first — how many documents ended `complete`, `crashed`,
+`nothing-to-run`, or have **not returned**. Read it before the counts under it: a missing
+endpoint is a gap only for a document whose run has returned, and an absent count and a zero
+count are different facts. The census is `_astRun`, which the offscreen writes once per
+document at the terminal return; the caveat used to name a `learnstate` command whose worker
+the offscreen's own CSP forbids from ever existing.
 
-Writes `analysis.json` into the run directory and prints a per-site
-summary to stdout.
+## Reading state directly
 
-## What gets measured
+`offscreen <expr>` reaches the brain's live objects: `globalStore.endpoints`,
+`globalStore.discoveryDocs`, `globalStore.securityFindings`, `state.docs`. Each document
+carries `_astRun` (the run outcome), `_astResults` (present only when an engine document
+arrived — its ABSENCE is the statement that none did), and `_resolverErrors` (absent means the
+engine recorded no page error, which is why nothing may default it to `[]`).
 
-### 1. API vs static classification
+## Rules that are not style
 
-The classifier **ignores Content-Type and URL extensions**. Per the
-user's requirement: an API can legitimately return an image. Each
-captured response is labelled on body content alone:
-
-* **magic bytes** for media/fonts/pdf/zip
-* **JSON parse** (and GraphQL shape detection)
-* **NDJSON** multi-line JSON
-* **SSE** `event:`/`data:` frames
-* **gRPC-Web frame** (`[0x00|0x80][be32 length]`)
-* **Protobuf** wire-format varint head
-* **HTML / JS / CSS** heuristics for static web assets
-
-Then we compare the content-based label to what the extension learned
-(i.e. whether the service ended up in a discovery doc). Two
-disagreements are surfaced per site:
-
-| Flag | Meaning |
-|------|---------|
-| `extSaysApiBodyStatic` | Extension tracked this as an API, body looks static. Possible noise. |
-| `bodySaysApiExtMiss`   | Body strongly looks API, extension didn't learn. Possible miss. |
-
-Both lists are in `analysis.json` — not pass/fail; triage leads.
-
-### 2. Method naming quality
-
-Per service: method count, name collisions, percentage of names
-containing a CRUD verb, and names that look like bare IDs/UUIDs. Low
-CRUD-verb percentage + high UUID count means names are mechanical
-(probably `v1_by_id_123e4567`) rather than semantic.
-
-### 3. Body-param learning
-
-For every logged request with a JSON request body, counts the leaf
-fields present vs. the fields learned into the service schema under
-that method ID. Large gap = the learner missed fields.
-
-### 4. Security findings — triage, not labels
-
-**The user must review the actual JavaScript to decide whether each
-finding is real.** The harness does not guess.
-
-For every finding in every run, the classifier produces a triage
-entry:
-
-```json
-{
-  "kind": "sink",
-  "sourceUrl": "https://example.com/app-12ab.js",
-  "pageUrl": "https://example.com/",
-  "type": "DOM XSS sink",
-  "sink": "innerHTML =",
-  "severity": "high",
-  "sourceType": "user-controlled",
-  "taintSource": "location.hash",
-  "sanitized": false,
-  "line": 4821,
-  "col": 33,
-  "codeWindow": "  4817    ...\n> 4821    el.innerHTML = location.hash;\n  4825    ...",
-  "extensionContext": "..."
-}
-```
-
-The `codeWindow` is ±4 lines of the actual script as fetched, so the
-reviewer can judge real-vs-false-positive directly from
-`analysis.json` without opening the file. The raw script is also
-saved under `<site>.scripts/` keyed in `index.json`.
-
-## Mechanics
-
-The harness resolves the extension ID from Puppeteer's service-worker
-target (no manifest `key` needed). It wakes the SW between sites,
-then calls module-level state (`state.tabs`, `globalStore`,
-`serializeTabData`) via `worker.evaluate()`. Those are exactly what
-`popup.js` already reads via `chrome.runtime.sendMessage` — we take
-the same data by a more direct route to avoid any message-gating
-surprises.
-
-Per-site flow:
-
-1. Open blank tab, navigate to site (`domcontentloaded`).
-2. Dwell N/2 seconds for AST + network capture.
-3. Scroll the page to trigger lazy loads.
-4. Dwell another N/2 seconds.
-5. Ask the SW which tab id currently maps to this URL.
-6. Dump `state.tabs[tabId]` + `globalStore` snapshot to JSON.
-7. Refetch each script referenced by a security finding, save it.
-8. Close tab, move on.
-
-## Extending
-
-* **Add sites**: edit `testing/sites.json`. Entries are
-  `{ "name": "unique_slug", "url": "..." }`. Use real complex popular
-  sites — toy vuln apps aren't useful here.
-* **New score**: add a function to `classify.js`, wire it into
-  `analyzeSite()`'s returned object. Everything offline runs against
-  saved dumps, so new scoring can re-run over old runs.
-* **New state field**: prefer editing `extractors.js` and reading
-  what already exists in the SW — do **not** add code to the
-  extension itself.
+* **One targeted minimal test at a time.** Never a bulk sweep against live sites.
+* **Clear storage before concluding any bug.**
+* **One run of a live site is not a measurement.** The bytes, the server's answers and the
+  order orphans are reached all move under you. A before/after belongs on frozen bytes — a
+  mirror, a fixture, a recorded payload replayed. Report a live number with its run count and
+  its spread or do not report it as a comparison.
+* **On a site that aborts, the endpoint count beside the crash is noise.** How much a run
+  learned before it died is a function of where the crash landed. The crash record is the
+  stable fact.
+* Bulk gates (test262, WPT, solvergate) belong to the main agent and are run once, serialized.
+  This harness is the targeted exercise, and it costs no compile.

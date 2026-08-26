@@ -8,8 +8,7 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "harness": "node testing/harness.js",
-    "classify": "node testing/classify.js"
+    "harness": "node testing/harness.js"
   },
   "repository": {
     "type": "git",

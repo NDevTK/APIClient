@@ -781,9 +781,11 @@ async function cmdDiag(args) {
       try {
         if (t.type() === "service_worker") { const w = await t.worker(); if (w) attach("SW", w); }
         else if (t.type() === "other" && t.url().startsWith("chrome-extension://") && t.url().endsWith(".js")) {
-          // The analysis Web Worker (ast-thread.js) is a dedicated-worker target —
-          // reach its console via t.worker(), NOT t.page(). importScripts/analysis
-          // errors surface HERE, which t.page() silently missed before.
+          // A dedicated-worker target's console is reached via t.worker(), NOT t.page(), and t.page()
+          // silently missed it. This branch names no particular worker and must not: it used to name
+          // `ast-thread.js`, a file not on disk that ast-worker.html's `default-src 'none'` (no
+          // worker-src) forbids that document from ever starting — so the comment described the one
+          // target this branch can never see, on the command whose whole job is to list what is there.
           const w = await t.worker().catch(() => null);
           if (w) attach("worker:" + t.url().split("/").pop(), w);
         }
@@ -861,56 +863,27 @@ async function cmdCapture(args) {
   });
 }
 
-// Dump the exact combined bundle the deep grind booted (and crashed on) from
-// the offscreen doc's feDeepDB, so the wasm OOB can be reproduced natively in
-// _wdeep.cjs with a real stack instead of guessed-at. Writes <out> (the code)
-// and <out>.pre.js (the page HTML) — drop-in replacements for _curbundle_all.js
-// / _realph.js so the live, crashing chunk set is what runs natively.
-async function cmdDumpBundle(args) {
-  const out = (args.join(" ").trim()) || "engine/qjs/_livebundle.js";
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const extId = lock?.extId;
-    const url = `chrome-extension://${extId}/ast-worker.html`;
-    let pg = null;
-    for (let i = 0; i < 40 && !pg; i++) {
-      const t = browser.targets().find(t => t.url().startsWith(url));
-      if (t) pg = await t.page().catch(() => null);
-      if (!pg) await sleep(150);
-    }
-    if (!pg) { log("(no offscreen target — extension running?)"); return; }
-    const rec = await pg.evaluate(() => new Promise((res) => {
-      let r;
-      try { r = indexedDB.open("feDeepDB"); } catch (e) { return res({ err: "open throw " + e.message }); }
-      r.onerror = () => res({ err: "open error" });
-      r.onsuccess = () => {
-        const db = r.result;
-        if (!db.objectStoreNames.contains("code")) return res({ err: "no code store; have=" + [...db.objectStoreNames].join(",") });
-        const g = db.transaction("code", "readonly").objectStore("code").getAll();
-        g.onerror = () => res({ err: "getAll error" });
-        g.onsuccess = () => {
-          const recs = g.result || [];
-          if (!recs.length) return res({ err: "no code records (grind didn't persist / cleared)" });
-          const c = recs[recs.length - 1];
-          res({ key: c.key, sourceUrl: c.sourceUrl || "", len: (c.code || "").length, code: c.code || "", pageHtml: c.pageHtml || "", scriptUrls: c.scriptUrls || null });
-        };
-      };
-    }));
-    if (rec.err) { log("feDeepDB: " + rec.err); return; }
-    const abs = path.isAbsolute(out) ? out : path.join(ROOT, out);
-    fs.writeFileSync(abs, rec.code, "utf8");
-    if (rec.pageHtml) fs.writeFileSync(abs.replace(/\.js$/, ".pre.js"), "globalThis.__pageUrl=" + JSON.stringify(rec.sourceUrl.split("#")[0]) + ";globalThis.__pageHtml=" + JSON.stringify(rec.pageHtml) + ";\n", "utf8");
-    log(`dumped ${rec.len} bytes (sourceUrl=${rec.sourceUrl}) -> ${abs}` + (rec.pageHtml ? " + .pre.js" : ""));
-  });
-}
-
 /* `dumpscripts` DELETED with lib/analyze.js. It dumped `_scriptBuffers[].scripts` — the per-document
    list of script bodies the brain used to concatenate. The engine has sourced every script itself for a
    long time (Lexbor parses CONTENT_HTML; qjs_run_doc_scripts runs inline + external in document order),
    so the CONTENT_HTML handler sets that array to `[]` and nothing pushes to it: the command skipped
    every buffer as empty and answered "no live buffer" for every page there has ever been. A diagnostic
-   that reads a collection its producer stopped filling reports an absence as a finding. The engine-side
-   equivalent that still has a producer is `dumpbundle`. */
+   that reads a collection its producer stopped filling reports an absence as a finding.
+   AND THE LINE THAT CLOSED IT — "the engine-side equivalent that still has a producer is `dumpbundle`" —
+   NAMED A COMMAND WITH NO PRODUCER EITHER, which is the same defect standing one command over from the
+   note written to record it. `dumpbundle` and `srcloc` both opened IndexedDB `feDeepDB`; this extension
+   opens `uasr_store` (lib/persistence.js) and `apiclient-frontier` (bridge.js) and no third database, so
+   `indexedDB.open` CREATED an empty one, found no `code` store, and reported that as its answer — a
+   diagnostic whose only output is a description of the database it just made.
+   SIX MORE WENT WITH THEM, FOR ONE ROOT: `worker`, `profile`, `reachgap`, `learnstate` and `triage` all
+   searched `offscreenPage.workers()` for `ast-thread.js`, and ast-worker.html's own policy forbids the
+   search from ever succeeding — `default-src 'none'` with no `worker-src`, and the document says in
+   words that nothing there calls `new Worker`. That is worse than a stale pointer for the three that
+   returned a VERDICT: `learnstate` answered "is a finding MISSING or still being LOOKED FOR", `triage`
+   answered HANG-vs-SPIN-vs-DONE, and `reachgap` answered "where did the fetch paths die" — each
+   composed out of `self._whyRecords || []` and `self._learningState`, names no realm in this extension
+   writes, so each `|| []` was a zero standing where the instrument's own absence belonged. The one that
+   was READ downstream is rebuilt from the producer that does exist: see `netdiff`'s run census. */
 
 // Evaluate an expression in the OFFSCREEN document (the learning brain lives
 // there now, not the SW) — for DIAGNOSING a stalled learning pipeline (script
@@ -937,392 +910,6 @@ async function cmdOffscreen(args) {
     if (!pg) { log("(no offscreen target — extension running?)"); return; }
     const out = await pg.evaluate(new Function("return (async () => { " + body + " })()"));
     log(JSON.stringify(out, null, 2));
-  });
-}
-
-// Eval inside the analysis Web Worker (ast-thread.js) — a dedicated-worker CDP
-// target reached via t.worker(), NOT t.page(). The place to inspect a stuck grind
-// (self._poolLiveness is in the offscreen; the worker holds the live combined
-// source + driven set + the engine instance). If the worker is blocked in a sync
-// C call with no JSPI yield, this eval will time out — itself a useful signal
-// (sync-block vs resumed-but-non-terminating).
-async function cmdWorker(args) {
-  const expr = args.join(" ");
-  if (!expr) throw new Error("usage: worker <js-expression>");
-  // Wrap in `return (...)` UNLESS the expr STARTS with a statement keyword — so
-  // expressions that merely CONTAIN `{`/`;`/`return` inside nested functions (an
-  // IIFE, `.map(fn).join()`, `JSON.stringify([...].map(...))`) still return their
-  // value. The old `contains {/;/return` test ran those with no return -> undefined.
-  const body = /^\s*(return|var|let|const|if|for|while|function|throw|do|switch)\b/.test(expr) ? expr : "return (" + expr + ");";
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const extId = lock?.extId;
-    const ourl = `chrome-extension://${extId}/ast-worker.html`;
-    // The analysis worker is a DEDICATED worker of the offscreen PAGE, so it is
-    // reached via offscreenPage.workers(), not browser.targets() (a dedicated
-    // worker isn't a top-level target). There may be several (the pool) — pick
-    // one running ast-thread.js.
-    let w = null, diag = "";
-    for (let i = 0; i < 40 && !w; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      const pg = t ? await t.page().catch(() => null) : null;
-      if (pg) {
-        const workers = pg.workers();
-        diag = "offscreen workers=[" + workers.map((x) => x.url().split("/").pop()).join(",") + "]";
-        w = workers.find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
-      }
-      if (!w) await sleep(150);
-    }
-    if (!w) { log("(no analysis worker; " + (diag || "no offscreen page") + ")"); return; }
-    const out = await w.evaluate(new Function("return (async () => { " + body + " })()"));
-    log(JSON.stringify(out, null, 2));
-  });
-}
-
-// CPU-PROFILE the analysis worker while it processes a url — the ONLY way to see WHERE a
-// single-threaded HANG spins, since the worker can't answer evaluate() but CDP Profiler
-// samples its stack OUT-OF-PROCESS. usage: profile <url> [seconds]. Dumps top self-time fns.
-async function cmdProfile(args) {
-  const url = (args[0] || "").trim();
-  const secs = parseInt(args[1] || "15", 10);
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const extId = lock?.extId;
-    const ourl = `chrome-extension://${extId}/ast-worker.html`;
-    let w = null;
-    for (let i = 0; i < 40 && !w; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      const pg = t ? await t.page().catch(() => null) : null;
-      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
-      if (!w) await sleep(150);
-    }
-    if (!w) { log("(no analysis worker)"); return; }
-    const client = w.client || w._client;   // the worker's CDPSession (works while the worker is wedged)
-    if (!client) { log("(no CDP client on worker)"); return; }
-    // Capture worker console (the print handler -> console.error) OUT-OF-PROCESS — readable mid-spin.
-    const consoleLines = [];
-    await client.send("Runtime.enable").catch(() => {});
-    const phaseCounts = {};
-    client.on("Runtime.consoleAPICalled", (e) => {
-      try { const s = (e.args || []).map((a) => (a.value != null ? a.value : (a.description || ""))).join(" ");
-        if (/@WHY|spin/.test(s)) { consoleLines.push(s); const m = /"phase":"([^"]+)"/.exec(s); if (m) phaseCounts[m[1]] = (phaseCounts[m[1]] || 0) + 1; }
-        const pm = /^\s*(@\w+|@WHY \{"phase":"[^"]+")/.exec(s); if (pm) { const k = pm[1].slice(0, 40); phaseCounts["LINE:" + k] = (phaseCounts["LINE:" + k] || 0) + 1; } } catch (_) {}
-    });
-    await client.send("Profiler.enable");
-    await client.send("Profiler.setSamplingInterval", { interval: 60 });
-    await client.send("Profiler.start");
-    if (url) { try { const page = await getActivePage(browser); await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }); } catch (_) {} }
-    await sleep(secs * 1000);
-    if (consoleLines.length) { log("=== @WHY phase COUNTS (mid-spin) ==="); log(JSON.stringify(phaseCounts, null, 2)); log("=== sample lines ==="); log(JSON.stringify([...new Set(consoleLines)].slice(0, 8), null, 2)); }
-    const { profile } = await client.send("Profiler.stop");
-    const nodes = (profile && profile.nodes) || [];
-    const self = {};
-    for (const n of nodes) {
-      const f = n.callFrame || {};
-      const key = (f.functionName || "(anon)") + " @ " + ((f.url || "").split("/").pop()) + ":" + (f.lineNumber + 1);
-      self[key] = (self[key] || 0) + (n.hitCount || 0);
-    }
-    const total = Object.values(self).reduce((a, b) => a + b, 0) || 1;
-    const top = Object.entries(self).sort((a, b) => b[1] - a[1]).slice(0, 18)
-      .map(([k, v]) => ({ fn: k, hits: v, pct: +(100 * v / total).toFixed(1) }));
-    log("=== profile: top self-time (the hot spin) over " + secs + "s, " + total + " samples ===");
-    log(JSON.stringify(top, null, 2));
-    // Call-stack TO the hottest node (who is looping calling it).
-    const parentOf = {};
-    for (const n of nodes) for (const c of (n.children || [])) parentOf[c] = n.id;
-    const byId = {}; for (const n of nodes) byId[n.id] = n;
-    let hot = nodes.reduce((a, b) => ((b.hitCount || 0) > (a.hitCount || 0) ? b : a), nodes[0] || {});
-    const stack = []; let cur = hot;
-    for (let i = 0; i < 30 && cur; i++) {
-      const f = cur.callFrame || {};
-      stack.push((f.functionName || "(anon)") + " @ " + ((f.url || "").split("/").pop()) + ":" + (f.lineNumber + 1));
-      cur = byId[parentOf[cur.id]];
-    }
-    log("=== call stack to the hot node (innermost first) ===");
-    log(JSON.stringify(stack, null, 2));
-  });
-}
-
-// Resolve an engine-reported combined-bundle location (file:line[:col]) back to
-// a readable source snippet. The forced-exec engine line-numbers stack frames
-// (@DSTART, @WHY spin loopFile/loopLine) against the COMBINED bundle (slices
-// joined with per-slice start-line offsets), but a chunk is one minified line
-// and combined line numbers shift between dumps — so a raw
-// `devsite...:4944:158` is otherwise unreadable. This reads the SAME
-// feDeepDB.code store the grind booted from and prints the line (windowed around
-// the column) so a fixpoint/keying bug can be read in the real source. The
-// missing piece that made the Google spin fix blind.
-async function cmdSrcLoc(args) {
-  const spec = (args[0] || "").trim();          // file:line[:col]
-  const ctxCols = parseInt(args[1] || "200", 10); // chars of context each side of col
-  // Non-greedy filename: a greedy `.*` ate the line number (file:4944:158 →
-  // line=158), so anchor the trailing :line[:col] and take the SHORTEST file.
-  const m = spec.match(/^(.*?):(\d+)(?::(\d+))?$/);
-  if (!m) throw new Error("usage: srcloc <file:line[:col]> [ctxCols]");
-  const wantFile = m[1], wantLine = parseInt(m[2], 10), wantCol = m[3] ? parseInt(m[3], 10) : 0;
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
-    let pg = null;
-    for (let i = 0; i < 40 && !pg; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      if (t) pg = await t.page().catch(() => null);
-      if (!pg) await sleep(150);
-    }
-    if (!pg) { log("(no offscreen)"); return; }
-    const rec = await pg.evaluate(async (wantFileArg) => {
-      let r; try { r = indexedDB.open("feDeepDB"); } catch (e) { return { err: "open throw " + e.message }; }
-      const db = await new Promise((ok) => { r.onsuccess = () => ok(r.result); r.onerror = () => ok(null); });
-      if (!db) return { err: "no feDeepDB" };
-      if (!db.objectStoreNames.contains("code")) return { err: "no code store" };
-      const g = db.transaction("code", "readonly").objectStore("code").getAll();
-      const recs = await new Promise((ok) => { g.onsuccess = () => ok(g.result || []); g.onerror = () => ok([]); });
-      if (!recs.length) return { err: "code store empty" };
-      // Prefer the record whose scriptOffsets reference the wanted chunk; else largest.
-      let best = null;
-      for (const rc of recs) {
-        const offs = rc.scriptOffsets || [];
-        const hasChunk = offs.some((o) => (o.url || "").indexOf(wantFileArg) >= 0);
-        const sz = (rc.code || "").length;
-        const score = (hasChunk ? 1e12 : 0) + sz;
-        if (!best || score > best.score) best = { score, rc };
-      }
-      const rc = best.rc;
-      return { key: rc.key || "", code: rc.code || "", scriptOffsets: rc.scriptOffsets || null };
-    }, wantFile);
-    if (rec.err) { log("srcloc: " + rec.err); return; }
-    const lines = rec.code.split("\n");
-    if (wantLine < 1 || wantLine > lines.length) {
-      log(`srcloc: line ${wantLine} out of range (combined has ${lines.length} lines)`);
-      return;
-    }
-    const line = lines[wantLine - 1];
-    // Which chunk owns this combined line (scriptOffsets[].lineStart is 1-based
-    // combined space). Pick the chunk with the GREATEST lineStart <= wantLine —
-    // NOT array order (scriptOffsets isn't guaranteed sorted; a from-end break
-    // mis-attributed devsite@3247 as a googleapis chunk@84).
-    let owner = null;
-    const offs = rec.scriptOffsets || [];
-    for (let i = 0; i < offs.length; i++) {
-      const ls = offs[i].lineStart | 0;
-      if (ls <= wantLine && (!owner || ls > (owner.lineStart | 0))) owner = offs[i];
-    }
-    log(`srcloc ${spec}  (combined ${lines.length} lines, key=${rec.key})`);
-    log(`chunk: ${owner ? (owner.url || "?") + " @lineStart " + owner.lineStart : "(no scriptOffsets)"}`);
-    log(`lineLen=${line.length} col=${wantCol}`);
-    if (wantCol > 0 && line.length > ctxCols * 2) {
-      const a = Math.max(0, wantCol - ctxCols), b = Math.min(line.length, wantCol + ctxCols);
-      log(`…[${a}..${b}]…`);
-      log(line.slice(a, b));
-      log(" ".repeat(Math.min(ctxCols, wantCol - a)) + "^ col " + wantCol);
-    } else {
-      log(line.slice(0, Math.min(line.length, ctxCols * 4)));
-    }
-  });
-}
-
-// reachgap — the moat's central diagnostic in ONE view: grind summary + learned
-// endpoints + the @WHY reach failures (host_reach_prune / spin_nonterminating /
-// recur_collapse) aggregated by source site. Answers the question that took five
-// manual indirections before: "forced-exec ran but learned few endpoints — WHERE
-// did the fetch paths die?" Usage: `goto <url>` then `reachgap`.
-async function cmdReachGap(args) {
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
-    let pg = null, w = null;
-    for (let i = 0; i < 40 && !w; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      pg = t ? await t.page().catch(() => null) : null;
-      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
-      if (!w) await sleep(150);
-    }
-    if (!w) { log("(no analysis worker — run `harness restart` + `goto <url>` first)"); return; }
-    const wrep = await w.evaluate(() => {
-      const recs = self._whyRecords || [];
-      const byPhase = {};
-      for (const r of recs) (byPhase[r.phase] = byPhase[r.phase] || []).push(r);
-      const loc = (r) => ((r.file || "?").split("/").pop() || "?") + ":" + r.line + ":" + r.col;
-      const agg = (phase, keyFn) => {
-        const m = new Map();
-        for (const r of (byPhase[phase] || [])) {
-          const k = keyFn(r); const e = m.get(k) || { k, n: 0, s: r }; e.n++; m.set(k, e);
-        }
-        return [...m.values()].sort((a, b) => b.n - a.n);
-      };
-      return {
-        total: recs.length,
-        phases: Object.keys(byPhase).map((k) => k + "=" + byPhase[k].length),
-        prune: agg("host_reach_prune", (r) => loc(r) + "  fn=" + (r.fn || "?")).slice(0, 25).map((e) => ({ at: e.k, n: e.n })),
-        spin: agg("spin_nonterminating", (r) => loc(r) + "  backPc=" + r.ownLoopBackPc).slice(0, 25).map((e) => ({ at: e.k, n: e.n, seenN: e.s.seenN })),
-        recur: agg("recur_collapse", (r) => loc(r)).slice(0, 15).map((e) => ({ at: e.k, n: e.n })),
-        recvThrow: agg("recv_throw", (r) => "L" + r.line + ": " + String(r.msg || "").slice(0, 60)).slice(0, 10).map((e) => ({ at: e.k, n: e.n })),
-        orphanDrive: (function () {
-          const d = byPhase["orphan_drive"] || [];
-          let recv = 0, host = 0, asy = 0, inst = 0;
-          for (const r of d) { if (r.recv) recv++; if (r.host) host++; if (r.async) asy++; if (r.inst) inst++; }
-          return d.length ? { n: d.length, recv1: recv, recv0: d.length - recv, host: host, async: asy, inst: inst } : null;
-        })(),
-        drive: self._lastDeepStats ? (function () { const s = self._lastDeepStats; return { recvThr: s.recvThr, dnfThrew: s.dnfThrew, dnfRet: s.dnfRet, gsDrv: s.gsDrv, gsRecv: s.gsRecv, gsDrn: s.gsDrn, recvExc: String(s.recvExcMsg || "").slice(0, 70) }; })() : null,
-        learn: (typeof self._learningState === "function") ? self._learningState() : null,
-      };
-    }).catch((e) => ({ error: String(e && e.message || e) }));
-    let eps = null;
-    if (pg) {
-      eps = await pg.evaluate(() => {
-        try {
-          return {
-            n: globalStore.endpoints.size,
-            list: [...globalStore.endpoints.values()].slice(0, 40).map((e) => (e.method || "?") + " " + (e.url || "").slice(0, 70)),
-            services: [...globalStore.discoveryDocs.keys()],
-          };
-        } catch (e) { return { error: String(e && e.message || e) }; }
-      }).catch((e) => ({ error: String(e && e.message || e) }));
-    }
-    const L = (...a) => log(a.join(""));
-    L("── REACH GAP ───────────────────────────");
-    if (wrep.error) { L("worker eval error: ", wrep.error); return; }
-    if (wrep.learn) L("grind: ", JSON.stringify(wrep.learn));
-    L("endpoints learned: ", eps ? (eps.n != null ? eps.n : JSON.stringify(eps)) : "?", eps && eps.services ? ("  services=" + JSON.stringify(eps.services)) : "");
-    if (eps && eps.list) for (const e of eps.list) L("    ", e);
-    L("@WHY phases: ", (wrep.phases || []).join("  "));
-    if (wrep.drive) L("drive-stats: ", JSON.stringify(wrep.drive));
-    if (wrep.orphanDrive) L("orphan-drive (receiver coverage): ", JSON.stringify(wrep.orphanDrive));
-    const sec = (title, rows, fmt) => {
-      if (!rows || !rows.length) return;
-      L("");
-      L(title, " (", rows.length, " site(s))");
-      for (const r of rows) L("    ", fmt(r));
-    };
-    sec("HOST_REACH_PRUNE — fetch paths dropped as 'won't reach host'", wrep.prune, (r) => "×" + r.n + "  " + r.at);
-    sec("SPIN_NONTERMINATING — drive stalled in a loop", wrep.spin, (r) => "×" + r.n + "  " + r.at + "  seenN=" + r.seenN);
-    sec("RECUR_COLLAPSE", wrep.recur, (r) => "×" + r.n + "  " + r.at);
-    sec("RECV_THROW — receiver-drive threw (orphan line : message)", wrep.recvThrow, (r) => "×" + r.n + "  " + r.at);
-  });
-}
-
-// The honest "is a finding MISSING or still being LOOKED FOR" verdict — the
-// signal a network-vs-AST diff MUST gate on. Polls the worker's _learningState
-// until it reaches "complete" (every orphan driven → absence is a real gap) or
-// "stalled" (priority frontier failed to advance → a SCHEDULING defect, not a
-// coverage gap), or times out still "analyzing" (slow, not done — absence is
-// NOT a gap yet). Without this, calling something a gap mid-analysis is
-// unfalsifiable. `--wait` polls up to --timeout for a terminal verdict.
-async function cmdLearnState(args) {
-  const flags = args.filter((a) => a.startsWith("--"));
-  const wait = flags.includes("--wait");
-  const tmf = flags.find((f) => f.startsWith("--timeout="));
-  const timeoutMs = tmf ? parseInt(tmf.slice(10), 10) : 120000;
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
-    let w = null;
-    for (let i = 0; i < 60 && !w; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      const pg = t ? await t.page().catch(() => null) : null;
-      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
-      if (!w) await sleep(150);
-    }
-    if (!w) { log("(no analysis worker — run `harness restart` first)"); return; }
-    const deadline = Date.now() + timeoutMs;
-    let last = null;
-    do {
-      last = await w.evaluate(() => (typeof self._learningState === "function" ? self._learningState() : { state: "no-verdict-fn" }))
-        .catch((e) => ({ state: "eval-error", error: String(e && e.message || e) }));
-      if (!wait || last.state === "complete" || last.state === "stalled" || last.state === "no-verdict-fn") break;
-      await sleep(2000);
-    } while (Date.now() < deadline);
-    // Reaching the deadline while still "analyzing" is itself the answer: not done.
-    log(JSON.stringify(last, null, 2));
-  });
-}
-
-// TRIAGE — distinguishes the failure modes `learnstate` CANNOT: a non-terminating
-// HANG vs a RECYCLE (uncatchable stack-overflow re-spawn) vs a SPIN (sync loop) vs
-// a LARGE TASK (progressing, fix = prioritisation not a cap) vs DONE. learnstate
-// shows only {state,driven} and HIDES that e.g. 100+ catchable stack overflows
-// fired-and-recovered (measured on sentry_inline: complete/1302 yet stack_overflow
-// _recursion×N). This samples _learningState()+_whyRecords TWICE (--gap ms apart)
-// so the driven/overflow DELTA classifies the mode; a worker eval that TIMES OUT is
-// itself the HANG signal (worker sync-blocked in a C call, no JSPI yield).
-//   usage: triage [--gap=4000]
-async function cmdTriage(args) {
-  const gapf = args.find((a) => a.startsWith("--gap="));
-  const gapMs = gapf ? parseInt(gapf.slice(6), 10) : 4000;
-  await withBrowser(async (browser) => {
-    const lock = await readLock();
-    const ourl = `chrome-extension://${lock?.extId}/ast-worker.html`;
-    let w = null;
-    for (let i = 0; i < 60 && !w; i++) {
-      const t = browser.targets().find((t) => t.url().startsWith(ourl));
-      const pg = t ? await t.page().catch(() => null) : null;
-      if (pg) w = pg.workers().find((x) => x.url().indexOf("ast-thread.js") >= 0) || null;
-      if (!w) await sleep(150);
-    }
-    if (!w) { log("(no analysis worker — run `harness restart` first)"); return; }
-    const probe = async () => {
-      const t0 = Date.now();
-      try {
-        const r = await w.evaluate(() => {
-          const st = (typeof self._learningState === "function") ? self._learningState() : { state: "no-fn" };
-          const recs = self._whyRecords || [];
-          const by = {}; for (const x of recs) { const p = (x && x.phase) || "?"; by[p] = (by[p] || 0) + 1; }
-          // Surface the THROW err strings + recycle reasons — the distinguishing
-          // root signal for a wasm_trap recycle loop that the bare phase COUNT
-          // hides: "Cannot enlarge memory"/"Out of memory"=scale (boot bundle too
-          // big), "out of bounds"/"unreachable"=a specific orphan bug, "Aborted()"
-          // =an assert. Without this a large-site wedge shows 59× deep_callmain_throw
-          // with no CAUSE, so it can't be root-caused (CLAUDE.md: READ throw.err).
-          const throws = recs.filter((x) => x && x.phase === "deep_callmain_throw").slice(-3).map((x) => ({ err: x.err, step: x.step, culprit: x.culprit, loc: x.culpritLoc, stack: x.stack }));
-          const recycles = {}; for (const x of recs) { if (x && x.phase === "deep_recycle") { const rr = x.reason || "?"; recycles[rr] = (recycles[rr] || 0) + 1; } }
-          // async_resume_bad_sp: the defensive cur_sp bound-check (names the victim async).
-          // async_reached_done: a generator/async that hit the NORMAL done exit and was
-          // re-routed to done_generator (the module-top-level-as-orphan fix).
-          const badsp = recs.filter((x) => x && x.phase === "async_resume_bad_sp").slice(-6);
-          const reacheddone = recs.filter((x) => x && x.phase === "async_reached_done").slice(-4);
-          return { st, by, nWhy: recs.length, throws, recycles, badsp, reacheddone };
-        });
-        return { ms: Date.now() - t0, ...r };
-      } catch (e) {
-        // A hung worker (sync-blocked in a C recursion/loop with no JSPI yield)
-        // cannot service the eval — the timeout IS the hang signal.
-        return { ms: Date.now() - t0, evalError: String(e && e.message || e) };
-      }
-    };
-    const sig = (by) => ({
-      overflow: ((by || {}).stack_overflow_recursion || 0) + ((by || {}).stack_overflow_nonrecursive || 0),
-      spin: (by || {}).spin_nonterminating || 0,
-      caught: (by || {}).caught_throw || 0,
-    });
-    const a = await probe();
-    if (a.evalError) { log(JSON.stringify({ verdict: "HANG — worker sync-blocked (eval timed out: " + a.evalError + ")", note: "a C-level recursion/loop with no JSPI yield; srcloc the last @DSTART / @WHY spin" }, null, 2)); return; }
-    await sleep(gapMs);
-    const b = await probe();
-    if (b.evalError) { log(JSON.stringify({ verdict: "HANG — worker became sync-blocked between samples", firstSample: a.st }, null, 2)); return; }
-    const dn = (x) => (x && typeof x.st.driven === "number") ? x.st.driven : null;
-    const dDriven = (dn(a) !== null && dn(b) !== null) ? dn(b) - dn(a) : null;
-    const sa = sig(a.by), sb = sig(b.by);
-    const dOverflow = sb.overflow - sa.overflow, dWhy = b.nWhy - a.nWhy;
-    let verdict;
-    if (b.st.state === "complete" || b.st.state === "stalled") {
-      verdict = (b.st.state === "complete" ? "DONE (terminated)" : "STALLED (worker self-reported stalled)") +
-        (sb.overflow ? ` — RECOVERED from ${sb.overflow} catchable stack-overflow(s); the gitlab pathology is the UNCATCHABLE variant of these` : "");
-    } else if (dDriven !== null && dDriven > 0) {
-      verdict = `LARGE TASK — driven +${dDriven} in ${gapMs}ms (progressing). Fix is PRIORITISATION (run productive paths first), NEVER a cap.`;
-    } else if (dOverflow > 0) {
-      verdict = `RECYCLE — driven flat (+${dDriven}) while stack-overflows climb (+${dOverflow}). The uncatchable-overflow re-spawn; root-cause the trap (reserve throw headroom).`;
-    } else if (sb.spin > 0 && dDriven !== null && dDriven <= 0) {
-      verdict = `SPIN — driven flat, ${sb.spin} spin_nonterminating @WHY. A non-terminating sync loop the fixpoint missed; srcloc the loop.`;
-    } else if (dWhy > 0 && (dDriven === null || dDriven <= 0)) {
-      verdict = `BUSY-NO-DRIVE — emitting @WHY (+${dWhy}) but driven flat; inspect whyByPhase for the active phase.`;
-    } else {
-      verdict = `IDLE/STUCK — driven flat (+${dDriven}), no overflow/spin/emit delta. Either finished-but-not-flagged or a silent stall.`;
-    }
-    log(JSON.stringify({
-      verdict, state: b.st.state, driven: dn(b), dDriven, rem: b.st.rem, total: b.st.total,
-      gapMs, signals: sb, deltas: { dOverflow, dWhy }, whyByPhase: b.by,
-      recycles: b.recycles, throws: b.throws, badsp: b.badsp, reacheddone: b.reacheddone,
-    }, null, 2));
   });
 }
 
@@ -1405,9 +992,14 @@ async function cmdMultiTab(args) {
 // and quantified, per-vendor, instead of eyeballed. Read-only over the brain's
 // own state — does NOT mutate, does NOT craft state messages.
 //   usage: netdiff [--all]   (--all = include cross-origin 3rd-party; default first-party-ish)
-// CAVEAT: a request absent from the learned set is only a definitive gap once
-// learnstate is "complete" (rem==0). Mid-analysis it may still be learned — the
-// command prints the current learnstate alongside so the reader judges.
+/* CAVEAT: a request absent from the learned set is only a definitive gap for a document whose run has
+   RETURNED — until then it may still be learned, so the absence is the analysis being unfinished rather
+   than a coverage hole. This caveat used to name `learnstate` and claim "the command prints the current
+   learnstate alongside so the reader judges", and BOTH halves were false: the command printed no such
+   thing, and `learnstate` read `self._learningState` off a worker ast-worker.html's own CSP forbids. So
+   the one qualifier on the moat's headline diagnostic sent its reader to a verdict nobody can compute,
+   at exactly the seam where "analysed and clean" and "never ran" are told apart. The census below is
+   that qualifier answered from the producer that does write it — see `runs`. */
 async function cmdNetDiff(args) {
   const all = args.includes("--all");
   const showAssets = args.includes("--assets");   // include static-asset GETs in the gap list (default: filter them)
@@ -1504,10 +1096,43 @@ async function cmdNetDiff(args) {
       // orphan-residue drive surfaces opacity the first pass didn't (firebase's auth-instance config goes
       // opaque only once the init chain is force-driven) and lands here — and the replay cache that used to
       // be read alongside it is deleted, so there is no second, staler copy to reconcile against.
+      /* WHICH RUNS THESE NUMBERS ARE MADE OF. Every count below — learned, live, gaps, unused — is a
+         count over documents, and a document that has not returned a run contributes to the learned set
+         whatever it had reached when this command looked. Without saying how many those are, a gap list
+         and a finished analysis are the same JSON, which is the exact pair §Testing forbids averaging:
+         "an absent count and a zero count are DIFFERENT facts".
+         `_astRun` IS THE PRODUCER'S OWN WORD FOR IT, written once per document at the terminal return
+         (offscreen-brain.js) out of the analysis record's `_run`, and DCHECKed there to be one of
+         complete / crashed / nothing-to-run. Its ABSENCE is the fourth state and the one this command
+         most needs, so it is counted as a state rather than defaulted into any of the three. An outcome
+         outside that vocabulary is the producer having changed under this reader, and it says so here —
+         this evaluate runs in ast-worker.html, which loads check.js first, so the assertion is the same
+         mechanism the zone asserts with everywhere else. */
+      const runs = { complete: 0, crashed: 0, "nothing-to-run": 0, "not-returned": 0 };
       if (typeof state !== "undefined" && state.docs) {
         for (const t of state.docs.values()) {
-          const re = t && t._resolverErrors;
-          if (Array.isArray(re)) for (const r of re) {
+          const outcome = t ? t._astRun : undefined;
+          if (outcome === undefined) runs["not-returned"]++;
+          else {
+            DCHECK(Object.prototype.hasOwnProperty.call(runs, outcome),
+                   "a document carries the run outcome `" + outcome + "`, which is not one of the three " +
+                   "offscreen-brain.js writes (complete / crashed / nothing-to-run) — netdiff's whole " +
+                   "caveat is a census of that vocabulary, so a word it cannot name would be counted as " +
+                   "a finished run and every gap below reported as definitive");
+            runs[outcome]++;
+          }
+          /* AN ABSENT `_resolverErrors` IS "THE ENGINE RECORDED NO PAGE ERROR", not a document to skip.
+             The `Array.isArray(re)` that stood alone here answered the same for that absence and for a
+             present value of the wrong shape, and lib/serialize.js — the other reader of this field —
+             already splits the two and DCHECKs the second. Split them the same way, so the reached-but-
+             opaque count means the engine reported none rather than this reader having looked away. */
+          const re = t ? t._resolverErrors : undefined;
+          if (re === undefined) continue;
+          DCHECK(Array.isArray(re),
+                 "a document's _resolverErrors is present but is not an array — offscreen-brain.js pushes " +
+                 "{context,message} rows onto it and nothing else creates the field, so a non-array is " +
+                 "that writer broken and the reached-but-opaque count below is made of nothing");
+          for (const r of re) {
             const msg = String((r && r.message) || JSON.stringify(r));
             if (msg.indexOf("could not load module") >= 0) {
               const mm = msg.match(/could not load module filename '([^']+)'/);
@@ -1621,25 +1246,39 @@ async function cmdNetDiff(args) {
         const _normKey = (s) => s.replace(/%7B[^%]*?%7D/gi, "%7B%7D").replace(/\{[^}]*\}/g, "{}");
         const _unusedDistinct = new Set(unusedList.map((u) => _normKey(u.split("  [")[0]))).size;
         return { mode: "unused = learned-but-not-live (the unused API surface forced exec found — THE VALUE)",
+                 runs: runs,
                  learnedCount: learnedMap.size, liveDistinct: seen.size, unusedCount: unusedList.length,
                  unusedDistinct: _unusedDistinct,   // placeholder-normalized (arg0/id collapsed) — the HONEST distinct-endpoint count
                  reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
                  moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
                  unused: unusedList.slice(0, 100) };
       }
-      return { learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
+      return { runs: runs,
+               learnedCount: learned.size, liveDistinct: seen.size, gapCount: gaps.length,
                reachedButOpaque: _reached.length, reachedSamples: _reached.slice(0, 10),
                moduleLinkFailures: _moduleLink.length, moduleLinkSamples: _moduleLink.slice(0, 10),
                assetFiltered: assetFiltered + (showAssets ? " (shown; --assets)" : " (static-asset GETs excluded; --assets to show)"),
                gaps: gaps.slice(0, 60).map((g) => g.k + (g.status ? " [" + g.status + "]" : "") + (g.site ? "  ← " + g.site : "  ← (no stack)")) };
     }, { all, showAssets, unused }).catch((e) => ({ error: String(e && e.message || e) }));
     log(JSON.stringify(out, null, 2));
-    log("NOTE: a gap is definitive only when learnstate is `complete` (rem==0); mid-analysis, re-check after.");
+    /* THE NOTE IS DERIVED FROM THE CENSUS PRINTED DIRECTLY ABOVE IT, so a reader can check it against
+       the same output instead of against a command that answers nothing. `runs` is built by the block
+       in the evaluate and always carries all four keys, so it is read as written and never defaulted;
+       a run that threw returns `{error}` instead and carries no census, which is a different fact and
+       is said as one rather than being reported as zero documents. */
+    if (out.error) { log("NOTE: this census did not run — the error above is the whole result, and no statement about gaps follows from it."); return; }
+    log(out.runs["not-returned"]
+      ? "NOTE: " + out.runs["not-returned"] + " document(s) have not returned a run, so an endpoint missing " +
+        "from the learned set is NOT yet a gap for those — re-check once every document reports " +
+        "complete / crashed / nothing-to-run."
+      : "NOTE: every document has returned. A missing endpoint is a real gap for the " + out.runs.complete +
+        " complete run(s); for the " + out.runs.crashed + " crashed one(s) it is unknowable, because a crash " +
+        "invalidates the RUN and not the observations it had already made.");
   });
 }
 
 
-const CMDS = { start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, worker: cmdWorker, profile: cmdProfile, capture: cmdCapture, dumpbundle: cmdDumpBundle, srcloc: cmdSrcLoc, learnstate: cmdLearnState, reachgap: cmdReachGap, triage: cmdTriage, multitab: cmdMultiTab, netdiff: cmdNetDiff };
+const CMDS = { start: cmdStart, restart: cmdRestart, "restart-keep": (a) => cmdRestart(a, true), page: cmdPage, popup: cmdPopup, pocrun: cmdPocRun, goto: cmdGoto, diag: cmdDiag, sweval: cmdSweval, offscreen: cmdOffscreen, capture: cmdCapture, multitab: cmdMultiTab, netdiff: cmdNetDiff };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);

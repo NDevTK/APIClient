@@ -321,10 +321,12 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      is the §FIELD-A-CONSUMER-DEFAULTS defect with the arrow reversed: `dangerousPatterns` crossed two
      boundaries into `tab._securityFindings`, and a `.length` of 0 there is indistinguishable from "no
      dangerous patterns found". A constant `[]` is not a measurement of a page, so it is not shipped as one.
-     (testing/extractors.js and testing/classify.js read dangerousPatterns/valueConstraints/protoEnums/
-     protoFieldMaps/sourceMapUrl off the analysis with `|| []`; they were already reading the constant, so they
-     read the same nothing, and testing/test-spec.js's two `domEndpoints` assertions fail exactly as they did —
-     they are the record that the DOM-attribute scan is an ENGINE capability nobody has built.) */
+     (testing/test-spec.js's two `domEndpoints` assertions fail exactly as they did — they are the record
+     that the DOM-attribute scan is an ENGINE capability nobody has built. The two testing drivers that read
+     dangerousPatterns/valueConstraints/protoEnums/protoFieldMaps/sourceMapUrl off the analysis with `|| []`
+     are gone with the batch pipeline they belonged to: their input was a report field no writer in this tree
+     produced, so the whole analyzer was composed of absences, and this paragraph's own naming of them was the
+     last thing pointing a reader at it.) */
   const analysis = {
     /* THE ENGINE'S OWN PAGE ERRORS, WHICH IT CALLS `pageErrors`. This line read `resolverErrors` — a name
        nothing on the engine side has ever written — so every error the engine recorded while running the page

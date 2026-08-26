@@ -350,12 +350,30 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       // could resolve to a DIFFERENT origin; with no target option,
       // tabs.sendMessage would broadcast to every frame. No documentId → refuse.
       if (!msg.documentId) { sendResponse({ error: "blocked: no documentId" }); return true; }
+      /* `binary: false` IS THIS RELAY'S OWN STATEMENT, NOT A DEFAULT OF THE REQUEST. It read
+         `msg.binary || false`, and no producer has ever written `binary` on the way in: the send panel's
+         only WS payload (lib/popup-console.js) carries type/tabId/channelId/data/documentId/frameId, and
+         `data` is the textarea's string. So the `||` was reading a name nobody writes and manufacturing
+         the value that name would have carried — the shape that makes a MISSING capability and a present
+         one that always answers "text" the same bytes. The capability is missing and this says which:
+         the WS console composes TEXT frames only, because it has no control that produces anything else.
+         AND THE ASSERTION IS WHAT KEEPS THAT TRUE. content.js DCHECKs `typeof msg.binary === "boolean"`
+         on the far side because the flag decides whether the MAIN world base64-decodes the payload, so
+         the day this panel gains a binary control, a flag relayed past a line that ignores it would put
+         a binary frame's base64 on the wire as literal text — a wrong frame, sent, with nothing to say
+         so. Asserting the request carries NONE crashes here instead, at the hop that must learn to
+         forward it, which is the whole of what building that control means on this side. */
+      DCHECK(!("binary" in msg),
+             "a WS_SEND_MSG reached this relay carrying `binary` — the send panel composes text frames " +
+             "only, so this hop STATES `binary: false` rather than reading one, and a request that " +
+             "carries the flag is a binary-compose control built without teaching this line to pass it " +
+             "through to content.js, which base64-decodes on exactly that flag");
       var _wsOpts = { documentId: msg.documentId };
       swRpc("tabs.sendMessage", tabId, {
         type: "WS_SEND_MSG",
         wsId: msg.channelId,
         data: msg.data,
-        binary: msg.binary || false,
+        binary: false,
       }, _wsOpts).then(() => sendResponse({ ok: true }))
         .catch((err) => sendResponse({ error: err.message }));
       return true;
