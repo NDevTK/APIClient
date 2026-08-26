@@ -26,6 +26,12 @@
  *                    This is the CONCEALMENT: it is what turns the categories above from a crash into a
  *                    plausible datum, and it is a defect on its own terms even where the writer exists today,
  *                    because it is what will hide the writer's removal tomorrow.
+ *   OUTSIDE THE RETURN DOMAIN
+ *                    the same defect where the plausible datum is a VALUE and not a name: a host branching on
+ *                    a code its producer cannot answer. Every identifier on both sides is spelled correctly,
+ *                    so the three categories above see nothing — see §the RETURN-DOMAIN namespace below.
+ *                    Beside it, the value a producer DOES answer that an exhaustive construct omits, and the
+ *                    producer that never declared what it can answer at all.
  *   AMBIGUOUS        a receiver whose record identity this cannot decide. Counted, never resolved either way.
  *   REFUSED          a construct this scan cannot read. Counted and named with file:line, never guessed past.
  *
@@ -74,6 +80,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, relative, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -96,8 +103,18 @@ function walk(dir, out = []) {
 /* The corpus rule, applied per path. A file is in because of WHERE it is and WHAT it is, never because it was
    named — a list of seam files is a list a reader has to keep true, and the first file that joins the seam
    without joining the list goes unaudited exactly as an uncollected WPT test does. */
+/* AND THE WALK ANSWERS ITS OWN CONE, because the two must be one list. The cone is the set of paths this
+   gate's number is a FACT ABOUT — what gate_revision asks git whether the checkout still agrees with — and a
+   second hand-written copy of it is the same defect as a second copy of a build's source list: it is right on
+   the day it is written and silently wrong on the day a root moves. So every walk below pushes the pathspec it
+   is a walk of, and there is nothing to keep in step.
+   THE CONE IS WIDER THAN THE WALK BY EXACTLY THIS FILE, and that is right rather than an oversight: the
+   instrument is not a party to the seam it MEASURES (see below), but its own bytes decide every answer it
+   gives, so a modified `fieldgate.mjs` is precisely a run whose number no revision describes. */
+const cone = [];
 function corpus() {
   const files = [];
+  cone.push("engine/host");
   for (const p of walk(join(ROOT, "engine", "host")))
     if (extname(p) === ".c" || extname(p) === ".h") files.push({ path: p, lang: "c", area: "engine/host" });
   /* …minus this file. An instrument is not a party to the seam it measures, and including it is not neutral:
@@ -105,12 +122,15 @@ function corpus() {
      of those names is then immune to the read-with-no-writer diff. Reconstructing `canVerify`'s missing
      `shape` field found exactly that: the defect went unreported because this file writes `shape:` in its own
      result rows. */
+  cone.push(":(glob)engine/*.mjs");
   for (const p of walk(join(ROOT, "engine")))
     if (extname(p) === ".mjs" && dirname(p) === join(ROOT, "engine") && p !== fileURLToPath(import.meta.url))
       files.push({ path: p, lang: "js", area: "engine drivers" });
+  cone.push("extension");
   for (const p of walk(join(ROOT, "extension")))
     if (extname(p) === ".js" && !p.includes(join("lib", "qjs")))
       files.push({ path: p, lang: "js", area: "extension" });
+  cone.push(":(glob)testing/*.js");
   for (const p of walk(join(ROOT, "testing")))
     if (extname(p) === ".js" && dirname(p) === join(ROOT, "testing") && !basename(p).startsWith("debug-"))
       files.push({ path: p, lang: "js", area: "testing drivers" });
@@ -568,6 +588,8 @@ function scanC(file, src) {
     if (!keysIn(lit).length) continue;
     emit(lit, at, !patterns.has(m[1]));
   }
+
+  collectDomainsC(file, src, code, struct, bodies);
 }
 
 /* Unresolvable formats are held until the whole C corpus is read, because whether one is a hiding place for a
@@ -871,12 +893,433 @@ function scanJS(file, src) {
     for (const t of markersIn(m[0])) rec(markers, t).reads.push(site(m.index));
   }
 
+  collectDomainsJS(file, src, code, struct);
+
   return { file, src, localReads, localWrites, wholeDefaults, site };
+}
+
+/* ---- the RETURN-DOMAIN namespace: the one place a plausible datum is a VALUE rather than a NAME ------------ */
+
+/* THE THREE NAMESPACES ABOVE DIFF NAMES, AND ONE HISTORICAL INSTANCE OF THIS DEFECT CARRIES NO NAME AT ALL.
+ * `bridge.js` branched on `st === 1` for a NEED_FETCH code while the producer answers DONE(0), YIELD(2) and
+ * STALLED(3) — every identifier on both sides was spelled correctly and every field existed. What did not exist
+ * was the VALUE, so the branch was unreachable, the only caller of the reply service sat behind it, and the
+ * whole `qjs_pending -> safeFetch -> qjs_provide` path had never once run in the shipped extension. A name diff
+ * cannot see that, and the same run of it would miss it again.
+ *
+ * SO THE PRODUCER'S SIDE IS ITS RETURN DOMAIN — the set of integer constants a named function can answer — and
+ * the consumer's side is the constants it compares that function's result against. It is read out of the same
+ * kind of construct as everything else here, and the DECLARATION is taken in this order:
+ *   1. A MEMBERSHIP ASSERTION over the value the function returns: `DCHECK(r == A || r == B || r == C, …)`.
+ *      This is the engine's OWN idiom for stating an invariant at its origin (CLAUDE.md §Offensive
+ *      programming), so where it exists it IS the producer's declaration and nothing needs to be inferred.
+ *   2. Otherwise, every `return` in the body, when each yields a resolvable integer constant — a literal, a
+ *      `#define`, or an enumerator (implicit counters included).
+ *   3. Otherwise the function has NOT DECLARED what it can return, and that is reported rather than guessed.
+ *
+ * WHAT LINKS THE TWO SIDES IS A NAME AT A CALL, NEVER A DATAFLOW: the ABI's own `M.ccall("qjs_step", "number",
+ * …)`, whose FIRST argument is a string literal naming the C entry and whose SECOND says the answer is a
+ * number. The binding must be a `const`/`let`, so the block it lives in IS its scope — a fact rather than an
+ * inference — and it must be assigned exactly once; a binding that is re-assigned, or bound by a form this
+ * cannot scope, is a REFUSAL with its place. There is deliberately no attempt to follow a value through a
+ * parameter or a returned object: that is the flowed identity idl_installed.mjs's second solve was wrong for,
+ * and it would be wrong here for the same reason.
+ *
+ * AND THE SEAM IS WHAT MAKES IT A CONTRACT WITH TWO SIDES, which is why a C caller of a C function is NOT one.
+ * The three namespaces above audit the serialized seam for the stated reason — that is where a name has two
+ * independent spellings and nothing checks them against each other — and the ABI is the same seam for a value:
+ * the codes live in `engine.h`, the host writes them as bare integers, and no compiler sees both. A C `switch`
+ * on an internal dispatch index shares one header with its producer and is checked by the compiler that reads
+ * them together, so auditing it would report the language's integer dispatch rather than the corpus's contract.
+ * It was measured before it was excluded: sixty-eight C callers, of which the largest single group was an IDL
+ * member's `magic` — a value whose domain is legitimately different for every interface that dispatches on it,
+ * so a demand that its producer declare one is a demand that cannot be met and a red that could never go out.
+ *
+ * THE BOUNDARY THIS NAMESPACE DOES NOT CROSS, stated rather than left to be discovered: the shipped bridge
+ * reaches the same entry through the mojo interface (`renderer.step()` answering a `code` field), and NOTHING
+ * in that path names the C function — the interface record's own prose does, and prose is not a construct. So
+ * the mojom-mediated consumer of an ABI code is unresolved here, exactly as the `qjs_*` ABI namespace is, and
+ * for the same reason: a namespace read from one side only reports a plausible answer.
+ *
+ * TWO CONSTANTS, NEVER ONE — the same discipline the shape anchor uses, in the value dimension. Where the
+ * producer's domain RESOLVES, the link is by name and every compared constant is checkable however few there
+ * are. Where it does NOT, demanding a declaration of every entry a host tests for zero would report the
+ * language: a value compared against a single bare constant is a success test, and a value compared against
+ * TWO OR MORE distinct constants is being treated as a member of a set. Only the second is a domain nobody
+ * declared, and only that is reported.
+ *
+ * AND EXHAUSTIVENESS IS A CONSTRUCT TOO. `if (x === 0) … else …` handles every other value in its else and
+ * claims nothing; a `switch` with no `default`, and a membership assertion, both claim to enumerate. Only those
+ * two are read as a claim, so a value the producer can return and the claim omits is reported, and an ordinary
+ * `if` is not turned into an obligation it never took on. */
+
+const cConsts = new Map();          // NAME -> {file, line, text}  (#define bodies and enumerators, unresolved)
+const cConstConflict = new Set();   // a NAME two translation units give different text — resolving it is a guess
+const producers = new Map();        // fn -> {file, line, returns:[{text,line}], memberships:[…], dup:[file:line]}
+const consumers = [];               // one binding of one call's result, with every constant compared against it
+const jsConsts = new Map();         // file -> Map(NAME -> text)
+let abiBindings = 0;                // every ccall result bound to a scopable name, branched on or not
+
+/* An integer constant, or null. Names resolve through the map the caller hands in — the C corpus's own
+   `#define`/enumerator table, or a JS file's own `const NAME = <int>` table — with a cycle guard, because a
+   name that resolves to itself is not a value and answering one would be the invention this file is against. */
+function intOf(text, consts, seen) {
+  if (text == null) return null;
+  let t = String(text).trim();
+  for (;;) {
+    if (/^\(.*\)$/.test(t) && matchAt(t, 0) === t.length) { t = t.slice(1, -1).trim(); continue; }
+    break;
+  }
+  let sign = 1;
+  while (/^[-+]/.test(t)) { if (t[0] === "-") sign = -sign; t = t.slice(1).trim(); }
+  if (/^0[xX][0-9a-fA-F]+[uUlL]*$/.test(t)) return sign * parseInt(t, 16);
+  if (/^\d+[uUlL]*$/.test(t)) return sign * parseInt(t, 10);
+  if (/^[A-Za-z_$][\w$]*$/.test(t)) {
+    const s = seen || new Set();
+    if (s.has(t) || cConstConflict.has(t)) return null;
+    const c = consts.get(t);
+    if (c === undefined) return null;
+    s.add(t);
+    const v = intOf(typeof c === "string" ? c : c.text, consts, s);
+    return v === null ? null : sign * v;
+  }
+  return null;
+}
+
+/* Top-level spans of one logical operator inside [from,to). Depth is counted across all three bracket kinds,
+   which is sound here because the caller has already established the region's brackets balance. */
+function splitLogical(struct, from, to, op) {
+  const parts = [];
+  let depth = 0, start = from;
+  for (let i = from; i < to; i++) {
+    const c = struct[i];
+    if (PAIRS[c]) depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (!depth && c === op[0] && struct[i + 1] === op[1]) { parts.push([start, i]); start = i + 2; i++; }
+  }
+  parts.push([start, to]);
+  return parts;
+}
+
+/* A MEMBERSHIP STATEMENT over ONE identifier, in either of its two spellings: `x == A || x == B` and its
+   negation `x != A && x != B`. EVERY disjunct must compare the SAME identifier, or it is not a membership
+   statement at all — `r != STALLED || pending` is a conditional about one member and reading it as a domain
+   would invent two. */
+function membershipOf(struct, code, from, to) {
+  for (const [op, cmp] of [["||", /^\s*(?:===|==)\s*/], ["&&", /^\s*(?:!==|!=)\s*/]]) {
+    const parts = splitLogical(struct, from, to, op);
+    if (parts.length < 2) continue;
+    let id = null;
+    const consts = [];
+    let ok = true;
+    for (const [a, b] of parts) {
+      const t = code.slice(a, b);
+      const lhs = /^\s*([A-Za-z_$][\w$]*)\s*(?=[=!])/.exec(t);
+      if (!lhs) { ok = false; break; }
+      const rest = t.slice(lhs[0].length);
+      const c = cmp.exec(rest);
+      if (!c) { ok = false; break; }
+      if (id === null) id = lhs[1];
+      else if (id !== lhs[1]) { ok = false; break; }
+      consts.push(rest.slice(c[0].length).trim());
+    }
+    if (ok && id && consts.length >= 2) return { id, consts, negated: op === "&&" };
+  }
+  return null;
+}
+
+/* Every comparison of `id` against a single operand token inside [from,to), in both operand orders. The
+   OPERATOR must start exactly where the walk stands, so `<=`, `>=` and `=>` are not comparisons of membership
+   and a plain `=` is not one either. */
+function comparisonsOn(struct, code, id, from, to) {
+  const out = [];
+  const re = new RegExp(`(^|[^\\w$.])${id}(?![\\w$])`, "g");
+  re.lastIndex = from;
+  let m;
+  const OPS = /^(===|!==|==|!=)/;
+  const TOK = /^\s*([A-Za-z_$][\w$]*|0[xX][0-9a-fA-F]+|\d+)/;
+  while ((m = re.exec(struct)) && m.index < to) {
+    const at = m.index + m[1].length;
+    let j = at + id.length;
+    while (j < to && /\s/.test(struct[j])) j++;
+    const right = OPS.exec(struct.slice(j, j + 3));
+    if (right) {
+      const t = TOK.exec(code.slice(j + right[0].length, Math.min(to, j + right[0].length + 40)));
+      if (t) out.push({ text: t[1], off: at });
+    }
+    let k = m.index;
+    while (k > from && /\s/.test(struct[k - 1])) k--;
+    if (k >= from + 2) {
+      const two = struct.slice(k - 3, k);
+      const back = /(===|!==|==|!=)$/.exec(two) || /(==|!=)$/.exec(struct.slice(k - 2, k));
+      if (back) {
+        let e = k - back[1].length;
+        while (e > from && /\s/.test(struct[e - 1])) e--;
+        let s = e;
+        while (s > from && /[\w$]/.test(struct[s - 1])) s--;
+        const t = code.slice(s, e);
+        if (/^([A-Za-z_$][\w$]*|0[xX][0-9a-fA-F]+|\d+)$/.test(t)) out.push({ text: t, off: at });
+      }
+    }
+  }
+  return out;
+}
+
+/* How many times `id` is ASSIGNED inside [from,to). One is what makes the binding's value the call's; two is a
+   binding whose value at a comparison is not decidable here, and that is a refusal rather than a guess. */
+function assignmentsTo(struct, id, from, to) {
+  let n = 0;
+  const re = new RegExp(`(^|[^\\w$.])${id}(?![\\w$])`, "g");
+  re.lastIndex = from;
+  let m;
+  while ((m = re.exec(struct)) && m.index < to) {
+    let j = m.index + m[1].length + id.length;
+    while (j < to && /\s/.test(struct[j])) j++;
+    if (struct[j] === "=" && struct[j + 1] !== "=" && struct[j + 1] !== ">") n++;
+    else if (/^(\+\+|--|\+=|-=|\|=|&=|\^=|\*=|\/=|%=)/.test(struct.slice(j, j + 2))) n++;
+  }
+  return n;
+}
+
+/* A `switch (id) {` inside [from,to): its top-level case constants and whether it carries a `default`. A switch
+   WITHOUT a default is the one branching construct that claims to enumerate, so it is the only one besides an
+   assertion whose omissions are reported. */
+function switchOn(struct, code, id, from, to) {
+  const re = new RegExp(`\\bswitch\\s*\\(\\s*${id}\\s*\\)\\s*\\{`, "g");
+  re.lastIndex = from;
+  const m = re.exec(struct);
+  if (!m || m.index >= to) return null;
+  const open = struct.indexOf("{", m.index);
+  const close = matchAt(struct, open);
+  if (close < 0) return null;
+  const cases = [];
+  const CASE = /\bcase\s+([^:]+):/g;
+  let c;
+  CASE.lastIndex = open;
+  while ((c = CASE.exec(struct)) && c.index < close) cases.push(code.slice(c.index + 5, c.index + c[0].length - 1).trim());
+  return { cases, hasDefault: /\bdefault\s*:/.test(struct.slice(open, close)), off: m.index };
+}
+
+/* One consumer record: everything the diff needs about one binding, resolved later so a constant defined in a
+   header a later file carries is not read as unresolvable. */
+function pushConsumer(file, src, struct, code, fn, id, from, to, off) {
+  const cmps = comparisonsOn(struct, code, id, from, to);
+  /* A `case` LABEL IS A COMPARISON, and reading only `==` missed every switch outright — the construct that
+     branches on a code without ever writing an operator. */
+  const sw = switchOn(struct, code, id, from, to);
+  if (sw) for (const c of sw.cases) cmps.push({ text: c, off: sw.off });
+  if (!cmps.length) return;                      /* a result nothing branches on states nothing to check */
+  let claim = null;
+  if (sw && !sw.hasDefault) claim = { kind: "a switch with no default", consts: sw.cases, line: lineOf(src, sw.off) };
+  if (!claim)
+    for (const a of ["DCHECK", "CHECK", "assert", "DFAIL"])
+      for (const cs of callSites(struct, a)) {
+        if (!cs.args || cs.at < from || cs.at >= to) continue;
+        const mem = membershipOf(struct, code, cs.args[0][0], cs.args[0][1]);
+        if (mem && mem.id === id && !mem.negated)
+          claim = { kind: `a ${a} membership assertion`, consts: mem.consts, line: lineOf(src, cs.at) };
+      }
+  consumers.push({ file, fn, id, line: lineOf(src, off),
+                   compared: cmps.map((c) => ({ text: c.text, line: lineOf(src, c.off) })), claim });
+}
+
+function collectDomainsC(file, src, code, struct, bodies) {
+  const line = (off) => lineOf(src, off);
+
+  /* `#define NAME <text>` — object-like only. A function-like macro's name is followed by `(` with no space,
+     which this pattern cannot match, and that is deliberate: its body is not a value. */
+  const DEF = /(^|\n)[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+([^\n]*)/g;
+  let m;
+  while ((m = DEF.exec(code))) {
+    const name = m[2], text = m[3].trim();
+    const prev = cConsts.get(name);
+    if (prev && prev.text !== text) cConstConflict.add(name);
+    if (!prev) cConsts.set(name, { file, line: line(m.index + m[1].length), text });
+  }
+
+  /* Enumerators, implicit counters included — the other half of what §the task calls a `#define` set. */
+  const EN = /\benum\b/g;
+  while ((m = EN.exec(struct))) {
+    let i = m.index + 4;
+    while (i < struct.length && /[\s\w]/.test(struct[i])) i++;
+    if (struct[i] !== "{") continue;
+    const close = matchAt(struct, i);
+    if (close < 0) continue;
+    /* THE IMPLICIT COUNTER IS ONLY KNOWN WHILE THE EXPLICIT ONES ARE. An enumerator whose `= <expr>` this
+       cannot resolve does not merely fail to answer for itself — it makes every enumerator AFTER it a value
+       nobody knows, and continuing the count past it would hand the diff a plausible number. So the counter
+       goes to null and the rest of the enum stays unresolved, which reads downstream as an OPEN domain and is
+       reported as one. */
+    let next = 0;
+    for (const [a, b] of splitTop(struct, i + 1, close - 1)) {
+      const t = code.slice(a, b).trim();
+      if (!t) continue;
+      const em = /^([A-Za-z_]\w*)\s*(?:=\s*([\s\S]+))?$/.exec(t);
+      if (!em) continue;
+      const explicit = em[2] !== undefined;
+      if (!explicit && next === null) continue;
+      const text = explicit ? em[2].trim() : String(next);
+      const v = intOf(text, cConsts, null);
+      next = v === null ? null : v + 1;
+      const prev = cConsts.get(em[1]);
+      if (prev && prev.text !== text) cConstConflict.add(em[1]);
+      if (!prev) cConsts.set(em[1], { file, line: line(a), text });
+    }
+    EN.lastIndex = close;
+  }
+
+  /* THE ASSERTION SITES, READ ONCE PER FILE AND NOT ONCE PER BODY. Asking `callSites` inside the body loop is
+     a scan of the whole file for every function in it, which is quadratic in the file's own size — measured at
+     more than twice this gate's total runtime on `engine.c` alone. */
+  const asserts = [];
+  for (const a of ["DCHECK", "CHECK", "assert"])
+    for (const cs of callSites(struct, a)) {
+      if (!cs.args) continue;
+      const mem = membershipOf(struct, code, cs.args[0][0], cs.args[0][1]);
+      if (mem && !mem.negated) asserts.push({ at: cs.at, mem });
+    }
+
+  for (const [from, to] of bodies) {
+    const fn = cFunctionNameBefore(struct, code, from);
+    if (!fn) continue;
+
+    /* THE PRODUCER'S DECLARATION. Both sources are collected here and the priority is applied at resolution,
+       because a membership assertion may name a constant a later file defines. */
+    const returns = [];
+    const RET = /\breturn\b/g;
+    RET.lastIndex = from;
+    let r;
+    while ((r = RET.exec(struct)) && r.index < to) {
+      if (/[\w$]/.test(struct[r.index - 1] || "")) continue;
+      let e = r.index + 6, d = 0;
+      for (; e < to; e++) {
+        const ch = struct[e];
+        if (PAIRS[ch]) d++;
+        else if (ch === ")" || ch === "]" || ch === "}") d--;
+        else if (ch === ";" && !d) break;
+      }
+      returns.push({ text: code.slice(r.index + 6, e).trim(), line: line(r.index) });
+    }
+    const memberships = asserts.filter((a) => a.at >= from && a.at < to).map((a) => ({ ...a.mem, line: line(a.at) }));
+    const prev = producers.get(fn);
+    if (prev) prev.dup.push(`${file}:${line(from)}`);
+    else producers.set(fn, { file, line: line(from), returns, memberships, dup: [] });
+  }
+}
+
+/* The identifier immediately before a body's parameter list — a function DEFINITION's name. A brace whose
+   preceding significant character is `=` is an initializer and answers null, which is what keeps a file-scope
+   table out of the producer set. */
+function cFunctionNameBefore(struct, code, braceAt) {
+  let i = braceAt - 1;
+  while (i >= 0 && /\s/.test(struct[i])) i--;
+  if (struct[i] !== ")") return null;
+  let depth = 0, j = i;
+  for (; j >= 0; j--) {
+    if (struct[j] === ")") depth++;
+    else if (struct[j] === "(") { depth--; if (!depth) break; }
+  }
+  if (j < 0) return null;
+  let k = j;
+  while (k > 0 && /\s/.test(struct[k - 1])) k--;
+  const e = k;
+  while (k > 0 && /[\w$]/.test(struct[k - 1])) k--;
+  const name = code.slice(k, e);
+  return /^[A-Za-z_]\w*$/.test(name) ? name : null;
+}
+
+/* The innermost brace span containing `off`, which for a `const`/`let` IS its scope — a fact rather than an
+   inference, and the reason only those two binding forms are read. */
+function innermostBlock(struct, off) {
+  const stack = [];
+  for (let i = 0; i <= off && i < struct.length; i++) {
+    if (struct[i] === "{") stack.push(i);
+    else if (struct[i] === "}") stack.pop();
+  }
+  for (let s = stack.length - 1; s >= 0; s--) {
+    const end = matchAt(struct, stack[s]);
+    if (end > off) return [stack[s], end];
+  }
+  return [0, struct.length];
+}
+
+function collectDomainsJS(file, src, code, struct) {
+  const line = (off) => lineOf(src, off);
+  const mine = new Map();
+  jsConsts.set(file, mine);
+  /* `const A = 0, B = 2, C = 3;` is one declaration and three constants — reading only the first is how a
+     domain comes out one member short. */
+  const CD = /\bconst\s+/g;
+  let m;
+  while ((m = CD.exec(struct))) {
+    let e = m.index + m[0].length, d = 0;
+    for (; e < struct.length; e++) {
+      const ch = struct[e];
+      if (PAIRS[ch]) d++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+      else if (ch === ";" && !d) break;
+      else if (ch === "\n" && !d && /^\s*$/.test(struct.slice(e, struct.indexOf("\n", e + 1) + 1 || e))) break;
+    }
+    for (const [a, b] of splitTop(struct, m.index + m[0].length, e)) {
+      const t = code.slice(a, b).trim();
+      const dm = /^([A-Za-z_$][\w$]*)\s*=\s*([-+]?\s*(?:0[xX][0-9a-fA-F]+|\d+))$/.exec(t);
+      if (dm) mine.set(dm[1], dm[2].replace(/\s+/g, ""));
+    }
+  }
+
+  /* THE ABI CALL IS THE LINK, and its first argument is a string literal naming the C entry. A result bound by
+     anything other than a `const`/`let` has no scope this can state, so it is refused with its place rather
+     than searched for in a region that might not be its own. */
+  for (const cs of callSites(struct, "ccall")) {
+    if (!cs.args || cs.args.length < 2) continue;
+    /* THE ANSWER'S TYPE IS THE CALL'S OWN SECOND ARGUMENT, and it is asked FIRST: a `'string'` or `'void'`
+       entry has no integer domain, so an unnameable one is a DECIDED negative rather than an unreadable
+       construct. Refusing over `str = (f, ...a) => M.ccall(f, 'string', …)` would have counted a helper that
+       could not have been hiding a code as a place one might be. */
+    const rt = /^(["'])(\w+)\1$/.exec(code.slice(cs.args[1][0], cs.args[1][1]).trim());
+    if (rt && rt[2] !== "number") continue;
+    const raw = code.slice(cs.args[0][0], cs.args[0][1]).trim();
+    const lit = /^(["'])([A-Za-z_]\w*)\1$/.exec(raw);
+    if (!lit) {
+      refuse(file, line(cs.at), "an ABI call answering a number whose entry name is not a string literal — the " +
+             "producer whose return domain its result belongs to cannot be named", raw);
+      continue;
+    }
+    const head = code.slice(Math.max(0, cs.at - 160), cs.at);
+    const bind = /\b(const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?[\w$.\s]*$/.exec(head);
+    if (!bind) {
+      if (/=\s*(?:await\s+)?[\w$.\s]*$/.test(head) && !/[=!<>]=\s*(?:await\s+)?[\w$.\s]*$/.test(head))
+        refuse(file, line(cs.at), "an ABI call whose result is bound by a form this cannot scope — only a " +
+               "`const`/`let` declaration states the region its comparisons live in", head.slice(-60));
+      continue;
+    }
+    const [from, to] = innermostBlock(struct, cs.at);
+    if (assignmentsTo(struct, bind[2], from, to) !== 1) {
+      refuse(file, line(cs.at), "an ABI result whose binding is re-assigned in its own scope — which call a " +
+             "comparison is about is not decidable here", bind[2]);
+      continue;
+    }
+    abiBindings++;
+    pushConsumer(file, src, struct, code, lit[2], bind[2], from, to, cs.at);
+  }
 }
 
 /* ---- the run --------------------------------------------------------------------------------------------- */
 
 const files = corpus();
+
+/* THE REVISION THIS SCAN'S NUMBER BELONGS TO, TAKEN BEFORE THE FIRST FILE IS READ. §Testing's rule is about
+   gates in general and not about compilers in particular: "a gate runs from a FROZEN SNAPSHOT … and the commit
+   it measured is REPORTED WITH THE RESULT". A reader is the same defect as a builder here — this walks about
+   seven hundred files over several seconds out of a checkout several agents are editing, so a run of it in the
+   shared working tree measures a program no revision contains, exactly as a build that read `idl_args.h` 33
+   seconds apart did. The difference is only that a reader's wrong answer LOOKS like a finding rather than like
+   a segfault. So the cone the walk itself declared is asked of git, printed at the start and again beside the
+   verdict — the tail is what gets pasted — and asked AGAIN at the end, because a file edited under this scan
+   is a file whose reported line number names something else by the time anyone opens it. */
+const REV_AT_START = gateRevision(cone);
+for (const l of revisionLines(REV_AT_START)) console.log(l);
+
 const jsScans = [];
 for (const f of files) {
   let src;
@@ -944,9 +1387,84 @@ for (const s of jsScans) {
   }
 }
 
+/* ---- the return-domain diff ------------------------------------------------------------------------------- */
+
+/* THE PRIORITY THE HEADER STATES, APPLIED ONCE PER PRODUCER. A membership assertion over a returned identifier
+   is the declaration; a `return` of a resolvable constant contributes itself; anything else leaves the domain
+   OPEN with the line that opened it, which is the answer rather than a hole. */
+const domainCache = new Map();
+function domainOf(fn) {
+  if (domainCache.has(fn)) return domainCache.get(fn);
+  let out;
+  const p = producers.get(fn);
+  if (!p) out = { open: "no definition of this name is in the corpus this gate reads" };
+  else if (p.dup.length) out = { open: `defined in more than one translation unit (${[p.file + ":" + p.line, ...p.dup].join(", ")})` };
+  else {
+    const values = new Set();
+    let open = null;
+    for (const r of p.returns) {
+      if (!r.text) continue;                        /* `return;` — a void arm carries no value */
+      const v = intOf(r.text, cConsts, null);
+      if (v !== null) { values.add(v); continue; }
+      if (/^[A-Za-z_]\w*$/.test(r.text)) {
+        const mem = p.memberships.find((m) => m.id === r.text);
+        if (mem) {
+          const vs = mem.consts.map((t) => intOf(t, cConsts, null));
+          if (!vs.some((x) => x === null)) { for (const x of vs) values.add(x); continue; }
+          open = open || `${p.file}:${mem.line} asserts \`${r.text}\`'s membership against a constant this cannot resolve`;
+          continue;
+        }
+      }
+      open = open || `${p.file}:${r.line} returns \`${r.text.replace(/\s+/g, " ").slice(0, 40)}\`, which is not a constant this can resolve and no assertion in the body states its membership`;
+    }
+    out = open ? { open } : values.size ? { values, at: `${p.file}:${p.line}` } : { open: `${p.file}:${p.line} returns no value` };
+  }
+  domainCache.set(fn, out);
+  return out;
+}
+
+const outsideDomain = [];    // a constant a consumer branches on that the producer cannot answer — the defect
+const unenumerated = [];     // a value the producer answers that an EXHAUSTIVE construct omits
+const undeclaredDomain = []; // a producer enumerated by a consumer and declared by nobody
+
+for (const c of consumers) {
+  const map = jsConsts.get(c.file) || new Map();
+  const seen = new Map();
+  let unresolved = null;
+  for (const cmp of c.compared) {
+    const v = intOf(cmp.text, map, null);
+    if (v === null) { unresolved = unresolved || cmp; continue; }
+    if (!seen.has(v)) seen.set(v, cmp);
+  }
+  const dom = domainOf(c.fn);
+  if (dom.open) {
+    /* TWO, NEVER ONE — one bare constant is a success test and reporting it would report the language. */
+    if (seen.size >= 2)
+      undeclaredDomain.push({ file: c.file, line: c.line, fn: c.fn, id: c.id,
+                              constants: [...seen.keys()].sort((a, b) => a - b), why: dom.open });
+    continue;
+  }
+  if (unresolved)
+    refuse(c.file, unresolved.line, "a constant compared against an ABI result that this cannot resolve to a " +
+           "value — whether it is in the producer's return domain is not decidable here", unresolved.text);
+  for (const [v, cmp] of seen)
+    if (!dom.values.has(v))
+      outsideDomain.push({ file: c.file, line: cmp.line, fn: c.fn, id: c.id, value: v,
+                           text: cmp.text, domain: [...dom.values].sort((a, b) => a - b), at: dom.at });
+  if (c.claim) {
+    const claimed = new Set();
+    let bad = false;
+    for (const t of c.claim.consts) { const v = intOf(t, map, null); if (v === null) bad = true; else claimed.add(v); }
+    const missing = [...dom.values].filter((v) => !claimed.has(v)).sort((a, b) => a - b);
+    if (!bad && missing.length)
+      unenumerated.push({ file: c.file, line: c.claim.line, fn: c.fn, id: c.id, kind: c.claim.kind,
+                          missing, domain: [...dom.values].sort((a, b) => a - b), at: dom.at });
+  }
+}
+
 /* ---- verdict --------------------------------------------------------------------------------------------- */
 
-const readNoWriter = [...fields].filter(([, e]) => e.reads.length && !e.writes.length);
+const readNoWriter =[...fields].filter(([, e]) => e.reads.length && !e.writes.length);
 /* THE WRITE SIDE IS ASKED OF THE SEAM'S PRODUCER, not of every object literal in the tree. A key a JS module
    writes into its own record and nobody reads is dead JS; a field the ENGINE serializes into the result
    document and nobody reads is a measurement that has never once been looked at, which is the half of this
@@ -1030,12 +1548,48 @@ if (ambiguous.length) {
   if (ambiguous.length > 15) log(`  … and ${ambiguous.length - 15} more`);
 }
 
+/* THE NAMESPACE'S OWN COVERAGE, PRINTED WHETHER OR NOT IT FOUND ANYTHING. A namespace that resolved NO
+   consumer and one that resolved a dozen and liked every one of them print the same empty sections, and
+   "nothing found" against "nothing asked" is the pair this whole file exists to keep apart — the same reason
+   §Testing gives for never averaging an absent count with a zero one. */
+{
+  const seen = new Map();
+  for (const c of consumers) { if (!seen.has(c.fn)) seen.set(c.fn, 0); seen.set(c.fn, seen.get(c.fn) + 1); }
+  const parts = [...seen].sort().map(([fn, n]) => {
+    const d = domainOf(fn);
+    return `${fn}${n > 1 ? `\u00d7${n}` : ""} ${d.open ? "OPEN" : `{${[...d.values].sort((a, b) => a - b).join(",")}}`}`;
+  });
+  log(`── return domains ── ${abiBindings} ABI result(s) bound to a scopable name, ${consumers.length} of them ` +
+      `branched on, against ${producers.size} C function definition(s) read for a domain` +
+      (parts.length ? `: ${parts.join("; ")}` : " — NOTHING WAS CHECKED, so the sections below are silent " +
+       "because nothing was asked, not because nothing is wrong"));
+}
+
+/* THE HEADLINE OF THE FOURTH NAMESPACE: a branch on a value the producer cannot answer. It is unreachable
+   code that looks like handled code, and every other category here would report it as clean. */
+show(`OUTSIDE THE RETURN DOMAIN — ${outsideDomain.length} comparison(s) against a value the producer cannot answer`,
+     outsideDomain,
+     (d) => `${place(d)}  \`${d.id} == ${d.text}\` (${d.value}) on ${d.fn}(), whose domain is ` +
+            `{${d.domain.join(", ")}} declared at ${d.at} — the branch is unreachable`);
+
+show(`RETURN VALUE NOT ENUMERATED — ${unenumerated.length} exhaustive construct(s) omitting a value the producer answers`,
+     unenumerated,
+     (d) => `${place(d)}  ${d.kind} over \`${d.id}\` omits ${d.missing.join(", ")} of ${d.fn}()'s ` +
+            `{${d.domain.join(", ")}} (${d.at}) — the value arrives at whichever branch is the fallback`);
+
+show(`RETURN DOMAIN UNDECLARED — ${undeclaredDomain.length} producer(s) a consumer enumerates and nothing declares`,
+     undeclaredDomain,
+     (d) => `${place(d)}  \`${d.id}\` from ${d.fn}() is compared against {${d.constants.join(", ")}}; ${d.why}`);
+
 /* PER AREA AS WELL AS IN TOTAL, for §Testing's reason: one number in which the widest surface answers most of
    the count makes every other component invisible. */
 {
   const areaOf = new Map(files.map((f) => [relative(ROOT, f.path), f.area]));
   const tally = new Map();
-  const bump = (f, k) => { const a = areaOf.get(f) || "?"; if (!tally.has(a)) tally.set(a, { rnw: 0, wnr: 0, def: 0, amb: 0, ref: 0 }); tally.get(a)[k]++; };
+  const bump = (f, k) => { const a = areaOf.get(f) || "?"; if (!tally.has(a)) tally.set(a, { rnw: 0, wnr: 0, def: 0, amb: 0, dom: 0, ref: 0 }); tally.get(a)[k]++; };
+  for (const d of outsideDomain) bump(d.file, "dom");
+  for (const d of unenumerated) bump(d.file, "dom");
+  for (const d of undeclaredDomain) bump(d.file, "dom");
   for (const [, e] of readNoWriter) for (const r of e.reads) bump(r.file, "rnw");
   for (const [, e] of writeNoReader) for (const w of e.writes) bump(w.file, "wnr");
   for (const d of defaulted) bump(d.file, "def");
@@ -1045,7 +1599,8 @@ if (ambiguous.length) {
   const w = Math.max(...[...tally.keys()].map((k) => k.length));
   for (const [a, t] of [...tally].sort((x, y) => (y[1].rnw + y[1].wnr + y[1].def) - (x[1].rnw + x[1].wnr + x[1].def)))
     log(`  ${a.padEnd(w)}  read-no-writer ${String(t.rnw).padStart(4)}   write-no-reader ${String(t.wnr).padStart(4)}` +
-        `   defaulted ${String(t.def).padStart(4)}   ambiguous ${String(t.amb).padStart(3)}   refused ${String(t.ref).padStart(4)}`);
+        `   defaulted ${String(t.def).padStart(4)}   domain ${String(t.dom).padStart(3)}` +
+        `   ambiguous ${String(t.amb).padStart(3)}   refused ${String(t.ref).padStart(4)}`);
 }
 
 const rByReason = new Map();
@@ -1059,6 +1614,14 @@ if (refusals.length) {
   }
 }
 
+for (const l of revisionLines(REV_AT_START)) console.log(l);
+{
+  const moved = revisionMoved(REV_AT_START);
+  if (moved) console.error("[rev] THE TREE MOVED UNDER THIS SCAN — " + moved + ". Every file:line above names " +
+                           "a position in the sources as they were READ, which no revision now describes.");
+  else console.log("[rev] the tree did not move under this scan");
+}
+
 log("── verdict ──");
 const cats = [
   ["record field names READ with no writer", readNoWriter.length],
@@ -1067,6 +1630,9 @@ const cats = [
   ["stream markers WRITTEN with no reader", mWriteNoReader.length],
   ["reads of a record field DEFAULTED rather than asserted", defaulted.length],
   ["whole emitted records DEFAULTED away by a substitute literal", wholeDefaulted.length],
+  ["comparisons OUTSIDE a producer's return domain — branches on a value it cannot answer", outsideDomain.length],
+  ["values a producer returns that an exhaustive construct does NOT enumerate", unenumerated.length],
+  ["producers whose RETURN DOMAIN is undeclared while a consumer enumerates constants", undeclaredDomain.length],
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
 ].filter(([, n]) => n);
@@ -1082,14 +1648,11 @@ console.error(`[field-gate] FAILED — ${cats.length} category(ies) above. A rea
               `(extension/check.js mirrors check.h), or delete the half of the contract that has gone stale.`);
 process.exit(1);
 
-/* WHAT IS NOT WIRED, AND WHERE IT GOES. This runs standalone (`node engine/fieldgate.mjs`) and belongs as a
- * STAGE of engine/build.mjs beside the IDL audit, which is where a gate stops being something a person
- * remembers to run. Two things follow from that placement and neither is optional: the stage must run from the
- * FROZEN SNAPSHOT the build already measures (a scan of a shared working tree measures a program no revision
- * contains — the loaded-machine defect with a reader instead of a compiler), and its exit code must join the
- * build's verdict rather than be printed beside it.
- * THE THIRD NAMESPACE IS THE qjs_* ABI: `QJS_EXPORT` names one side, engine/build.mjs's QJS_ABI table and
- * extension/mojom.js's interface records name the other, and an export with no counterpart is the shape
- * `qjs_result`-with-no-caller had. It is not half-resolved here on purpose — a namespace read from one side
- * only would report every export as unreferenced, which is a plausible answer and therefore the worst kind.
+/* THE NAMESPACE THAT IS STILL ONE-SIDED IS THE qjs_* ABI ITSELF: `QJS_EXPORT` names one side, engine/build.mjs's
+ * QJS_ABI table and extension/mojom.js's interface records name the other, and an export with no counterpart is
+ * the shape `qjs_result`-with-no-caller had. It is not half-resolved here on purpose — a namespace read from
+ * one side only would report every export as unreferenced, which is a plausible answer and therefore the worst
+ * kind. It is also what would close the RETURN-DOMAIN namespace's one declared boundary: with `Step` resolved
+ * to `qjs_step`, the mojom-mediated `renderer.step().code` becomes a linkable consumer, and the shipped
+ * bridge — the zone the NEED_FETCH defect actually lived in — comes inside this gate rather than beside it.
  */

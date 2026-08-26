@@ -1118,6 +1118,32 @@ STAGES.push(ABI_LINK.code
                "cross-origin renderers provisioned into one browsing-context group, the duplicate-cluster " +
                "refusal that is SECURITY.md's one-instance-per-cluster rule, and the routing-id accounting. " +
                "Until this stage existed neither file was compiled, imported or run by anything."));
+/* THE RECORD-FIELD CONTRACT, which is the defect class §Architecture names and which nothing else here asks
+   about: a name a consumer READS off a producer's record and no producer WRITES, a field a producer emits that
+   nothing reads, a `||`/`??`/`?.`/swallowed-catch that turns either of those into a plausible datum instead of
+   a crash, and — the one where the plausible datum is a VALUE rather than a name — a host branching on a code
+   the ABI cannot answer. Every instance of it this project has recorded was a live product defect that was
+   invisible AS A CRASH and was found later by somebody chasing a wrong number.
+   IT IS A STAGE FOR THE TWO REASONS ITS AUTHOR NAMED AND NEITHER IS OPTIONAL. (1) The SNAPSHOT: it is a
+   READER, and a reader of a shared working tree measures a program no revision contains just as a compiler of
+   one does — the difference is only that the reader's wrong answer looks like a finding rather than like a
+   segfault. Run here it reads the same checkout this build compiled, and it prints its OWN `[rev]` block over
+   its OWN cone (engine/host, engine/*.mjs, extension, testing/*.js), which is deliberately NOT this build's
+   cone: a popup edit must not be a reason to distrust a link, and a link's cone would say nothing about the
+   extension files that are half of this contract. (2) The EXIT CODE JOINS: it is pushed onto STAGES like every
+   other stage, so report() carries it into the build's verdict rather than letting it print beside one. A gate
+   that only prints is a gate somebody has to remember to read.
+   IT SITS WITH THE AUDITS AND NOT IN FRONT OF THE PROGRAMS, on the same argument as the one below: it compiles
+   no C and reads no artifact, so it asks its question of the SOURCES whatever the programs did, and a link
+   failure can never take it out of the run — while report() exiting on the FIRST non-zero code keeps a program
+   that did not build or did not run ahead of a source-scan finding. */
+STAGES.push(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.mjs")],
+                       "each category above is one side of a contract with nothing on the other: a field read " +
+                       "off a record no producer emits, a field emitted and never read, a default that stops " +
+                       "either from crashing, or a branch on a value outside a producer's return domain. Fix " +
+                       "at the ROOT — make the consumer DCHECK the field (extension/check.js mirrors check.h) " +
+                       "or delete the half of the contract that has gone stale. There is no baseline to " +
+                       "update: the count IS the disagreement."));
 /* THE THIRD AREA: does each component install the surface its Web IDL declares. It gates nothing and nothing
    gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
    programs above did, and a link failure can never take the member census out of the run with it.
