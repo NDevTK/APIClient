@@ -13,7 +13,8 @@
  * decided by the standard rather than by symmetry — see the seams at the end of `parse_html_from_a_string`.
  *
  * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because no component here yet parses a DOCUMENT — core/xml/
- * holds the character, name, reference, markup, declaration, literal, namespace and §3.1 tag layers, and what
+ * holds the character, name, reference, markup, declaration, literal and namespace layers, §3.1's three tags,
+ * and §3's [39] element walk over §3.1's [43] content, and what
  * stands between them and a Document is the crash's own list, in spec order. Lexbor ships no
  * `xml` module — `engine/build.mjs` states which release this tree pins and `ls source/lexbor` in the vendored
  * checkout is the whole of the check — so CLAUDE.md's bind-before-build order has nothing at the "existing
@@ -303,28 +304,44 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
               "returned error. AND THE FIRST GRAMMAR RULE IS BUILT TOO: xml_tag.h is §3.1's [40] STag, [42] "
               "ETag and [44] EmptyElemTag over [41] Attribute, [25] Eq and [10] AttValue, with §3.3.3 "
               "Attribute-Value Normalization and with [WFC: Unique Att Spec], [WFC: No < in Attribute Values] "
-              "and [WFC: Entity Declared] decided — so DO NOT WRITE A SECOND TAG SCANNER. "
-              "WHAT IS STILL OWED, IN SPEC ORDER: (1) §3's [39] element ::= EmptyElemTag | STag content ETag "
-              "over §3.1's [43] content, which is the ELEMENT STACK — it owns [WFC: Element Type Match], the "
-              "constraint xml_tag.c deliberately does not check because it is written on [39] and is about a "
-              "PAIR of tags. (2) §2.1's [1] document ::= prolog element Misc*, with §2.8's [22] prolog around "
-              "its [23] XMLDecl (xml_decl.h answers it) and its [28] doctypedecl. (3) THE DOM CONSTRUCTION: "
-              "each [39] element becomes a Lexbor node, its attributes are expanded through xml_ns.h's scope "
-              "(push at the STag, pop at the ETag) and Namespaces in XML 1.0 3e §6.3 Uniqueness of "
-              "Attributes' expanded-name half is checked there, since xml_tag.c can only answer §3.1's "
-              "literal-Name half. (4) §8.5.1 step 3's parsererror element in the "
+              "and [WFC: Entity Declared] decided — so DO NOT WRITE A SECOND TAG SCANNER. AND SO IS THE "
+              "PRODUCTION THAT PUTS ONE TAG INSIDE ANOTHER: xml_element.h is §3's [39] element ::= "
+              "EmptyElemTag | STag content ETag over §3.1's [43] content, the ELEMENT STACK, and it owns "
+              "[WFC: Element Type Match] — the constraint xml_tag.c does not check because §3 writes it on "
+              "[39] and it is about a PAIR of tags. It is a PULL walk over an explicit heap stack (§C-stack: "
+              "[43] contains [39], so C recursion would put a page's own nesting depth on the C stack) and it "
+              "reports [43]'s five alternatives plus the two boundaries of [39] as items — so DO NOT WRITE A "
+              "SECOND CONTENT WALK EITHER. "
+              "WHAT IS STILL OWED, IN SPEC ORDER: (1) §2.1's [1] document ::= prolog element Misc*, with "
+              "§2.8's [22] prolog ::= XMLDecl? Misc* (doctypedecl Misc*)? around its [23] XMLDecl (xml_decl.h "
+              "answers it), its [27] Misc ::= Comment | PI | S and its [28] doctypedecl. (2) THE DOM "
+              "CONSTRUCTION: each [39] element becomes a Lexbor node, its attributes are expanded through "
+              "xml_ns.h's scope (push at the STag, pop at the ETag) and Namespaces in XML 1.0 3e §6.3 "
+              "Uniqueness of Attributes' expanded-name half is checked there, since xml_tag.c can only answer "
+              "§3.1's literal-Name half. THAT is the component that must be a STEP MACHINE — a parse over "
+              "attacker-length input is unbounded, and the walk beneath it is re-enterable at every construct "
+              "because its whole state is the caller's POD reader plus a stack whose owner it asserts. (3) "
+              "§8.5.1 step 3's parsererror element in the "
               "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace, built from the error record — "
               "every component in core/xml/ already reports its sentence as a message, so nothing new has to "
-              "be worded. (5) Route this arm to it, and route §3.6.6's arm to it too. "
+              "be worded. (4) Route this arm to it, and route §3.6.6's arm to it too. "
               "THE DOCTYPE IS A SECURITY DECISION AND MUST CRASH RATHER THAN BE SKIPPED. Nothing here reads "
-              "§2.8's [28] doctypedecl, which is why xml_tag.c can answer an [68] EntityRef outside §4.6's "
-              "five with [WFC: Entity Declared] — in a document without any DTD that IS the standard's answer. "
+              "§2.8's [28] doctypedecl, which is why an [68] EntityRef outside §4.6's five is answered "
+              "[WFC: Entity Declared] — in a document without any DTD that IS the standard's answer, and it is "
+              "answered at TWO sites on purpose: xml_tag.c for §3.1's [10] AttValue and xml_element.c for "
+              "§3.1's [43] content. Those two must stay two, because §4.4 Entity Type Table gives 'Reference "
+              "in Content' and 'Reference in Attribute Value' different rows and §4.4.4 Forbidden's third "
+              "bullet makes a reference to an EXTERNAL entity fatal in a value while content includes it — one "
+              "site cannot answer for both the moment declarations exist. "
               "The moment [28] is read that stops being true, so whoever builds it owes §4.2's [70] EntityDecl "
               "WITH §3.1's [WFC: No External Entity References] and §4.4.4 Forbidden's third bullet in the "
               "same diff: an attribute value MUST NOT reference an external entity, and a parser that resolves "
               "one has put an XXE inside a security tool. Until then a [28] doctypedecl is an unbuilt "
               "capability and belongs in the prolog walk as its own DFAIL, never as a construct skipped to "
-              "reach the element");
+              "reach the element — which is also why xml_element.c reports a `<!DOCTYPE` standing in [43] "
+              "content as a fatal error rather than reading one: §2.8 says the document type declaration MUST "
+              "appear before the first element, so in content it is a document's mistake and not this build's "
+              "missing capability");
         return JS_ThrowInternalError(ctx, "parseFromString: this build has no XML parser");
     }
 
