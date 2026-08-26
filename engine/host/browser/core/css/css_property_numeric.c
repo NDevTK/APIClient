@@ -86,11 +86,18 @@ typedef struct {
      css-page-floats-3 §5.1 "The float-defer property" `<integer> | last | none`, §7 "The float-offset
                   property" `<length-percentage>`
      CSS 2.1 §9.9.1 "Specifying the stack level: the 'z-index' property" `auto | <integer> | inherit`
-     CSS 2.1 §10.8 "Line height calculations: the 'line-height' and 'vertical-align' properties" —
-                  `vertical-align` is `... | <percentage> | <length> | inherit`, a single component value.
-                  css-inline-3 §4.2 makes `vertical-align` a SHORTHAND instead; lexbor types it as CSS 2.1's
-                  longhand and this engine has no `baseline-source`/`alignment-baseline` expansion for it, so
-                  the row is the grammar that is actually parsed here.
+     css-inline-3 §4.2 "Transverse Box Alignment: the vertical-align property" —
+                  `[ first | last ] || <'alignment-baseline'> || <'baseline-shift'>`, a SHORTHAND, so its
+                  numeric production sits in the `<'baseline-shift'>` COMPONENT (§4.2.3 "Post-Alignment Shift:
+                  the baseline-shift longhand" is `<length-percentage> | sub | super | top | center | bottom`)
+                  and `vertical-align: first calc(1em)` is a value only that longhand's grammar can judge.
+                  CSS 2.2 §10.8 "Line height calculations: the 'line-height' and 'vertical-align' properties"
+                  defines it as a longhand whose whole value is `... | <percentage> | <length>` instead — and
+                  that is NOT the grammar parsed here: lexbor's `vertical-align` state machine is §4.2's `||`
+                  and stores into an alignment and a shift sub-value, its registry carries all three longhands,
+                  and core/css/css_shorthand.c expands the row. A `S_WHOL` here would send a two-component
+                  value to the whole-value math test, which one lone math function is the only thing that can
+                  pass — silently dropping every `vertical-align` that names a term beside its length.
 
    EVERY OTHER ROW IS `CSS_NUMERIC_NONE`, AND THAT IS A CLAIM RATHER THAN AN OMISSION: its grammar names no numeric
    production anywhere, so a math function written there is invalid CSS and the declaration is dropped by CSS
@@ -221,7 +228,7 @@ static const CssNumericRow CSS_NUMERIC[] = {
     { "text-transform",            S_NONE,      0 },
     { "top",                       S_WHOL,     N_(LENGTH_PERCENTAGE) },
     { "unicode-bidi",              S_NONE,      0 },
-    { "vertical-align",            S_WHOL,     N_(LENGTH_PERCENTAGE) },
+    { "vertical-align",            S_COMP,     N_(LENGTH_PERCENTAGE) },
     { "visibility",                S_NONE,      0 },
     { "white-space",               S_NONE,      0 },
     { "width",                     S_WHOL,     N_(LENGTH_PERCENTAGE) },

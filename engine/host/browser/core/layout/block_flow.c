@@ -241,12 +241,25 @@ bool block_flow_text_child_generates_box(lxb_dom_element_t *parent, const lxb_do
               "beside its block-level children — so §9.2.1.1 wraps it in an ANONYMOUS BLOCK BOX ('if a block "
               "container box has a block-level box inside it, then we force it to have only block-level boxes "
               "inside it'), and that anonymous box's height is §10.6.3's first bullet, 'the bottom edge of the "
-              "last line box'. A line box needs the text MEASURED — its advance width to find the break "
-              "opportunities, its ascent and descent to give the line a height — and this engine has no font "
-              "metrics at all, so there is nothing to derive the number from and a zero here would be an "
-              "invented height every ancestor's geometry would then be stated over. BUILD the inline formatting "
-              "context: font metrics first, then §9.4.2's line boxes and §10.8's line-height calculations over "
-              "them, then §9.2.1.1's anonymous block generation so this walk has a box to place");
+              "last line box'. WHAT IS MISSING IS ONE HALF OF THE MEASUREMENT AND NOT THE WHOLE OF IT, and "
+              "saying otherwise sends the next reader to build what is here. The VERTICAL half is answered: "
+              "CSS 2 §10.8.1 'Leading and half-leading''s `A` and `D` — 'a characteristic height above the "
+              "baseline and a depth below it' — are core/css/font_metrics.h's, `AD` with them, and §10.8's "
+              "step 1 reads an inline box's `line-height` through core/css/css_computed_value.h's "
+              "`css_computed_line_height`, whose `normal` arm IS that `AD`. §10.8's step 2 aligns those boxes "
+              "'according to their vertical-align property', and that is answered too: css-inline-3 §4.2 "
+              "'Transverse Box Alignment: the vertical-align property' makes it a shorthand of "
+              "`baseline-source`, `alignment-baseline` and `baseline-shift`, core/css/css_shorthand.c expands "
+              "it and css_computed_value.c derives all three. So §10.8.1's leading (L = 'line-height' - AD, "
+              "half above `A` and half below `D`) is arithmetic over values this engine holds. "
+              "WHAT IS ABSENT IS THE HORIZONTAL half: the ADVANCE of an arbitrary glyph, which is what decides "
+              "the break opportunities and therefore HOW MANY line boxes there are. font_metrics.h holds the "
+              "advance of exactly two glyphs — css-values-4 §6.1.1's assumed '0' for `ch` and '水' for `ic` — "
+              "and no measurement of a run of text, so the count of line boxes is the one term of §10.6.3's "
+              "first bullet with nothing to derive it from, and a zero here would be an invented height every "
+              "ancestor's geometry would then be stated over. BUILD the per-glyph advance beside `A` and `D` "
+              "in core/css/font_metrics.h, then §9.4.2's line boxes over it with §10.8's calculation for their "
+              "heights, then §9.2.1.1's anonymous block generation so this walk has a box to place");
     ws = bf_computed(parent, "white-space");
     collapses = strcmp(ws, "normal") == 0 || strcmp(ws, "nowrap") == 0;
     free(ws);

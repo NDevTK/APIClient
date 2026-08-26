@@ -92,7 +92,9 @@ bool block_flow_display_is_block_container(const char *display);
    not generate any anonymous inline boxes." FALSE is that sentence — a run this element's computed
    `white-space` collapses away, which is most of the character data in a pretty-printed document — and the
    two ways a text run DOES generate a box both CRASH naming §9.4.2, because a line box needs the text
-   measured with a real font and this engine has none.
+   measured and the ADVANCE of an arbitrary glyph is the metric of the first available font that
+   core/css/font_metrics.h does not hold — its `A`, `D` and `AD` answer how TALL a line box is, and nothing
+   answers where the run BREAKS, which is what decides how many there are.
    IT IS EXPORTED BECAUSE EVERY WALK OVER A BLOCK CONTAINER'S CHILDREN MUST ASK IT. The height walk below is
    one; CSSOM VIEW §2's scrolling area (core/layout/scrolling_area.h) is another, and it asks for a reason the
    height walk cannot cover — a box with a DECLARED height never reaches the walk at all, so its own text

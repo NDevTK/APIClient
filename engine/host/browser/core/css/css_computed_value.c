@@ -804,9 +804,24 @@ bool css_computed_models_length(const char *name)
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
     /* `font-size` IS length-valued and is deliberately NOT in the list above: css-fonts-4 §2.5's computed
        value is `an absolute length` with no percentage arm and no keyword arm, which is a DIFFERENT rule from
-       the one every member of that list shares, and folding it in would hand it to `computed_length` whole. */
+       the one every member of that list shares, and folding it in would hand it to `computed_length` whole.
+       `baseline-shift` IS in the same shape as that list and is deliberately not IN it either, for the
+       opposite reason: css-inline-3 §4.2.3 "Post-Alignment Shift: the baseline-shift longhand" gives it
+       "the specified keyword or a computed <length-percentage> value", which IS `computed_length`'s rule
+       whole — a keyword arm, a percentage carried as specified, an absolute length absolutized — so it needs
+       no rule of its own and takes the generic one. What it does not share is that list's SECOND sentence:
+       it is not one of the ten physical box-model lengths nor one of the four sizing limits, so
+       core/layout/used_value.c does not read it for §10.4's clamp, and putting it there would make a true
+       sentence about the group false of a member.
+       ITS PERCENTAGE MUST SURVIVE TO THE COMPUTED VALUE, which is where §4.2.3 and CSS 2.2 §10.8 "Line height
+       calculations: the 'line-height' and 'vertical-align' properties" disagree and where the generic rule is
+       the RIGHT one rather than merely the convenient one. §10.8 gives `vertical-align` a `Computed value:` of
+       "for <percentage> and <length> the absolute length" over percentages that "refer to the 'line-height' of
+       the element itself"; §4.2.3's percentages "refer to the USED VALUE of line-height", and a used value is
+       not one any cascade step holds — it is what CSS 2 §10.8's own line-box calculation produces. Resolving
+       one here would be this engine answering with a number no step of it has computed. */
     return css_models_length(name) || css_border_side_of(name, "width") >= 0 ||
-           strcmp(name, "font-size") == 0;
+           strcmp(name, "font-size") == 0 || strcmp(name, "baseline-shift") == 0;
 }
 
 bool css_computed_models(const char *name)
@@ -817,6 +832,7 @@ bool css_computed_models(const char *name)
            strcmp(name, "box-sizing") == 0 || strcmp(name, "white-space") == 0 ||
            strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
            strcmp(name, "line-height") == 0 ||
+           strcmp(name, "alignment-baseline") == 0 || strcmp(name, "baseline-source") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -846,7 +862,8 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
 
     DCHECK(css_computed_models_length(name),
            "css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. For a "
-           "KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, an "
+           "KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
+           "`alignment-baseline`, `baseline-source`, an "
            "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
            "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
            "number zero. For `line-height` the line is a UNION of three shapes (css-inline-3 §5.1), which "
@@ -1057,10 +1074,22 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        OVERFLOW DIRECTIONS, which css-writing-modes-4 §6.2 "Flow-relative Directions" derives from the two
        together — "determining the inline-start and inline-end sides of a box depends not only on the
        writing-mode property but also the direction property". Each of those three crashed for want of this one
-       row. */
+       row.
+       css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand" (`auto | first | last`)
+       and §4.2.2 "Alignment Baseline Type: the alignment-baseline longhand" (`baseline | text-bottom |
+       alphabetic | ideographic | middle | central | mathematical | text-top`) both state `Computed value:
+       specified keyword` over a keyword-only `Value:` line, so the as-specified arm is the whole of their rule
+       as well. THEY ARE HERE BECAUSE `getComputedStyle(el).verticalAlign` READS ALL THREE BY NAME: §4.2 makes
+       `vertical-align` a shorthand over these two and `baseline-shift`, core/css/css_shorthand.c records the
+       row, and §6.6.1's shorthand step builds the answer out of each longhand's RESOLVED value — so modelling
+       two of the three would leave one third of one property's answer a specified value wearing the word
+       computed. They are also what CSS 2 §10.8's step 2 will read when its line boxes exist ("the inline-level
+       boxes are aligned vertically according to their `vertical-align` property"), and that step needs the
+       ALIGNMENT BASELINE and the SHIFT apart, which is exactly the split §4.2 makes. */
     DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
                strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
-               strcmp(name, "writing-mode") == 0 || css_border_side_of(name, "style") >= 0,
+               strcmp(name, "writing-mode") == 0 || strcmp(name, "alignment-baseline") == 0 ||
+               strcmp(name, "baseline-source") == 0 || css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "
            "apart");

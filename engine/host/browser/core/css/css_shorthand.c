@@ -198,6 +198,121 @@ static const char *const BORDER_PART_INITIAL[] = { "medium", "none", "currentcol
    each one's recorded longhand list IS the four `border-<side>-<part>`, so the three tables cannot drift. */
 static const char *const BORDER_PART_SHORTHAND[] = { "border-width", "border-style", "border-color" };
 
+/* ---- css-inline-3 §4.2 "Transverse Box Alignment: the vertical-align property" -----------------------------
+ *
+ * `vertical-align` IS A SHORTHAND IN THIS ENGINE, AND THAT IS A FACT ABOUT THE VENDORED PARSER RATHER THAN A
+ * CHOICE. CSS 2.2 §10.8 "Line height calculations: the 'line-height' and 'vertical-align' properties" defines
+ * it as a longhand whose value is `baseline | sub | super | top | text-top | middle | bottom | text-bottom |
+ * <percentage> | <length>`; css-inline-3 §4.2 redefines it as `[ first | last ] || <'alignment-baseline'> ||
+ * <'baseline-shift'>`, a shorthand over three longhands the module states separately (§4.2.1 "Alignment
+ * Baseline Source: the baseline-source longhand", §4.2.2 "Alignment Baseline Type: the alignment-baseline
+ * longhand", §4.2.3 "Post-Alignment Shift: the baseline-shift longhand"). Lexbor's property registry carries
+ * ALL FOUR names, its `vertical-align` state machine is §4.2's `||` and stores into an `alignment` and a
+ * `shift` sub-value, and its serializer writes those two back in the grammar's own order — so §4.2 is the
+ * grammar a declaration in this engine has actually been through, and CSS 2.2's ten-value list is a production
+ * nothing here parses. Every CSS 2.1 value still reaches a longhand: `baseline`, `middle`, `text-top` and
+ * `text-bottom` are §4.2.2's, and `sub`, `super`, `top`, `bottom`, a `<length>` and a `<percentage>` are
+ * §4.2.3's.
+ *
+ * WHICH MEANS THE COMPUTED VALUE IS THE LONGHANDS' AND NOT THIS PROPERTY'S, and the two specs disagree about
+ * it in the one way that matters. CSS 2.2 §10.8 gives `vertical-align` "for <percentage> and <length> the
+ * absolute length, otherwise as specified" over a `Percentages:` line of "refer to the 'line-height' of the
+ * element itself"; §4.2.3 gives `baseline-shift` "the specified keyword or a computed <length-percentage>
+ * value" over "refer to the USED VALUE of line-height". A used value is not a value any cascade step holds, so
+ * §4.2.3's percentage cannot resolve at computed-value time and CSS 2.2's sentence describes a resolution this
+ * engine must not perform — which is exactly why recording the shorthand comes first: the three longhands are
+ * where the `Computed value:` lines that CAN be honoured are written.
+ *
+ * THE THREE TERM SETS ARE DISJOINT, which is what makes §4.2's `||` splittable by the component value alone
+ * rather than by position. `baseline` belongs only to §4.2.2; `top`, `center` and `bottom` belong only to
+ * §4.2.3 (its LINE-RELATIVE shift values, which §4.2.3's own note records as the pair that "don't fit
+ * perfectly in the dichotomy"); and `first`/`last` belong only to the source term. A word in two of them would
+ * make the shorthand ambiguous and the split a guess — so the disjointness is asserted rather than assumed,
+ * beside the round trip, in css_shorthand_init. */
+static const char *const BASELINE_SOURCE_KEYWORDS[] = { "first", "last" };
+/* §4.2.2's `Value:` line entire and in its own order. The SVG legacy spellings §4.2.2.1 lists are deliberately
+   absent: lexbor's `lxb_css_alignment_baseline_type_t` carries these eight and no others, so a declaration
+   naming one of the legacy values never reaches this component as a `vertical-align` at all. */
+static const char *const ALIGNMENT_BASELINE_KEYWORDS[] = {
+    "baseline", "text-bottom", "alphabetic", "ideographic", "middle", "central", "mathematical", "text-top"
+};
+/* §4.2.3's keyword arm; its `<length-percentage>` arm is core/css/css_length.h's production, asked below. */
+static const char *const BASELINE_SHIFT_KEYWORDS[] = { "sub", "super", "top", "center", "bottom" };
+/* Each longhand's own `Initial:` line — §4.2.1's `auto`, §4.2.2's `baseline`, §4.2.3's `0` — which is what an
+   OMITTED term of the `||` is set to. §4.2 states the first of them outright ("if first or last is specified,
+   it sets baseline-source, WHICH IS OTHERWISE RESET TO AUTO"), and CSS Cascade §Shorthand Properties states
+   the rule the other two follow ("each missing sub-property is assigned its initial value").
+   THE SHIFT'S ZERO CARRIES ITS UNIT, AND THAT IS THE SAME LENGTH §4.2.3 WRITES WITHOUT ONE. css-values-4 §6
+   "Distance Units: the <length> type": "for zero lengths the unit identifier is optional (i.e. can be
+   syntactically represented as the <number> 0)" — so `0` and `0px` are two spellings of one value, and this
+   list must be written in the spelling its READERS produce. It has two: the expansion fills an omitted term
+   from it, and §6.6.1's shorthand step compares it against each longhand's RESOLVED value — which for a
+   length is always core/css/css_length.c's serialization, and that always writes the unit. A bare `0` here
+   would match neither, so `vertical-align` would report an all-initial element as `0px` rather than as its
+   own `Initial:` line, which is the one case whole_initial exists for. */
+static const char *const VERTICAL_ALIGN_INITIAL[] = { "auto", "baseline", "0px" };
+
+static const char *const LH_VERTICAL_ALIGN[] = { "baseline-source", "alignment-baseline", "baseline-shift" };
+
+/* WHICH OF §4.2's THREE TERMS the component value `w` is — 0 the source, 1 the alignment baseline, 2 the
+   shift — or -1 for a value outside the shorthand's grammar, which drops the declaration. `*canon` is set to
+   the keyword's CANONICAL (lower-case) spelling, or to NULL for the `<length-percentage>` arm, which has no
+   canonical spelling of this component's to give: core/css/css_length.h owns the unit's case and every other
+   question about it, so that arm is copied verbatim exactly as a `margin`'s component is. */
+static int vertical_align_term_of(const char *w, size_t n, const char **canon)
+{
+    char *probe;
+    bool len;
+
+    *canon = css_sh_keyword(BASELINE_SOURCE_KEYWORDS, CSS_SH_N(BASELINE_SOURCE_KEYWORDS), w, n);
+    if (*canon) return 0;
+    *canon = css_sh_keyword(ALIGNMENT_BASELINE_KEYWORDS, CSS_SH_N(ALIGNMENT_BASELINE_KEYWORDS), w, n);
+    if (*canon) return 1;
+    *canon = css_sh_keyword(BASELINE_SHIFT_KEYWORDS, CSS_SH_N(BASELINE_SHIFT_KEYWORDS), w, n);
+    if (*canon) return 2;
+    probe = css_sh_dupn(w, n);
+    /* §4.2.3's `<length-percentage>` carries NO range restriction — "raise (positive value) or lower (negative
+       value)" — so a leading `-` is a value and not the invalid declaration it is for a `<line-width>`. */
+    len = css_length_is_length_percentage(probe);
+    free(probe);
+    return len ? 2 : -1;
+}
+
+/* §4.2's expansion: the component values in ANY ORDER, each term at most once, omitted terms initial — the same
+   `||` shape §3.4's border triple has, over a different partition of the value space. */
+static char *vertical_align_component(const char *value, int part)
+{
+    const char *w[3], *found[3] = { NULL, NULL, NULL }, *canon[3] = { NULL, NULL, NULL };
+    size_t wl[3], flen[3] = { 0, 0, 0 };
+    int n, i;
+
+    n = css_words(value, w, wl, 3);
+    if (n < 1) return NULL;
+    for (i = 0; i < n; i++) {
+        const char *c;
+        int term = vertical_align_term_of(w[i], wl[i], &c);
+
+        if (term < 0) return NULL;              /* outside §4.2's grammar: an invalid declaration */
+        if (found[term] != NULL) return NULL;   /* `||` admits each term at most once */
+        found[term] = w[i];
+        flen[term] = wl[i];
+        canon[term] = c;
+    }
+    if (found[part] == NULL) return css_sh_strdup(VERTICAL_ALIGN_INITIAL[part]);
+    return canon[part] ? css_sh_strdup(canon[part]) : css_sh_dupn(found[part], flen[part]);
+}
+
+/* Which of §4.2's three longhands `longhand` is, or -1 for a name it does not set. The list is read rather than
+   restated so the index the expansion writes and the index the table's canonical order names are ONE. */
+static int vertical_align_longhand_index(const char *longhand)
+{
+    unsigned i;
+
+    for (i = 0; i < CSS_SH_N(LH_VERTICAL_ALIGN); i++)
+        if (strcmp(LH_VERTICAL_ALIGN[i], longhand) == 0) return (int)i;
+    return -1;
+}
+
 /* Which of §3.4's three terms `longhand` is, and on which side. -1 when it is not a border longhand. */
 static int border_part_index(const char *longhand, int *pside)
 {
@@ -324,6 +439,18 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
        The whole grammar — including CSS Cascade §7.3's keywords, which for this shorthand reach the RESET-ONLY
        group as well and so cannot be answered here — belongs to the component that owns §2.7. */
     if (strcmp(shorthand, "font") == 0) return css_font_shorthand_component(value, longhand);
+
+    /* ---- css-inline-3 §4.2's `vertical-align` -------------------------------------------------------------- */
+    if (strcmp(shorthand, "vertical-align") == 0) {
+        int term = vertical_align_longhand_index(longhand);
+
+        if (term < 0) return NULL;
+        /* CSS Cascade §Shorthand Properties: "if a shorthand is specified as one of the CSS-wide keywords, it
+           sets all of its sub-properties to that keyword" — the ENTIRE value, so it precedes §4.2's own
+           grammar, in which `inherit` is no term at all. §7's DEFAULTING step is what resolves it. */
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        return vertical_align_component(value, term);
+    }
 
     /* ---- css-backgrounds-3 §3.2, §3.3 and §3.4's BORDER SHORTHANDS ---------------------------------------- */
     /* §3.4's reset of `border-image`, ahead of the side/part split because these five longhands carry the side
@@ -524,7 +651,7 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
 typedef enum {
     CSS_SH_FOUR_SIDE,   /* CSS 2.1 §8.3's rotation reversed: top/right/bottom/left with the tail dropped */
     CSS_SH_TWO_AXIS,    /* css-overflow §3.1's `{1,2}`: the second omitted when it equals the first */
-    CSS_SH_TRIPLE,      /* css-backgrounds-3 §3.4's `||`, each term omitted when it is that longhand's initial */
+    CSS_SH_TRIPLE,      /* a three-term `||`, each term omitted when it is that longhand's initial */
     CSS_SH_BORDER,      /* §3.4's `border`: one triple common to all four sides, over an untouched border-image */
     CSS_SH_FONT         /* css-fonts-4 §2.7's `font`, whose grammar is core/css/css_font_shorthand.h's */
 } CssShKind;
@@ -539,6 +666,21 @@ typedef struct {
        css_shorthand_component answers for every row's every longhand: a row that did not was a shorthand whose
        declarations set NOTHING, and the flag that used to record that is deleted with the row that had it. */
     const char *probe;
+    /* CSS_SH_TRIPLE ONLY — each longhand's own `Initial:` line, in the row's canonical order. §6.7.2's rule is
+       "if component values can be omitted ... without changing the meaning of the value, omit them", and a
+       term holding its initial is exactly one that can be, so this list is the omission's DATA and belongs to
+       the row rather than to the algorithm. It is the SAME list the forward expansion fills an omitted term
+       from, which is what keeps the two directions one statement. NULL for every other kind, asserted. */
+    const char *const *initial;
+    /* CSS_SH_TRIPLE ONLY — the SHORTHAND'S OWN `Initial:` line, for the case where every term is omitted and
+       the omission would leave the empty string, which matches no production of any of these grammars.
+       IT IS NULL WHERE THE PROPERTY DEFINITION STATES NONE, and that is the whole of the difference between
+       the two rows that reach the case: css-inline-3 §4.2 gives `vertical-align` an `Initial:` line of
+       `baseline`, so an all-initial list has a value it can be written as; css-backgrounds-3 §3.4 gives
+       `border-<side>` "see individual properties", so it has none and §6.7.2's "cannot exactly represent" arm
+       is the answer instead. css_shorthand_init asserts that a stated one EXPANDS BACK to this row's own
+       initials, so the two cannot state different faces of one value. */
+    const char *whole_initial;
 } CssShorthandRow;
 
 static const char *const LH_MARGIN[]  = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
@@ -573,23 +715,28 @@ static const char *const LH_BORDER[] = {
    lexicographic, and a table that is already sorted is what makes that step a scan instead of a comparison
    nobody would notice going wrong. */
 static const CssShorthandRow SHORTHANDS[] = {
-    { "border",        LH_BORDER,        17, CSS_SH_BORDER,    "1px solid red" },
-    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    "1px solid red" },
-    { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, "red green" },
-    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_TRIPLE,    "1px solid red" },
-    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_TRIPLE,    "1px solid red" },
-    { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid" },
-    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    "1px solid red" },
-    { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px" },
+    { "border",        LH_BORDER,        17, CSS_SH_BORDER,    "1px solid red", NULL, NULL },
+    { "border-bottom", LH_BORDER_BOTTOM,  3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-color",  LH_BORDER_COLOR,   4, CSS_SH_FOUR_SIDE, "red green", NULL, NULL },
+    { "border-left",   LH_BORDER_LEFT,    3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-right",  LH_BORDER_RIGHT,   3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-style",  LH_BORDER_STYLE,   4, CSS_SH_FOUR_SIDE, "solid", NULL, NULL },
+    { "border-top",    LH_BORDER_TOP,     3, CSS_SH_TRIPLE,    "1px solid red", BORDER_PART_INITIAL, NULL },
+    { "border-width",  LH_BORDER_WIDTH,   4, CSS_SH_FOUR_SIDE, "1px", NULL, NULL },
     /* §2.7's own longhand list, taken from the component that owns the grammar so the ORDER the serialization
        reads positionally and the order the expansion writes are ONE statement in ONE file. The fixture is the
        shortest value §2.7's grammar admits — its `<'font-size'>` and `<'font-family'>#` are both required and
        everything else is optional — so the round trip exercises all nineteen longhands (the seven set, and the
        twelve reset to their initial values) without depending on how any one component canonicalizes. */
-    { "font",          CSS_FONT_SHORTHAND_LONGHANDS, CSS_FONT_SHORTHAND_N, CSS_SH_FONT, "12px sans-serif" },
-    { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px" },
-    { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto" },
-    { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px" },
+    { "font", CSS_FONT_SHORTHAND_LONGHANDS, CSS_FONT_SHORTHAND_N, CSS_SH_FONT, "12px sans-serif", NULL, NULL },
+    { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px", NULL, NULL },
+    { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto", NULL, NULL },
+    { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px", NULL, NULL },
+    /* css-inline-3 §4.2. The fixture names all three terms, in the grammar's canonical order and none of them
+       at its initial, so the round trip exercises every arm of the partition at once — a `[first|last]`, an
+       `<'alignment-baseline'>` and an `<'baseline-shift'>` keyword. */
+    { "vertical-align", LH_VERTICAL_ALIGN, 3, CSS_SH_TRIPLE, "first middle super",
+      VERTICAL_ALIGN_INITIAL, "baseline" },
 };
 
 static const CssShorthandRow *css_sh_row(const char *name)
@@ -826,20 +973,24 @@ static char *css_sh_two_axis_value(const char *const *v)
     return css_sh_join(v, 2);
 }
 
-/* css-backgrounds-3 §3.4's `<line-width> || <line-style> || <color>`, written in the canonical order of the
-   grammar with each term omitted when it holds that longhand's initial value — §6.7.2's "if component values
-   can be omitted ... without changing the meaning of the value, omit them", and BORDER_PART_INITIAL is the same
-   list the forward expansion fills an omitted term from. Every term initial leaves nothing to write, and the
-   empty string is §6.7.2's own answer for a shorthand that cannot represent the list. */
-static char *css_sh_triple_value(const char *width, const char *style, const char *color)
+/* A THREE-TERM `||`, written in the canonical order of the grammar with each term omitted when it holds that
+   longhand's initial value — §6.7.2's "if component values can be omitted ... without changing the meaning of
+   the value, omit them". `initial` is the same list the forward expansion fills an omitted term from, which is
+   what keeps the two directions one statement; it is the ROW's, because the rule is one algorithm over two
+   grammars (css-backgrounds-3 §3.4's `<line-width> || <line-style> || <color>` and css-inline-3 §4.2's
+   `[first|last] || <'alignment-baseline'> || <'baseline-shift'>`).
+   EVERY TERM INITIAL LEAVES NOTHING TO WRITE, and the empty string matches no production of either grammar —
+   so the answer is the SHORTHAND's own `Initial:` line where its definition states one and §6.7.2's "cannot
+   exactly represent the values" arm where it does not. See the row's `whole_initial` for why that is the
+   difference between the two rows rather than a preference. */
+static char *css_sh_triple_value(const char *const *v, const char *const *initial, const char *whole_initial)
 {
-    const char *v[3], *parts[3];
+    const char *parts[3];
     unsigned n = 0, i;
 
-    v[0] = width; v[1] = style; v[2] = color;
     for (i = 0; i < 3; i++)
-        if (strcmp(v[i], BORDER_PART_INITIAL[i]) != 0) parts[n++] = v[i];
-    if (n == 0) return NULL;
+        if (strcmp(v[i], initial[i]) != 0) parts[n++] = v[i];
+    if (n == 0) return whole_initial ? css_sh_strdup(whole_initial) : NULL;
     return css_sh_join(parts, n);
 }
 
@@ -856,7 +1007,15 @@ static char *css_sh_border_value(const char *const *v)
         if (strcmp(v[12 + i], BORDER_IMAGE_INITIAL[i]) != 0) return NULL;
     for (i = 1; i < 4; i++)
         if (strcmp(v[i], v[0]) != 0 || strcmp(v[4 + i], v[4]) != 0 || strcmp(v[8 + i], v[8]) != 0) return NULL;
-    return css_sh_triple_value(v[0], v[4], v[8]);
+    {
+        /* The three parts of ONE side, gathered out of the twelve — `border` has already been established to
+           set every side alike, so any side's triple is the shorthand's. §3.4 gives it an `Initial:` line of
+           "see individual properties" exactly as `border-<side>` has, so an all-initial list has no value to
+           be written as here either. */
+        const char *const triple[3] = { v[0], v[4], v[8] };
+
+        return css_sh_triple_value(triple, BORDER_PART_INITIAL, NULL);
+    }
 }
 
 char *css_shorthand_serialize_value(const char *shorthand, const char *const *values)
@@ -885,7 +1044,7 @@ char *css_shorthand_serialize_value(const char *shorthand, const char *const *va
     switch (row->kind) {
     case CSS_SH_FOUR_SIDE: return css_sh_four_side_value(values);
     case CSS_SH_TWO_AXIS:  return css_sh_two_axis_value(values);
-    case CSS_SH_TRIPLE:    return css_sh_triple_value(values[0], values[1], values[2]);
+    case CSS_SH_TRIPLE:    return css_sh_triple_value(values, row->initial, row->whole_initial);
     case CSS_SH_FONT:      return css_font_shorthand_value(values);
     default:
         DCHECK(row->kind == CSS_SH_BORDER,
@@ -917,6 +1076,26 @@ void css_shorthand_init(void)
                "a shorthand row carries no fixture value, so nothing exercises its expansion. Every row in this "
                "table is one css_shorthand_component takes apart — a row that is not is a shorthand whose "
                "declarations set no longhand at all, which reads as the property's INITIAL value everywhere");
+        DCHECK((row->kind == CSS_SH_TRIPLE) == (row->initial != NULL),
+               "a shorthand row carries a per-longhand INITIAL list without being the three-term `||` kind that "
+               "reads it, or is that kind and carries none. §6.7.2's omission rule needs exactly that list to "
+               "know which terms can be dropped, and a NULL one would be read past the null pointer rather "
+               "than reported");
+        DCHECK(row->whole_initial == NULL || row->initial != NULL,
+               "a shorthand row states its OWN `Initial:` line without the per-longhand initials the all-"
+               "initial case is detected by — the second is what decides that the first is ever reached");
+        if (row->whole_initial != NULL)
+            for (j = 0; j < row->n; j++) {
+                char *from_whole = css_shorthand_component(row->name, row->whole_initial, row->longhands[j]);
+
+                DCHECK(from_whole != NULL && strcmp(from_whole, row->initial[j]) == 0,
+                       "a shorthand's own `Initial:` line does not EXPAND to its longhands' own initial values, "
+                       "so the two faces of one value disagree. The serialization writes that line whenever "
+                       "every term is initial and the cascade writes those initials whenever the shorthand is "
+                       "not declared, and a page reading the shorthand back would then see a value no "
+                       "declaration of it could have produced");
+                free(from_whole);
+            }
         for (j = 0; j < row->n; j++) {
             DCHECK(strcmp(row->longhands[j], row->name) != 0,
                    "a shorthand names ITSELF among its longhands");
@@ -949,6 +1128,34 @@ void css_shorthand_init(void)
                "differs from what the page wrote for no reason a reader could see");
         free(back);
         for (j = 0; j < row->n; j++) free(values[j]);
+    }
+    /* css-inline-3 §4.2's THREE TERM SETS ARE DISJOINT, which is the property that lets its `||` be split by
+       the component value alone. Asserted by asking the partition itself about every keyword of every set: a
+       word that answered a term other than its own would be one the header's claim is false of, and the
+       symptom would be a `vertical-align: middle` setting `baseline-shift` — a silent wrong longhand rather
+       than a dropped declaration. The `<length-percentage>` arm needs no row here: it is the fallback the
+       partition reaches only after all three keyword sets have refused. */
+    {
+        static const char *const *const VA_SETS[] = {
+            BASELINE_SOURCE_KEYWORDS, ALIGNMENT_BASELINE_KEYWORDS, BASELINE_SHIFT_KEYWORDS
+        };
+        static const unsigned VA_SET_N[] = {
+            CSS_SH_N(BASELINE_SOURCE_KEYWORDS), CSS_SH_N(ALIGNMENT_BASELINE_KEYWORDS),
+            CSS_SH_N(BASELINE_SHIFT_KEYWORDS)
+        };
+
+        for (i = 0; i < CSS_SH_N(VA_SETS); i++)
+            for (j = 0; j < VA_SET_N[i]; j++) {
+                const char *canon = NULL;
+                const char *kw = VA_SETS[i][j];
+
+                DCHECK(vertical_align_term_of(kw, strlen(kw), &canon) == (int)i && canon != NULL &&
+                           strcmp(canon, kw) == 0,
+                       "a keyword of one of css-inline-3 §4.2's three term sets is classified as another "
+                       "term's, so the sets are not disjoint and the shorthand's `||` cannot be split by the "
+                       "component value. Whichever set is scanned FIRST would take the shared word and the "
+                       "other longhand would silently read its initial value");
+            }
     }
     /* THE THREE PART TABLES ARE ONE INDEX, and css_shorthand_component reads all three by it: the part index
        `border_part_index` answers with names the component grammar (BORDER_PARTS), the initial value the
@@ -1016,6 +1223,15 @@ bool css_shorthand_complete_for(const char *longhand)
        line, and the module states no shorthand over them — its own §3.2.1 "Obsolete SVG1.1 writing-mode Values"
        is about VALUES of `writing-mode` and not about a second property that sets it. The `text-orientation`
        §5.1 declares is a sibling longhand, not a container.
+       `baseline-source`, `alignment-baseline` and `baseline-shift` — css-inline-3 §4.2's `vertical-align` is
+       the only shorthand that sets any of the three, and it is in the table above. §4.2 says so in its own
+       words for the first ("if first or last is specified, it sets baseline-source, which is otherwise reset
+       to auto") and declares the other two as its remaining components; no other module states a shorthand
+       over them, and CSS Box Alignment 3's `place-*` shorthands are over `align-*`/`justify-*`, which are
+       different properties. THE ROW THAT MADE THIS ANSWERABLE IS THE SHORTHAND'S, and until it existed a
+       `vertical-align: middle` set NO longhand at all — the declaration reached the cascade as one lexbor had
+       typed and nothing had taken apart, so all three read as undeclared, with their initial values to show
+       for it and nothing to say the declaration was never looked at.
 
        THE FONT LONGHANDS, and the SEVEN that are deliberately absent. css-fonts-4 §2.7's `font` is the only
        shorthand in CSS that sets `font-size`, `line-height`, `font-family`, `font-style`, `font-weight` or
@@ -1030,6 +1246,7 @@ bool css_shorthand_complete_for(const char *longhand)
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
         "direction", "writing-mode",
+        "baseline-source", "alignment-baseline", "baseline-shift",
         "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",
         "font-feature-settings", "font-kerning", "font-language-override", "font-optical-sizing",
         "font-size-adjust", "font-variation-settings",
