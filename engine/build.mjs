@@ -15,8 +15,8 @@
  * harness once the browser target is wired.
  */
 import { spawnSync, spawn } from "node:child_process";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, statSync, readFileSync, rmSync, openSync, closeSync, symlinkSync } from "node:fs";
-import { dirname, join, resolve, relative, sep } from "node:path";
+import { mkdirSync, existsSync, copyFileSync, readdirSync, writeFileSync, readFileSync, renameSync, rmSync, openSync, closeSync, symlinkSync } from "node:fs";
+import { dirname, join, resolve, relative, isAbsolute, sep } from "node:path";
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
@@ -302,6 +302,11 @@ const QJS = join(ENGINE, "qjs");
 const HOST = join(ENGINE, "host");
 const OUT = join(HOST, "out");
 const EXT_QJS = join(ENGINE, "..", "extension", "lib", "qjs");   // where bridge.js imports the engine from
+/* THE CHECKOUT ROOT, and the only thing anything here is allowed to state an in-tree path relative to. §Testing
+   runs every gate from a frozen snapshot, so the absolute path of this tree is a fact about one directory that
+   existed for one afternoon — anything derived from it (a cache key, a `__FILE__`, an emitted manifest) is a
+   claim about a place rather than about the program. */
+const ROOT = resolve(ENGINE, "..");
 
 /* `--list-sources` answers WHAT THE PROGRAM IS and exits — check_recursion.sh shells back into this file to ask,
    and a list with build output in front of it is not a list.
@@ -508,7 +513,7 @@ if (LIST_SOURCES) {
    this disk, and they are derived from the same CFLAGS array the link uses rather than restated — this file
    may not hold a second copy either, or it becomes the thing it is fixing. */
 if (LIST_INCLUDE_ROOTS) {
-  const rel = (p) => relative(join(ENGINE, ".."), p).split(sep).join("/");
+  const rel = (p) => relative(ROOT, p).split(sep).join("/");
   console.log(JSON.stringify([
     { name: "engine", roots: ENGINE_INCLUDE_ROOTS.map(rel), sources: sources.map(rel) },
   ], null, 1));
@@ -714,6 +719,17 @@ const CFLAGS = [
      is explicit for that reason, and the moment it went in the gate found three more missing includes. */
   "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses", "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration",
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",
+  /* `__FILE__` IS REPO-RELATIVE, AND THAT IS A CORRECTNESS FLAG AND NOT A TIDINESS ONE. Every source reaches
+     the compiler by absolute path, so without this the string that bakes into an object — the one a DCHECK
+     prints as `@WHY <cond> at <file>:<line>` — is the absolute path of the directory the build happened to run
+     in. §Testing runs gates from a frozen snapshot that is deleted afterwards, so the file every abort named
+     was a path that no longer exists, in a tree no revision contains; `engine/host/browser/core/dom/x.c:123` is
+     an answer the reader can open. It is also what makes an object PATH-INDEPENDENT — measured: two checkouts
+     of one revision emit BYTE-IDENTICAL objects with this flag and differ without it — which is the property
+     the content-addressed object names below rely on to be shareable rather than merely equal-looking.
+     It rewrites `__FILE__` and debug paths only; the -MMD dependency list keeps real absolute paths, which is
+     what the identity code below re-roots for itself. */
+  "-ffile-prefix-map=" + ROOT + "/=",
   // Offensive-programming build mode (check.h): DEV (default) keeps every DCHECK live so a should-never-happen
   // aborts LOUD at its origin; a `release` arg compiles them out (the release exemption — the user is not
   // crashed on an unsupportable state). CHECK (OOM/security) stays fatal in both.
@@ -753,70 +769,205 @@ const LDFLAGS_ABI = [
   "-sMODULARIZE=1", "-sEXPORT_ES6=1", "-sEXPORT_NAME=createQJS", "-sINVOKE_RUN=0",
 ];
 
-/* ── OBJECTS, COMPILED ONCE AND CACHED ────────────────────────────────────────────────────────────────────
-   An object is rebuilt when it is missing, when its source is newer, or when any HEADER it included is newer —
-   the last of which is the one a hand-rolled cache always gets wrong, so it is not hand-rolled: clang emits the
-   real dependency list with -MMD and this reads it back. A cache that misses a header edit is worse than no
-   cache, because it reports a stale binary as a fresh one. */
+/* ── OBJECTS, NAMED BY WHAT PRODUCED THEM ─────────────────────────────────────────────────────────────────────
+   AN OBJECT'S FILENAME IS THE HASH OF EVERYTHING THAT DECIDES ITS BYTES: the flags, the toolchain, the source,
+   and every header the compiler recorded itself as having read. Nothing below compares a timestamp, so nothing
+   below can be wrong about one, and "is this object stale?" stops being a question anyone has to answer
+   correctly — a stale object simply has a different NAME from the one being asked for.
+   WHERE THE HEADER LIST COMES FROM IS UNCHANGED AND IS STILL THE POINT: a cache that misses a header edit is
+   worse than no cache, because it reports a stale binary as a fresh one, so the list is not hand-rolled —
+   clang emits the real one with -MMD and this reads it back. What changed is that the list is HASHED rather
+   than stat'd, which is the same guarantee with no clock, no ordering assumption, and no `touch` that costs
+   twenty minutes of compiling.
+   THE PATH IS NOT THE IDENTITY, AND THAT IS WHY THIS WAS THE PROJECT'S RATE LIMITER. The key used to be the
+   source's ABSOLUTE path. §Testing requires a gate to run from a FROZEN SNAPSHOT, so every measured build
+   happens in a checkout that has never existed before — and the same file at a new absolute path was a new
+   cache entry, so every one of those builds compiled all ~295 translation units from cold. A content name is
+   the same name in any checkout at any path, so an obj/ directory copied or shared between snapshots HITS
+   exactly when the content genuinely matches, and MISSES exactly when it does not.
+   AND MERELY MAKING THE KEY RELATIVE IS THE TRAP, NOT THE FIX: the .d files clang writes record ABSOLUTE header
+   paths, so a relative key plus a copied obj/ would resolve every dependency into the DONOR tree — where those
+   headers still exist, with older mtimes — and report FRESH for an object compiled against a different tree's
+   headers. That is the stale-binary-reported-fresh failure with an extra tree in it. Every dependency is
+   therefore RE-ROOTED before it is recorded (`repo:<path-from-the-checkout-root>`); an out-of-tree toolchain
+   header keeps its absolute path, because that IS one file for every checkout on this machine; and either way
+   it is hashed by CONTENT, so which tree it was read from cannot matter. */
 const OBJDIR = join(WORK, "obj");
 mkdirSync(OBJDIR, { recursive: true });
-/* THE FLAGS ARE PART OF THE OBJECT'S IDENTITY, NOT A THING THE CACHE COMPARES. The comment above says a cache
-   that misses a header edit reports a stale binary as a fresh one; this cache missed a FLAG edit, which is the
-   same defect with a wider blast radius. `CFLAGS` carries `-DAPICLIENT_DEV=0` under `release` and `=1`
-   otherwise — the switch that compiles out every DCHECK — and `objIsStale` compared only mtimes, so
+/* THE FLAGS ARE PART OF THE OBJECT'S NAME, NOT A THING THE CACHE COMPARES. The comment above says a cache
+   that misses a header edit reports a stale binary as a fresh one; this cache once missed a FLAG edit, which is
+   the same defect with a wider blast radius. `CFLAGS` carries `-DAPICLIENT_DEV=0` under `release` and `=1`
+   otherwise — the switch that compiles out every DCHECK — and the cache compared only mtimes, so
    `node engine/build.mjs release` after a dev build found every object fresh, relinked the DEV objects, and
    reported a green release build of a program that was never built. That is §Testing's "a number about
    NOTHING" in the build system itself, and it is why release mode had to be verified with `-fsyntax-only`
    rather than by running the target.
-   Hashing the flags into the PATH rather than storing them for comparison is what makes the failure
+   Hashing the flags into the NAME rather than storing them for comparison is what makes the failure
    impossible instead of detected: two flag sets are two files, so neither can masquerade as the other and
-   both stay cached across switches. The compiler binary is in the hash for the same reason a header is —
-   changing it changes the output. */
-const FLAG_ID = createHash("sha256").update(EMCC + " " + CFLAGS.join(" ")).digest("hex").slice(0, 12);
-const objPath = (src) => join(OBJDIR, resolve(src).replace(/[\\/:]/g, "_") + "." + FLAG_ID + ".o");
-
-function objIsStale(src, obj) {
-  if (!existsSync(obj)) return true;
-  const objTime = statSync(obj).mtimeMs;
-  if (statSync(src).mtimeMs > objTime) return true;
-  const dep = obj.replace(/\.o$/, ".d");
-  if (!existsSync(dep)) return true;   /* no recorded deps is not "no deps" — it is no information */
-  for (const f of readFileSync(dep, "utf8")
-                    .replace(/\\\r?\n/g, " ").split(/\s+/).slice(1).filter(Boolean)) {
-    if (!existsSync(f)) return true;   /* a header that vanished changes the compile */
-    if (statSync(f).mtimeMs > objTime) return true;
+   both stay cached across switches. */
+/* WHERE THIS TREE HAPPENS TO SIT IS NOT PART OF ANY IDENTITY — the one rule, applied to every string that goes
+   into a name. `CFLAGS` carries four absolute `-I` roots and an absolute -ffile-prefix-map, and `emcc -v` names
+   an absolute InstalledDir; each of those changes in every frozen snapshot while naming the same headers and
+   the same compiler, so leaving any of them in re-creates the absolute-path cache key one level up and every
+   snapshot goes cold for a reason that is not about the program.
+   Measured rather than assumed: the `-I` roots alone made two checkouts of ONE revision share nothing, and the
+   run that seemed to prove the cache worked had in fact only reused its own earlier run in the same tree. */
+/* THE TOOLCHAIN IS ASKED FOR ITS VERSION, NOT POINTED AT. The line this replaced hashed the STRING `EMCC` under
+   a comment claiming "the compiler binary is in the hash for the same reason a header is" — and it was not:
+   emsdk upgrades IN PLACE, so one path names two compilers that emit different objects, and the claim was a
+   false statement of exactly the kind a cache comment must not make. `emcc -v` costs ~0.2 s once per build,
+   names both the emscripten and the clang commit, and goes through `unroot` like every other string here. */
+const unroot = (s) => s.split(EMSDK).join("<emsdk>").split(ROOT).join("<root>");
+const TOOLCHAIN_ID = (() => {
+  const v = spawnSync(EMCC, ["-v"], { encoding: "utf8" });
+  const text = unroot(((v.stdout || "") + (v.stderr || "")).split("\n")
+                        .filter((l) => !l.startsWith("InstalledDir")).join("\n"));
+  if (!/^emcc \(/m.test(text)) {
+    console.error("[build] `emcc -v` did not report a version (rc=" + v.status + ")\n" +
+                  "[build]   an object may not be named for a toolchain this cannot identify — a name that\n" +
+                  "[build]   does not change when the compiler does is how a stale object is reported fresh.");
+    process.exit(1);
   }
-  return false;
+  return text;
+})();
+const FLAG_ID = createHash("sha256")
+  .update(TOOLCHAIN_ID + "\0" + unroot(CFLAGS.join("\0"))).digest("hex").slice(0, 12);
+
+/* ONE READ PER FILE PER BUILD, NOT PER TRANSLATION UNIT — check.h is in nearly every dependency list and is
+   hashed once. That is the whole of the cost control: what gets read is the unique file SET, not the ~2900
+   (source, header) pairs that name it. */
+const fileHashes = new Map();
+function fileHash(abs) {
+  if (!fileHashes.has(abs))
+    /* ABSENT IS A POSITIVE ANSWER, not a hole to fill: a recorded dependency that is gone means this source has
+       no identity in this tree, which the one caller turns into a compile. */
+    fileHashes.set(abs, existsSync(abs) ? createHash("sha256").update(readFileSync(abs)).digest("hex") : null);
+  return fileHashes.get(abs);
+}
+const depName = (p) => {
+  const abs = resolve(p), r = relative(ROOT, abs);
+  return (r && !r.startsWith("..") && !isAbsolute(r)) ? "repo:" + r.split(sep).join("/") : "abs:" + abs;
+};
+const depFile = (d) => (d.startsWith("repo:") ? join(ROOT, d.slice(5)) : d.slice(4));
+
+/* WHAT CLANG RECORDED IT READ. The first token is the `<object>:` target, which is why it is dropped; every
+   remaining token is a real input and the source itself is among them. Sorted, so the name does not depend on
+   the order a compiler happened to emit — a reordering would otherwise cost a recompile and nothing else. */
+function parseDepFile(dFile) {
+  if (!existsSync(dFile)) return null;   /* no recorded deps is not "no deps" — it is no information */
+  const toks = readFileSync(dFile, "utf8")
+                 .replace(/\\\r?\n/g, " ").trim().split(/\s+/).slice(1).filter(Boolean);
+  return toks.length ? [...new Set(toks.map(depName))].sort() : null;
+}
+
+/* THE NAME. Null when the list names a file this tree does not have — that is "no identity", and it is never a
+   name computed from the shorter list that remains: a name is only ever the hash of a COMPLETE set. */
+function contentId(deps) {
+  const h = createHash("sha256").update("apiclient-obj-v1\0" + FLAG_ID);
+  for (const d of deps) {
+    const fh = fileHash(depFile(d));
+    if (fh === null) return null;
+    h.update("\0" + d + "\0" + fh);
+  }
+  return h.digest("hex");
+}
+const objFor = (id) => join(OBJDIR, id + ".o");
+
+/* THE DEPENDENCY RECORD IS A HINT AND THE OBJECT NAME IS A FACT — the invariant the whole scheme rests on, and
+   the answer to "can a stale record produce a false HIT?".
+   The record says which files to hash. It is keyed by (source path, flags) because that is what is known BEFORE
+   a compile; it can be some other tree's answer; and being wrong makes the computed name MISS.
+   The name is written only by `adopt` below, only after a compile that had just observed its OWN COMPLETE
+   dependency list. So `<id>.o` existing means: some compile, with these flags and this toolchain, over a source
+   and headers whose bytes hash to `id`, produced it — and a compiler's output is a function of exactly those
+   inputs, so that object IS the object being asked for. Worked through: a hint that omits a header h2 makes the
+   computed name H(src, h1) for a source that really reads {h1, h2}; no compile of that source ever recorded a
+   list without h2, so nothing was ever published under that name, and the lookup misses. A wrong hint therefore
+   costs a needless recompile and can cost nothing else, which is the only failure mode a memo in a build system
+   may have.
+   The record's first line is its SUBJECT, checked on read, so a record can never be spent on another source. */
+const depRecord = (src) => join(OBJDIR, createHash("sha256")
+  .update("apiclient-deps-v1\0" + FLAG_ID + "\0" + depName(src)).digest("hex").slice(0, 32) + ".deps");
+function recordedDeps(src) {
+  const f = depRecord(src);
+  if (!existsSync(f)) return null;
+  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean);
+  return lines.length > 1 && lines[0] === depName(src) ? lines.slice(1) : null;
 }
 
 /* Both entries are compiled every time, because both are LINKED every time. */
 const TO_COMPILE = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
-const stale = TO_COMPILE.filter((s) => objIsStale(s, objPath(s)));
+/* src -> the object that IS this source at this content. Absent means "compile it", and that is also the only
+   thing a NEVER-COMPILED source can mean: its header list does not exist until a compile writes one, so there
+   is nothing to hash and NO name to invent. Naming it from the source bytes alone is the false hit this whole
+   arrangement exists to make impossible — such a name does not change when a header does, so the SECOND build
+   would compute the same name and HIT an object compiled against headers that have since been edited. A source
+   with no identity is therefore given none: it compiles to a private temporary and is named afterwards. */
+const OBJ_OF = new Map();
+const IDENTITY_T0 = Date.now();
+for (const src of TO_COMPILE) {
+  const deps = recordedDeps(src);
+  const id = deps && contentId(deps);
+  if (id && existsSync(objFor(id))) OBJ_OF.set(src, objFor(id));
+}
+const IDENTITY_MS = Date.now() - IDENTITY_T0;
+const stale = TO_COMPILE.filter((s) => !OBJ_OF.has(s));
 console.log("[build] " + TO_COMPILE.length + " sources, " + stale.length + " to compile" +
-            (stale.length < TO_COMPILE.length ? " (rest cached)" : ""));
+            (stale.length < TO_COMPILE.length ? " (rest cached)" : "") +
+            " [identity " + IDENTITY_MS + " ms over " + fileHashes.size + " files]");
 
 if (stale.length) {
-  /* IN PARALLEL, bounded by the cores actually present. A cold build is ~130 translation units and the machine
-     is otherwise idle while each one runs. */
+  /* IN PARALLEL, bounded by the cores actually present. A cold build is every translation unit in the program
+     and the machine is otherwise idle while each one runs. */
   const JOBS = Math.max(1, cpus().length - 1);
-  let next = 0, failed = 0, running = 0;
+  let next = 0, failed = 0, running = 0, tmpSeq = 0;
   await new Promise((done) => {
     const pump = () => {
       while (running < JOBS && next < stale.length) {
-        const src = stale[next++], obj = objPath(src);
+        const src = stale[next++];
+        /* A PRIVATE TEMPORARY, because the name this object will carry is not known until it has been compiled
+           and has said what it read. The pid keeps two concurrent builds out of each other's way; the final
+           name they both arrive at is the same one, and arriving there is a rename, which is atomic. */
+        const tmp = join(OBJDIR, ".tmp-" + process.pid + "-" + tmpSeq++);
         running++;
-        const p = spawn(EMCC, [...CFLAGS, "-MMD", "-MF", obj.replace(/\.o$/, ".d"), "-c", src, "-o", obj],
+        const p = spawn(EMCC, [...CFLAGS, "-MMD", "-MF", tmp + ".d", "-c", src, "-o", tmp + ".o"],
                         { stdio: "inherit", shell: true, cwd: QJS });
+        /* THE NAMING, AND IT IS THE ONLY PLACE AN OBJECT EVER GETS A NAME. It runs on a compile that exited 0,
+           over the dependency list THAT compile just wrote, so the invariant the lookup rests on holds by
+           construction: `<id>.o` exists only where `id` is the hash of a complete, observed input set. Every
+           way of not knowing that set is a failure here rather than a shorter hash — a name computed from part
+           of the inputs is precisely the stale-object-reported-fresh defect, arrived at from the other end. */
+        const adopt = () => {
+          const deps = parseDepFile(tmp + ".d");
+          if (!deps)
+            return "the compiler exited 0 and recorded no dependency list, so this object cannot be named — "
+                 + "naming it from its source alone would give it a name that does not change when a header does";
+          if (!deps.includes(depName(src))) return "the recorded dependency list does not name the source itself";
+          const id = contentId(deps);
+          if (!id) return "a file this compile had just read is already gone";
+          renameSync(tmp + ".o", objFor(id));            /* the FACT, published atomically */
+          writeFileSync(depRecord(src), [depName(src), ...deps].join("\n") + "\n");   /* the HINT, after it */
+          rmSync(tmp + ".d", { force: true });
+          OBJ_OF.set(src, objFor(id));
+          return null;
+        };
         let settled = false;
         const settle = (why) => {          /* exit and error are not mutually exclusive; the pump must run once */
           if (settled) return;
           settled = true;
-          if (why) { failed++; console.error("[build] FAILED " + src + " — " + why); }
+          if (why) {
+            failed++;
+            /* NOTHING HALF-NAMED SURVIVES A FAILURE. A temporary left behind is an object with no identity, and
+               an obj/ directory that accumulates those is a directory whose contents stop meaning anything. */
+            rmSync(tmp + ".o", { force: true });
+            rmSync(tmp + ".d", { force: true });
+            console.error("[build] FAILED " + src + " — " + why);
+          }
           running--;
           if (next >= stale.length && running === 0) done();
           else pump();
         };
-        p.on("exit", (code) => settle(code === 0 ? null : "compiler exited " + code));
+        p.on("exit", (code) => settle(code === 0 ? adopt() : "compiler exited " + code));
         /* A SPAWN THAT NEVER STARTS MUST BE A FAILED TU, NOT AN UNHANDLED THROW. With no `error` listener node
            raises the event as an exception, so the build died mid-run with no line naming a source — and
            `running--` never ran either, so the promise it was inside could not have settled had the throw been
@@ -833,7 +984,19 @@ if (stale.length) {
   if (failed) { console.error("[build] FAILED — " + failed + " source(s) did not compile"); process.exit(1); }
 }
 
-const OBJS_SHARED = SHARED_SOURCES.map(objPath);
+/* THE LINK ASKS FOR AN OBJECT BY SOURCE AND IS ANSWERED OR THE BUILD STOPS. Every source either had a name at
+   the top of this section or was compiled and named by `adopt`, so an absent entry here is not a link that will
+   be short one object — it is a source that reached the link with no compiled identity at all, which can only
+   mean the compile loop lost it. Say so at the source rather than hand wasm-ld a shorter list. */
+function mustObj(src) {
+  const o = OBJ_OF.get(src);
+  if (!o || !existsSync(o)) {
+    console.error("[build] no object for " + src + " — it reached the link with no compiled identity");
+    process.exit(1);
+  }
+  return o;
+}
+const OBJS_SHARED = SHARED_SOURCES.map(mustObj);
 
 /* ── LINK BOTH PROGRAMS ───────────────────────────────────────────────────────────────────────────────────
    THE ABI ARTIFACT STAGES WHERE THE EXTENSION LOADS IT: bridge.js does import("./lib/qjs/qjs.mjs"), so that is
@@ -856,11 +1019,11 @@ function link(what, entryObj, ldflags, out) {
   console.log("[build] OK -> " + out);
   return { label: what + " link", verdict: "PASS", code: 0 };
 }
-const SMOKE_LINK = link("smoke", objPath(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
+const SMOKE_LINK = link("smoke", mustObj(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
 const ABI_LINK = ABI_LIST.code
   ? skipped("production ABI link", "the renderer ABI list and main.c's QJS_EXPORT bodies disagree, so this "
                                  + "link's --export= list is known wrong")
-  : link("production ABI", objPath(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
+  : link("production ABI", mustObj(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
 
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old
