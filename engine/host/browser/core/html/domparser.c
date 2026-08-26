@@ -12,7 +12,9 @@
  * but the four PARSE-BOUNDARY seams a lexbor tree needs afterwards, and WHICH of them §8.5.1 asks for is
  * decided by the standard rather than by symmetry — see the seams at the end of `parse_html_from_a_string`.
  *
- * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because there is no XML parser in this build. Lexbor ships no
+ * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because no component here yet parses a DOCUMENT — core/xml/
+ * holds the character, name, reference, markup, declaration, literal, namespace and §3.1 tag layers, and what
+ * stands between them and a Document is the crash's own list, in spec order. Lexbor ships no
  * `xml` module — `engine/build.mjs` states which release this tree pins and `ls source/lexbor` in the vendored
  * checkout is the whole of the check — so CLAUDE.md's bind-before-build order has nothing at the "existing
  * Lexbor module" rung and what is owed is a faithful spec port. THE RELEASE NUMBER THAT STOOD IN THIS SENTENCE
@@ -282,29 +284,47 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
            never ran: §8.5.1 produces one for an XML WELL-FORMEDNESS ERROR, which a build with no parser has not
            found. The release build throws for the same reason — a capability that is not supportable outside
            development fails rather than fabricating a Document the moat would then report on. */
-        DFAIL("HTML §8.5.1 parseFromString reached its XML arm and this build has no XML parser (lexbor ships "
-              "no xml module at the release engine/build.mjs pins). XMLHttpRequest §3.6.6 step 6 stands at the "
-              "same wall in core/xhr/xml_http_request.c. BUILD ONE COMPONENT FOR BOTH: a namespace-aware XML "
-              "parser that produces a Lexbor tree and reports XML and XML-namespace well-formedness errors. "
-              "ITS LEAVES ARE ALREADY IN core/xml/ AND MUST NOT BE REBUILT — xml_char.h is XML 1.0 5e §2.2's "
-              "[2] Char, §2.3's [3] S and §2.11's end-of-line normalization as the reader every production "
-              "reads through, xml_name.h is §2.3's [5] Name with Namespaces in XML's NCName and QName, "
-              "xml_ref.h is §4.1's [66] CharRef and [68] EntityRef with §4.6's five predefined entities, "
-              "xml_markup.h is §2.5's [15] Comment, §2.6's [16] PI and §2.7's [18] CDSect — the three "
-              "constructs §2.4 names as the places a literal < or & may stand, so none of their content ever "
-              "reaches xml_ref.h — xml_decl.h is §2.8's [23] XMLDecl with §2.9's [32] SDDecl and §4.3.1's "
-              "[77] TextDecl, xml_literal.h is §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] "
-              "PubidChar, and "
-              "xml_ns.h is that standard's §6 scope stack with every §3 and §5 constraint as a returned error. "
-              "What is owed is the GRAMMAR between them: §2.8's [22] prolog around its [23] XMLDecl and its "
-              "[28] doctypedecl with [28b] intSubset, §4.2's [70] EntityDecl, §3's [39] "
-              "element with [40] STag / [42] ETag / [44] EmptyElemTag and [43] content, "
-              "and §3.3.3 attribute-value normalization over [10] AttValue, which is written over "
-              "xml_ref.h's result and over §4.5's replacement text. Then route this arm to it, build §8.5.1 "
-              "step 3's "
-              "parsererror element in the "
-              "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace from the error it reports, and "
-              "route §3.6.6's arm to it too");
+        DFAIL("HTML §8.5.1 parseFromString reached its XML arm and this build has no XML DOCUMENT parser. "
+              "Lexbor ships no xml module — `ls engine/lexbor/source/lexbor` is the whole of that check and it "
+              "is the same answer upstream, so CLAUDE.md's bind-before-build order has nothing at the "
+              "existing-module rung and what is owed is a faithful spec port. XMLHttpRequest §3.6.6 step 6 "
+              "stands at the same wall in core/xhr/xml_http_request.c. BUILD ONE COMPONENT FOR BOTH: a "
+              "namespace-aware XML parser producing a Lexbor tree and reporting XML and XML-namespace "
+              "well-formedness errors. MOST OF IT IS ALREADY IN core/xml/ AND MUST NOT BE REBUILT — read those "
+              "headers before writing a line. The LEAVES: xml_char.h is XML 1.0 5e §2.2's [2] Char, §2.3's [3] "
+              "S and §2.11's end-of-line normalization as the reader every production reads through, plus the "
+              "§4.3.3 encode §3.3.3 needs; xml_name.h is §2.3's [5] Name with Namespaces in XML's NCName and "
+              "QName; xml_ref.h is §4.1's [66] CharRef and [68] EntityRef with §4.6's five predefined "
+              "entities; xml_markup.h is §2.5's [15] Comment, §2.6's [16] PI and §2.7's [18] CDSect — the "
+              "three constructs §2.4 names as the places a literal < or & may stand, so none of their content "
+              "ever reaches xml_ref.h; xml_decl.h is §2.8's [23] XMLDecl with §2.9's [32] SDDecl and §4.3.1's "
+              "[77] TextDecl; xml_literal.h is §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] "
+              "PubidChar; xml_ns.h is that standard's §6 scope stack with every §3 and §5 constraint as a "
+              "returned error. AND THE FIRST GRAMMAR RULE IS BUILT TOO: xml_tag.h is §3.1's [40] STag, [42] "
+              "ETag and [44] EmptyElemTag over [41] Attribute, [25] Eq and [10] AttValue, with §3.3.3 "
+              "Attribute-Value Normalization and with [WFC: Unique Att Spec], [WFC: No < in Attribute Values] "
+              "and [WFC: Entity Declared] decided — so DO NOT WRITE A SECOND TAG SCANNER. "
+              "WHAT IS STILL OWED, IN SPEC ORDER: (1) §3's [39] element ::= EmptyElemTag | STag content ETag "
+              "over §3.1's [43] content, which is the ELEMENT STACK — it owns [WFC: Element Type Match], the "
+              "constraint xml_tag.c deliberately does not check because it is written on [39] and is about a "
+              "PAIR of tags. (2) §2.1's [1] document ::= prolog element Misc*, with §2.8's [22] prolog around "
+              "its [23] XMLDecl (xml_decl.h answers it) and its [28] doctypedecl. (3) THE DOM CONSTRUCTION: "
+              "each [39] element becomes a Lexbor node, its attributes are expanded through xml_ns.h's scope "
+              "(push at the STag, pop at the ETag) and Namespaces in XML 1.0 3e §6.3 Uniqueness of "
+              "Attributes' expanded-name half is checked there, since xml_tag.c can only answer §3.1's "
+              "literal-Name half. (4) §8.5.1 step 3's parsererror element in the "
+              "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace, built from the error record — "
+              "every component in core/xml/ already reports its sentence as a message, so nothing new has to "
+              "be worded. (5) Route this arm to it, and route §3.6.6's arm to it too. "
+              "THE DOCTYPE IS A SECURITY DECISION AND MUST CRASH RATHER THAN BE SKIPPED. Nothing here reads "
+              "§2.8's [28] doctypedecl, which is why xml_tag.c can answer an [68] EntityRef outside §4.6's "
+              "five with [WFC: Entity Declared] — in a document without any DTD that IS the standard's answer. "
+              "The moment [28] is read that stops being true, so whoever builds it owes §4.2's [70] EntityDecl "
+              "WITH §3.1's [WFC: No External Entity References] and §4.4.4 Forbidden's third bullet in the "
+              "same diff: an attribute value MUST NOT reference an external entity, and a parser that resolves "
+              "one has put an XXE inside a security tool. Until then a [28] doctypedecl is an unbuilt "
+              "capability and belongs in the prolog walk as its own DFAIL, never as a construct skipped to "
+              "reach the element");
         return JS_ThrowInternalError(ctx, "parseFromString: this build has no XML parser");
     }
 

@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include <lexbor/encoding/decode.h>
+#include <lexbor/encoding/encode.h>
 
 #include "check.h"
 #include "core/xml/xml_char.h"
@@ -91,6 +92,52 @@ static lxb_codepoint_t decode_one(const char *p, const char *end, const char **a
            "its two sentinels — this component reads that answer as a three-way choice and a fourth outcome "
            "would be silently classified as a character");
     return cp;
+}
+
+/* THE BYTES BACK OUT, through the same module the decode goes through — CLAUDE.md's bind-before-build order
+   puts an existing Lexbor module above a hand-rolled walk, and `lxb_encoding_encode_utf_8_single` is the exact
+   inverse of the decoder above with no WHATWG substitution in it: it encodes what it is given and answers
+   LXB_ENCODING_ENCODE_ERROR above U+10FFFF rather than emitting U+FFFD. That matters here — a replacement
+   character would turn a caller's bug into a character the document is then said to have contained.
+   THE ENCODE CONTEXT IS A ZEROED LOCAL AND NOTHING READS IT. The UTF-8 encoder never touches `ctx` (it is
+   there for the stateful encoders in the same table), which is why the whole of a fresh one is a zero. */
+size_t xml_char_encode(uint32_t cp, char *dst)
+{
+    lxb_encoding_encode_t enc;
+    lxb_char_t *q = (lxb_char_t *)dst;
+    int8_t n;
+
+    DCHECK(dst != NULL, "an XML character was encoded with nowhere to put it");
+    DCHECK(xml_char_is_char(cp),
+           "an XML character encode was handed a code point that is not §2.2's [2] Char — every caller has one "
+           "from this file's own reader, which checked it, or from core/xml/xml_ref.h's [66] scan, which "
+           "enforces [WFC: Legal Character], so a value outside the production is an engine bug and not a "
+           "document that contains one");
+    memset(&enc, 0, sizeof enc);
+    n = lxb_encoding_encode_utf_8_single(&enc, &q, (lxb_char_t *)dst + XML_CHAR_ENCODE_MAX, (lxb_codepoint_t)cp);
+    DCHECK(n >= 1 && n <= XML_CHAR_ENCODE_MAX,
+           "lexbor's single-character UTF-8 encoder could not spell a code point this file had already decided "
+           "is §2.2's [2] Char — the two are one module and [2] Char is a subset of what UTF-8 can encode, so "
+           "a refusal here means the buffer bound and the production's ceiling have drifted apart");
+    DCHECK((char *)q == dst + n, "lexbor's UTF-8 encoder advanced its cursor by a different number of bytes "
+                                 "than it reported writing");
+    /* TWO-SIDED, ON EVERY CALL. The encode and the decode are one rule read in two directions, and a
+       mis-transcription of either would produce bytes that are not the character asked for — which nothing
+       downstream could tell from a document that held those bytes. Reading it back through THIS file's
+       decoder is what makes that impossible rather than unlikely; it is not a reader, so §4.3.3's Byte Order
+       Mark question never arises and a legitimate `&#xFEFF;` round-trips like any other character.
+       The decode stands INSIDE the assertion so that a release build does not perform it: `after` is a local
+       nothing outside the check can observe, which is what makes the call side-effect-free in the sense
+       check.h requires of a DCHECK condition. */
+    {
+        const char *after = NULL;
+
+        DCHECK(decode_one(dst, dst + n, &after) == (lxb_codepoint_t)cp && after == dst + n,
+               "an XML character did not read back as the character it was encoded from — the encoder and the "
+               "decoder are one rule in two directions and a disagreement means one of the two is wrong");
+        (void)after;
+    }
+    return (size_t)n;
 }
 
 void xml_char_reader_init(XmlCharReader *r, const char *s, size_t len)

@@ -159,4 +159,29 @@ XmlCharError xml_char_read(XmlCharReader *r, uint32_t *out);
 size_t xml_char_normalized_len(const char *s, size_t len);
 size_t xml_char_normalize(const char *s, size_t len, char *dst);
 
+/* THE INVERSE OF THE READ — the bytes §4.3.3 Character Encoding in Entities would have spelt this character
+ * with, for the ONE kind of production whose result is TEXT THE ENTITY DOES NOT CONTAIN.
+ *
+ * WHY IT EXISTS AT ALL, when every other production here hands back a borrowed slice. §3.3.3
+ * Attribute-Value Normalization builds a value out of characters that are not the ones written down: its step
+ * 3a appends "the referenced character" of a [66] `CharRef` where the entity holds `&#x3C;`, and its step 3c
+ * appends a space where the entity holds a tab. So the value has to be BUILT, and building it means turning
+ * a code point back into bytes — which is this component's sentence, because §4.3.3 is what says which bytes,
+ * and because the decoder that must agree with it lives here. Two owners is how two spellings drift apart.
+ *
+ * IT DOES NOT APPLY §2.11, AND THAT IS THE POINT RATHER THAN AN OMISSION. §3.3.3's own note turns on exactly
+ * this: "if the unnormalized attribute value contains a character reference to a white space character other
+ * than space (#x20), the normalized value contains the referenced character itself (#xD, #xA or #x9)". So a
+ * `&#xD;` in an attribute value is a carriage return the standard requires to SURVIVE, while a literal #xD in
+ * the same value was already gone before the grammar saw it. This function writes the character it is given;
+ * the reader is where §2.11 lives, and a second copy of that rule here would delete a #xD the standard keeps.
+ *
+ * The code point MUST be §2.2's [2] Char — every caller has one either from the reader, which checked it, or
+ * from core/xml/xml_ref.h, whose [66] scan enforces [WFC: Legal Character] — so a value outside it is a
+ * caller's bug and not a document's, and it aborts rather than encoding something no XML document may hold.
+ * At most XML_CHAR_ENCODE_MAX bytes are written and the count is returned; the result is read back through
+ * this file's own decoder on every call, so the encoder and the decoder cannot disagree silently. */
+#define XML_CHAR_ENCODE_MAX 4
+size_t xml_char_encode(uint32_t cp, char *dst);
+
 #endif
