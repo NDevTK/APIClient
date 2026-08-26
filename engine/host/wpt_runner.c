@@ -3028,16 +3028,20 @@ int main(int argc, char **argv)
         int r = engine_sched_step();
         int did;
 
-        /* THE ONE EXIT IS DONE, AND THE TWO ENDS THAT ARE NOT DONE ASK FOR A PARK FIRST — see below. */
-        if (r == ENGINE_STEP_DONE) break;
-        /* THE STEP AFTER A PARK REQUEST TAKES IT (engine.h's engine_request_park: at the next boundary with no
-           flow switched in, which is the top of the very next slice, before the first pick). So a second step
-           that answered anything else means the residue is still live and everything below would be paying for
-           work this measurement has already ended. */
-        DCHECK(!g_parking,
-               "this host asked the engine to write its frontier out and the step that followed did not take "
-               "the park — the residue is still live, so the teardown below is about to release flows whose "
-               "recipes were never written");
+        /* THE STEP AFTER A PARK REQUEST IS THE ONE THAT TAKES IT (engine.h's engine_request_park: at the next
+           boundary with no flow switched in, which is the top of the very next slice, before the first pick),
+           so this run is over the moment it returns. What is still owed is the park's OWN announcements — it
+           emits them between writing the residue and closing the session, which the engine calls the last
+           point at which a notice of ours is still drained. The REQUESTS are deliberately not answered here:
+           the session is closed, and engine_host_answer into a closed frontier delivers to nobody. */
+        if (g_parking) {
+            DCHECK(r == ENGINE_STEP_DONE,
+                   "this host asked the engine to write its frontier out and the step that followed did not "
+                   "take the park — the residue is still live, so the teardown below is about to release "
+                   "flows whose recipes were never written");
+            wpt_drain_notices(ctx);
+            break;
+        }
 
         /* THE MEASUREMENT ENDED, so the session does — HTML §7.3.1.6 "Navigable destruction". `done()` is
            testharness's own end of the test and the verdict is already printed (js_wpt_test_complete says why
@@ -3072,6 +3076,10 @@ int main(int argc, char **argv)
         did = wpt_answer_host_requests(ctx);
         if (wpt_issue_pending() > 0) did = 1;
         if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
+        /* AFTER THE HOST'S HALF AND NOT BEFORE IT. The final step emits like any other — a notice naming a
+           document, a reply a flow was owed — and a DONE checked ahead of this line would leave exactly those
+           undrained, which is the emitting-end-invisible drop the router's own DFAIL is about. */
+        if (r == ENGINE_STEP_DONE) break;
         if (r == ENGINE_STEP_STALLED && !did) {
             /* NOTHING RUNNABLE, AND THIS HOST FILLED NOTHING — which is a WAIT if an answer is on its way and
                a DISAGREEMENT if one is not, and those were the same line until the network edge could tell
@@ -3093,11 +3101,7 @@ int main(int argc, char **argv)
             wpt_net_pump(ctx, /*block*/1);
         }
     }
-    /* THE PARK'S OWN NOTICES, drained at the one point the engine says they are still drainable — the park
-       emits them between writing the residue and closing the session (engine.c), and this loop left on the
-       DONE that same step answered, so nothing else would ever look at them. */
-    wpt_drain_notices(ctx);
-    /* AND THE ENGINE'S OWN ANSWER TO THE CLAIM THE PARK ABOVE MAKES. "Every member was written out as a
+    /* THE ENGINE'S OWN ANSWER TO THE CLAIM THE PARK ABOVE MAKES. "Every member was written out as a
        recipe" is exactly the sort of statement that reads as true because it was intended; engine_frontier_paged
        is the engine saying whether this frontier was WRITTEN rather than drained, so the claim is checked at the
        one place it is load-bearing instead of asserted by the comment that makes it. */
