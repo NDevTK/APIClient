@@ -4918,8 +4918,27 @@ static int s_arraylen(const char *js, const char *sink, const char *src, const c
  * SO THE RUNGS ARE THE FACTS, each read from the field that IS it: SEEN is an entry at all, SEEDED is `tried`,
  * RAN is `turns` (solve_flow_begin counts a switch-in of one of this search's candidate flows), ARRIVED is
  * `reached` (a BREAKOUT's own bytes in the string the sink was handed), FIRED is a `poc`. Five facts, five
- * fields, no field standing in for a neighbour. */
-enum { S_UNSEEN = 0, S_SEEN, S_SEEDED, S_RAN, S_ARRIVED, S_FIRED };
+ * fields, no field standing in for a neighbour.
+ *
+ * AND `ARRIVED` IS NOT THE LAST RUNG BEFORE THE FIRE — `escaped` IS, AND IT WAS READ BY NOTHING. `reached` is
+ * raised for any candidate of this search whose bytes turn up in the string the sink was handed, and the ONE
+ * thing that cannot be recovered from it is WHICH candidate, because solve.h says it counts arrivals and not
+ * spellings. That distinction is the whole of this sink class's remaining question, and it is measurable rather
+ * than arguable: run the three escapes an attribute-value hole in `<img alt='{}'>` produces through the real
+ * Lexbor parse, delivered as the fragment percent-encode set delivers them, and
+ *   `'/src='x'/onerror='X9()'/x9pad='`   ->  <img alt="" src="x" onerror="X9()" x9pad="">   HANDLER
+ *   `'><svg onload=X9()>`                ->  <img alt="" %3e%3csvg%20onload="X9()%3E'">     none
+ *   `' src=x onerror=X9() x9pad='`       ->  <img alt="" %20src="x%20onerror=X9()%20x9pad=''">  none
+ * The last two are what the derivation constructs BEFORE the delivery probe has measured anything, and both
+ * carry `X9` into an attribute VALUE — so both raise `reached` and neither can ever fire. `reached:1` on this
+ * search is therefore satisfied by a candidate that is known-doomed, and `escaped` is the field that says
+ * otherwise: html_fire_walk sets it only where the marker is inside an AUTO-FIRING handler of the real parse,
+ * which is HTML §8.1.1 Introduction's "event handler content attributes" and is the definition of an executable
+ * position for this class. So the two states a `reached:N, poc absent` record has been saying at once are
+ *   escaped:0  only the doomed spellings have arrived — the measured-table escape has not run yet, and
+ *   escaped:N  the marker IS in a handler and X9 did not CALL — §@S's "only firing proves it", unproved,
+ * and they take opposite work. */
+enum { S_UNSEEN = 0, S_SEEN, S_SEEDED, S_RAN, S_ARRIVED, S_ESCAPED, S_FIRED };
 static int s_stage(const char *js, const char *sink, const char *src) {
     static const char PARKED[] = ",\"search\":\"parked\",\"tried\":";
     char pat[192];
@@ -4939,6 +4958,7 @@ static int s_stage(const char *js, const char *sink, const char *src) {
     DCHECK(!strncmp(e, PARKED, sizeof PARKED - 1),
            "an @S entry is neither of the two shapes solve.h declares — it carries no `poc` and no parked "
            "search, so the report has a third state this row would silently score as never having run");
+    if (s_num(js, sink, src, "escaped") > 0) return S_ESCAPED;
     if (s_num(js, sink, src, "reached") > 0) return S_ARRIVED;
     if (s_num(js, sink, src, "turns")   > 0) return S_RAN;
     return atoi(e + sizeof PARKED - 1) > 0 ? S_SEEDED : S_SEEN;
@@ -5764,6 +5784,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            "the @S attribute search constructed a breakout with no context witness behind it — a derived class "
            "reads its §13.2.5 state off the string a real run handed the sink and has no other observation to "
            "read one off, so an escape with no witness was built from a static shape of the expression");
+    /* AND THE ONE RUNG THE LADDER ITSELF CANNOT ORDER. `escaped` is read BEFORE `reached` — a search that got
+       out of its context has by definition arrived, so the higher rung answers first and the lower one is never
+       consulted for it. That makes the ordering an assumption rather than a reading, and it is exactly the
+       assumption solve.c's escape_reached asserts at the site that establishes it (`e->reached > 0`, "every
+       escape site runs downstream of breakout_arrived on the same string"). Held here too, so the two ends
+       cannot drift: a record reporting an executable position with no arrival behind it means the two counts
+       are being taken about different strings. */
+    DCHECK(st_attr != S_ESCAPED || s_num(ss, "innerHTML", ATTR_SRC, "reached") > 0,
+           "the @S attribute search reports its marker at an EXECUTABLE position while no breakout of it has "
+           "been recorded as ARRIVING — solve.c asserts the arrival at the escape site itself, so these are "
+           "two counts about two different strings");
     DCHECK(!s_attr_wit || st_attr >= S_RAN,
            "the @S attribute search's context probe reached the sink while the scheduler reports it has never "
            "given the search a turn — a witness is produced by one of this search's own candidate flows, so "
@@ -6018,13 +6049,34 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              -ran       the WFQ has given one of them the thread        (`turns`)
              -witnessed the CONTEXT PROBE reached the sink              (`witnessed`)
              -derived   a breakout was constructed from what it saw     (`survivedBy` length past `probes`)
-             -atsink    a BREAKOUT's own bytes arrived at the sink      (`reached`) */
+             -atsink    a BREAKOUT's own bytes arrived at the sink      (`reached`)
+             -escaped   the marker reached an EXECUTABLE position       (`escaped`)
+             -fired     the record carries a PoC at all                 (`poc`)
+           THE LAST TWO ARE THE ROWS THIS SET WAS MISSING WHEN IT FIRST ANSWERED. Climbing every rung to
+           `-atsink` and stopping there left `-atsink=1, s-attr=0` naming three different things: an arrival by
+           one of the two spellings the derivation builds before it has measured anything (both of which carry
+           the marker into an attribute VALUE and can never fire — measured against the real parser, see the
+           ladder's own comment), a marker sitting in a real handler that never called, and a fire whose PoC is
+           not the text `s-attr` names. `-escaped` splits the first from the second and `-fired` splits both
+           from the third, which is a state this file's own DCHECK anticipated in prose and gave no row.
+           `s-attr` STAYS THE VERDICT and is not one of these: it asserts the payload TEXT, and `-fired`
+           asserts only that some payload fired, so the pair reading `fired=1, s-attr=0` is a regressed
+           derivation and reading `fired=0` is a search that has not solved. Two facts, two rows. */
         { "s-attr-seen", st_attr >= S_SEEN, "location.hash", SESS_EXPLORE },
         { "s-attr-seeded", st_attr >= S_SEEDED, "location.hash", SESS_EXPLORE },
         { "s-attr-ran", st_attr >= S_RAN, "location.hash", SESS_EXPLORE },
         { "s-attr-witnessed", s_attr_wit, "location.hash", SESS_EXPLORE },
         { "s-attr-derived", s_attr_built, "location.hash", SESS_EXPLORE },
         { "s-attr-atsink", st_attr >= S_ARRIVED, "location.hash", SESS_EXPLORE },
+        { "s-attr-escaped", st_attr >= S_ESCAPED, "location.hash", SESS_EXPLORE },
+        { "s-attr-fired", st_attr >= S_FIRED, "location.hash", SESS_EXPLORE },
+        /* AND THE NEGATIVE HALF OF THE SAME RUNG, on the sibling that must never solve. The raw-fragment markup
+           search writes into §13.2.5.1 "Data state", whose only exit is `<`, and the fragment percent-encode
+           set holds it — so nothing of that search may ever reach an executable position. `s-park` already
+           asserts it emits no PoC; this asserts the rung BELOW the PoC, which is where a derivation that began
+           producing something executable out of the data state would show up first and which a `poc`-shaped
+           row cannot see until it has already fired. */
+        { "s-park-noescape", st_lpark < S_ESCAPED, "location.hash", SESS_EXPLORE },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while
