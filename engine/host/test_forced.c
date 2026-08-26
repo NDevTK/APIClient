@@ -8114,6 +8114,14 @@ static void xml_element_selftest(void)
     static const XmlItemExp E_TEXT[] = {
         { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "hi", 0, 0 },
         { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    /* A DOCUMENT WITH THE SAME SHAPE AS E_TEXT AND DIFFERENT BYTES GETS ITS OWN ARRAY. Sharing one is the
+       ASSERTION only where the two streams being identical is the thing under test — E_EMPTY below is shared
+       by `<a/>` and `<a></a>` precisely because §3.1 makes them one element written two ways. Sharing it
+       anywhere else is an accident that tests the wrong document, and this row is where that happened: it
+       reused E_TEXT and asserted this document's `x` against that document's `hi`. */
+    static const XmlItemExp E_STOPS[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "x", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
     static const XmlItemExp E_ATTS[] = {
         { XML_CONTENT_ELEMENT_START, "a", 2, 0 }, { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
     static const XmlItemExp E_NEST[] = {
@@ -8228,7 +8236,7 @@ static void xml_element_selftest(void)
           "y` three characters and the borrowed slice four bytes — a consumer that memcpy'd it into a Text "
           "node would ship a carriage return the parser had already removed, which is why the slice is read "
           "back through core/xml/xml_char.h's own spelling of §2.11 on every row here" },
-        { "<a>x</a>trailing", E_TEXT, 3, 8, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+        { "<a>x</a>trailing", E_STOPS, 3, 8, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
           "the walk stops the moment its stack empties, leaving [1] document's own `Misc*` for whoever walks "
           "that production" },
 
