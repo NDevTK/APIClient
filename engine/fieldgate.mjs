@@ -66,13 +66,16 @@
  *   a page reaches, and WHICH members those must be is decided by the IDL — idlgen.mjs already audits it, off
  *   the spec rather than off the consumers. Counting those here would drown this report in the other gate's
  *   subject and would answer its question worse.
- *   NOT the qjs_* ABI. Its C entries are `QJS_EXPORT` declarations and its JS counterparts are named through
- *   `engine/build.mjs`'s QJS_ABI table and `extension/mojom.js`'s interface records, so resolving that
- *   namespace means reading build.mjs — which is the follow-up named at the bottom of this file, not a
- *   namespace to half-resolve here. A namespace this cannot read soundly is one it does not declare.
+ *   AND THE qjs_* ABI, which is the same seam one layer down and is audited as its own namespace below: an
+ *   entry is described by its `QJS_EXPORT` body, by the build's export list, by the renderer document's
+ *   binding table and by the mojom method record, and until those four were read together nothing asked
+ *   whether an exported entry had a caller at all. This paragraph used to say the ABI was a namespace this
+ *   file would not read; it is read now, and the sentence goes with the absence it described.
  *
  * THE CORPUS IS A RULE, NOT A LIST, AND IT IS PRINTED. Producer and consumer both: engine/host/** (the C that
- * emits and reads back), engine/*.mjs (the drivers), extension/**\/*.js minus the generated wasm glue, and the
+ * emits and reads back), engine/*.mjs (the drivers), extension/**\/*.js minus the generated wasm glue, the
+ * inline `<script>` of every extension DOCUMENT (the renderer's ABI binding table is four hundred lines of
+ * this seam that no namespace saw while the corpus rule was spelled `.js`), and the
  * top level of testing/ minus its one-off `debug-*` probes. Fixture pages under testing/fixtures and
  * testing/corpus are the SUBJECT of a run, not a party to the seam: crediting a fixture's own object literal
  * as the producer of an engine field name is the false COMPLETE idl_installed.mjs was rewritten to remove.
@@ -130,6 +133,14 @@ function corpus() {
   for (const p of walk(join(ROOT, "extension")))
     if (extname(p) === ".js" && !p.includes(join("lib", "qjs")))
       files.push({ path: p, lang: "js", area: "extension" });
+  /* AND THE SHIPPED JAVASCRIPT THAT LIVES IN A DOCUMENT, which a corpus rule spelled `.js` cannot see. This
+     is §Testing's uncollected-test defect in this gate's own corpus: `renderer.html` carries the ONE table
+     binding each mojo method to its `qjs_*` entry, its return type and the field its reply answers under —
+     four hundred lines of the seam this file exists to audit — and it was in no namespace at all because of
+     its extension. A file is in for WHERE it is and WHAT it is; an inline module script in the extension is
+     extension JavaScript however the document around it is named. */
+  for (const p of walk(join(ROOT, "extension")))
+    if (extname(p) === ".html") files.push({ path: p, lang: "html", area: "extension" });
   cone.push(":(glob)testing/*.js");
   for (const p of walk(join(ROOT, "testing")))
     if (extname(p) === ".js" && dirname(p) === join(ROOT, "testing") && !basename(p).startsWith("debug-"))
@@ -152,6 +163,46 @@ const refuse = (file, line, reason, text) =>
    blanked — it is what structure is scanned in, so a `printf(` inside a comment or a `{` inside a string is
    not a construct. Every replacement is the same length as what it replaces, so an offset into either view is
    an offset into the original and a reported line number is the real one. */
+
+/* A DOCUMENT'S INLINE SCRIPTS AS ONE JS VIEW AT IDENTICAL OFFSETS — everything outside a `<script>` body
+   blanked, newlines kept, so a line number reported against this view is the line number in the document. A
+   `src=`-carrying `<script>` has no body to take and its empty span contributes nothing, so no case needs
+   telling apart. HTML §13.2.5.4 Script data state ends the body at the first `</script`, which is what the
+   parser does and therefore what a reader must do; a script containing that text in a string is a script the
+   browser also cuts short, so the two agree by construction. */
+/* A `<script>` INSIDE A COMMENT IS NOT A SCRIPT, and reading one as the start of a body swallowed thirty-five
+   lines of English prose into the JavaScript view and reported the file as untokenizable — which is the
+   plausible-wrong-answer failure this file is built against, arriving through the one construct nobody thinks
+   of. HTML §13.2.5.43 Comment start state runs a comment to its `-->`, and a start tag inside one is text. */
+function withoutHtmlComments(src) {
+  const arr = src.split("");
+  const RE = /<!--/g;
+  let m;
+  while ((m = RE.exec(src))) {
+    const end = src.indexOf("-->", m.index + 4);
+    const to = end < 0 ? src.length : end + 3;
+    blank(arr, m.index, to);
+    RE.lastIndex = to;
+  }
+  return arr.join("");
+}
+
+function htmlScriptView(raw) {
+  const src = withoutHtmlComments(raw);
+  const out = src.split("");
+  blank(out, 0, src.length);
+  const OPEN = /<script\b[^>]*>/gi;
+  let m, any = false;
+  while ((m = OPEN.exec(src))) {
+    const from = m.index + m[0].length;
+    const end = src.toLowerCase().indexOf("</script", from);
+    const to = end < 0 ? src.length : end;
+    for (let i = from; i < to; i++) out[i] = src[i];
+    any = any || to > from;
+    OPEN.lastIndex = to;
+  }
+  return any ? out.join("") : null;
+}
 
 const lineOf = (src, off) => {
   let line = 1;
@@ -590,6 +641,7 @@ function scanC(file, src) {
   }
 
   collectDomainsC(file, src, code, struct, bodies);
+  collectAbiC(file, src, code, struct);
 }
 
 /* Unresolvable formats are held until the whole C corpus is read, because whether one is a hiding place for a
@@ -894,6 +946,7 @@ function scanJS(file, src) {
   }
 
   collectDomainsJS(file, src, code, struct);
+  collectAbiJS(file, src, code, struct);
 
   return { file, src, localReads, localWrites, wholeDefaults, site };
 }
@@ -935,11 +988,14 @@ function scanJS(file, src) {
  * member's `magic` — a value whose domain is legitimately different for every interface that dispatches on it,
  * so a demand that its producer declare one is a demand that cannot be met and a red that could never go out.
  *
- * THE BOUNDARY THIS NAMESPACE DOES NOT CROSS, stated rather than left to be discovered: the shipped bridge
- * reaches the same entry through the mojo interface (`renderer.step()` answering a `code` field), and NOTHING
- * in that path names the C function — the interface record's own prose does, and prose is not a construct. So
- * the mojom-mediated consumer of an ABI code is unresolved here, exactly as the `qjs_*` ABI namespace is, and
- * for the same reason: a namespace read from one side only reports a plausible answer.
+ * THE BOUNDARY THIS NAMESPACE DOES NOT CROSS, stated rather than left to be discovered. The shipped bridge
+ * reaches the same entry through the mojo interface — `(await renderer.step()).code` — and half of that chain
+ * is now resolvable: §the qjs_* ABI namespace below reads the renderer document's binding table, so `Step` is
+ * known to be `qjs_step` and `code` is known to be the field its answer arrives under. What is still unlinked
+ * is the READ: the receiver `(await eng.r.renderer.step())` is not a normalizable expression, and normalizing
+ * it would mean following a value out of a promise and through a call, which is the flowed identity this file
+ * refuses everywhere else. It is refused with its place, as it should be, and closing it means giving the
+ * receiver walk a construct for an awaited call — not giving this one a guess.
  *
  * TWO CONSTANTS, NEVER ONE — the same discipline the shape anchor uses, in the value dimension. Where the
  * producer's domain RESOLVES, the link is by name and every compared constant is checkable however few there
@@ -958,7 +1014,7 @@ const cConstConflict = new Set();   // a NAME two translation units give differe
 const producers = new Map();        // fn -> {file, line, returns:[{text,line}], memberships:[…], dup:[file:line]}
 const consumers = [];               // one binding of one call's result, with every constant compared against it
 const jsConsts = new Map();         // file -> Map(NAME -> text)
-let abiBindings = 0;                // every ccall result bound to a scopable name, branched on or not
+let domainBindings = 0;             // every ccall result bound to a scopable name, branched on or not
 
 /* An integer constant, or null. Names resolve through the map the caller hands in — the C corpus's own
    `#define`/enumerator table, or a JS file's own `const NAME = <int>` table — with a cycle guard, because a
@@ -1267,40 +1323,265 @@ function collectDomainsJS(file, src, code, struct) {
     }
   }
 
-  /* THE ABI CALL IS THE LINK, and its first argument is a string literal naming the C entry. A result bound by
-     anything other than a `const`/`let` has no scope this can state, so it is refused with its place rather
-     than searched for in a region that might not be its own. */
+  /* THE ABI CALL IS THE LINK, and its first argument is a string literal naming the C entry.
+     THE ORDER OF THE THREE QUESTIONS IS THE WHOLE OF WHAT KEEPS THIS REPORT HONEST, and it was wrong once in
+     each direction. A call is only a place a wrong branch can hide if SOMETHING BRANCHES ON ITS ANSWER, so
+     "is the answer compared against a constant anywhere in this file" is asked BEFORE anything is refused —
+     the renderer's own generic dispatcher (`M.ccall(e.fn, e.ret, …)`, one call standing for the whole table)
+     places its answer in a reply record and compares it against nothing, and refusing over it manufactured a
+     permanent unreadable-construct that no fix could ever retire. Only once the answer IS branched on does an
+     unnameable entry, or a binding whose region this cannot state, become a place a defect can hide — and
+     then it is refused with its place rather than searched for in a region that might not be its own. */
   for (const cs of callSites(struct, "ccall")) {
     if (!cs.args || cs.args.length < 2) continue;
-    /* THE ANSWER'S TYPE IS THE CALL'S OWN SECOND ARGUMENT, and it is asked FIRST: a `'string'` or `'void'`
-       entry has no integer domain, so an unnameable one is a DECIDED negative rather than an unreadable
-       construct. Refusing over `str = (f, ...a) => M.ccall(f, 'string', …)` would have counted a helper that
-       could not have been hiding a code as a place one might be. */
+    /* THE ANSWER'S TYPE IS THE CALL'S OWN SECOND ARGUMENT: a `'string'` or `'void'` entry has no integer
+       domain at all, so it is a DECIDED negative rather than an unreadable construct. */
     const rt = /^(["'])(\w+)\1$/.exec(code.slice(cs.args[1][0], cs.args[1][1]).trim());
     if (rt && rt[2] !== "number") continue;
+    const head = code.slice(Math.max(0, cs.at - 160), cs.at);
+    const bind = /\b(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?[\w$.\s]*$/.exec(head) ||
+                 /(^|[^\w$.=!<>])()([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?[\w$.\s]*$/.exec(head);
+    if (!bind) continue;                              /* nothing holds the answer — decided, not unreadable */
+    const id = bind[2] || bind[3];
+    if (!comparisonsOn(struct, code, id, 0, struct.length).length &&
+        !switchOn(struct, code, id, 0, struct.length)) continue;   /* nothing branches on it — decided */
     const raw = code.slice(cs.args[0][0], cs.args[0][1]).trim();
     const lit = /^(["'])([A-Za-z_]\w*)\1$/.exec(raw);
     if (!lit) {
-      refuse(file, line(cs.at), "an ABI call answering a number whose entry name is not a string literal — the " +
-             "producer whose return domain its result belongs to cannot be named", raw);
+      refuse(file, line(cs.at), "an ABI call answering a number that is BRANCHED ON, whose entry name is not a " +
+             "string literal — the producer whose return domain the branch is about cannot be named", raw);
       continue;
     }
-    const head = code.slice(Math.max(0, cs.at - 160), cs.at);
-    const bind = /\b(const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?[\w$.\s]*$/.exec(head);
-    if (!bind) {
-      if (/=\s*(?:await\s+)?[\w$.\s]*$/.test(head) && !/[=!<>]=\s*(?:await\s+)?[\w$.\s]*$/.test(head))
-        refuse(file, line(cs.at), "an ABI call whose result is bound by a form this cannot scope — only a " +
-               "`const`/`let` declaration states the region its comparisons live in", head.slice(-60));
+    if (bind[1] !== "const" && bind[1] !== "let") {
+      refuse(file, line(cs.at), "an ABI result that is branched on and bound by a form this cannot scope — only " +
+             "a `const`/`let` declaration states the region its comparisons live in", head.slice(-60));
       continue;
     }
     const [from, to] = innermostBlock(struct, cs.at);
-    if (assignmentsTo(struct, bind[2], from, to) !== 1) {
+    if (assignmentsTo(struct, id, from, to) !== 1) {
       refuse(file, line(cs.at), "an ABI result whose binding is re-assigned in its own scope — which call a " +
-             "comparison is about is not decidable here", bind[2]);
+             "comparison is about is not decidable here", id);
       continue;
     }
-    abiBindings++;
-    pushConsumer(file, src, struct, code, lit[2], bind[2], from, to, cs.at);
+    domainBindings++;
+    pushConsumer(file, src, struct, code, lit[2], id, from, to, cs.at);
+  }
+}
+
+/* ---- the qjs_* ABI namespace: one entry, four descriptions of it, nothing checking them against each other -- */
+
+/* THE ABI IS DESCRIBED IN FOUR PLACES AND ONLY TWO OF THEM WERE EVER DIFFED. `engine/build.mjs` already checks
+ * its `QJS_ABI` export list against `main.c`'s `QJS_EXPORT` bodies in both directions, and that pair is where
+ * this stops. What no gate asked is whether anything CALLS an entry — which is exactly the shape `qjs_result`
+ * had: defined, exported, listed, and reached by nobody, so the zone that was supposed to read the result
+ * document read `result || {}` and reported a clean bill for a run that learned nothing.
+ *
+ * THE FOUR DESCRIPTIONS, each read out of its own construct:
+ *   1. `QJS_EXPORT <ret> qjs_x(` in the entry source — the entry, and the TYPE it answers with.
+ *   2. `QJS_ABI = [ … ]` in the build — what is `--export=`'d, so what can be reached at all.
+ *   3. `{ <method>: { fn: "qjs_x", ret: …, out: … } }` in the renderer document — the ONE binding of a mojo
+ *      method to a C entry, the ccall return type it is read with, and the reply field it answers under. It is
+ *      found by the `fn:` key naming a `qjs_`-prefixed literal, never by the table's variable name, so a table
+ *      that moves or is renamed is still read.
+ *   4. `{ ordinal, name: "Step", reply: [ { name: "code", … } ] }` in the mojom module — the TYPED, VALIDATED
+ *      wire: the method the boundary declares and the field name its reply carries.
+ * The mojom name and the binding's method name are related by `lowerFirst`, and that is not a convention this
+ * assumes — it is the transformation `extension/mojo.js` PERFORMS on every method it installs, so the mapping
+ * is read off the shipped code exactly as everything else here is.
+ *
+ * WHAT THE FOUR DISAGREEING MEANS, one defect per pair: an entry with no binding is a capability the extension
+ * cannot use; a binding naming no entry is a call that cannot land; a mojom method with no binding is a
+ * declared operation the renderer cannot perform, and a binding with no mojom method is an entry that crosses
+ * the boundary without the validator that assumes the renderer is hostile ever seeing it; and an `out:` that
+ * is not the reply field the mojom declares is the `cspBlocks`/`cspBlocked` defect ON THE WIRE, where the
+ * reader gets `undefined` from a call that succeeded. */
+
+const abiEntries = new Map();   // qjs_x -> {file, line, ret}    from QJS_EXPORT
+const abiExported = new Map();  // qjs_x -> {file, line}         from the build's export list
+const abiBindings = new Map();  // method -> {fn, ret, out, file, line}
+const mojomMethods = new Map(); // "<iface>#Step" -> {file, line, iface, reply:[names], unresolved:[…]}
+const servedInterfaces = [];    // {iface, file, line} — the interface a binding table's own document names
+const abiCcalls = new Map();    // qjs_x -> [{file,line}]        a driver reaching the entry directly
+
+/* The C side: the marker the entry source puts on every ABI body, with the type in front of the name. */
+function collectAbiC(file, src, code, struct) {
+  const RE = /\bQJS_EXPORT\s+([\w \t*]+?)\b(qjs_\w+)\s*\(/g;
+  let m;
+  while ((m = RE.exec(struct))) {
+    if (abiEntries.has(m[2])) continue;
+    abiEntries.set(m[2], { file, line: lineOf(src, m.index), ret: m[1].replace(/\s+/g, " ").trim() });
+  }
+}
+
+/* An object-literal value on `key`, inside [from,to), when it is a string literal or `null` — the two forms
+   the descriptions above use. Anything else answers undefined and is reported by its caller. */
+function litProp(struct, code, key, from, to) {
+  const re = new RegExp(`(^|[^\\w$.])${key}\\s*:\\s*`, "g");
+  re.lastIndex = from;
+  const m = re.exec(struct);
+  if (!m || m.index >= to) return undefined;
+  const at = m.index + m[0].length;
+  const s = /^(["'])((?:[^"'\\]|\\.)*)\1/.exec(code.slice(at, Math.min(to, at + 120)));
+  if (s) return s[2];
+  if (/^null\b/.test(struct.slice(at, at + 5))) return null;
+  return undefined;
+}
+
+/* The innermost `{` enclosing `off`, and its close. */
+function enclosingBrace(struct, off) {
+  const stack = [];
+  for (let i = 0; i <= off && i < struct.length; i++) {
+    if (struct[i] === "{") stack.push(i);
+    else if (struct[i] === "}") stack.pop();
+  }
+  if (!stack.length) return null;
+  const open = stack[stack.length - 1];
+  const close = matchAt(struct, open);
+  return close < 0 ? null : [open, close];
+}
+
+function collectAbiJS(file, src, code, struct) {
+  const line = (off) => lineOf(src, off);
+  const ifaceSpans = [];
+
+  /* (2) the export list, read as an array of string literals bound to the name the linker is handed. */
+  {
+    const RE = /\bQJS_ABI\s*=\s*\[/g;
+    let m;
+    while ((m = RE.exec(struct))) {
+      const open = struct.indexOf("[", m.index);
+      const close = matchAt(struct, open);
+      if (close < 0) { refuse(file, line(m.index), "an unbalanced ABI export list — its entries cannot be delimited"); continue; }
+      for (const [a, b] of splitTop(struct, open + 1, close - 1)) {
+        const t = code.slice(a, b).trim();
+        if (!t) continue;
+        const s = /^(["'])([A-Za-z_]\w*)\1$/.exec(t);
+        if (!s) { refuse(file, line(a), "an ABI export list entry that is not a string literal — what is exported is not a static fact", t); continue; }
+        if (!abiExported.has(s[2])) abiExported.set(s[2], { file, line: line(a) });
+      }
+    }
+  }
+
+  /* (3) the binding table, found by its `fn:` key rather than by the table's own name. */
+  {
+    /* MATCHED IN `code`, NOT IN `struct`, and this is the one place that distinction bites: the two views
+       differ exactly by having string INTERIORS blanked, so a pattern whose payload is inside the quotes finds
+       nothing at all in the structural view. It found nothing here, silently, and the diff below then reported
+       ten entries as uncalled because the side that calls them had read zero rows — the same "a side answered
+       nothing and the report read it as an answer" defect this whole file is against, produced inside it. The
+       quote's POSITION is checked in `struct` so a match inside another literal is still not a construct. */
+    const RE = /(^|[^\w$.])fn\s*:\s*(["'])(qjs_\w+)\2/g;
+    let m;
+    while ((m = RE.exec(code))) {
+      const at = m.index + m[1].length;
+      if (struct[m.index + m[0].length - 1] !== m[2]) continue;   /* the closing quote is real, so this is a literal */
+      const span = enclosingBrace(struct, at);
+      if (!span) { refuse(file, line(at), "an ABI binding whose enclosing record cannot be delimited", m[3]); continue; }
+      const [open, close] = span;
+      /* the METHOD is the key this record is the value of */
+      let p = open - 1;
+      while (p >= 0 && /\s/.test(struct[p])) p--;
+      if (struct[p] !== ":") { refuse(file, line(at), "an ABI binding that is not the value of a named method key — the method it binds cannot be read", m[3]); continue; }
+      p--;
+      while (p >= 0 && /\s/.test(struct[p])) p--;
+      let e = p + 1;
+      while (p >= 0 && /[\w$]/.test(struct[p])) p--;
+      const method = code.slice(p + 1, e);
+      if (!/^[A-Za-z_$][\w$]*$/.test(method)) { refuse(file, line(at), "an ABI binding whose method key this cannot read", m[3]); continue; }
+      const ret = litProp(struct, code, "ret", open, close);
+      const out = litProp(struct, code, "out", open, close);
+      if (ret === undefined) { refuse(file, line(at), "an ABI binding with no readable `ret` — the ccall type its answer is read with is not a static fact", method); continue; }
+      if (out === undefined) { refuse(file, line(at), "an ABI binding with no readable `out` — the reply field its answer is placed under is not a static fact", method); continue; }
+      abiBindings.set(method, { fn: m[3], ret, out, file, line: line(at) });
+    }
+  }
+
+  /* WHICH INTERFACE A METHOD BELONGS TO, because a method list is per interface and a table binds ONE of them.
+     Reading them as one pool reported `GetMojoStats` — a `content.mojom.ChildProcess` method the trusted zone
+     implements — as an operation the RENDERER has no binding for, which is a confident false red produced by
+     asking one interface's question of another's list. The owner is the interface record whose braces contain
+     the method record; the interface a TABLE serves is named by that table's own document, through the call it
+     makes to get the declaration, so neither half is inferred. */
+  {
+    const RE = /(^|[^\w$.])name\s*:\s*(["'])(\w+\.mojom\.\w+)\2/g;
+    let m;
+    while ((m = RE.exec(code))) {
+      if (struct[m.index + m[0].length - 1] !== m[2]) continue;
+      const span = enclosingBrace(struct, m.index + m[1].length);
+      if (span) ifaceSpans.push({ iface: m[3], open: span[0], close: span[1] });
+    }
+  }
+  /* `interfaceOf`, NOT `exposeInterface`, and the two are different questions rather than two spellings of
+     one. `interfaceOf` asks for the DECLARATION a table is implemented against — the renderer walks its
+     methods and looks each one up in the binding table — while `exposeInterface` PUBLISHES an implementation,
+     and one document publishes several. Reading both made the served interface ambiguous and quietly took the
+     whole declared-versus-bound direction out of the run. */
+  for (const cs of callSites(struct, "interfaceOf")) {
+    if (!cs.args) continue;
+    const s2 = /^(["'])(\w+\.mojom\.\w+)\1$/.exec(code.slice(cs.args[0][0], cs.args[0][1]).trim());
+    if (s2) servedInterfaces.push({ iface: s2[2], file, line: line(cs.at) });
+  }
+
+  /* (4) the mojom method records: an `ordinal` beside a `name` is the construct, and the reply's field names
+     are what a consumer will read the answer under. An element of `reply` that is a bare identifier is
+     resolved through the file's own `<ID> = { name: … }` declaration and REFUSED when there is none — never
+     skipped, because a skipped element is a field name that silently has no counterpart. */
+  {
+    const RE = /(^|[^\w$.])ordinal\s*:\s*\d+\s*,\s*name\s*:\s*(["'])([A-Za-z_][\w$]*)\2/g;
+    let m;
+    while ((m = RE.exec(code))) {
+      const at = m.index + m[1].length;
+      if (struct[m.index + m[0].length - 1] !== m[2]) continue;
+      const span = enclosingBrace(struct, at);
+      if (!span) { refuse(file, line(at), "a mojom method record that cannot be delimited", m[3]); continue; }
+      const [open, close] = span;
+      const owner = ifaceSpans.filter((s2) => at > s2.open && at < s2.close)
+                              .sort((a, b) => (b.open - a.open))[0];
+      if (!owner) { refuse(file, line(at), "a mojom method record inside no interface declaration — which " +
+                           "interface declares it cannot be read, and a method list is per interface", m[3]); continue; }
+      const rec = { file, line: line(at), iface: owner.iface, name: m[3], reply: [], unresolved: [] };
+      const RRE = /(^|[^\w$.])reply\s*:\s*\[/g;
+      RRE.lastIndex = open;
+      const r = RRE.exec(struct);
+      if (r && r.index < close) {
+        const ro = struct.indexOf("[", r.index), rc = matchAt(struct, ro);
+        if (rc < 0) rec.unresolved.push("an unbalanced reply list");
+        else for (const [a, b] of splitTop(struct, ro + 1, rc - 1)) {
+          const t = code.slice(a, b).trim();
+          if (!t) continue;
+          if (t[0] === "{") {
+            const n = litProp(struct, code, "name", a, b);
+            if (typeof n === "string") rec.reply.push(n);
+            else rec.unresolved.push(`a reply field at ${file}:${line(a)} whose name is not a literal`);
+            continue;
+          }
+          if (/^[A-Za-z_$][\w$]*$/.test(t)) {
+            /* a shared field record, named once and reused — resolved through its own declaration */
+            const DRE = new RegExp(`(^|[^\\w$.])${t}\\s*=\\s*\\{`, "g");
+            const d = DRE.exec(struct);
+            if (d) {
+              const dOpen = struct.indexOf("{", d.index), dClose = matchAt(struct, dOpen);
+              const n = dClose > 0 ? litProp(struct, code, "name", dOpen, dClose) : undefined;
+              if (typeof n === "string") { rec.reply.push(n); continue; }
+            }
+            rec.unresolved.push(`a reply element \`${t}\` at ${file}:${line(a)} this cannot resolve to a field record`);
+            continue;
+          }
+          rec.unresolved.push(`a reply element at ${file}:${line(a)} this cannot read`);
+        }
+      }
+      const key = owner.iface + "#" + m[3];
+      if (!mojomMethods.has(key)) mojomMethods.set(key, rec);
+    }
+  }
+
+  /* Every driver that reaches an entry directly, which is a caller the mojo boundary never sees. */
+  for (const cs of callSites(struct, "ccall")) {
+    if (!cs.args) continue;
+    const s = /^(["'])(qjs_\w+)\1$/.exec(code.slice(cs.args[0][0], cs.args[0][1]).trim());
+    if (!s) continue;
+    if (!abiCcalls.has(s[2])) abiCcalls.set(s[2], []);
+    abiCcalls.get(s[2]).push({ file, line: line(cs.at) });
   }
 }
 
@@ -1325,8 +1606,14 @@ for (const f of files) {
   let src;
   try { src = readFileSync(f.path, "utf8"); } catch { continue; }
   const rel = relative(ROOT, f.path);
-  if (f.lang === "c") scanC(rel, src);
-  else { const s = scanJS(rel, src); if (s) jsScans.push({ ...s, area: f.area }); }
+  if (f.lang === "c") { scanC(rel, src); continue; }
+  if (f.lang === "html") {
+    const view = htmlScriptView(src);
+    if (!view) continue;    /* a document with no inline script carries no seam — decided, not unreadable */
+    src = view;
+  }
+  const s = scanJS(rel, src);
+  if (s) jsScans.push({ ...s, area: f.area });
 }
 
 /* An unresolvable emission format is a hiding place for a field only in a file that emits fields. Applied
@@ -1462,6 +1749,79 @@ for (const c of consumers) {
   }
 }
 
+/* ---- the ABI diff ------------------------------------------------------------------------------------------ */
+
+/* The transformation `extension/mojo.js` performs on every method name it installs, read off that file rather
+   than assumed — a mojom `Step` is the binding's `step`. If the shipped rule ever changes, the file it is read
+   from is the one place that says so. */
+const lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
+const upperFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+const abiDefects = [];   // {kind, name, text}
+let abiServed = null;    // the interface the binding table's own document is implemented against
+{
+  const boundFns = new Set([...abiBindings.values()].map((b) => b.fn));
+  /* THE INTERFACE THE BINDING TABLE SERVES, taken from that table's own document rather than guessed from an
+     overlap. Two documents naming two interfaces is not a thing this can resolve, and it is refused rather
+     than resolved toward the first one. */
+  /* AND ONLY FROM A DOCUMENT THAT CARRIES BINDINGS. Another file asking for a declaration is not a table
+     serving it, and folding those in is how one program's question gets asked of another's list. */
+  const bindingFiles = new Set([...abiBindings.values()].map((b) => b.file));
+  const namedHere = servedInterfaces.filter((s2) => bindingFiles.has(s2.file));
+  const named = [...new Set(namedHere.map((s2) => s2.iface))];
+  const served = abiServed = named.length === 1 ? named[0] : null;
+  if (named.length > 1)
+    for (const s2 of namedHere)
+      refuse(s2.file, s2.line, "more than one mojo interface is named by the documents that carry ABI " +
+             "bindings — which declaration a binding answers to cannot be decided here", s2.iface);
+  for (const [fn, e] of abiEntries) {
+    if (!abiExported.has(fn)) continue;   /* the build's own stage owns this pair and states it better */
+    if (boundFns.has(fn) || abiCcalls.has(fn)) continue;
+    abiDefects.push({ kind: "an EXPORTED entry nothing calls", name: fn, place: `${e.file}:${e.line}`,
+                      text: "defined and exported, and no binding names it and no driver ccalls it — the shape " +
+                            "`qjs_result` had while the zone that should have read the result document " +
+                            "defaulted it away instead" });
+  }
+  for (const [method, b] of abiBindings) {
+    if (!abiEntries.has(b.fn))
+      abiDefects.push({ kind: "a BINDING naming no entry", name: `${method} -> ${b.fn}`, place: `${b.file}:${b.line}`,
+                        text: "the renderer would ccall a symbol no QJS_EXPORT body defines" });
+    else {
+      /* THE TYPE THE ANSWER IS READ WITH. A `const char *` read as a number is an ADDRESS reported as a
+         value, and an `int` read as a string is a pointer dereference into whatever that integer names —
+         neither has a symptom the reader can see. */
+      const ret = abiEntries.get(b.fn).ret;
+      const want = /^void$/.test(ret) ? null : /\*/.test(ret) ? "string" : "number";
+      if (b.ret !== want)
+        abiDefects.push({ kind: "a BINDING whose ccall type is not the entry's", name: `${method} -> ${b.fn}`,
+                          place: `${b.file}:${b.line}`,
+                          text: `the entry answers \`${ret}\` and the binding reads it as ` +
+                                `${b.ret === null ? "nothing" : "`" + b.ret + "`"}` });
+    }
+    const mm = served ? mojomMethods.get(served + "#" + upperFirst(method)) : null;
+    if (served && !mm)
+      abiDefects.push({ kind: "a BINDING the typed boundary does not declare", name: method, place: `${b.file}:${b.line}`,
+                        text: `${served} carries no method record of this name, so the validator that assumes ` +
+                              "the renderer is hostile has never seen this call" });
+    else if (mm && b.out !== null && !mm.reply.includes(b.out))
+      abiDefects.push({ kind: "a BINDING answering under a field the reply does not declare", name: method,
+                        place: `${b.file}:${b.line}`,
+                        text: `the renderer places its answer under \`${b.out}\` and the reply declares ` +
+                              `{${mm.reply.join(", ")}} — a caller reading the declared name gets undefined ` +
+                              `from a call that succeeded` });
+  }
+  for (const [, rec] of mojomMethods) {
+    if (rec.unresolved.length)
+      for (const u of rec.unresolved) refuse(rec.file, rec.line, "a mojom reply element this cannot read — a " +
+                                             "field name may have no counterpart and this cannot say", u);
+    /* ASKED ONLY OF THE INTERFACE THE TABLE SERVES. Another interface's methods are implemented in another
+       zone entirely, and demanding an ABI binding for one is a question about the wrong program. */
+    if (served && rec.iface === served && !abiBindings.has(lowerFirst(rec.name)))
+      abiDefects.push({ kind: "a DECLARED method with no binding", name: rec.name, place: `${rec.file}:${rec.line}`,
+                        text: `${served} declares an operation the renderer has no entry bound for` });
+  }
+}
+
 /* ---- verdict --------------------------------------------------------------------------------------------- */
 
 const readNoWriter =[...fields].filter(([, e]) => e.reads.length && !e.writes.length);
@@ -1559,7 +1919,7 @@ if (ambiguous.length) {
     const d = domainOf(fn);
     return `${fn}${n > 1 ? `\u00d7${n}` : ""} ${d.open ? "OPEN" : `{${[...d.values].sort((a, b) => a - b).join(",")}}`}`;
   });
-  log(`── return domains ── ${abiBindings} ABI result(s) bound to a scopable name, ${consumers.length} of them ` +
+  log(`── return domains ── ${domainBindings} ABI result(s) bound to a scopable name, ${consumers.length} of them ` +
       `branched on, against ${producers.size} C function definition(s) read for a domain` +
       (parts.length ? `: ${parts.join("; ")}` : " — NOTHING WAS CHECKED, so the sections below are silent " +
        "because nothing was asked, not because nothing is wrong"));
@@ -1580,6 +1940,20 @@ show(`RETURN VALUE NOT ENUMERATED — ${unenumerated.length} exhaustive construc
 show(`RETURN DOMAIN UNDECLARED — ${undeclaredDomain.length} producer(s) a consumer enumerates and nothing declares`,
      undeclaredDomain,
      (d) => `${place(d)}  \`${d.id}\` from ${d.fn}() is compared against {${d.constants.join(", ")}}; ${d.why}`);
+
+/* THE ABI'S OWN COVERAGE, on the same rule as the domain namespace's: four descriptions that agree and four
+   that were never read print the same silence. */
+log(`── qjs_* ABI ── ${abiEntries.size} QJS_EXPORT entr(ies), ${abiExported.size} on the build's export list, ` +
+    `${abiBindings.size} bound to a mojo method, ${mojomMethods.size} method(s) the typed boundary declares, ` +
+    `${abiCcalls.size} reached directly by a driver` +
+    (abiServed ? `; the table is implemented against ${abiServed}, so both directions were asked`
+               : " — NO SERVED INTERFACE IS NAMED by a document carrying bindings, so the declared-versus-bound " +
+                 "direction was NOT asked and its silence is not an answer") +
+    (abiEntries.size && abiBindings.size && mojomMethods.size ? "" :
+     " — A SIDE READ NOTHING, so the rows below are silent because nothing was asked"));
+
+show(`ABI DESCRIPTIONS THAT DISAGREE — ${abiDefects.length}`, abiDefects,
+     (d) => `${d.place}  ${d.kind}: ${d.name} — ${d.text}`, 30);
 
 /* PER AREA AS WELL AS IN TOTAL, for §Testing's reason: one number in which the widest surface answers most of
    the count makes every other component invisible. */
@@ -1633,6 +2007,7 @@ const cats = [
   ["comparisons OUTSIDE a producer's return domain — branches on a value it cannot answer", outsideDomain.length],
   ["values a producer returns that an exhaustive construct does NOT enumerate", unenumerated.length],
   ["producers whose RETURN DOMAIN is undeclared while a consumer enumerates constants", undeclaredDomain.length],
+  ["qjs_* ABI descriptions that DISAGREE — an entry, its export, its binding, its declared method", abiDefects.length],
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
 ].filter(([, n]) => n);
@@ -1648,11 +2023,11 @@ console.error(`[field-gate] FAILED — ${cats.length} category(ies) above. A rea
               `(extension/check.js mirrors check.h), or delete the half of the contract that has gone stale.`);
 process.exit(1);
 
-/* THE NAMESPACE THAT IS STILL ONE-SIDED IS THE qjs_* ABI ITSELF: `QJS_EXPORT` names one side, engine/build.mjs's
- * QJS_ABI table and extension/mojom.js's interface records name the other, and an export with no counterpart is
- * the shape `qjs_result`-with-no-caller had. It is not half-resolved here on purpose — a namespace read from
- * one side only would report every export as unreferenced, which is a plausible answer and therefore the worst
- * kind. It is also what would close the RETURN-DOMAIN namespace's one declared boundary: with `Step` resolved
- * to `qjs_step`, the mojom-mediated `renderer.step().code` becomes a linkable consumer, and the shipped
- * bridge — the zone the NEED_FETCH defect actually lived in — comes inside this gate rather than beside it.
+/* WHAT IS STILL ONE-SIDED, now that the ABI's four descriptions are read together: the CALLER'S READ of a mojo
+ * reply. `(await eng.r.renderer.step()).code` names a field this gate knows the declaration of, and it reads it
+ * off a receiver the normalizer refuses — so the shipped bridge, the zone the NEED_FETCH defect actually lived
+ * in, still sits one construct outside every namespace here. What would close it is a receiver walk that can
+ * read an AWAITED CALL as a receiver whose record identity is the called method's reply, which is a construct
+ * rather than an inference: the call names the method and the method's own record names its fields. Until that
+ * exists the refusal is the honest answer and its place is printed.
  */
