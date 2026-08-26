@@ -13,6 +13,16 @@ function mergeASTResultsIntoVDD(tab, results) {
   for (var r = 0; r < results.length; r++) {
     var analysis = results[r];
 
+    /* A RECORD WITH NO ENGINE DOCUMENT IS NOT A MERGEABLE OBSERVATION, AND ITS ABSENCE IS WHAT SAYS SO.
+       bridge.js writes `fetchCallSites`/`securitySinks`/`_park` exactly where an @RESULT document arrived and
+       was asserted field for field; a crashed instance and a page with nothing to run carry none of them, and
+       that absence is a POSITIVE statement ("this run observed nothing") rather than a hole to fill. Read as
+       one here: the two passes below would otherwise walk arrays that are not there — and before the record
+       became present-or-absent they walked bridge.js's fabricated empties instead, which is the same merge
+       with the fabrication one file upstream. The eviction sweep at the bottom still runs, because a run that
+       died is still a run that ENDED and this document's transient RAM view is still reclaimable. */
+    if (!analysisHasDocument(analysis)) continue;
+
     /* NO probeResults RELAY OFF THE ENGINE RESULT. `tab.probeResults` is written by the two systems that
        actually probe — lib/req2proto.js through lib/discovery-probe.js and lib/response-decode.js — and the
        engine has no such record to relay: it never issues a request, so it never receives a rejection to read

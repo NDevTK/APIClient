@@ -108,9 +108,20 @@ function assertResultDocument(r) {
      a code-execution sink ever ran, whether anything tainted arrived at one, and whether an arrival was
      DECLINED because the check standing on it was unforgeable. Those are four different pages and one empty
      array was the evidence for each. A missing one here is the whole split gone, so it is asserted with the
-     rest and never defaulted — the same rule that put the other eight in this loop. */
+     rest and never defaulted — the same rule that put the other eight in this loop.
+     AND THE SIX CROSS-INSTANCE ONES ARE IN IT BECAUSE THE RULE ABOVE IS NOT A RULE ABOUT WHAT THIS ZONE
+     HAPPENS TO READ. This loop asserted thirteen of the nineteen counters result.c writes in that one
+     snprintf, and the six it left out — the routed-delivery pair and §9.3.3 step 8's four task ends — are
+     precisely the newest, i.e. the ones the composition most recently changed to add. That is the "check on
+     the wrong thing" this comment already names, arriving by omission instead of by design: a subset that
+     tracks the fields somebody thought of asserts the document as it was, and the next field added to
+     result.c joins the unchecked half by default. `engine/route.mjs` reads all six and asserts them, so
+     nothing here is asserting a name with no writer; what this adds is that the EXTENSION — the consumer
+     that runs in production, where route.mjs never runs — notices the same break. */
   for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                    "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
+                   "_routedDelivered", "_routedRefused", "_routedTasksFired",
+                   "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
                    "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"]) {
     DCHECK(typeof r[k] === "number",
            "the engine's result document carries no " + k + " count — solver/result.c emits every cost " +
@@ -284,11 +295,23 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      in the one place a reader looks for what the runs did. An absent row and a row of zeroes are different
      facts, and so are an absent row and a crash row. */
   if (outcome !== "nothing-to-run") engineLogWrite(eng, m);
-  /* THE HOST-SIDE EMPTIES A CRASH RECORD IS MADE OF, named once: there is no engine answer to default, so
-     every field is the host's own empty and the engine's `_park` is absent rather than zero. The engine's own
-     protocol errors still travel, because @E and @WHY are emitted on their own lines and do not ride the
-     result document; that is the whole reason a crash record is worth returning at all. */
-  const engineDoc = result || { fetchCallSites: [], securitySinks: [], pageErrors: [], _park: [] };
+  /* A RUN WITH NO ENGINE DOCUMENT SAYS SO BY NOT CARRYING ONE, AND THAT IS THE WHOLE OF WHAT IT MAY SAY.
+     `result || { fetchCallSites: [], securitySinks: [], pageErrors: [], _park: [] }` stood here — the defect
+     §Architecture opens its list with, grown into its most developed form. The substitute literal had reached
+     the document's FULL shape, so it no longer read as a default at all: it fabricated a well-formed result
+     in which the engine looked at the page and learned nothing, and "no document arrived" and "the page was
+     analysed and is clean" became the same four empty arrays travelling under the same field names. Calling
+     them "the host's own empties" (which the comment that stood here did) does not make them the host's to
+     state — `fetchCallSites` means THE ENDPOINTS THE ENGINE LEARNED, and this zone does not know that number
+     for a page whose engine never answered. It is not a host-side empty, it is a measurement nobody made.
+     SO THE THREE ENGINE-OWNED FIELDS ARE PRESENT-OR-ABSENT, NEVER EMPTY-AS-A-SUBSTITUTE. Their PRESENCE is
+     the positive statement "an @RESULT document arrived and assertResultDocument checked it field for
+     field", and every consumer reads that presence rather than a length: lib/merge.js's two passes,
+     offscreen-brain's incremental merge and its terminal replace-or-keep, and the frontier write below.
+     `resolverErrors` is NOT one of them and stays on both arms — it is the HOST's record of what went wrong,
+     of which the engine's `pageErrors` are one contributor, and on this arm it carries the `@E engine-crash`
+     row that says why there is no document. `_run` is the other half of the same statement: WHICH absence
+     this is (an instance that died, or a document with nothing to run). */
   /* THIS DOCUMENT IS EXACTLY WHAT THE BRAIN READS, AND IT USED TO CARRY FIFTEEN MORE FIELDS THAT NOTHING DID.
      A "sibling fields the brain reads unconditionally, present + empty so it never throws" block held
      protoEnums/protoFieldMaps/dangerousPatterns/esmImportUrls/inRunModuleUrls/domEndpoints/sourceMapTypes/
@@ -302,9 +325,7 @@ function linesToAnalysis(lines, msg, outcome, eng) {
      protoFieldMaps/sourceMapUrl off the analysis with `|| []`; they were already reading the constant, so they
      read the same nothing, and testing/test-spec.js's two `domEndpoints` assertions fail exactly as they did —
      they are the record that the DOM-attribute scan is an ENGINE capability nobody has built.) */
-  return {
-    fetchCallSites: engineDoc.fetchCallSites,
-    securitySinks: engineDoc.securitySinks,
+  const analysis = {
     /* THE ENGINE'S OWN PAGE ERRORS, WHICH IT CALLS `pageErrors`. This line read `resolverErrors` — a name
        nothing on the engine side has ever written — so every error the engine recorded while running the page
        was dropped here, and the `|| []` beside it is precisely what made the drop invisible: the field the
@@ -314,13 +335,12 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        renderer ever read either, and the engine has no source-text or reply to state for a page error in the
        first place (result.c's pageErrors are strings). Three comments — here, in lib/serialize.js and in
        popup.js — named `snippet` as part of the contract the popup reads; it was read nowhere. */
-    resolverErrors: engineDoc.pageErrors.map((e) => ({ context: "page", message: String(e) })).concat(extraErrors),
+    resolverErrors: (result ? result.pageErrors.map((e) => ({ context: "page", message: String(e) })) : []).concat(extraErrors),
     /* NO probeResults ON THIS SEAM. The engine issues no request, so it receives no rejection and has no
        error-derived schema to relay; the record the Send panel reads is written by the two systems that DO
        probe — lib/req2proto.js (driven by lib/discovery-probe.js and lib/response-decode.js) — straight into
        `globalStore.probeResults`, which never crossed this boundary. */
     sourceUrl: (msg && msg.sourceUrl) || "",
-    _park: engineDoc._park,
     /* WHAT THIS ANALYSIS IS A RECORD OF, CARRIED WITH IT. Every consumer of an analysis has to be able to tell
        a snapshot of a running page from a finished run, and both of those from a run that died — and until
        this field there was nothing on the object that said so. `_engineCrashed` was set on the crash arm and
@@ -329,7 +349,38 @@ function linesToAnalysis(lines, msg, outcome, eng) {
        asserts it rather than defaulting a missing one to "fine". */
     _run: outcome,
   };
+  /* THE THREE FIELDS THAT ARE THE ENGINE'S TO STATE, ADDED ONLY WHERE THE ENGINE STATED THEM. Read straight
+     off `result` rather than through a second name, so there is no object in this function that a document
+     could be defaulted INTO — the shape that let the substitute literal survive four hardenings of the
+     surrounding code. */
+  if (result) {
+    analysis.fetchCallSites = result.fetchCallSites;
+    analysis.securitySinks = result.securitySinks;
+    analysis._park = result._park;
+  }
+  return analysis;
 }
+/* THE ONE QUESTION EVERY CONSUMER OF AN ANALYSIS ASKS BEFORE IT READS A FINDING ARRAY, asked in one place so
+   the three fields cannot drift apart at four call sites. It is a POSITIVE read of an absence, not a guard
+   against one: a true answer means an @RESULT document arrived and `assertResultDocument` checked it, and a
+   false answer means this run produced no document at all and `_run` says which absence it is. The DCHECK is
+   what keeps the two states from silently becoming three — a record carrying one of the trio and not the
+   others is `linesToAnalysis` broken, and would read here as a document. */
+function analysisHasDocument(a) {
+  DCHECK(a && typeof a === "object", "an analysis record is not an object — every producer of one is in this file");
+  const n = (a.fetchCallSites !== undefined) + (a.securitySinks !== undefined) + (a._park !== undefined);
+  DCHECK(n === 0 || n === 3,
+         "an analysis carries " + n + " of the three engine-document fields (fetchCallSites, securitySinks, " +
+         "_park) — linesToAnalysis writes all three or none, because their presence IS the statement that an " +
+         "@RESULT document arrived, and a partial set would be read by every consumer as a document that is " +
+         "there while one of the surfaces it travels in is silently gone");
+  DCHECK(n === 3 || a._run === "crashed" || a._run === "nothing-to-run",
+         "an analysis marked `" + a._run + "` carries no engine document — only a crashed instance and a page " +
+         "with nothing to run may lack one, so a partial/complete run without one is the @RESULT relay broken " +
+         "and reporting it as a page with no API surface is a false clean bill");
+  return n === 3;
+}
+self.analysisHasDocument = analysisHasDocument;   // read by offscreen-brain.js and lib/merge.js across the zone's one realm
 
 /* Run one page through a fresh v2 engine instance, capturing @H/@CHUNK stdout. The ENGINE parses the
    page HTML with its in-wasm Lexbor DOM and runs the document's scripts in order (against the real
@@ -1272,6 +1323,17 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "safeFetch answered a reply with no computed content type — solver/reply_decode.c reads this " +
              "field instead of re-deriving a type from the raw header, so an absent stamp is a producer that " +
              "failed and never a resource whose type is unknown");
+      /* AND §2.2.6's STATUS MESSAGE, WHOSE EMPTY VALUE IS A REAL ANSWER — which is exactly why `|| ""` could
+         not stand beside it. HTTP/2 and HTTP/3 carry no reason phrase at all, so `""` is what a perfectly
+         ordinary response says, and safeFetch writes the field on every one of its return paths (its blocked
+         arms put the REASON there, which is the only account a page ever gets of a request the chokepoint
+         refused). Defaulting it therefore mapped "this protocol has no reason phrase" and "the chokepoint
+         stopped writing the field" onto the same two bytes, and the second of those is a blocked-by-CORB or
+         blocked-scheme answer arriving at the engine with its explanation deleted. */
+      DCHECK(typeof r.statusText === "string",
+             "safeFetch answered a reply with no statusText — it is written on every path (the blocked arms " +
+             "carry their REFUSAL REASON in it), and an empty string is a legitimate answer from any HTTP/2 " +
+             "response, so an absent one cannot be defaulted without erasing the difference");
       /* STATUS 0 IS NOT A REPLY. It is the one status no HTTP response has, and it is exactly what the
          chokepoint answers when the request never went on the wire at all (bad URL, blocked scheme, blocked
          private target, CORB). This comment's own rule — «`null` is a NETWORK ERROR, which is what a URL this
@@ -1281,7 +1343,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       /* TWO PIECES OF ONE REPLY, because they cross on two channels — `meta` is the JSON qjs_provide parses
          and `bytes` is what it copies into the engine's heap beside it. They are handed over together so a
          caller cannot deliver one without the other. */
-      return { meta: { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers),
+      return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers),
                        urlList: r.urlList, computedType: r.computedType },
                bytes: r.body };
     } catch (e) {
@@ -1380,11 +1442,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
              "built from it and the page reads status, statusText and every header off that, and §2.2.4's " +
              "body source is a BYTE SEQUENCE");
+      /* AND §3.5.6's STATUS MESSAGE, ASSERTED FOR THE REASON `fetched` GIVES ONE LINE-FOR-LINE: `""` is what
+         an HTTP/2 response legitimately reports, so a `|| ""` beside it says the same two bytes for a real
+         answer and for a chokepoint that stopped writing the field — and on the arms where safeFetch REFUSED
+         the request, this field carries the whole reason it refused. */
+      DCHECK(typeof r.statusText === "string",
+             "safeFetch answered an XHR with no statusText — XMLHttpRequest §3.7.5's `statusText` getter is " +
+             "read straight off it, and the chokepoint writes one on every path including the refusals whose " +
+             "reason it is");
       /* THE BYTES BESIDE THE RECORD, for the reason `fetched` states: §3.6.6's "get a text response" DECODES
          the received bytes with the FINAL encoding, and until those bytes crossed as bytes that algorithm was
          decoding a re-encoding of this zone's own UTF-8 guess. `responseType = "arraybuffer"` handed the page
          the same round trip in place of the server's bytes. */
-      return { meta: { status: r.status, statusText: r.statusText || "", headers: Object.entries(r.headers) },
+      return { meta: { status: r.status, statusText: r.statusText, headers: Object.entries(r.headers) },
                bytes: r.body };
     } catch (e) {
       /* §3.5.6's "handle errors": a THROWN fetch is the network error that becomes the page's `error` event.
@@ -2759,7 +2829,13 @@ const _hostOps = {
     // too — gating the merge on fetchCallSites alone dropped every sink from a live/looping engine.
     /* `securitySinks` IS ASSERTED ON EVERY DOCUMENT THIS SEAM PRODUCES (assertResultDocument), so the
        `partial.securitySinks &&` that stood beside this one was a defaulted read of a guaranteed field — the
-       shape that turns a producer that stopped writing it into a page with no sinks. */
+       shape that turns a producer that stopped writing it into a page with no sinks. A snapshot is BUILT from
+       the one @RESULT line above, so it always has a document; asserted rather than assumed, because "always"
+       here is a claim about the arm `linesToAnalysis` took and the two lengths below are read regardless. */
+    DCHECK(analysisHasDocument(partial),
+           "an incremental snapshot carried no engine document — it is parsed from the @RESULT line this " +
+           "function just found, so its absence is that parse having produced something else entirely and " +
+           "every finding in the snapshot is about to be read off a record that has none");
     const hasWork = partial.fetchCallSites.length || partial.securitySinks.length;
     if (!hasWork) return;
     /* THE MERGE CALLBACK IS THE OTHER HALF OF THIS EDGE. `typeof … === "function"` guarding the call meant a
@@ -3085,12 +3161,21 @@ const _hostOps = {
     /* A CRASHED RUN DOES NOT WRITE THE CROSS-SESSION FRONTIER, AND THIS IS THE READER `_engineCrashed` NEVER
        HAD. The park recipes are a claim that these flows can be resumed — out of the heap that just aborted —
        and the counters beside them (`emit`, `visits`) are a claim about a run that finished. Worse in the
-       direction that has no symptom: a crashed run's `_park` is empty, `frontierPut` DELETES an entry whose
-       recipe string is empty, so persisting a crash would erase the residue a PREVIOUS session parked for
-       this origin — findings and flows nobody in this session ever measured, dropped by a run that died.
-       Skipping the write leaves that entry exactly as it was, which is the honest state: this run has nothing
-       to say about what is resumable. */
+       direction that has no symptom: a crashed run has NO `_park` at all (and had an empty one before the
+       document became present-or-absent), `frontierPut` DELETES an entry whose recipe string is empty, so
+       persisting a crash would erase the residue a PREVIOUS session parked for this origin — findings and
+       flows nobody in this session ever measured, dropped by a run that died. Skipping the write leaves that
+       entry exactly as it was, which is the honest state: this run has nothing to say about what is
+       resumable. */
     if (eng.persist && result._fkey && result._run === "complete") {   // persist into the GLOBAL frontier (cross-session cold tier)
+      /* AND THE GATE'S OWN PREMISE IS ASSERTED, because it is a premise about ANOTHER function's arms. `_run`
+         is `complete` exactly where `linesToAnalysis` was given a document, so the two reads below are safe —
+         and if that ever stops being true the failure is silent and maximally expensive: `recipes` would be
+         the empty string, which frontierPut reads as "delete this origin's residue". */
+      DCHECK(analysisHasDocument(result),
+             "a run marked `complete` reached the frontier write with no engine document — its `_park` " +
+             "recipes and its endpoint count are what this origin's cross-session entry is MADE of, and a " +
+             "missing one would erase a previous session's parked residue rather than extend it");
       const prior = result._prior;
       await frontierPut(result._fkey, {
         /* THE TOP-LEVEL CREATION URL IS PART OF THE RECIPE, because a resumed flow must resume into the same
@@ -3105,12 +3190,13 @@ const _hostOps = {
            carried verbatim; this zone never re-derives it, because no header is re-derivable from an address. */
         key: result._fkey, sourceUrl: eng.msg.sourceUrl, topLevelUrl: eng.msg.topLevelUrl, origin: eng.origin,
         responseHeaders: eng.msg.responseHeaders, html: eng.html, code: eng.code,
-        /* `_park` AND `fetchCallSites` ARE GUARANTEED BY `linesToAnalysis` ON BOTH ARMS — asserted off the
-           engine document when there is one, the host's own empty when the caller said there would not be —
-           so a `|| []` here cannot fire. What it CAN do is exactly what this file has already been burnt by
-           twice: outlive the guarantee. This entry is the cross-session frontier's residue, and the shape of
-           the failure it would hide is "the recipes joined to the empty string", which reads to the next
-           session as an origin that finished rather than one whose parked flows were dropped. */
+        /* `_park` AND `fetchCallSites` ARE GUARANTEED ON THE ARM THIS GATE SELECTS — `linesToAnalysis` writes
+           both exactly where an @RESULT document arrived and `assertResultDocument` checked it, and the
+           DCHECK above is that premise stated where it is relied on rather than assumed across two functions.
+           A `|| []` here cannot fire, and what it CAN do is exactly what this file has been burnt by twice:
+           outlive the guarantee. This entry is the cross-session frontier's residue, and the shape of the
+           failure it would hide is "the recipes joined to the empty string", which reads to the next session
+           as an origin that finished rather than one whose parked flows were dropped. */
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
         emit: ((prior && prior.emit) || 0) + result.fetchCallSites.length, visits: ((prior && prior.visits) || 0) + 1, ts: Date.now(),
       });

@@ -456,13 +456,19 @@ function _mergeFrontierResult(sourceUrl, documentIds, result, epoch) {
   try {
     // Merge on EITHER surface: an XSS-only page carries verified @S PoCs with no endpoints. Gating on
     // fetchCallSites alone dropped every incremental sink (they only surface here now, not just at teardown).
-    /* NOT `result.fetchCallSites && …`: bridge.js asserts both arrays on every document it relays, so the
-       `&&` was a defaulted read of a guaranteed field — and what it produced when the producer stopped
-       writing one was a quiet return, i.e. a page reported as having learned nothing. */
-    DCHECK(Array.isArray(result.fetchCallSites) && Array.isArray(result.securitySinks),
-           "an engine advance reached the merge without its two finding arrays — every endpoint and every @S " +
-           "record travels in them, so a missing one is bridge.js's relay broken and this advance would " +
-           "silently merge as an empty one");
+    /* NOT `result.fetchCallSites && …`: the two finding arrays are PRESENT-OR-ABSENT on a bridge.js analysis
+       and their presence IS the statement that an @RESULT document arrived, so the `&&` was reading a
+       three-state fact as a two-state one — and what it produced when the producer stopped writing an array
+       was a quiet return, i.e. a page reported as having learned nothing.
+       AN ADVANCE WITH NO DOCUMENT AND AN ADVANCE THAT LEARNED NOTHING ARE DIFFERENT, and only the second of
+       them is an observation of a page. A cold/child instance that ABORTED reaches here with no document at
+       all (bridge.js's crash arm carries none), and merging that as an empty advance is precisely how a run
+       that died came to be recorded as a page with no API surface. Said out loud, like the epoch path above,
+       rather than returned through a `.length` that cannot tell the two apart. */
+    if (!analysisHasDocument(result)) {
+      console.debug("[frontier] advance discarded — the run produced no engine document (_run=%s)", result._run);
+      return;
+    }
     if (!result.fetchCallSites.length && !result.securitySinks.length) return;   // legitimately empty (nothing learned yet) — not an invariant break
     result.sourceUrl = sourceUrl || result.sourceUrl || "";
     if (!documentIds.length) {
@@ -910,12 +916,21 @@ async function _dispatchDocument(docKey) {
     }
   }
 
-  DCHECK(Array.isArray(analysis.securitySinks) && Array.isArray(analysis.fetchCallSites),
-         "the engine result reached the merge without its two finding arrays — every endpoint and every @S " +
-         "record for this page travels in them, and merging a document that has neither reports the page as " +
-         "analysed and clean");
-  console.debug("[AST] tab=%d: %d fetchSites, %d secSinks, %d pageErrors", tabId,
-    analysis.fetchCallSites.length, analysis.securitySinks.length, analysis.resolverErrors.length);
+  /* WHETHER THIS RUN PRODUCED A DOCUMENT AT ALL, ASKED ONCE AND USED THREE TIMES BELOW. It is a fact about
+     the RECORD, not a length: bridge.js writes the two finding arrays exactly where the engine handed it an
+     @RESULT, so their presence is the run's own statement that there is something here to merge. Read into a
+     local because the console line, the replace gate and the merge all need the same answer and asking three
+     times is three chances to ask it differently. */
+  const hasDoc = analysisHasDocument(analysis);
+  /* AND THE COUNTS ARE ONLY PRINTED WHERE THERE ARE COUNTS. `0 fetchSites, 0 secSinks` for a run that never
+     answered is the same false line as the empty arrays it was read off — §Testing: an absent count and a
+     zero count are different facts and must never be averaged. */
+  if (hasDoc)
+    console.debug("[AST] tab=%d: %d fetchSites, %d secSinks, %d pageErrors", tabId,
+      analysis.fetchCallSites.length, analysis.securitySinks.length, analysis.resolverErrors.length);
+  else
+    console.debug("[AST] tab=%d: no engine document (_run=%s), %d pageErrors", tabId,
+      analysis._run, analysis.resolverErrors.length);
 
   /* WHAT THIS RUN WAS, ON THE DOCUMENT ITSELF. `_engineCrashed` was written twice in bridge.js and read
      nowhere, so a crashed run reached this document as a plausible empty analysis: `_astError` is null (the
@@ -937,17 +952,23 @@ async function _dispatchDocument(docKey) {
      held its page source forever, and the one case that produces no symptom is again the one that was broken.
      "The engine found nothing" is a RESULT and is recorded as one.
      A RECORD THAT CARRIES NO DOCUMENT DOES NOT REPLACE ONE THAT DOES. A crash record and a page with nothing
-     to run are made of the host's own empty arrays — they are not an observation of a page — and overwriting
-     the last real snapshot with them is precisely how a run that learned an endpoint came to report none.
+     to run carry no finding arrays at all — they are not an observation of a page — and overwriting the last
+     real snapshot with them is precisely how a run that learned an endpoint came to report none.
      "The engine found nothing" and "the engine died" are both recorded, in `_astRun`; only the first of them
      is a finding set.
-     A CRASH RECORD THAT DID CARRY OBSERVATIONS STILL REPLACES, and it is not the same test written twice: an
+     A CRASH RECORD THAT DID CARRY A DOCUMENT STILL REPLACES, and it is not the same test written twice: an
      instance that aborts between printing a snapshot and this zone consuming it hands over that snapshot,
      which is strictly newer than the last one merged (each is the run's growing accumulation and the merged
-     ones are consumed as they go), so it is the most complete answer this run has. What must not replace is
-     an EMPTY record — the host's own empties, which are not an observation of anything. */
-  if (analysis._run === "complete" || analysis.fetchCallSites.length || analysis.securitySinks.length)
-    tab._astResults = [analysis];
+     ones are consumed as they go), so it is the most complete answer this run has.
+     THE TEST IS PRESENCE AND NOT LENGTH, AND THAT IS THE FIX RATHER THAN A REWORDING. `_run === "complete" ||
+     fetchCallSites.length || securitySinks.length` was asking "did it observe anything" of a record that
+     could not say — an ABSENT document and a document holding zero endpoints both answered 0, so the length
+     was standing in for presence and got it right only because bridge.js was fabricating the empty arrays
+     that made the two indistinguishable in the first place. With the document present-or-absent the question
+     has a direct answer, and the case the lengths got wrong is now the one that is right: a completed engine
+     document holding no endpoint and no sink is a real observation of a page with nothing to find, and it
+     REPLACES, because the engine's endpoint set is cumulative and a later document is never smaller. */
+  if (hasDoc) tab._astResults = [analysis];
   mergeASTResultsIntoVDD(tab, [analysis]);
   mergeToGlobal(tab);
   notifyPopup(tabId);

@@ -183,8 +183,31 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
              "an endpoint's pathParams entry is not {name, values[]} with at least one value — lib/merge.js " +
              "builds it from the method parameters whose location is \"path\" and skips any hole nothing has " +
              "filled, so an empty one would surface a templated segment as if a value had been learned for it");
-      const cur = parameters[pp.name] || { name: pp.name, type: "string", location: "path", required: true, description: "AST-learned path segment" };
-      const vals = (cur._astValidValues || []).slice();
+      /* A NAME THE RESOLVED SCHEMA DOES NOT DECLARE IS NOT A HOLE — it is the schema stating it has no such
+         parameter, and a templated path segment the engine learned a value for is one the panel must show
+         anyway. So the miss is answered by DECLARING the parameter out of what this `pathParams` entry
+         already states, never by defaulting one into existence behind a `||`: `location` is "path" because
+         that is the list the entry came from, `required` is true because a templated segment with no value
+         does not produce a URL at all, and `type` is "string" because a path segment IS the URL's own bytes.
+         Each is a fact about a path parameter rather than a guess about this one — §RUN, DON'T MATCH: what
+         is surfaced is what merge.js observed plus what the URL grammar determines. */
+      const declared = Object.prototype.hasOwnProperty.call(parameters, pp.name);
+      const cur = declared ? parameters[pp.name]
+                           : { name: pp.name, type: "string", location: "path", required: true, description: "AST-learned path segment" };
+      DCHECK(cur && typeof cur === "object",
+             "the resolved schema declares `" + pp.name + "` as something that is not a parameter record — " +
+             "resolveEndpointSchema builds this map out of parameter declarations, so a non-object here is " +
+             "that build broken and a learned path value is about to be attached to it");
+      /* AND AN ABSENT `_astValidValues` IS "NOTHING HAS BEEN LEARNED FOR THIS PARAMETER YET" — exactly what
+         lib/merge.js's `_mergeParamInto` means by writing the field only where the union is non-empty. Read
+         as that statement rather than through a `||`, which says the same thing for an absent field and for
+         a producer that started writing something that is not an array. */
+      const priorVals = cur._astValidValues;
+      DCHECK(priorVals === undefined || Array.isArray(priorVals),
+             "a parameter's `_astValidValues` is not an array — lib/merge.js writes it as the union of the " +
+             "values the contributing documents observed, so a non-array is that union broken and the panel " +
+             "would render a learned-value list nobody observed");
+      const vals = priorVals === undefined ? [] : priorVals.slice();
       for (const val of pp.values) if (vals.indexOf(val) < 0) vals.push(val);
       cur._astValidValues = vals;
       if ((cur._exampleValue === undefined || cur._exampleValue === null) && vals.length) { cur._exampleValue = vals[0]; cur._exampleValueSource = "ast"; }

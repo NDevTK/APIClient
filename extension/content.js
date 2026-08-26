@@ -22,38 +22,42 @@
   // This relay only forwards to background.js via sendMessage; background validates
   // the RESPONSE_BODY type against the content-script allowlist. See SECURITY.md.
 
+  /* THE FIELDS EVERY TRANSPORT WRITES, and then the ones only SOME of them do. intercept.js emits this event
+     from three wrappers with three different shapes — fetch, XMLHttpRequest and WebSocket — so a field's
+     absence here is a fact about WHICH TRANSPORT ran, and a relay that fills it in destroys the one thing
+     this side knows and the offscreen cannot re-derive.
+       responseType  Fetch §2.2.6 response's TYPE, read off `clone.type`. Only the fetch wrapper can produce
+                     one: XHR's own spec fails a cross-origin response CORS did not allow rather than handing
+                     back an opaque one, and a WebSocket frame is not a Response at all. It is also the one
+                     fact about an opaque no-cors response its bytes cannot carry — body null, header list
+                     empty, byte-identical to an empty readable response — so "absent" is NOT APPLICABLE and
+                     `null` was that statement rendered as the value the classifier reads for "not opaque".
+       wsId          written by the WebSocket wrapper alone; its absence is "this is not a socket frame", and
+                     lib/response-decode.js reads exactly that (`msg.channelId || msg.wsId`).
+       requestHeaders / requestBody / requestBodyBase64 / callStack
+                     written by the fetch and XHR wrappers, which have a request to describe. A WS_OPEN /
+                     WS_SEND / WS_RECV frame has none, and `null`/`false` said "the request carried no
+                     headers and no body", which is a claim about a request that does not exist.
+     AND THREE NAMES ARE GONE BECAUSE NOTHING ON THIS EVENT EVER WROTE THEM. `channelId`, `sourceOrigin` and
+     `targetOrigin` belong to the postMessage/MessageChannel records THIS FILE builds further down — a
+     different producer on a different path — and reading them off intercept.js's detail was a read with no
+     writer, with `|| null` as the reason it never crashed. */
+  const PER_TRANSPORT = ["responseType", "wsId", "requestHeaders", "requestBody", "requestBodyBase64", "callStack"];
   document.addEventListener("__uasr_resp", (e) => {
     if (!e.detail) return;
     const d = e.detail;
-    _sendChunked({
+    const m = {
       type: "RESPONSE_BODY",
       url: d.url,
       method: d.method,
       status: d.status,
       contentType: d.contentType,
       responseHeaders: d.responseHeaders,
-      // Fetch §2.2.6's FILTERED RESPONSE KIND, which intercept.js has read off the
-      // Response (`clone.type`) since it was written and which this relay dropped on
-      // the floor — so `msg.responseType` was undefined in the offscreen for the whole
-      // life of the field and the classifier's opaque rule was a reader with no writer.
-      // It is the one fact about an opaque no-cors response that its bytes cannot
-      // carry: the body is null and the header list empty, so an unreadable response
-      // and an empty one are byte-identical downstream and only this side can tell them
-      // apart. The XHR path emits none because XHR cannot produce one — its own spec
-      // fails a cross-origin response CORS did not allow rather than handing back an
-      // opaque one — so absence here is "not applicable", not "not sent".
-      responseType: d.responseType || null,
       body: d.body,
       base64Encoded: d.base64Encoded,
-      wsId: d.wsId || null,
-      channelId: d.channelId || null,
-      sourceOrigin: d.sourceOrigin || null,
-      targetOrigin: d.targetOrigin || null,
-      requestHeaders: d.requestHeaders || null,
-      requestBody: d.requestBody || null,
-      requestBodyBase64: d.requestBodyBase64 || false,
-      callStack: d.callStack || null,
-    }, "body");
+    };
+    for (const k of PER_TRANSPORT) if (k in d) m[k] = d[k];
+    _sendChunked(m, "body");
   });
   // Signal intercept.js that the relay is listening — replays buffered events
   document.dispatchEvent(new CustomEvent("__uasr_ready"));
@@ -375,8 +379,28 @@
   // ─── Fetch relay: background → content script → response ──────────────────
 
   async function handlePageFetch(msg) {
+    /* WHAT THE TRUSTED ZONE PROMISED TO SEND, ASSERTED WHERE IT ARRIVES. lib/schema.js's `_sendPageFetch`
+       composes this message in ONE object literal and writes url/method/headers/body/bodyEncoding on every
+       one it sends — `pageContextFetch` above it DCHECKs the method is a non-empty string before that literal
+       is even built — so `msg.headers || {}` and `msg.method || "GET"` were a SECOND layer of the producer's
+       own defaults, and what a second layer buys is that a producer which stops writing a field is answered
+       here with a plausible request instead of a crash. The verb is the half that matters: a relay that
+       silently sends GET for a message whose method went missing performs a DIFFERENT REQUEST than the
+       caller asked for, against a page's real credentials, and reports it as that caller's answer. */
+    DCHECK(!!msg && typeof msg.url === "string" && msg.url !== "",
+           "a PAGE_FETCH reached the page-context relay with no url — lib/schema.js writes one on every " +
+           "message it sends, so an absent one is that composition broken and this relay is about to fetch " +
+           "the string \"undefined\" against the page's own credentials");
+    DCHECK(typeof msg.method === "string" && msg.method !== "",
+           "a PAGE_FETCH reached the page-context relay with no method — pageContextFetch asserts one before " +
+           "the message is built, and defaulting to GET here would run a different request than the caller " +
+           "named and answer them with its result");
+    DCHECK(msg.headers && typeof msg.headers === "object",
+           "a PAGE_FETCH reached the page-context relay with no headers object — lib/schema.js writes one " +
+           "(possibly empty) on every message, and an absent one is a header list the caller composed and " +
+           "this relay silently dropped");
     // Strip browser-managed headers
-    const headers = { ...(msg.headers || {}) };
+    const headers = { ...msg.headers };
     delete headers["Cookie"];
     delete headers["cookie"];
     delete headers["Origin"];
@@ -385,7 +409,7 @@
     delete headers["referer"];
 
     const opts = {
-      method: msg.method || "GET",
+      method: msg.method,
       credentials: "same-origin",
       headers,
     };
@@ -395,8 +419,12 @@
         msg.bodyEncoding === "base64" ? base64ToUint8(msg.body) : msg.body;
     }
 
+    /* THE ADDRESS IS COMPOSED OUTSIDE THE CATCH, because the catch below has a real job and this is not it: a
+       fetch that fails is a Fetch §5.6 network-error OUTCOME the caller is entitled to be told about, while a
+       message with no url is a broken contract with the trusted zone. Read inside the try, the second was
+       reported to the caller as the first. */
+    const fetchUrl = msg.url + (msg.url.includes("#") ? "&" : "#") + "_uasr_send";
     try {
-      const fetchUrl = msg.url + (msg.url.includes("#") ? "&" : "#") + "_uasr_send";
       const resp = await fetch(fetchUrl, opts);
       const respHeaders = {};
       resp.headers.forEach((v, k) => {
@@ -452,8 +480,20 @@
       return true;
     }
     if (msg.type === "WS_SEND_MSG") {
+      /* `binary` DECIDES HOW THE MAIN WORLD READS `data` — intercept.js base64-decodes it when the flag is
+         set and sends the string as-is when it is not — so `|| false` was not a default, it was a DECISION
+         made on the producer's behalf: a flag that went missing became "this is text", and a binary frame
+         the operator composed would be delivered as its own base64 spelling. lib/popup-handlers.js writes
+         the flag on every WS_SEND_MSG it relays. */
+      DCHECK(typeof msg.binary === "boolean",
+             "a WS_SEND_MSG reached the socket relay with no `binary` flag — it is what decides whether the " +
+             "main world base64-decodes the payload, so an absent one would send a binary frame's base64 " +
+             "text as the frame itself");
+      DCHECK(typeof msg.data === "string",
+             "a WS_SEND_MSG reached the socket relay with no `data` — the payload is the whole of what this " +
+             "relay exists to deliver");
       document.dispatchEvent(new CustomEvent("__uasr_ws_send", {
-        detail: { wsId: msg.wsId, data: msg.data, binary: msg.binary || false }
+        detail: { wsId: msg.wsId, data: msg.data, binary: msg.binary }
       }));
       sendResponse({ ok: true });
       return;
@@ -475,12 +515,23 @@
         sendResponse({ error: "Wildcard targetOrigin only allowed for sandboxed iframes" });
         return;
       }
+      /* THE PAYLOAD IS READ OUTSIDE BOTH CATCHES, and the two catches are then about the two things they are
+         actually for. The inner one is real and stays: a console payload is human-typed text, so "it is not
+         JSON" is a DATUM and the string is posted as itself. The outer one turns a postMessage throw into an
+         answer the operator sees. Neither of them is about whether the trusted zone sent a payload at all,
+         and with `msg.data` read inside them a message that carried none was delivered as the literal
+         `undefined` or reported as a failed post. */
+      DCHECK(typeof msg.data === "string",
+             "a PM_SEND_MSG reached the postMessage relay with no `data` string — lib/popup-handlers.js " +
+             "relays the operator's typed payload on every one, so an absent one is a message this window " +
+             "would receive carrying nothing the operator wrote");
+      let data = msg.data;
       try {
-        let data = msg.data;
-        try { data = JSON.parse(data); } catch (_) {}
+        try { data = JSON.parse(data); } catch (_) { /* not JSON: the typed text IS the payload */ }
         source.postMessage(data, origin);
         sendResponse({ ok: true });
       } catch (err) {
+        RETHROW_FATAL(err);
         sendResponse({ error: err.message });
       }
       return;
@@ -491,12 +542,20 @@
         sendResponse({ error: "No port for channel " + msg.channelId });
         return;
       }
+      /* Same split as PM_SEND_MSG one branch up: the payload's PRESENCE is a contract with the trusted zone
+         and is asserted here, its JSON-ness is a datum the inner catch answers, and a port that refuses the
+         post is the outer catch's business. */
+      DCHECK(typeof msg.data === "string",
+             "an MC_SEND_MSG reached the MessagePort relay with no `data` string — lib/popup-handlers.js " +
+             "relays the operator's typed payload on every one, so an absent one is a port message carrying " +
+             "nothing the operator wrote");
+      let data = msg.data;
       try {
-        let data = msg.data;
-        try { data = JSON.parse(data); } catch (_) {}
+        try { data = JSON.parse(data); } catch (_) { /* not JSON: the typed text IS the payload */ }
         port.postMessage(data);
         sendResponse({ ok: true });
       } catch (err) {
+        RETHROW_FATAL(err);
         sendResponse({ error: err.message });
       }
       return;
