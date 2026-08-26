@@ -635,10 +635,13 @@ static void ev_require_single_fragment(const EvTarget *t)
               "rather than a rectangle. CSS 2 §9.4.2 'Inline formatting contexts' is what produces them: "
               "'boxes are laid out horizontally, one after the other, beginning at the top of a containing "
               "block', broken into lines whose width the containing block and the floats decide. That needs the "
-              "text MEASURED — a real font, its ascent and descent, and the break opportunities css-text-3 "
-              "defines — which is the same capability §9's Range members need for a Text node's rectangles and "
-              "the same one CSS 2 §10.6.3's line-box arm needs for a content-based height. BUILD the font "
-              "metrics, then §9.4.2's line boxes over them");
+              "text MEASURED, and only one half of the measurement is missing: the ascent and descent are CSS "
+              "2 §10.8.1 'Leading and half-leading''s `A` and `D`, which core/css/font_metrics.h holds, while "
+              "the ADVANCE of an arbitrary glyph — what decides the break opportunities css-text-3 defines, "
+              "and therefore how many fragments there are — has no measurement at all. That is the same "
+              "capability §9's Range members need for a Text node's rectangles and the same one CSS 2 "
+              "§10.6.3's line-box arm needs for a content-based height. BUILD the per-glyph advance beside "
+              "`A` and `D`, then §9.4.2's line boxes over it");
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
         DFAIL("CSSOM VIEW §6's getClientRects() step 3's SECOND CONSTRAINT: an element whose computed `display` "
               "is `table` or `inline-table` contributes 'both the TABLE BOX and the CAPTION BOX, if any, but "

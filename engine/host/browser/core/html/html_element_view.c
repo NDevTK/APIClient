@@ -331,10 +331,12 @@ static JSValue hev_offset_extent(JSContext *ctx, const HevTarget *t, bool vertic
               "inline-level box which was split by a block-level descendant, also include fragments generated "
               "by the block-level descendants, unless they are zero width or height'. So this member's answer "
               "for an inline element is a union over line fragments, and there are no line boxes: CSS 2 §9.4.2 "
-              "'Inline formatting contexts' needs the text MEASURED with a real font and css-text-3's break "
-              "opportunities. That is the same capability §6's getClientRects, §9's Range rectangles and CSS 2 "
-              "§10.6.3's line-box arm are all waiting on. BUILD the font metrics, then §9.4.2's line boxes over "
-              "them, then the union here");
+              "'Inline formatting contexts' needs the text MEASURED, and the half that is missing is the "
+              "ADVANCE — core/css/font_metrics.h holds CSS 2 §10.8.1 'Leading and half-leading''s `A` and `D`, "
+              "which say how TALL a line box is, and nothing says where the run breaks, which is what decides "
+              "how many fragments this union is over. That is the same capability §6's getClientRects, §9's "
+              "Range rectangles and CSS 2 §10.6.3's line-box arm are all waiting on. BUILD the per-glyph "
+              "advance beside `A` and `D`, then §9.4.2's line boxes over it, then the union here");
     if (kind == ELEMENT_VIEW_FRAGMENTS_TABLE)
         DFAIL("CSSOM VIEW §7's offsetWidth/offsetHeight step 2 is over the fragments of the PRINCIPAL BOX, and "
               "an element whose computed `display` is `table` or `inline-table` has the box structure CSS 2 "

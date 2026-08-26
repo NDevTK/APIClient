@@ -1475,12 +1475,15 @@ static JSValue range_client_rects(JSContext *ctx, const RangeBounds *b)
                   "computed using FONT METRICS; thus, for horizontal writing, the vertical dimension of each "
                   "box is determined by the font ascent and descent, and the horizontal dimension by the text "
                   "advance width', with a partially covered TYPOGRAPHIC CHARACTER UNIT (half a surrogate pair, "
-                  "part of a grapheme cluster) rounded out to the whole unit. This engine measures no text: "
-                  "there is no font, no ascent or descent, and no advance width, which is the SAME missing "
-                  "capability CSS 2 §9.4.2's line boxes need for an inline box's fragments and §10.6.3's "
-                  "line-box arm needs for a content-based height. BUILD the font metrics and css-text-3's "
-                  "typographic character unit segmentation; this rule and those two are then one component's "
-                  "three consumers");
+                  "part of a grapheme cluster) rounded out to the whole unit. THE VERTICAL DIMENSION IS NO "
+                  "LONGER THE GAP: the ascent and descent this rule names are CSS 2 §10.8.1 'Leading and "
+                  "half-leading''s `A` and `D`, and core/css/font_metrics.h holds both for the first available "
+                  "font. WHAT IS ABSENT IS THE ADVANCE WIDTH — font_metrics.h measures exactly two glyphs "
+                  "(css-values-4 §6.1.1's assumed '0' for `ch` and '水' for `ic`) and no run of text — which "
+                  "is the SAME missing capability CSS 2 §9.4.2's line boxes need for an inline box's fragments "
+                  "and §10.6.3's line-box arm needs for a content-based height. BUILD the per-glyph advance "
+                  "beside `A` and `D`, and css-text-3's typographic character unit segmentation; this rule and "
+                  "those two are then one component's three consumers");
         if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && range_contains(b, n) &&
             !(n->parent != NULL && range_contains(b, n->parent))) {
             JSValue list = element_view_client_rects(lxb_dom_interface_element(n)), len;
