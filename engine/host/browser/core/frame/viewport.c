@@ -41,12 +41,25 @@
    core/css/css_style_declaration.c resolves an author declaration out of the style sheet OBJECTS §6.2's list
    holds — and there IS a used value over it: core/layout/used_value.h's `used_value_px(el, "width")`, which
    for a `width: auto` iframe now runs §10.3.2 and lands on this very default.
-   WHAT IS ACTUALLY MISSING IS THE REACH, and it is a fact about this file rather than about CSS: the container
-   ELEMENT is not obtainable from here. `viewport_width` is asked with a child realm's ctx, walks to its
-   WindowProxy, and neither core/frame/window_proxy.h nor core/frame/navigable.h exports the navigable's
-   container element — no member of either header names a `lxb_dom_element_t` at all. BUILD THAT: a navigable's
-   container element beside its parent, and this entry becomes `used_value_content_px(container, false)`, which
-   answers this same default whenever the cascade sized the frame `auto`. */
+   THE REACH IS NO LONGER MISSING, and this paragraph used to say it was: `window_proxy_container` answers
+   §7.3.1.3 "Child navigables"' container of a navigable, recorded by create-a-new-child-navigable and
+   confirmed against the element's own content navigable, so it is per-flow with nothing to capture. HTML
+   §15.3.2 "The page" states the consequence this file wants in one sentence — "if a Document's node navigable
+   is a child navigable, then it is expected to be positioned and sized to fit inside the CONTENT BOX of the
+   container of that navigable" — so the number is `used_value_content_px(container, vertical)` and the walk
+   to it is `window_proxy_container(ctx, document_window_proxy(ctx))` -> `node_of`.
+   TWO THINGS STAND BETWEEN THAT AND THIS ENTRY, and neither is the reach. (1) THE ENVIRONMENT FACT CHANGES
+   KIND. A top-level traversable's viewport is PICKED, which is what makes CSS_ENV_ICB_WIDTH a row in the seam
+   below; a CHILD's would be DERIVED from its container's used size, which bottoms out in the parent's own ICB
+   for a percentage-sized frame and in nothing at all for `iframe { width: 500px }`. viewport.h's test then
+   says a child ICB is not a picked fact and must carry its container's facts WHOLE rather than mint a key of
+   its own — while `innerWidth` in that child still crosses through the MEMBER seam, which mints per document.
+   Those two answers have to be made one deliberately, and `viewport_width` returning a bare `double` is where
+   the choice is currently hidden rather than made. (2) THE CROSS-ORIGIN ARM. A container in a peer instance
+   has no wrapper in this heap, so the read is CLAUDE.md §Security's suspend-at-the-boundary — the same
+   primitive core/css/css_presentational_hints.c crashes for when §15.3.2's third margin source needs the same
+   element's attribute, and the same one §15.3.2's own "if the container is not being rendered, the navigable
+   is expected to have a viewport with zero width and zero height" would be asked through. */
 
 /* A modelled non-HiDPI display. See viewport.h. */
 #define VIEWPORT_DPPX           1.0

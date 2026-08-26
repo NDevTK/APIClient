@@ -9,6 +9,7 @@
 #include "quickjs.h"
 #include "core/css/css_presentational_hints.h"
 #include "core/dom/document.h"
+#include "core/dom/node.h"
 #include "core/frame/window_proxy.h"
 
 static char *hint_strdup(const char *s)
@@ -90,6 +91,68 @@ static bool document_is_child_navigable(const lxb_dom_node_t *doc)
     return child;
 }
 
+/* HTML §15.3.2 "The page"'s CONTAINER FRAME ELEMENT, in the section's own two conjuncts: "if the body
+   element's node document's node navigable is a CHILD NAVIGABLE, and the container of that navigable is a
+   FRAME OR IFRAME element, then the container frame element of the body element is that frame or iframe
+   element. Otherwise, there is no container frame element."
+   THE SECOND CONJUNCT IS NOT DECORATION. §7.3.1.3's navigable containers are `iframe`, `object`, `embed` and
+   `fencedframe`, and §15.3.2 names two of them — so a `<body marginheight=…>`-less document inside an
+   `<object>` has NO container frame element and takes the 8px default, while the same document inside an
+   `<iframe marginheight=20>` takes 20. A test that only asked whether the navigable has a container would
+   read an `object`'s attribute that HTML never routes here.
+   NULL IS TWO DIFFERENT ANSWERS AND ONLY ONE OF THEM IS A GAP. There is genuinely no container frame element
+   for a top-level traversable and for a container HTML does not name, and §15.3.2 states the default for
+   exactly those. A container that EXISTS and cannot be reached is the third thing, and it crashes: §7.3.1.3
+   gives every child navigable a container, so a child navigable whose container reads back null is one whose
+   container element lives in another agent — the cross-origin case §15.3.2's own note says is intentional
+   ("a page can change the margins of another page, including one from another origin"). */
+static lxb_dom_element_t *hint_container_frame_element(const lxb_dom_node_t *doc)
+{
+    JSContext *ctx;
+    JSValue container;
+    lxb_dom_node_t *n;
+    const lxb_char_t *tag;
+    size_t taglen = 0;
+
+    if (!document_is_child_navigable(doc)) return NULL;
+    ctx = document_active_realm_of(doc);
+    DCHECK(ctx != NULL && JS_IsObject(document_window_proxy(ctx)),
+           "§15.3.2's container-frame walk found a document that IS a child navigable and has no realm or no "
+           "WindowProxy — the predicate above establishes both before answering true, so the two tests have "
+           "come apart");
+    container = window_proxy_container(ctx, document_window_proxy(ctx));
+    if (JS_IsNull(container)) {
+        JS_FreeValue(ctx, container);
+        DFAIL("HTML §15.3.2 \"The page\"'s THIRD SOURCE for a body margin is the body element's CONTAINER "
+              "FRAME ELEMENT's `marginheight`/`marginwidth` attribute, this document's navigable IS a child "
+              "navigable — so §7.3.1.3 \"Child navigables\" gives it a container — and that container reads "
+              "back NULL. THE REVERSE EDGE IS NOT WHAT IS MISSING: `window_proxy_container` answers it, "
+              "recorded by create-a-new-child-navigable and confirmed against the element's own content "
+              "navigable so it is per-flow. What is missing is a container in ANOTHER AGENT: a cross-origin "
+              "parent holds the `iframe` element in a different WASM instance, so there is no wrapper in this "
+              "heap to read an attribute off. §15.3.2's own note says that read is intentional rather than an "
+              "oversight — \"a page can change the margins of another page (including one from another "
+              "origin)\" — and answering 8px here is a REAL NUMBER for a page whose embedder wrote "
+              "`<iframe marginheight=20>`, with nothing to say the attribute was never read. BUILD the "
+              "SUSPEND-AT-THE-BOUNDARY read (CLAUDE.md §Security: a synchronous cross-instance read is a "
+              "suspend point) and ask the peer for the container's attribute");
+        return NULL;
+    }
+    n = node_of(container);
+    JS_FreeValue(ctx, container);
+    DCHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+           "§7.3.1.3's container of a navigable is a NAVIGABLE CONTAINER ELEMENT, and the wrapper this "
+           "navigable holds is not an element — the create that recorded it is handed the element itself, so "
+           "anything else is a slot written by something that is not that algorithm");
+    /* The node is owned by the parent document's tree, not by the wrapper, so it outlives the reference freed
+       above — an element that is a navigable's container is by definition still in that tree. */
+    tag = lxb_dom_element_local_name(lxb_dom_interface_element(n), &taglen);
+    DCHECK(tag != NULL, "a navigable container element has no local name");
+    if (taglen == 6 && memcmp(tag, "iframe", 6) == 0) return lxb_dom_interface_element(n);
+    if (taglen == 5 && memcmp(tag, "frame", 5) == 0) return lxb_dom_interface_element(n);
+    return NULL;
+}
+
 char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(el);
@@ -113,12 +176,27 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
         if (!node->owner_document) return NULL;
         doc = lxb_dom_interface_node(node->owner_document);
         if (document_body_of(doc) != node) return NULL;
-        for (k = 0; k < 2; k++) {
-            const char *attr = k == 0 ? PAGE_MARGIN[i].own : PAGE_MARGIN[i].legacy;
+        /* §15.3.2's THREE SOURCES PER PROPERTY, in the table's own order: the body element's own attribute,
+           its legacy spelling, and the body element's CONTAINER FRAME ELEMENT's attribute — which carries the
+           first spelling again, on a different element. One loop, because "the FIRST attribute that exists
+           maps to the pixel length property" is one rule over all three and a third source tested outside the
+           loop would be that rule written twice.
+           THE THIRD SOURCE IS RESOLVED ONLY WHEN IT IS REACHED, which is what keeps its cross-origin crash
+           where the spec puts the read: a page inside a cross-origin frame that writes `<body marginheight=0>`
+           has its answer from the first source and must never pay for a container it does not consult. */
+        for (k = 0; k < 3; k++) {
+            const char *attr = k == 1 ? PAGE_MARGIN[i].legacy : PAGE_MARGIN[i].own;
+            lxb_dom_element_t *src = el;
             const lxb_char_t *v, *digits;
             size_t vlen = 0, dlen = 0;
 
-            v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), &vlen);
+            if (k == 2) {
+                src = hint_container_frame_element(doc);
+                /* "Otherwise, there is no container frame element" — so there is no third attribute to be the
+                   first that exists, and §15.3.2's default is the answer. */
+                if (src == NULL) break;
+            }
+            v = lxb_dom_element_get_attribute(src, (const lxb_char_t *)attr, strlen(attr), &vlen);
             if (!v) continue;
             /* "The FIRST attribute that exists maps to the pixel length property", so the search stops at the
                one that is PRESENT whether or not it parses, and an unparseable one falls to the default rather
@@ -134,17 +212,8 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
                 return out;
             }
         }
-        DCHECK(!document_is_child_navigable(doc),
-               "§15.3.2's THIRD SOURCE for a body margin is the body element's CONTAINER FRAME ELEMENT's "
-               "`marginheight`/`marginwidth` attribute, and this document's navigable IS a child navigable, so "
-               "it has one. This engine cannot ask it: a WindowProxy carries no container element — the same "
-               "gap navigable.c names from the other side when it cannot re-snapshot §7.4.2.1's iframe "
-               "sandboxing flag set. Answering 8px here is a REAL NUMBER for a page whose embedder wrote "
-               "`<iframe marginheight=20>`, with nothing to say the attribute was never read. BUILD the "
-               "navigable -> container element link: §4.8.5's create-a-child-navigable has the element in hand, "
-               "and the CROSS-ORIGIN case is a read of another agent's DOM, which §15.3.2's own note says is "
-               "intentional (`a page can change the margins of another page, including one from another "
-               "origin`) and which the suspend-at-the-boundary primitive is for");
+        /* "If none of the attributes for a property are found, or if the value of the attribute that was
+           found cannot be parsed successfully, then a default value of 8px is expected to be used." */
         return hint_strdup(PAGE_MARGIN_DEFAULT);
     }
     /* Every other hint HTML defines is a row this file does not have yet, and a property no row names is not
