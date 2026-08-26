@@ -104,10 +104,11 @@ typedef struct {
        be a different same-origin document with a different container, which would give the child whichever
        document happened to touch it first. A creation fact, so like `is_popup` no flow can change it.
        ONE VALUE, NOT ONE FIELD PER ITEM. It was the CSP list's two halves as two `char *`, which is a container
-       flattened — and the flattening is why §7.1.4's embedder policy had nowhere to sit: an item added to the
-       container would have reached this struct and stopped, with nothing to say so. The bytes it names are
-       proxy_strdup'd and outlive every flow, exactly as the two strings did; a parked flow resuming onto its
-       saved copy of this POD struct resumes onto live memory.
+       flattened, and an item added to the container reached this struct and stopped with nothing to say so.
+       §7.1.4's embedder policy is the item that proved it: it landed on the container and the compiler stopped
+       HERE, at a mint that had to state where its answer comes from. Every string the value names is
+       proxy_strdup'd and outlives every flow; a parked flow resuming onto its saved copy of this POD struct
+       resumes onto live memory.
        serialized_policy_container_none for a navigable with an address (its container comes with its response)
        and for the root. */
     SerializedPolicyContainer creator_policy;
@@ -633,10 +634,19 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
            "§7.4 created a navigable with no §7.1.7 POLICY CONTAINER to clone — its initial about:blank "
            "Document has no response of its own, so a container is the only thing it can be created with, and "
            "without one it would resolve `'self'` against nothing: the one case §2.2's self-origin exists for");
+    /* §7.1.4'S TWO ENDPOINT STRINGS ARE COPIED HERE FOR EXACTLY THE SAME SENTENCE, and they are copied
+       UNCONDITIONALLY where the policy text is copied only when it is non-empty: §7.1.4 spells an absent
+       endpoint as the EMPTY STRING, so there is no NULL form of one for this to reproduce, and
+       serialized_embedder_policy refuses a NULL anyway. The two VALUES are scalars and ride the struct. */
     p->creator_policy =
         serialized_policy_container(creator_policy.csp && *creator_policy.csp
                                         ? proxy_strdup(creator_policy.csp) : NULL,
-                                    proxy_strdup(creator_policy.self_origin));
+                                    proxy_strdup(creator_policy.self_origin),
+                                    serialized_embedder_policy(creator_policy.embedder.value,
+                                                               proxy_strdup(creator_policy.embedder.endpoint),
+                                                               creator_policy.embedder.report_only_value,
+                                                               proxy_strdup(creator_policy.embedder
+                                                                                .report_only_endpoint)));
     /* §7.4's `let creatorBaseURL be null` is the ABSENCE of a creator, so NULL here is a real state and not a
        caller that forgot: the root navigable has no creator, and a navigable created with an address takes its
        Document from a response, which §2.4.3 gives a null about base URL. */
@@ -743,8 +753,16 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
     /* NO CREATOR BASE URL either, and for the same sentence: §7.4 did not create this navigable, so there is
        no creator whose base URL to pass on. Its Document comes from the response at this instance's address,
        which §2.4.3 gives a null about base URL. */
+    /* AND §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" HERE, WHICH IS THE STANDARD'S ANSWER AND NOT A DEFAULT.
+       This field is the CREATOR's clone, and this navigable has no creator — §7.1.7 gives a container built
+       without one an embedder policy "initially a new embedder policy", which is what this states. The ROOT
+       DOCUMENT's own embedder policy is a different fact and comes from a different place: it is obtained from
+       the response this instance was started with and reaches the Document through the container
+       document_install is handed, never through this proxy (whose realm exists from the moment it is adopted,
+       so proxy_realm's lazy materialization is unreachable for it). */
     obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, opener_policy,
-                           serialized_policy_container(NULL, origin_serialized(origin_agent())),
+                           serialized_policy_container(NULL, origin_serialized(origin_agent()),
+                                                       serialized_embedder_policy_new()),
                            NULL, tlus, tlo, JS_UNDEFINED, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);

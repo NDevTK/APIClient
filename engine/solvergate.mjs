@@ -210,13 +210,19 @@ async function child(docPath, schedName) {
       const hp = e.M._malloc(u8.length + 1);
       e.M.HEAPU8.set(u8, hp);
       e.M.HEAPU8[hp + u8.length] = 0;
-      /* THE LAST TWO ARE HTML §7.1.7's INHERITED POLICY CONTAINER, BOTH EMPTY: this gate roots each instance at
-         a fixture document with no creator, so there is no container to clone and CSP §2.2.2's self-origin
+      /* THE EMPTY CSP PAIR IS HTML §7.1.7's INHERITED POLICY CONTAINER, ABSENT: this gate roots each instance
+         at a fixture document with no creator, so there is no container to clone and CSP §2.2.2's self-origin
          (this address's origin, which the entry derives) is the right one. The empty pair says that, rather
-         than being an argument this driver forgot when the entry grew one. */
+         than being an argument this driver forgot when the entry grew one.
+         THE FOUR AFTER IT ARE §7.1.4's EMBEDDER POLICY of that same container, and they are NOT empty — they
+         are the section's own "a new embedder policy", because §7.1.7 gives every container one and there is
+         therefore no absence to spell. The two values are §7.1.4's token strings; main.c refuses one that
+         names none of the three rather than reading it as the default. */
       e.M.ccall("qjs_init", "number",
-                ["number", "number", "number", "number", "number", "number", "number", "number"],
-                [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url), e.cs(""), e.cs("")]);
+                ["number", "number", "number", "number", "number", "number", "number", "number",
+                 "number", "number", "number", "number"],
+                [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url), e.cs(""), e.cs(""),
+                 e.cs("unsafe-none"), e.cs(""), e.cs("unsafe-none"), e.cs("")]);
       e.M._free(hp);
     }
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);

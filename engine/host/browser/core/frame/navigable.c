@@ -645,6 +645,20 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     SerializedPolicyContainer policy;
     const char *inherited_csp = NULL;
     const char *inherited_self = NULL;
+    /* §7.1.4's EMBEDDER POLICY of the initiator's container, item by item, because the job carries the whole
+       container and §7.1.7's clone moves every item at once. The two VALUES arrive as §7.1.4's own tokens
+       rather than as integers — see embedder_policy.h — and the two endpoints as the strings they are. */
+    const char *inherited_coep = NULL;
+    const char *inherited_coep_endpoint = NULL;
+    const char *inherited_coep_report_only = NULL;
+    const char *inherited_coep_report_only_endpoint = NULL;
+    SerializedEmbedderPolicy inherited_ep;
+    /* §7.1.7's create-a-policy-container-from-a-fetch-response step 4's OWN item for THIS load's response —
+       "the result of obtaining an embedder policy given response and environment". FILLED WHERE THE ANSWER IS
+       DECIDABLE rather than here: §7.1.4's obtain needs the environment's secure-context answer, which is not
+       known until `tlu` is, and the record OWNS two strings so an init above this frame's two yields would
+       allocate a pair on every resume. */
+    EmbedderPolicy response_ep;
     const char *about_base = NULL;
     const char *field_lines = NULL;
     /* THE RESPONSE'S WHOLE HEADER LIST, because several standards read different names out of ONE list and
@@ -785,13 +799,42 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            "it had a document, every document has a container, and §7.1.7 step 3 asks whether that container "
            "is null rather than whether it holds any policies; a load without one gives an `about:blank` "
            "destination an empty container of its own instead of the clone its creator's CSP travels in");
+    /* AND §7.1.4'S ITEM OF THAT SAME CONTAINER, ON THE SAME JOB AND FOR THE SAME SENTENCE. §7.1.7's clone
+       moves EVERY item of the initiator's container, so an inherited container whose embedder policy was left
+       behind at the enqueue is a clone that silently downgrades a `require-corp` creator's `about:blank` child
+       to `unsafe-none` — the item is exactly as much a fact about the OPERATION as the CSP list is, and by the
+       time this job runs the only document it could ask is the one being replaced. */
+    DCHECK(JS_IsString(step_arg(&s->hdr, 6)) && JS_IsString(step_arg(&s->hdr, 7)) &&
+           JS_IsString(step_arg(&s->hdr, 8)) && JS_IsString(step_arg(&s->hdr, 9)),
+           "a document load carried no §7.1.4 EMBEDDER POLICY for its initiator's §7.1.7 container — the "
+           "container travels whole or it is not a container, and every operation that enqueues a load has a "
+           "document whose container holds one (initially a new embedder policy, never absent)");
     inherited_csp  = JS_ToCString(ctx, step_arg(&s->hdr, 3));
     inherited_self = JS_ToCString(ctx, step_arg(&s->hdr, 4));
-    inherited = serialized_policy_container(inherited_csp, inherited_self);
-    /* §2.2.2's pair for this load's own response: its policies, and the DESTINATION's origin — which is the
-       origin the operation determined, asserted to be the response URL's by the sandbox DCHECK below (the one
-       header that could make the two disagree). */
-    response = serialized_policy_container(resp_csp, origin_serialized(origin));
+    inherited_coep = JS_ToCString(ctx, step_arg(&s->hdr, 6));
+    inherited_coep_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, 7));
+    inherited_coep_report_only = JS_ToCString(ctx, step_arg(&s->hdr, 8));
+    inherited_coep_report_only_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, 9));
+    {
+        EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
+        /* §7.1.4's THREE STRINGS, READ BACK. A token this job carries was written by embedder_policy_value_token
+           at the enqueue, so a token that names no value is not a fail-open of §7.1.4.1's kind (that one is
+           about a HEADER a server sent) — it is this engine's own record disagreeing with itself, which is the
+           two-readers-of-one-format defect and crashes rather than defaulting.
+           THE PARSE IS A STATEMENT AND THE ASSERT ONLY READS IT: a DCHECK condition is compiled out in release,
+           so a parse inside one is a parse the shipped build does not perform. */
+        bool ok = embedder_policy_value_of_token(inherited_coep, &v);
+        bool ok_ro = embedder_policy_value_of_token(inherited_coep_report_only, &ro);
+
+        (void)ok; (void)ok_ro;
+        DCHECK(ok && ok_ro,
+               "a document load carried an §7.1.4 embedder policy VALUE that names none of the three strings "
+               "the section defines — this token was written by this engine at the enqueue, so it is a record "
+               "that disagrees with its own writer rather than a header that failed to parse");
+        inherited_ep = serialized_embedder_policy(v, inherited_coep_endpoint, ro,
+                                                  inherited_coep_report_only_endpoint);
+    }
+    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep);
     /* §7.4.5's ABOUT BASE URL for THIS navigation — "if url matches about:blank or about:srcdoc, set
        aboutBaseURL to initiatorBaseURL" — which is why the INITIATOR's base URL rides the job and is used only
        when the destination is an `about:` URL. `fetches` is exactly that test already made, from the other
@@ -832,6 +875,30 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        CONTAINER this Document is created with, which is §7.1.7's determine step's answer and not a third
        reading of "did the response carry a policy" — the flags follow the container, so they are read off the
        container rather than off whichever half of it this frame happened to hold. */
+    /* §7.1.7's CREATE-A-POLICY-CONTAINER-FROM-A-FETCH-RESPONSE, ASSEMBLED HERE RATHER THAN AT THE HEADER READ
+       ABOVE, because its step 4 needs an ENVIRONMENT and the environment's answer is not known until `tlu` is.
+       §7.1.4's obtain step 2 returns the default policy for a NON-SECURE CONTEXT whatever the response sent,
+       and §8.1.3.5 answers that over the environment's TOP-LEVEL CREATION URL — which for a nested navigable
+       is its ancestor's and not this address, the same fact the opener-policy arm below reads the same way.
+       Building the container where `resp_csp` was read would have had to answer it from `addr`, and an https
+       document in an http page's iframe would then have obtained a `require-corp` a browser refuses it.
+       ONLY WHERE THERE IS A RESPONSE. §7.1.7 runs this algorithm on one; a destination with no response gets
+       step 5's new container, whose embedder policy item §7.1.4 makes "a new embedder policy" — the else arm.
+       IT IS INITIALISED HERE AND NOT AT THE TOP OF THIS FRAME, unlike `response_coop` beside it, and that is a
+       fact about the two records rather than a style: §7.1.4's endpoints are STRINGS whose initial value is the
+       empty one, so an init ALLOCATES — and this step machine re-enters from the top on every resume, so an
+       init above the two yields would allocate a pair per park and free one pair at the end. §7.1.3's endpoint
+       is initially NULL, which is why the line above may stand where it does. */
+    if (fetches)
+        embedder_policy_obtain(&response_ep, &response_headers,
+                               secure_context_url_potentially_trustworthy(tlu));
+    else
+        embedder_policy_init(&response_ep);
+    /* §2.2.2's pair for this load's own response: its policies, and the DESTINATION's origin — which is the
+       origin the operation determined, asserted to be the response URL's by the sandbox DCHECK below (the one
+       header that could make the two disagree) — beside §7.1.4's item obtained just above. */
+    response = serialized_policy_container(resp_csp, origin_serialized(origin),
+                                           serialized_embedder_policy_of(&response_ep));
     policy = policy_container_determine_navigation_params(addr, response, inherited);
     csp_flags = policy_csp_derived_sandboxing_flags(policy.csp, policy.csp ? strlen(policy.csp) : 0);
     final_flags = window_proxy_creation_sandbox_flags(proxy) | csp_flags;
@@ -911,11 +978,16 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin, response_coop.value);
     }
     opener_policy_free(&response_coop);
+    embedder_policy_free(&response_ep);
     /* THE INHERITED CONTAINER'S BYTES, WHICH THIS FRAME OWNS AND THE REALM HAS ALREADY COPIED. They are freed
-       unconditionally because the job always carries a container: the two conversions above are the only
-       producers of these pointers and neither is conditional. */
+       unconditionally because the job always carries a container: the conversions above are the only
+       producers of these pointers and none of them is conditional. */
     JS_FreeCString(ctx, inherited_csp);
     JS_FreeCString(ctx, inherited_self);
+    JS_FreeCString(ctx, inherited_coep);
+    JS_FreeCString(ctx, inherited_coep_endpoint);
+    JS_FreeCString(ctx, inherited_coep_report_only);
+    JS_FreeCString(ctx, inherited_coep_report_only_endpoint);
     JS_FreeCString(ctx, about_base);
     free(resp_csp);
     free(resp_ctype);
@@ -993,12 +1065,13 @@ static int g_nav_load_stepid = -1;
 static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const char *addr, const Origin *origin,
                                    SerializedPolicyContainer inherit_policy, const char *about_base)
 {
-    JSValueConst argv[6];
+    JSValueConst argv[10];
     JSValue fn, url, org, csp, self, about;
+    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
-    fn = JS_NewCFunction2(ctx, NULL, "load", 6, JS_CFUNC_step, g_nav_load_stepid);
+    fn = JS_NewCFunction2(ctx, NULL, "load", 10, JS_CFUNC_step, g_nav_load_stepid);
     CHECK(!JS_IsException(fn), "the document-load job's callee could not be allocated");
     url = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
@@ -1024,6 +1097,21 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     CHECK(!JS_IsException(csp), "the document-load job's inherited policy could not be allocated");
     self = JS_NewString(ctx, inherit_policy.self_origin);
     CHECK(!JS_IsException(self), "the document-load job's inherited self-origin could not be allocated");
+    /* §7.1.4'S ITEM, ALL FOUR OF IT, BECAUSE §7.1.7'S CLONE MOVES A CONTAINER WHOLE. The two VALUES ride as the
+       section's own TOKENS rather than as the enum's integers: a job is a record like the `navigable.create`
+       notice is, and a record carrying `1` for `require-corp` is a contract whose two ends agree only by
+       accident of declaration order (embedder_policy.h states the rule for both). */
+    coep = JS_NewString(ctx, embedder_policy_value_token(inherit_policy.embedder.value));
+    CHECK(!JS_IsException(coep), "the document-load job's inherited embedder policy could not be allocated");
+    coep_endpoint = JS_NewString(ctx, inherit_policy.embedder.endpoint);
+    CHECK(!JS_IsException(coep_endpoint),
+          "the document-load job's inherited embedder reporting endpoint could not be allocated");
+    coep_ro = JS_NewString(ctx, embedder_policy_value_token(inherit_policy.embedder.report_only_value));
+    CHECK(!JS_IsException(coep_ro),
+          "the document-load job's inherited report-only embedder policy could not be allocated");
+    coep_ro_endpoint = JS_NewString(ctx, inherit_policy.embedder.report_only_endpoint);
+    CHECK(!JS_IsException(coep_ro_endpoint),
+          "the document-load job's inherited report-only embedder endpoint could not be allocated");
     /* THE INITIATOR'S BASE URL, RESOLVED NOW AND NOT IN THE JOB — the same sentence the address above is
        resolved by: by the time the job runs, the document it would ask is the one being replaced. */
     DCHECK(about_base == NULL || *about_base,
@@ -1037,7 +1125,15 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[3] = csp;
     argv[4] = self;
     argv[5] = about;
-    JS_EnqueueCallTask(ctx, fn, 6, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    argv[6] = coep;
+    argv[7] = coep_endpoint;
+    argv[8] = coep_ro;
+    argv[9] = coep_ro_endpoint;
+    JS_EnqueueCallTask(ctx, fn, 10, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    JS_FreeValue(ctx, coep_ro_endpoint);
+    JS_FreeValue(ctx, coep_ro);
+    JS_FreeValue(ctx, coep_endpoint);
+    JS_FreeValue(ctx, coep);
     JS_FreeValue(ctx, about);
     JS_FreeValue(ctx, self);
     JS_FreeValue(ctx, csp);
@@ -1724,15 +1820,42 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                "the peer instance would build this Document unsandboxed. Add the set to the notice beside the "
                "policy (it is one word, and it crosses as text like everything else on this record), and hand "
                "it to that instance's document_install as its active sandboxing flag set");
+        /* §7.1.4'S ITEM CROSSES THE NOTICE TOO, AND ITS FOUR FIELDS SIT WITH THE SELF-ORIGIN FOR THE SAME
+           REASON: the policy is the record's REMAINDER, so everything that is not the policy comes before it.
+           A `report-to` ENDPOINT IS SAFE IN A SPLIT FIELD and that is the standard's own guarantee rather than
+           an assumption about what servers send: §7.1.4.1 makes the parameter a structured-field STRING, and
+           RFC 8941 §3.3.3 "Strings" defines one as "zero or more printable ASCII characters (i.e., the range
+           %x20 to %x7E)" and notes in as many words that "this excludes tabs, newlines, carriage returns".
+           The VALUES cross as §7.1.4's three strings rather than as this enum's integers, so the peer that
+           reads them is reading the standard's vocabulary and not this build's declaration order.
+           IT IS THE CREATOR'S ITEM AND NOT THIS ENGINE'S RESPONSE'S: §7.1.7's clone moves the whole container
+           and §7.3.2.1 clones the CREATOR's, so a peer that obtained one from the CHILD's response would be
+           answering the wrong document's question — which is the same substitution the self-origin above
+           exists to prevent, one item along. */
+        DCHECK(!strchr(creator_policy.embedder.endpoint, '\t') &&
+               !strchr(creator_policy.embedder.report_only_endpoint, '\t'),
+               "§7.1.4's `report-to` reporting endpoint contains a TAB and this record is tab-delimited — RFC "
+               "8941 §3.3.3 \"Strings\" excludes tabs from a structured-field string, so a byte that reached "
+               "here is one the structured-field parser admitted and should not have; it would split this "
+               "notice into more fields than it has and shift the creator's policy text onto the wrong one");
         n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
             strlen(addr) + strlen(origin_serialized(origin)) +
             strlen(creator_policy.csp ? creator_policy.csp : "") + strlen(tlu) +
-            strlen(creator_policy.self_origin) + 32;
+            strlen(creator_policy.self_origin) +
+            strlen(embedder_policy_value_token(creator_policy.embedder.value)) +
+            strlen(creator_policy.embedder.endpoint) +
+            strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
+            strlen(creator_policy.embedder.report_only_endpoint) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
-                 creator_policy.self_origin, creator_policy.csp ? creator_policy.csp : "");
+                 creator_policy.self_origin,
+                 embedder_policy_value_token(creator_policy.embedder.value),
+                 creator_policy.embedder.endpoint,
+                 embedder_policy_value_token(creator_policy.embedder.report_only_value),
+                 creator_policy.embedder.report_only_endpoint,
+                 creator_policy.csp ? creator_policy.csp : "");
         engine_host_notify(ctx, op);
         free(op);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just

@@ -21,14 +21,13 @@
  * half of it, through the CSP `sandbox` directive alone — the function at the bottom of this file, and the only
  * connection between the two.
  *
- * THE EMBEDDER POLICY IS THE ITEM THIS FILE STILL DOES NOT HOLD, AND WHAT IS OWED IS NOW THE ITEM ITSELF.
- * §7.1.4's obtain is built (core/frame/embedder_policy.h) and a response's is obtained where a response is read
- * (core/frame/navigation_params.c), which CRASHES BY NAME at any response whose policy this container would
- * drop. What used to block it was TRAVEL: the seams a clone crosses carried the CSP list's two halves as bare
- * arguments, so an item added here would have vanished at each of them. They carry a SerializedPolicyContainer
- * now — one value, built through one constructor that names every item — so the remaining work is to give
- * `PolicyContainer` and that serialization the §7.1.4 field, at which point every producer stops compiling
- * until it states one and §7.1.4.2's embedder policy checks have something to read.
+ * THE EMBEDDER POLICY IS AN ITEM OF THE CONTAINER AND NOT A FACT ABOUT A RESPONSE, which is the whole reason
+ * it lives here rather than beside §7.1.4's obtain. A Document created from no response has one (§7.1.7:
+ * "initially a new embedder policy"), a Document created by a CREATOR inherits the creator's through the same
+ * clone that moves the CSP list, and only a Document created from a RESPONSE gets the obtained one — three
+ * answers to one item, all of which are the container's. `EmbedderPolicy` is OWNED here, so its two endpoint
+ * strings are copied by the clone and freed by the free, and the two functions are written next to each other
+ * because a field added to one and not the other is the defect that shape produces.
  *
  * AND THE CLONE CROSSES INSTANCES. A cross-origin creator and the child it clones from are not in the same
  * heap, so the clone is serialized as CSP TEXT and parsed again on the other side — which is exactly what
@@ -77,10 +76,15 @@ struct PolicyContainer {
        are one value with one lifetime: free them together and never reallocate the text under the list. */
     CspList  csp;
     char    *referrer_policy;    /* §7.1.7's referrer policy (owned) */
+    /* §7.1.7's EMBEDDER POLICY item (owned — both of §7.1.4's endpoint strings). THE OWNED FIELDS OF THIS
+       STRUCT ARE AN OBLIGATION AT THREE SITES AND NOWHERE ELSE: the constructor fills them, the clone copies
+       them, the free releases them. Adding a field here without visiting all three is the defect a clone-site
+       assert exists to catch, and there is one below. */
+    EmbedderPolicy embedder;
 };
 
 PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
-                                      const char *referrer_policy)
+                                      const char *referrer_policy, SerializedEmbedderPolicy embedder)
 {
     PolicyContainer *p = calloc(1, sizeof *p);
 
@@ -98,6 +102,10 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
         p->referrer_policy = strdup(referrer_policy);
         CHECK(p->referrer_policy != NULL, "policy container: OOM copying a referrer policy");
     }
+    /* §7.1.4's ITEM, TAKING ITS OWN COPY OF BOTH ENDPOINT STRINGS. The caller's bytes belong to the operation
+       creating this Document — a response's header list that is freed the moment the Document is installed, or
+       a `navigable.create` record — and a container outlives every one of them. */
+    embedder_policy_adopt(&p->embedder, embedder);
     return p;
 }
 
@@ -117,7 +125,20 @@ PolicyContainer *policy_container_clone(const PolicyContainer *src)
        inheritance failing in exactly the case the field was added for. The RECORD travels, so the two
        containers share an identity as well as a tuple; where this clone crosses an instance instead, the
        origin crosses as its serialization like every other cross-boundary fact. */
-    return policy_container_new(src->csp_text, src->csp.self_origin, src->referrer_policy);
+    /* THE CLONE-SITE ASSERT §7.1.4'S ITEM CREATED, AND IT IS ABOUT THE OBLIGATION RATHER THAN ABOUT THIS
+       PARTICULAR FIELD. A struct copied field-by-field must dup EVERY owned field, so an item added to
+       `PolicyContainer` creates a duty at the constructor, at this clone and at the free — and the one of the
+       three that fails SILENTLY is this one, because a clone that drops an item produces a container that is
+       merely WRONG rather than one that crashes. §7.1.4 makes both endpoints strings whose absence is the
+       EMPTY one, so a NULL here is a container whose embedder item its constructor never filled: the shape a
+       new item takes on the day somebody adds it to the struct and not to policy_container_new. */
+    DCHECK(src->embedder.endpoint != NULL && src->embedder.report_only_endpoint != NULL,
+           "§7.1.7's clone-a-policy-container reached a container whose §7.1.4 EMBEDDER POLICY was never "
+           "filled in — every container has one (initially a new embedder policy, whose endpoints are the "
+           "EMPTY STRING and never null), so this container was built somewhere that does not go through "
+           "policy_container_new, and the clone would carry an item the source does not have");
+    return policy_container_new(src->csp_text, src->csp.self_origin, src->referrer_policy,
+                                serialized_embedder_policy_of(&src->embedder));
 }
 
 void policy_container_free(PolicyContainer *p)
@@ -126,6 +147,11 @@ void policy_container_free(PolicyContainer *p)
     csp_list_free(&p->csp);   /* frees the parse's arrays; the text it points into is freed next */
     free(p->csp_text);
     free(p->referrer_policy);
+    /* §7.1.4's TWO ENDPOINT STRINGS — the other half of the obligation policy_container_new took on. This line
+       and the adopt in the constructor are read together: an item owned by one and not released by the other
+       is a leak that no gate names, because a container is freed once per Document and a document is not a
+       loop. */
+    embedder_policy_free(&p->embedder);
     free(p);
 }
 
@@ -135,7 +161,10 @@ const CspList *policy_container_csp_list(const PolicyContainer *p) { return p ? 
 
 const Origin *policy_container_self_origin(const PolicyContainer *p) { return p ? p->csp.self_origin : NULL; }
 
-SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin)
+const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p) { return p ? &p->embedder : NULL; }
+
+SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
+                                                     SerializedEmbedderPolicy embedder)
 {
     SerializedPolicyContainer out;
 
@@ -151,6 +180,7 @@ SerializedPolicyContainer serialized_policy_container(const char *csp, const cha
            "its own policy; the ABSENCE of a container is serialized_policy_container_none");
     out.csp = csp;
     out.self_origin = self_origin;
+    out.embedder = embedder;
     return out;
 }
 
@@ -160,10 +190,18 @@ SerializedPolicyContainer serialized_policy_container_none(void)
 
     out.csp = NULL;
     out.self_origin = NULL;
+    /* §7.1.4's "A NEW EMBEDDER POLICY" EVEN HERE, AND IT IS NOT A CONTRADICTION WITH "THERE IS NO CONTAINER".
+       The absence is carried by the SELF-ORIGIN — the one field serialized_policy_container_exists reads — so
+       every other member of this struct is only ever read after that question has been answered. Filling this
+       one with the standard's own initial value rather than leaving it zeroed is what keeps the type free of a
+       member whose bytes mean nothing: a reader that reached it would get `unsafe-none`, which is the answer
+       §7.1.7 gives a container built from no response, and never an uninitialized pointer. */
+    out.embedder = serialized_embedder_policy_new();
     return out;
 }
 
-SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin)
+SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
+                                                              SerializedEmbedderPolicy embedder)
 {
     /* THE ABSENCE IS AN ABSENT SELF-ORIGIN AND NEVER AN ABSENT POLICY. §2.2 gives every CSP list a self-origin
        whether or not it holds policies, so a relaying zone that has a container states one either way — and a
@@ -177,7 +215,7 @@ SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, c
            "both), so this is a relay that stopped writing the origin field and not a document with no "
            "container; `'self'` would resolve against this document's own address instead of the creator's");
     if (!(self_origin != NULL && *self_origin)) return serialized_policy_container_none();
-    return serialized_policy_container(csp, self_origin);
+    return serialized_policy_container(csp, self_origin, embedder);
 }
 
 SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *p)
@@ -197,7 +235,8 @@ SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *
            "policy_container_new parses it in whether or not there is policy text, so a container without one "
            "was built somewhere that did not state it");
     return serialized_policy_container(policy_container_csp(p),
-                                       origin_serialized(policy_container_self_origin(p)));
+                                       origin_serialized(policy_container_self_origin(p)),
+                                       serialized_embedder_policy_of(policy_container_embedder(p)));
 }
 
 bool serialized_policy_container_exists(SerializedPolicyContainer c)

@@ -917,13 +917,28 @@ static ChildDoc *wpt_child_for(const char *name)
    §2.2.2 "Parse response's Content Security Policies" states a self-origin from OUTSIDE the policy bytes, and
    the only origin a child could state for itself is its own address's — which is the wrong one for an
    inherited list by construction (CSP §2.2's note: the self-origin exists for documents "that have inherited
-   their policy"). */
+   their policy").
+   AND THE FOUR `coep*` SLOTS ARE THAT SAME CONTAINER'S §7.1.4 EMBEDDER POLICY ITEM, which crosses for exactly
+   the reason the two above do: §7.1.7's clone-a-policy-container sets the clone's embedder policy to a COPY of
+   the source's, so an item this process kept to itself is an inheritance the child would silently replace with
+   `unsafe-none`. The two VALUES cross as §7.1.4's own tokens — a command line is a record, and a record
+   carrying this enum's integers is a contract whose ends agree only by declaration order. */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
-                            const char *csp_self_origin, const char *top_level_url)
+                            const char *csp_self_origin, const char *top_level_url,
+                            const char *coep, const char *coep_endpoint,
+                            const char *coep_report_only, const char *coep_report_only_endpoint)
 {
     int down[2], up[2];
     pid_t pid;
 
+    /* §7.1.4'S FOUR ITEMS ARE STATED BY EVERY CALLER, never defaulted here. The two callers ARE the two
+       operations: a `navigable.create` carries the creator's, and §7.1.3.2's SWAP has no creator at all and
+       so states §7.1.4's "a new embedder policy" in its own words. A `?:` here would make those one answer. */
+    DCHECK(coep != NULL && coep_endpoint != NULL && coep_report_only != NULL &&
+           coep_report_only_endpoint != NULL,
+           "a child document was about to be provisioned with no §7.1.4 EMBEDDER POLICY for its §7.1.7 "
+           "container — every container has one, so this is a caller that did not state which of the two "
+           "answers applies (the creator's clone, or a new embedder policy where there is no creator)");
     if (wpt_child_for(name)) return;   /* already provisioned; a notice is not a request */
     CHECK(g_children_n < WPT_CHILD_MAX, "wpt: more child documents at once than this runner tracks");
     /* O_CLOEXEC, AND IT IS NOT HYGIENE. fork() copies every descriptor, so a SECOND child would inherit this
@@ -942,8 +957,12 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         dup2(down[0], 0);
         dup2(up[1], 1);
         close(down[0]); close(down[1]); close(up[0]); close(up[1]);
+        /* APPENDED RATHER THAN INTERLEAVED, which is the rule this command line has followed since the
+           self-origin was added to it: every position already read keeps its meaning, so the child's argv
+           indexing has one rule and not one per generation. */
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
-              top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "", (char *)NULL);
+              top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
+              coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1085,7 +1104,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[8]; int nf = 0; char *q;
+    char *f[12]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1094,16 +1113,18 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 8; q++)
+    for (q = line, f[nf++] = q; *q && nf < 12; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 8 && !strcmp(f[0], "navigable.create")) {
-        /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL and FIELD 6 IS CSP §2.2's SELF-ORIGIN of the
-           policy in field 7, which cross for the same reason: the child's environment and the origin its
-           INHERITED policy resolves `'self'` against are both decided by the operation that created it, and
-           the instance that will host the child can derive neither. The self-origin comes BEFORE the policy
-           because the policy is the record's remainder — an origin's serialization cannot contain a tab and a
-           raw CSP header can. */
-        wpt_spawn_child(f[1], f[3], f[4], f[7], f[6], f[5]);
+    if (nf == 12 && !strcmp(f[0], "navigable.create")) {
+        /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
+           7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
+           report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
+           the creator's container, which moves whole, and the instance that will host the child can derive
+           none of them. They all come BEFORE the policy at field 11 because the policy is the record's
+           remainder: neither an origin's serialization nor an §7.1.4 value's token can contain a tab, and RFC
+           8941 §3.3.3 "Strings" excludes one from the `report-to` endpoint, while a raw CSP header may hold
+           one. */
+        wpt_spawn_child(f[1], f[3], f[4], f[11], f[6], f[5], f[7], f[8], f[9], f[10]);
         free(whole);
         return;
     }
@@ -1118,8 +1139,12 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        instance on `(browsing context group, origin)`, and a swap changes the first half. */
     if (nf == 4 && !strcmp(f[0], "navigable.swap")) {
         /* NO CREATOR MEANS NO CONTAINER TO CLONE, so both halves of the CSP list are empty rather than one of
-           them being guessed at — an empty policy resolves no `'self'`, so there is no self-origin to state. */
-        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2]);
+           them being guessed at — an empty policy resolves no `'self'`, so there is no self-origin to state.
+           §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" FOR THE SAME REASON AND IS SPELLED OUT RATHER THAN LEFT
+           EMPTY: the CSP list's absence is spelled by an absent self-origin, but an embedder policy has no
+           absence — §7.1.7 gives every container one — so the swapped-to Document's is the initial value the
+           section names, `unsafe-none` with two empty reporting endpoints. */
+        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "");
         free(whole);
         return;
     }
@@ -1752,9 +1777,18 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
    RESPONSE, and bytes with no headers is a load that never asked what it fetched while headers with no bytes
    are a response somebody else's. NULL for both is a caller with no response at all, which is HTML §7.4's
    initial about:blank and is an HTML document BY §7.4 rather than by anything defaulting here. */
+/* `inherited_coep` AND ITS THREE COMPANIONS ARE THAT SAME CONTAINER'S §7.1.4 EMBEDDER POLICY ITEM. §7.1.7's
+   clone-a-policy-container moves EVERY item of a container — "set clone's embedder policy to a copy of
+   policyContainer's embedder policy" — so a clone that arrived without it would put a cross-origin-isolated
+   creator's child under `unsafe-none`, with no header anywhere to say so because the child's own response
+   never carried one. The values are §7.1.4's own TOKENS, which is what a `--document` child reads off its
+   command line and what a `navigable.create` notice writes. */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
-                                     const char *inherited_csp, const char *inherited_csp_self_origin)
+                                     const char *inherited_csp, const char *inherited_csp_self_origin,
+                                     const char *inherited_coep, const char *inherited_coep_endpoint,
+                                     const char *inherited_coep_report_only,
+                                     const char *inherited_coep_report_only_endpoint)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
@@ -1888,11 +1922,33 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            its policy resolves `'self'` against), and an inherited container is exactly what makes them
            disagree. THE ORDERING IS NOT THIS RUNNER'S TO HOLD: a copy of it here and another in main.c is two
            orderings, and the gate whose whole job is to measure the product host would be measuring its own. */
-        SerializedPolicyContainer inherited =
-            serialized_policy_container_or_none(inherited_csp, inherited_csp_self_origin);
-        SerializedPolicyContainer response = serialized_policy_container(np.csp, origin);
-        SerializedPolicyContainer policy =
-            policy_container_determine_navigation_params(g_base_url, response, inherited);
+        EmbedderPolicyValue _coep = EMBEDDER_POLICY_UNSAFE_NONE, _coep_ro = EMBEDDER_POLICY_UNSAFE_NONE;
+        SerializedPolicyContainer inherited;
+        /* §7.1.4's THREE STRINGS, READ BACK — see embedder_policy.h for why they cross as tokens. A token
+           naming none of them did not come off a header (that is §7.1.4.1's fail-open and belongs to `obtain`,
+           which ran in the PARENT); it came off this runner's own command line, which its own parent wrote, so
+           it is a record disagreeing with its writer and crashes rather than defaulting to `unsafe-none`. */
+        SerializedPolicyContainer response;
+        SerializedPolicyContainer policy;
+        /* THE PARSE IS A STATEMENT AND THE ASSERT ONLY READS IT — a DCHECK condition is compiled out in
+           release, so a parse performed inside one is a parse the shipped build never runs. */
+        bool _ok = embedder_policy_value_of_token(inherited_coep, &_coep);
+        bool _ok_ro = embedder_policy_value_of_token(inherited_coep_report_only, &_coep_ro);
+
+        (void)_ok; (void)_ok_ro;
+        DCHECK(_ok && _ok_ro,
+               "a document was built with an §7.1.4 EMBEDDER POLICY VALUE naming none of the three strings the "
+               "section defines — this runner writes these tokens onto a child's command line itself, so a "
+               "token outside them is this program's two ends disagreeing about their own record");
+        inherited = serialized_policy_container_or_none(
+            inherited_csp, inherited_csp_self_origin,
+            serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
+                                       inherited_coep_report_only_endpoint));
+        /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
+           response step 4, obtained where the response is read and handed to the constructor here. */
+        response = serialized_policy_container(np.csp, origin,
+                                               serialized_embedder_policy_of(&np.embedder));
+        policy = policy_container_determine_navigation_params(g_base_url, response, inherited);
 
         wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, policy,
                           np.sandbox_flags, world_local_doc(), root_proxy);
@@ -2039,6 +2095,20 @@ static int wpt_child_main(int argc, char **argv)
        is LAST on the command line rather than beside `csp`, because appending is what keeps every position
        above it a fact this file already reads. */
     const char *csp_self_origin = argc > 7 ? argv[7] : "";
+    /* §7.1.4's EMBEDDER POLICY of that same inherited container, its four items, from the same parent for the
+       same reason: §7.1.7's clone moves a container WHOLE, so an item this process had to guess at would be an
+       inheritance silently replaced by `unsafe-none` — and there is no header in this child's own response
+       that could ever say otherwise, because the item belongs to the CREATOR's response and not to this one.
+       APPENDED, like the self-origin above and for its reason: every position already read keeps its meaning.
+       NOT DEFAULTED WHEN ABSENT — the CHECK below refuses a short command line instead. The two items above it
+       could be spelled by an empty string because CSP §2.2's absence IS an empty pair; an embedder policy has
+       no absence (§7.1.7 gives every container one), so "the parent did not state it" and "the parent stated
+       `unsafe-none`" would be one value here, and that is the difference between a child a browser isolates
+       and one it does not. */
+    const char *coep = argc > 8 ? argv[8] : NULL;
+    const char *coep_endpoint = argc > 9 ? argv[9] : NULL;
+    const char *coep_report_only = argc > 10 ? argv[10] : NULL;
+    const char *coep_report_only_endpoint = argc > 11 ? argv[11] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2066,6 +2136,12 @@ static int wpt_child_main(int argc, char **argv)
           "wpt: a child document was started with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide "
           "whether this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by "
           "that answer, so the platform surface of this instance would be a guess");
+    CHECK(coep && coep_endpoint && coep_report_only && coep_report_only_endpoint,
+          "wpt: a child document was started with no §7.1.4 EMBEDDER POLICY for its §7.1.7 policy container — "
+          "the clone that created this Document moves every item of its creator's container, and this one is "
+          "not derivable here: it belongs to the CREATOR's response, which this process never saw. Reading it "
+          "as `unsafe-none` would put a cross-origin-isolated creator's child under the wrong rule for every "
+          "no-CORS fetch it makes, with nothing anywhere to say so");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
        synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
@@ -2084,7 +2160,8 @@ static int wpt_child_main(int argc, char **argv)
        secure context inside an insecurely-delivered page, which is exactly the ancestral hole Secure
        Contexts §4.2 exists to close. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
-                             csp, csp_self_origin);
+                             csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
+                             coep_report_only_endpoint);
     free(html);
     header_list_free(&html_headers);
 
@@ -2246,11 +2323,16 @@ int main(int argc, char **argv)
        URL is its own address — the runner navigated to it and nothing embeds it. */
     /* NO CREATOR: this process rooted its own top-level document from a response it fetched, so
        §7.1.7 has no container to clone and CSP §2.2.2's self-origin (this address's origin) is the
-       right one. The empty pair is that statement rather than an absent argument. */
+       right one. The empty pair is that statement rather than an absent argument.
+       AND §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" — the initial value §7.1.7 gives a container built without
+       a creator, spelled out because an embedder policy has no ABSENCE to spell: the CSP list's absence is the
+       empty self-origin beside it, and this item is always there. What this document's OWN response says about
+       it is a different fact and is obtained from that response inside the build. */
     /* NO BYTES AND NO HEADERS FROM HERE: this call has no response of its own to hand over — wpt_build_document
        fetches the test document itself in `--test-document` mode, and a `.any.js` run has no document response
        at all (the skeleton it wraps the script in is this runner's, not a server's). */
-    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, NULL, "", "");
+    ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, NULL, "", "",
+                             "unsafe-none", "", "unsafe-none", "");
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */

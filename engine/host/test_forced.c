@@ -2625,7 +2625,8 @@ static void csp_url_matching_selftest(void)
         size_t k;
 
         for (k = 0; k < sizeof LISTS / sizeof *LISTS; k++) {
-            PolicyContainer *p = policy_container_new(LISTS[k].policy, https_self, NULL);
+            PolicyContainer *p = policy_container_new(LISTS[k].policy, https_self, NULL,
+                                                      serialized_embedder_policy_new());
             UrlRecord u;
 
             url_record_init(&u);
@@ -2640,7 +2641,8 @@ static void csp_url_matching_selftest(void)
     /* A DOCUMENT WITH NO POLICY BLOCKS NOTHING, which is the overwhelmingly common page and the one a wrong
        default would refuse every request on. */
     {
-        PolicyContainer *none = policy_container_new(NULL, https_self, NULL);
+        PolicyContainer *none = policy_container_new(NULL, https_self, NULL,
+                                                     serialized_embedder_policy_new());
         UrlRecord u;
 
         url_record_init(&u);
@@ -2650,7 +2652,7 @@ static void csp_url_matching_selftest(void)
         /* And §6.8.1's "report" destination is governed by no fetch directive even under `default-src 'none'`,
            which is what stops a report to a blocked endpoint from being blocked and never sent. */
         policy_container_free(none);
-        none = policy_container_new("default-src 'none'", https_self, NULL);
+        none = policy_container_new("default-src 'none'", https_self, NULL, serialized_embedder_policy_new());
         CHECK(policy_should_block_request(none, &u, "report", 0) == CSP_REQUEST_ALLOWED,
               "§6.8.1 returns null for the report destination, so no fetch directive governs it");
         CHECK(policy_should_block_request(none, &u, "", 0) == CSP_REQUEST_BLOCKED,
@@ -2677,26 +2679,29 @@ static void policy_container_selftest(void)
        running them before the runtime exists. */
     const Origin *self_origin = origin_parse("https://x.test");
 
-    none = policy_container_new(NULL, self_origin, NULL);
+    none = policy_container_new(NULL, self_origin, NULL, serialized_embedder_policy_new());
     /* No policy is not an empty policy: a document with no Content-Security-Policy permits everything, which
        is the overwhelmingly common case and the one a wrong default would mis-report on every page. */
     CHECK(csp_ok(none, CSP_INLINE_SCRIPT_ATTRIBUTE), "no policy must permit an inline handler");
     CHECK(policy_allows_string_compilation(none), "no policy must permit eval");
 
-    self_only = policy_container_new("script-src 'self'", self_origin, NULL);
+    self_only = policy_container_new("script-src 'self'", self_origin, NULL,
+                                     serialized_embedder_policy_new());
     /* §S's own example: an inline onerror is DEAD under `script-src 'self'`, and so is a javascript: URL. A
        host source never permits inline execution — that is what 'unsafe-inline' is for. */
     CHECK(!csp_ok(self_only, CSP_INLINE_SCRIPT_ATTRIBUTE), "'self' must not permit an inline handler");
     CHECK(!csp_ok(self_only, CSP_INLINE_NAVIGATION), "'self' must not permit a javascript: URL");
     CHECK(!policy_allows_string_compilation(self_only), "'self' must not permit eval");
 
-    inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", self_origin, NULL);
+    inline_ok = policy_container_new("default-src 'none'; script-src 'unsafe-inline'", self_origin, NULL,
+                                     serialized_embedder_policy_new());
     CHECK(csp_ok(inline_ok, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-inline' must permit an inline handler");
     CHECK(!policy_allows_string_compilation(inline_ok), "'unsafe-inline' must not permit eval");
 
     /* CSP §6.1: a nonce source makes 'unsafe-inline' be IGNORED — the rule that makes adding a nonce to a
        legacy policy actually tighten it rather than widen it. A handler can carry no nonce, so it stays dead. */
-    nonced = policy_container_new("script-src 'unsafe-inline' 'nonce-abc'", self_origin, NULL);
+    nonced = policy_container_new("script-src 'unsafe-inline' 'nonce-abc'", self_origin, NULL,
+                                  serialized_embedder_policy_new());
     CHECK(!csp_ok(nonced, CSP_INLINE_SCRIPT), "a nonce source must make 'unsafe-inline' ignored");
     CHECK(!csp_ok(nonced, CSP_INLINE_SCRIPT_ATTRIBUTE), "a handler carries no nonce, so it stays blocked");
 
@@ -2705,7 +2710,8 @@ static void policy_container_selftest(void)
        the case that exposes it — the handler came out ALLOWED because `default-src`'s 'unsafe-inline' survived
        a `script-src` that does not carry it. */
     {
-        PolicyContainer *overridden = policy_container_new("default-src 'unsafe-inline'; script-src 'self'", self_origin, NULL);
+        PolicyContainer *overridden = policy_container_new("default-src 'unsafe-inline'; script-src 'self'", self_origin, NULL,
+                                                           serialized_embedder_policy_new());
         CHECK(!csp_ok(overridden, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a present script-src must REPLACE default-src for scripts, not inherit its 'unsafe-inline'");
         policy_container_free(overridden);
@@ -2719,7 +2725,8 @@ static void policy_container_selftest(void)
        side. The two lines below now differ, which is the whole content of the fix. */
     {
         PolicyContainer *granular =
-            policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", self_origin, NULL);
+            policy_container_new("script-src 'unsafe-inline' 'unsafe-eval'; script-src-attr 'none'", self_origin, NULL,
+                                 serialized_embedder_policy_new());
         CHECK(!csp_ok(granular, CSP_INLINE_SCRIPT_ATTRIBUTE), "script-src-attr 'none' must kill a handler");
         CHECK(csp_ok(granular, CSP_INLINE_NAVIGATION),
               "§6.8.2 maps a `navigation` inline check to script-src-elem, so script-src-attr must not touch it");
@@ -2732,7 +2739,8 @@ static void policy_container_selftest(void)
        makes the line above a statement about which directive rather than about which answer. */
     {
         PolicyContainer *elem =
-            policy_container_new("script-src 'unsafe-inline'; script-src-elem 'none'", self_origin, NULL);
+            policy_container_new("script-src 'unsafe-inline'; script-src-elem 'none'", self_origin, NULL,
+                                 serialized_embedder_policy_new());
         CHECK(!csp_ok(elem, CSP_INLINE_NAVIGATION), "script-src-elem 'none' must kill a javascript: URL");
         CHECK(!csp_ok(elem, CSP_INLINE_SCRIPT), "script-src-elem 'none' must kill a script element");
         CHECK(csp_ok(elem, CSP_INLINE_SCRIPT_ATTRIBUTE), "script-src-elem must not govern an event handler");
@@ -2744,7 +2752,8 @@ static void policy_container_selftest(void)
        not model and then DCHECKed on it, which is most of the real web. */
     {
         PolicyContainer *hashed =
-            policy_container_new("script-src 'unsafe-inline' 'sha256-YWJj'", self_origin, NULL);
+            policy_container_new("script-src 'unsafe-inline' 'sha256-YWJj'", self_origin, NULL,
+                                 serialized_embedder_policy_new());
         /* The SCRIPT-ATTRIBUTE type is the one this can assert, and the reason is §6.7.3.3's own step 5: its
            hash arm runs only when the type is "script" or "style" or the list carries 'unsafe-hashes', so a
            handler never reaches a digest and the answer is decided by §6.7.3.2 alone.
@@ -2761,13 +2770,15 @@ static void policy_container_selftest(void)
         /* `'sha1-…'` is not a hash-source: §2.3.1's hash-algorithm is exactly sha256/sha384/sha512, so this is
            an unrecognised expression, which §6.7.3.2 IGNORES rather than treats as an override. The two lines
            differ by the digest length alone and must not agree. */
-        PolicyContainer *not_a_hash = policy_container_new("script-src 'unsafe-inline' 'sha1-YWJj'", self_origin, NULL);
+        PolicyContainer *not_a_hash = policy_container_new("script-src 'unsafe-inline' 'sha1-YWJj'", self_origin, NULL,
+                                                           serialized_embedder_policy_new());
         CHECK(csp_ok(not_a_hash, CSP_INLINE_SCRIPT),
               "an expression outside the grammar must be ignored by §6.7.3.2, not read as a hash source");
         policy_container_free(not_a_hash);
     }
     {
-        PolicyContainer *strict = policy_container_new("script-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL);
+        PolicyContainer *strict = policy_container_new("script-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL,
+                                                       serialized_embedder_policy_new());
         CHECK(!csp_ok(strict, CSP_INLINE_SCRIPT), "'strict-dynamic' must override 'unsafe-inline'");
         CHECK(!csp_ok(strict, CSP_INLINE_NAVIGATION),
               "'strict-dynamic' covers the navigation type as well as script and script attribute");
@@ -2779,7 +2790,8 @@ static void policy_container_selftest(void)
        the TYPE alone and must not agree; a copy of the script arm that forgot the type would silently refuse
        every page that pairs a style directive with 'strict-dynamic', which strict CSPs routinely do. */
     {
-        PolicyContainer *sd = policy_container_new("style-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL);
+        PolicyContainer *sd = policy_container_new("style-src 'unsafe-inline' 'strict-dynamic'", self_origin, NULL,
+                                                   serialized_embedder_policy_new());
         CHECK(csp_ok(sd, CSP_INLINE_STYLE), "'strict-dynamic' must not touch inline style");
         CHECK(csp_ok(sd, CSP_INLINE_STYLE_ATTRIBUTE), "nor a style attribute");
         policy_container_free(sd);
@@ -2788,13 +2800,14 @@ static void policy_container_selftest(void)
        run §4.2.6 step 5 at all. `style-src-elem` governs the ELEMENT, `style-src-attr` the ATTRIBUTE, both
        fall back through `style-src` and then `default-src`, and no script directive reaches either. */
     {
-        PolicyContainer *d = policy_container_new("default-src 'unsafe-inline'", self_origin, NULL);
+        PolicyContainer *d = policy_container_new("default-src 'unsafe-inline'", self_origin, NULL,
+                                                  serialized_embedder_policy_new());
         PolicyContainer *g = policy_container_new("default-src 'unsafe-inline'; style-src-attr 'none'",
-                                                 self_origin, NULL);
+                                                 self_origin, NULL, serialized_embedder_policy_new());
         PolicyContainer *s = policy_container_new("default-src 'unsafe-inline'; style-src 'none'",
-                                                 self_origin, NULL);
+                                                 self_origin, NULL, serialized_embedder_policy_new());
         PolicyContainer *k = policy_container_new("script-src 'none'; style-src 'unsafe-inline'",
-                                                 self_origin, NULL);
+                                                 self_origin, NULL, serialized_embedder_policy_new());
 
         CHECK(csp_ok(d, CSP_INLINE_STYLE) && csp_ok(d, CSP_INLINE_STYLE_ATTRIBUTE),
               "§6.8.3 falls back to default-src for both style types when no style directive is present");
@@ -2814,7 +2827,8 @@ static void policy_container_selftest(void)
        and it is the one the old parser aborted on. */
     {
         PolicyContainer *hosts =
-            policy_container_new("script-src https: https://*.example.com:443/a/b 'unsafe-inline'", self_origin, NULL);
+            policy_container_new("script-src https: https://*.example.com:443/a/b 'unsafe-inline'", self_origin, NULL,
+                                 serialized_embedder_policy_new());
         CHECK(csp_ok(hosts, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "host and scheme sources are invisible to §6.7.3.2, so 'unsafe-inline' still allows all inline");
         CHECK(!policy_allows_string_compilation(hosts), "and none of them is 'unsafe-eval'");
@@ -2822,14 +2836,16 @@ static void policy_container_selftest(void)
     }
     /* §2.2.1: within ONE policy a repeated directive is IGNORED, so the first wins... */
     {
-        PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", self_origin, NULL);
+        PolicyContainer *dup = policy_container_new("script-src 'unsafe-inline'; script-src 'self'", self_origin, NULL,
+                                                    serialized_embedder_policy_new());
         CHECK(csp_ok(dup, CSP_INLINE_SCRIPT_ATTRIBUTE), "a repeated directive in one policy must be ignored");
         policy_container_free(dup);
     }
     /* ...and §2.2.1 lowercases the name before that containment test, so the repeat is a repeat however it is
        spelled — `script-SRC 'none'` and `ScRiPt-sRc 'none'` are the standard's own example of equivalence. */
     {
-        PolicyContainer *cased = policy_container_new("SCRIPT-SRC 'unsafe-inline'; script-src 'none'", self_origin, NULL);
+        PolicyContainer *cased = policy_container_new("SCRIPT-SRC 'unsafe-inline'; script-src 'none'", self_origin, NULL,
+                                                      serialized_embedder_policy_new());
         CHECK(csp_ok(cased, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a directive name is matched ASCII case-insensitively, so the second one is the ignored repeat");
         policy_container_free(cased);
@@ -2837,20 +2853,23 @@ static void policy_container_selftest(void)
     /* ...but §2.2's policy LIST is comma-delimited and enforced INDEPENDENTLY, so the very same two directives
        as two POLICIES must intersect instead. These two lines differ by one character and must not agree. */
     {
-        PolicyContainer *list = policy_container_new("script-src 'unsafe-inline', script-src 'self'", self_origin, NULL);
+        PolicyContainer *list = policy_container_new("script-src 'unsafe-inline', script-src 'self'", self_origin, NULL,
+                                                     serialized_embedder_policy_new());
         CHECK(!csp_ok(list, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "policies in a list are enforced independently — a second policy can only NARROW");
         policy_container_free(list);
     }
     /* A policy that governs no script directive forbids nothing about scripts. */
     {
-        PolicyContainer *unrelated = policy_container_new("img-src 'none'; frame-ancestors 'none'", self_origin, NULL);
+        PolicyContainer *unrelated = policy_container_new("img-src 'none'; frame-ancestors 'none'", self_origin, NULL,
+                                                          serialized_embedder_policy_new());
         CHECK(csp_ok(unrelated, CSP_INLINE_SCRIPT_ATTRIBUTE), "img-src must not block a handler");
         CHECK(policy_allows_string_compilation(unrelated), "frame-ancestors must not block eval");
         policy_container_free(unrelated);
     }
 
-    evals = policy_container_new("script-src 'unsafe-eval'", self_origin, NULL);
+    evals = policy_container_new("script-src 'unsafe-eval'", self_origin, NULL,
+                                 serialized_embedder_policy_new());
     CHECK(policy_allows_string_compilation(evals), "'unsafe-eval' must permit eval");
     CHECK(!csp_ok(evals, CSP_INLINE_SCRIPT_ATTRIBUTE), "'unsafe-eval' must not permit an inline handler");
 
@@ -2862,6 +2881,50 @@ static void policy_container_selftest(void)
     CHECK(policy_container_csp(child) != NULL &&
           policy_container_csp(child) != policy_container_csp(self_only),
           "a cloned container must own its own copy of the policy text");
+
+    /* HTML §7.1.7 "Policy containers"' CLONE MOVES THE EMBEDDER POLICY TOO — "set clone's embedder policy to a
+       COPY of policyContainer's embedder policy" — and this is the ITEM whose absence made every
+       cross-origin-isolated response abort in this build. The check is the same shape as the policy text's
+       above and for the same reason: an item that is EQUAL but SHARED is a clone that a later free turns into
+       a dangling pointer in the source, and an item that is absent is a clone that silently downgrades a
+       `require-corp` creator's child to `unsafe-none`. Both halves, because either alone passes. */
+    {
+        PolicyContainer *isolated =
+            policy_container_new("script-src 'self'", self_origin, NULL,
+                                 serialized_embedder_policy(EMBEDDER_POLICY_REQUIRE_CORP, "ep",
+                                                            EMBEDDER_POLICY_CREDENTIALLESS, "ro"));
+        PolicyContainer *copy = policy_container_clone(isolated);
+
+        CHECK(policy_container_embedder(isolated)->value == EMBEDDER_POLICY_REQUIRE_CORP &&
+              policy_container_embedder(isolated)->report_only_value == EMBEDDER_POLICY_CREDENTIALLESS,
+              "§7.1.7's container must carry the §7.1.4 embedder policy it was created with — a container that "
+              "answered `unsafe-none` for a response that opted into cross-origin isolation would have every "
+              "no-CORS fetch it makes judged by the wrong rule");
+        CHECK(policy_container_embedder(copy)->value == EMBEDDER_POLICY_REQUIRE_CORP &&
+              policy_container_embedder(copy)->report_only_value == EMBEDDER_POLICY_CREDENTIALLESS &&
+              !strcmp(policy_container_embedder(copy)->endpoint, "ep") &&
+              !strcmp(policy_container_embedder(copy)->report_only_endpoint, "ro"),
+              "§7.1.7's clone must move EVERY item of the embedder policy — an about:blank child of a "
+              "`require-corp` creator inherits it, and a clone that dropped it would report the child under "
+              "`unsafe-none` with no header anywhere to say so");
+        CHECK(policy_container_embedder(copy)->endpoint != policy_container_embedder(isolated)->endpoint &&
+              policy_container_embedder(copy)->report_only_endpoint !=
+                  policy_container_embedder(isolated)->report_only_endpoint,
+              "§7.1.7's clone must OWN both of §7.1.4's reporting endpoint strings — a clone that shared them "
+              "leaves the source holding two dangling pointers the moment the clone is freed, which is the "
+              "obligation every owned field of a copied struct creates");
+        /* A CONTAINER BUILT WITH NO STATED POLICY STILL HAS THE ITEM — §7.1.7 makes it "initially a NEW
+           embedder policy", whose endpoints §7.1.4 makes the EMPTY STRING and never null. This is the shape
+           the clone-site assert in policy_container.c is written against. */
+        CHECK(policy_container_embedder(none)->value == EMBEDDER_POLICY_UNSAFE_NONE &&
+              policy_container_embedder(none)->endpoint != NULL &&
+              *policy_container_embedder(none)->endpoint == 0,
+              "a container built with §7.1.4's new embedder policy must hold `unsafe-none` and an EMPTY "
+              "reporting endpoint — the section spells that absence as the empty string, and a NULL would be "
+              "a second absence no reader has a rule for");
+        policy_container_free(copy);
+        policy_container_free(isolated);
+    }
 
     policy_container_free(none);
     policy_container_free(self_only);
@@ -3011,10 +3074,14 @@ static void csp_element_matching_selftest(void)
           "§4.2.4 runs the inline check upon NULL, and step 1 answers it without a branch of its own");
 
     {
-        PolicyContainer *pol = policy_container_new("style-src 'nonce-abc'", self_origin, NULL);
-        PolicyContainer *other = policy_container_new("style-src 'nonce-xyz'", self_origin, NULL);
-        PolicyContainer *cased = policy_container_new("style-src 'NONCE-abc'", self_origin, NULL);
-        PolicyContainer *upper = policy_container_new("style-src 'nonce-ABC'", self_origin, NULL);
+        PolicyContainer *pol = policy_container_new("style-src 'nonce-abc'", self_origin, NULL,
+                                                    serialized_embedder_policy_new());
+        PolicyContainer *other = policy_container_new("style-src 'nonce-xyz'", self_origin, NULL,
+                                                      serialized_embedder_policy_new());
+        PolicyContainer *cased = policy_container_new("style-src 'NONCE-abc'", self_origin, NULL,
+                                                      serialized_embedder_policy_new());
+        PolicyContainer *upper = policy_container_new("style-src 'nonce-ABC'", self_origin, NULL,
+                                                      serialized_embedder_policy_new());
 
         /* THE POINT OF THE WHOLE CHANGE: the nonced element runs and the identical element beside it does
            not, under one policy, decided by the element rather than by the policy alone. */
@@ -3086,7 +3153,8 @@ static void csp_element_matching_selftest(void)
         size_t k;
 
         for (k = 0; k < sizeof ROWS / sizeof ROWS[0]; k++) {
-            PolicyContainer *p = policy_container_new(ROWS[k].policy, self_origin, NULL);
+            PolicyContainer *p = policy_container_new(ROWS[k].policy, self_origin, NULL,
+                                                      serialized_embedder_policy_new());
 
             CHECK(!!policy_allows_inline(p, CSP_INLINE_STYLE, bare, S, slen) == ROWS[k].expect, ROWS[k].why);
             /* The ELEMENT is not what a hash arm reads — §6.7.3.3 step 5 is over `source` alone — so the
@@ -3100,10 +3168,11 @@ static void csp_element_matching_selftest(void)
         /* §6.7.3.3 STEPS 3-4's 'unsafe-hashes' FLAG, which is the whole of what extends the hash arm past
            "script" and "style". Without it a STYLE ATTRIBUTE's source never reaches step 5 at all. */
         {
-            PolicyContainer *plain = policy_container_new(S256, self_origin, NULL);
+            PolicyContainer *plain = policy_container_new(S256, self_origin, NULL,
+                                                          serialized_embedder_policy_new());
             PolicyContainer *hashes = policy_container_new(
                 "style-src 'unsafe-hashes' 'sha256-p0bF+un5yUb9MBO6xRb8kPHlY2BdpHVtLiFkDrZPF64='",
-                self_origin, NULL);
+                self_origin, NULL, serialized_embedder_policy_new());
 
             CHECK(!policy_allows_inline(plain, CSP_INLINE_STYLE_ATTRIBUTE, bare, S, slen),
                   "a hash alone must NOT admit a style attribute — §6.7.3.3 step 5's condition is `type is "
@@ -3138,7 +3207,7 @@ static void document_policy_selftest(void)
     const Origin *self_origin = origin_parse("https://x.test");
 
     html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
-    p = document_policy_new(dom, NULL, self_origin);
+    p = document_policy_new(dom, NULL, self_origin, serialized_embedder_policy_new());
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
     CHECK(!csp_ok(p, CSP_INLINE_SCRIPT_ATTRIBUTE),
           "two meta policies must INTERSECT — the second's 'self' forbids what the first's 'unsafe-inline' "
@@ -3149,7 +3218,7 @@ static void document_policy_selftest(void)
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = dom_document_create();
     html_parse_document(plain, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)"<html><body></body></html>", 26);
-    empty = document_policy_new(plain, NULL, self_origin);
+    empty = document_policy_new(plain, NULL, self_origin, serialized_embedder_policy_new());
     CHECK(csp_ok(empty, CSP_INLINE_SCRIPT_ATTRIBUTE), "a document with no meta CSP must permit everything");
 
     {
@@ -3157,8 +3226,10 @@ static void document_policy_selftest(void)
            it is enforced, so a header that forbids inline must still forbid it on a page whose meta permits it
            — which is exactly the page above. The engine's entry point used to drop the header, so this page
            reported a live inline handler that the real response kills. */
-        PolicyContainer *hdr = document_policy_new(plain, "script-src 'self'", self_origin);
-        PolicyContainer *both = document_policy_new(dom, "default-src 'unsafe-inline'", self_origin);
+        PolicyContainer *hdr = document_policy_new(plain, "script-src 'self'", self_origin,
+        serialized_embedder_policy_new());
+        PolicyContainer *both = document_policy_new(dom, "default-src 'unsafe-inline'", self_origin,
+        serialized_embedder_policy_new());
         CHECK(!csp_ok(hdr, CSP_INLINE_SCRIPT_ATTRIBUTE),
               "a header-borne policy must be enforced on a document whose tree declares none");
         CHECK(!csp_ok(both, CSP_INLINE_SCRIPT_ATTRIBUTE),
@@ -8460,7 +8531,8 @@ int main(int argc, char **argv) {
            any, and `'self'` in a policy this fixture builds later is measured against it. It is this
            document's own address's origin, because this document is its own response. */
         tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test",
-                         serialized_policy_container(NULL, "https://x.test"), 0,
+                         serialized_policy_container(NULL, "https://x.test",
+                                                     serialized_embedder_policy_new()), 0,
                          world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }

@@ -600,10 +600,12 @@ try {
      pointer and a LENGTH, which the mojom layer places from the array below),
      §4.4's address, the name this agent's root document is known by, the response's header field lines (empty
      — this document had no response), §8.1.3.1's top-level creation URL, which for a root document is its
-     own address, and the two halves of HTML §7.1.7's inherited policy container — both empty, because this
-     document has no creator and an empty pair is the positive statement of that. */
+     own address, the two halves of HTML §7.1.7's inherited policy container — both empty, because this
+     document has no creator and an empty pair is the positive statement of that — and §7.1.4's EMBEDDER POLICY
+     item of that same container, which has no empty spelling: §7.1.7 gives every container one, so a document
+     with no creator states the section's own "a new embedder policy" in as many words. */
   const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
-                                               OPENER_ADDR, '', '');
+                                               OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '');
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
@@ -648,14 +650,16 @@ try {
          'boundary or a notice that did not survive the typed wire, and until this phase existed neither ' +
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
-     origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>policy`, built by core/frame/navigable.c. The policy
-     is LAST because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a
-     middle field. CSP §2.2's self-origin sits immediately before it because an origin's serialization cannot
-     contain one.
+     origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
+     coepReportOnlyEndpoint<TAB>policy`, built by core/frame/navigable.c. The policy is LAST because it is the
+     record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle field. Everything
+     that is not the policy sits before it — an origin's serialization cannot contain a tab, HTML §7.1.4's
+     three values are fixed tokens, and RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to` endpoint
+     those two fields carry.
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 8)
-    fail(`the create notice carries ${create.length} field(s) where the record has eight — ` +
+  if (create.length < 12)
+    fail(`the create notice carries ${create.length} field(s) where the record has twelve — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -695,8 +699,23 @@ try {
          'child\'s address means `script-src \'self\'` on the creator would permit the child\'s origin and ' +
          'refuse the creator\'s — the finding reported live where a browser blocks it, and blocked where a ' +
          'browser runs it');
-  if (create.slice(7).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(7).join('\t')}\`) and this ` +
+  /* HTML §7.1.4's EMBEDDER POLICY ITEM OF THAT SAME CLONE, whose four fields cross for the reason the
+     self-origin does: §7.1.7's clone-a-policy-container moves EVERY item of a container, and the peer instance
+     can derive none of them — the item belongs to the CREATOR's response and the child's own response is the
+     only place a header could be read. This opener is init'd with no response headers at all, so §7.1.4's
+     obtain answered its own initial value; what is asserted is that the record SAYS so in the section's own
+     token rather than leaving the field empty, because an embedder policy has no absence to spell. */
+  if (create[7] !== 'unsafe-none' || create[9] !== 'unsafe-none')
+    fail(`the create notice's §7.1.4 embedder policy values are \`${create[7]}\`/\`${create[9]}\` and this ` +
+         'document was init\'d with no response headers, so HTML §7.1.4\'s obtain answered `unsafe-none` for ' +
+         'both. A field that is empty or carries something else is an engine that stopped writing the item, ' +
+         'and the peer would create the child claiming a policy no response ever stated');
+  if (create[8] !== '' || create[10] !== '')
+    fail(`the create notice carries a §7.1.4 reporting endpoint (\`${create[8]}\`/\`${create[10]}\`) and no ` +
+         'response header on this document could have named one — §7.1.4 makes both endpoints the EMPTY ' +
+         'STRING initially and only a `report-to` parameter writes one');
+  if (create.slice(11).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(11).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

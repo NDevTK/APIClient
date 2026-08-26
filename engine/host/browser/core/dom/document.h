@@ -248,8 +248,13 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
    quoting are the parser's answer rather than a second one. It lives on the DOM half because only that half
    may walk a tree, and it RETURNS the container rather than installing one so it is exercisable with a
    document of its own. `csp` may be NULL; `self_origin` may not, because CSP §2.2 gives every list one and
-   §6.7.2.8 has no answer without it. OWNED by the caller. */
-PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin);
+   §6.7.2.8 has no answer without it. OWNED by the caller.
+   `embedder` IS §7.1.4'S ITEM OF THE CONTAINER THIS DOCUMENT IS CREATED WITH, passed straight through: the
+   meta walk below has nothing to say about it (CSP §3.3's `<meta>` delivers CSP policies and nothing else, and
+   `Cross-Origin-Embedder-Policy` has no `<meta>` form at all), so this function neither derives it nor defaults
+   it — which is what keeps the two halves this function DOES merge from acquiring a silent third. */
+PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
+                                     SerializedEmbedderPolicy embedder);
 
 /* THIS DOCUMENT'S POLICY CONTAINER — HTML §7.2.6, built at install from the above. Built at install rather
    than on demand because §7.4 clones it for an about:blank child at the moment that child is created, which

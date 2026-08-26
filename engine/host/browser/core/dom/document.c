@@ -2409,7 +2409,8 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    The meta half is a REAL LEXBOR WALK, not a regex over the source: a `content` attribute is parsed markup by
    the time it is here, so entity decoding and quoting are the parser's answer rather than a second one — the
    same reason the bundle id is a `<script>` scan. */
-PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin)
+PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
+                                     SerializedEmbedderPolicy embedder)
 {
     lxb_dom_node_t *cur;
     char *acc = NULL;
@@ -2476,8 +2477,11 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
         /* THE MERGED LIST TAKES ONE SELF-ORIGIN, and it is the created-with policy's rather than a second one
            derived for the `<meta>` half. CSP §3.3 delivers a meta policy INSIDE the response this document
            came from, so §2.2.2's "response's URL's origin" is the same origin for both halves; the two are one
-           list precisely because they belong to one response. */
-        PolicyContainer *p = policy_container_new(acc, self_origin, NULL);
+           list precisely because they belong to one response.
+           AND §7.1.4'S ITEM PASSES THROUGH UNTOUCHED, which is a statement about CSP §3.3 rather than a
+           shortcut: a `<meta http-equiv>` can deliver a CSP policy and nothing else, so there is no second
+           half of the embedder policy for this walk to find and no merge for it to perform. */
+        PolicyContainer *p = policy_container_new(acc, self_origin, NULL, embedder);
         free(acc);
         return p;
     }
@@ -2990,7 +2994,7 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "one cannot resolve `'self'` and would report every one of its own scripts as blocked by its own "
            "policy. §7.1.7's determine step answers this for every creating operation and always with a "
            "container, so an absence here is a caller that did not run it");
-    d->policy = document_policy_new(dom, policy.csp, origin_parse(policy.self_origin));
+    d->policy = document_policy_new(dom, policy.csp, origin_parse(policy.self_origin), policy.embedder);
     /* §7.1.5's ACTIVE SANDBOXING FLAG SET, as the creating operation decided it — §7.2's creation flags for
        the initial about:blank, §7.4.5's final flag set for a navigated Document. Beside the policy container
        because §7.5.1 hands the Document both in one breath, and NOT derived from it: the container's only

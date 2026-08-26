@@ -24,6 +24,7 @@
 
 #include "core/frame/csp_directive_list.h"
 #include "core/frame/csp_source_list.h"
+#include "core/frame/embedder_policy.h"
 #include "core/frame/sandboxing.h"
 
 typedef struct PolicyContainer PolicyContainer;
@@ -38,9 +39,17 @@ typedef struct PolicyContainer PolicyContainer;
    response's URL's origin" — so it cannot be recovered from `csp_text` at either end of a clone and has to be
    handed over with it. Every caller states it, because WHOSE origin it is belongs to the operation: a Document
    built from a response takes its own, and §7.3.2.1's clone takes the CREATOR's along with the text. BORROWED —
-   an origin lives for the agent. */
+   an origin lives for the agent.
+   `embedder` IS §7.1.4'S ITEM AND IS STATED BY EVERY CALLER, never defaulted here. §7.1.7 makes it "initially
+   a NEW embedder policy" and its create-a-policy-container-from-a-fetch-response makes it "the result of
+   obtaining an embedder policy given response and environment" — two different answers to one item, and which
+   of them applies is a fact about the OPERATION building the container. A container that filled it in itself
+   would answer `unsafe-none` for a response that opted into cross-origin isolation, which is the silence this
+   item exists to end; a caller with no response says so by passing serialized_embedder_policy_new(), which is
+   the standard's own words rather than an omission. It is COPIED — both endpoint strings — because a container
+   owns its items and outlives the operation that built it. */
 PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
-                                      const char *referrer_policy);
+                                      const char *referrer_policy, SerializedEmbedderPolicy embedder);
 
 /* §7.1.7's "clone a policy container" — §7.3.2.1 performs this for a navigable created with a creator, which is
    how an initial about:blank inherits its CSP. A DEEP copy: the child's policy is its own from the moment it
@@ -69,6 +78,13 @@ const CspList *policy_container_csp_list(const PolicyContainer *p);
    ask it a question: §7.3.2.1's create, which clones the CREATOR's container into a navigable it is making.
    NULL only for a container that does not exist. */
 const Origin *policy_container_self_origin(const PolicyContainer *p);
+/* §7.1.4'S EMBEDDER POLICY ITEM OF THIS CONTAINER — what §7.1.4.2's embedder policy checks reads off a child
+   navigable's CONTAINER DOCUMENT ("let parentPolicy be navigable's container document's policy container's
+   embedder policy"), and what §7.1.3's obtain-an-opener-policy asks to turn `same-origin` into
+   `same-origin-plus-COEP`. BORROWED, and NULL only for a container that does not exist — which is a different
+   answer from `unsafe-none` and must stay so: the first is "there is no document here", the second is a real
+   policy a real response stated. */
+const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p);
 
 /* ---- HTML §7.1.7 "Policy containers" — THE CONTAINER IN THE FORM IT CROSSES A SEAM -------------------------
  *
@@ -76,17 +92,22 @@ const Origin *policy_container_self_origin(const PolicyContainer *p);
  * to a Document", and §7.1.7's clone-a-policy-container moves EVERY item of it in one operation. A seam that
  * carries the items as separate arguments is not carrying a container; it is carrying whichever of them its
  * author remembered, and the item added NEXT is the one nobody adds to the seam. That is not hypothetical —
- * §7.1.4's embedder policy is obtained where a response is read and had nowhere to sit, because the two seams a
- * clone crosses (a lazily-materialized about:blank child's navigable, and the `navigable.create` notice a peer
- * instance is provisioned from) each carried the CSP list's two halves and nothing else. A field written in one
- * place and absent in the next is the defect this build makes greppable, and this type is the fix for it.
+ * §7.1.4's embedder policy WAS obtained where a response is read and had nowhere to sit, because the two seams
+ * a clone crosses (a lazily-materialized about:blank child's navigable, and the `navigable.create` notice a
+ * peer instance is provisioned from) each carried the CSP list's two halves and nothing else. A field written
+ * in one place and absent in the next is the defect this build makes greppable, and this type is the fix for
+ * it.
  *
  * IT IS BUILT THROUGH A FUNCTION AND NEVER BY AN INITIALIZER, WHICH IS THE WHOLE FORCING MECHANISM. A
  * designated initializer zero-fills the member it does not name, so a struct that grows silently hands every
  * producer a container whose new item is whatever zero happens to mean, with the compiler saying nothing —
  * exactly the shape of a consumer defaulting a producer's field, one layer earlier. `serialized_policy_container`
  * below names EVERY item §7.1.7 gives a container that this build holds, so the day another item lands here
- * every producer STOPS COMPILING until it states one. Nothing may construct this struct any other way.
+ * every producer STOPS COMPILING until it states one. Nothing may construct this struct any other way. THAT
+ * MECHANISM HAS NOW BEEN EXERCISED ONCE, WHICH IS THE ONLY WAY TO KNOW IT WORKS: §7.1.4's embedder policy was
+ * the item it was built for, and adding it stopped every producer in this tree — the two host ABI entries, the
+ * WPT runner, the fixture, the WindowProxy that holds a creator's clone and the `navigable.create` notice that
+ * carries one to a peer — until each of them stated where its answer comes from.
  *
  * EVERYTHING IN IT IS TEXT AND BORROWED. A live value crosses neither an instance, nor a session, nor a park,
  * so the clone that crosses an instance and the clone that crosses a session are the same operation as the
@@ -108,12 +129,24 @@ typedef struct {
        presence off the POLICY collapses them, which is §7.1.7's `initiatorPolicyContainer is not null`
        answered from the wrong field. Ask serialized_policy_container_exists rather than testing it here. */
     const char *self_origin;
+    /* §7.1.4's EMBEDDER POLICY, the item §7.1.7 lists between the CSP list and the referrer policy. It is ONE
+       VALUE rather than four members for the same reason this whole struct is one value rather than three:
+       §7.1.4 makes a policy a struct of four items and §7.1.7's clone moves it as one ("set clone's embedder
+       policy to a COPY of policyContainer's embedder policy"), so a seam that spelled the items separately
+       would drop the one added next. It is ALWAYS present — a container that exists has an embedder policy,
+       initially a new one — which is why nothing here spells its absence. */
+    SerializedEmbedderPolicy embedder;
 } SerializedPolicyContainer;
 
 /* A CONTAINER, stating every item. `self_origin` is REQUIRED and non-empty: a container that exists has a CSP
    list and every CSP list has one. The ABSENCE of a container is serialized_policy_container_none below, which
-   is a different thing and is spelled differently so that no caller can reach it by passing NULL here. */
-SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin);
+   is a different thing and is spelled differently so that no caller can reach it by passing NULL here.
+   `embedder` is REQUIRED for a different reason and one that admits no "none": §7.1.7 gives every container an
+   embedder policy whether or not a response stated one, so the caller with nothing to state says so with
+   serialized_embedder_policy_new() — §7.1.4's own "a new embedder policy" — rather than by omitting an
+   argument this function would then have to invent. */
+SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
+                                                      SerializedEmbedderPolicy embedder);
 
 /* NO CONTAINER — §7.1.7's `null` for the initiator/parent/history containers its determine step tests against,
    which is a real state (a Document with no creator) and not a caller that forgot an argument. */
@@ -123,8 +156,13 @@ SerializedPolicyContainer serialized_policy_container_none(void);
    `navigable.create` notice the trusted zone relays from the instance that created this document. Such a
    boundary carries FIELDS and cannot carry a null struct, so the absence arrives as an absent SELF-ORIGIN, and
    this is the ONE place that spelling is read: a host entry that tested it inline would be a second reading of
-   §7.1.7's `is not null`, in a different file, for each entry that has one. */
-SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin);
+   §7.1.7's `is not null`, in a different file, for each entry that has one.
+   `embedder` IS STILL STATED FOR AN ABSENT CONTAINER, and that is not a contradiction: an entry reading a
+   record reads its fields before it knows whether they describe a container, and refusing to take the item
+   until the answer is known would put the §7.1.7 test in the caller — which is the second reading this
+   function exists to prevent. An absent container discards it, exactly as it discards the policy text. */
+SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
+                                                              SerializedEmbedderPolicy embedder);
 
 /* THE SERIALIZATION OF A LIVE CONTAINER — §7.1.7's clone, in the form it crosses a seam. It reads EVERY item
    off `p`, so a container that grows grows here once and no caller has to be told: this is the one place a

@@ -372,10 +372,49 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
  * close, and this engine cannot see its own embedder: the offscreen is the only zone that knows which instance
  * holds which document. For a top-level document the zone passes the address itself; for a document this
  * engine's peer created, it passes the field that peer put on its `navigable.create` notice. */
+/* HTML §7.1.7's CLONE OF THE CREATOR'S CONTAINER AS IT ARRIVES OVER THIS ABI, READ IN ONE PLACE FOR BOTH
+ * ENTRIES. `qjs_init` and `qjs_join` take the identical contract — a Document this instance did not root is
+ * created with a clone of its creator's container whichever entry it comes through — so a second reading here
+ * would be a second grammar for one record, which is how two readers of one format come to disagree about what
+ * a field means.
+ *
+ * THE VALUES ARRIVE AS §7.1.4's OWN TOKENS. The relaying zone reads them off the emitting engine's
+ * `navigable.create` notice and passes them through verbatim; it does not interpret them, and it could not —
+ * §7.1.4 names three STRINGS and this is the only file that turns one back into a value. A token naming none of
+ * them is not §7.1.4.1's fail-open (that is about a HEADER a server sent, which this is not): it is a relay
+ * that stopped writing the field, and it crashes at the boundary that produced it. */
+static SerializedPolicyContainer qjs_inherited_container(const char *csp, const char *self_origin,
+                                                         const char *coep, const char *coep_endpoint,
+                                                         const char *coep_report_only,
+                                                         const char *coep_report_only_endpoint)
+{
+    EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
+    /* THE PARSE RUNS, THEN THE ASSERT READS ITS ANSWER — never the other way round. A `DCHECK` condition is
+       compiled out in release (engine/host/check.h), so a parse performed INSIDE one is a parse that does not
+       happen in the build that ships: both values would stay at `unsafe-none` whatever the record said. */
+    bool ok = embedder_policy_value_of_token(coep, &v);
+    bool ok_ro = embedder_policy_value_of_token(coep_report_only, &ro);
+
+    (void)ok; (void)ok_ro;
+    DCHECK(coep_endpoint != NULL && coep_report_only_endpoint != NULL,
+           "a §7.1.7 policy container arrived over this ABI with no §7.1.4 REPORTING ENDPOINT — the section "
+           "makes both of them strings whose absence is the EMPTY one, so a NULL is the relaying zone having "
+           "stopped writing the field rather than a policy that names no endpoint");
+    DCHECK(ok && ok_ro,
+           "a §7.1.7 policy container arrived over this ABI with an §7.1.4 EMBEDDER POLICY VALUE that names "
+           "none of the three strings the section defines — the emitting engine writes these tokens onto its "
+           "`navigable.create` notice and the trusted zone relays them verbatim, so a token outside them is a "
+           "relay that stopped writing the field, not a header that failed to parse. Read as `unsafe-none` it "
+           "would put a cross-origin isolated creator's child under the wrong rule for every no-CORS fetch");
+    return serialized_policy_container_or_none(csp, self_origin,
+                                               serialized_embedder_policy(v, coep_endpoint, ro,
+                                                                          coep_report_only_endpoint));
+}
+
 /* `headers` IS THE NAVIGATION RESPONSE'S HEADER LIST, and it replaces the single `csp` argument that used to
  * stand here. That argument was the whole of what a Document in this engine could be created with, and three
- * separate capabilities were stuck behind it: §7.1.7's policy container has an EMBEDDER POLICY item that had
- * no writer, §7.5.1's creation table gives a Document an OPENER POLICY row that did not exist, and §7.5.1's
+ * separate capabilities were stuck behind it: §7.1.7's policy container has an EMBEDDER POLICY item that then
+ * had no writer, §7.5.1's creation table gives a Document an OPENER POLICY row that did not exist, and §7.5.1's
  * own `Origin-Agent-Cluster` read never happened — so §8.1.2.2's agent cluster key was the SITE for every
  * document this engine has ever built, and `originAgentCluster` answered `false` without ever having asked.
  * One header cannot be widened into three by adding three arguments: the standard reads a HEADER LIST, several
@@ -438,10 +477,20 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
  * determine-navigation-params-policy-container, which lives once beside the container it is about
  * (core/frame/policy_container.h) and is called from here with both in hand. This entry's job is to STATE the
  * two facts a host knows and nothing else — restating the ordering here would make the WPT runner's entry a
- * second copy of it, and two copies of an ordering are two orderings. */
+ * second copy of it, and two copies of an ordering are two orderings.
+ *
+ * AND THE FOUR `inherited_coep*` ARGUMENTS ARE THE SAME CONTAINER'S §7.1.4 ITEM, which is why they stand with
+ * the two above rather than in `headers`. A clone moves EVERY item of a container (§7.1.7's clone-a-policy-
+ * container sets the clone's embedder policy to a COPY of the source's), so an item that did not cross would
+ * be a clone that silently downgraded a cross-origin-isolated creator's child to `unsafe-none` — with no
+ * header anywhere to say so, because the child's own response never carried one. They are read through
+ * qjs_inherited_container above, once, for both entries. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
-                        const char *inherited_csp, const char *inherited_csp_self_origin)
+                        const char *inherited_csp, const char *inherited_csp_self_origin,
+                        const char *inherited_coep, const char *inherited_coep_endpoint,
+                        const char *inherited_coep_report_only,
+                        const char *inherited_coep_report_only_endpoint)
 {
     char *origin;
     HeaderList response_headers;
@@ -574,8 +623,14 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            `origin` beside it because the two are different facts — a Document's principal, and the origin its
            policy resolves `'self'` against — which is precisely what an inherited container makes disagree. */
         SerializedPolicyContainer inherited =
-            serialized_policy_container_or_none(inherited_csp, inherited_csp_self_origin);
-        SerializedPolicyContainer response = serialized_policy_container(np.csp, origin);
+            qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
+                                    inherited_coep_endpoint, inherited_coep_report_only,
+                                    inherited_coep_report_only_endpoint);
+        /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
+           response step 4, computed where the response is read (core/frame/navigation_params.c) and handed to
+           the container constructor here, which is the ONLY thing `np.embedder` is for. */
+        SerializedPolicyContainer response =
+            serialized_policy_container(np.csp, origin, serialized_embedder_policy_of(&np.embedder));
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 
@@ -645,10 +700,15 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  * document reaching THIS entry is by definition one this agent did not root, which for a child navigable means
  * one a peer's `navigable.create` announced — the case HTML §7.1.7's clone exists for. The same two-sided
  * assert applies, and it applies through §7.1.7's own algorithm (core/frame/policy_container.h) so this entry,
- * the root's, and the WPT runner's cannot come to answer it differently. */
+ * the root's, and the WPT runner's cannot come to answer it differently. The four `inherited_coep*` arguments
+ * are that same container's §7.1.4 item, for the reason qjs_init states: §7.1.7's clone moves every item of a
+ * container, so an item that stops at a seam is an inheritance silently deleted. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
-                        const char *inherited_csp, const char *inherited_csp_self_origin)
+                        const char *inherited_csp, const char *inherited_csp_self_origin,
+                        const char *inherited_coep, const char *inherited_coep_endpoint,
+                        const char *inherited_coep_report_only,
+                        const char *inherited_coep_report_only_endpoint)
 {
     HeaderList response_headers;
     NavigationParams np;
@@ -750,9 +810,12 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            off this document's own response — and a document that reaches THIS entry is one another instance
            announced, so an inherited container is the case the entry exists for rather than an exotic one. */
         SerializedPolicyContainer inherited =
-            serialized_policy_container_or_none(inherited_csp, inherited_csp_self_origin);
+            qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
+                                    inherited_coep_endpoint, inherited_coep_report_only,
+                                    inherited_coep_report_only_endpoint);
         SerializedPolicyContainer response =
-            serialized_policy_container(np.csp, origin_serialized(origin_agent()));
+            serialized_policy_container(np.csp, origin_serialized(origin_agent()),
+                                        serialized_embedder_policy_of(&np.embedder));
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 

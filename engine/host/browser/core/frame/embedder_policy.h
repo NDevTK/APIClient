@@ -58,6 +58,55 @@ void embedder_policy_free(EmbedderPolicy *p);
    `same-origin-plus-COEP`) and by §7.1.4.2's embedder policy checks. */
 bool embedder_policy_compatible_with_cross_origin_isolation(EmbedderPolicyValue v);
 
+/* §7.1.4's THREE STRINGS, IN BOTH DIRECTIONS — "an embedder policy value is one of three STRINGS", and these
+   are that sentence read as a serialization. A value crosses a seam as the token the standard names it with
+   and never as an integer: a record whose `1` a reader takes for `require-corp` because both sides happen to
+   spell the enum in the same order is a contract nothing checks, and a `@WHY` naming `2` tells the reader of
+   it nothing. `_of_token` is §7.1.4.1's "the valid token values are the embedder policy values" — false for a
+   token that names none, which is the caller's fail-open. */
+const char *embedder_policy_value_token(EmbedderPolicyValue v);
+bool embedder_policy_value_of_token(const char *token, EmbedderPolicyValue *out);
+
+/* §7.1.4'S EMBEDDER POLICY IN THE FORM §7.1.7'S CONTAINER CROSSES A SEAM IN — the same four items, with the
+ * two endpoints BORROWED rather than owned, which is the only difference between this type and the one above.
+ *
+ * IT IS ITS OWN TYPE AND NOT `EmbedderPolicy` PASSED BY VALUE, for the reason every other field of a
+ * SerializedPolicyContainer is `const`: a copy of an owning struct is a second name for memory it does not
+ * own, so the day somebody frees through the copy the owner holds two dangling pointers and nothing said so.
+ * The `const` is what makes that unspellable rather than merely discouraged.
+ *
+ * BUILT THROUGH A FUNCTION AND NEVER BY AN INITIALIZER, which is the same forcing mechanism
+ * core/frame/policy_container.h states for the container that holds it: a designated initializer zero-fills
+ * the item it does not name, and zero here is `unsafe-none` — a plausible policy for a response that opted
+ * into isolation, which is exactly the silence this whole chain of work exists to end. */
+typedef struct {
+    EmbedderPolicyValue value;
+    const char         *endpoint;               /* never NULL — §7.1.4's initial value is the EMPTY STRING */
+    EmbedderPolicyValue report_only_value;
+    const char         *report_only_endpoint;   /* never NULL, same sentence */
+} SerializedEmbedderPolicy;
+
+/* AN EMBEDDER POLICY, stating every item. Both endpoints are REQUIRED and may be empty but not NULL — §7.1.4
+   spells their absence as the empty string, and a NULL would be a second absence with no meaning. */
+SerializedEmbedderPolicy serialized_embedder_policy(EmbedderPolicyValue value, const char *endpoint,
+                                                    EmbedderPolicyValue report_only_value,
+                                                    const char *report_only_endpoint);
+
+/* §7.1.4's "a NEW embedder policy" — every item at its stated initial value, which is what §7.1.7 gives a
+   container that was not created from a response ("initially a new embedder policy") and what its
+   create-a-policy-container-from-a-fetch-response sets the item to when there is no environment to obtain one
+   for ("otherwise, set it to `unsafe-none`"). A real answer, not a placeholder. */
+SerializedEmbedderPolicy serialized_embedder_policy_new(void);
+
+/* THE SERIALIZATION OF A LIVE ONE. The bytes are BORROWED from `p`, so they live as long as it does. */
+SerializedEmbedderPolicy serialized_embedder_policy_of(const EmbedderPolicy *p);
+
+/* §7.1.7's clone step 3 — "set clone's embedder policy to a COPY of policyContainer's embedder policy" — and
+   the arrival of one over a seam, which are ONE operation because a container crossing a seam and a container
+   cloned in this heap are one operation (core/frame/policy_container.h). `out` is FILLED from `s`, taking its
+   own copy of both endpoint strings; the caller frees it with embedder_policy_free. */
+void embedder_policy_adopt(EmbedderPolicy *out, SerializedEmbedderPolicy s);
+
 /* §7.1.4's "obtain an embedder policy from a response `response` and an environment `environment`", over the
  * response's HEADER LIST — which is the whole of what the algorithm reads from the response.
  *

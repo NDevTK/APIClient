@@ -130,8 +130,16 @@ let instanceSerial = 0;
    `headers` SLOT, which is a raw policy value where the entry parses HTTP field lines: it carried no colon,
    so header_list_parse_field_lines had nothing to make of it and every child this driver provisioned ran
    under NO policy while the record that named one crossed intact. Both halves are the empty string for a root
-   document, which has no creator. */
-async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf) {
+   document, which has no creator.
+   `inheritedCoep` AND ITS THREE COMPANIONS ARE THAT SAME CONTAINER'S §7.1.4 EMBEDDER POLICY ITEM. HTML §7.1.7's
+   clone-a-policy-container moves EVERY item of a container, so an item that stopped at this seam would be an
+   inheritance silently replaced by `unsafe-none` — and unlike the CSP list there is no empty spelling for it:
+   §7.1.7 gives every container an embedder policy, so a document with no creator states §7.1.4's own initial
+   value ("unsafe-none", "", "unsafe-none", "") rather than nothing. The two VALUES are §7.1.4's token strings;
+   main.c is the only party that turns one into a value and it crashes on a token naming none of the three. */
+async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf,
+                          inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
+                          inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -170,9 +178,12 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
   {
     const [hp, hn] = bs(html);
     M.ccall('qjs_init', 'number',
-      ['number','number','number','number','number','number','number','number'],
+      ['number','number','number','number','number','number','number','number',
+       'number','number','number','number'],
       [hp, hn, cs(url), cs(docId), cs(headers || ''), cs(topLevelUrl),
-       cs(inheritedCsp || ''), cs(inheritedCspSelf || '')]);
+       cs(inheritedCsp || ''), cs(inheritedCspSelf || ''),
+       cs(inheritedCoep), cs(inheritedCoepEndpoint),
+       cs(inheritedCoepReportOnly), cs(inheritedCoepReportOnlyEndpoint)]);
     M._free(hp);
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
@@ -458,10 +469,14 @@ async function drainNotices(e) {
        and which nothing downstream could tell from the routing. */
     if (f[0] === 'navigable.create') {
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
-      /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list and FIELD 7 IS THE LIST — the policy is the
-         record's REMAINDER (a raw CSP header may contain HTAB), which is why the self-origin sits before it.
+      /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
+         its value, its reporting endpoint, its report-only value and its report-only endpoint — and FIELD 11
+         IS THE LIST. The policy is the record's REMAINDER (a raw CSP header may contain HTAB), which is why
+         everything that is not the policy sits before it: an origin's serialization cannot contain a tab, nor
+         can §7.1.4's tokens, and RFC 8941 §3.3.3 "Strings" excludes one from a `report-to` endpoint.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(7).join('\t'), f[6]));
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(11).join('\t'),
+                                         f[6], f[7], f[8], f[9], f[10]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a

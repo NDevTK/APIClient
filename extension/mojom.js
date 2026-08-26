@@ -161,6 +161,37 @@
          "distinguishes them because a Document merges CSP §3.3's `<meta>` policies into that SAME list under " +
          "that SAME self-origin, so a `data:` child's `<meta>` policy resolves `'self'` differently in the " +
          "two cases" };
+  /* HTML §7.1.4 "Cross-origin embedder policies"' EMBEDDER POLICY — the ITEM of that same §7.1.7 container,
+     which travels as four fields because §7.1.4 makes a policy "a value, a reporting endpoint string, a report
+     only value, and a report only reporting endpoint string" and §7.1.7's clone-a-policy-container moves every
+     one of them ("set clone's embedder policy to a COPY of policyContainer's embedder policy").
+     IT IS NOT A RESPONSE HEADER AND CANNOT BE RELAYED AS ONE, for the reason the CSP list beside it cannot: the
+     item belongs to the CREATOR's response, and the child's own response is where a header would be read. A
+     child provisioned without it is created claiming `unsafe-none` for a creator that opted into cross-origin
+     isolation — an inheritance silently deleted, with no header anywhere on the child's side to disagree with.
+     THE VALUES ARE §7.1.4's OWN TOKENS AND THIS ZONE DOES NOT INTERPRET THEM. The emitting engine writes
+     `unsafe-none`/`require-corp`/`credentialless` onto its `navigable.create` notice and this relays the bytes;
+     the receiving engine is the only party that turns one back into a value, and it CRASHES on a token naming
+     none of the three rather than reading it as the default. */
+  var INHERITED_COEP = { name: "inheritedCoep", type: "string",
+    why: "§7.1.4's embedder policy VALUE of that inherited container, as one of the section's three token " +
+         "strings. There is no empty spelling: a container that exists has an embedder policy, initially a " +
+         "new one, so the absence of a creator is still said by the self-origin above and this field always " +
+         "names a policy" };
+  var INHERITED_COEP_ENDPOINT = { name: "inheritedCoepEndpoint", type: "string",
+    why: "§7.1.4's reporting endpoint of that policy — the `report-to` parameter of the creator's header, " +
+         "whose absence §7.1.4 spells as the EMPTY STRING and never as null" };
+  var INHERITED_COEP_REPORT_ONLY = { name: "inheritedCoepReportOnly", type: "string",
+    why: "§7.1.4's REPORT ONLY value of that policy, from the creator's " +
+         "`Cross-Origin-Embedder-Policy-Report-Only`. It is a separate item because §7.1.4.2's embedder " +
+         "policy checks reads it separately — its report-only arm fires where the parent's report-only value " +
+         "is compatible with cross-origin isolation and the response's value is not" };
+  var INHERITED_COEP_REPORT_ONLY_ENDPOINT = { name: "inheritedCoepReportOnlyEndpoint", type: "string",
+    why: "§7.1.4's report only reporting endpoint of that policy. It is carried even though §7.1.4's own " +
+         "obtain never writes it — BOTH of its branches set `policy's endpoint`, which is the section's own " +
+         "text — because the item exists and a serialization that dropped an item is the defect this whole " +
+         "record is shaped to prevent" };
+
   var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string",
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
@@ -180,7 +211,8 @@
     methods: [
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
-                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN],
+                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -190,7 +222,8 @@
 
       { ordinal: 1, name: "Join",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
-                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN],
+                 INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

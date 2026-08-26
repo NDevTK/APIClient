@@ -768,6 +768,27 @@ function responseFieldLines(h) {
   return out.join("\n");
 }
 
+/* HTML §7.1.4 "Cross-origin embedder policies"' EMBEDDER POLICY, AS THIS ZONE RELAYS IT — the ITEM of §7.1.7's
+   policy container that travels beside the CSP list on every path a container takes through here.
+   THIS ZONE DOES NOT INTERPRET IT AND MUST NOT. §7.1.4 names three token strings and the ENGINE is the only
+   party that turns one back into a value; a relay that mapped them here would be a second reading of §7.1.4.1
+   in a language with no enum, and the engine crashes on a token it does not know rather than defaulting. What
+   this zone owes is that the four items reach the other side unchanged and that a caller cannot half-state one.
+   AND ITS ABSENCE IS NOT AN EMPTY VALUE. The CSP list says "there is no container" with an empty SELF-ORIGIN;
+   an embedder policy has no such spelling, because §7.1.7 gives every container one — so a caller with no
+   creator states NEW_EMBEDDER_POLICY, the section's own initial value, in as many words. */
+const NEW_EMBEDDER_POLICY = Object.freeze({ value: "unsafe-none", endpoint: "",
+                                            reportOnlyValue: "unsafe-none", reportOnlyEndpoint: "" });
+
+/* WHOLE OR NOT AT ALL, which is the same rule the CSP list's two halves are held to and for the same reason:
+   §7.1.7's clone moves every item of a container, so half an item is a clone that arrives having silently
+   replaced the creator's answer with the default. */
+function embedderPolicyWhole(e) {
+  return !!e && typeof e.value === "string" && e.value !== "" && typeof e.endpoint === "string" &&
+         typeof e.reportOnlyValue === "string" && e.reportOnlyValue !== "" &&
+         typeof e.reportOnlyEndpoint === "string";
+}
+
 // ---- Engine lifecycle over ONE wasm instance (one document) ----
 /* `docName` is set ONLY for a document another engine CREATED — its name arrived in that engine's
    navigable.create notice, minted there because HTML §4.8.5 creates a child navigable inside the insertion
@@ -815,10 +836,12 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
      exactly how the CHILD's own address came to answer `'self'`. */
   DCHECK(inherited === null ||
          (!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
-          inherited.selfOrigin !== ""),
-         "an instance was started with an inherited policy container that is neither `null` nor a whole CSP " +
-         "list — CSP §2.2 makes a list a struct of policies AND a self-origin, so a half of one is a clone " +
-         "that arrives unable to resolve `'self'` against anything but this document's own address");
+          inherited.selfOrigin !== "" && embedderPolicyWhole(inherited.embedder)),
+         "an instance was started with an inherited policy container that is neither `null` nor a WHOLE one — " +
+         "CSP §2.2 makes a list a struct of policies AND a self-origin, and HTML §7.1.7 makes the container a " +
+         "struct of that list AND §7.1.4's embedder policy, so a half of either is a clone that arrives unable " +
+         "to resolve `'self'` against anything but this document's own address or claiming `unsafe-none` for a " +
+         "creator that opted into cross-origin isolation");
   const cluster = clusterKeyOf(msg);
   /* THE POOL IS THE REGISTER OF WHO HOLDS WHAT, AND ASKING IT IS THE CALLER'S JOB — this asserts they did.
      Every site that builds an instance has already answered "does this agent cluster have one?" (admit's
@@ -1081,9 +1104,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      not part of the response: HTML §7.1.7's clone is what a Document created by a CREATOR gets, and the engine
      is what decides which of the two lists this Document is created with. The empty pair is the positive
      statement that there is no creator, which is what `null` means at this function's own boundary. */
+  /* §7.1.4's ITEM RIDES WITH THE LIST. `null` here is a document with NO CREATOR — a root a content script
+     reported, a rehydrated recipe, §7.3.2.3's swapped-to context — and §7.1.7 gives the container such a
+     Document is created with "a new embedder policy", which NEW_EMBEDDER_POLICY spells rather than a `||`
+     filling in a producer's silence. */
+  const _initEp = inherited ? inherited.embedder : NEW_EMBEDDER_POLICY;
   const _init = await rend.renderer.init(_doc, msg.sourceUrl, eng.docId, _headers, _tlu,
                                          inherited ? inherited.csp : "",
-                                         inherited ? inherited.selfOrigin : "");
+                                         inherited ? inherited.selfOrigin : "",
+                                         _initEp.value, _initEp.endpoint,
+                                         _initEp.reportOnlyValue, _initEp.reportOnlyEndpoint);
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
@@ -1469,7 +1499,7 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited) {
      the pair rather than demanding a self-origin. There is still no `null` arm: engineRoot takes one because
      its callers include a rehydrated recipe that has no message at all, and every caller here has a message. */
   DCHECK(!!inherited && typeof inherited.csp === "string" && typeof inherited.selfOrigin === "string" &&
-         (inherited.selfOrigin !== "" || inherited.csp === ""),
+         (inherited.selfOrigin !== "" || inherited.csp === "") && embedderPolicyWhole(inherited.embedder),
          "a document was joined with a CSP list and no SELF-ORIGIN for it — CSP §2.2 \"Policies\" makes a list " +
          "a struct of policies AND the origin `'self'` resolves against, so a policy with no self-origin is " +
          "half a container and §6.7.2.8 would answer one directive backwards. BOTH EMPTY IS A REAL STATE AND " +
@@ -1482,7 +1512,10 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited) {
          "made this zone invent one");
   const _join = await eng.r.renderer.join(_doc, msg.sourceUrl, docName,
                                           responseFieldLines(msg.responseHeaders), topLevelUrl,
-                                          inherited.csp, inherited.selfOrigin);
+                                          inherited.csp, inherited.selfOrigin,
+                                          inherited.embedder.value, inherited.embedder.endpoint,
+                                          inherited.embedder.reportOnlyValue,
+                                          inherited.embedder.reportOnlyEndpoint);
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
@@ -1781,7 +1814,8 @@ let _nextSwapGroup = 1;
 
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
-   `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <csp>` — the engine has
+   `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <coep> <coepEndpoint>
+   <coepReportOnly> <coepReportOnlyEndpoint> <csp>` — the engine has
    already named the document and
    already handed the page a WindowProxy for it; what is missing is an INSTANCE. This provisions one under that
    name, loading the child's own document through the one safeFetch chokepoint.
@@ -1791,13 +1825,14 @@ let _nextSwapGroup = 1;
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    /* EIGHT FIELDS, because CSP §2.2's SELF-ORIGIN, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are
-       all read below. The count said five once, so a record that stopped at the origin passed the assert and
-       then took `undefined` for the creator's policy clone — a child document judged under NO policy, which is
-       §7.1.7's inheritance silently deleted, and the one field a CSP-blocked sink verdict is decided against.
+    /* TWELVE FIELDS, because CSP §2.2's SELF-ORIGIN, §7.1.4's four EMBEDDER POLICY items, the POLICY and HTML
+       §8.1.3.1's TOP-LEVEL CREATION URL are all read below. The count said five once, so a record that stopped
+       at the origin passed the assert and then took `undefined` for the creator's policy clone — a child
+       document judged under NO policy, which is §7.1.7's inheritance silently deleted, and the one field a
+       CSP-blocked sink verdict is decided against.
        An assert that permits the record it is about to misread is the shape of check that reports green while
        the value is missing, so it counts every field the reader below indexes. */
-    DCHECK(f.length >= 8, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin and policy");
+    DCHECK(f.length >= 12, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     const loaded = await eng.fetchedDocument(f[3]);
     /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
@@ -1856,7 +1891,23 @@ async function hostNotice(eng, line) {
        URL and the self-origin sit before it — an origin's serialization cannot contain a tab. The C router
        already reads it this way — its splitter stops at the policy and keeps the remainder verbatim — and two
        readers of one format that disagree about where a field ends are two formats. */
-    const inherited = { csp: f.slice(7).join("\t"), selfOrigin: f[6] };
+    /* §7.1.4'S FOUR ITEMS SIT BETWEEN THE SELF-ORIGIN AND THE POLICY, for the reason the self-origin sits
+       before the policy: everything that is not the policy comes first, because the policy is the remainder.
+       They are SAFE in split fields and that is the standard's own guarantee — §7.1.4's values are three fixed
+       tokens, and §7.1.4.1 makes `report-to` a structured-field STRING, which RFC 8941 §3.3.3 "Strings" defines
+       as "zero or more printable ASCII characters (i.e., the range %x20 to %x7E)" and notes "excludes tabs,
+       newlines, carriage returns". A raw CSP header may hold a tab; none of these may.
+       RELAYED VERBATIM. This zone does not read the tokens — the engine that receives them is the only party
+       that turns one into a value, and it crashes on one it does not know rather than reading it as the
+       default. See NEW_EMBEDDER_POLICY. */
+    const inherited = { csp: f.slice(11).join("\t"), selfOrigin: f[6],
+                        embedder: { value: f[7], endpoint: f[8],
+                                    reportOnlyValue: f[9], reportOnlyEndpoint: f[10] } };
+    DCHECK(embedderPolicyWhole(inherited.embedder),
+           "a navigable.create notice carried no §7.1.4 EMBEDDER POLICY — navigable.c writes all four of its " +
+           "items on every record because HTML §7.1.7's clone moves a container WHOLE, so a missing one is an " +
+           "engine that stopped writing the field and a child created claiming `unsafe-none` for a creator " +
+           "that opted into cross-origin isolation, with no header on the child's own response to say so");
     DCHECK(typeof inherited.selfOrigin === "string" && inherited.selfOrigin !== "",
            "a navigable.create notice carried no CSP self-origin — navigable.c writes the creator's on every " +
            "record because HTML §7.1.7 clones the container whole and CSP §2.2 makes its list a struct of " +
@@ -2926,7 +2977,11 @@ const _hostOps = {
              "HTML §8.1.3.5 reads it to decide whether this realm is a secure context, so Web IDL §3.3.13's " +
              "members would exist or not by a guess; a top-level traversable's is its own document address, " +
              "which is the one thing every arrival at this zone carries");
-      await engineJoin(swap.cluster, swap.job.msg, swap.docId, _tlu, { csp: "", selfOrigin: "" });
+      /* NO CREATOR, SO NO CONTAINER TO CLONE — §7.3.2.3 creates the swapped-to browsing context "with null,
+         null, and group", and this Document's container comes from its OWN response. The empty CSP pair says
+         that; §7.1.4's item has no empty spelling and so states the section's own new embedder policy. */
+      await engineJoin(swap.cluster, swap.job.msg, swap.docId, _tlu,
+                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY });
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);
       return;
     }

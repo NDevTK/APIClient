@@ -55,27 +55,15 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
 
     out->requests_oac = np_requests_oac(headers, secure_context);
 
-    /* §7.1.4's obtain, which §7.1.7 step 4 makes the policy container's embedder policy. */
+    /* §7.1.4's obtain, which §7.1.7's create-a-policy-container-from-a-fetch-response step 4 makes the policy
+       container's EMBEDDER POLICY item: "if environment is non-null, then set result's embedder policy to the
+       result of obtaining an embedder policy given response and environment".
+       IT IS THE CONTAINER'S ITEM AND THIS STRUCT ONLY CARRIES IT AS FAR AS THE CREATION. Every caller that
+       builds a Document out of these params hands it to serialized_policy_container as the response's own
+       container's item — which is the ONLY thing this value is for, and the reason it is not read anywhere
+       else here: which container a Document is created with is §7.1.7's determine step's answer, and the
+       obtained policy is the candidate that step may or may not pick. */
     embedder_policy_obtain(&out->embedder, headers, secure_context);
-    /* AND HERE IS WHERE IT STOPS, NAMED AT THE RESPONSE THAT NEEDS IT. §7.1.7 puts this on the POLICY
-       CONTAINER, and this build's container holds a CSP list and nothing else.
-       WHAT USED TO BLOCK IT WAS TRAVEL, AND THAT HALF IS BUILT. HTML §7.3.2.1 "Creating browsing contexts"
-       clones the creator's container for a lazily-materialized `about:blank` child, and that clone used to
-       cross its seams as the CSP list's two bare halves — so an item added to the container would have been
-       silently dropped at each of them. Every seam now carries a `SerializedPolicyContainer` (core/frame/
-       policy_container.h), built through one constructor that names every item, so an item added to the
-       container stops every producer compiling until it is stated. What is left is the ITEM: give
-       `PolicyContainer` and its serialization the §7.1.4 field, install it in core/dom/document.c beside the
-       CSP list, and §7.1.4.2's check-a-navigation-response's-adherence-to-its-embedder-policy then has a
-       parent document's embedder policy to read. */
-    DCHECK(!embedder_policy_compatible_with_cross_origin_isolation(out->embedder.value),
-           "this response's `Cross-Origin-Embedder-Policy` is compatible with cross-origin isolation, and "
-           "§7.1.7's policy container has no embedder policy ITEM in this build to hold it — so the Document "
-           "would be created claiming `unsafe-none` for a response that opted into isolation, and every "
-           "cross-origin no-CORS fetch it makes would be judged by the wrong rule. The container TRAVELS as a "
-           "container already (SerializedPolicyContainer, whose one constructor names every item); what is "
-           "owed is the field itself on PolicyContainer and on that serialization, the install beside the CSP "
-           "list in core/dom/document.c, and then §7.1.4.2's embedder policy checks");
 
     /* §7.1.3's obtain, which §7.5.1's creation table gives the Document as its OPENER POLICY row.
        THE ROW HAS A HOME AND THE SWAP HAS A DECISION NOW, which is what used to be missing here — this line
