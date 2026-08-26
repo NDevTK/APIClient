@@ -95,6 +95,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <poll.h>
+#include <errno.h>
 #include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
 #include "core/css/media_query_list.h"
@@ -372,27 +374,6 @@ static void wpt_owe(JSContext *ctx, JSValueConst deliver, JSValueConst value, co
  * exactly what a hosts-file mapping does for a real browser. */
 static char g_server[64];   /* "127.0.0.1:PORT", from the driver */
 
-static int wpt_connect(void)
-{
-    struct sockaddr_in a;
-    char host[64];
-    const char *colon = strchr(g_server, ':');
-    int fd;
-
-    CHECK(colon != NULL, "wpt: the driver did not name a server to serve the corpus from");
-    CHECK((size_t)(colon - g_server) < sizeof host, "wpt: the server address is longer than this runner holds");
-    memcpy(host, g_server, (size_t)(colon - g_server));
-    host[colon - g_server] = 0;
-    fd = socket(AF_INET, SOCK_STREAM, 0);
-    CHECK(fd >= 0, "wpt: no socket to reach the corpus server");
-    memset(&a, 0, sizeof a);
-    a.sin_family = AF_INET;
-    a.sin_port = htons((uint16_t)atoi(colon + 1));
-    a.sin_addr.s_addr = inet_addr(host);
-    if (connect(fd, (struct sockaddr *)&a, sizeof a) < 0) { close(fd); return -1; }
-    return fd;
-}
-
 static void wpt_send_all(int fd, const char *p, size_t n)
 {
     while (n) {
@@ -421,15 +402,112 @@ static char *wpt_computed_type(const HeaderList *rh)
     return out;
 }
 
-/* Perform one request and return its BODY, or NULL. A non-2xx is a NULL body, which is what the delivery turns
-   into `fetch`'s TypeError — the same answer a real network error gives. */
-static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, HeaderList *phdrs)
+/* ---- THE NETWORK EDGE IS A SET OF REQUESTS IN FLIGHT, NEVER A CALL THAT WAITS ---------------------------
+ *
+ * WHAT WAS HERE. One `read(2)` loop per request, run from inside the step loop. The FLOW that issued a fetch
+ * parked correctly — the engine's own register held it — and then this host stood in a blocking read with the
+ * WHOLE FRONTIER behind it: the other timelines of this document, the deliveries a child instance had already
+ * written up its pipe, the due timers, and the very flow whose POST would have satisfied whatever the answer
+ * was waiting on. That is §scheduler's cardinal violation performed by the HOST rather than by the engine — a
+ * wait that runs to completion and cannot be suspended — and where the answer depends on anything this process
+ * would have done next it is a deadlock by construction, because the thread that owes the answer is the thread
+ * that is blocked waiting for it.
+ *
+ * MEASURED, on the live process: `back-forward-cache/events.html` sat in this read for the gate's whole 600 s
+ * wall backstop having consumed 0.00 s of CPU — subtests already reported, frontier frozen mid-poll, the
+ * backtrace `main → wpt_provide_pending → wpt_http → read(3)`. Nine files in `html/browsers` did the same,
+ * which is an hour and a half of every area run spent asleep in one syscall.
+ *
+ * WHAT IT IS NOW. A request is BEGUN and this host returns to the loop; its socket is a row in the table below
+ * and the flow that asked stays parked on the engine's register exactly as it already did. This is the SAME
+ * park, paid the way the extension pays it (engine.h's `qjs_pending` → fetch → `qjs_provide` pair, whose
+ * network side is a Promise and has never blocked a step) — not a second wait primitive beside it. Every slice
+ * boundary drains whatever arrived and delivers it; the flows that can run, run.
+ *
+ * THERE IS NO TIMEOUT, NO POLL BUDGET AND NO RETRY COUNT, and that is not an omission — §NO BOUNDS. A reply
+ * that never comes leaves its flow parked for ever, which is the correct state: the frontier runs everything
+ * else, and the only thing a deadline could do is truncate a reply that was merely slow. Where the frontier
+ * has NOTHING runnable and requests are outstanding, this host has no work of its own left, so it blocks in
+ * `poll` with an INFINITE timeout — a thread with nothing to do is not a bound, and that wait ends the moment
+ * any one of the answers lands. */
+enum { WPT_REQ_CONNECT, WPT_REQ_SEND, WPT_REQ_READ, WPT_REQ_DONE };
+/* WHAT A COMPLETED REQUEST IS DELIVERED AS. The four kinds differ in the ANSWER they build and in whom they
+   hand it to, and in NOTHING else — one HTTP implementation with four consumers, never four network edges.
+   SYNC is the one with no flow behind it: the document this process was started to run, and the external
+   scripts of it, are fetched BEFORE there is a session, so there is nothing to park and nothing to starve. */
+enum { WPT_DELIVER_SYNC, WPT_DELIVER_FETCH, WPT_DELIVER_DOCUMENT, WPT_DELIVER_XHR };
+
+#define WPT_INFLIGHT_MAX 64
+typedef struct {
+    uint64_t seq;              /* stable across the table's compaction — an index is not */
+    int      state, deliver, fd, failed;
+    char    *method, *url;     /* the pair engine_provide is keyed on, and the address an answer reports */
+    uint32_t id;               /* DOCUMENT/XHR: the request id engine_host_answer names */
+    char    *out;              /* the whole request, serialized ONCE at begin so nothing it borrowed has to
+                                  outlive this call — the ownership half of making a call a work item */
+    size_t   out_n, out_off;
+    char    *in;
+    size_t   in_cap, in_n;
+} WptRequest;
+static WptRequest g_inflight[WPT_INFLIGHT_MAX];
+static int g_inflight_n;
+static uint64_t g_inflight_seq;
+
+static WptRequest *wpt_request_find(uint64_t seq)
+{
+    int i;
+    for (i = 0; i < g_inflight_n; i++) if (g_inflight[i].seq == seq) return &g_inflight[i];
+    return NULL;
+}
+
+/* IS THIS QUESTION ALREADY ASKED. The pending registers list an entry until it is ANSWERED, so a host that
+   issued from them at every slice boundary would issue the same request once per slice — a page's one `fetch`
+   becoming an unbounded stream of them. The key is the one the delivery is keyed on, which is why these are
+   two functions and not one: a network park is `(method, url)` (engine.h) and a host request is its id. */
+static bool wpt_request_asked(const char *method, const char *url)
+{
+    int i;
+    for (i = 0; i < g_inflight_n; i++)
+        if (g_inflight[i].deliver == WPT_DELIVER_FETCH &&
+            !strcmp(g_inflight[i].method, method) && !strcmp(g_inflight[i].url, url)) return true;
+    return false;
+}
+
+static bool wpt_request_asked_id(uint32_t id)
+{
+    int i;
+    for (i = 0; i < g_inflight_n; i++)
+        if (g_inflight[i].deliver != WPT_DELIVER_FETCH && g_inflight[i].deliver != WPT_DELIVER_SYNC &&
+            g_inflight[i].id == id) return true;
+    return false;
+}
+
+/* Begin one request against the corpus server and RETURN, whatever stage it reaches. The socket is
+   non-blocking from before the connect, so not one of the three stages below can hold this thread. */
+static uint64_t wpt_request_begin(const FetchRequest *req, int deliver, uint32_t id)
 {
     UrlRecord base, rec;
-    char *path = NULL, *authority = NULL, *head;
-    char *buf = NULL, *body = NULL;
-    size_t cap = 1 << 16, n = 0, hn;
-    int fd, status = 0, i;
+    char *path = NULL, *authority = NULL;
+    struct sockaddr_in a;
+    char host[64];
+    const char *colon = strchr(g_server, ':');
+    WptRequest *r;
+    size_t hn, n;
+    int fd, i;
+
+    CHECK(g_inflight_n < WPT_INFLIGHT_MAX, "wpt: more requests in flight at once than this runner tracks");
+    CHECK(colon != NULL, "wpt: the driver did not name a server to serve the corpus from");
+    CHECK((size_t)(colon - g_server) < sizeof host, "wpt: the server address is longer than this runner holds");
+
+    r = &g_inflight[g_inflight_n++];
+    memset(r, 0, sizeof *r);
+    r->seq = ++g_inflight_seq;
+    r->deliver = deliver;
+    r->id = id;
+    r->fd = -1;
+    r->method = strdup(req->method ? req->method : "GET");
+    r->url = strdup(req->url ? req->url : "");
+    CHECK(r->method && r->url, "wpt: OOM recording a request in flight");
 
     url_record_init(&base);
     url_record_init(&rec);
@@ -447,92 +525,287 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
     }
     url_record_free(&base);
     url_record_free(&rec);
-    if (!path) { free(authority); return NULL; }
-
-    fd = wpt_connect();
-    if (fd < 0) { free(path); free(authority); return NULL; }
+    /* AN ADDRESS THAT DOES NOT PARSE IS A NETWORK ERROR, and it is DELIVERED as one rather than dropped: the
+       flow that asked is parked on this pair, so a silent return would park it for the life of the run. */
+    if (!path) { free(authority); r->failed = 1; r->state = WPT_REQ_DONE; return r->seq; }
 
     hn = strlen(path) + strlen(authority ? authority : "") + 512
-       + (req->headers ? (size_t)req->headers->n * 512 : 0);
-    head = malloc(hn);
-    CHECK(head, "wpt: OOM building a request");
-    n = (size_t)snprintf(head, hn, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n",
+       + (req->headers ? (size_t)req->headers->n * 512 : 0) + (req->body ? req->body_len : 0);
+    r->out = malloc(hn);
+    CHECK(r->out, "wpt: OOM building a request");
+    n = (size_t)snprintf(r->out, hn, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n",
                          req->method ? req->method : "GET", path, authority ? authority : "127.0.0.1");
     for (i = 0; req->headers && i < req->headers->n; i++)
-        n += (size_t)snprintf(head + n, hn - n, "%s: %s\r\n",
+        n += (size_t)snprintf(r->out + n, hn - n, "%s: %s\r\n",
                               req->headers->e[i].name, req->headers->e[i].value);
-    n += (size_t)snprintf(head + n, hn - n, "Content-Length: %zu\r\n\r\n", req->body ? req->body_len : 0);
-    wpt_send_all(fd, head, n);
-    if (req->body && req->body_len) wpt_send_all(fd, req->body, req->body_len);
-    free(head);
+    n += (size_t)snprintf(r->out + n, hn - n, "Content-Length: %zu\r\n\r\n", req->body ? req->body_len : 0);
+    /* `snprintf` ANSWERS THE LENGTH IT WOULD HAVE WRITTEN, so an accumulated `n` that reached the end of the
+       buffer would run PAST it and make every `hn - n` below underflow to a huge size_t. The sizing above is
+       generous; this is what says so where a header list could outgrow it. */
+    CHECK(n < hn, "wpt: a request outgrew the buffer sized for it — the header list is larger than the "
+                  "allowance above, and the writes past this point would be counted against a negative size");
+    if (req->body && req->body_len) { memcpy(r->out + n, req->body, req->body_len); n += req->body_len; }
+    r->out_n = n;
     free(path);
     free(authority);
 
-    buf = malloc(cap);
-    CHECK(buf, "wpt: OOM reading a reply");
-    n = 0;
-    for (;;) {
-        ssize_t got;
-        if (n + 4096 > cap) {
-            char *g = realloc(buf, cap *= 2);
-            CHECK(g, "wpt: OOM growing a reply");
-            buf = g;
-        }
-        got = read(fd, buf + n, cap - n);
-        if (got <= 0) break;
-        n += (size_t)got;
-    }
-    close(fd);
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    CHECK(fd >= 0, "wpt: no socket to reach the corpus server");
+    CHECK(fcntl(fd, F_SETFL, O_NONBLOCK) == 0, "wpt: a corpus connection could not be made non-blocking — the "
+                                               "whole frontier waits behind a socket that can block");
+    memcpy(host, g_server, (size_t)(colon - g_server));
+    host[colon - g_server] = 0;
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)atoi(colon + 1));
+    a.sin_addr.s_addr = inet_addr(host);
+    r->fd = fd;
+    r->state = WPT_REQ_CONNECT;
+    if (connect(fd, (struct sockaddr *)&a, sizeof a) == 0) r->state = WPT_REQ_SEND;
+    else if (errno != EINPROGRESS && errno != EINTR) { r->failed = 1; r->state = WPT_REQ_DONE; }
+    return r->seq;
+}
 
-    /* HTTP/1.1 <status>, then headers, then a blank line. The body is what follows; `Connection: close` is why
-       there is no chunked framing to unpick. */
-    if (n > 12 && !memcmp(buf, "HTTP/1.", 7)) status = atoi(buf + 9);
-    *pstatus = status;
-    {
-        char *sep = memmem(buf, n, "\r\n\r\n", 4);
-        /* THE REPLY'S HEADERS, which were read past and dropped. A page reads them — `r.headers.get(...)` is
-           how it learns a reply's Content-Type — and every one of them answered null. Each line up to the
-           blank one is `name: value`; the status line is skipped because it is not one. */
-        if (sep) {
-            char *line = memchr(buf, '\n', n);
-            while (line && line + 1 < sep) {
-                char *end = memchr(line + 1, '\r', (size_t)(sep - line - 1));
-                char *colon;
-                if (!end) break;
-                *end = 0;
-                colon = strchr(line + 1, ':');
-                if (colon) {
-                    char *v = colon + 1;
-                    *colon = 0;
-                    while (*v == ' ' || *v == '\t') v++;
-                    header_list_append(phdrs, line + 1, v);
+/* Move one request as far as it can go WITHOUT blocking, and no further. */
+static void wpt_request_advance(WptRequest *r)
+{
+    for (;;) {
+        if (r->state == WPT_REQ_CONNECT) {
+            int err = 0;
+            socklen_t el = sizeof err;
+            if (getsockopt(r->fd, SOL_SOCKET, SO_ERROR, &err, &el) < 0 || err) {
+                r->failed = 1; r->state = WPT_REQ_DONE; return;
+            }
+            r->state = WPT_REQ_SEND;
+            continue;
+        }
+        if (r->state == WPT_REQ_SEND) {
+            while (r->out_off < r->out_n) {
+                ssize_t w = write(r->fd, r->out + r->out_off, r->out_n - r->out_off);
+                if (w < 0 && errno == EINTR) continue;
+                if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+                if (w <= 0) { r->failed = 1; r->state = WPT_REQ_DONE; return; }
+                r->out_off += (size_t)w;
+            }
+            r->state = WPT_REQ_READ;
+            continue;
+        }
+        if (r->state == WPT_REQ_READ) {
+            for (;;) {
+                ssize_t got;
+                if (r->in_n + 4096 > r->in_cap) {
+                    size_t want = r->in_cap ? r->in_cap * 2 : (size_t)1 << 16;
+                    char *g = realloc(r->in, want);
+                    CHECK(g, "wpt: OOM growing a reply");
+                    r->in = g;
+                    r->in_cap = want;
                 }
-                line = end + 1;
+                got = read(r->fd, r->in + r->in_n, r->in_cap - r->in_n);
+                if (got < 0 && errno == EINTR) continue;
+                if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+                /* EOF ENDS THE BODY, which is what `Connection: close` above is for: there is no chunked
+                   framing to unpick and no length to trust. An error is the same end with no bytes. */
+                if (got < 0) { r->failed = 1; r->state = WPT_REQ_DONE; return; }
+                if (got == 0) { r->state = WPT_REQ_DONE; return; }
+                r->in_n += (size_t)got;
             }
         }
-        /* THE BODY OF EVERY RESPONSE, NOT ONLY A 2xx ONE. Fetch rejects a promise for a NETWORK ERROR and for
-           nothing else — a 404 RESOLVES, with `ok` false and the server's error page as the body — so cutting
-           the body off at the status made `fetch("/missing")` reject where the standard resolves. XHR is what
-           made it impossible to ignore: `status` and `responseText` on a 404 are exactly what half of
-           xhr/ asserts, and there is no second helper to give them to. A reply with no header terminator at
-           all is still the network error it always was. */
-        if (sep) {
-            size_t off = (size_t)(sep - buf) + 4;
-            *plen = n - off;
-            body = malloc(*plen + 1);
-            CHECK(body, "wpt: OOM copying a reply body");
-            memcpy(body, buf + off, *plen);
-            body[*plen] = 0;
+        return;
+    }
+}
+
+/* HTTP/1.1 <status>, then headers, then a blank line. The body is what follows. `buf` is modified in place.
+   NULL when there is no header terminator at all, which is the network error it always was. */
+static char *wpt_response_split(char *buf, size_t n, int *pstatus, HeaderList *phdrs, size_t *plen)
+{
+    char *sep, *body = NULL;
+
+    /* A CONNECTION THAT CLOSED WITH NOTHING ON IT is the network error a peer that hung up gives, and it
+       arrives here as no buffer at all rather than as an empty one — `memmem` over a NULL is not a search. */
+    *pstatus = 0;
+    if (!buf || !n) return NULL;
+    if (n > 12 && !memcmp(buf, "HTTP/1.", 7)) *pstatus = atoi(buf + 9);
+    sep = memmem(buf, n, "\r\n\r\n", 4);
+    if (!sep) return NULL;
+    /* THE REPLY'S HEADERS. A page reads them — `r.headers.get(...)` is how it learns a reply's Content-Type.
+       Each line up to the blank one is `name: value`; the status line is skipped because it is not one. */
+    if (phdrs) {
+        char *line = memchr(buf, '\n', n);
+        while (line && line + 1 < sep) {
+            char *end = memchr(line + 1, '\r', (size_t)(sep - line - 1));
+            char *colon;
+            if (!end) break;
+            *end = 0;
+            colon = strchr(line + 1, ':');
+            if (colon) {
+                char *v = colon + 1;
+                *colon = 0;
+                while (*v == ' ' || *v == '\t') v++;
+                header_list_append(phdrs, line + 1, v);
+            }
+            line = end + 1;
         }
     }
-    free(buf);
+    /* THE BODY OF EVERY RESPONSE, NOT ONLY A 2xx ONE. Fetch rejects a promise for a NETWORK ERROR and for
+       nothing else — a 404 RESOLVES, with `ok` false and the server's error page as the body — so cutting the
+       body off at the status made `fetch("/missing")` reject where the standard resolves. XHR is what made it
+       impossible to ignore: `status` and `responseText` on a 404 are exactly what half of xhr/ asserts. */
+    {
+        size_t off = (size_t)(sep - buf) + 4;
+        *plen = n - off;
+        body = malloc(*plen + 1);
+        CHECK(body, "wpt: OOM copying a reply body");
+        memcpy(body, buf + off, *plen);
+        body[*plen] = 0;
+    }
     return body;
 }
 
-/* ANSWER EVERY REPLY THE FRONTIER IS PARKED ON — the host's half of one slice boundary, and it is the same
- * operation the extension's `qjs_pending`/`qjs_provide` pair performs: read what the flows are waiting for,
- * fetch it, and deliver it onto the register of every flow that named it. Returns how many entries were
- * filled, which is what tells a stall that could not be answered from one that was.
+static void wpt_request_release(int i)
+{
+    WptRequest *r = &g_inflight[i];
+    if (r->fd >= 0) close(r->fd);
+    free(r->method); free(r->url); free(r->out); free(r->in);
+    g_inflight[i] = g_inflight[--g_inflight_n];
+}
+
+/* THE REQUESTS STILL OUTSTANDING WHEN THE RUN ENDS — each one a flow that parked and never resumed, which the
+   frontier's own teardown asserts about from the other end. Released here because a socket is not in the
+   runtime's heap and no gc walk can see it. */
+static void wpt_net_free(void)
+{
+    while (g_inflight_n) wpt_request_release(g_inflight_n - 1);
+}
+
+/* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no redirect, so
+   the list is the one URL it was asked for — which is what makes `response.url` the address the test fetched
+   and `response.redirected` false, both computed rather than declared. */
+static JSValue wpt_reply_value(JSContext *ctx, WptRequest *r, int status, HeaderList *rh,
+                               char *body, size_t len)
+{
+    char *cty = wpt_computed_type(rh);
+    const char *url = r->url;
+    JSValue v = body ? fetch_reply_new(ctx, status, "", rh, body, len, &url, 1, cty) : JS_NULL;
+    free(cty);
+    return v;
+}
+
+/* ONE COMPLETED REQUEST, HANDED TO WHOEVER PARKED ON IT. Answers how many registers it filled, which is what
+   tells a stall this host answered from one it could not. */
+static int wpt_request_finish(JSContext *ctx, WptRequest *r)
+{
+    HeaderList rh = { 0 };
+    size_t len = 0;
+    int status = 0, filled = 0, i;
+    char *body = r->failed ? NULL : wpt_response_split(r->in, r->in_n, &status, &rh, &len);
+
+    DCHECK(ctx != NULL, "a reply completed for a flow before this host had a realm to deliver it into — only "
+                        "the pre-session loads run without one, and none of them is delivered");
+    if (r->deliver == WPT_DELIVER_DOCUMENT) {
+        /* THE ANSWER IS `{body, headers}`: a navigated Document is created from THIS response, so everything
+           §7.5.1 reads off a header list belongs in it. The block is the same field-line form qjs_init takes,
+           serialized by the component that parses it so the two cannot disagree.
+           §2.2.5's BODY IS A BYTE SEQUENCE and this answer carries one as one — `JS_NewStringLen` would be
+           quickjs's own UTF-8 decode, run by the zone that FETCHED on bytes HTML's encoding sniffing has not
+           looked at yet. */
+        JSValue v = JS_NewObject(ctx);
+        char *field_lines = header_list_field_lines(&rh);
+        JS_SetPropertyStr(ctx, v, "body",
+                          body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
+        JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
+        free(field_lines);
+        /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
+           program, and a load that did not load is `{body: null}` rather than a throw. */
+        engine_host_answer(ctx, r->id, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
+        JS_FreeValue(ctx, v);
+        filled = 1;
+    } else {
+        JSValue reply = wpt_reply_value(ctx, r, status, &rh, body, len);
+        if (r->deliver == WPT_DELIVER_XHR) {
+            /* Also the host's own — XHR §3.5.6's fetch, answered out of the network; a network error is a
+               reply that component reads, never a thrown value. */
+            engine_host_answer(ctx, r->id, NULL, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
+            filled = 1;
+        } else {
+            filled = engine_provide(ctx, r->method, r->url, reply);
+            /* THE REQUEST RECORD THIS ANSWERED, released only now: it holds the body and headers that made
+               the question, and a second flow parking the same pair before the answer landed is the case its
+               own DCHECK is there to catch. */
+            for (i = 0; i < g_owed_n; i++)
+                if (!strcmp(g_owed[i].url, r->url) && !strcmp(g_owed[i].method, r->method)) {
+                    wpt_owed_forget(i);
+                    break;
+                }
+        }
+        JS_FreeValue(ctx, reply);
+    }
+    header_list_free(&rh);
+    free(body);
+    return filled;
+}
+
+/* THE HOST'S HALF OF ONE SLICE BOUNDARY: move every outstanding request as far as it goes, deliver the ones
+   that finished, and answer how many registers that filled.
+   `block` is asked ONLY where the frontier has nothing runnable and this host has nothing else to pay — see
+   the loop in main. It is an INFINITE poll and never a deadline: §NO BOUNDS. */
+static int wpt_net_pump(JSContext *ctx, int block)
+{
+    struct pollfd pfd[WPT_INFLIGHT_MAX];
+    int map[WPT_INFLIGHT_MAX];
+    int nf = 0, i, delivered = 0;
+
+    for (i = 0; i < g_inflight_n; i++) {
+        if (g_inflight[i].state == WPT_REQ_DONE) continue;
+        pfd[nf].fd = g_inflight[i].fd;
+        pfd[nf].events = (short)(g_inflight[i].state == WPT_REQ_READ ? POLLIN : POLLOUT);
+        pfd[nf].revents = 0;
+        map[nf++] = i;
+    }
+    DCHECK(!block || nf > 0, "this host was asked to WAIT with nothing in flight to wait for — a poll with no "
+                             "descriptors and an infinite timeout is a hang, and the caller that asked for it "
+                             "believes an answer is coming that nobody is going to send");
+    if (nf) {
+        int rc = poll(pfd, (nfds_t)nf, block ? -1 : 0);
+        CHECK(rc >= 0 || errno == EINTR, "wpt: poll over the corpus connections failed");
+        for (i = 0; i < nf; i++) if (pfd[i].revents) wpt_request_advance(&g_inflight[map[i]]);
+    }
+    for (i = 0; i < g_inflight_n; ) {
+        if (g_inflight[i].state != WPT_REQ_DONE || g_inflight[i].deliver == WPT_DELIVER_SYNC) { i++; continue; }
+        delivered += wpt_request_finish(ctx, &g_inflight[i]);
+        wpt_request_release(i);
+    }
+    return delivered;
+}
+
+/* Perform one request and return its BODY, or NULL — THE ONE WAIT LEFT IN THIS FILE, and it is not the one
+   that was deleted. It is reachable only BEFORE the session exists: the document this process was started to
+   run, and the external scripts of it. There is no flow to park, no frontier to starve and nothing else this
+   thread could be doing, so waiting is the whole of the work. It is the SAME request machine as everything
+   above — one HTTP implementation, entered here in "wait for this one" mode rather than a second one kept
+   beside it. A non-2xx is a body like any other; a NULL body is what the delivery turns into `fetch`'s
+   TypeError, the same answer a real network error gives. */
+static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, HeaderList *phdrs)
+{
+    uint64_t seq = wpt_request_begin(req, WPT_DELIVER_SYNC, 0);
+    WptRequest *r;
+    char *body;
+    int i;
+
+    while ((r = wpt_request_find(seq)) != NULL && r->state != WPT_REQ_DONE) wpt_net_pump(NULL, /*block*/1);
+    r = wpt_request_find(seq);
+    DCHECK(r != NULL, "the pre-session load this host was waiting for was released by the pump — a SYNC "
+                      "request has no register to deliver into and must be reaped by the caller that made it");
+    *pstatus = 0;
+    body = r->failed ? NULL : wpt_response_split(r->in, r->in_n, pstatus, phdrs, plen);
+    for (i = 0; i < g_inflight_n; i++) if (g_inflight[i].seq == seq) { wpt_request_release(i); break; }
+    return body;
+}
+
+/* ISSUE EVERY REPLY THE FRONTIER IS PARKED ON — the host's half of one slice boundary, and it is the same
+ * operation the extension's `qjs_pending`/`qjs_provide` pair performs: read what the flows are waiting for and
+ * ASK for it. It does not wait, and that is the whole of the change: the answer arrives at wpt_net_pump, on
+ * whichever later slice boundary the bytes land, exactly as the extension's reply arrives when its Promise
+ * settles. Returns how many requests it started, which is progress this host made and therefore not a stall.
  *
  * IT DOES NOT ENTER JS. The delivery used to be `JS_CallAsFlow(deliver, reply)` out of the host's own time —
  * a call root outside any scheduled flow, settling a promise whose reactions then belonged to whichever flow
@@ -545,32 +818,31 @@ static char *wpt_http(const FetchRequest *req, size_t *plen, int *pstatus, Heade
  * defaulted to "GET" here, which was true and was still the wrong shape: the engine states the method at each
  * of those parks (engine.c) and the join carries it, so nothing on this side has to know which kind of park a
  * line came from. What the missing record does mean is that there are no headers and no body to re-send. */
-static int wpt_provide_pending(JSContext *ctx)
+static int wpt_issue_pending(void)
 {
     char *list, *p;
-    int filled = 0;
+    int issued = 0;
 
     if (!*engine_pending_fetches()) return 0;
-    /* THE LIST IS COPIED BEFORE IT IS WALKED: engine_pending_fetches answers out of one buffer it reuses, and the
-       provide below re-enters the engine. */
+    /* THE LIST IS COPIED BEFORE IT IS WALKED: engine_pending_fetches answers out of one buffer it reuses. */
     list = strdup(engine_pending_fetches());
     CHECK(list != NULL, "wpt: OOM copying the frontier's pending list");
     for (p = list; *p; ) {
         char *end = strchr(p, '\n');
         const char *method, *url;
         FetchRequest req;
-        HeaderList rh = { 0 };
         HeaderList none = { 0 };
-        size_t len = 0;
-        int status = 0, i, rec = -1;
-        char *body;
-        JSValue reply;
+        int i, rec = -1;
 
         if (!end) break;
         *end = 0;
         /* SPLIT WHERE IT WAS JOINED, by the engine's own splitter — three hosts each finding the TAB for
            themselves is three places for the grammar to drift. */
         engine_pending_split(p, &method, &url);
+        /* AN ENTRY STAYS LISTED UNTIL IT IS ANSWERED, and this host now visits the list at every slice rather
+           than once per answer — so without this the page's one `fetch` would become one REQUEST PER SLICE at
+           the server, which is a different question asked repeatedly rather than the one the flow parked on. */
+        if (wpt_request_asked(method, url)) { p = end + 1; continue; }
         for (i = 0; i < g_owed_n; i++)
             if (!strcmp(g_owed[i].url, url) && !strcmp(g_owed[i].method, method)) { rec = i; break; }
         req.method = method;
@@ -578,24 +850,12 @@ static int wpt_provide_pending(JSContext *ctx)
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;
-        body = wpt_http(&req, &len, &status, &rh);
-        /* §4.1's clone of the REQUEST's URL list. This runner serves the checked-out corpus and follows no
-           redirect, so the list is the one URL it was asked for — which is what makes `response.url` the
-           address the test fetched and `response.redirected` false, both computed rather than declared. */
-        {
-            char *cty = wpt_computed_type(&rh);
-            reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1, cty) : JS_NULL;
-            free(cty);
-        }
-        filled += engine_provide(ctx, method, url, reply);
-        JS_FreeValue(ctx, reply);
-        header_list_free(&rh);
-        free(body);
-        if (rec >= 0) wpt_owed_forget(rec);
+        wpt_request_begin(&req, WPT_DELIVER_FETCH, 0);
+        issued++;
         p = end + 1;
     }
     free(list);
-    return filled;
+    return issued;
 }
 
 /* THE HOST'S HALF, pumped between resumes.
@@ -992,37 +1252,27 @@ static bool wpt_answer_host_requests(JSContext *ctx)
            agent. `{body, csp}` is ONE answer because a policy is a property of THE RESPONSE; a body of null is
            a fetch that did not load, which is still a document the navigable gets. */
         else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
-            char *field_lines, *body;
-            HeaderList h;
-            size_t len = 0;
-            JSValue v = JS_NewObject(ctx);
+            FetchRequest req;
+            HeaderList none = { 0 };
 
             DCHECK(n < sizeof op, "a document address outgrew this runner's request buffer — truncating it "
                                   "would GET a different URL and skipping it parks the loading flow forever, "
                                   "so the buffer is what has to grow");
             memcpy(op, tab + 1, n); op[n] = 0;
-            body = wpt_get_headers(strchr(op, '\t') + 1, &len, &h);
-            /* THE ANSWER IS `{body, headers}`: a navigated Document is created from THIS response, so
-               everything §7.5.1 reads off a header list belongs in it. It used to be `{body, csp}` — one field
-               narrowed out of the list by this runner — which is why §7.1.3's opener policy and §7.1.4's
-               embedder policy could not be obtained for one at all. The block is the same field-line form
-               qjs_init takes, serialized by the component that parses it so the two cannot disagree. */
-            field_lines = header_list_field_lines(&h);
-            header_list_free(&h);
-            /* §2.2.5's BODY IS A BYTE SEQUENCE, and this answer carries one as one. It was
-               `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so a corpus document served in any
-               other encoding reached lexbor already replaced with U+FFFD — a decode run by the zone that
-               FETCHED, on bytes HTML's own encoding sniffing had not looked at yet. */
-            JS_SetPropertyStr(ctx, v, "body",
-                              body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
-            JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));
-            free(body);
-            free(field_lines);
-            /* THE HOST'S OWN ANSWER, so a NORMAL completion: this zone fetched bytes, it did not run a peer's
-               program, and a load that did not load is `{body: null}` rather than a throw. */
-            engine_host_answer(ctx, id, NULL, v, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
-            answered = true;
-            JS_FreeValue(ctx, v);
+            /* ASKED, NOT AWAITED — and this is the site where the difference is a DEADLOCK rather than a
+               delay: §7.4 step 14 loads a document whose own instance this process has yet to fork, so a host
+               that stood in the read could not spawn it, could not route to it, and could not run the flow
+               that would. The answer is built at the completion (wpt_request_finish's DOCUMENT arm), which is
+               where the response's header list and its bytes arrive together. */
+            if (!wpt_request_asked_id(id)) {
+                req.method = "GET";
+                req.url = strchr(op, '\t') + 1;
+                req.headers = &none;
+                req.body = NULL;
+                req.body_len = 0;
+                wpt_request_begin(&req, WPT_DELIVER_DOCUMENT, id);
+                answered = true;
+            }
         }
         /* XHR §3.5.6's FETCH, which this runner answers with the same HTTP it answers every other request
            with. The record crosses as JSON because it carries a method, a header list and a body — a
@@ -1030,17 +1280,17 @@ static bool wpt_answer_host_requests(JSContext *ctx)
            IT IS ANSWERED HERE AND NOT ROUTED TO A PEER: an XMLHttpRequest belongs to the instance that made
            it, and the trusted zone's job for one is the network, not the routing. */
         else if (!strncmp(tab + 1, "xhr.send\t", 9)) {
-            char *line = malloc(n + 1);
-            JSValue rec, mv, uv, hv, bv, reply;
+            char *line;
+            JSValue rec, mv, uv, hv, bv;
             const char *method, *url, *bodys = NULL;
             size_t blen = 0;
-            HeaderList hdrs = { 0 }, rh = { 0 };
+            HeaderList hdrs = { 0 };
             FetchRequest req;
             uint32_t hn = 0, hi;
-            char *body;
-            size_t len = 0;
-            int status = 0;
 
+            /* THE REGISTER LISTS THIS UNTIL IT IS ANSWERED — see wpt_issue_pending's own guard. */
+            if (wpt_request_asked_id(id)) { p = end + 1; continue; }
+            line = malloc(n + 1);
             CHECK(line != NULL, "wpt: OOM reading an XMLHttpRequest's request record");
             memcpy(line, tab + 1, n); line[n] = 0;
             rec = JS_ParseJSON(ctx, line + 9, strlen(line + 9), "<xhr.send>");
@@ -1073,21 +1323,12 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             req.headers = &hdrs;
             req.body = bodys;
             req.body_len = blen;
-            body = wpt_http(&req, &len, &status, &rh);
-            /* §4.1's clone of the REQUEST's URL list — see the fetch drain above; XHR's `responseURL` is the
-               same fact and comes from the same place. */
-            {
-                char *cty = wpt_computed_type(&rh);
-                reply = body ? fetch_reply_new(ctx, status, "", &rh, body, len, &req.url, 1, cty) : JS_NULL;
-                free(cty);
-            }
-            /* Also the host's own — §3.5.6's fetch, answered out of the network; a network error is a reply
-               this component reads, never a thrown value. */
-            engine_host_answer(ctx, id, NULL, reply, ENGINE_COMPLETION_NORMAL, ENGINE_ANSWER_HOST);
+            /* ASKED, NOT AWAITED. `xml_http_request.c` calls this park "the one rendezvous in this engine that
+               BLOCKS a flow" — and blocking the FLOW is the design; blocking the THREAD it shares with every
+               other flow of the document was this host's own addition. The whole request is serialized into
+               the record before this returns, so nothing it borrowed here has to outlive the call. */
+            wpt_request_begin(&req, WPT_DELIVER_XHR, id);
             answered = true;
-            JS_FreeValue(ctx, reply);
-            free(body);
-            header_list_free(&rh);
             header_list_free(&hdrs);
             if (method) JS_FreeCString(ctx, method);
             if (url) JS_FreeCString(ctx, url);
@@ -1095,8 +1336,20 @@ static bool wpt_answer_host_requests(JSContext *ctx)
             JS_FreeValue(ctx, mv); JS_FreeValue(ctx, uv); JS_FreeValue(ctx, hv); JS_FreeValue(ctx, bv);
             JS_FreeValue(ctx, rec);
         }
-        /* An operation this harness does not route is left UNANSWERED rather than guessed: the asking flow
-           stays parked, which is visible, where a wrong answer is not. */
+        /* AN OPERATION THIS HOST DOES NOT ROUTE IS A FLOW PARKED ON AN ANSWER NOBODY CAN SEND, and it CRASHES
+           here rather than being left for the frontier to discover.
+           It used to be left unanswered "because the asking flow stays parked, which is visible, where a wrong
+           answer is not". The second half is right and the first half was false: what it was visible AS is a
+           file that reports nothing and is killed at the gate's wall backstop ten minutes later, with the
+           runner asleep and the op that caused it named nowhere. A missing route is a capability this host has
+           not built — §Offensive programming's second kind — so it says which one, at the line that met it.
+           Every op the engine raises today is routed above (windowproxy.get, object.*, document.fetch,
+           xhr.send), so this cannot fire for anything that exists; it fires for the next one added. */
+        else {
+            DFAIL("a cross-agent operation reached this host under a verb it does not route — the flow that "
+                  "asked is parked on an answer nothing in this process will ever produce. Route it beside "
+                  "the four above, or state why this host is not the zone that answers it");
+        }
         p = end + 1;
     }
     return answered;
@@ -1743,13 +1996,21 @@ static void wpt_child_run(JSContext *ctx, const char *token)
 {
     for (;;) {
         int r = engine_sched_step();
+        int did;
         wpt_child_emit_notices(token);
         if (r == ENGINE_STEP_YIELD) continue;
         /* AND WHAT THIS HOST OWES, at the same boundary and for the same reason the top-level half pays it
            there: a child document fetches too (its own `<script src>` aside, its scripts call `fetch`), and a
            reply nobody supplies is a timeline parked for the life of the instance. A stall this fills is not a
            stall — the frontier has work again. */
-        if (wpt_provide_pending(ctx) > 0) continue;
+        did = wpt_issue_pending();
+        if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
+        if (did) continue;
+        /* NOTHING RUNNABLE AND NOTHING FILLED. If an answer is on its way this instance waits for it — and it
+           waits in the POLL rather than in a read, so the wait ends at whichever request lands first instead
+           of at the one that happened to be issued first. With nothing in flight there is nothing to wait for
+           and this is the stall the parent's next question resumes. */
+        if (g_inflight_n) { wpt_net_pump(ctx, /*block*/1); continue; }
         DCHECK(r == ENGINE_STEP_STALLED,
                "the scheduler declared this instance's frontier EXHAUSTED — a document another agent holds a "
                "reference into has no such state, so either engine_set_referenced was not set for it or the "
@@ -1927,6 +2188,7 @@ static int wpt_child_main(int argc, char **argv)
         fflush(stdout);
         free(answer);
     }
+    wpt_net_free();
     return 0;
 }
 
@@ -2109,18 +2371,26 @@ int main(int argc, char **argv)
            document announced but not yet provisioned is one a read would arrive for before its instance
            exists. */
         did = wpt_answer_host_requests(ctx);
-        if (wpt_provide_pending(ctx) > 0) did = 1;
+        if (wpt_issue_pending() > 0) did = 1;
+        if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
         if (r == ENGINE_STEP_DONE) break;
-        if (r == ENGINE_STEP_STALLED) {
-            /* THE TWO ANSWERS ABOUT ONE QUESTION MUST AGREE. The scheduler stalls because engine_host_owes
-               found something outstanding; if the very next thing this host does is fill NOTHING,
-               the two disagree and the frontier is parked on something that is never coming — a spin, not a
-               wait. In release there is nothing to fix it with, so the run ends with the flows parked and the
-               teardown names what was dropped. */
-            DCHECK(did, "the frontier stalled on work this host says it owes and then filled NOTHING — the "
-                        "stall hook and the provide edge are two answers to one question and they disagree, "
-                        "so the flows parked here are waiting for a reply nobody is going to send");
-            if (!did) break;
+        if (r == ENGINE_STEP_STALLED && !did) {
+            /* NOTHING RUNNABLE, AND THIS HOST FILLED NOTHING — which is a WAIT if an answer is on its way and
+               a DISAGREEMENT if one is not, and those were the same line until the network edge could tell
+               them apart. A request in flight means the frontier is parked on the network, which is the
+               ordinary state of a browser: this host has no work of its own left, so it sleeps in the poll
+               until one of the answers lands and then re-ranks. NO TIMEOUT — §NO BOUNDS: a reply that never
+               comes leaves its flow parked, and a deadline could only truncate one that was merely slow.
+               THE TWO ANSWERS ABOUT ONE QUESTION MUST AGREE. With nothing in flight, the scheduler says it is
+               owed something and this host says it owes nothing, so the flows parked here are waiting for a
+               reply nobody is going to send. In release there is nothing to fix it with, so the run ends with
+               the flows parked and the teardown names what was dropped. */
+            DCHECK(g_inflight_n > 0,
+                   "the frontier stalled on work this host says it owes, this host filled NOTHING, and it has "
+                   "NOTHING IN FLIGHT — the stall hook and the network edge are two answers to one question "
+                   "and they disagree, so the flows parked here are waiting for a reply nobody will send");
+            if (!g_inflight_n) break;
+            wpt_net_pump(ctx, /*block*/1);
         }
     }
 
@@ -2136,6 +2406,7 @@ int main(int argc, char **argv)
         free(g_prog_srcs);
         free(g_prog_types);
         while (g_owed_n) wpt_owed_forget(g_owed_n - 1);
+        wpt_net_free();
     }
 
     /* THE PLATFORM'S OWN LIST, UNDONE — see main.c's teardown: one call, whatever this browser declared. */
