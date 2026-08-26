@@ -37,12 +37,23 @@ JSValue storage_shed_backing_map(JSContext *ctx, JSValueConst proxy_map);
    caller: the quota is what makes "cannot be stored" a computed fact rather than a shrug. */
 double storage_shed_quota(JSContext *ctx, JSValueConst proxy_map);
 
-/* HOW MANY OTHER PROXY MAPS ARE IN THIS BOTTLE'S §4.6 PROXY MAP REFERENCE SET.
- * HTML §12.2.1's broadcast step 3 collects "all Storage objects excluding storage whose type is storage's type
- * and whose relevant settings object's origin is same origin with storage's". In an ORIGIN-KEYED AGENT CLUSTER
- * (CLAUDE.md §Security) there is one storage key per instance and therefore one bottle per (type, identifier),
- * so every same-origin Storage of that type holds a proxy map over THIS bottle and the intersection step 3
- * describes IS this set. Zero means the broadcast has nothing to fire at. */
-int storage_shed_other_proxy_maps(JSContext *ctx, JSValueConst proxy_map);
+/* WHICH Storage OBJECT THIS PROXY MAP STANDS FOR. §4.6 mints one proxy map per obtain and HTML §12.2.2/§12.2.3
+   wrap exactly one Storage around each, so the reference set and the set of Storage objects are the same set
+   counted from two ends — and this is the link between them. Written once, by the mint, before the object is
+   reachable; asserted to be written once, because two Storages over one proxy map would make §12.2.1's
+   broadcast fire twice at one document. */
+void storage_shed_proxy_map_bind(JSContext *ctx, JSValueConst proxy_map, JSValueConst storage);
+
+/* HTML §12.2.1's broadcast STEP 3 — "let remoteStorages be all Storage objects EXCLUDING storage whose type is
+ * storage's type and whose relevant settings object's origin is same origin with storage's" (and, for
+ * "session", whose traversable is this one) — as a JS Array of those Storage objects, in reference-set order.
+ *
+ * IT IS THIS BOTTLE'S §4.6 PROXY MAP REFERENCE SET MINUS THIS MAP, because in an ORIGIN-KEYED AGENT CLUSTER
+ * (CLAUDE.md §Security) there is one storage key per instance and therefore one bottle per (type, identifier):
+ * every same-origin Storage of that type holds a proxy map over THIS bottle, so the intersection step 3
+ * describes IS this set and "excluding storage" is this object's own map, excluded here by identity. An EMPTY
+ * array is the ordinary case — one document, one holder, one proxy map — and step 4 over it is a step with
+ * nothing to do rather than an absence to guard against. OWNED. */
+JSValue storage_shed_other_storages(JSContext *ctx, JSValueConst proxy_map);
 
 #endif

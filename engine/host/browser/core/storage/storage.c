@@ -44,6 +44,10 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/agent_state.h"
+#include "core/dom/document.h"
+#include "core/dom/node.h"
+#include "core/events/event_target.h"
+#include "core/events/storage_event.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
@@ -111,6 +115,22 @@ static JSValue st_map(JSContext *ctx, JSValueConst slots)
 }
 
 bool storage_is(JSValueConst v) { return g_ready && JS_GetClassID(v) == g_class; }
+
+JSClassID storage_class_id(void) { return g_ready ? g_class : 0; }
+
+/* §12.2.1 step 1's "storage's relevant global object's associated Document", as the `document` object of the
+   realm this Storage was minted in. It is a SLOT rather than a lookup because a Storage outlives the member
+   call that made it and is reached from a broadcast running in ANOTHER realm: js_call_c_function takes `ctx`
+   from the function object, so asking the running realm would name the broadcaster's document for every remote
+   Storage in the set — which is both the wrong URL (step 2) and the wrong realm to fire in (step 4). OWNED. */
+static JSValue st_document(JSContext *ctx, JSValueConst slots)
+{
+    JSValue doc = JS_GetPropertyStr(ctx, slots, "document");
+
+    DCHECK(JS_IsObject(doc), "a Storage object carries no Document — storage_new places it before the object is "
+                             "reachable, and §12.2.1's broadcast reads both its URL and its realm off it");
+    return doc;
+}
 
 /* ---- keys, values and their sizes ------------------------------------------------------------------------ */
 
@@ -187,26 +207,91 @@ static void st_reorder(JSContext *ctx, JSValueConst self) { (void)ctx; (void)sel
  * and step 4 queues a global task on the DOM manipulation task source at each of their globals to fire a
  * `storage` event using StorageEvent.
  *
- * STEP 3 IS ANSWERED BY THE BOTTLE'S §4.6 PROXY MAP REFERENCE SET, which is the same set by construction: an
- * instance is an ORIGIN-KEYED AGENT CLUSTER, so every same-origin Storage of one type holds a proxy map over
- * the ONE bottle for that (type, identifier), and "excluding storage" is this object's own map. Empty is the
- * ordinary case — one document, one holder, one proxy map — and step 4 over an empty set is a step with
- * nothing to do, which is why the early return below is the algorithm rather than a guard past it. */
-static void st_broadcast(JSContext *ctx, JSValueConst slots)
+ * STEP 3 IS ANSWERED BY THE BOTTLE'S §4.6 PROXY MAP REFERENCE SET, which is the same set by construction, and
+ * each of its three conditions is met by a different part of that construction rather than tested here. TYPE:
+ * a bottle belongs to exactly one (type, identifier), so every proxy map in this set stands for a Storage of
+ * this Storage's type — asserted below, because a set holding two types would silently deliver a localStorage
+ * write into a sessionStorage listener. SAME ORIGIN: an instance is an ORIGIN-KEYED AGENT CLUSTER
+ * (CLAUDE.md §Security), so every environment reaching this shed keys the one storage key
+ * obtain_storage_key asserts. THE TRAVERSABLE, for "session": storage_shed.c builds the agent's ROOT
+ * traversable's session shed and crashes at the obtain for any other, so a session bottle's set spans one
+ * traversable by the same construction. "EXCLUDING STORAGE" is this object's own proxy map, which is the one
+ * thing that IS tested — by identity, in the shed, where the set lives.
+ *
+ * STEP 4's TASK SOURCE IS event_target_fire — core/events/event_target.h's queued reach, which is for "a caller
+ * whose spec says QUEUE a task … to fire an event named X" and for no other, and which is what
+ * core/frame/session_history.c uses for §7.4.6.2's hashchange on this same DOM manipulation task source. It is
+ * enqueued in the TARGET's realm, which is what §8.1.7.2 "Queuing tasks"' queue-a-global-task says
+ * ("let document be global's associated Document … queue a task given source, event loop, document, and
+ * steps"): the task belongs to the receiving document, so HTML §7.5.10's step 7 removal of a destroyed
+ * document's tasks reaches it, which it would not if the broadcaster had queued it in its own.
+ *
+ * A TARGET THAT IS NOT FULLY ACTIVE IS NOT AN ERROR HERE, and §12.2.1 says so in its own words: "The Document
+ * object associated with the resulting task is not necessarily fully active, but events fired on such objects
+ * are ignored by the event loop until the Document becomes fully active again." So the queue is unconditional
+ * and the waiting is §8.1.7.3 "Processing model" step 1's runnable-task condition, which is the event loop's
+ * and not this algorithm's. */
+static void st_broadcast(JSContext *ctx, JSValueConst self, JSValueConst slots, JSValueConst key,
+                         JSValueConst old_value, JSValueConst new_value)
 {
     JSValue pm = JS_GetPropertyStr(ctx, slots, "proxyMap");
-    int others;
+    JSValue doc = st_document(ctx, slots);
+    JSValue others, type;
+    const char *url;
+    uint32_t n = 0, i;
 
+    (void)self;   /* the exclusion below is an assert's, and an assert is compiled out of a release build */
     DCHECK(JS_IsObject(pm), "a Storage object's map is not a storage proxy map");
-    others = storage_shed_other_proxy_maps(ctx, pm);
+    /* STEPS 1-2, off THIS Storage's own Document rather than off the running realm's — see st_document. */
+    url = document_url_of(lxb_dom_interface_document(node_of(doc)));
+    DCHECK(url != NULL, "the Document a Storage was minted in has no address — every Document is installed at "
+                        "one, and §12.2.1 step 2 is the serialization of it");
+    JS_FreeValue(ctx, doc);
+    type = JS_GetPropertyStr(ctx, slots, "type");
+
+    others = storage_shed_other_storages(ctx, pm);          /* step 3 */
     JS_FreeValue(ctx, pm);
-    if (others == 0) return;   /* step 4 over an empty set */
-    DFAIL("HTML §12.2.1's broadcast reached a second same-origin Storage of this type and has nothing to fire "
-          "at it — build §12.2.4's StorageEvent (core/events/storage_event.c, and fill core/events/"
-          "create_event.c's `storageevent` row, whose DCHECK asserts the two arrive together), and queue the "
-          "dispatch on the DOM MANIPULATION TASK SOURCE rather than firing it inline: this engine's event loop "
-          "(core/timing/event_loop.h) has no such source yet, and core/frame/session_history.c fires §7.4.6.2's "
-          "hashchange synchronously for the same missing reason");
+    CHECK(JS_IsArray(others), "storage: §12.2.1 broadcast step 3's remoteStorages could not be collected");
+    {
+        JSValue len = JS_GetPropertyStr(ctx, others, "length");
+        CHECK(JS_ToUint32(ctx, &n, len) == 0, "storage: remoteStorages has no length");
+        JS_FreeValue(ctx, len);
+    }
+    for (i = 0; i < n; i++) {                               /* step 4, for each remoteStorage */
+        JSValue remote = JS_GetPropertyUint32(ctx, others, i);
+        JSValue rslots, rtype, rdoc, win, ev;
+        JSContext *rctx;
+
+        DCHECK(storage_is(remote), "§12.2.1 broadcast step 3 collected something that is not a Storage");
+        DCHECK(JS_VALUE_GET_PTR(remote) != JS_VALUE_GET_PTR(self),
+               "§12.2.1 broadcast step 3 collected the broadcasting Storage itself — the step says \"all "
+               "Storage objects EXCLUDING storage\", and the exclusion is the proxy map's identity in the "
+               "bottle's reference set");
+        rslots = st_slots(ctx, remote);
+        rtype = JS_GetPropertyStr(ctx, rslots, "type");
+        DCHECK(JS_IsStrictEqual(ctx, type, rtype),
+               "§12.2.1 broadcast step 3 collected a Storage of the OTHER type — a §4.6 bottle belongs to one "
+               "(type, identifier), so a reference set holding both means a bucket handed out a bottle of the "
+               "type it was not built for and a localStorage write would fire at a sessionStorage listener");
+        JS_FreeValue(ctx, rtype);
+        rdoc = st_document(ctx, rslots);
+        JS_FreeValue(ctx, rslots);
+        /* §12.2.1 step 4's "remoteStorage's relevant global object" — the global of the realm that Document
+           belongs to. The EVENT is built there too, because it is handed to that document's listeners. */
+        rctx = document_realm_of(node_of(rdoc));
+        JS_FreeValue(ctx, rdoc);
+        DCHECK(rctx != NULL, "a remote Storage's Document belongs to no realm — every Storage is minted by a "
+                             "realm's own localStorage getter, so its Document has a record");
+        win = JS_GetGlobalObject(rctx);
+        ev = storage_event_new_to_fire(rctx, key, old_value, new_value, url, remote);
+        CHECK(!JS_IsException(ev), "storage: §12.2.1 step 4's StorageEvent could not be allocated — a dropped "
+                                   "broadcast is a document that never learns another wrote its storage");
+        event_target_fire(rctx, win, ev, JS_UNDEFINED);     /* CONSUMES ev */
+        JS_FreeValue(rctx, win);
+        JS_FreeValue(ctx, remote);
+    }
+    JS_FreeValue(ctx, others);
+    JS_FreeValue(ctx, type);
 }
 
 /* ---- the members ------------------------------------------------------------------------------------------ */
@@ -332,7 +417,11 @@ static JSValue js_st_set_item(JSContext *ctx, JSValueConst this_val, int argc, J
     if (JS_SetProperty(ctx, map, a, JS_DupValue(ctx, argv[1])) < 0) goto fail_atom;   /* step 5 */
     JS_FreeAtom(ctx, a);
     if (reorder) st_reorder(ctx, this_val);                              /* step 6 */
-    st_broadcast(ctx, slots);                                            /* step 7 */
+    /* STEP 7's THREE ARGUMENTS ARE THIS MEMBER'S OWN, not the map's: `key` is the argument the page passed —
+       which for unknown external input is the concolic itself, while the MAP is keyed by its shape — and
+       `newValue` is the value now stored. Reading them back off the map instead would hand a listener the
+       shape where the writer wrote a taint. */
+    st_broadcast(ctx, this_val, slots, argv[0], old, argv[1]);           /* step 7 */
     JS_FreeValue(ctx, old);
     JS_FreeValue(ctx, map);
     JS_FreeValue(ctx, slots);
@@ -370,14 +459,16 @@ static JSValue js_st_remove_item(JSContext *ctx, JSValueConst this_val, int argc
     }
     r = JS_DeleteProperty(ctx, map, a, 0);                               /* step 3 — the COW delta's capture */
     JS_FreeAtom(ctx, a);
-    JS_FreeValue(ctx, old);
     JS_FreeValue(ctx, map);
-    if (r < 0) { JS_FreeValue(ctx, slots); return JS_EXCEPTION; }
+    if (r < 0) { JS_FreeValue(ctx, old); JS_FreeValue(ctx, slots); return JS_EXCEPTION; }
     DCHECK(r == 1, "a Storage entry refused to be removed — every entry is created by this component as a "
                    "configurable data property of a null-prototype map, so a refusal means something else "
                    "defined it");
     st_reorder(ctx, this_val);                                           /* step 4 */
-    st_broadcast(ctx, slots);                                            /* step 5 */
+    /* STEP 5's `oldValue` is step 2's — the value this call removed — so it is held across the delete rather
+       than freed at it. `newValue` is null, which §12.2.4 types the attribute for. */
+    st_broadcast(ctx, this_val, slots, argv[0], old, JS_NULL);           /* step 5 */
+    JS_FreeValue(ctx, old);
     JS_FreeValue(ctx, slots);
     return JS_UNDEFINED;
 }
@@ -407,7 +498,9 @@ static JSValue js_st_clear(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     }
     st_keys_free(ctx, tab, n);
     JS_FreeValue(ctx, map);
-    st_broadcast(ctx, slots);                                            /* step 3 */
+    /* "Broadcast this with null, null, and null" — all three are the IDL null, which is what tells a listener
+       that the whole area was cleared rather than one entry changed. */
+    st_broadcast(ctx, this_val, slots, JS_NULL, JS_NULL, JS_NULL);       /* step 3 */
     JS_FreeValue(ctx, slots);
     return JS_UNDEFINED;
 }
@@ -568,12 +661,24 @@ static int st_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueC
         JS_FreeValue(ctx, map); JS_FreeValue(ctx, slots);
         return 1;
     }
-    r = JS_SetProperty(ctx, map, prop, str);                             /* setItem step 5 */
-    JS_FreeValue(ctx, old);
+    r = JS_SetProperty(ctx, map, prop, JS_DupValue(ctx, str));           /* setItem step 5 */
     JS_FreeValue(ctx, map);
-    if (r < 0) { JS_FreeValue(ctx, slots); return -1; }
+    if (r < 0) { JS_FreeValue(ctx, old); JS_FreeValue(ctx, str); JS_FreeValue(ctx, slots); return -1; }
     if (!exists) st_reorder(ctx, obj);                                   /* setItem step 6 */
-    st_broadcast(ctx, slots);                                            /* setItem step 7 */
+    /* setItem step 7's THREE ARGUMENTS, through the named-property setter's door. `key` is §3.9.7's property
+       name P as a value, `oldValue` is what the map held (null when it held nothing) and `newValue` is the
+       converted value this define stored — the same three the method form passes, because §3.9.3 step 2's
+       invoke-a-named-property-setter performs setItem's steps and not a shorter algorithm. */
+    {
+        JSValue kv = JS_AtomToValue(ctx, prop);
+
+        CHECK(!JS_IsException(kv), "storage: a named property's key could not be read back for §12.2.1's "
+                                   "broadcast");
+        st_broadcast(ctx, obj, slots, kv, old, str);                     /* setItem step 7 */
+        JS_FreeValue(ctx, kv);
+    }
+    JS_FreeValue(ctx, old);
+    JS_FreeValue(ctx, str);
     JS_FreeValue(ctx, slots);
     return 1;
 }
@@ -596,12 +701,19 @@ static int st_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
         JS_FreeValue(ctx, map); JS_FreeValue(ctx, slots);
         return 1;
     }
-    JS_FreeValue(ctx, old);
     r = JS_DeleteProperty(ctx, map, prop, 0);                            /* removeItem step 3 */
     JS_FreeValue(ctx, map);
-    if (r < 0) { JS_FreeValue(ctx, slots); return -1; }
+    if (r < 0) { JS_FreeValue(ctx, old); JS_FreeValue(ctx, slots); return -1; }
     st_reorder(ctx, obj);                                                /* removeItem step 4 */
-    st_broadcast(ctx, slots);                                            /* removeItem step 5 */
+    {
+        JSValue kv = JS_AtomToValue(ctx, prop);
+
+        CHECK(!JS_IsException(kv), "storage: a named property's key could not be read back for §12.2.1's "
+                                   "broadcast");
+        st_broadcast(ctx, obj, slots, kv, old, JS_NULL);                 /* removeItem step 5 */
+        JS_FreeValue(ctx, kv);
+    }
+    JS_FreeValue(ctx, old);
     JS_FreeValue(ctx, slots);
     return 1;
 }
@@ -620,29 +732,47 @@ static const JSClassExoticMethods STORAGE_EXOTIC = {
 
 /* ---- construction and install ---------------------------------------------------------------------------- */
 
+/* §12.2.2 step 4 and §12.2.3 step 4's "let storage be a new Storage object whose map is map".
+ *
+ * IT IS INFALLIBLE, and that is what makes the BINDING below impossible to miss. Storage §4.6 step 7 has
+ * already appended `proxy_map` to its bottle's proxy map reference set by the time this runs — that is the
+ * spec's own order — so between the obtain and the bind there is a proxy map in §12.2.1 broadcast step 3's set
+ * that stands for no Storage object. An early return on an allocation failure would leave one there for the
+ * life of the agent; an OOM here is a CHECK (CLAUDE.md §Offensive: allocation is always fatal), so the two
+ * steps cannot come apart. */
 JSValue storage_new(JSContext *ctx, JSValue proxy_map, StorageType type)
 {
     JSValue obj, slots, proto;
+    JSValueConst doc = document_object(ctx);
     JSAtom k;
 
     DCHECK(g_ready, "a Storage was minted before storage_init declared the interface");
     DCHECK(JS_IsObject(proxy_map), "a Storage was minted with no storage proxy map — §12.2.1's object IS its "
                                    "map, and Storage §4.6 is what obtains one");
+    /* §12.2.2's and §12.2.3's holder is the DOCUMENT's, and §12.2.1 step 1 reads the Document back off the
+       Storage — so a realm with none has nowhere to put this object and nothing for the broadcast to name. */
+    DCHECK(JS_IsObject(doc), "a Storage was minted in a realm with no `document` — both getters hold their "
+                             "Storage on this's associated Document, and §12.2.1 step 1 is that Document");
     proto = JS_GetClassProto(ctx, g_class);
     DCHECK(!JS_IsNull(proto), "a Storage was minted in a realm that never ran its per-realm install");
     obj = JS_NewObjectProtoClass(ctx, proto, g_class);
     JS_FreeValue(ctx, proto);
-    if (JS_IsException(obj)) { JS_FreeValue(ctx, proxy_map); return obj; }
+    CHECK(!JS_IsException(obj), "a Storage object could not be allocated");
 
     slots = idl_slots_new(ctx);
     CHECK(!JS_IsException(slots), "a Storage object's slot record could not be allocated");
-    JS_SetPropertyStr(ctx, slots, "proxyMap", proxy_map);
+    JS_SetPropertyStr(ctx, slots, "proxyMap", JS_DupValue(ctx, proxy_map));
     JS_SetPropertyStr(ctx, slots, "type",
                       JS_NewString(ctx, type == STORAGE_TYPE_LOCAL ? "local" : "session"));
+    JS_SetPropertyStr(ctx, slots, "document", JS_DupValue(ctx, doc));
     k = JS_ValueToAtom(ctx, g_key);
     CHECK(k != JS_ATOM_NULL, "storage: the slot key could not be interned");
     JS_SetProperty(ctx, obj, k, slots);
     JS_FreeAtom(ctx, k);
+    /* §12.2.1 broadcast step 3's set is Storage §4.6's proxy map reference set, so the map has to know which
+       Storage it stands for — see storage_shed.h. */
+    storage_shed_proxy_map_bind(ctx, proxy_map, obj);
+    JS_FreeValue(ctx, proxy_map);
     return obj;
 }
 

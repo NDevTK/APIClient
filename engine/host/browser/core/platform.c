@@ -725,6 +725,11 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "Storage",               "storage" },
     { "localStorage",          "window_storage" },
     { "sessionStorage",        "window_storage" },
+    /* §12.2.4's interface object, whose component is `event` because core/events/event.c's subclass list is
+       where every Event subclass is declared — the same row NavigateEvent's witness names. A `storage` event
+       fired at a document that does not expose the interface would be an event whose `instanceof` a listener
+       cannot make sense of. */
+    { "StorageEvent",          "event" },
     /* WEB CRYPTOGRAPHY's three names — §10's interface object, §14's, and the Window member the mixin's
        partial declares. `crypto` is on browser/platform_names.h, so the absent-global seam declines to mint a
        concolic for it and a `window.crypto` that resolves to nothing answers `undefined` instead of throwing:

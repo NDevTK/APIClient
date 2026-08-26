@@ -31,6 +31,7 @@
 #include "core/events/keyboard_event.h"
 #include "core/events/message_event.h"
 #include "core/events/mouse_event.h"
+#include "core/events/storage_event.h"
 #include "core/events/ui_event.h"
 
 typedef JSValue (*EventMaker)(JSContext *ctx);
@@ -103,7 +104,7 @@ static const CreateEventRow CREATE_EVENT[] = {
     { "messageevent",           "MessageEvent",           make_message_event },
     { "mouseevent",             "MouseEvent",             mouse_event_new },
     { "mouseevents",            "MouseEvent",             mouse_event_new },
-    { "storageevent",           "StorageEvent",           NULL },
+    { "storageevent",           "StorageEvent",           storage_event_new },
     { "svgevents",              "Event",                  make_event },
     { "textevent",              "TextEvent",              NULL },
     { "touchevent",             "TouchEvent",             NULL },

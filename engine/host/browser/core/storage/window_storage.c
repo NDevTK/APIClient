@@ -93,8 +93,11 @@ static JSValue js_ws_get(JSContext *ctx, JSValueConst this_val, int magic)
                                     "this document's origin has no storage key, so it has no %s",
                                     WS_IDENTIFIER[magic]);
     }
+    /* STEP 4 CANNOT FAIL, which is core/storage/storage.c's statement and not an assumption here: the obtain
+       above has already put the proxy map in its bottle's §4.6 reference set, so a mint that returned an
+       exception would leave a map in HTML §12.2.1 broadcast step 3's set standing for no Storage. An
+       allocation failure there is a CHECK, so there is no arm to read back. */
     storage = storage_new(ctx, map, type);                                   /* step 4 */
-    if (JS_IsException(storage)) { JS_FreeValue(ctx, holders); return storage; }
     JS_SetPropertyStr(ctx, holders, WS_HOLDER[magic], JS_DupValue(ctx, storage));   /* step 5 */
     JS_FreeValue(ctx, holders);
     return storage;                                                          /* step 6 */

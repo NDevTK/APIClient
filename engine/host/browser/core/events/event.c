@@ -44,6 +44,7 @@
 #include "core/events/pop_state_event.h"
 #include "core/events/hash_change_event.h"
 #include "core/events/before_unload_event.h"
+#include "core/events/storage_event.h"
 #include "core/events/ui_event.h"
 #include "core/events/mouse_event.h"
 #include "core/events/keyboard_event.h"
@@ -843,6 +844,11 @@ static void event_declare_subclasses(JSContext *ctx)
        PER-REALM install rather than here. A class id is agent-scoped, so reading it later reads the same one. */
     navigate_event_init(ctx);
     before_unload_event_init(ctx);
+    /* HTML §12.2.4 — the event a WEB STORAGE broadcast fires at the other same-origin documents. Declared here
+       for the same reason as the rest: its prototype chains to this realm's Event.prototype. Its `storageArea`
+       member brands against core/storage/storage.c's class, which core/platform.c declares BEFORE this row —
+       so unlike NavigateEvent's two, it can be read at the declaration, and storage_event_init asserts it. */
+    storage_event_init(ctx);
     /* THE ORDER IS THE CHAIN. Each of these declares a per-realm install and realm.h runs them in declaration
        order, so an interface must declare AFTER the one it extends or its prototype chains to a slot no realm
        has filled yet: `MouseEvent : UIEvent : Event`, `KeyboardEvent : UIEvent : Event` and
@@ -863,6 +869,7 @@ static void event_free_subclasses(JSContext *ctx)
     navigation_current_entry_change_event_free(ctx);
     navigate_event_free(ctx);
     before_unload_event_free(ctx);
+    storage_event_free(ctx);
     ui_event_free(ctx);
     mouse_event_free(ctx);
     keyboard_event_free(ctx);

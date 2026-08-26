@@ -35,4 +35,10 @@ JSValue storage_new(JSContext *ctx, JSValue proxy_map, StorageType type);
    running a member, for anything that has to tell one from a page object wearing the same shape. */
 bool storage_is(JSValueConst v);
 
+/* THE CLASS §3.2.15 BRANDS A `Storage`-TYPED IDL POSITION AGAINST — HTML §12.2.4's `Storage? storageArea`, on
+   both StorageEventInit and initStorageEvent. It is the class id and not a predicate because that is what
+   idl_iface_brand takes; storage_is above is the same fact for a caller holding no declaration. Zero before
+   storage_init has run, which every caller asserts rather than branding against nothing. */
+JSClassID storage_class_id(void);
+
 #endif

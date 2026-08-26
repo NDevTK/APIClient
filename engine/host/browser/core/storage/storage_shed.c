@@ -194,6 +194,10 @@ static JSValue proxy_map_new(JSContext *ctx, JSValueConst bottle)
        are about the BOTTLE rather than the map — its §4.1 quota (setItem step 4) and its §4.6 proxy map
        reference set (broadcast step 3) — so the link travels with the map that stands in for it. */
     rec_set(ctx, pm, "bottle", JS_DupValue(ctx, bottle));
+    /* THE Storage THIS MAP STANDS FOR IS NOT SET HERE, and cannot be: §4.6 step 7 appends the map to the
+       reference set and HTML §12.2.2/§12.2.3 step 4 mints the Storage AFTER the obtain returns. The mint binds
+       it (storage_shed_proxy_map_bind) with nothing between the two that can fail, and the walk over the
+       reference set asserts every member is bound. */
 
     refs = rec_get(ctx, bottle, "proxyMaps");
     DCHECK(JS_IsArray(refs), "a §4.6 storage bottle has no proxy map reference set — it is created with an "
@@ -281,22 +285,58 @@ double storage_shed_quota(JSContext *ctx, JSValueConst proxy_map)
     return d;
 }
 
-int storage_shed_other_proxy_maps(JSContext *ctx, JSValueConst proxy_map)
+void storage_shed_proxy_map_bind(JSContext *ctx, JSValueConst proxy_map, JSValueConst storage)
+{
+    JSValue prev = rec_get(ctx, proxy_map, "storage");
+
+    DCHECK(JS_IsUndefined(prev),
+           "a §4.7 storage proxy map was bound to a SECOND Storage object — HTML §12.2.2 and §12.2.3 obtain a "
+           "fresh map per Storage, so two over one map would put one document in §12.2.1 broadcast step 3's "
+           "set twice and fire the event at it twice");
+    JS_FreeValue(ctx, prev);
+    DCHECK(JS_IsObject(storage), "a storage proxy map was bound to something that is not a Storage object");
+    rec_set(ctx, proxy_map, "storage", JS_DupValue(ctx, storage));
+}
+
+JSValue storage_shed_other_storages(JSContext *ctx, JSValueConst proxy_map)
 {
     JSValue bottle = rec_get(ctx, proxy_map, "bottle");
     JSValue refs = rec_get(ctx, bottle, "proxyMaps");
-    JSValue len;
-    uint32_t n = 0;
+    JSValue out = JS_NewArray(ctx), len;
+    uint32_t n = 0, i, k = 0;
+    bool self_seen = false;
 
+    CHECK(!JS_IsException(out), "storage: §12.2.1 broadcast step 3's remoteStorages could not be allocated");
     DCHECK(JS_IsArray(refs), "a §4.6 storage bottle has no proxy map reference set");
     len = JS_GetPropertyStr(ctx, refs, "length");
     CHECK(JS_ToUint32(ctx, &n, len) == 0, "storage: a proxy map reference set has no length");
     JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue pm = JS_GetPropertyUint32(ctx, refs, i), s;
+
+        DCHECK(JS_IsObject(pm), "a §4.6 proxy map reference set holds something that is not a proxy map");
+        if (JS_VALUE_GET_PTR(pm) == JS_VALUE_GET_PTR(proxy_map)) {   /* step 3's "excluding storage" */
+            self_seen = true;
+            JS_FreeValue(ctx, pm);
+            continue;
+        }
+        s = rec_get(ctx, pm, "storage");
+        JS_FreeValue(ctx, pm);
+        /* EVERY MAP IN THE SET IS BOUND. §4.6 step 7 appends the map and storage_new binds it with nothing
+           between them that can fail, so an unbound one means a map reached the set by another route — and
+           §12.2.1 step 4 would then have a target it cannot name. */
+        DCHECK(JS_IsObject(s), "a proxy map in a §4.6 reference set stands for no Storage object — the obtain "
+                               "appends it and HTML §12.2.2/§12.2.3's mint binds it, so an unbound one was put "
+                               "there by something that is not storage_shed_obtain_bottle_map");
+        CHECK(JS_SetPropertyUint32(ctx, out, k++, s) >= 0,
+              "storage: a remote Storage could not be collected into §12.2.1 broadcast step 3's list");
+    }
     JS_FreeValue(ctx, refs);
     JS_FreeValue(ctx, bottle);
-    DCHECK(n >= 1, "a proxy map is not in its own bottle's reference set — §4.6 step 7 appends every one it "
-                   "mints, so a set that does not contain this map was built by something else");
-    return (int)n - 1;
+    (void)self_seen;   /* the witness is the assert's, and an assert is compiled out of a release build */
+    DCHECK(self_seen, "a proxy map is not in its own bottle's reference set — §4.6 step 7 appends every one it "
+                      "mints, so a set that does not contain this map was built by something else");
+    return out;
 }
 
 void storage_shed_init(JSContext *ctx)
