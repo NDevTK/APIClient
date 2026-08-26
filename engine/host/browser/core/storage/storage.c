@@ -229,8 +229,9 @@ static void st_reorder(JSContext *ctx, JSValueConst self) { (void)ctx; (void)sel
  * A TARGET THAT IS NOT FULLY ACTIVE IS NOT AN ERROR HERE, and §12.2.1 says so in its own words: "The Document
  * object associated with the resulting task is not necessarily fully active, but events fired on such objects
  * are ignored by the event loop until the Document becomes fully active again." So the queue is unconditional
- * and the waiting is §8.1.7.3 "Processing model" step 1's runnable-task condition, which is the event loop's
- * and not this algorithm's. */
+ * and the waiting is the EVENT LOOP's rather than this algorithm's: §8.1.7.3 "Processing model" step 2 chooses
+ * among the task queues "with at least one RUNNABLE task", and §8.1.7.1 "Definitions" makes a task runnable "if
+ * its document is either null or fully active". */
 static void st_broadcast(JSContext *ctx, JSValueConst self, JSValueConst slots, JSValueConst key,
                          JSValueConst old_value, JSValueConst new_value)
 {
