@@ -9604,7 +9604,21 @@ int main(int argc, char **argv) {
         /* The fixture built this document, so the navigable's name is the initial "" and is known. */
         /* §7.5.1's OPENER POLICY ROW — §7.1.3's initial value, for the same reason the agent's is: this
            fixture's document came from no response. */
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "", OPENER_POLICY_UNSAFE_NONE);
+        /* AND §7.3.1.3's PARENT IS `u` — core/frame/remote_object.h's undefined, which is the POSITIVE
+           statement that this navigable has none. This fixture BUILT the document out of a C string literal,
+           so nothing embeds it and its navigable is a top-level traversable; the field is stated rather than
+           implied because a host that says nothing and a host that says "no parent" would otherwise be one
+           thing, and a cross-origin child navigable's whole instance is rooted through this same call.
+           §7.1.4's ITEM OF THIS DOCUMENT'S OWN "RESPONSE" is therefore §7.1.7's "a new embedder policy" — the
+           standard's answer for a container built from no response, and a real value rather than a NULL the
+           call would have to test for. */
+        EmbedderPolicy root_embedder;
+        JSValue root_proxy;
+
+        embedder_policy_init(&root_embedder);
+        root_proxy = navigable_root(ctx, world_local_doc(), "", OPENER_POLICY_UNSAFE_NONE, "u",
+                                    serialized_policy_container_none(), &root_embedder);
+        embedder_policy_free(&root_embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* NULL: this fixture's document is a C string literal, so it came from no response and has no
            header-borne policy. That is a fact about it, not a gap. */

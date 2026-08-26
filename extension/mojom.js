@@ -192,6 +192,25 @@
          "text — because the item exists and a serialization that dropped an item is the defect this whole " +
          "record is shaped to prevent" };
 
+  /* HTML §7.3.1.3 "Child navigables"' PARENT NAVIGABLE of the navigable this document is rooted in — NOT an
+     item of the policy container above it, and the distinction is the whole reason it is its own parameter: a
+     §7.1.7 container is five POLICIES and says nothing about a frame tree. §7.3.1.3 defines the term over the
+     link ("a navigable 'is a child navigable', which means that its parent is non-null"), so a renderer told
+     nothing here is not missing a field, it is being told it is a TOP-LEVEL TRAVERSABLE.
+     THAT IS THE COMMON CASE AND IT WAS SILENTLY WRONG. SECURITY.md makes a cross-origin document a separate
+     INSTANCE, so a cross-origin `<iframe>` — the frame a security tool cares about most — is the ROOT of its
+     own renderer, and a root with no parent answers §7.1.4.2 step 1, §7.2.2.4's `parent`/`top` and §7.5.9's
+     subtree walk with four plausible facts about a page that does not exist. None of them crashes.
+     IT CROSSES AS THE ENGINE'S OWN NAVIGABLE IDENTITY and never as a document name: the receiving instance
+     holds no proxy for that navigable, and minting one needs its origin, name, parent and opener. This zone
+     RELAYS the bytes off the emitting engine's `navigable.create` notice and reads none of them — the receiving
+     engine is the only party that decodes one, and it crashes on a record it cannot parse. `u` is that
+     grammar's undefined and is the positive statement that there is no parent. */
+  var PARENT_NAVIGABLE = { name: "parentNavigable", type: "string",
+    why: "§7.3.1.3's parent navigable of this document's navigable, as core/frame/remote_object.h's identity " +
+         "record, or `u` for a top-level traversable. There is no empty spelling: a navigable either has a " +
+         "parent or is a top-level traversable, and both are facts a host states" };
+
   var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string",
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
@@ -212,7 +231,7 @@
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT],
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -223,7 +242,7 @@
       { ordinal: 1, name: "Join",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT],
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

@@ -717,9 +717,11 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
 }
 
 /* §7.2.3's proxy for the REALM THAT IS ASKING — the one `window`, `self` and `e.source` are. Its realm is
-   this one, which the caller is standing in rather than creating: the two differences from a §7.4 child are
-   that the realm is handed over from the outside, and that nobody here stated the navigable's name. */
-JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy)
+   this one, which the caller is standing in rather than creating: the three differences from a §7.4 child are
+   that the realm is handed over from the outside, that nobody here stated the navigable's name, and that
+   §7.3.1.3's PARENT is a statement the HOST makes rather than one this mint is in a position to make. */
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
+                              JSValueConst parent)
 {
     /* THE ORIGIN IS THE AGENT'S, and it is read from where §7.2.1's check reads it rather than passed in —
        an agent is origin-keyed, so a caller-supplied one could only ever agree or be wrong. */
@@ -762,34 +764,60 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "no serialization it can be recreated from, and a URL therefore cannot say WHOSE it is. STATE "
            "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
            "instance — it is the same statement, made by the same party, for the same reason");
-    /* §7.1.5: AN EMPTY CREATION SANDBOXING FLAG SET, and it is the spec's answer rather than a placeholder.
-       This is the navigable the INSTANCE STARTED IN — a top-level traversable with no embedder, so
-       determine-the-creation-sandboxing-flags returns its POPUP SANDBOXING FLAG SET, which §7.1.5 says is
-       empty when a browsing context is created and which only §7.3.1.7 "Navigable target names"'s rules
-       for choosing a navigable ever populate. Nothing chose this one. What the ROOT document's own
-       `Content-Security-Policy: sandbox` adds
-       is the other half of §7.4.5's union, and it is added where a Document is created rather than here. */
-    /* NO POLICIES TO CLONE — this navigable is the one §7.4 did NOT create, so there is no creator whose
-       container to clone — but there IS a container, and CSP §2.2's SELF-ORIGIN of its CSP list is this agent's
-       own: the root Document is created from the response at this instance's address, which is §2.2.2's
-       answer. Nothing reads it through this proxy (its realm exists from the moment it is adopted, so
-       proxy_realm's lazy materialization is unreachable for it), and it is stated all the same because the
-       field is what makes "every navigable carries the container its Document runs under" an invariant rather
-       than a case analysis at each reader. */
+    /* §7.1.5: AN EMPTY CREATION SANDBOXING FLAG SET, and it is the spec's answer rather than a placeholder —
+       for a TOP-LEVEL root, because determine-the-creation-sandboxing-flags returns a browsing context with no
+       embedder its POPUP SANDBOXING FLAG SET, which §7.1.5 says is empty when a browsing context is created and
+       which only §7.3.1.7 "Navigable target names"'s rules for choosing a navigable ever populate; nothing
+       chose this one. What the ROOT document's own `Content-Security-Policy: sandbox` adds is the other half of
+       §7.4.5's union, and it is added where a Document is created rather than here.
+       FOR A ROOT THAT IS A CHILD NAVIGABLE THE ZERO IS TRUE FOR A DIFFERENT REASON, and it is one an assert
+       holds rather than one this file can argue: §7.1.5's set for a child is the union of its container
+       element's IFRAME SANDBOXING FLAG SET and its embedder document's own, which lives in the instance that
+       holds the element — and core/frame/navigable.c REFUSES to emit a create notice for a cross-instance child
+       whose creation flags are non-empty, naming the field the record still owes. So the only cross-instance
+       child that reaches this line is one whose set is empty, and the day that assert is satisfied by carrying
+       the set instead, this zero becomes a value the host states like the parent beside it. */
+    /* NO POLICIES TO CLONE — this navigable is the one §7.4 did not create IN THIS AGENT, so there is no
+       creator here whose container to clone — but there IS a container, and CSP §2.2's SELF-ORIGIN of its CSP
+       list is this agent's own: the root Document is created from the response at this instance's address,
+       which is §2.2.2's answer. Nothing reads it through this proxy (its realm exists from the moment it is
+       adopted, so proxy_realm's lazy materialization is unreachable for it), and it is stated all the same
+       because the field is what makes "every navigable carries the container its Document runs under" an
+       invariant rather than a case analysis at each reader.
+       A CROSS-INSTANCE CHILD DOES HAVE A CREATOR AND ITS CLONE DOES NOT COME THROUGH HERE. The `navigable.create`
+       notice carries §7.1.7's clone and the HOST hands it to §7.1.7's own determine-navigation-params-policy-
+       container beside the response's container, so the Document is created with the right one; this field
+       would be that clone's second copy, and a second copy of a container is a second answer waiting to be read
+       by the lazy materialization that cannot reach this navigable anyway. */
     /* NO CREATOR BASE URL either, and for the same sentence: §7.4 did not create this navigable, so there is
        no creator whose base URL to pass on. Its Document comes from the response at this instance's address,
        which §2.4.3 gives a null about base URL. */
     /* AND §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" HERE, WHICH IS THE STANDARD'S ANSWER AND NOT A DEFAULT.
-       This field is the CREATOR's clone, and this navigable has no creator — §7.1.7 gives a container built
-       without one an embedder policy "initially a new embedder policy", which is what this states. The ROOT
+       This field is the CREATOR's clone and this container is the one built without a creator in THIS agent —
+       §7.1.7 gives such a container an embedder policy "initially a new embedder policy", which is what this
+       states, and the creator's own item reaches the Document through the host's container as the paragraph
+       above describes rather than through a second copy here. The ROOT
        DOCUMENT's own embedder policy is a different fact and comes from a different place: it is obtained from
        the response this instance was started with and reaches the Document through the container
        document_install is handed, never through this proxy (whose realm exists from the moment it is adopted,
        so proxy_realm's lazy materialization is unreachable for it). */
+    /* §7.3.1.3's PARENT, STATED BY THE HOST AND NEVER ASSUMED HERE. This mint is reached for the navigable an
+       instance STARTED in, and that navigable is a top-level traversable only when the zone that provisioned
+       the instance says so: a cross-origin child navigable is provisioned as a peer instance of its own, and
+       its root is a CHILD navigable presented by an element in another heap. The value is checked rather than
+       trusted, because the two absences are spelled differently one slot apart — §7.2.2.4 makes a top-level
+       navigable's `parent` itself (JS_UNDEFINED in the record) and its `opener` null (JS_NULL beside it), and a
+       JS_NULL arriving here would make window_proxy_parent_navigable answer with something that is not a
+       navigable and is not the absence either. */
+    DCHECK(JS_IsUndefined(parent) || window_proxy_is(parent),
+           "a navigable was rooted with a §7.3.1.3 PARENT that is not a navigable — the section defines a child "
+           "navigable as one whose parent is non-null, so the only two answers are a WindowProxy (this "
+           "instance's own, or a remote one for a parent another instance holds) and JS_UNDEFINED, which is the "
+           "positive statement that this navigable is a top-level traversable");
     obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, 0, opener_policy,
                            serialized_policy_container(NULL, origin_serialized(origin_agent()),
                                                        serialized_embedder_policy_new()),
-                           NULL, tlus, tlo, JS_UNDEFINED, JS_NULL);
+                           NULL, tlus, tlo, parent, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);
 

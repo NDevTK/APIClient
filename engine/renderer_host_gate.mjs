@@ -601,11 +601,13 @@ try {
      §4.4's address, the name this agent's root document is known by, the response's header field lines (empty
      — this document had no response), §8.1.3.1's top-level creation URL, which for a root document is its
      own address, the two halves of HTML §7.1.7's inherited policy container — both empty, because this
-     document has no creator and an empty pair is the positive statement of that — and §7.1.4's EMBEDDER POLICY
+     document has no creator and an empty pair is the positive statement of that — §7.1.4's EMBEDDER POLICY
      item of that same container, which has no empty spelling: §7.1.7 gives every container one, so a document
-     with no creator states the section's own "a new embedder policy" in as many words. */
+     with no creator states the section's own "a new embedder policy" in as many words — and HTML §7.3.1.3's
+     PARENT NAVIGABLE, `u`, because this gate loaded the opener itself and nothing embeds it. That last one is
+     not part of the container: a policy container is five policies and says nothing about a frame tree. */
   const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
-                                               OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '');
+                                               OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '', 'u');
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
@@ -651,15 +653,15 @@ try {
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
-     coepReportOnlyEndpoint<TAB>policy`, built by core/frame/navigable.c. The policy is LAST because it is the
-     record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle field. Everything
-     that is not the policy sits before it — an origin's serialization cannot contain a tab, HTML §7.1.4's
-     three values are fixed tokens, and RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to` endpoint
-     those two fields carry.
+     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>policy`, built by core/frame/navigable.c. The policy is LAST
+     because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
+     field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
+     HTML §7.1.4's three values are fixed tokens, RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to`
+     endpoint those two fields carry, and a navigable identity is a one-letter tag over '.'-terminated base64.
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 12)
-    fail(`the create notice carries ${create.length} field(s) where the record has twelve — ` +
+  if (create.length < 13)
+    fail(`the create notice carries ${create.length} field(s) where the record has thirteen — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -714,8 +716,21 @@ try {
     fail(`the create notice carries a §7.1.4 reporting endpoint (\`${create[8]}\`/\`${create[10]}\`) and no ` +
          'response header on this document could have named one — §7.1.4 makes both endpoints the EMPTY ' +
          'STRING initially and only a `report-to` parameter writes one');
-  if (create.slice(11).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(11).join('\t')}\`) and this ` +
+  /* HTML §7.3.1.3's PARENT NAVIGABLE, AND THIS PHASE IS THE ONE THAT PROVES THE `u` ARM RATHER THAN THE OTHER.
+     The opener runs `window.open(CHILD_ADDR, "child")`, which §7.3.1.7 step 8 makes an AUXILIARY navigable —
+     created out of a target name with no element anywhere in the algorithm — so it has a full §7.1.7 container
+     and NO parent, and the record must say so in the encoding's own undefined rather than by leaving the field
+     empty. That pairing is the whole reason the parent is a field of its own: an auxiliary navigable and a
+     child navigable differ here and NOWHERE ELSE on this record, so a gate that only checked the container
+     would pass for a build that had confused the two. */
+  if (create[11] !== 'u')
+    fail(`the create notice's §7.3.1.3 parent navigable is \`${create[11]}\` and this document created the ` +
+         'child with `window.open`, which HTML §7.3.1.7 step 8 makes an AUXILIARY navigable — a top-level ' +
+         'traversable that is its own top and links back through `opener`. `u` is core/frame/remote_object.h\'s ' +
+         'undefined and is the positive statement that there is no parent; anything else here would give the ' +
+         'peer instance a frame tree the creator never built');
+  if (create.slice(12).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(12).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

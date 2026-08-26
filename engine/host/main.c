@@ -37,6 +37,7 @@
 #include "browser/core/frame/navigable.h"
 #include "browser/core/frame/navigation_params.h"
 #include "browser/core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
+#include "browser/core/frame/embedder_policy.h"    /* §7.1.4's item, and §7.1.4.2's check over two of them */
 #include "browser/core/frame/secure_context.h"
 #include "browser/core/url/url_search_params.h"
 #include "browser/core/html/form_data.h"
@@ -484,13 +485,21 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * container sets the clone's embedder policy to a COPY of the source's), so an item that did not cross would
  * be a clone that silently downgraded a cross-origin-isolated creator's child to `unsafe-none` — with no
  * header anywhere to say so, because the child's own response never carried one. They are read through
- * qjs_inherited_container above, once, for both entries. */
+ * qjs_inherited_container above, once, for both entries.
+ *
+ * `parent_navigable` IS HTML §7.3.1.3 "Child navigables"' PARENT OF THE NAVIGABLE THIS DOCUMENT IS ROOTED IN,
+ * and it is NOT part of the container beside it — a policy container is §7.1.7's five policies and says nothing
+ * about a tree. It is a separate fact stated by the same zone for a related reason: an instance is an
+ * ORIGIN-KEYED AGENT CLUSTER, so a cross-origin `<iframe>` is the ROOT of its own instance, and the only party
+ * that knows a root is nested is the zone that routed the create. navigable_root (core/frame/navigable.h)
+ * states what it is, why it is an identity rather than a name, and what reads it. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
-                        const char *inherited_coep_report_only_endpoint)
+                        const char *inherited_coep_report_only_endpoint,
+                        const char *parent_navigable)
 {
     char *origin;
     HeaderList response_headers;
@@ -604,15 +613,6 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
         /* NULL: THIS HOST DOES NOT KNOW THE NAVIGABLE'S NAME. The document was navigated to by the real
            browser, and a cross-origin opener may have set `name` before navigating — which is exactly how
            window.name became an attacker source. The read is concolic until something states it. */
-        /* §7.5.1's OPENER POLICY ROW for the root Document — §7.1.3's policy obtained from the response
-           this instance was started with. It is the navigable's because §7.1.3.2 and §7.3.2.1 both read it off
-           a browsing context's active document (core/frame/window_proxy.h). */
-        JSValue root_proxy = window_proxy_new_self(g_ctx, world_local_doc(), NULL, np.opener.value);
-        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
-        /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
-           response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
-           CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
-           file's remaining job is to say WHICH navigable and WHICH realm, which is a host fact. */
         /* WHICH CSP LIST THIS DOCUMENT IS CREATED WITH, AND CSP §2.2's SELF-ORIGIN OF IT — ONE answer from
            §7.1.7's own determine-navigation-params-policy-container (core/frame/policy_container.h), because
            WHOSE origin `'self'` names follows entirely from WHICH of the two containers this Document is
@@ -621,11 +621,27 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            inherited pair is §7.1.7's clone of the creator's container, relayed off the `navigable.create`
            notice by the trusted zone. The self-origin is stated as its own argument rather than taken from
            `origin` beside it because the two are different facts — a Document's principal, and the origin its
-           policy resolves `'self'` against — which is precisely what an inherited container makes disagree. */
+           policy resolves `'self'` against — which is precisely what an inherited container makes disagree.
+           IT IS COMPUTED BEFORE THE MINT because §7.1.4.2's step 2 reads its embedder policy: the check runs
+           where the navigable is rooted, and a check made after the Document exists is one that could not
+           block it. */
         SerializedPolicyContainer inherited =
             qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
                                     inherited_coep_report_only_endpoint);
+        /* §7.5.1's OPENER POLICY ROW for the root Document — §7.1.3's policy obtained from the response
+           this instance was started with. It is the navigable's because §7.1.3.2 and §7.3.2.1 both read it off
+           a browsing context's active document (core/frame/window_proxy.h). */
+        /* AND §7.3.1.3's PARENT, WHICH DECIDES WHETHER THIS ROOT IS A TOP-LEVEL TRAVERSABLE AT ALL — stated by
+           the zone that routed the create, never inferred from the fact that this entry is the one that roots
+           an instance. navigable_root runs §7.1.4.2 over it. */
+        JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np.opener.value,
+                                            parent_navigable, inherited, &np.embedder);
+        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
+           response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
+           CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
+           file's remaining job is to say WHICH navigable and WHICH realm, which is a host fact. */
         /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
            response step 4, computed where the response is read (core/frame/navigation_params.c) and handed to
            the container constructor here, which is the ONLY thing `np.embedder` is for. */
@@ -702,13 +718,20 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  * assert applies, and it applies through §7.1.7's own algorithm (core/frame/policy_container.h) so this entry,
  * the root's, and the WPT runner's cannot come to answer it differently. The four `inherited_coep*` arguments
  * are that same container's §7.1.4 item, for the reason qjs_init states: §7.1.7's clone moves every item of a
- * container, so an item that stops at a seam is an inheritance silently deleted. */
+ * container, so an item that stops at a seam is an inheritance silently deleted.
+ *
+ * `parent_navigable` IS qjs_init's TOO, AND IT IS NOT ALWAYS `u` HERE. A document reaching this entry is one
+ * this agent did not root, and the shape that makes it a CHILD navigable is ordinary: a same-origin document
+ * nested through a CROSS-ORIGIN one (a page embedding a third-party frame that embeds the page's own origin
+ * back) is a document of THIS cluster whose §7.3.1.3 parent lives in a peer instance. Its navigable is a child
+ * navigable, and this entry is where that is stated or lost. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
-                        const char *inherited_coep_report_only_endpoint)
+                        const char *inherited_coep_report_only_endpoint,
+                        const char *parent_navigable)
 {
     HeaderList response_headers;
     NavigationParams np;
@@ -798,21 +821,26 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            carries no name field, so `window.name` is unknown external input and reads concolic until something
            states it. That is what `window_proxy_new_self` spells with a NULL, and what the §7.4 mint beside it
            cannot spell at all (it answers "" for a name it was not given, because §7.4 always knows one). */
-        /* §7.5.1's OPENER POLICY ROW for the joined Document, from ITS response's header list — read by
-           the same component over the same shape, because this is the same algorithm over a second response. */
-        JSValue proxy = window_proxy_new_self(cctx, doc, NULL, np.opener.value);
-
-        CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
         /* THE PRINCIPAL IS THE AGENT'S OWN RECORD, serialized — not a second derivation from `url`; the CHECK
            above is what makes it the right answer rather than a substitution that happens to match.
            CSP §2.2's SELF-ORIGIN IS A DIFFERENT FACT AND IS RESOLVED WITH THE LIST IT BELONGS TO. This line
            passed the agent's record for both, which is §2.2.2's answer and is right exactly when the list came
            off this document's own response — and a document that reaches THIS entry is one another instance
-           announced, so an inherited container is the case the entry exists for rather than an exotic one. */
+           announced, so an inherited container is the case the entry exists for rather than an exotic one.
+           BEFORE THE MINT, for qjs_init's reason: §7.1.4.2 step 2 reads this container's embedder policy. */
         SerializedPolicyContainer inherited =
             qjs_inherited_container(inherited_csp, inherited_csp_self_origin, inherited_coep,
                                     inherited_coep_endpoint, inherited_coep_report_only,
                                     inherited_coep_report_only_endpoint);
+        /* §7.5.1's OPENER POLICY ROW for the joined Document, from ITS response's header list — read by
+           the same component over the same shape, because this is the same algorithm over a second response.
+           AND §7.3.1.3's PARENT, which for a joined document is as real a possibility as for a rooted one — a
+           same-origin document nested through a cross-origin one belongs to this cluster and to another
+           instance's frame tree at once. */
+        JSValue proxy = navigable_root(cctx, doc, NULL, np.opener.value, parent_navigable, inherited,
+                                       &np.embedder);
+
+        CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin_serialized(origin_agent()),
                                         serialized_embedder_policy_of(&np.embedder));

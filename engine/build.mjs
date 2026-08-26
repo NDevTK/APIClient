@@ -1194,8 +1194,9 @@ report(STAGES);
        run behind the frame boundary and a routing phase would have asserted against a peer with no frontier to
        route into. Phase 4 drives one renderer's frontier over the wire — a cross-origin `window.open`, which
        core/frame/navigable.c ANNOUNCES rather than creates because the child is in another agent cluster — and
-       reads the `navigable.create` notice back through the typed boundary, asserting its seven fields against
-       that record's own grammar. What is still unwritten is the record travelling the other way: `Route`,
+       reads the `navigable.create` notice back through the typed boundary, asserting the record against its
+       own grammar field by field — including HTML §7.3.1.3's PARENT NAVIGABLE, whose `u` is what distinguishes
+       the AUXILIARY navigable a `window.open` makes from the child navigable an `<iframe>` does. What is still unwritten is the record travelling the other way: `Route`,
        `Perform` and `HostAnswerRemote` are declared and the validator has still never seen one;
      - the routing DECISION and the origin stamp — bridge.js's, exercised by nothing, and NOT closed by adding
        a phase above: a gate that models `holderOf` the way route.mjs does is honest only if it says so. What

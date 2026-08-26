@@ -217,12 +217,16 @@ async function child(docPath, schedName) {
          THE FOUR AFTER IT ARE §7.1.4's EMBEDDER POLICY of that same container, and they are NOT empty — they
          are the section's own "a new embedder policy", because §7.1.7 gives every container one and there is
          therefore no absence to spell. The two values are §7.1.4's token strings; main.c refuses one that
-         names none of the three rather than reading it as the default. */
+         names none of the three rather than reading it as the default.
+         AND THE LAST IS HTML §7.3.1.3's PARENT NAVIGABLE, `u` — this gate's fixture documents are rooted with
+         no embedder, so their navigables are top-level traversables. It is the engine's own encoding for the
+         absence rather than an empty string, because a navigable either has a parent or is a top-level
+         traversable and both are facts a host states. */
       e.M.ccall("qjs_init", "number",
                 ["number", "number", "number", "number", "number", "number", "number", "number",
-                 "number", "number", "number", "number"],
+                 "number", "number", "number", "number", "number"],
                 [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url), e.cs(""), e.cs(""),
-                 e.cs("unsafe-none"), e.cs(""), e.cs("unsafe-none"), e.cs("")]);
+                 e.cs("unsafe-none"), e.cs(""), e.cs("unsafe-none"), e.cs(""), e.cs("u")]);
       e.M._free(hp);
     }
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);

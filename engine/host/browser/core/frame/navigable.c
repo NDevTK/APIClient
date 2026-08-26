@@ -14,6 +14,7 @@
 #include "core/frame/opener_policy.h"   /* §7.1.3's policy and §7.1.3.2's group-switch decision */
 #include "core/frame/embedder_policy.h" /* §7.1.4's obtain, which §7.1.7 step 4 makes a container's own item */
 #include "core/frame/browsing_context_group.h"   /* and §7.1.3.2's swap, which is what that decision reaches */
+#include "core/frame/remote_object.h"   /* the ONE grammar a navigable's IDENTITY crosses an instance in */
 #include "core/frame/secure_context.h"  /* §8.1.3.5, which §7.1.3 step 2 asks of the reserved environment */
 #include "core/fetch/headers.h"         /* the response's header list, as the field lines it crosses the ABI in */
 #include "core/dom/document.h"
@@ -1662,6 +1663,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     uint32_t child;
     JSValue proxy;
     char *op;
+    /* §7.3.1.3's PARENT, in the form a navigable crosses an instance boundary in — filled only on the arm that
+       emits the notice, because that is the only arm where a navigable's tree has to be described to someone
+       who cannot see it. */
+    char *parent_id = NULL;
     size_t n;
     /* HTML §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
        about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation
@@ -1872,11 +1877,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
         /* THE NOTICE, and every field of it is load-bearing. The CHILD is the name the host provisions an
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
-           child's; the SELF-ORIGIN and the POLICY are the two halves of HTML §7.3.2.1's CLONE OF THE CREATOR'S
-           policy container ("Creating browsing contexts": "Set document's policy container to a clone of
-           creator's policy container"), serialized — which the container can do precisely because it is a flat
-           parse over one owned string plus the origin beside it, so the clone that crosses an instance and the
-           clone that crosses a session are the same operation. */
+           child's; the PARENT is §7.3.1.3's link, without which the peer's own navigable is a top-level
+           traversable by that section's definition; the SELF-ORIGIN and the POLICY are the two halves of
+           HTML §7.3.2.1's CLONE OF THE CREATOR'S policy container ("Creating browsing contexts": "Set
+           document's policy container to a clone of creator's policy container"), serialized — which the
+           container can do precisely because it is a flat parse over one owned string plus the origin beside
+           it, so the clone that crosses an instance and the clone that crosses a session are the same
+           operation. */
         /* AND §8.1.3.1's TOP-LEVEL CREATION URL, which crosses for exactly the reason the policy container
            does: the child's ENVIRONMENT is decided by the operation that created it, the instance that will
            host the child cannot derive it, and a peer that answered from the child's own address would report
@@ -1951,6 +1958,41 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                "8941 §3.3.3 \"Strings\" excludes tabs from a structured-field string, so a byte that reached "
                "here is one the structured-field parser admitted and should not have; it would split this "
                "notice into more fields than it has and shift the creator's policy text onto the wrong one");
+        /* HTML §7.3.1.3 "Child navigables" — THE ONE FACT THE PEER COULD NEVER DERIVE ABOUT ITS OWN NAVIGABLE,
+           and the reason this field is the PARENT rather than a flag. The section defines the term over the
+           link and not over a property of the navigable: "A navigable navigable is a child navigable of another
+           navigable potentialParent when navigable's parent is potentialParent. We can also just say that a
+           navigable 'is a child navigable', which means that its PARENT IS NON-NULL." A peer instance mints its
+           root proxy for a navigable nothing there created, so its parent slot was JS_UNDEFINED — and a
+           navigable whose parent is null IS a top-level traversable, everywhere, by that definition. That is
+           not one wrong answer: §7.1.4.2 "Embedder policy checks" step 1 returns true for it, §7.2.2.4's
+           `parent` and `top` answer the frame itself, §7.5.9/§7.5.10's subtree walks find nothing above it, and
+           every one of those is a plausible answer about a top-level page rather than a crash.
+           IT IS NOT THE CREATOR FIELD SAID TWICE, AND THE TWO MUST NOT BE COLLAPSED. The creator is a ROUTING
+           fact — which instance made this, so a reply reaches it — and it is present for an AUXILIARY navigable,
+           which has no parent at all; the parent is §7.3.1.3's TREE LINK and carries a whole identity (origin,
+           name, parent, opener) rather than a name. They name one document for one shape of navigable, which is
+           the same coincidence §7.1.4.2's parentPolicy rests on, and a reader who deleted either would be
+           deleting the case where they differ.
+           IT CROSSES AS THE NAVIGABLE'S IDENTITY, in the one grammar a navigable already crosses an instance
+           boundary in (core/frame/remote_object.h's 'W' record), because a NAME is not enough to MINT one: the
+           peer holds no proxy for this navigable, and remote_object.c states in as many words that minting
+           needs the parent's own origin, name, parent and opener. The five base64 fields are '.'-terminated and
+           the tag is one letter, so nothing in it can contain a tab.
+           `u` — the grammar's own undefined — IS THE POSITIVE STATEMENT THAT THERE IS NO PARENT, and it is what
+           an AUXILIARY navigable sends: §7.3.1.7 step 8 creates one out of a target name with no element
+           anywhere in the algorithm, so it is its own top and what links it back here is `opener`. An empty
+           field would be a hole a reader could default; a value in the encoding's own vocabulary is a fact.
+           THE PARENT IS THIS DOCUMENT because §7.3.1.3's create-a-new-child-navigable runs in the embedder's
+           realm — "let parentNavigable be element's node navigable" — which is the same proxy this call hands
+           the child two lines below as its parent on the same-agent arm. */
+        parent_id = remote_object_encode(ctx, is_child ? document_window_proxy(ctx) : JS_UNDEFINED);
+        CHECK(parent_id != NULL, "navigable: OOM naming this navigable's §7.3.1.3 parent for a peer instance");
+        DCHECK(!strchr(parent_id, '\t'),
+               "§7.3.1.3's parent navigable was encoded with a TAB in it and this record is tab-delimited — "
+               "remote_object.c writes a one-letter tag and base64 fields terminated by '.', so a tab here is "
+               "that grammar having changed under a record that splits on one, and the creator's policy text "
+               "would land on the wrong field");
         n = strlen(world_doc_name(child)) + strlen(world_doc_name(document_doc(ctx))) +
             strlen(addr) + strlen(origin_serialized(origin)) +
             strlen(creator_policy.csp ? creator_policy.csp : "") + strlen(tlu) +
@@ -1958,19 +2000,23 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             strlen(embedder_policy_value_token(creator_policy.embedder.value)) +
             strlen(creator_policy.embedder.endpoint) +
             strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
-            strlen(creator_policy.embedder.report_only_endpoint) + 32;
+            strlen(creator_policy.embedder.report_only_endpoint) +
+            strlen(parent_id) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s", world_doc_name(child),
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+                 world_doc_name(child),
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
                  creator_policy.self_origin,
                  embedder_policy_value_token(creator_policy.embedder.value),
                  creator_policy.embedder.endpoint,
                  embedder_policy_value_token(creator_policy.embedder.report_only_value),
                  creator_policy.embedder.report_only_endpoint,
+                 parent_id,
                  creator_policy.csp ? creator_policy.csp : "");
         engine_host_notify(ctx, op);
         free(op);
+        free(parent_id);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just
            minted and nothing has named it yet, so this ask is the mint — but it is the ask that RECORDS it,
            and without the record `w.frames[0] === iframe.contentWindow` is false about the frame this line
@@ -1994,6 +2040,58 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     JS_FreeCString(ctx, creator_tlu_s);
     JS_FreeValue(ctx, creator_tlu);
     free(addr);
+    return proxy;
+}
+
+/* THE OTHER HALF OF §7.4's CREATE — the navigable an instance is ROOTED in, which the create above did not
+ * make. See core/frame/navigable.h for why the parent is a parameter, why it crosses as an identity, and why
+ * §7.1.4.2's step 2 is answerable here from the container the record carried. */
+JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
+                       const char *parent_navigable, SerializedPolicyContainer inherited,
+                       const EmbedderPolicy *response_embedder)
+{
+    JSValue parent, proxy;
+
+    DCHECK(parent_navigable != NULL && *parent_navigable,
+           "a navigable was rooted with no §7.3.1.3 PARENT field at all — a navigable either has a parent or is "
+           "a top-level traversable, both are facts, and core/frame/remote_object.h spells the second `u`. An "
+           "empty field is a host that stopped stating it, and the document would silently become a top-level "
+           "page in the only instance that holds it");
+    DCHECK(response_embedder != NULL,
+           "a navigable was rooted with no §7.1.4 EMBEDDER POLICY for its own response — §7.1.7's create-a-"
+           "policy-container-from-a-fetch-response obtains one for every response and §7.1.4's own initial value "
+           "answers for a document that has none, so an absent one is a host that did not run the obtain rather "
+           "than a response that carried nothing");
+    parent = remote_object_decode(ctx, parent_navigable);
+    if (window_proxy_is(parent)) {
+        /* §7.1.4.2 steps 2-6. The container is asserted to EXIST rather than read through a "none", whose
+           embedder policy answers `unsafe-none` — a value that makes step 4 return true, so a lost container
+           would turn this check off with nothing to say so. */
+        bool adheres;
+
+        DCHECK(serialized_policy_container_exists(inherited),
+               "a CHILD navigable was rooted with no §7.1.7 POLICY CONTAINER to inherit — §7.3.1.3's create "
+               "clones its creator's onto the record that provisions this instance and asserts it is there, so "
+               "a child that arrives without one lost the clone in transit. §7.1.4.2 step 2 would then read "
+               "`unsafe-none` for a container document that may have opted into cross-origin isolation, and the "
+               "check would pass for every response");
+        adheres = embedder_policy_check_navigation_response(inherited.embedder,
+                                                            serialized_embedder_policy_of(response_embedder));
+        /* §7.1.4.2's steps QUEUE before they answer, so the call stands outside the assert and only its ANSWER
+           is read below: a DCHECK's condition is compiled out in release, and a check performed inside one is a
+           check the shipped build never runs. */
+        DCHECK(adheres,
+               "HTML §7.4.5 \"Populating a session history entry\" BLOCKS this document — §7.1.4.2's check a "
+               "navigation response's adherence to its embedder policy returned false, because the CONTAINER "
+               "DOCUMENT of this navigable (which lives in another instance) enforces a "
+               "`Cross-Origin-Embedder-Policy` compatible with cross-origin isolation and this response opted "
+               "into none. The navigable must get §7.5.7 \"Loading a document for inline content that doesn't "
+               "have a DOM\"'s Document instead of the response's, marked unsalvageable with "
+               "\"navigation-failure\" — the same error Document js_nav_load_step above still owes for a child "
+               "navigable of this instance, and it is one value both sites take rather than two");
+    }
+    proxy = window_proxy_new_self(ctx, doc, name, opener_policy, parent);
+    JS_FreeValue(ctx, parent);
     return proxy;
 }
 

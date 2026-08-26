@@ -121,7 +121,23 @@ bool window_proxy_is_popup(JSValueConst proxy);
    policy obtained from the response that created it (core/frame/navigation_params.h). This is the one
    navigable §7.3.2.1 did not create, so there is nothing to inherit: the host states what the response said,
    exactly as it states the address and the header list it came from. */
-JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy);
+/* `parent` is HTML §7.3.1.3 "Child navigables"' PARENT NAVIGABLE, and it is an argument because it is the ONE
+   fact about this navigable's place in a tree that the instance holding it cannot see. §7.3.1.3 defines the
+   term over the link — a navigable "is a child navigable", "which means that its parent is non-null" — so a
+   host that passes JS_UNDEFINED is not leaving a field blank, it is STATING that this navigable is a top-level
+   traversable, and every algorithm that asks §7.3.1.3's question will answer accordingly.
+   THAT STATEMENT USED TO BE MADE BY THIS FUNCTION AND WAS FALSE FOR THE COMMONEST CASE. A cross-origin child
+   navigable is provisioned as a peer INSTANCE (SECURITY.md's origin-keyed agent cluster), whose root proxy is
+   this mint — so the frames a security tool cares about most presented as top-level pages in the only heap that
+   holds them, and §7.1.4.2 step 1, §7.2.2.4's `parent`/`top` and §7.5.9's subtree walks each returned a
+   plausible answer about a page that does not exist. The parent travels on the `navigable.create` notice, as
+   the identity core/frame/remote_object.h already crosses a navigable in, and reaches here through the host
+   entry (engine/host/main.c).
+   IT IS A NAVIGABLE OR NOTHING — a WindowProxy, remote or local, or JS_UNDEFINED. JS_NULL is the OPENER slot's
+   absence and not this one's (window_proxy.c keeps the two spellings apart because §7.2.2.4 answers `parent`
+   with the navigable itself at the top of a tree and `opener` with null). */
+JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
+                              JSValueConst parent);
 
 /* THE ONE WindowProxy FOR A DOCUMENT — this agent's own when it hosts it, and otherwise a proxy over a
    navigable whose active document lives in ANOTHER WASM instance, minted here on the first ask and answered

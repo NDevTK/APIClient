@@ -1467,10 +1467,17 @@ static ChildDoc *wpt_child_for(const char *name)
    the source's, so an item this process kept to itself is an inheritance the child would silently replace with
    `unsafe-none`. The two VALUES cross as §7.1.4's own tokens — a command line is a record, and a record
    carrying this enum's integers is a contract whose ends agree only by declaration order. */
+/* AND `parent` IS HTML §7.3.1.3 "Child navigables"' PARENT NAVIGABLE, in the identity form core/frame/
+   remote_object.h crosses one in. It is not part of the container above it — §7.1.7's container is five
+   policies and says nothing about a tree — and it is the one fact a child PROCESS could never recover: a
+   navigable "is a child navigable", "which means that its parent is non-null", and this process is the only
+   party that knows the navigable it is about to provision hangs off one of its own. `u` is that grammar's
+   undefined and is the positive statement that there is none, which is what §7.1.3.2's swap sends. */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
-                            const char *coep_report_only, const char *coep_report_only_endpoint)
+                            const char *coep_report_only, const char *coep_report_only_endpoint,
+                            const char *parent)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1483,6 +1490,13 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            "a child document was about to be provisioned with no §7.1.4 EMBEDDER POLICY for its §7.1.7 "
            "container — every container has one, so this is a caller that did not state which of the two "
            "answers applies (the creator's clone, or a new embedder policy where there is no creator)");
+    /* §7.3.1.3's PARENT IS STATED BY EVERY CALLER FOR THE SAME REASON, and it has no empty spelling either: a
+       navigable either has a parent or is a top-level traversable, and both are answers. */
+    DCHECK(parent != NULL && *parent,
+           "a child document was about to be provisioned with no §7.3.1.3 PARENT NAVIGABLE — the section makes "
+           "\"is a child navigable\" mean \"its parent is non-null\", so a process started without the field "
+           "would root its document in a navigable that presents as a TOP-LEVEL TRAVERSABLE, and every "
+           "algorithm that walks up out of it would find nothing rather than crash");
     if (wpt_child_for(name)) return;   /* already provisioned; a notice is not a request */
     CHECK(g_children_n < WPT_CHILD_MAX, "wpt: more child documents at once than this runner tracks");
     /* O_CLOEXEC, AND IT IS NOT HYGIENE. fork() copies every descriptor, so a SECOND child would inherit this
@@ -1506,7 +1520,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            indexing has one rule and not one per generation. */
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
-              coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, (char *)NULL);
+              coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1648,7 +1662,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[12]; int nf = 0; char *q;
+    char *f[13]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1657,18 +1671,21 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 12; q++)
+    for (q = line, f[nf++] = q; *q && nf < 13; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 12 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 13 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
            the creator's container, which moves whole, and the instance that will host the child can derive
-           none of them. They all come BEFORE the policy at field 11 because the policy is the record's
-           remainder: neither an origin's serialization nor an §7.1.4 value's token can contain a tab, and RFC
-           8941 §3.3.3 "Strings" excludes one from the `report-to` endpoint, while a raw CSP header may hold
-           one. */
-        wpt_spawn_child(f[1], f[3], f[4], f[11], f[6], f[5], f[7], f[8], f[9], f[10]);
+           none of them. FIELD 11 IS HTML §7.3.1.3's PARENT NAVIGABLE, which is not an item of that container
+           at all — it is the tree link that decides whether the child's own instance is rooted in a child
+           navigable or in a top-level traversable, and no process but this one holds it. They all come BEFORE
+           the policy at field 12 because the policy is the record's remainder: neither an origin's
+           serialization, nor an §7.1.4 value's token, nor remote_object.h's base64 identity can contain a tab,
+           and RFC 8941 §3.3.3 "Strings" excludes one from the `report-to` endpoint, while a raw CSP header may
+           hold one. */
+        wpt_spawn_child(f[1], f[3], f[4], f[12], f[6], f[5], f[7], f[8], f[9], f[10], f[11]);
         free(whole);
         return;
     }
@@ -1687,8 +1704,12 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            §7.1.4's ITEM IS "A NEW EMBEDDER POLICY" FOR THE SAME REASON AND IS SPELLED OUT RATHER THAN LEFT
            EMPTY: the CSP list's absence is spelled by an absent self-origin, but an embedder policy has no
            absence — §7.1.7 gives every container one — so the swapped-to Document's is the initial value the
-           section names, `unsafe-none` with two empty reporting endpoints. */
-        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "");
+           section names, `unsafe-none` with two empty reporting endpoints.
+           AND §7.3.1.3's PARENT IS `u`, WHICH IS THE SPEC AND NOT A BLANK: §7.1.3.2's swap is asserted at its
+           own site to be reached only for a TOP-LEVEL browsing context ("if browsingContext is not a top-level
+           browsing context, then return browsingContext"), so the navigable it provisions has no parent by the
+           standard's own step 2 rather than by this host having nothing to say. */
+        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u");
         free(whole);
         return;
     }
@@ -2360,12 +2381,19 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
    creator's child under `unsafe-none`, with no header anywhere to say so because the child's own response
    never carried one. The values are §7.1.4's own TOKENS, which is what a `--document` child reads off its
    command line and what a `navigable.create` notice writes. */
+/* AND `parent_navigable` IS HTML §7.3.1.3 "Child navigables"' PARENT, in remote_object.h's identity form. It
+   is NOT an item of the container above — a policy container is five policies and says nothing about a tree —
+   and it is the fact this process cannot recover for itself: §7.3.1.3 makes "is a child navigable" mean "its
+   parent is non-null", so a `--document` child that was told nothing would root its document in a navigable
+   that presents as a top-level traversable. `u` is that grammar's undefined and is what the top-level test
+   document passes: this runner loaded it from the corpus and nothing embeds it. */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
                                      const char *inherited_csp, const char *inherited_csp_self_origin,
                                      const char *inherited_coep, const char *inherited_coep_endpoint,
                                      const char *inherited_coep_report_only,
-                                     const char *inherited_coep_report_only_endpoint)
+                                     const char *inherited_coep_report_only_endpoint,
+                                     const char *parent_navigable)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
@@ -2481,11 +2509,6 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
     {
         /* THE RUNNER LOADED THIS DOCUMENT ITSELF, so it knows the navigable's name is the spec's initial "" —
            nothing opened it under a name. Saying so is what keeps `window.name` a computed value here. */
-        /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same
-           response the params above came from, so this runner and the product host give a root navigable the
-           identical row from the identical computation. */
-        JSValue root_proxy = window_proxy_new_self(ctx, world_local_doc(), "", np.opener.value);
-        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* §7.5.1's Document, from the navigation params the response decided — §7.4.5's final sandboxing flag
            set and §7.1.7 step 3's CSP list both come out of the one place a response is read
            (core/frame/navigation_params.c), so this runner and the product host create a Document from the
@@ -2521,6 +2544,16 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
             inherited_csp, inherited_csp_self_origin,
             serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
                                        inherited_coep_report_only_endpoint));
+        /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same response
+           the params above came from — and §7.3.1.3's PARENT, which for a `--document` child is a navigable in
+           the PARENT PROCESS and for the top-level test document is none. Both go to core/frame/navigable.c's
+           navigable_root, which is also where §7.1.4.2's check over the two containers runs: this runner and
+           the product host root a navigable through ONE algorithm, for the reason the container ordering above
+           is not restated here either. AFTER the inherited container, because that check reads it. */
+        JSValue root_proxy = navigable_root(ctx, world_local_doc(), "", np.opener.value, parent_navigable,
+                                            inherited, &np.embedder);
+
+        CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
         /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, origin,
@@ -2686,6 +2719,14 @@ static int wpt_child_main(int argc, char **argv)
     const char *coep_endpoint = argc > 9 ? argv[9] : NULL;
     const char *coep_report_only = argc > 10 ? argv[10] : NULL;
     const char *coep_report_only_endpoint = argc > 11 ? argv[11] : NULL;
+    /* HTML §7.3.1.3 "Child navigables"' PARENT of the navigable this process is rooted in, from the parent
+       process — the one fact about its place in a frame tree that a child process cannot recover, since the
+       section makes "is a child navigable" mean "its parent is non-null" and nothing here can see above itself.
+       APPENDED, like the two items above and for their reason: every position already read keeps its meaning.
+       NOT DEFAULTED WHEN ABSENT, for the embedder policy's reason and one more: `u` — the encoding's own
+       undefined — is a REAL answer here (§7.1.3.2's swap sends it), so "the parent did not state it" and "the
+       parent stated no parent" would be one value, and that is the difference between a frame and a page. */
+    const char *parent_navigable = argc > 12 ? argv[12] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2713,6 +2754,12 @@ static int wpt_child_main(int argc, char **argv)
           "wpt: a child document was started with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide "
           "whether this document's realm is a secure context, and Web IDL §3.3.13's members exist or do not by "
           "that answer, so the platform surface of this instance would be a guess");
+    CHECK(parent_navigable && *parent_navigable,
+          "wpt: a child document was started with no §7.3.1.3 PARENT NAVIGABLE — the section makes \"is a child "
+          "navigable\" mean \"its parent is non-null\", and this process cannot see what embeds it, so without "
+          "the field its document would be rooted in a navigable that presents as a TOP-LEVEL TRAVERSABLE: "
+          "§7.1.4.2 step 1 returns true for it, `parent` and `top` answer itself, and §7.5.9's subtree walk "
+          "finds nothing above it — four plausible answers about a page that is not there");
     CHECK(coep && coep_endpoint && coep_report_only && coep_report_only_endpoint,
           "wpt: a child document was started with no §7.1.4 EMBEDDER POLICY for its §7.1.7 policy container — "
           "the clone that created this Document moves every item of its creator's container, and this one is "
@@ -2738,7 +2785,7 @@ static int wpt_child_main(int argc, char **argv)
        Contexts §4.2 exists to close. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
-                             coep_report_only_endpoint);
+                             coep_report_only_endpoint, parent_navigable);
     free(html);
     header_list_free(&html_headers);
 
@@ -2908,8 +2955,11 @@ int main(int argc, char **argv)
     /* NO BYTES AND NO HEADERS FROM HERE: this call has no response of its own to hand over — wpt_build_document
        fetches the test document itself in `--test-document` mode, and a `.any.js` run has no document response
        at all (the skeleton it wraps the script in is this runner's, not a server's). */
+    /* AND §7.3.1.3's PARENT IS `u`, WHICH THIS RUNNER KNOWS RATHER THAN ASSUMES: it loaded this document from
+       the corpus itself, so nothing embeds it and its navigable is a top-level traversable. A `--document`
+       child reaches the same build with the identity its parent process wrote on its command line. */
     ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, NULL, "", "",
-                             "unsafe-none", "", "unsafe-none", "");
+                             "unsafe-none", "", "unsafe-none", "", "u");
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */

@@ -155,24 +155,28 @@
      becomes TWO C operands, which is the whole reason a placement is per-parameter rather than per-type. The
      two pairs differ only in LIFETIME, which is a fact about the C entry and not about the bytes. */
   var ABI = {
-    /* THE LAST SIX ARE `string` AND NOT `string-retained`, AND THAT IS READ OFF THE C ENTRY LIKE EVERY OTHER
+    /* THE LAST SEVEN ARE `string` AND NOT `string-retained`, AND THAT IS READ OFF THE C ENTRY LIKE EVERY OTHER
        PLACEMENT: the inherited policy container is consumed DURING the call — document_install runs
        `origin_parse` over the self-origin, policy_container_new COPIES the policy text and
        embedder_policy_adopt COPIES both of HTML §7.1.4's reporting endpoint strings — so no pointer outlives
        it, and retaining them would be this table asserting an ownership main.c does not take.
-       THE FOUR NEW ONES ARE §7.1.4's EMBEDDER POLICY, the item HTML §7.1.7 "Policy containers" makes part of
+       FOUR OF THEM ARE §7.1.4's EMBEDDER POLICY, the item HTML §7.1.7 "Policy containers" makes part of
        the container beside the CSP list. They are FOUR parameters because §7.1.4 makes a policy four items and
        §7.1.7's clone moves every one of them, and the two VALUES cross as the section's own token strings —
        main.c's own qjs_inherited_container is what turns one back into a value, and it crashes on a token
-       naming none of the three rather than reading it as the default. */
+       naming none of the three rather than reading it as the default.
+       THE LAST ONE IS HTML §7.3.1.3's PARENT NAVIGABLE and it is NOT part of that container — a policy
+       container is five policies and says nothing about a frame tree. It is `string` for the same lifetime
+       reason as the rest: navigable_root decodes it into a WindowProxy DURING the call (remote_object_decode)
+       and keeps no pointer into these bytes. */
     init:             { fn: "qjs_init",               ret: "number", out: "rc",
                         place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
                                 "string-retained", "string", "string", "string", "string", "string",
-                                "string"] },
+                                "string", "string"] },
     join:             { fn: "qjs_join",               ret: "number", out: "rc",
                         place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
                                 "string-retained", "string", "string", "string", "string", "string",
-                                "string"] },
+                                "string", "string"] },
     getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId", place: [] },
     begin:            { fn: "qjs_begin",              ret: null,     out: null,       place: ["string"] },
     step:             { fn: "qjs_step",               ret: "number", out: "code",     place: [] },

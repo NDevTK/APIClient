@@ -136,10 +136,18 @@ let instanceSerial = 0;
    inheritance silently replaced by `unsafe-none` — and unlike the CSP list there is no empty spelling for it:
    §7.1.7 gives every container an embedder policy, so a document with no creator states §7.1.4's own initial
    value ("unsafe-none", "", "unsafe-none", "") rather than nothing. The two VALUES are §7.1.4's token strings;
-   main.c is the only party that turns one into a value and it crashes on a token naming none of the three. */
+   main.c is the only party that turns one into a value and it crashes on a token naming none of the three.
+   `parentNavigable` IS HTML §7.3.1.3 "Child navigables"' PARENT, AND IT IS NOT AN ITEM OF THAT CONTAINER — a
+   policy container is five policies and says nothing about a frame tree. §7.3.1.3 defines the term over the
+   link ("a navigable 'is a child navigable', which means that its parent is non-null"), so a driver that says
+   nothing is declaring a TOP-LEVEL TRAVERSABLE — which is exactly what an instance provisioned for a
+   CROSS-ORIGIN CHILD is not. It crosses as the emitting engine's own navigable identity, relayed verbatim; `u`
+   is that grammar's undefined and is what a root document with no embedder states, which is why it is the
+   default here and never an empty string. */
 async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
-                          inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '') {
+                          inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
+                          parentNavigable = 'u') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -179,11 +187,12 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     const [hp, hn] = bs(html);
     M.ccall('qjs_init', 'number',
       ['number','number','number','number','number','number','number','number',
-       'number','number','number','number'],
+       'number','number','number','number','number'],
       [hp, hn, cs(url), cs(docId), cs(headers || ''), cs(topLevelUrl),
        cs(inheritedCsp || ''), cs(inheritedCspSelf || ''),
        cs(inheritedCoep), cs(inheritedCoepEndpoint),
-       cs(inheritedCoepReportOnly), cs(inheritedCoepReportOnlyEndpoint)]);
+       cs(inheritedCoepReportOnly), cs(inheritedCoepReportOnlyEndpoint),
+       cs(parentNavigable)]);
     M._free(hp);
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
@@ -470,13 +479,19 @@ async function drainNotices(e) {
     if (f[0] === 'navigable.create') {
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
       /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
-         its value, its reporting endpoint, its report-only value and its report-only endpoint — and FIELD 11
-         IS THE LIST. The policy is the record's REMAINDER (a raw CSP header may contain HTAB), which is why
-         everything that is not the policy sits before it: an origin's serialization cannot contain a tab, nor
-         can §7.1.4's tokens, and RFC 8941 §3.3.3 "Strings" excludes one from a `report-to` endpoint.
+         its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS
+         HTML §7.3.1.3's PARENT NAVIGABLE, and FIELD 12 IS THE LIST. The policy is the record's REMAINDER (a
+         raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
+         origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
+         one-letter tag and '.'-terminated base64, and RFC 8941 §3.3.3 "Strings" excludes one from a
+         `report-to` endpoint.
+         THE PARENT IS NOT PART OF THE CONTAINER BESIDE IT and is passed on its own: this fixture's `a` opens a
+         CROSS-ORIGIN WINDOW, which §7.3.1.7 step 8 makes an AUXILIARY navigable — a full policy container and
+         NO parent — so the record carries `u` here, and a driver that folded the two together could not tell
+         that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(11).join('\t'),
-                                         f[6], f[7], f[8], f[9], f[10]));
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(12).join('\t'),
+                                         f[6], f[7], f[8], f[9], f[10], f[11]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
@@ -494,6 +509,9 @@ async function drainNotices(e) {
       if (holderOf(f[1])) fail(`§7.1.3.2's swap named a document an instance already holds: ${f[1]}`);
       /* NO CREATOR (§7.3.2.3 makes the new browsing context "with null, null, and group"), so no container to
          clone and no self-origin to state. */
+      /* §7.3.1.3's PARENT DEFAULTS TO `u` HERE AND THAT IS THE SPEC: §7.1.3.2 step 2 returns before the
+         predicate is evaluated for anything that is not a TOP-LEVEL browsing context, which the engine asserts
+         where this record is written, so the navigable a swap provisions has no parent. */
       engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2], undefined, '', ''));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });

@@ -40,6 +40,8 @@
 /* §7.1.7's POLICY CONTAINER in the form it crosses a seam — a Document is created with one and a navigable is
    created with the clone of its creator's, so both entries below take one. */
 #include "core/frame/policy_container.h"
+#include "core/frame/embedder_policy.h"   /* §7.1.4's item, which §7.1.4.2 checks a rooted navigable against */
+#include "core/frame/opener_policy.h"     /* §7.5.1's opener policy ROW, which a rooted navigable carries */
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_features.h"
 #include "core/url/origin.h"
@@ -304,5 +306,38 @@ int navigable_realm_count(void);
 JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool is_child,
                          const WindowFeatures *feat, SandboxFlags iframe_sandbox_flags,
                          JSValueConst container);
+
+/* THE NAVIGABLE AN INSTANCE IS ROOTED IN — the one navigable_create above did NOT make, because it was made in
+ * another instance or by the browser itself — together with HTML §7.1.4.2 "Embedder policy checks" for the
+ * response it is being rooted with. It is here rather than in a host because there are THREE hosts and this is
+ * one rule: a copy per host is three rules waiting to disagree, which is the same reason §7.1.7's
+ * determine-navigation-params-policy-container is called by each of them and restated by none.
+ *
+ * `parent_navigable` IS HTML §7.3.1.3 "Child navigables"' PARENT, AS TEXT. The section defines the term over
+ * the link and not over a property — a navigable "is a child navigable", "which means that its parent is
+ * non-null" — so a host with nothing to say here is not omitting a field, it is declaring a TOP-LEVEL
+ * TRAVERSABLE. SECURITY.md makes a cross-origin document a separate INSTANCE, so the commonest child navigable
+ * there is (a cross-origin `<iframe>`) is the ROOT of a peer instance, and a peer that declared itself
+ * top-level answered §7.1.4.2 step 1, §7.2.2.4's `parent`/`top` and §7.5.9/§7.5.10's subtree walks with four
+ * plausible facts about a page that does not exist — never a crash.
+ * IT CROSSES AS core/frame/remote_object.h's NAVIGABLE IDENTITY and never as a document name, because the
+ * receiving instance holds no proxy for that navigable and a name is not enough to MINT one (remote_object.c:
+ * a minted parent needs its own origin, name, parent and opener). `u` is that grammar's undefined and is the
+ * POSITIVE statement that this navigable has no parent.
+ *
+ * `inherited` IS §7.1.7's CLONE THE HOST WAS HANDED and `response_embedder` IS §7.1.4's ITEM OBTAINED FROM THIS
+ * DOCUMENT'S OWN RESPONSE — the two operands of §7.1.4.2's steps 3-6. Its steps 1 and 2 are the caller's
+ * (core/frame/embedder_policy.h), and here step 1 is the parent above while step 2 — "navigable's CONTAINER
+ * DOCUMENT's policy container's embedder policy" — is `inherited`. THAT SUBSTITUTION IS PROVABLE RATHER THAN
+ * CONVENIENT: §7.3.1.3's create-a-new-child-navigable creates the browsing context and document "given
+ * element's node document, element, and group", so the CREATOR whose container was cloned onto the record that
+ * provisioned this instance IS "navigable's container's node document" — one Document, named two ways. What
+ * embedder_policy.h warns against is a LOAD JOB's INITIATOR container, which is a third document the moment
+ * `frames[0].location = …` runs, and no record provisions an instance for that navigation. A live read is not
+ * an alternative to prefer: the container document is in another instance and §Security makes a cross-instance
+ * read a SUSPEND POINT, which a rooting entry has no flow under it to suspend. */
+JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPolicyValue opener_policy,
+                       const char *parent_navigable, SerializedPolicyContainer inherited,
+                       const EmbedderPolicy *response_embedder);
 
 #endif
