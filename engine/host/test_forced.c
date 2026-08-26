@@ -14,6 +14,8 @@
 #include "core/xml/xml_markup.h" /* XML §2.5's [15] Comment, §2.6's [16] PI and §2.7's [18] CDSect */
 #include "core/xml/xml_decl.h"   /* XML §2.8's [23] XMLDecl, §2.9's [32] SDDecl and §4.3.1's [77] TextDecl */
 #include "core/xml/xml_literal.h" /* XML §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] PubidChar */
+#include "core/xml/xml_tag.h"    /* XML §3.1's [40] STag, [42] ETag, [44] EmptyElemTag and §3.3.3's values */
+#include "core/xml/xml_element.h" /* XML §3's [39] element over §3.1's [43] content — the element stack */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -7705,6 +7707,734 @@ static void xml_literal_selftest(void)
     }
 }
 
+/* XML 1.0 (Fifth Edition) §3.1 Start-Tags, End-Tags, and Empty-Element Tags with §3.3.3 Attribute-Value
+ * Normalization — core/xml/xml_tag.h, the first GRAMMAR RULE of that component set rather than another leaf.
+ *
+ * THE ROW THIS FIXTURE IS BUILT AROUND IS THE ONE PAIR §3.3.3'S OWN NOTE DISTINGUISHES, and it is the one a
+ * normalizer written from memory has backwards: "if the unnormalized attribute value contains a character
+ * reference to a white space character other than space (#x20), the normalized value contains the referenced
+ * character itself (#xD, #xA or #x9). This contrasts with the case where the unnormalized value contains a
+ * white space character (not a reference), which is replaced with a space character (#x20)." So one attribute
+ * value holding BOTH — `x&#x9;y` then a literal tab then `z` — must come out `x` #x9 `y` #x20 `z`, and a scan
+ * that ran its white-space arm over the reference's result, or its literal arm over the reference's, produces
+ * five characters that differ from the standard's answer in ONE byte each way. Neither mistake changes a
+ * length, neither throws, and both are invisible to every other row here — which is why the pair is written
+ * as one value rather than as two documents.
+ *   §3.3.3's own PRINTED TABLE supplies the other two, in its CDATA column, which is the only column this
+ * build can reach (§3.3.3: "All attributes for which no declaration has been read SHOULD be treated by a
+ * non-validating processor as if declared CDATA", and nothing here reads §2.8's [28] doctypedecl). Its first
+ * row is two literal line feeds before `xyz` and normalizes to `#x20 #x20 x y z`; its third is
+ * `&#xd;&#xd;A&#xa;&#xa;B&#xd;&#xa;` and normalizes to `#xD #xD A #xA #xA B #xD #xA` UNCHANGED — the row that
+ * proves §2.11 End-of-Line Handling is not applied to a reference's result, since a second §2.11 pass over the
+ * built value would collapse that final `#xD #xA` to one #xA. The standard's SECOND row is deliberately absent
+ * and its absence is the point: it is written over `<!ENTITY d "&#xD;">`, so reaching it needs a §2.8 [28]
+ * doctypedecl, and this build answers a reference to any entity outside §4.6's five with [WFC: Entity
+ * Declared] — which for a document with no DTD is the standard's answer and not a shortcut.
+ *
+ * THE EXTERNAL-ENTITY SURFACE IS A ROW HERE BECAUSE ITS CLOSURE IS A PROPERTY THAT CAN BE LOST QUIETLY.
+ * `<e a="&foo;">` is XML_TAG_ERR_ENTITY_UNDECLARED and NOT a value, so no attribute value in this build can be
+ * built out of anything a document names — which is what makes an XXE unreachable rather than filtered. A
+ * later increment that reads [28] and forgets §3.1's [WFC: No External Entity References] would turn this row
+ * green while turning the parser into one that fetches what a page's markup tells it to. */
+static void xml_tag_selftest(void)
+{
+#define XML_TAG_FIXTURE_ATTS 3
+    static const struct { const char *in; size_t n; XmlTagError err; XmlRefError ref;
+                          const char *name; bool empty;
+                          const char *att[XML_TAG_FIXTURE_ATTS][2];   /* [0] Name, [1] normalized value */
+                          size_t after; const char *why; } ST[] = {
+        /* [40] STag ::= '<' Name (S Attribute)* S? '>' and [44] EmptyElemTag ::= '<' Name (S Attribute)* S? '/>' */
+        { "<e>", 3, XML_TAG_OK, XML_REF_OK, "e", false, { { NULL, NULL } }, 3,
+          "[40]'s shortest form — a Name and nothing else, and `empty` false says [39] element took its `STag "
+          "content ETag` alternative" },
+        { "<e/>", 4, XML_TAG_OK, XML_REF_OK, "e", true, { { NULL, NULL } }, 4,
+          "[44] is the SAME production with a different ending, and which ending was found is a fact the scan "
+          "reports rather than a shape a caller recognised first" },
+        { "<e />", 5, XML_TAG_OK, XML_REF_OK, "e", true, { { NULL, NULL } }, 5,
+          "[44]'s `S? '/>'` — the optional white space is shared with [40] and cannot decide between them" },
+        { "<e >", 4, XML_TAG_OK, XML_REF_OK, "e", false, { { NULL, NULL } }, 4, "and the same for [40]" },
+        { "<e/>x", 5, XML_TAG_OK, XML_REF_OK, "e", true, { { NULL, NULL } }, 4,
+          "the scan stops immediately after the delimiter it found, leaving the rest for whoever walks [43] "
+          "content" },
+        { "<termdef id=\"dt-dog\" term=\"dog\">", 32, XML_TAG_OK, XML_REF_OK, "termdef", false,
+          { { "id", "dt-dog" }, { "term", "dog" }, { NULL, NULL } }, 32,
+          "§3.1's own printed example of a start-tag" },
+        { "<IMG align=\"left\" src=\"http://www.w3.org/Icons/WWW/w3c_home\" />", 63, XML_TAG_OK, XML_REF_OK,
+          "IMG", true, { { "align", "left" }, { "src", "http://www.w3.org/Icons/WWW/w3c_home" }, { NULL, NULL } },
+          63, "§3.1's own printed example of an empty element, with the `S? '/>'` the standard writes it with" },
+        { "<e a = \"1\" >", 12, XML_TAG_OK, XML_REF_OK, "e", false, { { "a", "1" }, { NULL, NULL } }, 12,
+          "[25] Eq ::= S? '=' S? — white space on BOTH sides of the equals sign is the production and not a "
+          "tolerance" },
+        { "<e a='1'>", 9, XML_TAG_OK, XML_REF_OK, "e", false, { { "a", "1" }, { NULL, NULL } }, 9,
+          "[10] AttValue's second alternative is delimited by apostrophes" },
+        { "<e a=\"it's\">", 12, XML_TAG_OK, XML_REF_OK, "e", false, { { "a", "it's" }, { NULL, NULL } }, 12,
+          "§2.4: `To allow attribute values to contain both single and double quotes` — the delimiter that did "
+          "not open the value is ordinary content inside it" },
+        { "<e a='say \"x\"'>", 15, XML_TAG_OK, XML_REF_OK, "e", false, { { "a", "say \"x\"" }, { NULL, NULL } },
+          15, "and the same in the other direction" },
+        { "<e a=\"\">", 8, XML_TAG_OK, XML_REF_OK, "e", false, { { "a", "" }, { NULL, NULL } }, 8,
+          "[10]'s content is zero or more, so the empty value is a value — and the pointer is never null, "
+          "because an empty string and no string are different facts" },
+        { "<e:f a:b=\"1\"/>", 14, XML_TAG_OK, XML_REF_OK, "e:f", true, { { "a:b", "1" }, { NULL, NULL } }, 14,
+          "§2.3's [4] NameStartChar HAS the colon in it — XML 1.0 5e keeps it as a name character and leaves "
+          "what it MEANS to Namespaces in XML, so this layer scans a qualified name without deciding one" },
+        { "<caf\xC3\xA9 a=\"\xC3\xA9\"/>", 15, XML_TAG_OK, XML_REF_OK, "caf\xC3\xA9", true,
+          { { "a", "\xC3\xA9" }, { NULL, NULL } }, 15,
+          "a Name and a value are [2] Char runs and not ASCII ones, so the borrowed name and the BUILT value "
+          "both carry a two-byte character — the value through §4.3.3's encode, which is the one place this "
+          "component turns a code point back into bytes" },
+
+        /* §3.3.3 Attribute-Value Normalization — the four arms of its step 3. */
+        { "<e a=\"x&#x9;y\tz\"/>", 18, XML_TAG_OK, XML_REF_OK, "e", true,
+          { { "a", "x\ty z" }, { NULL, NULL } }, 18,
+          "THE PAIR §3.3.3's NOTE DISTINGUISHES, IN ONE VALUE: `&#x9;` takes step 3's FIRST bullet (`for a "
+          "character reference, append the referenced character`) and survives as a #x9, while the literal tab "
+          "beside it takes the THIRD (`for a white space character (#x20, #xD, #xA, #x9), append a space "
+          "character (#x20)`). A scan with the two arms the other way round produces a five-character value of "
+          "the same length that differs in one byte at each end" },
+        { "<e a=\"\n\nxyz\"/>", 14, XML_TAG_OK, XML_REF_OK, "e", true, { { "a", "  xyz" }, { NULL, NULL } }, 14,
+          "§3.3.3's own printed table, first row, CDATA column: two literal line feeds normalize to `#x20 "
+          "#x20` and the rest is unchanged" },
+        { "<e a=\n\"&#xd;&#xd;A&#xa;&#xa;B&#xd;&#xa;\"/>", 42, XML_TAG_OK, XML_REF_OK, "e", true,
+          { { "a", "\r\rA\n\nB\r\n" }, { NULL, NULL } }, 42,
+          "§3.3.3's own printed table, THIRD row, whose two columns agree: `#xD #xD A #xA #xA B #xD #xA`. It "
+          "is the row that proves §2.11 End-of-Line Handling is not applied to what a reference produced — a "
+          "second §2.11 pass over the built value would collapse that closing `#xD #xA` to one #xA, and "
+          "core/xml/xml_char.h says in as many words that its encode does not carry that rule" },
+        { "<e a=\"\r\n\"/>", 11, XML_TAG_OK, XML_REF_OK, "e", true, { { "a", " " }, { NULL, NULL } }, 11,
+          "and the contrast from the other side: a LITERAL #xD #xA is ONE character by the time the grammar "
+          "sees it (§2.11 ran in the reader), so step 3's white-space arm appends ONE space — two bytes in, "
+          "one byte out, where the row above is twelve bytes in and two out" },
+        { "<e a=\"&lt;&amp;&gt;&apos;&quot;\"/>", 34, XML_TAG_OK, XML_REF_OK, "e", true,
+          { { "a", "<&>'\"" }, { NULL, NULL } }, 34,
+          "§4.6's five predefined entities, which `All XML processors MUST recognize ... whether they are "
+          "declared or not`. The `<` in the RESULT is not [WFC: No < in Attribute Values]: that constraint is "
+          "about the replacement TEXT holding one, and §4.6 requires lt to be declared as a character "
+          "reference precisely so that it cannot" },
+        { "<e a=\"&#38;#60;\"/>", 18, XML_TAG_OK, XML_REF_OK, "e", true, { { "a", "&#60;" }, { NULL, NULL } },
+          18,
+          "§4.4.2 Included's own example read as a value: the result of a reference is character DATA and is "
+          "never re-scanned, so `&#38;` yields an ampersand and the `#60;` after it stays five characters. A "
+          "scan that fed its own output back would produce a `<` here" },
+
+        /* The shapes that are not [40]/[44], one row per sentence. */
+        { "<e a=\"<\"/>", 10, XML_TAG_ERR_LT_IN_ATTRIBUTE_VALUE, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "[10] AttValue excludes the left angle bracket from both of its character alternatives, and §2.4 "
+          "makes a literal one outside markup a fatal error" },
+        { "<e a=\"&foo;\"/>", 14, XML_TAG_ERR_ENTITY_UNDECLARED, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "THE ROW THAT KEEPS THE EXTERNAL-ENTITY SURFACE CLOSED. §4.1's [WFC: Entity Declared] for a document "
+          "with no DTD: the Name MUST match a declaration `except ... amp, lt, gt, apos, quot`. Nothing here "
+          "reads §2.8's [28] doctypedecl, so no entity outside those five can resolve and no attribute value "
+          "can be built out of a [11] SystemLiteral — the classic external-entity read is unreachable because "
+          "there is nothing to widen, and this row is what says so" },
+        { "<e a=\"1\" a=\"2\">", 15, XML_TAG_ERR_UNIQUE_ATT_SPEC, XML_REF_OK, NULL, false, { { NULL, NULL } },
+          0, "§3.1 [WFC: Unique Att Spec]: `An attribute name MUST NOT appear more than once in the same "
+             "start-tag or empty-element tag`" },
+        { "<e a=\"1\"b=\"2\">", 14, XML_TAG_ERR_ATTRIBUTE_SEPARATOR, XML_REF_OK, NULL, false,
+          { { NULL, NULL } }, 0,
+          "[40]'s group is `(S Attribute)*`, so the S inside it is REQUIRED — it is not the `S?` the two "
+          "endings share, and its absence is a violation rather than a shape" },
+        { "<e a>", 5, XML_TAG_ERR_EQ, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "[41] Attribute ::= Name Eq AttValue — XML has no attribute with no value, which is where it and "
+          "HTML §13.2.5.32 part company" },
+        { "<e a=1>", 7, XML_TAG_ERR_ATTVALUE_QUOTE, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "[10] AttValue is delimited by a matched pair of quotation marks or apostrophes, and an unquoted "
+          "value is neither alternative" },
+        { "<e a=\"1>", 8, XML_TAG_ERR_ATTVALUE_UNTERMINATED, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "the entity ends before the value's own delimiter, which is a DIFFERENT mistake from the tag ending "
+          "early and sends an author to a different place" },
+        { "<e a=\"1\"", 8, XML_TAG_ERR_UNTERMINATED, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "the entity ends inside the tag, after a complete attribute specification" },
+        { "<e", 2, XML_TAG_ERR_UNTERMINATED, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "and after nothing but the Name" },
+        { "<e /", 4, XML_TAG_ERR_UNTERMINATED, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "a `/` with nothing after it can only have been [44]'s, and the `>` that completes it is not there" },
+        { "<>", 2, XML_TAG_ERR_NAME, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "[40] is `'<' Name`, and `>` is in neither [4] NameStartChar nor [4a] NameChar" },
+        { "<e 1=\"x\">", 9, XML_TAG_ERR_ATTRIBUTE_NAME, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "a digit is [4a] NameChar and NOT [4] NameStartChar, so `1` opens no [5] Name — the element type "
+          "and the attribute name are the same production and this is the attribute one" },
+        { "<e a=\"&#x0;\"/>", 14, XML_TAG_ERR_REFERENCE, XML_REF_ERR_LEGAL_CHARACTER, NULL, false,
+          { { NULL, NULL } }, 0,
+          "§4.1's [WFC: Legal Character] — U+0000 is not §2.2's [2] Char. The sentence is the REFERENCE "
+          "layer's, so it comes back through the `ref` out-parameter rather than being transcribed into this "
+          "component's enum, which is the one place two spellings of one rule could drift apart" },
+        { "<e a=\"&#x9\"/>", 13, XML_TAG_ERR_REFERENCE, XML_REF_ERR_UNTERMINATED, NULL, false,
+          { { NULL, NULL } }, 0,
+          "[66] CharRef closes with a `;` and this one does not — a second sentence of the same layer, which "
+          "is why the out-parameter carries a value and not a bool" },
+        { "<e a=\"x\001y\"/>", 12, XML_TAG_ERR_CHARACTER, XML_REF_OK, NULL, false, { { NULL, NULL } }, 0,
+          "§2.2: U+0001 is below [2] Char's first alternative, so the character layer latches its own fatal "
+          "error INSIDE the value — and that is the one answer this scan must not rewind, because restoring a "
+          "saved reader would restore the §1.2 latch to OK and un-report it" },
+    };
+    static const struct { const char *in; size_t n; XmlTagError err; const char *name; size_t after;
+                          const char *why; } ET[] = {
+        /* [42] ETag ::= '</' Name S? '>' */
+        { "</e>", 4, XML_TAG_OK, "e", 4, "[42]'s shortest form" },
+        { "</termdef>", 10, XML_TAG_OK, "termdef", 10, "§3.1's own printed example of an end-tag" },
+        { "</e >", 5, XML_TAG_OK, "e", 5, "[42]'s `S?` between the Name and the `>`" },
+        { "</e>x", 5, XML_TAG_OK, "e", 4, "and the scan stops at the delimiter, leaving [43] content's rest" },
+        { "</e", 3, XML_TAG_ERR_UNTERMINATED, NULL, 0, "the entity ends before the tag does" },
+        { "</>", 3, XML_TAG_ERR_NAME, NULL, 0, "[42] is `'</' Name` and `>` opens no [5] Name" },
+        { "</e a=\"1\">", 10, XML_TAG_ERR_ETAG_ATTRIBUTE, NULL, 0,
+          "[42] has no `(S Attribute)*` — an end-tag carries no attribute specifications, and §3.3 says "
+          "attribute specifications MUST NOT appear outside start-tags and empty-element tags. It is a "
+          "different report from `the entity ends before this tag does`, which would be a false sentence "
+          "about this document" },
+        { "</e/>", 5, XML_TAG_ERR_ETAG_ATTRIBUTE, NULL, 0,
+          "and so is a `/` where the `>` belongs — [42] has no empty-element ending" },
+    };
+    static const struct { const char *in; bool stag, etag; const char *why; } AT[] = {
+        { "<e>", true, false, "a `<` that opens neither an end-tag nor a `<!`/`<?` form is [40]/[44]'s" },
+        { "</e>", false, true, "and `</` is [42]'s" },
+        { "<!--a-->", false, false, "§2.5's comment is neither" },
+        { "<![CDATA[a]]>", false, false, "nor §2.7's CDATA section" },
+        { "<?x?>", false, false, "nor §2.6's processing instruction" },
+        { "<?xml version=\"1.0\"?>", false, false, "nor §2.8's [23] XMLDecl, which opens with the same two" },
+        { "<!DOCTYPE e>", false, false,
+          "nor §2.8's [28] doctypedecl — which in [43] content is a construct the grammar has no place for, "
+          "and the peek saying so is what lets a content walk report that rather than scan a tag" },
+        { "<1>", true, false,
+          "THE PEEK ROUTES AND THE SCAN DECIDES: a `<` followed by something that is no [5] Name still answers "
+          "true here, so XML_TAG_ERR_NAME is a sentence about the document rather than a shape the caller had "
+          "to recognise before it asked" },
+        { "<", true, false, "and a `<` at the very end of the entity is left to the scan for the same reason" },
+        { "a", false, false, "character data stands at no tag" },
+        { "", false, false, "and an entity that has ended stands at no construct at all" },
+    };
+    static const XmlTagError ALL[] = {
+        XML_TAG_OK, XML_TAG_ERR_NAME, XML_TAG_ERR_ATTRIBUTE_SEPARATOR, XML_TAG_ERR_ATTRIBUTE_NAME,
+        XML_TAG_ERR_EQ, XML_TAG_ERR_ATTVALUE_QUOTE, XML_TAG_ERR_ATTVALUE_UNTERMINATED,
+        XML_TAG_ERR_LT_IN_ATTRIBUTE_VALUE, XML_TAG_ERR_UNIQUE_ATT_SPEC, XML_TAG_ERR_ENTITY_UNDECLARED,
+        XML_TAG_ERR_UNTERMINATED, XML_TAG_ERR_ETAG_ATTRIBUTE, XML_TAG_ERR_REFERENCE, XML_TAG_ERR_CHARACTER
+    };
+    size_t i, a, b;
+
+    for (i = 0; i < sizeof(ST) / sizeof(ST[0]); i++) {
+        XmlCharReader r, start;
+        XmlTag got;
+        XmlRefError ref = XML_REF_ERR_NOT_A_REFERENCE;   /* a value no row expects, so a write is visible */
+        XmlTagError e;
+        size_t k;
+
+        /* THE DECLARED LENGTH IS MACHINE-CHECKED AGAINST THE LITERAL — every row is NUL-free, and a row whose
+           count is one out would silently test a different entity than the one its `why` describes. */
+        CHECK(ST[i].n == strlen(ST[i].in), "a start-tag row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, ST[i].in, ST[i].n);
+        start = r;
+        CHECK(xml_tag_at_stag(&r), "a start-tag row does not stand where xml_tag_at_stag is true");
+        memset(&got, 0, sizeof got);
+        e = xml_tag_scan_stag(&r, &got, &ref);
+        CHECK(e == ST[i].err, ST[i].why);
+        /* `*ref` IS WRITTEN ALWAYS, which is a positive statement that §4.1's layer found nothing to report
+           and not a field a caller has to default past. */
+        CHECK(ref == ST[i].ref, ST[i].why);
+        if (e == XML_TAG_OK) {
+            CHECK(got.name != NULL && got.name_len == strlen(ST[i].name)
+                      && memcmp(got.name, ST[i].name, got.name_len) == 0, ST[i].why);
+            CHECK(got.empty == ST[i].empty, ST[i].why);
+            CHECK((size_t)(r.p - r.start) == ST[i].after, ST[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful start-tag scan left the reader's §1.2 latch set");
+            /* The element type BORROWS the entity; the values do not, and both halves are asserted because
+               either one becoming the other is a defect the header forbids by name. */
+            CHECK(got.name > ST[i].in && got.name + got.name_len <= ST[i].in + ST[i].n,
+                  "a tag's element type does not point inside the entity it was scanned from — it is a "
+                  "borrowed slice and not a copy");
+            for (k = 0; k < XML_TAG_FIXTURE_ATTS && ST[i].att[k][0] != NULL; k++) ;
+            CHECK(got.att_n == k, ST[i].why);
+            /* A tag with no attributes has NO ARRAY — a positive statement, not a hole a caller iterates. */
+            CHECK((got.atts == NULL) == (got.att_n == 0),
+                  "a scanned tag's attribute array and its attribute count disagree about whether there are "
+                  "any attributes");
+            for (k = 0; k < got.att_n; k++) {
+                size_t vlen = strlen(ST[i].att[k][1]);
+
+                CHECK(got.atts[k].name_len == strlen(ST[i].att[k][0])
+                          && memcmp(got.atts[k].name, ST[i].att[k][0], got.atts[k].name_len) == 0, ST[i].why);
+                CHECK(got.atts[k].value != NULL && got.atts[k].value_len == vlen
+                          && memcmp(got.atts[k].value, ST[i].att[k][1], vlen) == 0, ST[i].why);
+                CHECK(got.atts[k].name >= ST[i].in && got.atts[k].name + got.atts[k].name_len
+                          <= ST[i].in + ST[i].n,
+                      "an attribute name does not point inside the entity it was scanned from");
+                CHECK(got.atts[k].value < ST[i].in || got.atts[k].value >= ST[i].in + ST[i].n,
+                      "an attribute value points INTO the entity — §3.3.3 PRODUCES text rather than selecting "
+                      "a slice of it (`&lt;` is four characters of the entity and one of the value), so a "
+                      "borrowed value would be a different string than the standard's answer");
+                CHECK(got.atts[k].value[got.atts[k].value_len] == '\0'
+                          && memchr(got.atts[k].value, '\0', got.atts[k].value_len) == NULL,
+                      "an attribute value is not NUL-terminated or holds an interior NUL — U+0000 is not "
+                      "§2.2's [2] Char, so the terminator is unambiguous and that is a fact to assert rather "
+                      "than assume");
+            }
+            xml_tag_free(&got);
+            /* The header promises a second free is a no-op and that a record no scan ever filled may be
+               freed, which is what makes an error path's cleanup unconditional. */
+            xml_tag_free(&got);
+            CHECK(got.atts == NULL && got.att_n == 0 && got.name == NULL,
+                  "xml_tag_free left a record a second free would act on");
+        } else {
+            CHECK(strcmp(xml_tag_error_message(e), xml_tag_error_message(XML_TAG_OK)) != 0, ST[i].why);
+            if (r.fatal != XML_CHAR_OK) {
+                /* THE ONE ANSWER THAT DOES NOT REWIND, and the carve-out is keyed on the LATCH rather than on
+                   the error value — §4.1's layer sets the same latch and this component reports THAT as
+                   XML_TAG_ERR_REFERENCE, so a guard written over the enum would rewind past a fatal error. */
+                CHECK(e == XML_TAG_ERR_CHARACTER || e == XML_TAG_ERR_REFERENCE,
+                      "a start-tag scan left the character layer's §1.2 latch set while reporting a failure "
+                      "that is neither its own nor the reference layer's");
+                CHECK(r.p != start.p, ST[i].why);
+            } else {
+                CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                          && r.fatal == start.fatal,
+                      "a start-tag scan that reported a §3.1 error did not restore the reader it was handed — "
+                      "a caller reporting the mistake would quote a position inside the failed construct, and "
+                      "a caller that recovered would resume in the middle of one");
+            }
+        }
+    }
+
+    for (i = 0; i < sizeof(ET) / sizeof(ET[0]); i++) {
+        XmlCharReader r, start;
+        const char *name = NULL;
+        size_t name_len = 0;
+        XmlTagError e;
+
+        CHECK(ET[i].n == strlen(ET[i].in), "an end-tag row's declared byte length is not its literal's");
+        xml_char_reader_init(&r, ET[i].in, ET[i].n);
+        start = r;
+        CHECK(xml_tag_at_etag(&r), "an end-tag row does not stand where xml_tag_at_etag is true");
+        e = xml_tag_scan_etag(&r, &name, &name_len);
+        CHECK(e == ET[i].err, ET[i].why);
+        if (e == XML_TAG_OK) {
+            CHECK(name != NULL && name_len == strlen(ET[i].name)
+                      && memcmp(name, ET[i].name, name_len) == 0, ET[i].why);
+            CHECK((size_t)(r.p - r.start) == ET[i].after, ET[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a successful end-tag scan left the reader's §1.2 latch set");
+            CHECK(name > ET[i].in && name + name_len <= ET[i].in + ET[i].n,
+                  "an end-tag's element type does not point inside the entity it was scanned from");
+        } else {
+            CHECK(strcmp(xml_tag_error_message(e), xml_tag_error_message(XML_TAG_OK)) != 0, ET[i].why);
+            CHECK(r.p == start.p && r.line == start.line && r.column == start.column
+                      && r.fatal == start.fatal,
+                  "an end-tag scan that reported a §3.1 error did not restore the reader it was handed");
+        }
+    }
+
+    for (i = 0; i < sizeof(AT) / sizeof(AT[0]); i++) {
+        XmlCharReader r;
+
+        xml_char_reader_init(&r, AT[i].in, strlen(AT[i].in));
+        CHECK(xml_tag_at_stag(&r) == AT[i].stag, AT[i].why);
+        CHECK(xml_tag_at_etag(&r) == AT[i].etag, AT[i].why);
+        /* THE TWO PEEKS ARE MUTUALLY EXCLUSIVE, which is what makes a [43] content walk's routing total
+           rather than ordered: `</` is [42]'s and every other `<` that is not a `<!`/`<?` form is [40]/[44]'s,
+           so no reader can stand at both and a walk that asked them in the other order would answer the same. */
+        CHECK(!(xml_tag_at_stag(&r) && xml_tag_at_etag(&r)), AT[i].why);
+    }
+
+    /* ONE MESSAGE PER SENTENCE — a report that merged two would send an author to the wrong one, which is
+       core/xml/xml_char.c's argument for its own two and this component's for its thirteen. */
+    for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+        for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+            CHECK(strcmp(xml_tag_error_message(ALL[a]), xml_tag_error_message(ALL[b])) != 0,
+                  "two XML tag errors share one message, so a `parsererror` would name the wrong sentence of "
+                  "§3.1 for one of them");
+
+    /* A TAG SCANNED AGAIN FROM A READER RESTORED OUT OF A COPY MUST PRODUCE THE SAME TAG. Peeking and parking
+       ARE that copy (core/xml/xml_char.h: the reader is a POD position), so a start-tag that cannot be
+       re-scanned from a saved reader is one a forked arm cannot re-enter and a suspended flow cannot resume
+       inside — and it is the ONE construct here that allocates, so a second scan is also where a value the
+       first scan owned would be handed out twice. */
+    {
+        static const char SRC[] = "<e a=\"x&#x9;y\tz\"/>";
+        XmlCharReader r, saved;
+        XmlTag first, again;
+        XmlRefError ref = XML_REF_OK;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        saved = r;
+        memset(&first, 0, sizeof first);
+        memset(&again, 0, sizeof again);
+        CHECK(xml_tag_scan_stag(&r, &first, &ref) == XML_TAG_OK && first.att_n == 1, "the first scan");
+        r = saved;
+        CHECK(xml_tag_scan_stag(&r, &again, &ref) == XML_TAG_OK && again.att_n == 1, "and the second");
+        CHECK(again.atts[0].value != first.atts[0].value,
+              "two scans of one start-tag handed back the SAME value pointer — §3.3.3's value is OWNED, so "
+              "sharing it would make the second xml_tag_free a double free");
+        CHECK(again.atts[0].value_len == first.atts[0].value_len
+                  && memcmp(again.atts[0].value, first.atts[0].value, again.atts[0].value_len) == 0,
+              "a start-tag re-scanned from a reader restored out of a copy produced a different value — "
+              "peeking and parking ARE that copy, so a parse that cannot rewind across a tag can neither fork "
+              "an arm nor suspend inside one");
+        xml_tag_free(&first);
+        xml_tag_free(&again);
+    }
+#undef XML_TAG_FIXTURE_ATTS
+}
+
+/* XML 1.0 (Fifth Edition) §3 Logical Structures' [39] `element` over §3.1's [43] `content` —
+ * core/xml/xml_element.h, the element stack and the one place [WFC: Element Type Match] is decided.
+ *
+ * THE FIXTURE COMPARES AN ITEM STREAM AND NOT A TREE, because the walk builds no tree — so the rows that carry
+ * it are the ones where two DIFFERENT documents must produce the SAME stream, and the ones where a stream must
+ * have MORE items than a tree would have nodes.
+ *   `<a/>` and `<a></a>` are the first: §3.1 says "The representation of an empty element is either a start-tag
+ * immediately followed by an end-tag, or an empty-element tag", so [44]'s single construct reports a START and
+ * then an END, and the two documents are byte-for-byte the same stream. A walk that reported [44] as one item
+ * would push the difference into every consumer, which is exactly the sentence core/xml/xml_tag.h says belongs
+ * to whoever holds the stack.
+ *   `x&amp;y` is the second: THREE items, because [43] writes `CharData` and `Reference` as different
+ * alternatives. One Text node holding `x&y` is what the DOM's own rule about adjacent text makes of them, and
+ * a walk that merged them here would be answering the consumer's question with the producer's information.
+ *
+ * THE `]]>` ROWS ARE THE ONES A SCANNER WRITTEN FROM THE PRODUCTION'S FIRST HALF GETS WRONG. [14] `CharData
+ * ::= [^<&]* - ([^<&]* ']]>' [^<&]*)` is a SUBTRACTION, so `]]>` in content is not a run that stops early —
+ * it is a document that does not match [43] at all, and §2.4 says the `>` "MUST, for compatibility, be escaped
+ * using either &gt; or a character reference when it appears in the string ]]> in content, when that string is
+ * not marking the end of a CDATA section". `]]` alone and `a]b` are the contrast that makes the rule about the
+ * three-character string rather than about the bracket.
+ *
+ * AND THE ROUTING ROWS ARE THE ONES THAT PROVE THE FIVE PEEKS COVER [43]. `<!DOCTYPE` inside content is
+ * XML_ELEMENT_ERR_CONTENT and not a construct skipped to reach the element — §2.8 puts [28] doctypedecl in
+ * [22] prolog, before the first element. `<?xml v?>` inside content is §2.6's reserved-target error, which is
+ * core/xml/xml_markup.h's stated answer for anywhere [23] XMLDecl is not permitted. A `&foo;` is [WFC: Entity
+ * Declared] rather than a resolved entity, which is the same closed external-entity surface xml_tag_selftest
+ * checks from the attribute-value side: nothing in this build reads a DTD, so no entity outside §4.6's five
+ * resolves in EITHER position. */
+static void xml_element_selftest(void)
+{
+    /* ONE EXPECTED ITEM. `s` is the element type for the two element kinds, the BORROWED run for the three
+       text kinds, [17]'s PITarget for a processing instruction, and NULL for a reference — whose whole payload
+       is the character §4.1 resolved it to. `nat` is meaningful for a start alone; the attribute LIST is
+       xml_tag_selftest's contract and is not restated here. */
+    typedef struct { XmlContentKind kind; const char *s; size_t nat; uint32_t cp; } XmlItemExp;
+    static const XmlItemExp E_EMPTY[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_TEXT[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "hi", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_ATTS[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 2, 0 }, { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_NEST[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_ELEMENT_START, "b", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "b", 0, 0 },   { XML_CONTENT_ELEMENT_START, "c", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "c", 0, 0 },   { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_DEEP[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_ELEMENT_START, "b", 0, 0 },
+        { XML_CONTENT_ELEMENT_START, "c", 0, 0 }, { XML_CONTENT_ELEMENT_END, "c", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "b", 0, 0 },   { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_MIXED[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "x", 0, 0 },
+        { XML_CONTENT_ELEMENT_START, "b", 0, 0 }, { XML_CONTENT_CHARDATA, "y", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "b", 0, 0 },   { XML_CONTENT_CHARDATA, "z", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_REF[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_REFERENCE, NULL, 0, 0x26 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_SPLIT[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "x", 0, 0 },
+        { XML_CONTENT_REFERENCE, NULL, 0, 0x26 }, { XML_CONTENT_CHARDATA, "y", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_TAB[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_REFERENCE, NULL, 0, 0x09 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_COMMENT[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_COMMENT, "c", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_PI[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_PI, "t", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_STYLESHEET[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_PI, "xml-stylesheet", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_CDATA[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CDSECT, "<b>&amp;", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_BRACKETS[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "]]", 0, 0 },
+        { XML_CONTENT_REFERENCE, NULL, 0, 0x3E }, { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_BRACKET2[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "a]b]]", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_EOL[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_CHARDATA, "x\r\ny", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "a", 0, 0 } };
+    static const XmlItemExp E_ONE[] = { { XML_CONTENT_ELEMENT_START, "a", 0, 0 } };
+    static const XmlItemExp E_CHILD[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_ELEMENT_START, "b", 0, 0 },
+        { XML_CONTENT_ELEMENT_END, "b", 0, 0 } };
+    static const XmlItemExp E_TWO[] = {
+        { XML_CONTENT_ELEMENT_START, "a", 0, 0 }, { XML_CONTENT_ELEMENT_START, "b", 0, 0 } };
+    static const XmlItemExp E_NONE[] = { { XML_CONTENT_ELEMENT_START, "a", 0, 0 } };
+
+    static const struct { const char *in; const XmlItemExp *exp; size_t n_exp; size_t after;
+                          XmlElementError err; XmlTagError tag; XmlMarkupError markup; XmlRefError ref;
+                          const char *why; } DOC[] = {
+        { "<a/>", E_EMPTY, 2, 4, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "[44] EmptyElemTag is ONE construct and TWO items — §3.1 makes the empty-element tag a representation "
+          "of the same element a start-tag and an end-tag represent, and the second item is the one that "
+          "consumes nothing because the first consumed the whole tag" },
+        { "<a></a>", E_EMPTY, 2, 7, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "AND THE OTHER SPELLING PRODUCES THE IDENTICAL STREAM, which is the whole point of [39] owning the "
+          "pair: a consumer pushes on the start and pops on the end and never learns which of §3.1's two "
+          "representations the author wrote" },
+        { "<a i=\"1\" j=\"2\"/>", E_ATTS, 2, 16, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "the start item carries §3.1's whole tag, attribute list and all — the LIST is core/xml/xml_tag.h's "
+          "contract and is not re-checked here, but that it arrives at all is this component's" },
+        { "<a>hi</a>", E_TEXT, 3, 9, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "[43]'s `CharData?` in its first position" },
+        { "<a><b/><c></c></a>", E_NEST, 6, 18, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "[43] contains [39], so two siblings are two push/pop pairs inside one" },
+        { "<a><b><c/></b></a>", E_DEEP, 6, 18, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "and nesting is the HEAP stack rather than C recursion — the same three C frames at depth three and "
+          "at the depth a page's own markup chooses, which is §C-stack's rule and not a style" },
+        { "<a>x<b>y</b>z</a>", E_MIXED, 7, 17, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "[43]'s `CharData? ((element | …) CharData?)*` in full: a run before the child, one inside it and "
+          "one after" },
+        { "<a>&amp;</a>", E_REF, 3, 12, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§4.6's predefined entity resolves to its character and the item carries that character, not the "
+          "five bytes the entity was written with" },
+        { "<a>x&amp;y</a>", E_SPLIT, 5, 14, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "THREE items and not one: [43] lists `CharData` and `Reference` as different alternatives, and the "
+          "single Text node holding `x&y` is what the DOM's rule about adjacent text makes of them — a walk "
+          "that merged them would have to allocate to answer a question its consumer answers for free" },
+        { "<a>&#x9;</a>", E_TAB, 3, 12, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "a [66] CharRef in CONTENT is the character it names and nothing else — §3.3.3's white-space rule is "
+          "written over [10] AttValue and has no counterpart here, so the contrast that fixture draws does not "
+          "exist in this position" },
+        { "<a><!--c--></a>", E_COMMENT, 3, 15, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§2.5's comment is one of [43]'s five alternatives and its body is a borrowed run" },
+        { "<a><?t d?></a>", E_PI, 3, 14, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "and so is §2.6's processing instruction, whose target and data are the two halves a DOM "
+          "ProcessingInstruction node is built from" },
+        { "<a><?xml-stylesheet h=\"x\"?></a>", E_STYLESHEET, 3, 31, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK,
+          XML_REF_OK,
+          "the single most common processing instruction on the web, and [17] subtracts only the "
+          "THREE-character spellings of `xml` — a routing that treated every `<?xml` prefix as a declaration "
+          "would reject it" },
+        { "<a><![CDATA[<b>&amp;]]></a>", E_CDATA, 3, 27, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§2.7: inside a CDATA section `only the CDEnd string is recognized as markup`, so the `<b>` is "
+          "character data and the `&amp;` is five characters — the routing hands the whole run to §2.7's scan "
+          "and never to §4.1's" },
+        { "<a>]]&gt;</a>", E_BRACKETS, 4, 13, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§2.4's own remedy: the `>` escaped as `&gt;` makes the same three characters legal, and the run "
+          "before it ends at the `&` with two brackets in it" },
+        { "<a>a]b]]</a>", E_BRACKET2, 3, 12, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "[14]'s subtraction is about the three-character STRING and not about the bracket, so a `]` and a "
+          "trailing `]]` are ordinary character data" },
+        { "<a>x\r\ny</a>", E_EOL, 3, 11, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "THE RUN IS BYTES AND THE PRODUCTION MATCHED CHARACTERS. §2.11 End-of-Line Handling makes `x #xD #xA "
+          "y` three characters and the borrowed slice four bytes — a consumer that memcpy'd it into a Text "
+          "node would ship a carriage return the parser had already removed, which is why the slice is read "
+          "back through core/xml/xml_char.h's own spelling of §2.11 on every row here" },
+        { "<a>x</a>trailing", E_TEXT, 3, 8, XML_ELEMENT_OK, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "the walk stops the moment its stack empties, leaving [1] document's own `Misc*` for whoever walks "
+          "that production" },
+
+        /* The shapes that are not [39]/[43], one row per sentence. */
+        { "<a></b>", E_ONE, 1, 0, XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§3 [WFC: Element Type Match]. The end-tag is a well-formed [42] — core/xml/xml_tag.h scans it "
+          "without complaint — so this constraint is decided by the STACK and by nothing else, which is why it "
+          "is written on [39] in §3 and not on [42] in §3.1" },
+        { "<a><b></a>", E_TWO, 2, 0, XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "and it is the INNERMOST open element the end-tag must match, not any element still open — HTML "
+          "§13.2.6.3's `generate implied end tags` closes elements that XML does not" },
+        { "<a>", E_ONE, 1, 0, XML_ELEMENT_ERR_UNCLOSED, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "[39] needs the [42] ETag its [40] STag opened, and the entity ended first" },
+        { "<a><b/>", E_CHILD, 3, 0, XML_ELEMENT_ERR_UNCLOSED, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "and a completed child does not close its parent" },
+        { "<a>]]></a>", E_ONE, 1, 0, XML_ELEMENT_ERR_CDATA_SECTION_CLOSE, XML_TAG_OK, XML_MARKUP_OK,
+          XML_REF_OK,
+          "[14] CharData SUBTRACTS `]]>` from its own run, so this is a document that does not match [43] "
+          "rather than a run that stops early — and the report names the character data, which is the "
+          "construct, rather than a position inside it" },
+        { "<a><!DOCTYPE b></a>", E_ONE, 1, 0, XML_ELEMENT_ERR_CONTENT, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§2.8: `The document type declaration MUST appear before the first element in the document`, and "
+          "[43] has no alternative it could match — a routing that skipped it to reach the element would be "
+          "reading a construct this build must not read at all" },
+        { "<a><!x></a>", E_ONE, 1, 0, XML_ELEMENT_ERR_CONTENT, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "and the same for any other `<!` form, which is the arm the four peeks leave behind" },
+        { "<a>&foo;</a>", E_ONE, 1, 0, XML_ELEMENT_ERR_ENTITY_UNDECLARED, XML_TAG_OK, XML_MARKUP_OK,
+          XML_REF_OK,
+          "§4.1 [WFC: Entity Declared] IN CONTENT, decided here and separately in core/xml/xml_tag.c for a "
+          "value — §4.4's table gives `Reference in Content` and `Reference in Attribute Value` different "
+          "rows and §4.4.4 Forbidden's third bullet makes an EXTERNAL entity fatal in a value while content "
+          "includes it, so one site cannot answer for both. With no DTD read, neither site resolves anything "
+          "outside §4.6's five and there is no path from markup to a fetch" },
+        { "<a>&#x0;</a>", E_ONE, 1, 0, XML_ELEMENT_ERR_REFERENCE, XML_TAG_OK, XML_MARKUP_OK,
+          XML_REF_ERR_LEGAL_CHARACTER,
+          "§4.1's [WFC: Legal Character] comes back through the detail rather than being transcribed into this "
+          "component's enum" },
+        { "<a b></a>", E_NONE, 0, 0, XML_ELEMENT_ERR_TAG, XML_TAG_ERR_EQ, XML_MARKUP_OK, XML_REF_OK,
+          "§3.1's layer reported it, on the very first item, and the detail names which of its sentences" },
+        { "<a></a b>", E_ONE, 1, 0, XML_ELEMENT_ERR_TAG, XML_TAG_ERR_ETAG_ATTRIBUTE, XML_MARKUP_OK, XML_REF_OK,
+          "and an end-tag's own sentence arrives the same way — [WFC: Element Type Match] is never reached, "
+          "because there is no Name to match against yet" },
+        { "<a><!--x</a>", E_ONE, 1, 0, XML_ELEMENT_ERR_MARKUP, XML_TAG_OK,
+          XML_MARKUP_ERR_UNTERMINATED_COMMENT, XML_REF_OK,
+          "§2.5's layer reported it: a comment ends at `-->` and nowhere else, so the `</a>` inside one is "
+          "comment content" },
+        { "<a><?xml v?></a>", E_ONE, 1, 0, XML_ELEMENT_ERR_MARKUP, XML_TAG_OK,
+          XML_MARKUP_ERR_PI_TARGET_RESERVED, XML_REF_OK,
+          "a `<?xml` in CONTENT is [17]'s reserved target, which core/xml/xml_markup.h states is the correct "
+          "report anywhere §2.8's [23] XMLDecl is not permitted — and [22] prolog is the only place it is" },
+        { "<a>x\001y</a>", E_ONE, 1, 0, XML_ELEMENT_ERR_CHARACTER, XML_TAG_OK, XML_MARKUP_OK, XML_REF_OK,
+          "§2.2: U+0001 is below [2] Char's first alternative, so the character layer latches its own fatal "
+          "error inside the run — and THAT answer must not be rewound, because restoring a saved reader would "
+          "restore the §1.2 latch to OK and un-report it" },
+    };
+    static const XmlElementError ALL[] = {
+        XML_ELEMENT_OK, XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH, XML_ELEMENT_ERR_UNCLOSED,
+        XML_ELEMENT_ERR_CDATA_SECTION_CLOSE, XML_ELEMENT_ERR_CONTENT, XML_ELEMENT_ERR_ENTITY_UNDECLARED,
+        XML_ELEMENT_ERR_TAG, XML_ELEMENT_ERR_MARKUP, XML_ELEMENT_ERR_REFERENCE, XML_ELEMENT_ERR_CHARACTER
+    };
+    size_t i, a, b;
+
+    for (i = 0; i < sizeof(DOC) / sizeof(DOC[0]); i++) {
+        XmlElementWalk *w = xml_element_walk_create();
+        XmlCharReader r, before;
+        size_t n = 0, len = strlen(DOC[i].in);
+        XmlElementError e = XML_ELEMENT_OK;
+
+        CHECK(xml_element_depth(w) == 0, "a fresh XML element walk has an open element");
+        xml_char_reader_init(&r, DOC[i].in, len);
+        for (;;) {
+            XmlContentItem it;
+            XmlElementDetail d;
+
+            before = r;
+            memset(&it, 0, sizeof it);
+            e = xml_element_next(w, &r, &it, &d);
+            if (e != XML_ELEMENT_OK) break;
+            /* EVERY LAYER ANSWERS OK ON A SUCCESSFUL ITEM, which is a positive statement and not a field a
+               consumer defaults past. */
+            CHECK(d.tag == XML_TAG_OK && d.markup == XML_MARKUP_OK && d.ref == XML_REF_OK,
+                  "a successful XML content item carries a layer's error report");
+            CHECK(n < DOC[i].n_exp, DOC[i].why);
+            CHECK(it.kind == DOC[i].exp[n].kind, DOC[i].why);
+            switch (it.kind) {
+            case XML_CONTENT_ELEMENT_START:
+                CHECK(it.tag.name_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.tag.name, DOC[i].exp[n].s, it.tag.name_len) == 0, DOC[i].why);
+                CHECK(it.tag.att_n == DOC[i].exp[n].nat, DOC[i].why);
+                break;
+            case XML_CONTENT_ELEMENT_END:
+                CHECK(it.name_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.name, DOC[i].exp[n].s, it.name_len) == 0, DOC[i].why);
+                break;
+            case XML_CONTENT_CHARDATA:
+            case XML_CONTENT_CDSECT:
+            case XML_CONTENT_COMMENT:
+                CHECK(it.text.raw_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.text.raw, DOC[i].exp[n].s, it.text.raw_len) == 0, DOC[i].why);
+                /* The run is BORROWED from the entity and is not §2.11-normalized — the same contract every
+                   content run in this family carries, held to core/xml/xml_char.h's own spelling of §2.11. */
+                CHECK(it.text.raw > DOC[i].in && it.text.raw + it.text.raw_len <= DOC[i].in + len,
+                      "a content run does not point inside the entity it was scanned from");
+                xml_markup_text_selftest(&it.text, DOC[i].why);
+                break;
+            case XML_CONTENT_PI:
+                CHECK(it.pi.target_len == strlen(DOC[i].exp[n].s)
+                          && memcmp(it.pi.target, DOC[i].exp[n].s, it.pi.target_len) == 0, DOC[i].why);
+                break;
+            case XML_CONTENT_REFERENCE:
+                CHECK(it.ref.cp == DOC[i].exp[n].cp, DOC[i].why);
+                CHECK(it.ref.kind != XML_REF_ENTITY, DOC[i].why);
+                break;
+            }
+            n++;
+            if (xml_element_depth(w) == 0) break;
+        }
+        CHECK(e == DOC[i].err, DOC[i].why);
+        CHECK(n == DOC[i].n_exp, DOC[i].why);
+        if (e == XML_ELEMENT_OK) {
+            CHECK(xml_element_depth(w) == 0,
+                  "an XML element walk answered its last item with elements still open — the stack emptying "
+                  "IS the end of [39], so the two cannot disagree");
+            CHECK((size_t)(r.p - r.start) == DOC[i].after, DOC[i].why);
+            CHECK(r.fatal == XML_CHAR_OK, "a completed XML element walk left the reader's §1.2 latch set");
+        } else {
+            CHECK(strcmp(xml_element_error_message(e), xml_element_error_message(XML_ELEMENT_OK)) != 0,
+                  DOC[i].why);
+            if (r.fatal != XML_CHAR_OK) {
+                /* THE ONE ANSWER THAT DOES NOT REWIND, keyed on the LATCH and not on the error value. */
+                CHECK(r.p != before.p, DOC[i].why);
+            } else {
+                /* THE STRUCTURAL PROMISE, whose unit is the ITEM: a failed call leaves the reader at the
+                   failing construct's first byte, which is the position a `parsererror` has to quote. */
+                CHECK(r.p == before.p && r.line == before.line && r.column == before.column
+                          && r.fatal == before.fatal,
+                      "an XML content scan that reported an error did not restore the reader it was handed — a "
+                      "caller reporting the mistake would quote a position inside the failed construct");
+            }
+        }
+        xml_element_walk_destroy(w);
+    }
+
+    /* THE DETAIL IS CHECKED ON A SECOND PASS so that the loop above can stop at the first item that fails,
+       which is where the layers' answers are. */
+    for (i = 0; i < sizeof(DOC) / sizeof(DOC[0]); i++) {
+        XmlElementWalk *w = xml_element_walk_create();
+        XmlCharReader r;
+        XmlContentItem it;
+        XmlElementDetail d;
+        XmlElementError e;
+
+        xml_char_reader_init(&r, DOC[i].in, strlen(DOC[i].in));
+        do {
+            memset(&it, 0, sizeof it);
+            e = xml_element_next(w, &r, &it, &d);
+        } while (e == XML_ELEMENT_OK && xml_element_depth(w) > 0);
+        CHECK(d.tag == DOC[i].tag && d.markup == DOC[i].markup && d.ref == DOC[i].ref, DOC[i].why);
+        xml_element_walk_destroy(w);
+    }
+
+    /* ONE MESSAGE PER SENTENCE — a report that merged two would send an author to the wrong one. */
+    for (a = 0; a < sizeof(ALL) / sizeof(ALL[0]); a++)
+        for (b = a + 1; b < sizeof(ALL) / sizeof(ALL[0]); b++)
+            CHECK(strcmp(xml_element_error_message(ALL[a]), xml_element_error_message(ALL[b])) != 0,
+                  "two XML content errors share one message, so a `parsererror` would name the wrong sentence "
+                  "for one of them");
+
+    /* A WALK RESUMED FROM A READER RESTORED OUT OF A COPY MUST PRODUCE THE SAME REST OF THE STREAM. The reader
+       is the POD position core/xml/xml_char.h documents, so a copy is both the peek and the park — and the
+       element STACK is the state that copy does not carry, which is exactly why the walk asserts its owner
+       rather than pretending a byte copy of it would do. Rewinding the reader alone inside one walk is the
+       operation a forked arm performs on its own stack, and it must be lossless. */
+    {
+        static const char SRC[] = "<a><b>x</b></a>";
+        XmlElementWalk *w = xml_element_walk_create();
+        XmlCharReader r, saved;
+        XmlContentItem it;
+        XmlElementDetail d;
+
+        xml_char_reader_init(&r, SRC, sizeof SRC - 1);
+        CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_OK
+                  && it.kind == XML_CONTENT_ELEMENT_START, "the root's start");
+        saved = r;
+        CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_OK
+                  && it.kind == XML_CONTENT_ELEMENT_START && xml_element_depth(w) == 2, "the child's start");
+        /* The stack now holds two, so re-reading the child's start-tag from the saved reader must be refused
+           by nothing and must push a THIRD — this is a rewind of the READER and not of the walk, and the two
+           being different things is what the owner assertion is about. */
+        r = saved;
+        CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_OK
+                  && it.kind == XML_CONTENT_ELEMENT_START && it.tag.name_len == 1
+                  && it.tag.name[0] == 'b' && xml_element_depth(w) == 3,
+              "a start-tag re-scanned from a reader restored out of a copy produced a different item — peeking "
+              "and parking ARE that copy, so a walk that cannot rewind across a construct can neither fork an "
+              "arm nor suspend inside one");
+        /* Unwind what this probe pushed, so the walk is destroyed the way a completed one is. */
+        CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_OK && it.kind == XML_CONTENT_CHARDATA, "the run");
+        CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_OK
+                  && it.kind == XML_CONTENT_ELEMENT_END && xml_element_depth(w) == 2, "the child's end");
+        CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH,
+              "and the duplicated push is what [WFC: Element Type Match] then reports, which is the "
+              "constraint doing its job on a stack this probe deliberately unbalanced");
+        xml_element_walk_destroy(w);
+    }
+}
+
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
  * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
  * stated by reference to.
@@ -8515,6 +9245,13 @@ int main(int argc, char **argv) {
                               and a failure there must be read as this component's and not as that one's */
     xml_literal_selftest();/* XML §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] PubidChar — the two
                               quoted strings §4.2.2's [75] ExternalID is made of */
+    xml_tag_selftest();    /* XML §3.1's [40] STag, [42] ETag and [44] EmptyElemTag with §3.3.3's
+                              Attribute-Value Normalization — AFTER the reference fixture, because every
+                              value row is built through §4.1's layer and a failure there must be read as
+                              that component's rather than as this one's */
+    xml_element_selftest();/* XML §3's [39] element over §3.1's [43] content — LAST of this family, because
+                              its item stream is produced by every one of the layers above and a failure in
+                              any of them must be read where that layer's own fixture reports it */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
