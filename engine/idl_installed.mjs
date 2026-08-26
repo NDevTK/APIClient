@@ -82,6 +82,24 @@
  * integer constant, and the rows whose bits intersect are the members that call installs on that target. A
  * selector this cannot evaluate — or a row filter in any other shape — is a REFUSAL with its file and line,
  * never a fallback to the union: a subset the audit cannot compute is a member list it does not know.
+ *
+ * AND A ROW FILTER THAT IS NOT A SELECTOR AT ALL IS ANSWERED BY THE ENGINE, NOT BY A SECOND READER OF THE C.
+ * A dedup (`for (j = 0; j < i; j++) if (!strcmp(T[j].iface, T[i].iface)) break; if (j < i) continue;`) removes
+ * repeated ROWS and no NAMES, so the set it installs is the set of the column — and the refusal above is still
+ * correct, because nothing in the source says so and the two repairs a reader reaches for are both worse than
+ * the refusal. Recognising the dedup by its TEXT is the "installation inferred from text" this header opens by
+ * deleting, and it reads the one shape it was taught while the next shape goes on dropping names. Assuming
+ * "the filter names no parameter, therefore every caller gets the union" is unsound in the ONE direction that
+ * never prints: `if (!T[i].enabled) continue;` names no parameter and drops names, so the rule would convert a
+ * loud refusal into a silent false COMPLETE.
+ * So the C DECLARES THE RESULT and the engine checks it — `idl_install_covers_column(ctx, target,
+ * IDL_NAME_COLUMN(TBL, field), why)` states that once the loop is done, `target` carries every name that column
+ * holds, and asserts exactly that per realm as an own-property lookup of each name. A filter that removed a
+ * name fires there, at the origin, naming the member. What is checked HERE is the other half: the declaration
+ * is matched to an install site by that site's own arguments — same function, same target object, same column —
+ * so a declaration nothing answers to is reported in the refusal's own category, and an install with no
+ * declaration stays refused. That pair is the whole difference between reading a declaration and being told a
+ * number, and it is the same pair idl_members_excluded has.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, dirname } from "node:path";
@@ -780,6 +798,42 @@ const ENTRY_KIND = (macro) => macro.startsWith("JS_CGETSET") ? "accessor"
    itself per realm. The caller checks it back against the corpus — a name declared here that the IDL no longer
    carries, or that the component nonetheless installs, is an error rather than a line nobody revisits. */
 const EXCLUDED_FORM = { fn: "idl_members_excluded", iface: 2, table: 3, why: 5 };
+
+/* THE ROW-FILTERED INSTALL LOOP — the mirror of the exclusion above, and the answer to the last thing this
+   file refused. A loop installing `TBL[i].member` with a `continue` between the top and the install installs an
+   unknown SUBSET as far as any reader of the source is concerned, and selectorOf refuses it: crediting the
+   column would be a false COMPLETE, the one error that never prints. Neither repair the refusal invites is
+   sound. Matching the filter's TEXT is the "installation inferred from text" this module's header exists to
+   have removed, and it reads the ONE shape it was taught while a filter of any other shape goes on dropping
+   names — `if (!TBL[i].enabled) continue;` mentions no parameter and drops names, so "the filter names no
+   caller argument, therefore every caller gets the union" turns a loud refusal into a silent false COMPLETE.
+   So the C declares the RESULT rather than the filter: `idl_install_covers_column(ctx, target,
+   IDL_NAME_COLUMN(TBL, field), why)` says that once the loop is done, `target` carries every name that column
+   holds. That is a claim about an OBJECT, so the engine checks it against the object — per realm, as an
+   own-property lookup of every name, which fires at the origin naming the member a dropped row would have made
+   this credit. THIS side checks the other half: the declaration is matched to an install site by the install's
+   OWN arguments — same function, same target object, and a column resolving to the same names in the same
+   order, which is the same column — so a declaration no install answers to is reported rather than believed,
+   and an install with no declaration stays refused. Neither side can drift while the other stands. */
+const COVERS_FORM = { fn: "idl_install_covers_column", target: 1, column: 2, why: 3 };
+/* The C spells the column's address, length and stride from ONE table and ONE field through IDL_NAME_COLUMN,
+   so the two identifiers this reads are the two the compiler reads. A column written any other way is not this
+   declaration and is refused with it — the same rule the exclusion's table argument gets. */
+const NAME_COLUMN_RE = /^\s*IDL_NAME_COLUMN\s*\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\s*$/;
+
+/* The member names one COLUMN of a table holds, in row order. Every cell must resolve, because a column with a
+   hole in it is a name list this does not know. */
+function columnStrings(R, table, field) {
+  const cells = R.column(table, field);
+  if (!cells) return null;
+  const out = [];
+  for (const c of cells) {
+    const v = R.strings(c, null);
+    if (!v) return null;
+    out.push(...v);
+  }
+  return out;
+}
 
 const TABLE_FORMS = [
   /* a reflection IS §3.7.6's attribute — [Reflect] changes where the value comes from, not what kind of
@@ -1982,6 +2036,33 @@ export function installedMembers(paths, env) {
       return names;
     };
 
+    /* 0. THE INSTALL-COVERAGE DECLARATIONS this file makes, read BEFORE the installs they answer — see
+       COVERS_FORM. Each is matched below by an install site in the same function, and one that matches nothing
+       is reported at the end of this file's scan: a declaration is only worth reading because the thing it
+       describes can contradict it, so one describing no install is a claim nothing tests. */
+    const covers = [];
+    for (const site of callSites(masked, COVERS_FORM.fn)) {
+      const f = fnAt(site.at);
+      if (!f) continue;                       /* a site outside every body is the form's own declaration */
+      const R = scoped(f);
+      const colExpr = String(site.args[COVERS_FORM.column] || "");
+      const col = colExpr.match(NAME_COLUMN_RE);
+      const why = R.strings(site.args[COVERS_FORM.why] || "", null);
+      const rec = { fn: f.name, at: site.at, target: stripCast(site.args[COVERS_FORM.target] || ""),
+                    table: col ? col[1] : null, field: col ? col[2] : null, names: null, bad: null,
+                    used: false };
+      if (!col)
+        rec.bad = `the covered column \`${colExpr.trim().replace(/\s+/g, " ")}\` is not ` +
+                  `IDL_NAME_COLUMN(table, field), so which names this declares covered is unknown`;
+      else if (!(rec.names = columnStrings(R, col[1], col[2])))
+        rec.bad = `the covered column \`${col[1]}[].${col[2]}\` could not be read as a list of member names`;
+      else if (!why || why.length !== 1)
+        rec.bad = `the coverage declaration for \`${col[1]}[].${col[2]}\` states no readable reason — the ` +
+                  `reason is the sentence saying why the loop's row filter cannot remove a NAME`;
+      if (rec.bad) rec.names = null;
+      covers.push(rec);
+    }
+
     /* 1. the call forms */
     for (const [callee, form] of forms) {
       for (const site of callSites(masked, callee)) {
@@ -2036,6 +2117,14 @@ export function installedMembers(paths, env) {
           }
         }
         if (!names) { report(site.at, callee, site.args[pos]); continue; }
+        /* THE COVERAGE DECLARATION THAT ANSWERS THIS SITE, matched by the site's OWN arguments: the same
+           function, the same object, and a column resolving to the same names in the same order — which is the
+           same column, read the same way. Marked used HERE rather than in the refusal branch below, because a
+           declaration over a loop that needs no refusal is still a true assertion the engine makes per realm. */
+        const cover = covers.find((c) => !c.bad && c.fn === f.name && c.target === target &&
+                                         c.names.length === names.length &&
+                                         c.names.every((n, k) => n === names[k]));
+        if (cover) cover.used = true;
         /* A SHARED INSTALLER THAT SELECTS A SUBSET OF ITS NAMES BY A CALLER'S ARGUMENT installs a DIFFERENT set
            per call, and reading it as one set is the audit's only remaining false COMPLETE — the error it
            cannot catch from the other side, because the member it hides never prints as anything.
@@ -2054,6 +2143,10 @@ export function installedMembers(paths, env) {
            list it does not know — and the one thing it must never do here is answer anyway. */
         const tgtIdx = f.params.indexOf(target);
         if (names.length > 1 && tgtIdx >= 0 && /\bcontinue\s*;/.test(f.body)) {
+          /* THE ENGINE HAS DECLARED WHAT THIS LOOP LEAVES ON THE TARGET, and asserts it per realm against the
+             object itself — so the filter's shape is not a thing this has to read, and a filter that removes a
+             name fires there instead of being credited here. The whole column is the member list. */
+          if (cover) { emitWith(names, noop, a, site.at, callee, null, form.kind); continue; }
           const sel = selectorOf(f, R);
           const line = lineOf(orig, site.at);
           if (sel.why) { unselected.push({ file: path, line, fn: f.name, why: sel.why }); continue; }
@@ -2211,6 +2304,21 @@ export function installedMembers(paths, env) {
         const names = reg.rows.filter((r) => form.applies(r.name)).map((r) => form.name(r.name));
         emit(names, false, f, stripCast(site.args[form.target] || ""), site.at, form.fn, form.kind);
       }
+    }
+
+    /* 6. A COVERAGE DECLARATION NO INSTALL IN ITS FUNCTION ANSWERS TO. The engine's own per-realm assert checks
+       the declaration against the OBJECT; this is the half that checks it against the CORPUS, and it is the
+       same pair the exclusion gets. A declaration whose column no install takes its names from, whose target no
+       install writes on, or whose own arguments could not be read, describes a loop that is not there — so it
+       credits a member list nothing produced, which is exactly the false COMPLETE the refusal it removes exists
+       to prevent. It is named in the refusal's own category, never dropped. */
+    for (const c of covers) {
+      if (c.used) continue;
+      unselected.push({ file: path, line: lineOf(orig, c.at), fn: c.fn,
+                        why: c.bad || `declares \`${c.table}[].${c.field}\` covered on \`${c.target}\`, and no ` +
+                             `install in this function takes its member name from that column and writes on ` +
+                             `that object — a coverage declaration is checked by the install it answers, so ` +
+                             `one that answers nothing is a claim nothing tests` });
     }
   }
   /* A DECLARED INSTALLER NOTHING CALLS. The three §6.6.1 partial interfaces are three contracts that can go

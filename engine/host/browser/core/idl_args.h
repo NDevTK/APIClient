@@ -1016,4 +1016,29 @@ void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *na
 void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
                           const char *const *names, int n, const char *why);
 
+/* THE NAMES A ROW-FILTERED INSTALL LOOP COVERS — the second thing the gap auditor cannot read off a loop, and
+   the mirror of the exclusion above: that one says a name is NOT there, this one says a whole column IS.
+   A loop that installs `TBL[i].member` and drops rows with a `continue` installs an unknown SUBSET as far as
+   any static reader is concerned, so the auditor REFUSES the site rather than crediting the column — crediting
+   a name the loop drops is a false COMPLETE, the one error it cannot catch from the other side, because the
+   member it hides never prints as anything. Teaching it to recognise the filter's TEXT is not the repair: a
+   `continue` is C rather than a declaration, and a reader that matches one shape of it silently mis-reads the
+   next — a parameter-free filter (`if (!TBL[i].enabled) continue;`) drops names while looking like a dedup.
+   So the engine states the RESULT instead of the filter: once this returns, `target` carries every name the
+   column holds. That is a claim about an OBJECT, not about source text, which is what makes it checkable where
+   claims about objects are checked — here, per realm, as an OWN-property lookup of each name, the very lookup
+   the page would do. A filter that removed a name, a column the loop never walked, a target it wrote somewhere
+   else: each fires at the origin, naming the member the audit would otherwise have credited.
+   The auditor reads the SAME call and credits the column at the install site it MATCHES — matched by the
+   install's own arguments (same column, same target, same function), so a declaration no install in its
+   function answers to is an error rather than a line nobody revisits, and an install that needs one and lacks
+   one stays refused. Those two sides are the whole difference between this and handing the auditor a number.
+   `why` is the sentence that says why the loop's filter cannot remove a NAME. See idl_args.c. */
+void idl_install_covers_column(JSContext *ctx, JSValueConst target, const char *const *column,
+                               int n, size_t stride, const char *why);
+/* The column's address, its length and its stride from ONE spelling of the table and ONE of the field, so the
+   three cannot drift apart — and the auditor reads the same two identifiers the compiler does. */
+#define IDL_NAME_COLUMN(tbl, field) \
+    ((const char *const *)&(tbl)[0].field), (int)(sizeof(tbl) / sizeof((tbl)[0])), sizeof((tbl)[0])
+
 #endif

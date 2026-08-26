@@ -1105,8 +1105,12 @@ if (unattributed.length) {
 const tagged = new Set([...installedBy.keys(), ...stubbedBy.keys()]);
 const unknownTags = [...tagged].filter((n) => !byName.has(n)).sort();
 /* A SHARED INSTALLER WHOSE PER-CALL SUBSET COULD NOT BE COMPUTED. Neither credited (the false COMPLETE that
-   does not print) nor dropped (a gap that is not there) — named with the call site, because the fix is either
-   to make the selector a constant this can evaluate or to teach the detector the row filter's shape. */
+   does not print) nor dropped (a gap that is not there) — named with the call site, because there are exactly
+   two root fixes and TEACHING THIS READER THE FILTER'S SHAPE IS NEITHER OF THEM: make the selector a C
+   constant this can evaluate, so the rows the caller asked for are computable; or, where the filter is not a
+   selector at all, have the C declare what the loop LEAVES ON THE TARGET (idl_install_covers_column), which
+   the engine then asserts per realm against the object itself. The same category carries a declaration no
+   install answers to — the other side of that pair, and the reason it is not simply believed. */
 defect("install sites whose selected subset could not be computed", world.unselected.length);
 for (const u of world.unselected)
   console.log(`[idl-audit] ${u.file.replace(BROWSER + "/", "")}:${u.line}  ${u.fn}() — ${u.why}`);

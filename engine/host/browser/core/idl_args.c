@@ -3483,6 +3483,56 @@ void idl_members_excluded(JSContext *ctx, JSValueConst proto, const char *iface,
 #endif
 }
 
+/* THE COLUMN A ROW-FILTERED INSTALL LOOP COVERS — see idl_args.h for why this exists and why it is the RESULT
+   that is declared rather than the filter. What is asserted here is exactly what the auditor credits: every
+   name the column holds is an OWN property of the object the loop installed onto.
+   OWN and not inherited, because the audit files a member under the interface ITS TARGET is: an inherited
+   property would answer this question with a member the base interface installed, which is the false COMPLETE
+   in a second costume. And the lookup runs NO page code — the object a realm's own install loop wrote on is one
+   the engine built, and JS_GetOwnPropertyNoUserCode aborts rather than running a trap or an undeclared exotic
+   hook in a C activation with no flow base under it.
+   The name is what the DCHECK reports, because the name is the whole finding: it is the member the gap audit
+   would have counted installed on the strength of this declaration and the page would not have found. */
+void idl_install_covers_column(JSContext *ctx, JSValueConst target, const char *const *column,
+                               int n, size_t stride, const char *why)
+{
+    DCHECK(why != NULL,
+           "an install-coverage declaration carries no reason — the reason is the sentence saying why this "
+           "loop's row filter cannot remove a NAME, and without it the declaration is an assertion of itself");
+    DCHECK(column != NULL, "an install-coverage declaration named no column");
+    DCHECK(n > 0, "an install-coverage declaration named an empty column — a loop that installs nothing is not "
+                  "a subset the audit needs told, it is a site with no members to credit");
+    DCHECK(stride >= sizeof(const char *),
+           "an install-coverage declaration strides by less than the pointer it strides over, so it reads one "
+           "row's name out of two rows' bytes");
+    DCHECK(JS_IsObject(target), "an install-coverage declaration was made against something that is not an "
+                                "object, so there is nothing the loop can have installed on");
+#if APICLIENT_DEV
+    {
+        int i;
+        for (i = 0; i < n; i++) {
+            const char *name;
+            JSAtom a;
+            int has;
+            /* the column is a FIELD of a wider row, so it is read by stride out of the row's bytes — through
+               memcpy, because a pointer read out of a byte cursor is the strict-aliasing violation that
+               passes at -O0 and segfaults a directory at -O1 */
+            memcpy(&name, (const unsigned char *)column + (size_t)i * stride, sizeof name);
+            CHECK(name != NULL, "an install-coverage declaration's column holds a NULL where a member name is");
+            a = JS_NewAtom(ctx, name);
+            CHECK(a != JS_ATOM_NULL, "a covered member's name could not be interned");
+            has = JS_GetOwnPropertyNoUserCode(ctx, NULL, target, a);
+            JS_FreeAtom(ctx, a);
+            /* The loop's row filter removed a NAME, or this column is not the one it walked: the audit credits
+               this member to the target's interface and the page cannot find it. */
+            DCHECK(has == 1, name);
+        }
+    }
+#else
+    (void)ctx; (void)target; (void)column; (void)n; (void)stride; (void)why;
+#endif
+}
+
 /* THE POOL IS RELEASED IN TWO HALVES, BECAUSE THE TWO THINGS IT HOLDS HAVE DIFFERENT LIFETIMES and one call
  * could only ever get one of them right. It was one call, it ran BEFORE the frontier and before the runtime in
  * two of the three hosts, and both halves were wrong there at once:

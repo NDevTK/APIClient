@@ -752,6 +752,17 @@ void html_element_install(JSContext *ctx, JSValueConst global)
             html_image_install_global(ctx, global, p);
         JS_FreeValue(ctx, p);
     }
+    /* WHAT THE LOOP ABOVE LEAVES ON THE GLOBAL, said as a claim about the global rather than about the loop.
+       The Web IDL gap audit reads `node_install_interface(ctx, global, HTML_IFACE[i].iface, p)` and finds a
+       `continue` between it and the top of the loop; it cannot tell a dedup from a filter that drops names, so
+       it refuses to credit the column at all — and refusing is right, because crediting a name this loop never
+       installed would report sixty-odd interface objects present with nothing to contradict it. The filter is a
+       dedup OF THIS VERY COLUMN, so it removes rows and no NAMES, and that is the fact stated here and asserted
+       per realm against the object itself. Break the dedup — key it on anything else, drop a row for any other
+       reason — and this fires naming the interface object the audit would have credited. */
+    idl_install_covers_column(ctx, global, IDL_NAME_COLUMN(HTML_IFACE, iface),
+                              "the row filter is a first-occurrence dedup on this same name column, so it "
+                              "removes repeated ROWS and never a NAME");
 }
 
 bool html_element_is(JSValueConst v)
