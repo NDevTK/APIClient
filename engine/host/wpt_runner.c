@@ -135,6 +135,10 @@ static FILE *report_out(void) { return g_report ? g_report : stdout; }
 
 /* THE MEASUREMENT IS OVER WHEN THE HARNESS SAYS IT IS — see js_wpt_test_complete and the loop in main. */
 static int g_test_complete;
+/* …AND THIS RUN HAS ASKED THE ENGINE TO WRITE ITS FRONTIER OUT. File scope because the notice router reads it:
+   a park announces worlds, and whether such an announcement is expected is exactly the question "is this run
+   ending?". See the loop in main. */
+static int g_parking;
 
 static JSValue js_wpt_gc(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
@@ -1696,20 +1700,41 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
         free(whole);
         return;
     }
+    /* `world.gone <name>` and `world.parked <vector>` — THE TWO A PARK EMITS, and this host's answer to both is
+       the same one and it is a POSITIVE answer rather than a shrug. They exist so a PEER INSTANCE that never
+       left memory can release the segment it holds for a timeline of ours, and so the zone can hold a foreign
+       world's death for whichever instance later resumes this document from its residue. Here every peer of
+       this session is a child PROCESS this run reaps in the same teardown (wpt_children_free closes its pipes
+       and waits for it), and no instance ever resumes a wpt file — the corpus is the next run's input, not a
+       residue. Reaping the process is a strictly stronger statement than either notice, delivered to the same
+       peer, in the same teardown.
+       THE PARK IS THE ONLY THING THAT EMITS THEM (engine.c has one caller of each, both inside the park), so
+       this is not a class of notice this host might meet mid-run and quietly discard — which is the shape the
+       DFAIL below is guarding, and the reason that distinction is asserted rather than assumed. */
+    if (nf == 2 && (!strcmp(f[0], "world.gone") || !strcmp(f[0], "world.parked"))) {
+        DCHECK(g_parking, "a world's death or a carried segment was announced while this run was still "
+                          "measuring — both are a PARK's announcements, so either a park was taken that this "
+                          "host did not ask for, or a peer of a live session just lost a timeline and the "
+                          "instance holding its segment will hold it for ever");
+        free(whole);
+        return;
+    }
     free(whole);
     DFAIL("a host notice reached the router under an operation it does not route — a notice this host drops is "
           "a capability the engine emitted for and nothing performs, which is invisible at the emitting end");
 }
 
-static bool wpt_answer_host_requests(JSContext *ctx)
+/* EVERY NOTICE THIS INSTANCE HAS EMITTED, ROUTED. Its own function because there are two callers and they are
+   not the same moment: the slice boundary below, and the end of the run — the park emits between writing the
+   residue and closing the session, which the engine calls the last point at which a notice of ours is still
+   drained, and the loop in main leaves on the DONE that same step answers. */
+static void wpt_drain_notices(JSContext *ctx)
 {
-    const char *notices = engine_host_notices();
     const char *p;
-    bool answered = false;
 
-    /* THE NOTICES FIRST: a document announced but not yet provisioned is one a read would arrive for before
-       its instance exists. */
-    for (p = notices; *p; ) {
+    /* A document announced but not yet provisioned is one a read would arrive for before its instance exists,
+       which is why these are drained ahead of the requests. */
+    for (p = engine_host_notices(); *p; ) {
         const char *end = strchr(p, '\n');
         char *line;
         size_t n;
@@ -1726,6 +1751,14 @@ static bool wpt_answer_host_requests(JSContext *ctx)
         free(line);
         p = end + 1;
     }
+}
+
+static bool wpt_answer_host_requests(JSContext *ctx)
+{
+    const char *p;
+    bool answered = false;
+
+    wpt_drain_notices(ctx);
 
     /* AND THE REQUESTS, each routed to the instance holding that document — which is what the trusted zone
        does in the extension, for the same reason: only it knows which instance holds which document. */
@@ -2995,15 +3028,41 @@ int main(int argc, char **argv)
         int r = engine_sched_step();
         int did;
 
+        /* THE ONE EXIT IS DONE, AND THE TWO ENDS THAT ARE NOT DONE ASK FOR A PARK FIRST — see below. */
+        if (r == ENGINE_STEP_DONE) break;
+        /* THE STEP AFTER A PARK REQUEST TAKES IT (engine.h's engine_request_park: at the next boundary with no
+           flow switched in, which is the top of the very next slice, before the first pick). So a second step
+           that answered anything else means the residue is still live and everything below would be paying for
+           work this measurement has already ended. */
+        DCHECK(!g_parking,
+               "this host asked the engine to write its frontier out and the step that followed did not take "
+               "the park — the residue is still live, so the teardown below is about to release flows whose "
+               "recipes were never written");
+
         /* THE MEASUREMENT ENDED, so the session does — HTML §7.3.1.6 "Navigable destruction". `done()` is
            testharness's own end of the test and the verdict is already printed (js_wpt_test_complete says why
            this is the end of a MEASUREMENT and not a bound on work). What performs the destruction is the
            teardown below this loop: every document this process holds is released, and each child navigable is
            a PROCESS whose pipes are closed and which is reaped — which is the shape of that section's
            destroy-a-top-level-traversable, "for each historyEntry ... destroy a document and its descendants"
-           and then the traversable itself. The requests still in flight go with it, as the loads of a
-           destroyed navigable do; wpt_net_free says so from the other end. */
-        if (g_test_complete) break;
+           and then the traversable itself.
+           IT IS NOT A `break`, AND THAT WAS THE HALF THAT WAS STILL WRONG. Ending a session over a live
+           frontier suspends the RUNNING flow (engine_sched_end) and says nothing about the OTHER members, which
+           reach flow_registry_free still holding parked continuations, suspended frames, queued reactions,
+           replies this host owed them and peers' routed messages — every one a work item on the ONE frontier,
+           and §scheduler forbids dropping one. flow_release asserts exactly that, and its own comment names the
+           two honest ends: a session that ends over live flows either PAGED them or had nothing to lose. This
+           one has plenty to lose (that is what a poll loop is), so it pages: engine_request_park writes every
+           member out as a recipe — the same operation the extension's host asks for at the RAM floor — and the
+           step that takes it switches the running flow out, hands back the operations it never started,
+           announces its worlds, and answers DONE with every flow marked `paged`.
+           SO NOTHING IS DROPPED, WHICH IS THE WHOLE DIFFERENCE FROM A BOUND. The residue is written IN FULL and
+           the recipes exist; what this host then does with the document is its own business, and a conformance
+           gate is one document in one process with no cross-session frontier to store it in. That is a fact
+           about this host's storage and not about the scheduler truncating work — the assert below reads the
+           engine's own answer to "was this frontier written out rather than drained" rather than taking my
+           word for it. */
+        if (g_test_complete) { engine_request_park(); g_parking = 1; continue; }
 
         /* THE HOST'S HALF OF EVERY SLICE BOUNDARY, and it is asked at EVERY one rather than only at a stall —
            the same protocol the extension's bridge speaks (engine.h): paying only at a stall makes one flow's
@@ -3013,7 +3072,6 @@ int main(int argc, char **argv)
         did = wpt_answer_host_requests(ctx);
         if (wpt_issue_pending() > 0) did = 1;
         if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
-        if (r == ENGINE_STEP_DONE) break;
         if (r == ENGINE_STEP_STALLED && !did) {
             /* NOTHING RUNNABLE, AND THIS HOST FILLED NOTHING — which is a WAIT if an answer is on its way and
                a DISAGREEMENT if one is not, and those were the same line until the network edge could tell
@@ -3029,25 +3087,30 @@ int main(int argc, char **argv)
                    "the frontier stalled on work this host says it owes, this host filled NOTHING, and it has "
                    "NOTHING IN FLIGHT — the stall hook and the network edge are two answers to one question "
                    "and they disagree, so the flows parked here are waiting for a reply nobody will send");
-            if (!g_inflight_n) break;
+            /* AND THIS END PAGES FOR THE SAME REASON, so the two ways this host stops are one operation: a
+               frontier parked on a reply nobody will send is a frontier with everything to lose. */
+            if (!g_inflight_n) { engine_request_park(); g_parking = 1; continue; }
             wpt_net_pump(ctx, /*block*/1);
         }
     }
-    /* AND THE SESSION ENDS HERE, UNCONDITIONALLY, because this loop has THREE exits and only one of them ends
-       a session by itself. DONE drained the frontier and closed it; the other two are this host deciding to
-       stop — the measurement being over, and a stall this host cannot pay — and each of those leaves a flow
-       SWITCHED IN, with its heap delta applied to the shared baseline, its created nodes in the document and
-       its decision state in the scheduler's globals rather than its own blob. The teardown below then releases
-       one copy of each while the scheduler still holds the other, which flow_release asserts and which is what
-       26 files in `html/browsers` aborted on the first time this loop grew a second exit.
-       ENDING IS THE ORDINARY SUSPEND, so this drops nothing: every member of the frontier is left a SNAPSHOT,
-       which is the state §Time-travel says a parked flow is in and the state §7.3.1.6's destruction needs them
-       in before it can be a mechanism rather than a free. The flows are not finished and this does not pretend
-       they are — they are suspended, and nothing resumes them because a gate runner is one document in one
-       process with no frontier that outlives it.
-       IT CARRIES NO `if`, and that is the correction rather than an economy: which exits have already closed
-       the session is a question the ENGINE answers (engine.h), and a copy of that answer in each host is a
-       condition every new exit has to remember to be included in. */
+    /* THE PARK'S OWN NOTICES, drained at the one point the engine says they are still drainable — the park
+       emits them between writing the residue and closing the session (engine.c), and this loop left on the
+       DONE that same step answered, so nothing else would ever look at them. */
+    wpt_drain_notices(ctx);
+    /* AND THE ENGINE'S OWN ANSWER TO THE CLAIM THE PARK ABOVE MAKES. "Every member was written out as a
+       recipe" is exactly the sort of statement that reads as true because it was intended; engine_frontier_paged
+       is the engine saying whether this frontier was WRITTEN rather than drained, so the claim is checked at the
+       one place it is load-bearing instead of asserted by the comment that makes it. */
+    DCHECK(!g_parking || engine_frontier_paged(),
+           "this host asked the engine to page its frontier out and the engine does not report a frontier that "
+           "was written — so the teardown below is about to release flows whose work has no recipe, which is "
+           "the drop flow_release names one flow at a time");
+    /* AND THE SESSION ENDS HERE, UNCONDITIONALLY. This loop now has ONE exit — DONE — because the two ends that
+       are not a drained frontier ask for a park and the step that takes it answers DONE like any other; so this
+       call is the positive nothing engine.h describes, and it is kept rather than dropped because the rule it
+       obeys is "call it when you stop stepping" and a host that obeys that cannot be wrong when it grows an
+       exit. Which exits have already closed the session is a question the ENGINE answers, and a copy of that
+       answer in each host is a condition every new exit has to remember to be included in. */
     engine_sched_end();
 
     /* THE PROGRAM SEQUENCE AND THE REQUEST RECORDS, both of which outlived the session by design and neither
