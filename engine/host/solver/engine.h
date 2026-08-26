@@ -377,6 +377,30 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
                         lxb_dom_element_t **els, int n, int forking, const char *recipes);
 int  engine_sched_step(void);
 
+/* THE SESSION ENDS WHEN THE HOST STOPS STEPPING, AND EVERY HOST SAYS SO THE SAME WAY. `begin`/`step`/`end`,
+ * with `end` called unconditionally at the point the host leaves its loop — never `if (r != ENGINE_STEP_DONE)`,
+ * which is a condition each host has to copy correctly and which one of them will not.
+ *
+ * WHAT IT IS FOR. Only ONE way out of a stepping loop closes the session by itself: DONE, where the frontier
+ * drained. Every other exit is the host's own decision — a stall nobody will pay, a measurement that is over —
+ * and it leaves the session LIVE: the scheduler's hooks installed over a frontier the host is about to tear
+ * down, and, the part that is not merely untidy, ONE FLOW STILL SWITCHED IN. That flow's heap delta is applied
+ * to the shared baseline, its created DOM nodes are in the document, and its decision state is in decide.c's
+ * globals rather than in its own blob — so the teardown releases one copy of each while the scheduler still
+ * holds the other, and flow_release asserts exactly that ("the RUNNING flow was released"). Measured: a wpt
+ * runner that ended its loop when testharness reported the file complete aborted 26 files on that assert.
+ *
+ * IT IS NOT A DROP, WHICH IS THE WHOLE REASON THIS IS A MECHANISM AND NOT A `free`. Ending performs the
+ * ORDINARY SUSPEND on the running flow — the same switch-out a park takes — so the frontier a closed session
+ * leaves behind is a set of SNAPSHOTS, every member in the state §Time-travel says a parked flow is in.
+ * Nothing is dropped, starved, skipped, reordered or forgotten; what ends is the SESSION, and whether those
+ * snapshots are then resumed is a question about the host's frontier and not about this call.
+ *
+ * CALLING IT AFTER DONE IS CORRECT AND IS NOTHING. A session that already closed has no running flow to
+ * suspend and no hooks left installed, which is a positive answer rather than a guard against a caller that
+ * got it wrong — and it is what lets the rule above be "call it when you stop stepping", with no condition. */
+void engine_sched_end(void);
+
 /* A SECOND DOCUMENT OF THIS AGENT RUNS ITS OWN SCRIPTS, ON THE FRONTIER THAT IS ALREADY RUNNING.
  *
  * An instance is an ORIGIN-KEYED AGENT CLUSTER, so several documents are one instance's — and a document the

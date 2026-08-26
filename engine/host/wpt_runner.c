@@ -3033,6 +3033,22 @@ int main(int argc, char **argv)
             wpt_net_pump(ctx, /*block*/1);
         }
     }
+    /* AND THE SESSION ENDS HERE, UNCONDITIONALLY, because this loop has THREE exits and only one of them ends
+       a session by itself. DONE drained the frontier and closed it; the other two are this host deciding to
+       stop — the measurement being over, and a stall this host cannot pay — and each of those leaves a flow
+       SWITCHED IN, with its heap delta applied to the shared baseline, its created nodes in the document and
+       its decision state in the scheduler's globals rather than its own blob. The teardown below then releases
+       one copy of each while the scheduler still holds the other, which flow_release asserts and which is what
+       26 files in `html/browsers` aborted on the first time this loop grew a second exit.
+       ENDING IS THE ORDINARY SUSPEND, so this drops nothing: every member of the frontier is left a SNAPSHOT,
+       which is the state §Time-travel says a parked flow is in and the state §7.3.1.6's destruction needs them
+       in before it can be a mechanism rather than a free. The flows are not finished and this does not pretend
+       they are — they are suspended, and nothing resumes them because a gate runner is one document in one
+       process with no frontier that outlives it.
+       IT CARRIES NO `if`, and that is the correction rather than an economy: which exits have already closed
+       the session is a question the ENGINE answers (engine.h), and a copy of that answer in each host is a
+       condition every new exit has to remember to be included in. */
+    engine_sched_end();
 
     /* THE PROGRAM SEQUENCE AND THE REQUEST RECORDS, both of which outlived the session by design and neither
        of which anything else owns. The session BORROWED the arrays (engine.h), so they are freed only now that
@@ -3086,7 +3102,9 @@ int main(int argc, char **argv)
        as a safety net: a session ends by CLOSING (engine_session_close performs exactly that switch-out, which
        is what makes the frontier a set of snapshots), so a host doing it as well would be the second scheduler
        this conversion removed, expressed as one line of teardown. A flow still switched in at this point is a
-       session that never closed, and flow_release says so at the flow it reaches. */
+       session that never closed, and flow_release says so at the flow it reaches — which is what the
+       `engine_sched_end` above the teardown is for, and it is the ENGINE's close rather than a switch-out this
+       file performs, so the two lines say the same thing from the two sides rather than contradicting. */
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(ctx);

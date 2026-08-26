@@ -6991,6 +6991,18 @@ static int engine_sched_slice(void) {
     return ENGINE_STEP_DONE;
 }
 
+/* THE OTHER END OF THE `begin`/`step` PAIR — see engine.h for why every host calls it unconditionally at the
+   point it stops stepping, and for what is still live inside a session that was left open. There is nothing
+   here beside the close: the whole of "the session is over" is already one function, and this is the seam that
+   lets a host outside this file reach it rather than a second copy of its list. */
+void engine_sched_end(void) {
+    /* A SESSION THAT ALREADY CLOSED IS ALREADY ENDED. This is the answer to the question, not a guard against
+       a caller who asked it wrongly: `engine_sched_step` closes the session itself when it answers DONE, and a
+       host that stopped stepping BECAUSE of that DONE is in exactly the state this call establishes. */
+    if (!g_sess_live) return;
+    engine_session_close();
+}
+
 /* THE SLICE'S BRACKET, and it is a WRAPPER because the body has seven exits. Opening the budget is arming an
    asynchronous edge (solver/quantum.h) and closing it is disarming that edge, so a return that forgot one would
    leave a CPU timer running over the host's own time between two steps — the signal would land while the host
@@ -7521,9 +7533,13 @@ static void run_scheduler(JSContext *ctx, char **bodies, char **srcs, const Scri
        it answers DONE; the OTHER way out of this loop — a stall nobody can supply — left the session LIVE, with
        the scheduler's hooks still installed over a frontier the host was about to tear down and one flow still
        switched in. That is exactly what engine_session_close's own comment says must not differ between the two
-       ways a session ends, and the way it ended here was the one nothing said. */
-    if (r != ENGINE_STEP_DONE)
-        engine_session_close();
+       ways a session ends, and the way it ended here was the one nothing said.
+       THE `r != ENGINE_STEP_DONE` THAT STOOD HERE IS GONE, and its absence is the point: it made "did this exit
+       already close the session?" a question every host answers for itself, which is one hand-copied condition
+       per driver and a §NO-STUBS-grade hole in whichever one gets it wrong. The wpt runner got it wrong the
+       first time it grew a second exit, and 26 files aborted on flow_release. `engine_sched_end` answers it
+       once, so a host's rule is now "call it when you stop stepping" with nothing to get right. */
+    engine_sched_end();
 }
 
 /* EXPLORE: seed boot OR a parked residue, then drain the frontier, forking at every concolic branch. */
