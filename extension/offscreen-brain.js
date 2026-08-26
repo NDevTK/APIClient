@@ -933,11 +933,12 @@ async function _dispatchDocument(docKey) {
       analysis._run, analysis.resolverErrors.length);
 
   /* WHAT THIS RUN WAS, ON THE DOCUMENT ITSELF. `_engineCrashed` was written twice in bridge.js and read
-     nowhere, so a crashed run reached this document as a plausible empty analysis: `_astError` is null (the
-     dispatch succeeded), the arrays are the host's own empties, and every surface downstream then reported a
-     page that had been analysed and found clean. It is `_run` now, it is written on every arm of every
-     producer, and this is where it becomes a fact about the DOCUMENT — read by the reclaim sweep below, by
-     lib/serialize.js, and by the popup, which says so in words.
+     nowhere, so a crashed run reached this document as a plausible empty analysis: `_astError` was null (the
+     dispatch succeeded), the finding arrays were the host's own fabricated empties, and every surface
+     downstream then reported a page that had been analysed and found clean. Both halves of that are gone —
+     the arrays are absent on a run with no document, and the outcome is stated: it is `_run`, it is written
+     on every arm of every producer, and this is where it becomes a fact about the DOCUMENT — read by the
+     reclaim sweep below, by lib/serialize.js, and by the popup, which says so in words.
      THE RECLAIM GATE MOVED HERE WITH IT. It asked `_astResults || _astError` — "has this run returned" — and
      `_astResults` is now also written by the incremental merge while the run is still going, which would have
      freed a running document's page source. `_astRun` is the terminal fact and is written exactly once. */
