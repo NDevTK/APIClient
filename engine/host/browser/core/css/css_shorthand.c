@@ -225,8 +225,10 @@ static const char *const BORDER_PART_SHORTHAND[] = { "border-width", "border-sty
  *
  * THE THREE TERM SETS ARE DISJOINT, which is what makes §4.2's `||` splittable by the component value alone
  * rather than by position. `baseline` belongs only to §4.2.2; `top`, `center` and `bottom` belong only to
- * §4.2.3 (its LINE-RELATIVE shift values, which §4.2.3's own note records as the pair that "don't fit
- * perfectly in the dichotomy"); and `first`/`last` belong only to the source term. A word in two of them would
+ * §4.2.3 — its LINE-RELATIVE shift values, which §4.2.3's own note flags as the three it is least sure of
+ * ("the line-relative shift values don't fit perfectly in the dichotomy between alignment-baseline and
+ * baseline-shift"), so a future edition moving them is the change that would break this split and it will
+ * break it LOUDLY; and `first`/`last` belong only to the source term. A word in two of them would
  * make the shorthand ambiguous and the split a guess — so the disjointness is asserted rather than assumed,
  * beside the round trip, in css_shorthand_init. */
 static const char *const BASELINE_SOURCE_KEYWORDS[] = { "first", "last" };
