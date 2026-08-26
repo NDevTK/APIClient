@@ -1148,9 +1148,12 @@ void css_shorthand_init(void)
             for (j = 0; j < VA_SET_N[i]; j++) {
                 const char *canon = NULL;
                 const char *kw = VA_SETS[i][j];
+                /* The partition is run HERE and not inside the assert: it writes through `canon`, and a
+                   DCHECK's condition must be side-effect-free (check.h) so that the compiled-out build runs
+                   the same program as the dev one. */
+                int term = vertical_align_term_of(kw, strlen(kw), &canon);
 
-                DCHECK(vertical_align_term_of(kw, strlen(kw), &canon) == (int)i && canon != NULL &&
-                           strcmp(canon, kw) == 0,
+                DCHECK(term == (int)i && canon != NULL && strcmp(canon, kw) == 0,
                        "a keyword of one of css-inline-3 §4.2's three term sets is classified as another "
                        "term's, so the sets are not disjoint and the shorthand's `||` cannot be split by the "
                        "component value. Whichever set is scanned FIRST would take the shared word and the "
