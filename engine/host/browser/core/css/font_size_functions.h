@@ -118,4 +118,18 @@ CssPx css_relative_size_px(CssPx parent, bool larger);
    font-size asserts this answers true rather than assuming it. */
 bool css_font_affecting_property(const char *name);
 
+/* §6.1.1's SECOND LIST, WHICH IS THE FIRST PLUS EXACTLY ONE ROW, and it exists because §6.1.1 states a rule
+   for `lh` and `rlh` that it states for no other unit: "when lh or rlh units are used in the value of THE
+   LINE-HEIGHT PROPERTY or font-affecting properties on the element they refer to, they resolve against the
+   computed line-height and font metrics of the parent element—or the computed metrics corresponding to the
+   initial values of the font and line-height properties, if the element has no parent."
+   THE ROW IS `line-height` AND IT IS NOT ONE OF THE FIRST LIST'S, which §6.1.1 makes explicit in the very next
+   parenthesis: "(the other font-relative lengths continue to resolve against the element's own metrics when
+   used in line-height)". So `line-height: 1.2em` is 1.2 times THIS element's font size while
+   `line-height: 1.2lh` is 1.2 times its PARENT's line height, and a single predicate for both units would get
+   one of those two wrong. It is a second entry rather than a flag for the same reason the first is an entry:
+   it is what stops a definition being of itself, and `line-height: 2lh` resolving against the element's own
+   computed line-height is an unbounded walk rather than a wrong number. */
+bool css_lh_affecting_property(const char *name);
+
 #endif

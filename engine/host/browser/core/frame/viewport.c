@@ -144,6 +144,11 @@ static const struct { const char *member; bool presented; } VIEWPORT_FACT[CSS_EN
        today. `presented` is false for the reason it is false one row up: the user agent's installed face
        exists whether or not this document is on a screen. */
     [CSS_ENV_FONT_ASCENT]        = { "fontAscent",                    false },
+    /* CSS 2.1 §10.8.1's `D`, the other half of the pair the row above picks. Two rows for one face is the
+       same answer this table gives the viewport, whose width and height are also one rectangle and also two
+       facts: what decides it is whether a page can read them APART, and `1cap` against `1lh` is exactly that
+       subtraction. */
+    [CSS_ENV_FONT_DESCENT]       = { "fontDescent",                   false },
 };
 
 /* THE SOURCE KEY, SPELLED ONCE — the document is part of it for media_query_list.c's reason (viewport.h), and

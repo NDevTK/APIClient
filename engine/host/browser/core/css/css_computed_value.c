@@ -282,6 +282,22 @@ static CssLength css_cv_px(CssPx px)
 
 /* ---- css-values-4 §6.1.1's `em` and `rem`, ANSWERED FROM THE TREE ------------------------------------------ */
 
+/* THE ELEMENT'S OWN COMPUTED `font-size`, which css-fonts-4 §2.5's `Computed value:` line makes an absolute
+   length and nothing else. Three arms multiply by it — §6.1.1's `lh`, css-inline-3 §5.1's percentage at
+   computed-value time and §9's number at used-value time — and all three mean THIS element's, never its
+   parent's, because the walk that redirects to a parent is decided from the PROPERTY by the two predicates
+   below and never from the element. */
+static CssPx css_cv_font_size_px(lxb_dom_element_t *el)
+{
+    CssLength len = css_computed_length(el, "font-size");
+
+    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
+           "an element's own computed `font-size` came back as something other than an ABSOLUTE LENGTH, which "
+           "css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
+    return len.px;
+}
+
+
 /* WHICH ELEMENT'S COMPUTED `font-size` A FONT-RELATIVE UNIT MEANS, which is the half css_length.h cannot answer
    for itself: both units are defined as a computed `font-size`, and a computed `font-size` is CSS Cascade §7.2's
    inheritance walk over the flattened element tree. `affecting` is css-values-4 §6.1.1's font-affecting rule
@@ -290,6 +306,12 @@ static CssLength css_cv_px(CssPx px)
 typedef struct {
     lxb_dom_element_t *el;
     bool               affecting;
+    /* §6.1.1's SECOND list, pre-decided from the same property for the same reason — `lh` and `rlh` resolve
+       against the PARENT inside `line-height` as well as inside a font-affecting property, and the two lists
+       differ by exactly that one row (core/css/font_size_functions.h). Two flags rather than one because a
+       single one would make `line-height: 1.2em` resolve against the parent's font size, which §6.1.1's own
+       parenthesis forbids in the same breath as it states the rule for `lh`. */
+    bool               lh_affecting;
 } CssCvFontCtx;
 
 /* THE PARENT'S COMPUTED `font-size`, which is FOUR spec sentences and one walk. CSS Cascade §7.2 Inheritance
@@ -378,7 +400,39 @@ static bool css_cv_metric_is_root(CssFontMetric which)
 {
     return which == CSS_FONT_METRIC_REM || which == CSS_FONT_METRIC_REX ||
            which == CSS_FONT_METRIC_RCH || which == CSS_FONT_METRIC_RIC ||
-           which == CSS_FONT_METRIC_RCAP;
+           which == CSS_FONT_METRIC_RCAP || which == CSS_FONT_METRIC_RLH;
+}
+
+/* ONE ELEMENT'S COMPUTED `line-height` AS AN ABSOLUTE LENGTH — css-values-4 §6.1.1's `lh` in its own words,
+   "the computed value of the line-height property of the element on which it is used, CONVERTING NORMAL to an
+   absolute length by using only the metrics of the first available font". The three shapes css-inline-3 §5.1
+   admits become one number here and nowhere else, so `1lh` and `getComputedStyle(el).lineHeight` cannot come
+   to disagree: a LENGTH is already one, a NUMBER is that factor times this element's own computed font size,
+   and `normal` is CSS 2.1 §10.8.1's `AD` at that size, which core/css/font_metrics.h forms.
+   WHICH ELEMENT is the caller's question and not this function's — §6.1.1 sends the unit to a PARENT inside
+   `line-height` itself, and the arm below decides that before calling. */
+static CssPx css_cv_line_height_px(lxb_dom_element_t *el)
+{
+    CssLineHeight v = css_computed_line_height(el);
+    CssPx size = css_cv_font_size_px(el);
+
+    if (v.kind == CSS_LINE_HEIGHT_LENGTH) return v.px;
+    if (v.kind == CSS_LINE_HEIGHT_NUMBER) return css_px_scale(size, v.number);
+    DCHECK(v.kind == CSS_LINE_HEIGHT_NORMAL,
+           "a computed `line-height` is none of the three shapes css-inline-3 §5.1's `Computed value:` line "
+           "admits — the entry that derives it answers exactly those, so this is that enumeration and this "
+           "conversion having come apart");
+    return font_metrics_normal_line_height_px(css_cv_realm(el), size);
+}
+
+/* §6.1.1's "THE COMPUTED METRICS CORRESPONDING TO THE INITIAL VALUES of the font and line-height properties",
+   which is the answer for `lh` on an element with no parent and for `rlh` in a document with no root element.
+   The initial `line-height` is `normal` (css-inline-3 §5.1) and the initial `font-size` is `medium`
+   (css-fonts-4 §2.5), so it is §10.8.1's `AD` at the one picked size core/css/font_size_functions.h owns —
+   the same base case §7.2's inheritance and §6.1.1's own no-parent clause both name. */
+static CssPx css_cv_initial_line_height_px(JSContext *realm)
+{
+    return font_metrics_normal_line_height_px(realm, css_default_font_size(realm));
 }
 
 static CssPx css_cv_font_metric(void *p, CssFontMetric which)
@@ -391,12 +445,38 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            "css-values-4 §6.1.1's font-metric callback was invoked with no element — the pair is handed to "
            "css_length_parse by the entries below and by nothing else, so an absent element is a metrics "
            "struct assembled field-by-field past them");
-    /* §6.1.1's EIGHT FONT-METRIC UNITS ARE A METRIC OVER ONE OF THE TWO FONT SIZES BELOW, so each is answered
-       by recursing into this same callback for its base — which is what makes `ex` and `rex` one derivation
-       with one difference (`rem` rather than `em`) rather than two that can drift apart. Six of them scale by
-       a ratio §6.1.1 fixes; `cap` and `rcap` take core/css/font_metrics.h's picked ascent instead, and the
-       difference in signature is the difference in kind (font_metrics.h). For `ch` the ratio is the axis
-       question above. */
+    /* §6.1.1's `lh` AND `rlh` ARE THE ONE PAIR WHOSE BASE IS A PROPERTY, so they leave before the metric arm
+       below rather than scaling one of the two font sizes: "equal to the computed value of the line-height
+       property of the element on which it is used", and `rlh` is "the value of the lh unit on the root
+       element". WHICH element answers is §6.1.1's own extra rule, and it has the SAME SHAPE as the
+       font-affecting one two arms down — the redirect fires exactly when the declaration sits on the element
+       the unit refers to, which for `lh` is always and for `rlh` is only on the root itself. That is why the
+       test below is `on == f->el` rather than a second spelling per unit: `html { line-height: 2rlh }` is two
+       times the INITIAL line height (the root has no parent) while `div { line-height: 2rlh }` is two times
+       the root's own and `div { height: 2rlh }` is too, because `height` is neither `line-height` nor
+       font-affecting. */
+    if (which == CSS_FONT_METRIC_LH || which == CSS_FONT_METRIC_RLH) {
+        JSContext *realm = css_cv_realm(f->el);
+        lxb_dom_element_t *on, *from;
+
+        if (which == CSS_FONT_METRIC_RLH) {
+            root = css_cv_root_element(f->el);
+            if (root == NULL) return css_cv_initial_line_height_px(realm);
+            on = lxb_dom_interface_element(root);
+        } else {
+            on = f->el;
+        }
+        from = (f->lh_affecting && on == f->el) ? css_cv_parent_element(on) : on;
+        /* §6.1.1's own no-parent clause, which is the same base case §7.2's inheritance falls to. */
+        if (from == NULL) return css_cv_initial_line_height_px(realm);
+        return css_cv_line_height_px(from);
+    }
+    /* §6.1.1's OTHER EIGHT FONT-METRIC UNITS ARE A METRIC OVER ONE OF THE TWO FONT SIZES BELOW, so each is
+       answered by recursing into this same callback for its base — which is what makes `ex` and `rex` one
+       derivation with one difference (`rem` rather than `em`) rather than two that can drift apart. Six of
+       them scale by a ratio §6.1.1 fixes; `cap` and `rcap` take core/css/font_metrics.h's picked ascent
+       instead, and the difference in signature is the difference in kind (font_metrics.h). For `ch` the ratio
+       is the axis question above. */
     if (which != CSS_FONT_METRIC_EM && which != CSS_FONT_METRIC_REM) {
         bool root_relative = css_cv_metric_is_root(which);
         CssPx base = css_cv_font_metric(p, root_relative ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
@@ -445,10 +525,9 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
     }
     DCHECK(which == CSS_FONT_METRIC_REM,
            "css_length.h's font-metric enumeration named a metric this component answers no arm for — the two "
-           "are one list and have come apart. The two of css-values-4 §6.1.1's units that this callback does "
-           "NOT carry a row for (`lh`, `rlh`) are the pair §6.1.1 states in terms of a PROPERTY rather than a "
-           "metric, and they crash in css_length.c naming `line-height`'s computed value and §10.8.1's depth "
-           "below the baseline rather than reaching a third arm here");
+           "are one list and have come apart. All twelve of css-values-4 §6.1.1's units have a row here now, "
+           "so an unanswered one is a THIRTEENTH that the unit table routed and this switch was never told "
+           "about");
     root = css_cv_root_element(f->el);
     /* §6.1.1: `rem` is "equal to the computed value of the em unit on the root element". The element it REFERS
        TO is therefore the root, so the font-affecting clause above bites only when the declaration is on the
@@ -472,6 +551,7 @@ static CssFontMetrics css_cv_font_metrics(CssCvFontCtx *slot, lxb_dom_element_t 
 
     slot->el = el;
     slot->affecting = css_font_affecting_property(name);
+    slot->lh_affecting = css_lh_affecting_property(name);
     m.resolve = css_cv_font_metric;
     m.ctx = slot;
     return m;
@@ -815,20 +895,6 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
 }
 
 /* ---- css-inline-3 §5.1 "Line Spacing: the line-height property" -------------------------------------------- */
-
-/* THE ELEMENT'S OWN COMPUTED `font-size`, which css-fonts-4 §2.5's `Computed value:` line makes an absolute
-   length and nothing else. Two arms below multiply by it — §5.1's percentage at computed-value time and §9's
-   number at used-value time — and both mean THIS element's, never its parent's: `line-height` is not a
-   font-affecting property (css-values-4 §6.1.1's own parenthesis), so there is no walk to redirect. */
-static CssPx css_cv_font_size_px(lxb_dom_element_t *el)
-{
-    CssLength len = css_computed_length(el, "font-size");
-
-    DCHECK(len.kind == CSS_LENGTH_ABSOLUTE,
-           "an element's own computed `font-size` came back as something other than an ABSOLUTE LENGTH, which "
-           "css-fonts-4 §2.5's `Computed value:` line admits nothing else than");
-    return len.px;
-}
 
 /* §5.1's `<number>` ARM, TOLD APART FROM ITS `<length-percentage>` ONE BY THE ABSENCE OF A UNIT. CSS Values §6
    lets a `<length>` omit its unit for ZERO and for nothing else, so a unitless value is a `<number>` — and for

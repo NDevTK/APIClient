@@ -61,16 +61,21 @@
  * and a concolic over it would model an ignorance this engine does not have, while a value the model picked
  * has a real range behind it and a bare number there deletes the arm another reader's font takes.
  *
- * WHAT IS STILL DELIBERATELY ABSENT. §10.8.1's `D` — the depth below the baseline — is NOT here, because
- * nothing reads it: `cap` needs `A` alone, and a constant nobody consumes is the mirror of the defect
- * CLAUDE.md names, a value that is real, asserted and consumed by nothing. It lands with its reader, which is
- * §10.8.1's leading (`L = 'line-height' - AD`), and THAT is also where CSS 2.1 §10.8's own recommendation
- * becomes checkable — "we recommend a used value for 'normal' between 1.0 to 1.2" is a statement about `AD`
- * and cannot be asserted over `A` alone. css-values-4 §6.1.1's `lh` is that same conversion under another
- * name ("converting normal to an absolute length by using only the metrics of the first available font"), and
- * it is now waiting on `D` ALONE for the `normal` case: the PROPERTY it reads is modelled
- * (core/css/css_computed_value.h's `css_computed_line_height`). So `D` has a reader the moment it exists, and
- * that is the order this file's absences are meant to be filled in. */
+ * `D` IS THE SECOND PICKED METRIC AND IT ARRIVED WITH ITS READER, which is the order this file's absences are
+ * meant to be filled in. §10.8.1 defines the pair together — `A`, `D`, and `AD = A + D`, "the distance from
+ * the top to the bottom" — and a `D` with nothing reading it would have been the mirror of the defect
+ * CLAUDE.md names, real and asserted and consumed by nothing. Its reader is `font_metrics_normal_line_height`,
+ * which is CSS 2.1 §10.8's `normal` and css-values-4 §6.1.1's "converting normal to an absolute length by
+ * using only the metrics of the first available font" under two names for one number.
+ * AND `AD` IS WHERE §10.8's OWN RECOMMENDATION FINALLY BECOMES AN ASSERT: "we recommend a used value for
+ * 'normal' between 1.0 to 1.2" is a statement about the SUM, so it could not be checked over `A` alone and is
+ * checked over the pair now. That is what makes the two picked numbers falsifiable rather than merely stated —
+ * the spec bounds their sum, §6.1.1's assumed x-height bounds `A` from below, and a face that violates either
+ * crashes at the point it would first be reported.
+ * WHAT IS STILL ABSENT IS THE LINE GAP. §10.8.1's note recommends a real face's `OS/2` "sTypoAscender" and
+ * "sTypoDescender" for `A` and `D` and names no third term, so `AD` is the whole of what this file needs for
+ * `normal`; a face's `sTypoLineGap` would be a third picked number with no sentence of §10.8 asking for it and
+ * nothing here reading it, which is the same reason `D` waited. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 
@@ -105,5 +110,17 @@ double font_metrics_em_ratio(FontMetricsEmRatio which);
    (core/frame/viewport.h): the source key is keyed on the document that read it. A document no navigable
    presents CRASHES rather than being handed a bare number, exactly as core/css/font_size_functions.h does. */
 CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size);
+
+/* CSS 2.1 §10.8.1's `AD = A + D` — the first available font's height above the baseline plus its depth below,
+   at `font_size`, in CSS pixels. It is CSS 2.1 §10.8's used value for `line-height: normal` ("tells user
+   agents to set the used value to a 'reasonable' value BASED ON THE FONT of the element"), which css-inline-3
+   §5.1 states as "determine the preferred line height automatically based on the metrics of the used font",
+   and it is css-values-4 §6.1.1's `lh` conversion ("converting normal to an absolute length by using only the
+   metrics of the first available font"). Three sentences, one number, one entry — so a page cannot read two
+   different answers for `line-height: normal` through `getComputedStyle` and through `1lh`.
+   `D` HAS NO ENTRY OF ITS OWN because nothing asks for a depth on its own: §10.8.1's leading splits `L` in
+   half around `A` and `D` separately, and THAT is the caller that will want them apart. Exporting it before
+   then would be the constant-with-no-reader this component already refused once. */
+CssPx font_metrics_normal_line_height_px(JSContext *realm, CssPx font_size);
 
 #endif

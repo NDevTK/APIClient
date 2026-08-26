@@ -23,8 +23,9 @@
  *   which it is used" and `rem` is "the computed value of the em unit on the root element" — a COMPUTED
  *   `font-size` and nothing else. The other ten are FONT METRICS: an x-height, a cap-height, the advance
  *   measure of the "0" and "水" glyphs, and a computed `line-height` with `normal` resolved from the first
- *   available font — each with an `r`-prefixed twin measured on the root element. THE TWO GROUPS PART COMPANY
- *   HERE, which is why they were always two tables and two crashes.
+ *   available font — each with an `r`-prefixed twin measured on the root element. THE TWO GROUPS ASK DIFFERENT
+ *   QUESTIONS AND TAKE ONE TABLE, because every one of the twelve is a base times a multiplier and only the
+ *   two differ; what parts company is where the multiplier comes FROM, which is the split below.
  *   THE FIRST TWO RESOLVE. css_computed_value.c derives css-fonts-4 §2.5's computed `font-size` — an absolute
  *   length, out of §2.5.1's keyword table, a percentage of the parent's, `larger`/`smaller`, or a length this
  *   file absolutizes — and CSS Cascade §7.2's inheritance carries it one node at a time to a base case that is
@@ -42,9 +43,13 @@
  *   determined, and a face with no glyph outlines is exactly that antecedent — core/css/font_metrics.h owns
  *   the three numbers and says why they are a real value here and not a stand-in. Each `r`-prefixed twin is
  *   "the value of the <unit> unit ON THE ROOT ELEMENT", so it is the same ratio over the `rem` base.
- *   THE LAST FOUR STILL CRASH, and they are the two §6.1.1 states no must-assume value for: `cap`/`rcap`
- *   falls back to "the font's ascent", which is a measurement of a real face, and `lh`/`rlh` is a computed
- *   `line-height` with `normal` resolved from that same face. The crash names each half separately.
+ *   THE LAST FOUR RESOLVE OUT OF A PICKED FACE, and that is the OTHER kind of multiplier: §6.1.1 states no
+ *   must-assume value for a cap-height or for `normal`, so `cap`/`rcap` takes CSS 2.1 §10.8.1's `A` and
+ *   `lh`/`rlh` takes its `AD`, both of which core/css/font_metrics.h PICKS — so those four carry an
+ *   environment fact where the six above carry none, and the whole of the difference is which sentence of the
+ *   spec answers. `lh` is also the one unit whose base is a PROPERTY: §6.1.1 gives it and `rlh` a resolution
+ *   rule of their own inside `line-height` (core/css/font_size_functions.h's second predicate), which the
+ *   caller answers exactly as it answers the font-affecting one.
  *   media_query.c resolves `em` against the INITIAL font size and is right to, and §6.1.1 says so itself —
  *   "when used outside the context of an element (such as in media queries), the font-relative lengths units
  *   refer to the metrics corresponding to the initial values of the font and line-height properties" — so the
@@ -139,6 +144,12 @@ typedef enum {
        between them and would get one arm out of a single key. It is also separate from §6.1.1's assumed
        x-height, which is a spec constant with no freedom in it and therefore no fact at all. */
     CSS_ENV_FONT_ASCENT,
+    /* CSS 2.1 §10.8.1's `D` — "a depth below [the baseline]" of the same face, picked by the same component
+       and a SEPARATE fact from `A` beside it for the same test: a page reads `1cap` for the ascent and `1lh`
+       for their sum, so their difference is independently observable and one key for both would decide it on
+       the example. §10.8.1 defines the pair together and this engine picks them together; that is why they
+       are two rows and not one, not a reason to make them one. */
+    CSS_ENV_FONT_DESCENT,
     CSS_ENV_FACT_COUNT
 } CssEnvFact;
 
@@ -274,11 +285,14 @@ typedef struct {
    cap-height, only that an undeterminable one takes "the font's ascent", and that ascent is a PICKED metric of
    the modelled face rather than a spec constant — so it carries CSS_ENV_FONT_ASCENT while the three above
    carry nothing of their own. The row is the same shape because the multiplication is.
-   `lh` IS ABSENT FOR font_metrics.h's REASON AND FOR ONE OF ITS OWN. The PROPERTY is modelled
-   (`css_computed_line_height`), so what is left is §6.1.1's `normal` conversion — CSS 2.1 §10.8.1's `AD`, and
-   font_metrics.h has only `A` — and the rule §6.1.1 states for `lh` and `rlh` alone: inside `line-height` they
-   resolve against the PARENT's computed line-height, which is a second predicate beside the font-affecting one
-   and would need a second row here to carry. The unit arm in css_length.c crashes naming both. */
+   `lh` IS THE TWELFTH AND IT IS A PROPERTY RATHER THAN A METRIC, which is why it is the last row and why it
+   changes nothing about this table's shape: §6.1.1 makes it "the computed value of the line-height property of
+   the element on which it is used, converting normal to an absolute length by using only the metrics of the
+   first available font", so the caller answers a computed `line-height` (core/css/css_computed_value.h) with
+   §10.8.1's `AD` substituted for `normal` (core/css/font_metrics.h), and this file multiplies as it does for
+   every other row. WHICH element's line-height is the caller's second question and §6.1.1 gives these two
+   units a rule of their own for it — core/css/font_size_functions.h's second predicate — which is the same
+   shape as the font-affecting one and lands in the same place, so nothing here has to know. */
 typedef enum {
     CSS_FONT_METRIC_EM = 0,   /* §6.1.1's `em`  — the element the unit is used on */
     CSS_FONT_METRIC_REM,      /* §6.1.1's `rem` — the root element */
@@ -289,7 +303,9 @@ typedef enum {
     CSS_FONT_METRIC_IC,       /* §6.1.1's `ic`  — the advance measure of the "水" glyph */
     CSS_FONT_METRIC_RIC,      /* §6.1.1's `ric` */
     CSS_FONT_METRIC_CAP,      /* §6.1.1's `cap` — the used cap-height, which falls back to the font's ASCENT */
-    CSS_FONT_METRIC_RCAP      /* §6.1.1's `rcap` */
+    CSS_FONT_METRIC_RCAP,     /* §6.1.1's `rcap` */
+    CSS_FONT_METRIC_LH,       /* §6.1.1's `lh`  — the computed `line-height`, with `normal` converted */
+    CSS_FONT_METRIC_RLH       /* §6.1.1's `rlh` */
 } CssFontMetric;
 
 /* IT IS ASKED LAZILY, AND THAT IS THE POINT OF THE INDIRECTION RATHER THAN AN OPTIMISATION. Resolving both

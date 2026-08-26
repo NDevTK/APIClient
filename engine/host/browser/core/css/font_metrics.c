@@ -46,10 +46,15 @@ double font_metrics_em_ratio(FontMetricsEmRatio which)
    COHERENT FACE rather than two. CSS 2.1 §10.8 recommends "a used value for 'normal' between 1.0 to 1.2", and
    §10.8.1 makes that value a function of `AD = A + D`; a Western text face spends roughly a quarter of that
    sum below the baseline, so an `A` near four fifths of the em is the middle of the range that satisfies both
-   once `D` exists to be checked against it. THAT SECOND CHECK IS NOT WRITTEN HERE AND CANNOT BE: `D` has no
-   reader yet (font_metrics.h), so §10.8's recommendation is an invariant this file will GAIN with it, not one
-   it is keeping quiet about. */
-#define FONT_METRICS_ASCENT_EM 0.8
+   once `D` exists to be checked against it. THAT CHECK IS WRITTEN NOW, over the pair, in
+   `font_metrics_normal_line_height_px` below — which is where the sum is formed and therefore the only place
+   §10.8's sentence is about something this file holds.
+   THE TWO NUMBERS ARE ONE FACE AND WERE PICKED TOGETHER. `D` is 0.3em, which puts `AD` at 1.1em — the exact
+   midpoint of §10.8's recommended 1.0 to 1.2 — and puts 0.273 of the pair below the baseline, which is the
+   "roughly a quarter" this paragraph reasoned from before `D` existed. A reader who wants to move either has
+   two asserts to satisfy and both name their section. */
+#define FONT_METRICS_ASCENT_EM  0.8
+#define FONT_METRICS_DESCENT_EM 0.3
 
 CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size)
 {
@@ -72,4 +77,34 @@ CssPx font_metrics_ascent_px(JSContext *realm, CssPx font_size)
        whichever caller remembered to: the answer is a joint function of the reader's font size, which the
        operand already carries, and of this user agent's face. */
     return css_px_mul(font_size, css_px_env(CSS_ENV_FONT_ASCENT, realm, FONT_METRICS_ASCENT_EM));
+}
+
+CssPx font_metrics_normal_line_height_px(JSContext *realm, CssPx font_size)
+{
+    CssPx descent;
+
+    if (realm == NULL)
+        DFAIL("CSS 2.1 §10.8.1 (Leading and half-leading)'s `AD` was asked for with no realm — the same "
+              "question the ascent above answers, for the same reason: the two metrics are a source key each, "
+              "and a key is keyed on the document that read it");
+    /* §10.8's OWN RECOMMENDATION, ASSERTED OVER THE PAIR — "we recommend a used value for 'normal' between
+       1.0 to 1.2". It is a statement about the SUM, which is why it could not be checked where `A` was picked
+       and is checked here, at the one place the sum is formed. A user agent is permitted to disagree with a
+       recommendation; what it must not do is disagree by ACCIDENT, which is what an unasserted pair of picked
+       numbers drifting apart would be. The bounds are inclusive because the spec's "between 1.0 to 1.2" names
+       both endpoints as acceptable values rather than as strict limits. */
+    DCHECK(FONT_METRICS_ASCENT_EM + FONT_METRICS_DESCENT_EM >= 1.0 &&
+               FONT_METRICS_ASCENT_EM + FONT_METRICS_DESCENT_EM <= 1.2,
+           "the first available font's picked `A` and `D` sum to a `normal` line height OUTSIDE the range CSS "
+           "2.1 §10.8 recommends — \"we recommend a used value for 'normal' between 1.0 to 1.2\". Under 1.0 "
+           "successive lines overlap at the default font size and over 1.2 every block of text on every page "
+           "is loosely set, and either is a user agent disagreeing with the spec's own guidance by accident "
+           "rather than by decision. Move one of the two numbers in core/css/font_metrics.c, or state the "
+           "disagreement here on purpose");
+    /* §10.8.1: "we also define AD = A + D, the distance from the top to the bottom". The sum is formed over
+       the two lengths rather than over the two ratios so that BOTH facts reach the result — a page reads the
+       ascent through `1cap` and the sum through `1lh`, and a domain naming only one of them would leave the
+       arm where the other reader's face differs unexplored. */
+    descent = css_px_mul(font_size, css_px_env(CSS_ENV_FONT_DESCENT, realm, FONT_METRICS_DESCENT_EM));
+    return css_px_add(font_metrics_ascent_px(realm, font_size), descent);
 }

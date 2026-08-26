@@ -173,3 +173,12 @@ bool css_font_affecting_property(const char *name)
        `h1 { font-size: 1.2em }` is 20% greater than the font size h1 elements INHERIT. */
     return strcmp(name, "font-size") == 0;
 }
+
+bool css_lh_affecting_property(const char *name)
+{
+    DCHECK(name != NULL, "css-values-4 §6.1.1's lh-affecting question was asked about a NULL property name");
+    /* §6.1.1's own wording is "the line-height property OR font-affecting properties", so this is that
+       disjunction and not a second table — the day the first list gains a row this one gains it too, which is
+       the whole reason it is written over the predicate rather than beside it. */
+    return strcmp(name, "line-height") == 0 || css_font_affecting_property(name);
+}

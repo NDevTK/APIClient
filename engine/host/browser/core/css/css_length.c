@@ -134,7 +134,7 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
    or a resolution". §6.1.1 defines all four as lengths, so that message sent the reader to look for a caller
    asking the wrong component when what is missing is a font metric. A crash that names the wrong absence is
    the stale-`DFAIL` failure with the coordinates still correct.
-   THE TWELVE SPLIT BY WHETHER THIS ENGINE CAN ANSWER THEM, AND THE LINE IS THE SPEC'S OWN. §6.1.1 defines
+   THE TWELVE SPLIT BY WHERE THEIR MULTIPLIER COMES FROM, AND THE LINE IS THE SPEC'S OWN. §6.1.1 defines
    `em` as "the computed value of the font-size property of the element on which it is used" and `rem` as "the
    computed value of the em unit on the root element" — both are a computed `font-size` and nothing else. Six
    more are a FONT METRIC times one of those two sizes, and §6.1.1 states what MUST be assumed for each when
@@ -143,21 +143,25 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
    outlines rather than a stand-in. `cap`/`rcap` join them on the same arithmetic and a DIFFERENT footing:
    §6.1.1 fixes no cap-height, only that an undeterminable one takes "the font's ASCENT", and that ascent is a
    metric of the modelled face that core/css/font_metrics.h PICKS — so the product carries an environment fact
-   where the three above carry none. All ten resolve, through the ONE `CssFontMetrics` pair the caller holding
-   the tree answers — one table, because the arithmetic is the same and only the base and the ratio differ.
-   THE REMAINING PAIR STILL CRASHES, and no longer for the property's sake: css-inline-3 §5.1's computed
-   `line-height` is modelled now. `lh`/`rlh` waits on §6.1.1's own "converting normal to an absolute length by
-   using only the metrics of the first available font" — CSS 2.1 §10.8.1's `AD`, of which core/css/font_metrics.h
-   has only `A` — and on the rule §6.1.1 states for these two units alone, which resolves them against the
-   PARENT's computed line-height inside `line-height` itself. */
+   where the three above carry none. All of them resolve through the ONE `CssFontMetrics` pair the caller
+   holding the tree answers — one table, because the arithmetic is the same and only the base and the multiplier
+   differ.
+   AND `lh`/`rlh` COMPLETES THE TWELVE, on the same arithmetic and a base that is a PROPERTY rather than a
+   metric: §6.1.1 makes it "the computed value of the line-height property of the element on which it is used,
+   converting normal to an absolute length by using only the metrics of the first available font", so the
+   caller answers css-inline-3 §5.1's computed value with CSS 2.1 §10.8.1's `AD` substituted for `normal`.
+   WHICH element answers is §6.1.1's own rule for these two units alone — inside `line-height` they resolve
+   against the PARENT's, which core/css/font_size_functions.h's second predicate decides from the property
+   exactly as the font-affecting one does. There is no arm left in this file for a font-relative unit to reach
+   past the table, which is why there is no list beside it any more. */
 static const struct { const char *unit; CssFontMetric metric; } CSS_FONT_RELATIVE[] = {
     { "em",  CSS_FONT_METRIC_EM  }, { "rem", CSS_FONT_METRIC_REM },
     { "ex",  CSS_FONT_METRIC_EX  }, { "rex", CSS_FONT_METRIC_REX },
     { "ch",  CSS_FONT_METRIC_CH  }, { "rch", CSS_FONT_METRIC_RCH },
     { "ic",  CSS_FONT_METRIC_IC  }, { "ric", CSS_FONT_METRIC_RIC },
     { "cap", CSS_FONT_METRIC_CAP }, { "rcap", CSS_FONT_METRIC_RCAP },
+    { "lh",  CSS_FONT_METRIC_LH  }, { "rlh", CSS_FONT_METRIC_RLH },
 };
-static const char *const CSS_FONT_RECORD_RELATIVE[] = { "lh", "rlh" };
 
 /* WHICH METRIC A UNIT NAMES, or false for one this file cannot route. It is a lookup and not a test followed
    by a second lookup, because the two would be one list that can disagree about a spelling. */
@@ -362,27 +366,7 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
                "multiplication can use");
         return css_px_scale(base, num);
     }
-    if (css_len_in(CSS_FONT_RECORD_RELATIVE, CSS_LEN_N(CSS_FONT_RECORD_RELATIVE), unit))
-        DFAIL("a length in css-values-4 §6.1.1's `lh` or `rlh` reached absolutization — the last pair of its "
-              "twelve units this engine cannot answer. THE PROPERTY IS NO LONGER MISSING: css-inline-3 §5.1 "
-              "\"Line Spacing: the line-height property\" is modelled now and `css_computed_line_height` answers "
-              "its three shapes, so a `line-height` that computed to a NUMBER or to a LENGTH is already an "
-              "absolute length or one multiplication away from being one. TWO things are left and they are "
-              "different. (1) `normal`, which is §6.1.1's own \"converting normal to an absolute length by "
-              "using only the metrics of the first available font\" and CSS 2.1 §10.8.1 (Leading and "
-              "half-leading)'s `AD = A + D`: core/css/font_metrics.h picks `A` and has no `D`, and §10.8's own "
-              "\"we recommend a used value for 'normal' between 1.0 to 1.2\" is the assert that arrives with "
-              "the pair. (2) WHICH ELEMENT'S line-height, which for THIS unit is not the element's own in "
-              "every case: §6.1.1 states a rule for `lh` that it states for no other unit — \"when lh or rlh "
-              "units are used in the value of the line-height property or font-affecting properties on the "
-              "element they refer to, they resolve against the computed line-height and font metrics of the "
-              "PARENT element—or the computed metrics corresponding to the initial values of the font and "
-              "line-height properties, if the element has no parent\" — which is the same self-reference guard "
-              "`font-size: 1.2em` needs and is a SECOND predicate beside core/css/font_size_functions.h's "
-              "font-affecting one, because §6.1.1 adds `line-height` to the list for these two units only "
-              "(\"the other font-relative lengths continue to resolve against the element's own metrics when "
-              "used in line-height\"). BUILD `D` with its reader, then that predicate");
-    else if (css_len_is_viewport(unit))
+    if (css_len_is_viewport(unit))
         return css_len_viewport(realm, unit, num / 100.0);
     else if (css_len_is_viewport_variant(unit))
         DFAIL("a length in one of css-values §6.1.2.1's SMALL, LARGE or DYNAMIC viewport-percentage units "
@@ -538,10 +522,11 @@ static bool css_len_unit_known(const char *unit)
     {
         CssFontMetric metric;
 
+        /* All twelve of §6.1.1's font-relative units are rows of the one table now, so this is the whole
+           font-relative family and there is no second list beside it to fall out of step with. */
         if (css_len_font_metric_of(unit, &metric)) return true;
     }
-    return css_len_in(CSS_FONT_RECORD_RELATIVE, CSS_LEN_N(CSS_FONT_RECORD_RELATIVE), unit) ||
-           css_len_is_viewport(unit) || css_len_is_viewport_variant(unit);
+    return css_len_is_viewport(unit) || css_len_is_viewport_variant(unit);
 }
 
 bool css_length_is_length_unit(const char *unit, size_t unit_len)

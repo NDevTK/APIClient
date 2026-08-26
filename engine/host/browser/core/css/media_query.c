@@ -883,9 +883,13 @@ MediaQuerySet *media_query_parse_one(const char *text)
    values to.
    A §6 LENGTH UNIT WITH NO ROW HERE MAKES THE FEATURE EVALUATE FALSE rather than crashing, and that is a
    DIVERGENCE from core/css/css_length.c, which crashes for the same units. The set is exactly the same one:
-   `lh`/`rlh` (a computed `line-height`, a property nothing models), `vi`/`vb` (an inline axis), and the
-   `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate facts). `value_ok` admits every
-   DIMENSION for a `<length>` feature, so those reach this table and leave through `*ok = false`.
+   `vi`/`vb` (an inline axis) and the `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate
+   facts). `value_ok` admits every DIMENSION for a `<length>` feature, so those reach this table and leave
+   through `*ok = false`. `lh`/`rlh` is NOT among them and is absent here for a reason of its own: §6.1.1
+   resolves it against a computed `line-height`, and outside the context of an element there is none to read —
+   the initial value applies, which is `normal`, which is CSS 2.1 §10.8.1's `AD` at the initial font size. That
+   is one row core/css/font_metrics.h can already answer, and it is left for the turn that has a caller asking
+   for it rather than added here on the strength of the arithmetic being easy.
    THE TABLE IS SPLIT FROM THE `MqValue` WALK because it has a SECOND caller with no MqValue to hand it, and
    that caller's rule is HTML §4.8.4.3 "Processing model" in one sentence: a source size's units other than the
    viewport-relative ones "must be interpreted THE SAME AS IN MEDIA QUERIES". So `media_query_length_px` below
