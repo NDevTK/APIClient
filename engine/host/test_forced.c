@@ -4740,12 +4740,119 @@ static int param_value_only(const char *js, const char *url, const char *pname, 
  * and the second is not a measurement at all. The sink NAMES are the engine's own table, so a document that
  * emitted no entry for one still emitted entries — the assert is that the array this is reading is an @S
  * array at all. */
-enum { S_UNSEEN = 0, S_SEEN, S_RAN, S_ARRIVED, S_FIRED };
+/* THE ATTRIBUTE-VALUE SEARCH'S SOURCE, SPELLED ONCE. `location.hash.slice(1)` composes this identity byte for
+ * byte (concolic.h states the derivation), and four rows plus a stage read it — four copies of one string, each
+ * free to drift from concolic.c's composition on its own. */
+#define ATTR_SRC "{" LOCATION_HASH_SRC "}.slice()"
+
+/* ONE @S RECORD'S OWN BOUNDS, which every reader below is a question asked INSIDE. An entry runs from its
+ * `{"sink":` to the next one, and that is the whole of what makes an answer a measurement rather than a match:
+ * a loose `strstr` over the array reaches a field from ANY record, which is exactly how the URL row came to be
+ * satisfied out of a different search's candidate list. Answers the record's start and writes its span, or NULL
+ * when this (sink, source) has no entry at all. */
+static const char *s_record(const char *js, const char *sink, const char *src, size_t *span) {
+    char pat[192];
+    const char *e, *end;
+    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
+
+    CHECK(k > 0 && (size_t)k < sizeof pat,
+          "an @S row's record pattern did not fit its buffer — a truncated pattern matches a PREFIX of the "
+          "record key, so the row would read a field out of some other sink's entry");
+    DCHECK(span != NULL, "an @S record was located with nowhere to put its bounds");
+    if (!(e = strstr(js, pat))) return NULL;
+    end = strstr(e + 1, ",{\"sink\":");
+    *span = end ? (size_t)(end - e) : strlen(e);
+    return e;
+}
+
+/* A NUMERIC FIELD OF ONE RECORD. THE ABSENT KEY IS A CRASH AND NOT A ZERO, which is the whole reason this is a
+ * function: `atoi` of a pointer nobody found is 0, and a 0 here is a REAL value every one of these fields must
+ * be able to say — `turns:0` is "the WFQ has never scheduled this search" and is precisely the reading this
+ * fixture exists to take. A default would make the row report the producer's silence as the producer's answer,
+ * which is the defect CLAUDE.md §Architecture names and which put seven live product bugs behind plausible
+ * data. Asked only of a PARKED entry: the fired shape carries `searched` in place of these, so the caller
+ * establishes the shape first (s_stage does, and the rows read it through s_stage's own ladder). */
+static int s_num(const char *js, const char *sink, const char *src, const char *key) {
+    char k[64];
+    const char *e, *p;
+    size_t span;
+    int w = snprintf(k, sizeof k, ",\"%s\":", key);
+
+    CHECK(w > 0 && (size_t)w < sizeof k, "an @S numeric field's key did not fit its buffer");
+    /* CHECK and not DCHECK, for the reason solve.c states about its own two: `span` is written by the call and
+       both are read immediately below, so a DCHECK alone turns a dev-mode abort into a release walk over an
+       uninitialised length. */
+    e = s_record(js, sink, src, &span);
+    CHECK(e != NULL, "a numeric field was read from an @S record this document does not carry — the caller "
+                     "establishes the record exists before asking it anything");
+    for (p = e; p + (size_t)w <= e + span; p++)
+        if (!memcmp(p, k, (size_t)w)) return atoi(p + w);
+#if APICLIENT_DEV
+    {
+        static char why[384];
+        snprintf(why, sizeof why,
+                 "a parked @S entry carries no `%s` — solve.h declares the parked shape and every count in it "
+                 "is emitted unconditionally, so an absent one is the producer's shape having moved under this "
+                 "reader, and reading it as 0 would state a measurement the run never took", key);
+        DFAIL(why);
+    }
+#endif
+    return 0;
+}
+
+/* HOW MANY ELEMENTS A NUMERIC ARRAY FIELD OF ONE RECORD HAS — `survivedBy`, which solve.h declares as one entry
+ * per `payloads` entry and in the same order. It is read for its LENGTH: `payloads` holds the candidate TEXTS,
+ * so counting its elements means counting commas that are not inside a JSON string, while `survivedBy` is
+ * integers and commas alone. The two lengths are the same by construction (push_breakout grows them together),
+ * so the cheap one is the one to count. */
+static int s_arraylen(const char *js, const char *sink, const char *src, const char *key) {
+    char k[64];
+    const char *e, *p;
+    size_t span;
+    int w = snprintf(k, sizeof k, ",\"%s\":[", key);
+
+    CHECK(w > 0 && (size_t)w < sizeof k, "an @S array field's key did not fit its buffer");
+    e = s_record(js, sink, src, &span);
+    DCHECK(e != NULL, "an array field was read from an @S record this document does not carry");
+    for (p = e; p + (size_t)w <= e + span; p++)
+        if (!memcmp(p, k, (size_t)w)) {
+            const char *q = p + w;
+            int n;
+
+            if (*q == ']') return 0;
+            for (n = 1; q < e + span && *q != ']'; q++) {
+                DCHECK(*q == ',' || (*q >= '0' && *q <= '9') || *q == '-',
+                       "a byte that is neither a digit nor a separator appeared in an @S numeric array — this "
+                       "reader counts elements by their separators and a string in there would be counted by "
+                       "whatever commas its bytes happen to contain");
+                if (*q == ',') n++;
+            }
+            DCHECK(q < e + span && *q == ']',
+                   "an @S numeric array ran past the end of its own record without closing — the count would "
+                   "be taken over bytes belonging to the next entry");
+            return n;
+        }
+    DFAIL("a parked @S entry carries none of the arrays solve.h declares for it — the shape has moved under "
+          "this reader and a length read off it would be a fact about nothing");
+    return 0;
+}
+
+/* THE LADDER, AND `RAN` NOW MEANS WHAT ITS NAME SAYS. It read `tried`, which solve_seed_candidates raises at the
+ * moment a candidate FLOW IS CREATED — so `-ran` was 1 for a search whose flows the scheduler had never once
+ * given the thread to, and the row that exists to separate a scheduling question from a distance question
+ * answered the scheduling one wrong in the only direction that matters. That is not a hypothetical misreading:
+ * the @S half was diagnosed from this exact pair twice, once concluding "the candidate is reaching the sink with
+ * the wrong bytes" for candidates that had never executed an opcode, and the falsifier both times was `turns` —
+ * a number the producer has emitted all along and which nothing in this file read.
+ * SO THE RUNGS ARE THE FACTS, each read from the field that IS it: SEEN is an entry at all, SEEDED is `tried`,
+ * RAN is `turns` (solve_flow_begin counts a switch-in of one of this search's candidate flows), ARRIVED is
+ * `reached` (a BREAKOUT's own bytes in the string the sink was handed), FIRED is a `poc`. Five facts, five
+ * fields, no field standing in for a neighbour. */
+enum { S_UNSEEN = 0, S_SEEN, S_SEEDED, S_RAN, S_ARRIVED, S_FIRED };
 static int s_stage(const char *js, const char *sink, const char *src) {
     static const char PARKED[] = ",\"search\":\"parked\",\"tried\":";
-    static const char REACHED[] = ",\"reached\":";
     char pat[192];
-    const char *e, *r;
+    const char *e;
 
     snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
     e = strstr(js, pat);
@@ -4761,11 +4868,9 @@ static int s_stage(const char *js, const char *sink, const char *src) {
     DCHECK(!strncmp(e, PARKED, sizeof PARKED - 1),
            "an @S entry is neither of the two shapes solve.h declares — it carries no `poc` and no parked "
            "search, so the report has a third state this row would silently score as never having run");
-    r = strstr(e, REACHED);
-    DCHECK(r != NULL, "a parked @S entry carries no `reached` — `tried` alone cannot say whether a candidate "
-                      "ever re-executed as far as the sink, which is the one thing this row exists to name");
-    if (atoi(r + sizeof REACHED - 1) > 0) return S_ARRIVED;
-    return atoi(e + sizeof PARKED - 1) > 0 ? S_RAN : S_SEEN;
+    if (s_num(js, sink, src, "reached") > 0) return S_ARRIVED;
+    if (s_num(js, sink, src, "turns")   > 0) return S_RAN;
+    return atoi(e + sizeof PARKED - 1) > 0 ? S_SEEDED : S_SEEN;
 }
 
 /* A FIRE-VERIFIED PoC IS A FIELD OF ITS OWN RECORD, NEVER A SUBSTRING OF THE DOCUMENT — and reading it the
@@ -4792,17 +4897,10 @@ static int s_stage(const char *js, const char *sink, const char *src) {
  * different search's candidate list. The record's own bounds are what makes the answer a measurement: an entry
  * runs from its `{"sink":` to the next one. */
 static int s_field(const char *js, const char *sink, const char *src, const char *needle) {
-    char pat[192];
-    const char *e, *end, *p;
+    const char *e, *p;
     size_t nl = strlen(needle), span;
-    int k = snprintf(pat, sizeof pat, "{\"sink\":\"%s\",\"source\":\"%s\"", sink, src);
 
-    CHECK(k > 0 && (size_t)k < sizeof pat,
-          "an @S field row's record pattern did not fit its buffer — a truncated pattern matches a PREFIX of "
-          "the record key, so the row would read a field out of some other sink's entry");
-    if (!(e = strstr(js, pat))) return 0;
-    end = strstr(e + 1, ",{\"sink\":");
-    span = end ? (size_t)(end - e) : strlen(e);
+    if (!(e = s_record(js, sink, src, &span))) return 0;
     if (span < nl) return 0;
     for (p = e; p + nl <= e + span; p++) if (!memcmp(p, needle, nl)) return 1;
     return 0;
@@ -5518,23 +5616,39 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        quoted because the solidus is not an exit from §13.2.5.38 "Attribute value (unquoted) state" — it is
        appended there — so an unquoted value would swallow the rest of the escape. A payload table could not
        have held this: it is a function of the source's measured byte set AND the element the hole is in. */
-    int s_attr  = s_poc(ss, "innerHTML", "{" LOCATION_HASH_SRC "}.slice()",
-                        "'/src='x'/onerror='X9()'/x9pad='");
-    int s_attrd = s_field(ss, "innerHTML", "{" LOCATION_HASH_SRC "}.slice()", "\"sourceDelivers\":\"\"");
+    int s_attr  = s_poc(ss, "innerHTML", ATTR_SRC, "'/src='x'/onerror='X9()'/x9pad='");
+    int s_attrd = s_field(ss, "innerHTML", ATTR_SRC, "\"sourceDelivers\":\"\"");
     /* THE STAGES BEHIND EACH OF THOSE ROWS. The rows above assert the PAYLOAD TEXT, which only a real
        derivation followed by a real fire can produce, and nothing here relaxes them — these say WHERE a run
-       that has not got there yet has got to. `-derived` is `reached >= 1` on a search whose candidate count
-       has grown past the one run its class opens with, which for a DERIVED class means the derivation
-       constructed a breakout; SINK_URL declares SINK_DERIVE_NONE and opens with its two written-down vectors,
-       so it has no `-derived` row and asking for one would be a claim about a mechanism that class has not
-       got. */
+       that has not got there yet has got to. `-derived` is a search whose candidate list has grown past the
+       probes its class opens with, which for a DERIVED class means the derivation constructed a breakout;
+       SINK_URL declares SINK_DERIVE_NONE and opens with its two written-down vectors, so it has no `-derived`
+       row and asking for one would be a claim about a mechanism that class has not got. */
     int st_eval  = s_stage(ss, "eval",      "{state}.code");
     int st_evalc = s_stage(ss, "eval",      "{state}.note");
     int st_html  = s_stage(ss, "innerHTML", "{state}.html");
     int st_url   = s_stage(ss, "location",  "{state}.next");
     int st_loc   = s_stage(ss, "eval",      LOCATION_HASH_SRC);
     int st_lpark = s_stage(ss, "innerHTML", LOCATION_HASH_SRC);
-    int st_attr  = s_stage(ss, "innerHTML", "{" LOCATION_HASH_SRC "}.slice()");
+    int st_attr  = s_stage(ss, "innerHTML", ATTR_SRC);
+    /* AND THE TWO PRODUCER FACTS THAT SPLIT `-ran=1, -atsink=0` INTO THE THINGS IT HAS BEEN SAYING AT ONCE.
+       A derived class cannot construct anything until its CONTEXT PROBE reaches the sink — the §13.2.5 state is
+       read off the string a real run handed the write, and there is no other observation to read one off — so
+       between "scheduled" and "a breakout arrived" sit two more facts, and with neither of them read a 0 on
+       `-atsink` named four states rather than one: never scheduled, scheduled and never got to the sink, got
+       there and built no escape, built one that never arrived. Those take four different actions.
+       `witnessed` IS THE PROBE'S ARRIVAL and `survivedBy` past `probes` IS THE CONSTRUCTION, both read off the
+       producer's own emission rather than re-derived here: solve.h states that `probes` counts the LEADING
+       entries that are probes and that a consumer must not decide it from position, and `survivedBy` is
+       declared one entry per `payloads` entry, so its length IS the candidate count.
+       THE FIRED ARM IS THE POSITIVE STATEMENT AND NOT A HOLE. A fired record carries the envelope, not the
+       search's counters, so both rows read their fact off the verdict once the search has solved — a search
+       that fired has by construction witnessed a context and constructed the escape that fired. */
+    int attr_parked  = st_attr != S_UNSEEN && st_attr != S_FIRED;
+    int s_attr_wit   = st_attr == S_FIRED || (attr_parked && s_num(ss, "innerHTML", ATTR_SRC, "witnessed") > 0);
+    int s_attr_built = st_attr == S_FIRED ||
+                       (attr_parked && s_arraylen(ss, "innerHTML", ATTR_SRC, "survivedBy")
+                                       > s_num(ss, "innerHTML", ATTR_SRC, "probes"));
 
     /* …AND THE TWO SETS ARE HELD AGAINST EACH OTHER, WHICH IS WHAT WOULD HAVE CAUGHT THE FALSE GREEN THE DAY
        IT APPEARED. A verdict row and its stage row are computed from the SAME bytes about the SAME record, so
@@ -5559,6 +5673,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                                             "stage says it carries no PoC");
     DCHECK(!s_attr  || st_attr  == S_FIRED, "the @S attribute-value verdict is green for a record whose own "
                                             "stage says it carries no PoC");
+    /* AND THE LADDER IS MONOTONE, WHICH IS WHAT STOPS A DEAD STATE BEING REACHED IN SILENCE. Each of the three
+       implications below is an invariant the ENGINE already asserts at the site that establishes it, read back
+       off the emitted document — so the pair can only disagree if a number is being written about a different
+       quantity than the field it lands in, which is exactly the failure the old `-ran` row had and which
+       nothing could see because nothing held two of these against each other.
+         breakout_arrived DCHECKs `npl > nprobe` at the arrival, so an ARRIVAL with no construction behind it is
+         impossible; derive_from_witness runs only on a stored witness, so a construction with no witness behind
+         it is impossible; and learn_witness now DCHECKs `turns > 0`, because a witness is produced by one of
+         this search's own candidate flows reaching the sink.
+       ONE DIRECTION ONLY, because only one direction is an implication: a witnessed search that has built
+       nothing is the CORRECT and final answer for a source whose percent-encode set holds every byte the state's
+       exit needs, and it is what the sibling raw-fragment search reports. */
+    DCHECK(st_attr < S_ARRIVED || s_attr_built,
+           "the @S attribute search reports a BREAKOUT arriving at its sink while its own record says it has "
+           "constructed none — solve.c asserts `npl > nprobe` at the arrival itself, so these two numbers are "
+           "about different searches or `probes`/`survivedBy` no longer mean what solve.h declares");
+    DCHECK(!s_attr_built || s_attr_wit,
+           "the @S attribute search constructed a breakout with no context witness behind it — a derived class "
+           "reads its §13.2.5 state off the string a real run handed the sink and has no other observation to "
+           "read one off, so an escape with no witness was built from a static shape of the expression");
+    DCHECK(!s_attr_wit || st_attr >= S_RAN,
+           "the @S attribute search's context probe reached the sink while the scheduler reports it has never "
+           "given the search a turn — a witness is produced by one of this search's own candidate flows, so "
+           "`turns` is counting something other than the flows that do this search's work, and `turns:0` would "
+           "be read as a WFQ starvation for a search that has run the whole document");
     /* AND THE TWO HALVES OF THE ONE SOURCE CANNOT BOTH BE THE SAME VERDICT, which is what makes this pair a
        measurement of the DERIVATION rather than of the transform. Both writes are fed from `location.hash`
        and both are markup sinks; the only thing that differs is the §13.2.5 state the bytes land in and
@@ -5797,9 +5936,23 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            probes the WFQ runs first. What replaces it as the statement of a genuine failure is
            `s-park-nodeliver`, which is the observation itself. */
         { "s-park-ran", st_lpark >= S_RAN, "location.hash", SESS_EXPLORE },
-        /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one. */
+        /* AND THE POSITIVE SEARCH'S OWN STAGES, so a 0 on `s-attr` names one — and now names ONE. The three
+           rows that stood here read `seen`, `ran` and `atsink`, and the middle one was computed from `tried`,
+           which is raised where a candidate FLOW IS CREATED: it said 1 for a search whose flows the scheduler
+           may never have run, so `seen=1 ran=1 atsink=0` was read as "the candidate reaches the sink with the
+           wrong bytes" when it is equally the report of a candidate that has never executed an opcode. That
+           reading was taken, out loud, about this very row set. The ladder below is five facts read from the
+           five fields that ARE them, so each 0 names exactly one thing to do:
+             -seeded    the search has candidate flows at all           (`tried`)
+             -ran       the WFQ has given one of them the thread        (`turns`)
+             -witnessed the CONTEXT PROBE reached the sink              (`witnessed`)
+             -derived   a breakout was constructed from what it saw     (`survivedBy` length past `probes`)
+             -atsink    a BREAKOUT's own bytes arrived at the sink      (`reached`) */
         { "s-attr-seen", st_attr >= S_SEEN, "location.hash", SESS_EXPLORE },
+        { "s-attr-seeded", st_attr >= S_SEEDED, "location.hash", SESS_EXPLORE },
         { "s-attr-ran", st_attr >= S_RAN, "location.hash", SESS_EXPLORE },
+        { "s-attr-witnessed", s_attr_wit, "location.hash", SESS_EXPLORE },
+        { "s-attr-derived", s_attr_built, "location.hash", SESS_EXPLORE },
         { "s-attr-atsink", st_attr >= S_ARRIVED, "location.hash", SESS_EXPLORE },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is

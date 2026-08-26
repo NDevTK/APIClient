@@ -881,6 +881,18 @@ static void learn_witness(Cand *e, const char *out) {
     DCHECK(e != NULL && out != NULL && *out,
            "a sink search was handed a context witness with no bytes in it — the witness is what a state is "
            "read off, and an empty one would derive a context for a write that never happened");
+    /* AND THE SEARCH HAS DEMONSTRABLY HELD THE THREAD, which is what makes `turns` a measurement rather than a
+       number beside one. A witness is produced by a CANDIDATE flow reaching this sink, and solve_flow_begin
+       raises `turns` at every switch-in of one, so a witness standing beside `turns:0` means the counter is not
+       counting the flow that did the work — and `reached:0,turns:0` would then be read as "the WFQ never
+       scheduled this search" for a search whose probe has already run the whole document. That misreading is
+       not hypothetical: it is the one the @S half was diagnosed with twice, in both directions, and the pair
+       exists precisely so the scheduling question and the distance question can be told apart. */
+    DCHECK(e->turns > 0,
+           "a sink search learned a context witness while the scheduler has given it no turn — the witness is "
+           "produced by one of this search's own candidate flows reaching the sink and solve_flow_begin counts "
+           "a turn at every switch-in of one, so `turns` is not counting the flow that produced this and the "
+           "parked record's scheduling half is reporting about a different quantity than it names");
     for (int i = 0; i < e->nwit; i++) if (!strcmp(e->wit[i], out)) return;
     if (e->nwit >= e->witcap) {
         e->witcap = e->witcap ? e->witcap * 2 : 4;
@@ -892,8 +904,16 @@ static void learn_witness(Cand *e, const char *out) {
     e->nwit++;
 }
 
+/* …AND WHAT IT ANSWERED IS READ. Both derivations RETURN how many escapes they constructed and this call was
+   discarding it — a computed value with no reader, which §@S names as the mirror of the read-with-no-writer
+   defect and calls "not a mechanism". What the number closes is a silent drop: a breakout the derivation
+   CONSTRUCTED and the search never received leaves `npl == nprobe`, which the report states as "this search has
+   built no escape" — the state a reader takes to mean the source cannot carry an exit from the state its bytes
+   are in. queue_derived has exactly one door that drops (a search closed by a fire between the derivation and
+   the push), and a search that fired holds the breakout that fired it, so the implication holds with no
+   exception written for it. */
 static void derive_from_witness(Cand *e) {
-    int derive;
+    int derive, built = 0;
 
     DCHECK(e != NULL && e->nwit > 0,
            "a derivation was asked to run on a search that holds no witness — the witness is the string the "
@@ -905,9 +925,15 @@ static void derive_from_witness(Cand *e) {
               "whose breakouts are written down never stores one, so this is a class whose derivation column "
               "was set without a parser being routed for it");
     for (int i = 0; i < e->nwit; i++) {
-        if (derive == SINK_DERIVE_HTML) solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
-        else                            solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        if (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
+        else                            built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
     }
+    DCHECK(built == 0 || e->npl > e->nprobe,
+           "a derivation constructed an escape that this search does not hold — the constructed count and the "
+           "search's own payload list are the two ends of one hand-off, so a search left holding nothing but "
+           "its probes after a derivation that built something has DROPPED it, and the report would state "
+           "`probes == payloads` — which a reader takes as the positive statement that this source can carry no "
+           "exit from the state its bytes landed in");
 }
 
 /* WHICH OF THE BYTES THIS SOURCE'S COMPONENT PERCENT-ENCODES ACTUALLY REACHED THE SINK — §@S(2)'s
@@ -1792,6 +1818,29 @@ char *solve_json_array(JSContext *ctx) {
         if (sink_class(g_pending[i].sink)->queues_fire) {
             json_buf_puts(&b, ",\"fires\":");
             snprintf(t, sizeof t, "%d", g_pending[i].fires); json_buf_puts(&b, t);
+        }
+        /* WHETHER THE CONTEXT PROBE EVER GOT THERE — the producer fact that splits `probes == payloads` into
+           the two opposite things it has been saying at once, and the last of `reached:0`'s readings with no
+           number behind it.
+           A DERIVED CLASS BUILDS NOTHING UNTIL ITS PROBE ARRIVES, because the state is read off the string a
+           REAL run handed the sink and there is no other observation to read one off. So `probes == payloads`
+           is TWO facts: the probe has not reached the sink yet (a distance-through-the-document question, the
+           same one `turns` and `survived` are asked for), or it reached it and the derivation constructed no
+           escape — which for a percent-encoded source is the CORRECT and final answer and is the whole point of
+           solving the three observations jointly. Those take opposite work and read identically, which is
+           precisely the state §@S forbids an instrument to leave a reader in — and the tell it names, a rung
+           whose ABSENCE and whose ZERO read alike, was exact here: this quantity was computed on every search
+           (`nwit`), read by the re-derivation, and emitted nowhere at all.
+           IT COUNTS DISTINCT SINK WRITES AND NOT RUNS, because that is what the search holds: a page that
+           writes the source into a sink from two templates is two contexts and two derivations, and a page that
+           writes the same template twice is one (learn_witness dedups by text). So `witnessed:2` beside
+           `payloads` of length 2 says two contexts were read and neither could be left.
+           ABSENT FOR A SINGLE-CONTEXT CLASS, on the column that decides it rather than on a count: that class
+           states its vectors at detection and runs no context probe at all, so a `0` there would read as "the
+           probe never arrived" about a search that has none. Same shape and same reason as `fires`. */
+        if (sink_class(g_pending[i].sink)->derive != SINK_DERIVE_NONE) {
+            json_buf_puts(&b, ",\"witnessed\":");
+            snprintf(t, sizeof t, "%d", g_pending[i].nwit); json_buf_puts(&b, t);
         }
         /* HOW MANY OF `payloads`' LEADING ENTRIES ARE PROBES — the producer fact that splits `reached:0` one
            more time, and the one state of this search the report could not say at all. `npl > nprobe` is

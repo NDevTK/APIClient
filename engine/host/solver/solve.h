@@ -109,7 +109,8 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
                       ,"searched":N[,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."]
                       [,"deliveryPrefix":"#"]}`
      parked search  `{"sink":..,"source":..,"search":"parked","tried":N,"reached":M,"turns":T,"survived":S,
-                      "survivedOf":L,"escaped":E[,"fires":F],"probes":P,"payloads":[..],"survivedBy":[..]
+                      "survivedOf":L,"escaped":E[,"fires":F][,"witnessed":W],"probes":P,"payloads":[..],
+                      "survivedBy":[..]
                       [,"sourceEncodes":".."][,"sourceDelivers":".."][,"delivery":".."][,"deliveryPrefix":"#"]}`
    The parked shape exists because absence is never a "safe" verdict: a sink an attacker source REACHES is
    reported whether or not its breakout has been solved, and it carries how far the search got plus the source's
@@ -136,9 +137,20 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    `reached` COUNTS BREAKOUTS AND NOT CONTEXT PROBES, and the distinction is the whole value of the field: a
    probe carries an inert locator and cannot fire by construction, so counting its arrival makes `reached:1`
    mean either "the probe got here and the breakout has not run" or "the breakout got here and failed" — the
-   two readings the field exists to separate. A derived class's probe arrival is already stated by `payloads`
-   holding more entries than the probes it opened with (its breakouts exist only because a probe returned
-   them), so nothing is lost and nothing is stated twice.
+   two readings the field exists to separate.
+   `witnessed` IS WHERE A DERIVED CLASS'S PROBE ARRIVAL IS STATED, and this paragraph used to say the arrival
+   "is already stated by `payloads` holding more entries than the probes it opened with (its breakouts exist
+   only because a probe returned them)". That is an implication read BACKWARDS: breakouts do imply an arrival,
+   and their ABSENCE implies nothing whatever, so `probes == payloads` was carrying two opposite facts under one
+   spelling — the probe has not reached the sink yet, and it reached it and the state its bytes landed in has no
+   exit this source can carry. The first is the same distance question `turns` and `survived` are asked for; the
+   second is the joint solve's CORRECT and final answer for a percent-encoded source, and is what the markup
+   sink fed a raw fragment reports. §@S forbids leaving those behind one number, and names the tell exactly:
+   a rung whose absence and whose zero read alike. So the arrival is counted where it happens — one entry per
+   DISTINCT sink write the probe was observed at, deduped by the string itself, because a page that renders one
+   template twice read one context and a page with two templates read two.
+   ABSENT FOR A SINGLE-CONTEXT CLASS, which runs no context probe at all: `0` there would state that a probe
+   this class does not have failed to arrive. Same shape and same reason as `fires`.
    `turns` IS THE THIRD, AND IT IS WHAT MAKES `reached:0` READABLE AT ALL. Seeded, arrived and SCHEDULED are
    three different facts: `tried:2,reached:0,turns:0` is a search the WFQ has never once given the thread to,
    and `tried:2,reached:0,turns:900` is one whose flows have run and have not got as far as the sink. The first
