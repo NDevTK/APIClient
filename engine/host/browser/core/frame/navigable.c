@@ -1019,10 +1019,21 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
              (wpt_runner.c spawns a child process; bridge.js roots a cluster), and neither can carry this one:
              both of those CREATE a navigable in the peer, and this one must attach a Document to a navigable
              whose identity, parent and container already exist over here.
-       THE SAME QUESTION IS ASKED ONE ALGORITHM EARLIER BY §7.4's CREATE, OFF THE REQUEST URL, and that is the
-       defect this move fixes for navigation and leaves standing for creation: a create whose address redirects
-       off-origin routes the child to the wrong instance, with nothing to say so. It is the same sentence of
-       §7.4.5 and it is fixed the same way — by the instance that holds the navigable fetching first. */
+       THE SAME QUESTION IS ASKED ONE ALGORITHM EARLIER BY §7.4's CREATE, OFF THE REQUEST URL, AND THIS CHECK
+       CLOSES EXACTLY THE HALF OF IT THAT REACHES A FETCH THIS INSTANCE PERFORMS. §7.4 creates the navigable
+       with the initial about:blank and NAVIGATES it at step 14, so a create whose address is same-origin takes
+       the local arm, enqueues that navigation, and its response arrives HERE — a redirect off-origin then
+       fires this line rather than silently loading a peer's document into this heap.
+       WHAT IS STILL SILENT IS THE OTHER ARM, AND IT IS SILENT IN THE PEER RATHER THAN HERE. A create whose
+       REQUEST url is already cross-origin emits the notice, and the host provisions an instance from the
+       origin that notice carried; that instance runs platform_agent_init, which calls origin_agent_adopt
+       BEFORE anything is fetched, and its root Document is handed to it as BYTES the host fetched rather than
+       through this job. So a redirect on that fetch gives the peer a principal its own response contradicts,
+       and `origin_agent_adopt`'s "one adopt per agent" assert cannot see it — the agent is not wrong twice,
+       it is wrong once and consistently. The check that closes it belongs where the host states the principal,
+       against the response's own URL, and it is NOT this site's to make: this instance never sees that
+       response. Naming it here is naming a defect in another file, so read that entry before building for it
+       (core/platform.c's adopt, and each host's provisioning of a peer) rather than from this line. */
     DCHECK(child_in_this_agent(origin),
            "§7.4.5 determined this navigation's RESPONSE ORIGIN and it is not this agent's, so the incoming "
            "Document belongs to a PEER instance — an instance is an origin-keyed agent cluster and the "
