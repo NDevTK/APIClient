@@ -436,13 +436,15 @@ fire_dispose:
        they run in a microtask rather than here (core/frame/navigate_event_fire.c says why). The tracker is
        null, which those steps' step 6 is the only reader of.
        STEP 15's clean up after running script is step 11's other half. */
-    DCHECK(!JS_IsNull(w->navigate_event),
+    /* THE FIELD IS A NavigateEvent OR NULL, so asking the BRAND asks both halves at once — and it is asked as
+       an assertion rather than as an `if`, which would be this same invariant softened into a silent skip of
+       the commit handler steps. */
+    DCHECK(navigate_event_is(ctx, w->navigate_event),
            "§7.2.6.4 reached step 14 with NO ongoing navigate event — a same-document navigation got here "
            "without one being fired, and the only path in this build that can is a TRAVERSAL: "
            "core/frame/session_history.c's §7.4.6.1 step 5 still has to fire a TRAVERSE navigate event, and "
            "the assertion naming that work is at that site, which is reached first");
-    if (navigate_event_is(w->navigate_event))
-        navigate_event_intercept_commit(ctx, w->navigate_event);
+    navigate_event_intercept_commit(ctx, w->navigate_event);
     JS_FreeValue(ctx, in);
     return 0;
 }
@@ -467,7 +469,7 @@ JSValue navigation_ongoing_navigate_event(JSContext *ctx)
     JS_FreeValue(ctx, nav);
     ev = JS_GetPropertyStr(ctx, slots, NAV_ONGOING_EVENT);
     JS_FreeValue(ctx, slots);
-    DCHECK(JS_IsNull(ev) || navigate_event_is(ev),
+    DCHECK(JS_IsNull(ev) || navigate_event_is(ctx, ev),
            "§7.2.6.8's ongoing navigate event held something that is neither a NavigateEvent nor null — the "
            "field starts at null with the Navigation and its only writers are §7.2.6.10.4's inner algorithm "
            "step 24, its commit handler success steps step 4, and §7.2.6.8's abort a NavigateEvent step 2");
@@ -479,7 +481,7 @@ void navigation_set_ongoing_navigate_event(JSContext *ctx, JSValueConst ev)
     JSValue nav = navigation_object(ctx), slots = nav_slots(ctx, nav);
 
     JS_FreeValue(ctx, nav);
-    DCHECK(JS_IsNull(ev) || navigate_event_is(ev),
+    DCHECK(JS_IsNull(ev) || navigate_event_is(ctx, ev),
            "§7.2.6.8's ongoing navigate event was set to something that is neither a NavigateEvent nor null");
     JS_SetPropertyStr(ctx, slots, NAV_ONGOING_EVENT, JS_DupValue(ctx, ev));
     JS_FreeValue(ctx, slots);

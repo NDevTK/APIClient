@@ -537,7 +537,7 @@ static int js_nef_commit_step(JSContext *ctx, void *st, JSValue cb_result, JSVal
         s->ev = JS_UNDEFINED;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
     }
-    DCHECK(navigate_event_is(event),
+    DCHECK(navigate_event_is(ctx, event),
            "§7.2.6.10.4's commit handler job was enqueued with something that is not a NavigateEvent — "
            "navigate_event_intercept_commit is its only producer and §7.2.6.4 step 14 its only caller");
     /* SUCCESS STEP 1: "if event's relevant global object is not fully active, then ABORT THESE STEPS." A
@@ -634,7 +634,7 @@ void navigate_event_intercept_commit(JSContext *ctx, JSValueConst event)
     JSValueConst argv[1];
     JSValue fn;
 
-    DCHECK(navigate_event_is(event),
+    DCHECK(navigate_event_is(ctx, event),
            "§7.2.6.4 step 14 ran the navigate event intercept commit handler steps over something that is not "
            "a NavigateEvent — the only value it may pass is the ongoing navigate event it read at its step 10");
     /* STEPS 1-3: "let promisesList be an empty list", "for each handler of event's NAVIGATION HANDLER LIST,

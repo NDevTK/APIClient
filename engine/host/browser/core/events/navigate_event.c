@@ -53,8 +53,8 @@
 #include "core/realm.h"
 #include "core/structured_clone.h"
 
-static JSValue   g_key;         /* the private Symbol this interface's own slots hang off */
-static JSClassID g_nav_ev_class;
+static JSValue   g_key;         /* the private Symbol this interface's own slots hang off — and the BRAND */
+static JSClassID g_nav_ev_class;/* the class exists for its per-REALM prototype slot; nothing wears it */
 static int       g_ready;
 static int       g_ctor_stepid = -1;
 
@@ -113,18 +113,39 @@ static JSValue ne_field(JSContext *ctx, JSValueConst ev, const char *name)
     return v;
 }
 
-bool navigate_event_is(JSValueConst v)
+/* WEB IDL §3.7.5's BRAND, asked of the OWN SLOT RECORD — never of a class id, which is a question no instance
+   of this interface has ever answered yes to. The class an event interface declares exists for its per-realm
+   PROTOTYPE SLOT and nothing wears it: every event in this engine is minted by core/events/event.c's
+   event_make_proto through JS_NewObjectProto, so JS_GetClassID of a NavigateEvent is JS_CLASS_OBJECT, for the
+   one the firing algorithm builds and for the one a page constructs alike. A brand written against
+   g_nav_ev_class therefore answers NO universally, and the failure is silent everywhere it is an `if`
+   (HTML §7.2.6.4 Initializing and updating the entry list step 14 skipped its intercept commit handler steps)
+   and a TypeError everywhere it guards a getter. The brand that DOES distinguish this interface is the private
+   Symbol ne_init_slots hangs its record off — the same test core/events/event.c's event_is makes of the base
+   interface and core/html/submit_event.c makes of its own. */
+bool navigate_event_is(JSContext *ctx, JSValueConst v)
 {
+    JSValue slots;
+    bool is;
+
     DCHECK(g_ready, "a value was asked whether it is a NavigateEvent before the interface was declared — the "
-                    "class id the question is asked with is minted by navigate_event_init");
-    return JS_GetClassID(v) == g_nav_ev_class;
+                    "slot key the question is asked with is minted by navigate_event_init");
+    /* NOT AN OBJECT IS NOT ONE, answered here rather than by the slot read: JS_GetOwnSlot THROWS on a
+       non-object, and this predicate's callers are assertions and an `if`, neither of which would clear the
+       pending TypeError it would leave behind. */
+    if (!JS_IsObject(v))
+        return false;
+    slots = ne_slots(ctx, v);
+    is = JS_IsObject(slots);
+    JS_FreeValue(ctx, slots);
+    return is;
 }
 
 JSValue navigate_event_signal(JSContext *ctx, JSValueConst ev)
 {
     JSValue v;
 
-    DCHECK(navigate_event_is(ev),
+    DCHECK(navigate_event_is(ctx, ev),
            "§7.2.6.10.4 asked for the abort controller's signal of something that is not a NavigateEvent");
     v = ne_field(ctx, ev, NE_NAME[NE_SIGNAL]);
     DCHECK(abort_signal_is(ctx, v),
@@ -141,9 +162,11 @@ static JSValue js_ne_get(JSContext *ctx, JSValueConst this_val, int magic)
     DCHECK(g_ready, "a NavigateEvent attribute was read before its init ran");
     DCHECK(magic >= NE_NAVIGATION_TYPE && magic < NE_N,
            "a NavigateEvent accessor was installed with a magic this interface has no member for");
-    /* WEB IDL §3.7.5's BRAND. The class is the check, so a getter pulled off the prototype and applied to
-       something else is the TypeError a browser answers with rather than a read of a slot that is not there. */
-    if (JS_GetClassID(this_val) != g_nav_ev_class)
+    /* WEB IDL §3.7.5's BRAND, as the ONE predicate above and not a second copy of it: a getter pulled off the
+       prototype and applied to something else is the TypeError a browser answers with rather than a read of a
+       slot that is not there — and NavigateEvent.prototype itself fails it, because the record is an OWN slot
+       of each instance and the prototype carries none. */
+    if (!navigate_event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "a NavigateEvent attribute was read on something that is not one");
     return ne_field(ctx, this_val, NE_NAME[magic]);
 }
@@ -171,6 +194,15 @@ static int ne_init_slots(JSContext *ctx, JSValueConst ev, const JSValue *members
     JS_SetPropertyStr(ctx, slots, NE_CLASSIC_STATE, JS_DupValue(ctx, classic));
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
     JS_FreeAtom(ctx, k);
+    /* THE PRODUCER AND THE BRAND ARE ASSERTED AGAINST EACH OTHER, at the ONE point both producers converge.
+       The record this function just placed IS what navigate_event_is asks for, so the two coming apart is the
+       state that must be impossible — and while it was not, nothing said so HERE: the first algorithm to ask
+       the question aborted nine steps downstream at HTML §7.2.6.8 Ongoing navigation tracking's field write,
+       naming a value the wrong type rather than the mint that gave it one. */
+    DCHECK(navigate_event_is(ctx, ev),
+           "a NavigateEvent left ne_init_slots without answering this interface's own BRAND — the slot record "
+           "it just placed is that brand, so the mint and the predicate have come apart and every algorithm "
+           "that asks navigate_event_is about an instance would answer no");
     return 0;
 }
 

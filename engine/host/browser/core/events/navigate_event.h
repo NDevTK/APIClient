@@ -66,9 +66,11 @@ JSValue navigate_event_new_to_fire(JSContext *ctx, const char *navigation_type, 
                                    JSValueConst signal, JSValueConst source_element,
                                    const StructuredData *classic_state);
 
-/* WEB IDL §3.7.5's BRAND, as a question — the class is agent-scoped, so this is the same test every accessor
-   in navigate_event.c makes and the one §7.2.6.10.4's algorithms make about a value they were handed. */
-bool navigate_event_is(JSValueConst v);
+/* WEB IDL §3.7.5's BRAND, as a question — the presence of this interface's OWN private-Symbol slot record,
+   which is the same test every accessor in navigate_event.c makes and the one §7.2.6.10.4's algorithms make
+   about a value they were handed. It takes a context because the record is a property read; a NON-OBJECT
+   answers false rather than throwing, so an assertion may ask it. */
+bool navigate_event_is(JSContext *ctx, JSValueConst v);
 
 /* §7.2.6.10.1's ABORT CONTROLLER'S SIGNAL, which is the `signal` attribute over it. THREE algorithms read it
    back and each of them decides whether to do anything at all by asking whether it is aborted:
