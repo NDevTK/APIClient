@@ -35,9 +35,16 @@ const LOG_NAME = (pass ? pass + '-' : '') + id + '.log';
 const b = await puppeteer.connect({ browserURL: `http://127.0.0.1:${CDP}` });
 
 const sink = [];
+/* THE ID CHROME MINTED, WHICH IS A FACT ABOUT THE PATH IT LOADED. An unpacked extension's id is derived from
+   its absolute directory, so two lanes' copies get different ids and a row can be CHECKED against the
+   directory it claims rather than trusting that claim. This is the second half of the EXT default fix below:
+   getting the default right stops the row describing a neighbour's tree, and recording this stops a WRONG
+   `HARNESS_EXT_DIR` or a refused `restart` from doing the same thing silently. */
+let loadedExtId = null;
 const hook = (label, e) => { if (e.__w) return; e.__w = 1; e.on('console', m => sink.push(label + ' ' + m.text())); };
 const attach = async (t) => {
   if (!t.url().startsWith('chrome-extension://')) return;
+  if (!loadedExtId) loadedExtId = t.url().slice('chrome-extension://'.length).split('/')[0];
   try {
     if (t.type() === 'service_worker') { const w = await t.worker(); if (w) hook('[sw]', w); return; }
     const p = await t.page().catch(() => null);
@@ -145,8 +152,20 @@ const myRuns = runs.filter(r => (r.url || '').startsWith(origin));
    in the middle of the first pass of this census, so two rows that look comparable were measurements of two
    different programs. A row that names its own wasm hash and build head cannot be quoted against another
    build by accident. */
-const EXT = process.env.HARNESS_EXT_DIR || '/home/user/APIClient/extension';
-let artifact = { extDir: EXT };
+/* THE DIRECTORY THIS BLOCK DESCRIBES MUST BE THE ONE CHROME LOADED, AND THE DEFAULT WAS THE OTHER ONE.
+   `run.sh`'s whole mechanism is that the LANE holds a private copy of `extension/` — harness.js derives its
+   EXT_DIR from harness.js's own location, so Chrome loads `$LANE/extension`. Defaulting here to the shared
+   checkout therefore described a directory the browser may never have opened, and the failure is silent and
+   confident: a run whose `restart` was REFUSED (the harness declines a port another lane's browser holds)
+   keeps driving the previous browser, while this block reports the shared tree's freshly staged hash and
+   head. Measured: three rows published `builtFromHeadClaim` two builds ahead of the artifact that produced
+   them, and the crash they carried resolved to a `file:line` the claimed head does not contain. So LANE
+   decides, exactly as it decides for harness.js, and the `wasmSha256` below is then a hash OF the bytes
+   Chrome loaded rather than of a neighbour's. */
+const EXT = process.env.HARNESS_EXT_DIR || (process.env.LANE ? process.env.LANE + '/extension'
+                                                             : '/home/user/APIClient/extension');
+let artifact = { extDir: EXT, extDirFrom: process.env.HARNESS_EXT_DIR ? 'HARNESS_EXT_DIR'
+                                        : process.env.LANE ? 'LANE' : 'shared-checkout-default' };
 try { artifact.wasmSha256 = createHash('sha256').update(readFileSync(EXT + '/lib/qjs/qjs.wasm')).digest('hex'); } catch (e) { artifact.wasmErr = String(e.message); }
 /* THE HASH IS THE ONLY FIELD THAT IS TRUE. `head`/`qjsHead` are what the SOURCE TREE was called at build
    time, and the tree is edited continuously by other lanes -- so a build of a dirty tree records a revision
@@ -173,6 +192,10 @@ try {
         : b.unasked.length ? 'unprovable(' + b.unasked.length + ' path(s) git could not be asked about)'
           : 'clean(asked, nothing differs)';
 } catch (e) { artifact.buildJsonErr = String(e.message); }
+/* THE ID THE BROWSER ACTUALLY LOADED, carried beside the directory this block read. They are two answers to
+   one question and a reader can now see both; an id that does not change between two rows whose `extDir`
+   does is a `restart` that was refused, which is the state that produced this session's worst measurement. */
+artifact.loadedExtId = loadedExtId;
 
 /* A RUN SAYS WHICH OF FOUR STATES IT IS IN, AND IT SAYS IT IN `run`. This file asked `r.crashed`, a boolean
    bridge.js DELETED — its own comment says why, at the site: "IT IS `run` AND NOT `crashed:true`, AND THE
