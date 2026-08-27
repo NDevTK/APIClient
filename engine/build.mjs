@@ -23,11 +23,94 @@ import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { lexborSourceId } from "./lexbor_source.mjs";
 
-/* A RUN THAT NEVER RETURNS IS NOT A VERDICT. Every program this file launches gets the same generous backstop
-   and reports a hang through a DIFFERENT signal than a failure — `.signal` where a failure sets `.status` — so
-   the two can never collapse into one verdict. Declared here because the native targets run ~300 lines before
-   the wasm ones and a `const` below them would be a TDZ throw. */
-const RUN_BACKSTOP_MS = 15 * 60 * 1000;
+/* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND A WALL CLOCK CANNOT SAY WHY. Every program this file
+   launches gets ONE budget and ONE backstop, and they measure DIFFERENT THINGS through DIFFERENT SIGNALS so
+   that they can never collapse into one verdict. Declared here because the native targets run ~300 lines
+   before the wasm ones and a `const` below them would be a TDZ throw.
+
+   THE BUDGET IS CPU, WHICH IS THE THING THE QUESTION IS ABOUT. What this file wants to know is how much
+   EXPLORATION the fixture was granted, and until this change it granted a stretch of WALL CLOCK — so the
+   amount of work the smoke was allowed was a function of what the other nine agents on the box were doing.
+   Measured on six consecutive builds of this project, each killed at the same fifteen wall-clock minutes:
+   the run retired between 45158 and 68947 flows. That is a 53% spread in the budget, invisible in the report,
+   and a reader comparing two revisions' smoke results was comparing two different machines. CLAUDE.md
+   §Testing names the fix in the units to use — CPU actually consumed, RLIMIT_CPU — and the kernel enforces it
+   for free: the child is exec'd under `ulimit -t`, exceeds it, and dies on SIGXCPU. THAT IS NOT A CAP ON THE
+   FRONTIER (§NO BOUNDS is about the engine capping its own exploration and has never had anything to say
+   about a harness refusing to wait forever); it is the same budget the wall clock was pretending to be,
+   stated in units the machine cannot move.
+
+   THE BACKSTOP IS THE WALL CLOCK, AND IT IS NOW ONLY FOR WHAT CPU CANNOT SEE. A deadlocked child consumes no
+   CPU, so RLIMIT_CPU never fires on one and something else must. It is GENEROUS — four times the CPU budget,
+   so it fires only on a child that averaged under a quarter of one core — it arrives as SIGTERM from THIS
+   HARNESS where the budget arrives as SIGXCPU from the KERNEL, and it carries its own verdict and its own
+   exit code. Both numbers are printed at every outcome and the verdict names which of them decided.
+
+   AND RAISING THAT WALL NUMBER IS NOT RAISING A CAP, BECAUSE THE CAP MOVED TO THE KERNEL. The incident this
+   backstop was written for — four abandoned `out/qjs.js` processes found at 84-97% CPU having run 1.9 to 4.1
+   hours, which WERE the machine load six lanes then declined to measure against — is now impossible by
+   construction rather than by the clock: a runaway can burn at most RUN_CPU_BUDGET_S of CPU before the kernel
+   kills it, whatever the wall clock says. A process the wall backstop reaches is by definition one that was
+   not consuming the machine. */
+const RUN_CPU_BUDGET_S = 15 * 60;
+/* THE HARD LIMIT IS THE FLOOR UNDER THE SOFT ONE. The kernel sends SIGXCPU at the soft limit, whose default
+   disposition terminates — but a child that installed a handler and ignored it would run on, so the hard
+   limit is what makes the budget unconditional (SIGKILL, unblockable). One minute apart, which is enough for
+   an orderly SIGXCPU death and short enough that the runaway case is still bounded. */
+const RUN_CPU_HARD_S = RUN_CPU_BUDGET_S + 60;
+const RUN_DEADLOCK_MS = 4 * RUN_CPU_BUDGET_S * 1000;
+/* THE BUDGET IS INSTALLED BY THE ONE PROGRAM THAT CAN INSTALL IT — node has no setrlimit — and the child is
+   `exec`'d so the shell is REPLACED rather than left as a layer between this reporter and the signal it
+   reads. A budget that silently failed to install would be the defaulted-field defect wearing a rlimit: the
+   run would look measured and be unmeasured, so the failure to set it is a LOUD marker and a distinct exit
+   code, never a silent continuation. `$0` is the wrapper's name, `$1`/`$2` the two limits, `$3` the program. */
+const CPU_BUDGET_SH =
+  'ulimit -H -t "$1" 2>/dev/null; ulimit -S -t "$2" || { echo "@BUDGET-NOT-INSTALLED"; exit 125; }; ' +
+  'p="$3"; shift 3; exec "$p" "$@"';
+const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
+
+/* THE UNITS /proc/self/stat REPORTS CHILD CPU IN, ASKED RATHER THAN ASSUMED. USER_HZ is 100 on every Linux
+   this project has run on, and writing 100 here would be a number nobody fetched — the same thing as a spec
+   section quoted from memory. `getconf` answers it, and an answer that is not a positive integer THROWS
+   rather than being defaulted to the number that is usually right. */
+let CLK_TCK = null;
+function clockTicks() {
+  if (CLK_TCK === null) {
+    const g = spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" });
+    const n = g.status === 0 ? Number((g.stdout || "").trim()) : NaN;
+    if (!Number.isInteger(n) || n <= 0)
+      throw new Error(`[build] \`getconf CLK_TCK\` did not answer a positive integer (status ${g.status}, ` +
+                      `stdout ${JSON.stringify(g.stdout)}) — /proc/self/stat reports child CPU in those units ` +
+                      `and this reporter will not guess them.`);
+    CLK_TCK = n;
+  }
+  return CLK_TCK;
+}
+/* THE CPU THIS PROCESS'S REAPED CHILDREN ACTUALLY CONSUMED — the kernel's own accounting, read either side of
+   the spawn, which is the only number in this file that is about the RUN rather than about the box. Fields 16
+   and 17 of /proc/self/stat (cutime, cstime), indexed past the comm field because a command name may itself
+   contain a space or a `)`.
+   A HOST WITHOUT IT ANSWERS `null`, WHICH IS A POSITIVE STATEMENT AND NOT A ZERO. Every consumer below prints
+   "not measured on this host" rather than a plausible 0.0 s: a zero CPU reading is exactly the evidence a
+   deadlock verdict rests on, so a host that cannot measure must never be able to manufacture one. The BUDGET
+   is unaffected — the kernel enforces the rlimit whether or not this file can read the meter. */
+function childCpuSeconds() {
+  let s;
+  try { s = readFileSync("/proc/self/stat", "utf8"); } catch { return null; }
+  const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
+  const cutime = Number(f[13]), cstime = Number(f[14]);
+  if (!Number.isFinite(cutime) || !Number.isFinite(cstime))
+    throw new Error(`[build] /proc/self/stat did not carry numeric cutime/cstime at fields 16/17 ` +
+                    `(${JSON.stringify(f.slice(11, 15))}) — the child-CPU meter this reporter's verdict is ` +
+                    `measured in reads them, and a non-number there must be fixed rather than absorbed.`);
+  return (cutime + cstime) / clockTicks();
+}
+const cpuText = (v) =>
+  v === null ? "not measured on this host (no /proc/self/stat child accounting)" : `${v.toFixed(1)} s`;
+const loadNow = () => {
+  try { return readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); }
+  catch { return "unknown"; }
+};
 /* `.signal` IS NOT THE HANG TEST, AND USING IT AS ONE MADE THIS REPORTER LIE. `spawnSync` sets `signal` for a
    child killed by ANY signal, so an ABORT — a DCHECK doing its job, arriving as SIGABRT — was reported as
    "DID NOT FINISH within 15 min", with a load average beside it inviting the reader to blame the machine. That
@@ -35,7 +118,16 @@ const RUN_BACKSTOP_MS = 15 * 60 * 1000;
    that reached its completion moment and then aborted at `idl_args.c:2148` was filed as a hang.
    The discriminator is node's own: a timeout kill sets `error.code === "ETIMEDOUT"`, and nothing else does. A
    signal without it is a CRASH, and a crash's `@WHY` is the result — it must not be dressed as a timing
-   artifact. Three outcomes, three reports, three exit codes.
+   artifact.
+   AND SIGXCPU IS THE THIRD THING THAT SIGNAL CAN BE, which is the whole reason the budget was moved to the
+   kernel: it is neither a crash nor a hang, it is the run reaching the exact amount of CPU this file agreed to
+   spend on it, and it is the only one of the three whose arrival is a fact about the TREE rather than about
+   the machine.
+   AND THE PARAGRAPH ABOVE WAS TRUE OF A HOST THAT IS NOT THE ONE THIS BUILD SHIPS. `signal` distinguishes an
+   abort ONLY where the host can deliver one, and the WASM smoke's cannot — emscripten turns `abort()` into a
+   thrown `RuntimeError` and node exits 1, which is also what an incomplete probe table exits with. So the
+   discriminator that keeps a DCHECK from being misfiled is not `signal` at all; it is what the aborting
+   macros WRITE. See `abortRecord`. Six outcomes, six reports, six exit codes.
 
    AND THE HUNG REPORT ASSERTED A CAUSE IT NEVER MEASURED. It said the kill meant "a defect in the fixture,
    not the engine" — a claim about which of two named causes held, made by a function whose children run
@@ -92,6 +184,79 @@ function probeFlips(out) {
   }
   return rows;
 }
+/* WHERE THE RUN GOT TO, IN THE FIXTURE'S OWN UNITS — AND THE ONE NUMBER THE VERDICT USED TO THROW AWAY.
+   `hungCause` has always computed this (its `zero` list) and the verdict line has always cut it off:
+   the verdict kept the cause's NAME and dropped everything in parentheses, which is exactly where
+   every number lives. So the stage table read `HUNG — a HEALTHY FRONTIER THAT WANTED MORE BUDGET` on six
+   consecutive builds of six different revisions, while underneath it the fixture answered 93/135, 96/138,
+   96/138, 97/141, 98/141 and 128/141 — a run that reached 128 and a run that reached 93 produced the SAME
+   line, and the 128 was the one nobody saw. That is a computed observation with no reader — the mirror of the
+   defect §Architecture names, and harder to see, because the value was real, printed in the hint, and
+   discarded by the one line anybody reads.
+   IT IS A STATEMENT ABOUT THE DOCUMENT AND NOT ABOUT THE MACHINE, which is what makes it the right thing to
+   put in a verdict: the fixture declares its own probe table (engine/host/test_forced.c), so this is not a
+   stored expectation this file has to keep in step — nothing here knows what 141 is until the run says so,
+   and a fixture that gains a statement moves both halves of the fraction by itself.
+   ABSENCE IS REPORTED AS ABSENCE. A stage that drives no scheduler prints no @H at all (the two-instance ABI
+   drive, the browser-process layer), and `0/0` for one of those would be the same lie as counting a marker no
+   shipped path writes. */
+function probeStanding(out) {
+  const rows = probeFlips(out);
+  if (!rows.length) return null;
+  const last = rows[rows.length - 1];
+  const names = Object.keys(last);
+  return { answered: names.filter((k) => last[k]).length, asked: names.length,
+           unanswered: names.filter((k) => !last[k]) };
+}
+const standingText = (s) =>
+  s === null ? "no @H probe stream in this run — this stage makes no statement of that kind"
+             : `${s.answered}/${s.asked} of the fixture's statements answered`;
+
+/* AN ABORT IS AN ABORT EVEN WHERE NO SIGNAL CAN CARRY IT, AND UNDER EMSCRIPTEN NONE CAN.
+   `runOutcome`'s `.signal` arm exists precisely so that a DCHECK doing its job is never misfiled as a timing
+   artifact — and for the WASM smoke, which is the stage this build is about, that arm is UNREACHABLE. The
+   emscripten runtime does not deliver SIGABRT: `abort()` reaches `__abort_js`, which throws a JS
+   `RuntimeError: Aborted(native code called abort())`, and node exits with STATUS 1. `test_forced.c`'s own
+   completion path also exits 1 (`return h_ok ? 0 : 1`) when the probe table is merely incomplete. So the two
+   most different outcomes this gate can produce — "a DCHECK named an unbuilt capability at a file:line" and
+   "the frontier answered most of the fixture and not all of it" — arrived as the SAME `FAILED rc=1`, and the
+   arm written to keep them apart only ever fires for the `native` targets.
+   MEASURED, AND IT COST A READING: a smoke run whose last words were
+   `@WHY §7.1.1 ToPrimitive ( input [ , preferredType ] ) reached with a REAL object … ROUTE THE CALL SITE`
+   followed by `Aborted(native code called abort())` was read off the stage table as an incomplete probe
+   table. The @WHY names the exact thing to build; the verdict discarded it and offered a row count instead.
+   THE WITNESS IS WHAT THE ABORTING MACROS ACTUALLY WRITE, not a signal the host cannot send: `check.h`'s
+   `@WHY`/`@E ` JSON line, and `engine/qjs/quickjs-check.h`'s prose `@WHY <msg> (<file>:<line>)`. Both abort
+   on the next statement, so either one in a run's output means that run died at an assert. Matched at the
+   START of a line and only in those two exact shapes, so a stage that quotes the token out of a source
+   comment cannot manufacture one. */
+const ABORT_WITNESS = /^@(?:WHY|E) (?:\{"phase":"assert"|.*\([^()]*:\d+\)$)/m;
+const EMSCRIPTEN_ABORT = "Aborted(native code called abort())";
+function abortRecord(out) {
+  const m = out.match(ABORT_WITNESS);
+  if (m) return m[0];
+  /* An abort with no assertion line above it is a RAW `abort()`/`assert` — still an abort, and the absence of
+     the message is itself the finding (a site that should be using check.h). Said, rather than defaulted. */
+  if (out.includes(EMSCRIPTEN_ABORT))
+    return `${EMSCRIPTEN_ABORT} — with NO @WHY/@E line above it, so this abort came from a raw abort()/assert ` +
+           `rather than from check.h, and it carries no message naming what to fix`;
+  return null;
+}
+
+/* THE CAUSE'S NAME, FOR THE ONE LINE ANYBODY READS. A `split(" (")[0]` was the whole of this and it only
+   worked for the arms that happen to open with a parenthesis: the two that do not — NOT ESTABLISHED, and the
+   too-few-censuses arm — put a whole paragraph into the stage table, where the report pads every label to a
+   column width. A name ends at the first " (" or the first " — ", whichever comes first, which is true of
+   every arm because that is how each one is written. */
+const causeName = (cause) => {
+  const cut = [" (", " — "].map((d) => cause.indexOf(d)).filter((i) => i >= 0);
+  const name = (cut.length ? cause.slice(0, Math.min(...cut)) : cause).trim();
+  /* AND IT STAYS A TABLE CELL. `report` pads every label to one column width, so a verdict that runs to a
+     paragraph reflows the whole stage list and the one line anybody reads becomes unreadable. The full record
+     is printed in the detail line above it — this is the name, not the evidence. */
+  return name.length > 90 ? name.slice(0, 89) + "…" : name;
+};
+
 /* THE ORDERING, MEASURED — engine.c's @WFQ line (solver/flow.h's WfqCensus).
    THE VERDICT BELOW USED TO ASSERT THIS CAUSE, which is the defect this function's own history already names
    one paragraph up: a reporter claiming which of two causes held, from evidence it did not have. "This is the
@@ -140,7 +305,8 @@ function hungCause(out) {
   if (s.length === 0) {
     const lines = out.split("\n").filter(l => l.trim().length);
     return `NOT ESTABLISHED — this stage printed no @COLD census, so this discriminator has nothing to read ` +
-           `and says nothing about why it hung. A stage that drives no scheduler never prints one, and for ` +
+           `and says nothing about why it ended without answering. A stage that drives no scheduler never ` +
+           `prints one, and for ` +
            `that stage the absence is expected rather than a finding. The evidence is the tail: ` +
            `${lines.length} line(s), last was ${JSON.stringify((lines[lines.length - 1] || "").slice(0, 120))}.`;
   }
@@ -161,10 +327,22 @@ function hungCause(out) {
   const hb = h[h.length - 1], ha = h[Math.floor((h.length - 1) / 2)];
   const flipped = h.length >= 2 ? Object.keys(hb).filter((k) => hb[k] && !ha[k]) : [];
   const zero = h.length ? Object.keys(hb).filter((k) => !hb[k]) : [];
+  /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
+     cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
+     reached 1 in the last window were, every time, the ten members of ONE family (the @S search rows), while
+     forty-two others had been 0 in EVERY sample since the first — so "the probe table was still advancing"
+     was true of one corner and false of the document, and it was the sentence the verdict carried. A row that
+     is late and a row nothing has ever approached take opposite work, and the count that separates them is
+     one pass over the samples this function already holds. */
+  const everOne = new Set();
+  for (const r of h) for (const k of Object.keys(r)) if (r[k]) everOne.add(k);
+  const neverOne = zero.filter((k) => !everOne.has(k));
   const hspan = h.length < 2
     ? `no @H stream to read`
     : `@H: ${flipped.length} row(s) reached 1 across the last ${h.length - Math.floor((h.length - 1) / 2)} of ` +
-      `${h.length} samples, ${zero.length} still 0` + (zero.length ? ` (${zero.join(" ")})` : "");
+      `${h.length} samples` + (flipped.length ? ` (${flipped.join(" ")})` : "") +
+      `, ${zero.length} still 0` + (zero.length ? ` (${zero.join(" ")})` : "") +
+      `, ${neverOne.length} of them 0 in every one of the ${h.length} samples`;
 
   const wfq = wfqReading(out);
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0 && h.length >= 2 && flipped.length === 0)
@@ -180,8 +358,15 @@ function hungCause(out) {
            ` The rows still 0 name what nothing scheduled was working toward.`;
   if (b.finished > a.finished && b.blocked === 0 && b.owed === 0)
     return `a HEALTHY FRONTIER THAT WANTED MORE BUDGET (${span}; ${hspan}; ${wfq.text}) — flows were still ` +
-           `finishing when the kill landed, nothing was waiting on the host, and the probe table was still ` +
-           `advancing.`;
+           `finishing when the budget ran out, nothing was waiting on the host, and ${flipped.length} row(s) ` +
+           `reached 1 across half the run. ` +
+           (neverOne.length
+             ? `THAT ADVANCE IS NOT THE WHOLE DOCUMENT: ${neverOne.length} row(s) have been 0 in every sample ` +
+               `of this run, so more budget extends a search that is moving and does nothing for those — read ` +
+               `them beside the @WFQ census before spending more CPU on this fixture.`
+             : `AND EVERY ROW STILL 0 HAS BEEN 1 AT SOME SAMPLE, which is not a budget question at all — a ` +
+               `probe row is a statement the result document makes, so one that goes 1→0 means the document ` +
+               `stopped making it, and that is the finding rather than the frontier's pace.`);
   if (b.finished === a.finished && b.flows > a.flows)
     return `a STALL (${span}; ${hspan}) — no flow finished across half the run while the live flow count rose, ` +
            `so work is being admitted and not retired.`;
@@ -215,8 +400,21 @@ function runChild(label, prog, args, hint) {
   console.log(`[build] ${label} — live at ${log}`);
   const fd = openSync(log, "w");
   let t;
-  try { t = spawnSync(prog, args, { stdio: ["inherit", fd, fd], shell: false, timeout: RUN_BACKSTOP_MS }); }
+  /* THE TWO MEASURES ARE READ AROUND THE SPAWN AND BOTH ARE CARRIED OUT, because a verdict that names one of
+     them must be able to print the other beside it. The CPU meter is the kernel's; the wall clock is this
+     process's and is CONTEXT — it is the number that six builds' worth of readers mistook for a budget. */
+  const cpuBefore = childCpuSeconds();
+  const wallBefore = Date.now();
+  try {
+    t = spawnSync("/bin/sh",
+                  ["-c", CPU_BUDGET_SH, `apiclient-build:${slug}`,
+                   String(RUN_CPU_HARD_S), String(RUN_CPU_BUDGET_S), prog, ...args],
+                  { stdio: ["inherit", fd, fd], shell: false, timeout: RUN_DEADLOCK_MS });
+  }
   finally { closeSync(fd); }
+  const cpuAfter = childCpuSeconds();
+  t.cpuSeconds = (cpuBefore === null || cpuAfter === null) ? null : cpuAfter - cpuBefore;
+  t.wallSeconds = (Date.now() - wallBefore) / 1000;
   /* Best-effort convenience only: a failure here must never change the verdict below. */
   try { rmSync(stable, { force: true }); symlinkSync(log, stable); } catch { /* not fatal */ }
   t.captured = readFileSync(log, "utf8");
@@ -224,30 +422,100 @@ function runChild(label, prog, args, hint) {
   return runOutcome(label, t, hint);
 }
 
+/* BOTH NUMBERS, AT EVERY OUTCOME, WITH THE VERDICT NAMING WHICH ONE DECIDED — CLAUDE.md §Testing, and the
+   half of it this file had never done. The elapsed figure is labelled CONTEXT in the line itself rather than
+   in a comment nobody reads at 2am, because it is the number that six consecutive builds' worth of readers
+   took for a budget; the load average is printed beside it for the same reason it always was — it is what
+   explains an elapsed figure, and it explains nothing about the CPU one. */
+const runNumbers = (t) =>
+  `[build]   CPU consumed: ${cpuText(t.cpuSeconds)} of the ${RUN_CPU_BUDGET_S / 60} min budget — THIS IS THE ` +
+  `MEASURE THE VERDICT IS IN\n` +
+  `[build]   elapsed ${t.wallSeconds.toFixed(1)} s against a ${RUN_DEADLOCK_MS / 60000} min deadlock ` +
+  `backstop, at load ${loadNow()} on ${cpus().length} cores — CONTEXT, never the verdict`;
+
 function runOutcome(label, t, hint) {
   const bad = (verdict, code, why) => {
     console.error(`[build] ${label} ${why}`);
+    console.error(runNumbers(t));
     if (hint) console.error(`[build]   ${hint}`);
     return { label, verdict, code };
   };
-  if (t.error && t.error.code === "ETIMEDOUT") {
-    let load = "unknown";
-    try { load = readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); } catch { /* not linux */ }
+  /* THE BUDGET INSTALL, WHICH MUST NEVER FAIL QUIETLY. A run without its rlimit is an UNMEASURED run wearing a
+     measured one's report, so the shell says so in the log and this reads the marker rather than trusting a
+     bare 125 — which is also a code a program may legitimately exit with. */
+  if (t.status === 125 && t.captured.includes(BUDGET_NOT_INSTALLED))
+    return bad("CPU BUDGET NOT INSTALLED", 5,
+      `could not install its ${RUN_CPU_BUDGET_S} s RLIMIT_CPU — \`ulimit -S -t\` was refused, which happens ` +
+      `when this process already sits under a LOWER hard limit. Nothing was run: a run under an unknown ` +
+      `budget would report a number about no budget at all.`);
+  /* THE BUDGET REACHED — SIGXCPU, FROM THE KERNEL. Not a hang and not a crash: the run consumed exactly the
+     CPU this file agreed to spend, which is a fact about the tree and is why the census's cause and the
+     fixture's own standing both belong in the verdict rather than in a hint under it. */
+  if (t.signal === "SIGXCPU") {
     const cause = hungCause(t.captured);
-    return bad("HUNG — " + cause.split(" (")[0], 2,
-      `DID NOT FINISH within ${RUN_BACKSTOP_MS / 60000} min — killed by the harness ` +
-      `backstop, NOT a failing run and NOT a passing one.\n` +
-      `[build]   load average at kill: ${load} (on ${cpus().length} cores)\n` +
+    return bad(`CPU BUDGET SPENT — ${standingText(probeStanding(t.captured))} — ${causeName(cause)}`, 2,
+      `SPENT ITS WHOLE ${RUN_CPU_BUDGET_S / 60} min CPU BUDGET — killed by the KERNEL at the rlimit, which is ` +
+      `the verdict measure and is invariant to what else this box was doing.\n` +
       `[build]   the census says it was ${cause}`);
   }
-  if (t.signal) {
-    return bad("CRASHED on " + t.signal, 3,
-      `DIED ON ${t.signal} — read the @WHY above it; an abort is a DCHECK naming ` +
-      `either an invariant to fix at its root or a capability to build, and it is the RESULT of this ` +
-      `run rather than an interruption of it.`);
+  /* AND THE CASE CPU CANNOT SEE — SIGTERM, FROM THIS HARNESS. A deadlocked child consumes nothing, so the
+     rlimit never fires on one and this is the only thing that will. The CPU figure printed beside it is what
+     tells the two apart in the one case they blur: a child that consumed most of its budget in this many wall
+     minutes was STARVED of the thread rather than deadlocked on it, and the reader can see which. */
+  if (t.error && t.error.code === "ETIMEDOUT") {
+    const cause = hungCause(t.captured);
+    return bad(`DEADLOCK BACKSTOP — ${standingText(probeStanding(t.captured))} — ${causeName(cause)}`, 4,
+      `RAN ${RUN_DEADLOCK_MS / 60000} min OF WALL CLOCK WITHOUT REACHING ITS ${RUN_CPU_BUDGET_S / 60} min CPU ` +
+      `BUDGET — killed by the harness, NOT by the kernel. Read the CPU figure below: near the budget means ` +
+      `this child was starved of the thread, near zero means it was waiting on something that never came.\n` +
+      `[build]   the census says it was ${cause}`);
   }
-  if (t.status !== 0) return bad("FAILED rc=" + t.status, t.status || 1, `FAILED rc=${t.status}`);
-  return { label, verdict: "PASS", code: 0 };
+  const aborted = abortRecord(t.captured);
+  if (t.signal) {
+    return bad("CRASHED on " + t.signal + (aborted ? " — " + causeName(aborted) : ""), 3,
+      `DIED ON ${t.signal} — an abort is a DCHECK naming either an invariant to fix at its root or a ` +
+      `capability to build, and it is the RESULT of this run rather than an interruption of it.\n` +
+      `[build]   ` + (aborted ? aborted
+                              : `no @WHY/@E line in this run's output — this signal did not come from ` +
+                                `check.h, so the cause is above and is not an assertion`));
+  }
+  /* THE ABORT THAT ARRIVES AS AN ORDINARY EXIT STATUS — the wasm smoke's only shape. Same class and same code
+     as the signal above, because it IS that event; only the transport differs. */
+  if (t.status !== 0 && aborted)
+    return bad("ABORTED — " + causeName(aborted), 3,
+      `ABORTED at an assertion and exited rc=${t.status} — under emscripten an abort() is a thrown ` +
+      `RuntimeError rather than a signal, so this is the same event the native targets report as SIGABRT. ` +
+      `The line below names what to fix or build; it is the RESULT of this run.\n` +
+      `[build]   ${aborted}`);
+  /* AND THE PROGRAM'S OWN VERDICT CARRIES WHERE IT GOT TO. This is the arm the smoke reaches when its
+     frontier DRAINS and its probe table is merely incomplete — the one outcome for which "how much of the
+     fixture was answered" is the entire content of the result, and it read `FAILED rc=1` with the number
+     computed and dropped exactly as the budget arms did. */
+  if (t.status !== 0) {
+    const stand = probeStanding(t.captured);
+    return bad("FAILED rc=" + t.status + (stand ? " — " + standingText(stand) : ""), t.status || 1,
+      `FAILED rc=${t.status} with NO assertion line in its output — this is the program's own verdict on ` +
+      `itself (for the smoke, test_forced.c's probe table reporting INCOMPLETE), not a crash` +
+      (stand && stand.unanswered.length
+        ? `\n[build]   the rows still 0: ${stand.unanswered.join(" ")}`
+        : ""));
+  }
+  /* A ZERO EXIT OVER AN ABORT WITNESS IS AN IMPOSSIBLE STATE. Every emitter of those two shapes aborts on its
+     next statement, so a run that printed one and exited 0 either swallowed the abort or something else is
+     writing the tag — and both are worth a non-pass rather than a green stage. Reported rather than thrown,
+     because a stage that throws is a door in front of every stage behind it. */
+  if (aborted)
+    return bad("ABORT WITNESS OVER A ZERO EXIT", 6,
+      `EXITED 0 having printed an assertion line — check.h and quickjs-check.h both abort() on the next ` +
+      `statement, so either an abort was swallowed on the way out or something other than those two macros ` +
+      `is writing the tag. Both are defects and neither is a pass.\n[build]   ${aborted}`);
+  /* A PASS PRINTS ITS COST TOO, and the verdict carries where the run got to. A stage that answers every
+     statement it makes and a stage that makes none both used to read `PASS`, and the CPU a passing smoke
+     spends is the one number that says a revision made the fixture cheaper or dearer to answer — which is
+     invisible if it is only ever printed on the runs that failed. */
+  console.log(runNumbers(t));
+  const stand = probeStanding(t.captured);
+  return { label, verdict: stand ? `PASS — ${standingText(stand)}` : "PASS", code: 0 };
 }
 
 /* A STAGE THAT CANNOT RUN IS REPORTED AS SKIPPED WITH ITS REASON, AND IT CARRIES A NON-ZERO CODE. Absorbing it
@@ -1059,12 +1327,15 @@ if (ABI_LINK.code === 0) stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host",
    load, and the load was then read by six separate lanes as "the machine is saturated, a measurement now would
    be a loaded-machine artifact" — so they each declined to run their gates. One missing timeout suppressed
    every gate in the project, and nothing anywhere said the word "hang".
-   THE BACKSTOP IS NOT A CAP, AND THE DISTINCTION IS §Testing's: the real measure is the fixture reporting its
-   own stream, this is the case that measure cannot see, so it is GENEROUS and it reports through a DIFFERENT
-   SIGNAL — a `signal` where a failure sets a `status` — and the two never collapse into one verdict. A hang is
-   named as a hang, with the load average that is the first thing to suspect, and it is NOT reported as a
-   failing smoke test. §NO BOUNDS is about the FRONTIER: it forbids the engine capping its own exploration, and
-   it has never had anything to say about a harness refusing to wait forever for a process it launched. */
+   THE BUDGET IS NOT A CAP, AND THE DISTINCTION IS §Testing's: the real measure is the fixture reporting its
+   own stream, and the budget is what this file agrees to spend before reading that stream and deciding. It is
+   in CPU — see RUN_CPU_BUDGET_S — because a stretch of WALL CLOCK is a budget the box sets rather than this
+   file, and every comparison of two revisions' smoke runs made under one was a comparison of two machines.
+   The wall clock survives ONLY as the backstop for what CPU cannot see, generous, through its own signal
+   (SIGTERM from this harness against SIGXCPU from the kernel), with its own verdict and its own exit code, so
+   the two never collapse into one. §NO BOUNDS is about the FRONTIER: it forbids the engine capping its own
+   exploration, and it has never had anything to say about a harness declining to spend an unbounded amount of
+   a shared machine on one process it launched. */
 function runProgram(label, argv, hint) {
   return runChild(label, process.execPath, argv, hint);
 }
