@@ -1793,14 +1793,28 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
        and waits for it), and no instance ever resumes a wpt file — the corpus is the next run's input, not a
        residue. Reaping the process is a strictly stronger statement than either notice, delivered to the same
        peer, in the same teardown.
-       THE PARK IS THE ONLY THING THAT EMITS THEM (engine.c has one caller of each, both inside the park), so
-       this is not a class of notice this host might meet mid-run and quietly discard — which is the shape the
-       DFAIL below is guarding, and the reason that distinction is asserted rather than assumed. */
+       ONLY ONE OF THE TWO IS A PARK'S. This comment used to say "THE PARK IS THE ONLY THING THAT EMITS THEM
+       (engine.c has one caller of each, both inside the park)", and the assert below was built on it — a
+       checkable claim about another component, which is exactly the kind this file is required to check
+       before trusting. It is FALSE, and grep answers it: `engine_notify_worlds_gone` has TWO callers, the
+       park's (engine.c) and `flow_release`'s (solver/flow.c). The second is the ordinary path — a flow leaving
+       the frontier announces the worlds whose last live descendant it was, because a peer that was ever posted
+       to or read by that flow holds a COW segment keyed on its world and releases it only when told. That
+       happens whenever a flow is released, which is most of a run.
+       So the pairing splits, and the assert splits with it: `world.parked` IS park-only (engine.c's one
+       caller, inside it) and `world.gone` is not. Asserting the park for BOTH aborted two healthy files whose
+       measurement had already finished — the shape of false red CLAUDE.md names, where an assert reports a
+       property of the instrument rather than of the run, and the abort landed AFTER 48 subtests had been
+       reported and 46 of them had passed. The narrower assert keeps the invariant that is real: a park's
+       residue announcement outside a park is still a park this host did not ask for. */
     if (nf == 2 && (!strcmp(f[0], "world.gone") || !strcmp(f[0], "world.parked"))) {
-        DCHECK(g_parking, "a world's death or a carried segment was announced while this run was still "
-                          "measuring — both are a PARK's announcements, so either a park was taken that this "
-                          "host did not ask for, or a peer of a live session just lost a timeline and the "
-                          "instance holding its segment will hold it for ever");
+        DCHECK(g_parking || !strcmp(f[0], "world.gone"),
+               "a park's carried-segment announcement arrived while this run was still measuring — "
+               "`world.parked` is written at ONE site (engine.c, inside the park) and names the foreign worlds "
+               "that park is handing to the cold tier, so one outside a park is a park this host did not ask "
+               "for and a residue nothing will resume. `world.gone` is NOT this case and is not asserted "
+               "against: solver/flow.c's release announces one whenever a flow leaves the frontier, which is "
+               "ordinary traffic");
         free(whole);
         return;
     }

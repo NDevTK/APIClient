@@ -153,23 +153,51 @@ JSContext *world_doc_realm(uint32_t doc)
     return g_docs[doc - 1].realm;
 }
 
+/* A NAME HAS NO MAXIMUM LENGTH, AND THE FIXED BUFFER THAT USED TO STAND HERE WAS A CAP IN §scheduler's SENSE.
+ * It was `char buf[64]` with a DCHECK refusing anything longer, and the refusal's own advice was "the fix is to
+ * grow it" — which is the answer a bound always offers and never the right one. A larger constant is the same
+ * constant. `engine.c`'s two notice writers already size from the name and say why in as many words ("a
+ * document name nests one component per navigable depth, so a constant here is a cap on the frame tree"); this
+ * minter, which is where every one of those names is BORN, did not get the same treatment.
+ *
+ * AND THE MESSAGE MISDIAGNOSED WHAT MAKES A NAME GROW, which is worse than the cap: it sent the reader to look
+ * for a deep frame tree. Names nest per COMPONENT, and there are TWO callers that add one. §7.3.1.3's create
+ * adds a component per navigable DEPTH (navigable.c's create-a-new-child-navigable, `world_mint_doc(
+ * document_doc(ctx))`) — that is the reading the old text described. But a NAVIGATION of an already-
+ * materialized navigable also mints, under that navigable's CURRENT document (`world_mint_doc(
+ * window_proxy_doc(proxy))`), so the name of a navigable's Nth document carries all N-1 before it and the
+ * length tracks how many times ONE navigable has been navigated. That is the growth a forced-execution
+ * frontier actually produces, and it is unbounded by construction because §scheduler says a flow count is: the
+ * file that first exceeded 64 bytes has every one of its frames at depth ONE, so a reader following the old
+ * message would have hunted a seventeen-deep tree that is not there and concluded the crash was spurious.
+ *
+ * WHETHER A NAVIGATION SHOULD NEST AT ALL IS A REAL QUESTION AND IS NOT SETTLED HERE. A navigable's successive
+ * documents are siblings in TIME, not descendants, so nesting makes the name encode history. What the nesting
+ * buys is uniqueness by induction with no allocator and no round trip, which is what navigable.h says makes
+ * creation synchronous — so the alternative has to keep that property and this is not the diff that finds one.
+ * What is settled is that the LENGTH must not be a limit, whichever way that question goes. */
 uint32_t world_mint_doc(uint32_t parent)
 {
-    char buf[64];
     const char *self;
+    char *buf;
+    size_t cap;
+    uint32_t doc;
 
     DCHECK(parent != 0 && parent <= g_docs_n, "a document was created by a parent that names no document");
     DCHECK(g_doc != 0, "a document was created before world_registry_init named the one creating it");
     self = world_doc_name(parent);
-    /* "<my name>.<n>" — unique by induction from the root name, which is what lets this be synchronous. */
-    DCHECK(strlen(self) + 12 < sizeof buf,
-           "a document name grew past this buffer — names nest one component per navigable depth, so this is a "
-           "frame tree deeper than the buffer holds and the fix is to grow it, never to truncate a name into a "
-           "collision with another document");
-    snprintf(buf, sizeof buf, "%s.%u", self, ++g_docs[parent - 1].next_child);
+    /* "<my name>.<n>" — unique by induction from the root name, which is what lets this be synchronous. The
+       12 is the '.', a `uint32_t`'s ten digits and the NUL, which is the whole of what this call appends. */
+    cap = strlen(self) + 12;
+    buf = malloc(cap);
+    CHECK(buf != NULL, "world registry: OOM minting a document name — a document that cannot be named can "
+                       "never be routed to, so every read through it would park its flow forever");
+    snprintf(buf, cap, "%s.%u", self, ++g_docs[parent - 1].next_child);
     CHECK(g_docs[parent - 1].next_child != 0, "the child-document counter wrapped — the next name it mints collides with a "
                              "document that already exists, merging two documents into one identity");
-    return world_doc_intern(buf);
+    doc = world_doc_intern(buf);   /* interning COPIES; this buffer is ours to release */
+    free(buf);
+    return doc;
 }
 
 static void world_segment_counts_reset(void);   /* defined with the counters it clears */
