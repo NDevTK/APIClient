@@ -214,6 +214,65 @@ const POLICY = new Map([
 const SCHEDULES = [...POLICY.keys()];
 const REFERENCE = "direct";
 
+/* THE REFERENCE IS ASKED TWICE, AND THAT IS NOT A FIFTH SCHEDULE. Every row this gate prints is a difference
+   between two SAMPLES, and nothing anywhere established that two samples of ONE schedule agree — so the gate's
+   own premise sat underneath every one of its results, unmeasured. §Testing states that premise as the stronger
+   of two claims: "the finding set is a function of the DOCUMENT ALONE". "The same across schedules" is strictly
+   weaker. If two runs of the reference under the reference's own policy can differ, then every MISMATCH row is
+   two draws of a noisy process reported as a schedule effect, and a real cross-schedule cap is indistinguishable
+   from that noise. Run-to-run determinism was ASSUMED here, which is the same shape as every other property in
+   this tree that read as established because it had never been measured.
+
+   AND THE ENGINE DOES NOT MAKE IT TRUE BY CONSTRUCTION, which is why this costs its child rather than being a
+   tautology. The WFQ's aging term is denominated in CPU ACTUALLY CONSUMED, and three mechanisms carry that
+   quantity into what runs next:
+     - solver/engine.c charges `flow_age_running(quantum_thread_us() - t0)` and PICKS on the next statement. Its
+       own DCHECK there REQUIRES the charge to move rank — "a flow consumed a whole COOPERATIVE QUANTUM of the
+       thread and its rank did not move" — so a rank change on consumed CPU is the design, not an accident.
+     - solver/flow.c reads it: `flow_silence_notch(f) = (f->cpu + acct_family_us(f)) / FLOW_SERVICE_US`, an
+       integer division of real microseconds by ONE cooperative quantum, subtracted from the weight at
+       FLOW_AGE_QUANTUM a notch. flow_next_to_run seeds with the flow already holding the thread and displaces it
+       only on a STRICTLY greater weight, so which side of a 12 ms boundary a charge lands on decides whether
+       there is a context switch at all.
+     - preempt_hook's cooperative clause is `return quantum_expired();` and the scheduler loop returns to the
+       host on that same question, so WHERE a flow parks and WHEN this driver next gets to answer an owed reply
+       are both decided by consumed CPU. That second one moves the very axis `lastreply` moves deliberately.
+   AND ON THE HOST THE EXTENSION ACTUALLY SHIPS THAT QUANTITY IS NOT EVEN CPU: quantum.c's emscripten branch
+   answers quantum_thread_us() from CLOCK_MONOTONIC because emscripten answers every WASI clock from
+   emscripten_get_now(), and engine.c states the consequence at the charge — a descheduled step is billed for
+   time it did not burn, so a flow is demoted a notch early and a sibling runs sooner. The schedule this gate
+   measures is therefore a function of the BOX as well as of the document.
+
+   SO A FAILURE HERE IS NOT EXPLAINED BY "CPU VARIES", and that is the whole reason the check is worth its run.
+   CPU variation is LICENSED to reorder — §scheduler: "only WHICH flow runs next is value-reranked" — and
+   FORBIDDEN to change what a DRAINING frontier emits. A differing SET means the order reached the outcome,
+   which is a flow dropped, starved, skipped, reordered or forgotten (§scheduler's razor) measured with no
+   second schedule involved at all. What is compared is the SET, never a sequence: the same canonical sets every
+   other row compares.
+
+   WHY IT IS NOT IN SCHEDULES. Each entry there is a distinct (floor, reply) PAIR that moves a distinct
+   mechanism, and a duplicate of the reference moves none: putting it in that list would make the list untrue
+   about itself, and would route a repeat failure through the MISMATCH message, which says "one of these two
+   schedules dropped…" and would be a wrong diagnosis stated confidently. Two failures that read alike is the
+   defect this file argues about @S candidates, performed by its own reporter. The verdicts are kept apart.
+
+   WHY THE REFERENCE AND NOT ANOTHER. Every other comparison is made AGAINST it. A noisy `preempt` costs one
+   row; a noisy `direct` costs the whole table, and the rows then have to say so — which is what refNoisy does.
+
+   WHY LAST. The box is in a different state after the other children than before them, so the second sample's
+   schedule has the best chance this gate can give it of differing from the first's. It costs nothing to put it
+   there, and the switch counts printed beside the verdict are what say whether it worked: `held` beside two
+   IDENTICAL switch counts is a weak sample — the two runs may have executed identically — while `held` beside
+   13sw and 2sw is the invariant surviving a frontier that genuinely interleaved differently. That is the
+   difference between a check that ran and a check that discriminated, and it is printed rather than asserted
+   because a run whose two samples happen to agree in cost is not a defect in anything.
+
+   WHAT ONE REPEAT CAN AND CANNOT DO, said plainly so `held` is never read as more than it is: a second sample
+   can FALSIFY determinism and can never ESTABLISH it. What it buys is that the assumption stops being
+   unmeasured and that a divergence which happens at all has somewhere to be seen. More samples are taken by
+   running one document alone (`node engine/solvergate.mjs <doc>`); a repeat-count knob would be a bound wearing
+   a flag, and this file has no use for one. */
+
 /* THE ONE REPLY EVERY OWED REQUEST GETS, stated once. It is deterministic because the invariance being
    measured is over the SCHEDULE and nothing else: a reply whose body varied between runs would make every
    comparison below meaningless, and a per-document reply table would make this gate's input something someone
@@ -718,6 +777,59 @@ for (const doc of docs) {
     if (!broke) { bad++; console.log(`  FAILED ${doc} — the reference schedule \`${REFERENCE}\` produced no result`); }
     continue;
   }
+  /* ─── THE REFERENCE, ASKED A SECOND TIME ──────────────────────────────────────────────────────────────────
+     See the block beside REFERENCE for why this is not a fifth schedule, why it is the reference that is
+     repeated and why it runs here. THE THREE STATES ARE KEPT THREE — §Testing: an absent count and a zero count
+     are different facts, so a repeat that never ran is NOT a determinism that held, and the summary line below
+     carries whichever of the three this document reached. */
+  let refNoisy = 0, det = "held", repeatCost = "";
+  {
+    const again = runChild(doc, REFERENCE);
+    if (!again.ok) {
+      bad++; det = "NOT-MEASURED";
+      console.log(`  FAILED ${doc} [${REFERENCE} x2]\n         the REPEAT of the reference produced no result, ` +
+                  "so run-to-run determinism was NOT MEASURED for this document — every comparison below it " +
+                  "rests on a baseline nothing has checked, which is a different fact from a baseline that was " +
+                  `checked and held. Cause: ${again.cause}`);
+      const tail = again.out.split(/\r?\n/).filter(Boolean).slice(-8);
+      if (tail.length) console.log(tail.map((l) => "           | " + l.slice(0, 160)).join("\n"));
+    } else if (!checkCoverage(doc, REFERENCE + " x2", again.result)) {
+      bad++; det = "NOT-MEASURED";
+    } else {
+      const p = POLICY.get(REFERENCE);
+      repeatCost = `${REFERENCE}(${p.floor === Infinity ? "+inf" : "-inf"}/${p.reply})x2:` +
+                   `${again.result._switches}sw/${again.result._flows}fl`;
+      for (const surface of SURFACES.keys()) {
+        const a = surfaceSet(ref, surface), b = surfaceSet(again.result, surface);
+        const only1 = a.filter((x) => !b.includes(x));
+        const only2 = b.filter((x) => !a.includes(x));
+        if (!only1.length && !only2.length) continue;
+        refNoisy++; bad++; det = "NONDETERMINISTIC";
+        console.log(`  NONDETERMINISTIC ${doc}  ${surface}: run 1 has ${a.length}, run 2 has ${b.length} — the ` +
+                    `SAME document under the SAME schedule \`${REFERENCE}\`, twice, on one build.` +
+                    "\n           This is the gate's PREMISE failing and not a schedule effect. §Testing's " +
+                    "\"the finding set is a function of the DOCUMENT ALONE\" is false of this build, so every " +
+                    "MISMATCH row for this document is a difference between two draws of a noisy process and a " +
+                    "real cross-schedule cap is indistinguishable from it." +
+                    "\n           IT IS NOT EXPLAINED BY THE CLOCK. The WFQ is LICENSED to reorder on consumed " +
+                    "time (flow_silence_notch divides it by one cooperative quantum) and FORBIDDEN to change " +
+                    "what a DRAINING frontier emits — so a differing set here is a flow dropped, starved, " +
+                    "skipped, reordered or forgotten, with no second schedule involved. Report the two sets " +
+                    "before patching anything: this is the first evidence the premise can fail.");
+        for (const x of only1) console.log(`             only in run 1: ${x.slice(0, 300)}`);
+        for (const x of only2) console.log(`             only in run 2: ${x.slice(0, 300)}`);
+      }
+      /* THE POSITIVE EVIDENCE THAT THE SAMPLE DISCRIMINATED, and it is a reading rather than a verdict. Two
+         runs of one pair that also differ in switch count executed DIFFERENT interleavings and agreed on the
+         findings anyway, which is the invariant surviving the thing it is about; two runs at the same count may
+         simply have executed the same way. Never a failure either way — an agreement in cost is not a defect,
+         it is a weaker sample, and saying which is what stops a column of `held` reading as more than it is. */
+      if (det === "held" && again.result._switches !== ref._switches)
+        console.log(`         determinism held ACROSS A DIFFERENT INTERLEAVING: ${ref._switches}sw then ` +
+                    `${again.result._switches}sw over the same pair — the two runs diverged in execution and ` +
+                    "still emitted the same set, which is the invariant tested against the thing that moves it.");
+    }
+  }
   let doc_bad = 0;
   for (const [sched, result] of runs) {
     if (sched === REFERENCE) continue;
@@ -732,6 +844,15 @@ for (const doc of docs) {
                   "WHICH flow runs next is value-reranked), so a difference here is a flow that one of these " +
                   "two schedules dropped, starved, skipped, reordered or forgot — which is the definition of " +
                   "a cap — or a switched-in flow reading another flow's state.");
+      /* …UNLESS THE BASELINE IS NOT A MEASUREMENT, in which case the sentence above is a claim this run cannot
+         support. A reference that disagrees with ITSELF makes every row against it a difference between two
+         draws, so the row is still printed — it is real data — and it is labelled rather than suppressed:
+         suppressing it would hide a genuine cross-schedule cap behind a determinism failure, which is the same
+         three-states-behind-one-answer defect in the other direction. */
+      if (refNoisy)
+        console.log("           AND THE BASELINE OF THIS COMPARISON IS NOT A MEASUREMENT: the reference " +
+                    "disagreed with ITSELF on this document (the NONDETERMINISTIC row above), so this row " +
+                    "cannot be read as a schedule effect until that is fixed.");
       for (const x of onlyRef) console.log(`             only in ${REFERENCE}: ${x.slice(0, 300)}`);
       for (const x of onlyThis) console.log(`             only in ${sched}:  ${x.slice(0, 300)}`);
     }
@@ -753,14 +874,16 @@ for (const doc of docs) {
   console.log(`  ${doc_bad ? "FAIL" : "ok  "} ${doc.padEnd(24)} ` +
               `@H ${String(ref.fetchCallSites.length).padStart(3)}  ` +
               `@S ${String(ref.securitySinks.length).padStart(3)}  ` +
-              `err ${String(ref.pageErrors.length).padStart(2)}   ${cost}`);
+              `err ${String(ref.pageErrors.length).padStart(2)}  det ${det.padEnd(16)} ` +
+              `${cost}${repeatCost ? "  " + repeatCost : ""}`);
   /* THE PAGE'S OWN ERRORS, PRINTED. A page error is the forcing function naming an unbuilt capability
      (result.h), and a corpus document that throws is exploring less than it looks like it is — the gate would
      still be measuring invariance, over a run that stopped early. Never a failure here (the two halves are
      different questions), always visible. */
   for (const e of ref.pageErrors) console.log(`         page error: ${e.slice(0, 160)}`);
 }
-console.log(`  ---- ${docs.length} document(s) x ${SCHEDULES.length} schedules`);
+console.log(`  ---- ${docs.length} document(s) x ${SCHEDULES.length} schedules + 1 repeat of \`${REFERENCE}\` ` +
+            "(the run-to-run check: SAME document, SAME schedule, twice — see the block beside REFERENCE)");
 /* THE REVISION IN THE TAIL, because the tail is what gets pasted — see engine/gate_revision.mjs. */
 for (const l of revisionLines(REV_AT_START)) console.log(l);
 {
