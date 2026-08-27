@@ -441,6 +441,30 @@ void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst
 void window_proxy_set_remote_container(JSValueConst proxy, const char *serialized_policy);
 const char *window_proxy_remote_container(JSValueConst proxy);
 
+/* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST FOR THAT SAME NAVIGABLE, when its
+ * ancestors are in another instance — the sibling of the pair above and not a second spelling of it.
+ *
+ * IT IS A THIRD CROSS-INSTANCE ANSWER RATHER THAN A DERIVATION OF THE FIRST TWO. §3.1.3 takes a Document and a
+ * referrer policy and reads three things this instance does not hold: the PARENT DOCUMENT's own internal list
+ * (its step 5), that document's ORIGIN RECORD (its steps 9 and 10), and the CONTAINER ELEMENT (its step 6).
+ * The parent identity on the provisioning record is not a substitute for any of them — it names a navigable,
+ * and §3.1.3 reads a Document's recorded ancestry, which no identity carries.
+ *
+ * AND THE RECORD'S ORIGINS ARE NOT ENOUGH TO RUN THE STEPS AT THIS END, which is the sharp half. Step 10 asks
+ * whether an ancestor "is same origin with parentDoc's origin"; §7.1.1 decides an opaque origin by IDENTITY
+ * and every opaque origin serializes to the same three bytes `null`, so a peer comparing text would mask an
+ * entry that is not the parent's the moment the parent is itself opaque — which is not an exotic case but the
+ * `data:`-iframe one, where the child is in a peer instance precisely BECAUSE its origin is opaque. So the
+ * creator runs §3.1.3 once, with all three inputs in one heap, and the finished list crosses as text.
+ *
+ * STATED THROUGH core/frame/navigable.h's navigable_root_ancestor_origins, which is where the pairing with
+ * §7.3.1.3's PARENT is asserted: a navigable with a remote parent is a child navigable and its list is
+ * non-empty; one with no parent is a top-level traversable and its list is empty. NULL from the reader is
+ * "nobody stated it", which is not an answer — core/dom/document.c crashes on it rather than installing an
+ * empty list, which would make a cross-origin frame report itself top-level. BORROWED. */
+void window_proxy_set_remote_ancestor_origins(JSValueConst proxy, const char *serialized_list);
+const char *window_proxy_remote_ancestor_origins(JSValueConst proxy);
+
 /* AND §7.2.2.4's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
    navigable onto the GLOBAL, which is the right answer for a page reading the member and the wrong one for an
    engine walk — a Window is not a WindowProxy, so a walk handed it asks "is this a proxy", is told no, and

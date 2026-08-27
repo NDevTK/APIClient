@@ -484,14 +484,33 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * permissions policy is none of them — §7.3.2.1 sets the two in different steps, from different algorithms.
  * WITHOUT IT §9.7 step 1 answered for a frame that HAS a container ("if container is null, return
  * `Enabled`"), which grants a cross-origin child every supported feature its embedder was never asked about;
- * core/dom/document.c crashes on the absence instead of taking that step. */
+ * core/dom/document.c crashes on the absence instead of taking that step.
+ *
+ * `ancestor_origins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for this
+ * Document, and it is a THIRD statement about the same navigable rather than a field of either above it.
+ * §3.1.3's steps read three things: the PARENT DOCUMENT's own recorded list (step 5), that Document's ORIGIN
+ * RECORD (steps 9 and 10), and the CONTAINER ELEMENT (step 6). The parent field beside it names a NAVIGABLE
+ * and carries no Document's recorded ancestry; the container field is Permissions Policy §9.5's answer, a
+ * different algorithm over two of the same inputs. Neither yields this one, and two of §3.1.3's three inputs
+ * cannot cross at all — an element is an OBJECT, and an origin RECORD is precisely what a serialization drops,
+ * since §7.1.1 decides an opaque origin by IDENTITY and every opaque origin is the three bytes `null`. Step 10
+ * compares an ancestor against "parentDoc's origin", so an instance re-running the steps over carried text
+ * would mask an ancestor that is not the parent's whenever the parent is itself opaque — which is the ORDINARY
+ * case on this route rather than a corner, since a `data:` document is in its own instance BECAUSE its origin
+ * is opaque. So the creating instance runs §3.1.3 once, where all three inputs are, and this field is its
+ * RESULT, in the text core/dom/document.h serializes a list into; "there are no ancestors" is that grammar's
+ * own word and is what a top-level document and an AUXILIARY navigable both state. WITHOUT IT this instance
+ * would install the EMPTY list, which is the positive claim that this Document is at the top of its own tree —
+ * a cross-origin frame answering every `location.ancestorOrigins` read wrongly, with nothing anywhere to
+ * disagree; core/dom/document.c crashes on the absence instead. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
-                        const char *parent_navigable, const char *container_policy)
+                        const char *parent_navigable, const char *container_policy,
+                        const char *ancestor_origins)
 {
     char *origin;
     HeaderList response_headers;
@@ -635,6 +654,10 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
            answered from what the creating instance already computed. Stated here rather than folded into the
            rooting above for §7.3.1.3's own reason — the section creates a navigable and links it afterwards. */
         navigable_root_container(g_ctx, root_proxy, container_policy);
+        /* AND §3.1.3's ANCESTOR ORIGINS FOR THAT NAVIGABLE'S DOCUMENT, before the install below and for the
+           same sentence: §7.3.2.1 runs those steps once per Document a navigable is given and reads this
+           there. A THIRD statement rather than a field of either above it — see core/frame/navigable.h. */
+        navigable_root_ancestor_origins(g_ctx, root_proxy, ancestor_origins);
         /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
            response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
            CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
@@ -725,14 +748,21 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  *
  * `container_policy` IS qjs_init's, and it is here for the sentence directly above: a navigable whose parent
  * is in a peer instance has its CONTAINER element there too, so Permissions Policy §9.5's answer for this
- * document's navigable is a fact only the creating instance could compute. */
+ * document's navigable is a fact only the creating instance could compute.
+ *
+ * `ancestor_origins` IS qjs_init's, and it is here for that same sentence read one algorithm along: a navigable
+ * whose parent is in a peer instance has its ANCESTORS there too, so §3.1.3's steps — which read the parent
+ * Document's own recorded list, its ORIGIN RECORD and the container element — can only run in that instance.
+ * The shape this entry exists for makes it sharper still: a same-origin document nested through a CROSS-ORIGIN
+ * one joins THIS cluster while every one of its ancestors sits in another. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
-                        const char *parent_navigable, const char *container_policy)
+                        const char *parent_navigable, const char *container_policy,
+                        const char *ancestor_origins)
 {
     HeaderList response_headers;
     NavigationParams np;
@@ -846,6 +876,10 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
            same-origin document nested through a cross-origin one has both of its §7.3.1.3 links in a peer
            instance, so this is where the container's answer is stated or lost. */
         navigable_root_container(cctx, proxy, container_policy);
+        /* AND §3.1.3's ANCESTOR ORIGINS FOR THAT SAME NAVIGABLE'S DOCUMENT, on the sentence above: a document
+           joining this cluster through a CROSS-ORIGIN parent has every one of its ancestors in that peer, so
+           its list is composed there and read back here. */
+        navigable_root_ancestor_origins(cctx, proxy, ancestor_origins);
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin_serialized(origin_agent()),
                                         serialized_embedder_policy_of(&np.embedder));

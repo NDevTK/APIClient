@@ -906,7 +906,7 @@ function embedderPolicyWhole(e) {
    so the name it passes in IS the answer (SECURITY.md's `(browsing-context group, origin)`), which is also
    what makes a frame in the offscreen's DOM identifiable as the instance the pool is talking about. */
 function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inherited, parentNavigable,
-                      containerPolicy) {
+                      containerPolicy, ancestorOrigins) {
   /* THE ONE WAY TO OBTAIN AN INSTANCE, ASSERTED RATHER THAN DISCOVERED AS A TypeError. Without this the failure
      of a load-order change (renderer-host.js is a <script> before this one in ast-worker.html) arrives as
      "self.rendererLaunch is not a function" inside admit's catch, which reports it as a BOOT ABORT of the
@@ -971,6 +971,26 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
          "which applies (a create notice carries the answer the creating engine computed; a document nothing " +
          "embeds says `null`). An absent one is a caller that skipped the question and a frame that would be " +
          "granted every feature its embedder holds");
+  /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the Document this instance
+     will build — a THIRD fact about the same navigable and not a derivation of the two above, because §3.1.3
+     reads things neither of them carries: the PARENT DOCUMENT's own recorded list, that Document's ORIGIN
+     RECORD, and the container element. Two of those cannot cross at all — an element is an object, and an
+     origin RECORD is exactly what a serialization drops, since HTML §7.1.1 decides an opaque origin by
+     IDENTITY while every opaque origin is the three bytes `null`. So §3.1.3 runs once in the creating instance
+     and this carries its RESULT. `none` is that grammar's word for "there are no ancestors", which a reported
+     root, a rehydrated recipe and §7.3.2.3's swapped-to context all state, and which is the same fact their
+     `u` parent states one link along.
+     NO DEFAULT, on the parent's rule and with the container's edge: the EMPTY list is not an absence, it is
+     the positive claim that this Document is at the TOP of its own tree, so "the caller forgot" and "there are
+     no ancestors" collapsing into one value is a cross-origin frame answering `location.ancestorOrigins` with
+     `[]` — a wrong answer no page can tell from a right one, since the member exists to report a tree the
+     reading page cannot otherwise see. */
+  DCHECK(typeof ancestorOrigins === "string" && ancestorOrigins !== "",
+         "an instance was started with no HTML §3.1.3 ANCESTOR ORIGINS statement — the composed list and " +
+         "`none` are the two things a caller can say, and every call site knows which applies (a create " +
+         "notice carries the list the creating engine composed; a document nothing embeds says `none`). An " +
+         "absent one is a caller that skipped the question and a frame that would report itself as the top of " +
+         "its own tree");
   const cluster = clusterKeyOf(msg);
   /* THE POOL IS THE REGISTER OF WHO HOLDS WHAT, AND ASKING IT IS THE CALLER'S JOB — this asserts they did.
      Every site that builds an instance has already answered "does this agent cluster have one?" (admit's
@@ -1006,7 +1026,7 @@ function engineCreate(code, html, msg, persist, docName, topLevelUrl, cold, inhe
     try {
       eng.r = await self.rendererLaunch(cluster);
       await engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
-                       containerPolicy);
+                       containerPolicy, ancestorOrigins);
       /* A CLEAR THAT LANDED MID-BOOT TAKES THE FRAME HERE, for the reason serviceFetch takes it there:
          hostClear cannot destroy a renderer this path has a call outstanding on, so it marks the record and
          the operation that owns the outstanding call removes the frame when it lands. */
@@ -1126,7 +1146,7 @@ function engineBootFailed(eng, e) {
    would leave the pool holding the reservation while every caller held the instance — one document with two
    records, which is the defect the reservation exists to close wearing a different hat. */
 async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, inherited, parentNavigable,
-                          containerPolicy) {
+                          containerPolicy, ancestorOrigins) {
   const rend = eng.r;
   DCHECK(rend && rend.name === eng.cluster,
          "a renderer was provisioned under a name that is not its instance's agent cluster — the frame's " +
@@ -1252,7 +1272,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
                                          inherited ? inherited.selfOrigin : "",
                                          _initEp.value, _initEp.endpoint,
                                          _initEp.reportOnlyValue, _initEp.reportOnlyEndpoint,
-                                         parentNavigable, containerPolicy);
+                                         parentNavigable, containerPolicy, ancestorOrigins);
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
@@ -1617,7 +1637,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
    the same way, which is exactly what the caller's `hostHolderOf` question decides here. Two spellings of one
    document would pass both checks and build a second tree, a second realm and a second run of that document's
    scripts inside one agent, so the name is asserted to be unheld across the WHOLE pool before it crosses. */
-async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavigable, containerPolicy) {
+async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavigable, containerPolicy,
+                          ancestorOrigins) {
   DCHECK(eng.state === "hot" || eng.state === "fetching",
          "a document was joined to an instance in state `" + eng.state + "` — a join ADDS a document to a LIVE " +
          "agent, and qjs_join's own asserts name the two calls that must already have happened (qjs_init roots " +
@@ -1652,6 +1673,15 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavig
          "and `null` are the two facts a host states, so an absent one is a caller that skipped the question " +
          "and a nested document granted every feature its embedder holds, through §9.7 step 1's null-container "+
          "arm");
+  /* AND §3.1.3's ANCESTOR ORIGINS, on engineCreate's rule and interesting here for that same shape one
+     algorithm along: a same-origin document nested through a cross-origin one has EVERY ancestor in another
+     instance, so §3.1.3's three inputs — the parent Document's own recorded list, its ORIGIN RECORD and the
+     container element — are all facts only that instance could read. */
+  DCHECK(typeof ancestorOrigins === "string" && ancestorOrigins !== "",
+         "a document was joined with no HTML §3.1.3 ANCESTOR ORIGINS statement — the composed list and " +
+         "`none` are the two facts a host states, so an absent one is a caller that skipped the question and " +
+         "a nested document that would answer `location.ancestorOrigins` with `[]` while sitting inside " +
+         "somebody else's frame tree");
   const html = msg.pageHtml;
   /* THE SAME ONE SHAPE THE ROOT'S DOCUMENT TAKES, and for the same reason: `content.mojom.Renderer.Join`
      declares `array<uint8>` because `qjs_join` has main.c's byte-identical signature, so the two operations
@@ -1691,7 +1721,7 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavig
                                           inherited.embedder.value, inherited.embedder.endpoint,
                                           inherited.embedder.reportOnlyValue,
                                           inherited.embedder.reportOnlyEndpoint,
-                                          parentNavigable, containerPolicy);
+                                          parentNavigable, containerPolicy, ancestorOrigins);
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
@@ -1991,8 +2021,8 @@ let _nextSwapGroup = 1;
 /* WHAT THIS ZONE OWES A ONE-WAY NOTICE. Two ops today, and each is an ACTION only this zone can take —
    SECURITY.md makes the offscreen the only zone that knows which instance holds which document.
    `navigable.create <child> <creator> <url> <origin> <topLevelUrl> <cspSelfOrigin> <coep> <coepEndpoint>
-   <coepReportOnly> <coepReportOnlyEndpoint> <parentNavigable> <containerPolicy> <csp>` — the engine has
-   already named the document and
+   <coepReportOnly> <coepReportOnlyEndpoint> <parentNavigable> <containerPolicy> <ancestorOrigins> <csp>` —
+   the engine has already named the document and
    already handed the page a WindowProxy for it; what is missing is an INSTANCE. This provisions one under that
    name, loading the child's own document through the one safeFetch chokepoint.
    `windowproxy.post <target> <world> <targetOrigin> <base64>` — routed VERBATIM to the instance holding
@@ -2001,8 +2031,9 @@ let _nextSwapGroup = 1;
 async function hostNotice(eng, line) {
   const f = line.split("\t");
   if (f[0] === "navigable.create") {
-    /* THIRTEEN FIELDS, because CSP §2.2's SELF-ORIGIN, §7.1.4's four EMBEDDER POLICY items, HTML §7.3.1.3's
-       TWO LINKS, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are all read below. The count said five
+    /* FOURTEEN FIELDS, because CSP §2.2's SELF-ORIGIN, §7.1.4's four EMBEDDER POLICY items, HTML §7.3.1.3's
+       TWO LINKS, HTML §3.1.3's ANCESTOR ORIGINS, the POLICY and HTML §8.1.3.1's TOP-LEVEL CREATION URL are all
+       read below. The count said five
        once, so a record that stopped at the origin passed the assert and then took `undefined` for the
        creator's policy clone — a child document judged under NO policy, which is §7.1.7's inheritance silently
        deleted, and the one field a CSP-blocked sink verdict is decided against.
@@ -2010,7 +2041,7 @@ async function hostNotice(eng, line) {
        the value is missing, so it counts every field the reader below indexes — and it MOVES when the record
        grows, because the field added last is exactly the one an unmoved count would let arrive as
        `undefined`. */
-    DCHECK(f.length >= 14, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, and the policy");
+    DCHECK(f.length >= 15, "a navigable.create notice was short of its fields — the engine writes child, creator, url, origin, top-level creation URL, CSP self-origin, the four items of §7.1.4's embedder policy, HTML §7.3.1.3's parent navigable and its container's Permissions Policy §9.5 answer, HTML §3.1.3's internal ancestor origin objects list, and the policy");
     if (hostHolderOf(f[1])) return;   // already provisioned: the engine announces a document once
     const loaded = await eng.fetchedDocument(f[3]);
     /* THE CHILD'S PRINCIPAL IS THE ORIGIN OF THE URL THIS ZONE FETCHED — derived HERE and not read off the
@@ -2101,6 +2132,29 @@ async function hostNotice(eng, line) {
        rather than on an absence it fills in. It sits BEFORE the policy for the reason everything else does —
        §4.1's feature tokens and §4.2's `Enabled`/`Disabled` cannot contain a tab, and a raw CSP header can. */
     const containerPolicy = f[12];
+    /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST AT FIELD 13 — a THIRD
+       statement about the same navigable and not either of the two above said again, because it is a THIRD
+       algorithm reading a set of things neither of them carries: the PARENT DOCUMENT's own recorded list, that
+       Document's ORIGIN RECORD, and the container element. The parent field is a navigable IDENTITY and holds
+       no Document's ancestry; the container field is §9.5's answer over two of the same inputs.
+       AND THE ORIGIN RECORD IS WHY THE ANSWER TRAVELS RATHER THAN THE INPUTS. §3.1.3's step 10 asks whether an
+       ancestor "is same origin with parentDoc's origin", HTML §7.1.1 decides an opaque origin by IDENTITY, and
+       every opaque origin serializes to the same three bytes `null` — so a receiving engine handed the
+       creator's list plus a serialized parent origin would mask an entry that is not the parent's the moment
+       the parent is opaque, which on this route is the ordinary case rather than a corner (a `data:` document
+       is in its own instance BECAUSE its origin is opaque). Relayed verbatim like the two beside it. It sits
+       BEFORE the policy for the reason everything else does: the list is origin serializations joined by
+       SPACE, and URL §3.2 "Host miscellaneous" makes both SPACE and TAB forbidden host code points, so neither
+       byte can occur inside an entry — while a raw CSP header may hold a tab. */
+    const ancestorOrigins = f[13];
+    DCHECK(typeof ancestorOrigins === "string" && ancestorOrigins !== "",
+           "a navigable.create notice carried no HTML §3.1.3 ANCESTOR ORIGINS statement — navigable.c writes " +
+           "the composed list on every record, and `none` where the Document has no container document at " +
+           "all, because both are facts and neither is an empty field. Without it this child would be " +
+           "provisioned with §3.1.3's EMPTY list, which is the positive claim that it is at the TOP of its " +
+           "own tree: `location.ancestorOrigins` would answer `[]` for a cross-origin frame, and nothing " +
+           "anywhere would disagree — the member exists precisely to report a tree the page cannot otherwise " +
+           "see");
     DCHECK(typeof containerPolicy === "string" && containerPolicy !== "",
            "a navigable.create notice carried no HTML §7.3.1.3 CONTAINER statement — navigable.c writes " +
            "Permissions Policy §9.5's answer on every record, and `null` where the navigable has no container " +
@@ -2159,7 +2213,7 @@ async function hostNotice(eng, line) {
              "a document was announced for a cluster whose instance never became one — the reservation holding " +
              "it failed to boot, so this child has an agent that does not exist rather than one it can join, " +
              "and every read through its proxy would park forever");
-      await engineJoin(holder, msg, f[1], f[5], inherited, parentNavigable, containerPolicy);
+      await engineJoin(holder, msg, f[1], f[5], inherited, parentNavigable, containerPolicy, ancestorOrigins);
       return;
     }
     /* A CHILD DOCUMENT IS A DOCUMENT: it joins the ONE pool and is ranked, sliced, parked and finalized by the
@@ -2169,7 +2223,7 @@ async function hostNotice(eng, line) {
        boot turns out. AWAITED, because the notices of one round are acted on IN ORDER: a page opens a window
        and posts to it in the same turn, so the instance must exist before the post that names it is routed. */
     await engineCreate("", msg.pageHtml, msg, false, f[1], f[5], true, inherited, parentNavigable,
-                       containerPolicy)._readyP;
+                       containerPolicy, ancestorOrigins)._readyP;
     return;
   }
   /* `navigable.swap <new document> <url> <origin>` — HTML §7.1.3.2 "Browsing context group switches due to
@@ -2227,8 +2281,11 @@ async function hostNotice(eng, line) {
     /* AND HTML §7.3.1.3's PARENT IS `u`, WHICH IS §7.1.3.2's OWN STEP 2 AND NOT A BLANK: "if browsingContext
        is not a top-level browsing context, then return browsingContext" — the swap is only ever reached for a
        top-level one (the engine asserts it where the record is written), so the navigable this provisions has
-       no parent by the standard rather than by this zone having nothing to say. */
-    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], f[2], true, null, "u", "null")._readyP;
+       no parent by the standard rather than by this zone having nothing to say.
+       AND HTML §3.1.3's LIST IS `none` BY THAT SAME SENTENCE READ ONE ALGORITHM ALONG: its steps 2-3 return
+       an empty output for a Document with no CONTAINER DOCUMENT, and a top-level browsing context has none. */
+    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], f[2], true, null, "u", "null",
+                       "none")._readyP;
     return;
   }
   if (f[0] === "windowproxy.post") {
@@ -3209,9 +3266,10 @@ const _hostOps = {
          null, and group", and this Document's container comes from its OWN response. The empty CSP pair says
          that; §7.1.4's item has no empty spelling and so states the section's own new embedder policy. */
       /* AND §7.3.1.3's PARENT IS `u` FOR THE SAME SENTENCE: what joins here is a TOP-LEVEL TRAVERSABLE's
-         incoming Document (§7.4.6.1 "Updating the traversable"), which is nested in nothing. */
+         incoming Document (§7.4.6.1 "Updating the traversable"), which is nested in nothing — and §3.1.3's
+         list is `none` because a Document nested in nothing has no container document for its step 2 to find. */
       await engineJoin(swap.cluster, swap.job.msg, swap.docId, _tlu,
-                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "null");
+                       { csp: "", selfOrigin: "", embedder: NEW_EMBEDDER_POLICY }, "u", "null", "none");
       await engineUnload(swap.cluster, swap.outgoing, swap.docId);
       return;
     }
@@ -3252,9 +3310,11 @@ const _hostOps = {
            breaking — so it travels on through `_readyP` to hostSchedule's own failure arm. */
         /* NULL: a document a content script reported is a ROOT one — no creator, so no §7.1.7 clone. */
         /* `u`: a document a content script reported is the TAB's, which is a top-level traversable — the one
-           navigable no create notice named, and the reason this zone can state its §7.3.1.3 parent at all. */
+           navigable no create notice named, and the reason this zone can state its §7.3.1.3 parent at all.
+           `none`: a top-level traversable's Document has no container document, so §3.1.3's steps 2-3 return
+           the empty list — the same fact its `u` parent states one link along. */
         const eng = engineCreate(job.code, job.html, job.msg, job.persist, null, null, false, null, "u",
-                                 "null");
+                                 "null", "none");
         DCHECK(hostClusterOf(key) === eng,
                "engineCreate did not leave its reservation in the pool before returning — the whole point of " +
                "the slot being taken synchronously is that the next arrival for this cluster finds it, so a " +
@@ -3302,8 +3362,11 @@ const _hostOps = {
       /* NULL: a rehydrated cold recipe replays a document that had no creator in this session either. */
       /* `u`: a rehydrated recipe carries the DOCUMENT its session recorded and no embedder — the frontier
          key is a document's, and a parked child navigable resumes through the create notice its creator's
-         replay re-emits rather than through this path. */
-      await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null")._readyP;
+         replay re-emits rather than through this path.
+         `none`: and §3.1.3's list arrives on that same re-emitted notice for the same reason, so what is
+         replayed HERE is a document with no embedder and therefore no ancestors. */
+      await engineCreate(doc.code, doc.html, msg, true, null, null, true, null, "u", "null",
+                         "none")._readyP;
     }
   },
   finish: async (eng) => {   // fully explored, or self-parked under RAM pressure -> persist residue to the cold tier + resolve/merge

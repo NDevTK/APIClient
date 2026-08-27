@@ -114,7 +114,7 @@
          "offscreen's realm any more, which is the whole point of the boundary. An absent one would read as " +
          "\"this instance occupies no memory\", which admits another engine against RAM already spent" };
 
-  /* THE SEVEN ARGUMENTS THAT ROOT OR JOIN A DOCUMENT. `Init` and `Join` take the identical list because
+  /* THE ARGUMENTS THAT ROOT OR JOIN A DOCUMENT. `Init` and `Join` take the identical list because
      main.c's two entries have byte-identical C signatures, and they are a shared record for that reason rather
      than for brevity: it is ONE contract taken by two operations (root this agent at a document / add a
      document to the agent already running), so a change to what a document arrives with must reach both. */
@@ -233,6 +233,35 @@
          "its §7.3.1.3 container element, or `null` for a navigable nothing presents. There is no empty " +
          "spelling: a navigable either has a container or does not, and both are facts a host states" };
 
+  /* HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for this document — a THIRD
+     statement about the same navigable and not a field of either above it, because it is a THIRD algorithm
+     over a set of inputs neither of them carries. §3.1.3's steps read the PARENT DOCUMENT's own recorded list
+     (step 5), that Document's ORIGIN RECORD (steps 9 and 10) and the CONTAINER ELEMENT (step 6). The parent
+     parameter beside it crosses a navigable IDENTITY, which names a navigable and says nothing about any
+     Document's recorded ancestry; the container parameter crosses §9.5's answer, a different algorithm that
+     happens to read two of the same things.
+     AND THE ORIGIN RECORD IS WHY THE RESULT CROSSES RATHER THAN THE INPUTS, which is the half a reader is
+     likeliest to argue with. Step 10 asks whether an ancestor "is same origin with parentDoc's origin", and
+     HTML §7.1.1 decides an opaque origin by IDENTITY — "an internal value … for which the only meaningful
+     operation is testing for equality" — while EVERY opaque origin serializes to the same three bytes `null`.
+     A renderer handed the creator's list plus the parent's serialized origin would therefore mask an entry
+     that is not the parent's the moment the parent is itself opaque, and that is not a corner case on this
+     route: a `data:` document is in its own instance BECAUSE its origin is opaque and an opaque origin is same
+     origin with nothing. So the creating renderer runs §3.1.3 once, where all three inputs are, and this
+     parameter is its RESULT. The container element could not have crossed in any case — a member whose value
+     is an OBJECT does not cross an instance boundary.
+     WITHOUT IT the renderer installs §3.1.3's EMPTY list, which is not an absence but the positive claim that
+     this Document is at the TOP of its own tree. `location.ancestorOrigins` then answers `[]` for a
+     cross-origin frame, and nothing anywhere disagrees — the member exists precisely to report a tree the
+     reading page cannot otherwise see. This zone RELAYS the bytes off the emitting renderer's
+     `navigable.create` notice and reads none of them. */
+  var ANCESTOR_ORIGINS = { name: "ancestorOrigins", type: "string",
+    why: "HTML §3.1.3's internal ancestor origin objects list for this document, composed by the renderer that " +
+         "holds its ancestors and serialized as §7.1.1 origin serializations joined by SPACE (URL §3.2 \"Host " +
+         "miscellaneous\" makes SPACE a forbidden host code point, so no entry can contain one), or `none` for " +
+         "a document with no container document. There is no empty spelling: a document either has ancestors " +
+         "or is the top of its tree, and both are facts a host states" };
+
   var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string",
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
@@ -254,7 +283,7 @@
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
-                 CONTAINER_POLICY],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -266,7 +295,7 @@
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
                  INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
-                 CONTAINER_POLICY],
+                 CONTAINER_POLICY, ANCESTOR_ORIGINS],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

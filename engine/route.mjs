@@ -151,11 +151,22 @@ let instanceSerial = 0;
    §9.5 runs ONCE there and this relays its result. `null` is that grammar's own word for "there is no
    container", which is what this driver's own root documents state — it invented them, nothing presents them —
    and it is the same fact `u` states one link along. Without it the engine takes §9.7 step 1, "if container is
-   null, return `Enabled`", for a navigable that HAS one. */
+   null, return `Enabled`", for a navigable that HAS one.
+   `ancestorOrigins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the Document
+   this instance will build — a THIRD statement about the same navigable, not a field of either above it.
+   §3.1.3's steps read the PARENT DOCUMENT's own recorded list, that Document's ORIGIN RECORD and the CONTAINER
+   ELEMENT: the parent field names a navigable and carries no ancestry, and the origin RECORD is exactly what a
+   serialization drops — §7.1.1 decides an opaque origin by IDENTITY while every opaque origin is the three
+   bytes `null`, so an instance re-running step 10 over relayed text would mask an ancestor that is not the
+   parent's whenever the parent is opaque. The creating instance runs the steps once and this relays the
+   result. `none` is that grammar's word for "there are no ancestors", which is what this driver's own root
+   documents state — nothing embeds them — and is the same fact `u` and `null` state one link along. Without
+   it the engine installs the EMPTY list, which is the positive claim that the Document is at the top of its
+   own tree. */
 async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
-                          parentNavigable = 'u', containerPolicy = 'null') {
+                          parentNavigable = 'u', containerPolicy = 'null', ancestorOrigins = 'none') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -195,12 +206,12 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     const [hp, hn] = bs(html);
     M.ccall('qjs_init', 'number',
       ['number','number','number','number','number','number','number','number',
-       'number','number','number','number','number','number'],
+       'number','number','number','number','number','number','number'],
       [hp, hn, cs(url), cs(docId), cs(headers || ''), cs(topLevelUrl),
        cs(inheritedCsp || ''), cs(inheritedCspSelf || ''),
        cs(inheritedCoep), cs(inheritedCoepEndpoint),
        cs(inheritedCoepReportOnly), cs(inheritedCoepReportOnlyEndpoint),
-       cs(parentNavigable), cs(containerPolicy)]);
+       cs(parentNavigable), cs(containerPolicy), cs(ancestorOrigins)]);
     M._free(hp);
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
@@ -490,19 +501,23 @@ async function drainNotices(e) {
          its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS
          HTML §7.3.1.3's PARENT NAVIGABLE, FIELD 12 IS THAT SECTION'S OTHER LINK (what the navigable's
          CONTAINER answered, which is Permissions Policy §9.5's result and which only the creating instance
-         could compute, since §9.5's two arguments are that element and the child's origin), and FIELD 13 IS
+         could compute, since §9.5's two arguments are that element and the child's origin), FIELD 13 IS HTML
+         §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the child's Document (a THIRD
+         answer over a THIRD algorithm, whose inputs include the parent Document's ORIGIN RECORD — which is
+         what a serialization drops, since §7.1.1 decides an opaque origin by IDENTITY), and FIELD 14 IS
          THE LIST. The policy is the record's REMAINDER (a
          raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
          origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
-         one-letter tag and '.'-terminated base64, and RFC 8941 §3.3.3 "Strings" excludes one from a
-         `report-to` endpoint.
+         one-letter tag and '.'-terminated base64, RFC 8941 §3.3.3 "Strings" excludes one from a
+         `report-to` endpoint, and §3.1.3's list is origin serializations joined by SPACE, which URL §3.2
+         "Host miscellaneous" makes a forbidden host code point exactly as it does TAB.
          THE PARENT IS NOT PART OF THE CONTAINER BESIDE IT and is passed on its own: this fixture's `a` opens a
          CROSS-ORIGIN WINDOW, which §7.3.1.7 step 8 makes an AUXILIARY navigable — a full policy container, NO
          parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
          either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(13).join('\t'),
-                                         f[6], f[7], f[8], f[9], f[10], f[11], f[12]));
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(14).join('\t'),
+                                         f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a
@@ -522,7 +537,10 @@ async function drainNotices(e) {
          clone and no self-origin to state. */
       /* §7.3.1.3's PARENT DEFAULTS TO `u` HERE AND THAT IS THE SPEC: §7.1.3.2 step 2 returns before the
          predicate is evaluated for anything that is not a TOP-LEVEL browsing context, which the engine asserts
-         where this record is written, so the navigable a swap provisions has no parent. */
+         where this record is written, so the navigable a swap provisions has no parent.
+         AND §3.1.3's LIST DEFAULTS TO `none` BY THAT SAME SENTENCE READ ONE ALGORITHM ALONG: its steps 2-3
+         return an empty output for a Document with no CONTAINER DOCUMENT, and a navigable with no parent has
+         none. Both are defaults because both are what the section says, not because nothing was known. */
       engines.push(await makeEngine(HTML_B, f[2], f[1], '', f[2], undefined, '', ''));
     }
     else if (f[0] === 'windowproxy.post') posts.push({ doc: f[1], world: f[2], record: n, origin: e.origin });

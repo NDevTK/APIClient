@@ -1505,12 +1505,21 @@ static ChildDoc *wpt_child_for(const char *name)
    tree and the child cannot see it, so what it carries is what the element ANSWERED: Permissions Policy
    §9.5's result, serialized. A `navigable.create` carries the creator's; §7.1.3.2's swap has no container at
    all (§7.3.2.3 makes the new browsing context "with null, null, and group") and says so in that grammar's
-   own word. */
+   own word.
+   AND `ancestor_origins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the
+   Document that child will build — a THIRD statement about the same navigable, because §3.1.3's steps read
+   three things a child process cannot reach: the parent Document's own recorded list, that Document's ORIGIN
+   RECORD, and the container element. The `parent` field names a navigable and carries no ancestry; the origin
+   record is precisely what a serialization drops (§7.1.1 decides an opaque origin by IDENTITY, and every
+   opaque origin serializes to `null`), which is why the steps run HERE and the answer travels. A
+   `navigable.create` carries the composed list; §7.1.3.2's swap provisions a TOP-LEVEL traversable, which has
+   no container document, so it states that grammar's "there are no ancestors". */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
                             const char *coep_report_only, const char *coep_report_only_endpoint,
-                            const char *parent, const char *container_policy)
+                            const char *parent, const char *container_policy,
+                            const char *ancestor_origins)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1530,6 +1539,12 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            "\"is a child navigable\" mean \"its parent is non-null\", so a process started without the field "
            "would root its document in a navigable that presents as a TOP-LEVEL TRAVERSABLE, and every "
            "algorithm that walks up out of it would find nothing rather than crash");
+    /* §3.1.3's LIST IS STATED BY EVERY CALLER FOR THAT SAME REASON, and it has no empty spelling either: a
+       Document either has ancestors or is at the top of its tree, and both are answers. */
+    DCHECK(ancestor_origins != NULL && *ancestor_origins,
+           "a child document was about to be provisioned with no §3.1.3 ANCESTOR ORIGINS — the steps return an "
+           "empty list for a Document with no container document and a composed one otherwise, so an absent "
+           "field is a caller that did not state which applies, and the child would report itself top-level");
     if (wpt_child_for(name)) return;   /* already provisioned; a notice is not a request */
     CHECK(g_children_n < WPT_CHILD_MAX, "wpt: more child documents at once than this runner tracks");
     /* O_CLOEXEC, AND IT IS NOT HYGIENE. fork() copies every descriptor, so a SECOND child would inherit this
@@ -1554,7 +1569,7 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
               coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
-              (char *)NULL);
+              ancestor_origins, (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1696,7 +1711,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[14]; int nf = 0; char *q;
+    char *f[15]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1705,9 +1720,9 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 14; q++)
+    for (q = line, f[nf++] = q; *q && nf < 15; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 14 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 15 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
@@ -1717,11 +1732,16 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            navigable or in a top-level traversable, and no process but this one holds it. FIELD 12 IS
            §7.3.1.3's OTHER LINK — what that navigable's CONTAINER ELEMENT answered, which is Permissions
            Policy §9.5's result and which only the creating instance could compute, since §9.5's two arguments
-           are that element and the child's origin and it holds both. They all come BEFORE the policy at field
-           13 because the policy is the record's remainder: neither an origin's serialization, nor an §7.1.4
-           value's token, nor remote_object.h's base64 identity, nor §4.1's feature tokens with §4.2's two
-           words can contain a tab, while a raw CSP header may hold one. */
-        wpt_spawn_child(f[1], f[3], f[4], f[13], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12]);
+           are that element and the child's origin and it holds both. FIELD 13 IS HTML §3.1.3 "Ancestor
+           origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the child's Document, which is a THIRD answer
+           and not a derivation of those two: its steps read the parent Document's own recorded list, that
+           Document's ORIGIN RECORD and the container element, and the origin RECORD is exactly what a
+           serialization drops — §7.1.1 decides an opaque origin by IDENTITY. They all come BEFORE the policy
+           at field 14 because the policy is the record's remainder: neither an origin's serialization, nor an
+           §7.1.4 value's token, nor remote_object.h's base64 identity, nor §4.1's feature tokens with §4.2's
+           two words, nor a SPACE-separated list of origin serializations (URL §3.2 "Host miscellaneous" makes
+           both TAB and SPACE forbidden host code points) can contain a tab, while a raw CSP header may. */
+        wpt_spawn_child(f[1], f[3], f[4], f[14], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12], f[13]);
         free(whole);
         return;
     }
@@ -1747,9 +1767,13 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            standard's own step 2 rather than by this host having nothing to say.
            AND §7.3.1.3's CONTAINER IS ABSENT FOR THE SAME SENTENCE: §7.3.2.3 creates the new browsing context
            "with null, null, and group", so there is no element presenting the navigable a swap provisions and
-           Permissions Policy §9.7 step 1 is its own correct answer rather than a value withheld. */
+           Permissions Policy §9.7 step 1 is its own correct answer rather than a value withheld.
+           AND §3.1.3's LIST IS EMPTY BY THE SENTENCE DIRECTLY ABOVE, not by this host having nothing to say:
+           its steps 2-3 return an empty output for a Document with no CONTAINER DOCUMENT, and a navigable no
+           element presents has none. It is stated in that grammar's own word for the reason the container is. */
         wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
-                        PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
+                        PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
+                        DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
         free(whole);
         return;
     }
@@ -2422,13 +2446,26 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
    both of those belong to the creator — it holds the `<iframe>` and it computed the child's origin — so the
    creator runs §9.5 once and this is its answer. The top-level test document passes that grammar's "there is
    no container", which is the same fact its `u` parent states one link along. */
+/* AND `ancestor_origins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the
+   Document about to be built — a THIRD cross-process answer and not a derivation of the two above. §3.1.3's
+   steps read the PARENT DOCUMENT's own recorded list (step 5), that Document's ORIGIN RECORD (steps 9 and 10)
+   and the CONTAINER ELEMENT (step 6). The parent field names a NAVIGABLE and carries no Document's recorded
+   ancestry; the container field is a different algorithm's answer over two of the same inputs. Neither yields
+   this one, and a serialization could not stand in for the origin record either — §7.1.1 decides an opaque
+   origin by IDENTITY while every opaque origin is the three bytes `null`, so a process re-running step 10 over
+   carried text would mask an ancestor that is not the parent's whenever the parent is opaque. That is the
+   ORDINARY case on this route rather than a corner: a `data:` iframe is in another process BECAUSE its origin
+   is opaque. So the creator runs §3.1.3 once, where all three inputs are, and this is its result. The
+   top-level test document passes that grammar's "there are no ancestors", which is the same fact its `u`
+   parent states one link along: this runner loaded it from the corpus and nothing embeds it. */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
                                      const char *inherited_csp, const char *inherited_csp_self_origin,
                                      const char *inherited_coep, const char *inherited_coep_endpoint,
                                      const char *inherited_coep_report_only,
                                      const char *inherited_coep_report_only_endpoint,
-                                     const char *parent_navigable, const char *container_policy)
+                                     const char *parent_navigable, const char *container_policy,
+                                     const char *ancestor_origins)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
@@ -2593,6 +2630,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
            could have run it. Stated after the rooting for §7.3.1.3's own order, exactly as the product host
            states it — one algorithm, two hosts, and no copy of it here. */
         navigable_root_container(ctx, root_proxy, container_policy);
+        /* AND §3.1.3's ANCESTOR ORIGINS FOR THAT NAVIGABLE'S DOCUMENT, before the install below for the same
+           sentence: §7.3.2.1 runs those steps once per Document a navigable is given and reads this there, and
+           for a navigable rooted in another process's frame tree only that process holds their three inputs.
+           A THIRD STATEMENT rather than a field of either above it — see navigable.h. */
+        navigable_root_ancestor_origins(ctx, root_proxy, ancestor_origins);
         /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, origin,
@@ -2775,6 +2817,16 @@ static int wpt_child_main(int argc, char **argv)
        navigable nothing presents), so "the parent did not state it" and "the parent stated no container" would
        be one value — and that value hands a cross-origin frame every supported feature its embedder holds. */
     const char *container_policy = argc > 13 ? argv[13] : NULL;
+    /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the Document this process
+       is about to build, composed by the parent process out of a tree only it holds — its own Document's
+       recorded list, that Document's ORIGIN RECORD and the container element, none of which exists here.
+       APPENDED, like every field above it, so every position already read keeps its meaning. NOT DEFAULTED
+       WHEN ABSENT, and the reason is the container's exactly: the EMPTY list is a REAL answer a `--document`
+       child legitimately gives (a swap provisions a top-level traversable, which has no container document and
+       so takes §3.1.3 step 3), so "the parent did not state it" and "the parent stated no ancestors" would be
+       one value — and that value makes a cross-origin frame report itself as the top of its own tree to every
+       `location.ancestorOrigins` read, which no page can tell from the truth. */
+    const char *ancestor_origins = argc > 14 ? argv[14] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2821,6 +2873,13 @@ static int wpt_child_main(int argc, char **argv)
           "origin. So §9.5 runs there and its ANSWER arrives here. Without the field this process would take "
           "§9.7 step 1 for a navigable that HAS a container, returning `Enabled` for every supported feature "
           "the embedder was never asked about");
+    CHECK(ancestor_origins && *ancestor_origins,
+          "wpt: a child document was started with no §3.1.3 ANCESTOR ORIGINS statement — the steps read the "
+          "parent Document's own recorded list, that Document's ORIGIN RECORD and the container element, and "
+          "all three belong to the process that created this navigable. So §3.1.3 runs there and its ANSWER "
+          "arrives here. Without the field this process would install the EMPTY list, which is the positive "
+          "claim that this Document has no ancestors — a cross-origin frame telling every "
+          "`location.ancestorOrigins` read that it is the top of its own tree");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
        synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
@@ -2840,7 +2899,8 @@ static int wpt_child_main(int argc, char **argv)
        Contexts §4.2 exists to close. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
-                             coep_report_only_endpoint, parent_navigable, container_policy);
+                             coep_report_only_endpoint, parent_navigable, container_policy,
+                             ancestor_origins);
     free(html);
     header_list_free(&html_headers);
 
@@ -3012,10 +3072,14 @@ int main(int argc, char **argv)
        at all (the skeleton it wraps the script in is this runner's, not a server's). */
     /* AND §7.3.1.3's PARENT IS `u`, WHICH THIS RUNNER KNOWS RATHER THAN ASSUMES: it loaded this document from
        the corpus itself, so nothing embeds it and its navigable is a top-level traversable. A `--document`
-       child reaches the same build with the identity its parent process wrote on its command line. */
+       child reaches the same build with the identity its parent process wrote on its command line.
+       AND §3.1.3's LIST IS EMPTY BY THAT SAME SENTENCE, said in that grammar's own word: a document nothing
+       embeds has no container document, so step 3 returns an empty output. It is stated rather than left
+       blank because an empty field would be indistinguishable from a host that stopped stating it. */
     ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, NULL, "", "",
                              "unsafe-none", "", "unsafe-none", "", "u",
-                             PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
+                             PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER,
+                             DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */

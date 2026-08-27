@@ -1858,6 +1858,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        navigable and this instance holds the ELEMENT that presents it. Permissions Policy §9.5's result, as
        text; see the notice below. */
     char *container_policy = NULL;
+    /* AND WHAT HTML §3.1.3 "Ancestor origins"' STEPS ANSWERED FOR THAT SAME NAVIGABLE, on the same arm and for
+       the same reason twice over: every input those steps read — the parent Document's own list, its ORIGIN
+       RECORD, the container element — is in THIS heap, and the one that could not be sent even if the others
+       were is the origin record, which is what §7.1.1's same origin decides step 10 by. See the notice below. */
+    char *ancestor_origins = NULL;
     size_t n;
     /* HTML §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
        about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation
@@ -2202,16 +2207,43 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            above splits on, which is not a duplication: they are two links of §7.3.1.3 that a child navigable
            has both of and an auxiliary one has neither of, and a peer that was told only one would have to
            infer the other. */
+        /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST FOR THIS CHILD, WHICH IS
+           THE THIRD FACT §7.3.1.3's CREATE HOLDS AND THE PEER CANNOT REACH. §3.1.3's steps read the parent
+           Document's own recorded list (step 5), that Document's ORIGIN RECORD (steps 9 and 10) and the
+           CONTAINER ELEMENT (step 6). All three are in THIS heap and none of them crosses: a Document's
+           ancestry is not carried by the navigable identity beside it, an element does not cross at all, and
+           an origin RECORD is exactly what a serialization drops — §7.1.1 decides an opaque origin by
+           identity and every opaque origin is the three bytes `null`.
+           THAT LAST ONE IS WHY THE RESULT CROSSES AND NOT THE INPUTS, and it is not a corner: the commonest
+           way to reach this arm at all is a `data:` iframe, whose child origin is a NEW OPAQUE ORIGIN and is
+           therefore same origin with nothing — which is what routed it here. A peer re-running step 10 over
+           serialized text would mask an ancestor that is not the parent's in precisely that case.
+           §3.1.3's step 3 IS THE OTHER ARM AND IT IS A FACT, NOT AN ABSENCE: "let parentDoc be document's
+           container document; if parentDoc is null, then return output". §7.3.1.7 step 8's AUXILIARY navigable
+           has no element anywhere in its algorithm, so it has no container document and its list is EMPTY for
+           ever. The record says so in that grammar's own word rather than by carrying nothing, and the peer
+           reads the two apart through document_ancestor_origins_serialized_has_ancestors — the same split
+           `is_child` makes for the container and the parent, because it is the same one link of §7.3.1.3. */
         if (is_child) {
             PermissionsPolicy *child_policy = document_permissions_policy_for_container(container, origin);
 
             container_policy = permissions_policy_serialize(child_policy);
             permissions_policy_free(child_policy);
+            ancestor_origins = document_ancestor_origins_for_child(ctx, container, origin);
         } else {
             container_policy = strdup(PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
+            ancestor_origins = strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
         }
         CHECK(container_policy != NULL,
               "navigable: OOM stating §9.5's answer for this navigable's container to a peer instance");
+        CHECK(ancestor_origins != NULL,
+              "navigable: OOM stating §3.1.3's ancestor origins for this navigable to a peer instance");
+        DCHECK(!strchr(ancestor_origins, '\t'),
+               "§3.1.3's ancestor origins list was serialized with a TAB in it and this record is "
+               "tab-delimited — the list is §7.1.1 serializations of origins joined by SPACE, and URL §3.2 "
+               "\"Host miscellaneous\" makes both TAB and SPACE forbidden host code points, so a tab here is "
+               "that grammar having changed under a record that splits on one, and the creator's policy text "
+               "would land on the wrong field");
         DCHECK(!strchr(container_policy, '\t'),
                "Permissions Policy §9.5's answer was serialized with a TAB in it and this record is "
                "tab-delimited — §4.1's feature tokens and §4.2's `Enabled`/`Disabled` contain none, so a tab "
@@ -2232,10 +2264,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             strlen(creator_policy.embedder.endpoint) +
             strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
             strlen(creator_policy.embedder.report_only_endpoint) +
-            strlen(parent_id) + strlen(container_policy) + 32;
+            strlen(parent_id) + strlen(container_policy) + strlen(ancestor_origins) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
                  world_doc_name(child),
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
                  creator_policy.self_origin,
@@ -2245,11 +2277,13 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                  creator_policy.embedder.report_only_endpoint,
                  parent_id,
                  container_policy,
+                 ancestor_origins,
                  creator_policy.csp ? creator_policy.csp : "");
         engine_host_notify(ctx, op);
         free(op);
         free(parent_id);
         free(container_policy);
+        free(ancestor_origins);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just
            minted and nothing has named it yet, so this ask is the mint — but it is the ask that RECORDS it,
            and without the record `w.frames[0] === iframe.contentWindow` is false about the frame this line
@@ -2361,6 +2395,47 @@ void navigable_root_container(JSContext *ctx, JSValueConst proxy, const char *co
        shape of caller it silently serves differently. */
     if (permissions_policy_serialized_has_container(container_policy))
         window_proxy_set_remote_container(proxy, container_policy);
+}
+
+/* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST FOR THAT SAME NAVIGABLE, composed
+ * by the instance that holds its ancestors. See core/frame/navigable.h.
+ *
+ * THE PAIRING WITH §7.3.1.3's PARENT IS ASSERTED HERE FOR THE REASON THE CONTAINER'S IS, and it is the same
+ * one link read through a different algorithm. §3.1.3's steps 2-3 return an EMPTY output exactly when there is
+ * no container document, and §7.3.1.3 makes a navigable with a non-null parent a CHILD NAVIGABLE, which has
+ * one. So "the parent is remote" and "the list is non-empty" are one fact said twice for a navigable rooted in
+ * a peer, and a record where they disagree describes two navigables. Neither direction is harmless: ancestors
+ * with no parent is a top-level traversable that reports a tree above it, and a remote parent with an empty
+ * list is a cross-origin frame telling every `location.ancestorOrigins` read that it is the top of its own —
+ * which is the answer an absent field would also give, and the whole reason this field exists.
+ *
+ * IT IS A SECOND STATEMENT RATHER THAN AN ARGUMENT TO THE ROOTING, on §7.3.1.3's own order: the section makes
+ * the navigable and links it afterwards, and §7.3.2.1 runs §3.1.3's steps later still — when the DOCUMENT is
+ * created, which is what they take. A host that skips it does not get an empty list; the install CRASHES,
+ * naming this call. */
+void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const char *ancestor_origins)
+{
+    JSValue parent = window_proxy_parent_navigable(ctx, proxy);
+    bool remote_parent = window_proxy_is(parent) && window_proxy_is_remote(parent);
+
+    JS_FreeValue(ctx, parent);
+    DCHECK(ancestor_origins != NULL && *ancestor_origins != '\0',
+           "a navigable was rooted and then told NOTHING about §3.1.3's ANCESTOR ORIGINS of its Document — the "
+           "composed list and \"there are no ancestors\" are the two things this statement can make, and an "
+           "empty field is a host that stopped making it rather than a document at the top of its tree");
+    DCHECK(document_ancestor_origins_serialized_has_ancestors(ancestor_origins) == remote_parent,
+           "§7.3.1.3's parent link and §3.1.3's ancestor list contradict each other for the navigable this "
+           "instance is rooted in — the section makes a CHILD NAVIGABLE one whose parent is non-null, and "
+           "§3.1.3's steps 2-3 return an empty list only for a Document with no container document, so a "
+           "navigable whose parent is in a peer has ancestors there and one with no parent has none. "
+           "Ancestors with no parent is a top-level traversable reporting a tree above it; a remote parent "
+           "with no ancestors is a cross-origin frame reporting itself as that top");
+    /* "THERE ARE NO ANCESTORS" IS RECORDED BY RECORDING NOTHING, and that is not a hole a reader could fill:
+       core/dom/document.c reaches this slot only on the remote-parent arm, and a navigable with no parent
+       takes §3.1.3's step 3 there without ever asking. The branch is on what this statement SAYS rather than
+       on which host made it, so there is no shape of caller it silently serves differently. */
+    if (document_ancestor_origins_serialized_has_ancestors(ancestor_origins))
+        window_proxy_set_remote_ancestor_origins(proxy, ancestor_origins);
 }
 
 /* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, given `target`, this document's

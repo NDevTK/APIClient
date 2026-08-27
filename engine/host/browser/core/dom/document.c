@@ -169,7 +169,7 @@ typedef struct Document {
        with NO browsing context, which is §4.1's "must return null otherwise" — the one place the two states
        differ, and the reason this is built by document_install and not by doc_rec_new. */
     JSValue              selection;
-    /* HTML §3.1.1 "The `Document` object" gives every Document an ANCESTOR ORIGINS LIST and, beside it, an
+    /* HTML §3.1.3 "Ancestor origins" gives every Document an ANCESTOR ORIGINS LIST and, beside it, an
        INTERNAL ANCESTOR ORIGIN OBJECTS LIST. Two fields because the standard has two and they answer different
        questions: the internal one is a list of ORIGINS and is what a CHILD reads to build its own; the public
        one is the DOMStringList §7.2.4's `ancestorOrigins` hands to script, and it is [SameObject] for the life
@@ -178,10 +178,15 @@ typedef struct Document {
        the list records the ancestors the Document was CREATED under, so a walk done later would report whatever
        a subsequent navigation left in the tree. That is also why removing the frame does not empty this list —
        it empties the ANSWER, because §7.2.4's first step finds no relevant Document at all.
-       THE INTERNAL LIST IS HELD AS SERIALIZED ORIGINS, which is what its only two consumers need: a child
-       composing its own list appends these verbatim, and the public list is their concatenation. An OPAQUE
-       origin is the three bytes `null`, and the one place that distinction still matters is the masking
-       comparison below, which is why that comparison asks the parent's origin RECORD and not this text. */
+       THE INTERNAL LIST IS HELD AS SERIALIZED ORIGINS, which is what all three of its consumers need: a child
+       composing its own list appends these verbatim, the public list is their concatenation, and a child in a
+       PEER INSTANCE is handed the finished list as text on the record that provisions it. An OPAQUE origin is
+       the three bytes `null`, and the one place that distinction still matters is the masking comparison
+       below, which is why that comparison asks the parent's origin RECORD and not this text — and it is also
+       why the composition runs in the CREATOR for a cross-instance child rather than the list crossing and the
+       steps running at the far end. A peer handed this text and the parent's serialized origin could not run
+       step 10: two opaque origins serialize to the same three bytes and are NOT same origin, so it would mask
+       an entry that is not the parent's whenever the parent is itself opaque. */
     JSValue              ancestor_origins;          /* §7.2.4's DOMStringList — [SameObject], UNDEFINED with no browsing context */
     JSValue              ancestor_origin_strings;   /* the internal list, as an Array of serialized origins */
     /* THE DOCUMENT'S ADDRESS — DOM §4.5 Interface Document's `URL`, and NOT its base URL. An INTERNED string
@@ -2732,35 +2737,55 @@ SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx
 
 const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return doc_here(ctx)->permissions_policy; }
 
-/* HTML §3.1.1 "The `Document` object" — the INTERNAL ANCESTOR ORIGIN OBJECTS LIST CREATION STEPS and the
- * ANCESTOR ORIGINS LIST CREATION STEPS, run together because §7.3.2.1 "Creating browsing contexts" runs them
- * together ("run the internal ancestor origin objects list creation steps given document and
- * iframeReferrerPolicy" then "set document's ancestor origins list to the result of running the ancestor
- * origins list creation steps given document").
+/* HTML §3.1.3 "Ancestor origins" — the INTERNAL ANCESTOR ORIGIN OBJECTS LIST CREATION STEPS, "given a
+ * `Document` object document and a referrer policy referrerPolicy". §7.3.2.1 "Creating browsing contexts" is
+ * the one caller and it runs them together with the ANCESTOR ORIGINS LIST CREATION STEPS beside them ("set
+ * document's internal ancestor origin objects list to the result of running the internal ancestor origin
+ * objects list creation steps given document and iframeReferrerPolicy" then "set document's ancestor origins
+ * list to the result of running the ancestor origins list creation steps given document").
  *
  * IT IS CALLED AT THE CREATION AND NOWHERE ELSE, which is the whole content of the member: §7.2.4's
  * `ancestorOrigins` is a SNAPSHOT of the tree this Document was created in. Reading it by walking parents at
  * the getter would answer with the tree as it is NOW, so a page that removed and re-inserted a frame would be
  * told about ancestors this document never had.
  *
- * `masked` IS THE REFERRER POLICY'S DOING and the two arms are the standard's: "no-referrer" masks
- * unconditionally, and "same-origin" masks only when the parent is cross-origin with this document. Masking
- * replaces an origin with A NEW OPAQUE ORIGIN rather than dropping it, so the list's LENGTH still reports the
- * depth of the frame tree — which is why the corpus asserts `['null']` and not `[]`.
+ * THE THREE INPUTS ARE PASSED RATHER THAN DERIVED FROM THE CHILD'S NAVIGABLE, and that is what lets the ONE
+ * implementation serve both sides of an instance boundary. §7.3.1.3's create-a-new-child-navigable holds all
+ * three in the CREATOR's heap — the parent navigable is "element's node navigable", the container is the
+ * element, the child's origin is what that create just computed — so for a child whose Document will be built
+ * in a PEER INSTANCE the creator runs these steps and the RESULT crosses, exactly as Permissions Policy §9.5's
+ * result does on the same record. Deriving the inputs from the child's own proxy instead would tie the
+ * composition to a navigable whose Document is in another heap, which is the one arrangement it cannot have.
+ *
+ * `masked` IS THE REFERRER POLICY'S DOING and the two arms are step 8's: "no-referrer" masks unconditionally,
+ * and "same-origin" masks only when the parent is cross-origin with this document. Masking replaces an origin
+ * with A NEW OPAQUE ORIGIN rather than dropping it, so the list's LENGTH still reports the depth of the frame
+ * tree — which is why the corpus asserts `['null']` and not `[]`.
  *
  * THE POLICY IS READ OFF THE CONTAINER ELEMENT AT THIS MOMENT, and that is the snapshot §7.4.2's beginning-
  * navigation step 16 describes for a navigation. For the INITIAL about:blank this creation IS that moment, so
  * the attribute's value here is the value the standard snapshots. A later write to `referrerpolicy` must not
  * change this list, and it cannot: nothing re-runs these steps.
  *
+ * WHAT IS READ IS THE RAW ATTRIBUTE AND WHAT §7.3.2.1 PASSES IS §7.1.6's ANSWER, AND THEY ARE NOT THE SAME
+ * FUNCTION. HTML §7.1.6 "iframe element referrer policy" is "if embedder is an `iframe` element, then return
+ * embedder's `referrerpolicy` attribute's STATE's corresponding keyword; return the empty string" — a state,
+ * so an enumerated attribute's ASCII case-insensitive match with an invalid-value default of the empty string,
+ * and the empty string for a container that is not an `iframe` at all. This reads the bytes and compares them
+ * exactly, so `referrerpolicy="No-Referrer"` does not mask and an `<object>`'s attribute would. That is a
+ * MISSING COMPONENT (§7.1.6 has no implementation in this tree) rather than a shortcut taken here, and it is
+ * named at the site instead of being quietly widened: when §7.1.6 exists, this takes its answer as the
+ * argument the standard makes it and stops touching the element.
+ *
  * THE MASKED SAME-ORIGIN COMPARISON ASKS THE PARENT'S ORIGIN RECORD, NOT ITS TEXT. Step 10's condition is
  * "ancestorOrigin is same origin with parentDoc's origin", and §7.1.1's same origin is FALSE for two opaque
  * origins — while both serialize to the same three bytes `null`. Comparing the stored text alone would
  * therefore mask an entry that is not the parent's whenever the parent is itself opaque, so the text
  * comparison is admitted only once the parent's origin is known to be a tuple. */
-static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueConst nav_proxy)
+static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_nav, JSValueConst container,
+                                            const Origin *child_origin)
 {
-    JSValue out = JS_NewArray(ctx), parent_nav, container;
+    JSValue out = JS_NewArray(ctx);
     uint32_t n = 0, i, nout = 0;
     JSContext *prealm;
     Document *pd;
@@ -2770,52 +2795,36 @@ static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueCons
     char *rp;
     JSValue len;
 
-    CHECK(!JS_IsException(out), "§3.1.1's ancestor origins list could not be allocated");
-    /* A DOCUMENT WITH NO BROWSING CONTEXT HAS NEITHER LIST, and that is a state §7.2.4 already answers: its
-       first step finds no relevant Document and returns the LOCATION's own empty list. Leaving both fields
-       UNDEFINED is what says so; an empty list here would be the positive claim that this Document sits at the
-       top of a tree, which is a different fact from having no tree at all. */
-    if (!window_proxy_is(nav_proxy)) { JS_FreeValue(ctx, out); return; }
-    /* STEP 2-3: "let parentDoc be document's container document; if parentDoc is null, then return output." A
-       top-level traversable has no container, and its list is empty for ever. */
-    parent_nav = window_proxy_parent_navigable(ctx, nav_proxy);
-    if (!window_proxy_is(parent_nav)) {
-        JS_FreeValue(ctx, parent_nav);
-        d->ancestor_origin_strings = out;
-        d->ancestor_origins = dom_string_list_new(ctx, JS_DupValue(ctx, out));
-        return;
-    }
-    /* A PEER'S PARENT IS NOT IN THIS HEAP TO BE ASKED, and this is the one place that is a statement rather
-       than a gap: the list would have to be composed by the instance that holds the ancestor, which is the
-       cross-instance read §Security describes. It crashes here rather than answering an empty list, because an
-       empty list is a POSITIVE claim that this document has no ancestors. */
-    DCHECK(!window_proxy_is_remote(parent_nav),
-           "§3.1.1's internal ancestor origin objects list reached a parent navigable this instance does not "
-           "hold — the ancestors live in a peer, so the list has to be composed there and cross the boundary "
-           "as text like every other cross-instance answer; an empty list here would claim this document is "
-           "top-level, which is a different fact");
+    CHECK(!JS_IsException(out), "§3.1.3's ancestor origins list could not be allocated");
+    DCHECK(window_proxy_is(parent_nav) && !window_proxy_is_remote(parent_nav),
+           "§3.1.3's internal ancestor origin objects list creation steps were run against a parent navigable "
+           "this instance does not hold — step 5 reads the parent Document's own list and step 9 reads its "
+           "ORIGIN RECORD, and neither exists in this heap for a peer's navigable. The composition belongs in "
+           "the instance that holds the ancestors and its RESULT crosses as text");
+    /* STEP 5: "let ancestorOrigins be parentDoc's internal ancestor origin objects list." */
     prealm = window_proxy_realm(ctx, parent_nav);
     pd = doc_here(prealm);
     DCHECK(pd != NULL && JS_IsArray(pd->ancestor_origin_strings),
-           "§3.1.1's step 4 read a parent Document that has no INTERNAL ancestor origin objects list — every "
+           "§3.1.3's step 5 read a parent Document that has no INTERNAL ancestor origin objects list — every "
            "Document of this agent is given one by this same function at its creation, so a parent without one "
            "was installed past it and this child's list would silently start from nothing");
     porigin = window_proxy_origin(pd->proxy);
-    DCHECK(porigin != NULL, "§3.1.1's step 9 needs the parent Document's origin and its navigable has none");
+    DCHECK(porigin != NULL, "§3.1.3's step 9 needs the parent Document's origin and its navigable has none");
     popaque = origin_is_opaque(porigin);
     pser = origin_serialized(porigin);
-    /* STEPS 5-8: the container element and the referrer policy snapshot. */
-    container = window_proxy_container(ctx, nav_proxy);
+    /* STEPS 6-8: the container element and the referrer policy snapshot — see §7.1.6 above for what this read
+       is standing in for. */
     rp = JS_IsObject(container) ? element_attr_get(ctx, container, "referrerpolicy") : NULL;
     if (rp && !strcmp(rp, "no-referrer")) {
-        masked = true;                                                                     /* STEP 7 */
-    } else if (rp && !strcmp(rp, "same-origin")) {                                          /* STEP 8 */
-        const Origin *self = window_proxy_origin(nav_proxy);
-        DCHECK(self != NULL, "§3.1.1's step 8 compares this Document's origin and its navigable has none");
-        masked = !origin_same(porigin, self);
+        masked = true;                                                              /* STEP 8, first arm */
+    } else if (rp && !strcmp(rp, "same-origin")) {                                  /* STEP 8, second arm */
+        DCHECK(child_origin != NULL,
+               "§3.1.3's step 8 compares this Document's origin against its parent's and the navigable being "
+               "created has none — every navigable is created with the origin its Document will have, so an "
+               "absent one is a create that had not computed it yet rather than a Document without one");
+        masked = !origin_same(porigin, child_origin);
     }
     free(rp);
-    JS_FreeValue(ctx, container);
     /* STEP 9: "if masked is true, then append a new opaque origin to output; otherwise, append parentDoc's
        origin to output." */
     JS_SetPropertyUint32(ctx, out, nout++,
@@ -2843,6 +2852,64 @@ static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueCons
         JS_FreeCString(ctx, s);
         JS_FreeValue(ctx, a);
     }
+    /* STEP 9 APPENDED ONE BEFORE THE LOOP COULD APPEND NONE, so a list composed for a navigable that HAS a
+       parent is never empty. That is the invariant the record crossing an instance boundary is checked
+       against at both ends: the empty list means "no container document", which means "no parent". */
+    DCHECK(nout >= 1, "§3.1.3's steps returned an EMPTY list for a navigable that has a parent — step 9 "
+                      "appends unconditionally, so an empty output is these steps having skipped it and the "
+                      "child would report itself top-level");
+    return out;
+}
+
+/* §3.1.3's TWO LISTS FOR THE DOCUMENT BEING INSTALLED, from whichever of the three states its navigable is in.
+ *
+ * THE THIRD STATE IS THE ONE THAT MAKES THIS A DISPATCH RATHER THAN A CALL, and it is the same third state
+ * §9.5's own creator has: a navigable whose PARENT lives in another WASM instance. §Security makes a
+ * cross-instance read a SUSPEND POINT and a Document's install has no flow base under it to take one, so the
+ * answer is one the creating instance already composed and put on the record that provisioned this instance.
+ * It is read back here rather than recomputed, for the reason document_create_permissions_policy states one
+ * function along: shipping the INPUTS would be a second site running one algorithm, and here it would be a
+ * second site running it WRONG — step 10's same-origin comparison needs the parent's origin RECORD, which is
+ * exactly the thing a serialization cannot carry. */
+static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueConst nav_proxy)
+{
+    JSValue parent_nav, container, out;
+
+    /* A DOCUMENT WITH NO BROWSING CONTEXT HAS NEITHER LIST, and that is a state §7.2.4 already answers: its
+       first step finds no relevant Document and returns the LOCATION's own empty list. Leaving both fields
+       UNDEFINED is what says so; an empty list here would be the positive claim that this Document sits at the
+       top of a tree, which is a different fact from having no tree at all. */
+    if (!window_proxy_is(nav_proxy)) return;
+    /* STEPS 2-3: "let parentDoc be document's container document; if parentDoc is null, then return output." A
+       top-level traversable has no container, and its list is empty for ever. */
+    parent_nav = window_proxy_parent_navigable(ctx, nav_proxy);
+    if (!window_proxy_is(parent_nav)) {
+        out = JS_NewArray(ctx);
+        CHECK(!JS_IsException(out), "§3.1.3's ancestor origins list could not be allocated");
+    } else if (window_proxy_is_remote(parent_nav)) {
+        const char *carried = window_proxy_remote_ancestor_origins(nav_proxy);
+
+        DCHECK(carried != NULL,
+               "§3.1.3's internal ancestor origin objects list is being created for a navigable whose PARENT "
+               "is in another WASM instance, and the record that provisioned this instance stated NOTHING "
+               "about it — the ancestors live in that peer, so its create ran these steps and the finished "
+               "list is what crosses. Reading the silence as an empty list would make this Document report "
+               "itself TOP-LEVEL to every `location.ancestorOrigins` read, which is a different fact and one "
+               "no page can tell from the truth. The statement exists (core/frame/navigable.h's "
+               "navigable_root_ancestor_origins, beside navigable_root_container) and this host did not make "
+               "it: carry the notice's ancestor-origins field to it");
+        DCHECK(document_ancestor_origins_serialized_has_ancestors(carried),
+               "a navigable whose §7.3.1.3 PARENT is in another WASM instance was provisioned with §3.1.3's "
+               "EMPTY list — the section's step 3 returns an empty output only when there is no container "
+               "document, and §7.3.1.3 makes a navigable with a parent a CHILD navigable that has one. The "
+               "two statements on that record contradict each other and one of them is about a different "
+               "navigable");
+        out = document_ancestor_origins_deserialize(ctx, carried);
+    } else {
+        container = window_proxy_container(ctx, nav_proxy);
+        out = doc_compose_ancestor_origins(ctx, parent_nav, container, window_proxy_origin(nav_proxy));
+        JS_FreeValue(ctx, container);
+    }
     JS_FreeValue(ctx, parent_nav);
     d->ancestor_origin_strings = out;
     /* THE ANCESTOR ORIGINS LIST CREATION STEPS, whose whole content is "append the SERIALIZATION of origin to
@@ -2860,6 +2927,142 @@ JSValue document_ancestor_origins(JSContext *ctx)
            "one to every Document it creates, so a Document without one reached its realm by some other route "
            "and its ancestry was never recorded");
     return JS_DupValue(ctx, d->ancestor_origins);
+}
+
+/* §3.1.3's INTERNAL LIST IN THE FORM IT CROSSES AN INSTANCE BOUNDARY — see document.h for the grammar and for
+ * why a SPACE is the separator rather than a character somebody liked the look of. */
+char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list)
+{
+    uint32_t n = 0, i;
+    size_t cap = 1;
+    char *out;
+    JSValue len;
+
+    DCHECK(JS_IsArray(list),
+           "§3.1.3's internal ancestor origin objects list was serialized for a peer instance from something "
+           "that is not the list — every Document of this agent holds one as an Array of serialized origins "
+           "and there is nothing else this record can be made of");
+    len = JS_GetPropertyStr(ctx, list, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    /* THE EMPTY LIST IS A WORD AND NOT AN EMPTY FIELD, which is the same rule §9.5's answer beside it follows
+       and for the same reason: a host that STOPPED WRITING the field and a navigable with no ancestors are two
+       different facts, and only one of them is a bug. An empty field would make them one, and the bug is the
+       silent kind — a cross-origin frame reporting itself top-level. */
+    if (n == 0) {
+        out = strdup(DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE);
+        CHECK(out != NULL, "document: OOM stating §3.1.3's empty ancestor list to a peer instance");
+        return out;
+    }
+    for (i = 0; i < n; i++) {
+        JSValue a = JS_GetPropertyUint32(ctx, list, i);
+        const char *s = JS_ToCString(ctx, a);
+
+        CHECK(s != NULL, "document: OOM reading §3.1.3's list to serialize it for a peer instance");
+        cap += strlen(s) + 1;
+        JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, a);
+    }
+    out = malloc(cap);
+    CHECK(out != NULL, "document: OOM serializing §3.1.3's ancestor list for a peer instance");
+    out[0] = '\0';
+    for (i = 0; i < n; i++) {
+        JSValue a = JS_GetPropertyUint32(ctx, list, i);
+        const char *s = JS_ToCString(ctx, a);
+
+        CHECK(s != NULL, "document: OOM reading §3.1.3's list to serialize it for a peer instance");
+        /* THE SEPARATOR CANNOT OCCUR IN AN ENTRY AND THAT IS A THEOREM, NOT AN OBSERVATION OF TODAY'S DATA.
+           §7.1.1's serialization of an origin is either the three bytes `null` or scheme, "://", host and an
+           optional ":" and port; a scheme is ASCII alphanumeric with "+", "-" and ".", a port is digits, and
+           URL §3.2 "Host miscellaneous" makes U+0020 SPACE a FORBIDDEN HOST CODE POINT — so a host containing
+           one fails to parse and never reaches an origin record. It is asserted anyway, because the value that
+           would break this record is exactly the value nothing else would notice: an entry carrying a space
+           would arrive at the peer as two ancestors. */
+        DCHECK(strchr(s, ' ') == NULL,
+               "§7.1.1's serialization of an origin contains a SPACE and this record is space-separated — URL "
+               "§3.2 \"Host miscellaneous\" makes SPACE a forbidden host code point, so a byte that reached "
+               "here came from an origin record built somewhere that did not parse its host, and the peer "
+               "would read one ancestor as two");
+        DCHECK(*s != '\0' && strcmp(s, DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE) != 0,
+               "§3.1.3's list holds an entry that is empty or is this grammar's word for the EMPTY LIST — "
+               "every entry is §7.1.1's serialization of an origin, which is `null` or a scheme-and-host, so "
+               "an entry spelling the absence would make a one-ancestor list unreadable from a no-ancestor one");
+        if (i != 0) strcat(out, " ");
+        strcat(out, s);
+        JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, a);
+    }
+    return out;
+}
+
+bool document_ancestor_origins_serialized_has_ancestors(const char *text)
+{
+    /* A `CHECK` FOR THE REASON THE DESERIALIZER'S ARE, and it is the same judgement permissions_policy.c makes
+       one field along: this is a field's presence read off a record that crossed an INSTANCE boundary, and
+       SECURITY.md makes the instance on the other side of it UNTRUSTED. It is also the only guard between a
+       host that stated nothing and a `strcmp` on NULL, which a DCHECK would leave standing in release. */
+    CHECK(text != NULL && *text != '\0',
+          "§3.1.3's internal ancestor origin objects list was read off a record that states NOTHING for it — "
+          "an empty list and a list of ancestors are both answers a provisioning record makes, so an absent "
+          "field is a host that stopped writing one, and reading it as the empty list tells a cross-origin "
+          "frame it is the top of its own tree");
+    return strcmp(text, DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE) != 0;
+}
+
+JSValue document_ancestor_origins_deserialize(JSContext *ctx, const char *text)
+{
+    JSValue out;
+    uint32_t nout = 0;
+    const char *p;
+
+    /* EVERY REFUSAL HERE IS A `CHECK`, for permissions_policy_deserialize's reason: the bytes come from
+       another instance, so a malformed record is check.h's security-boundary case rather than this engine's
+       own logic being wrong, and a DCHECK would be compiled out of the build that faces it. */
+    CHECK(document_ancestor_origins_serialized_has_ancestors(text),
+          "§3.1.3's list was rebuilt from a record that says there are NO ancestors — the empty list is a "
+          "decision the READER of this record takes (a navigable with no parent has no container document, so "
+          "step 3 returns an empty output), not a list to build, and a caller that reached here has not asked "
+          "whether its navigable has a parent at all");
+    out = JS_NewArray(ctx);
+    CHECK(!JS_IsException(out), "§3.1.3's ancestor origins list could not be allocated");
+    for (p = text; *p != '\0'; ) {
+        const char *end = strchr(p, ' ');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+
+        CHECK(n > 0,
+              "§3.1.3's list arrived from a peer instance with an EMPTY entry — every entry is §7.1.1's "
+              "serialization of an origin, which is never the empty string, so a record holding one has a "
+              "separator where an origin should be and every ancestor after it is at the wrong depth");
+        JS_SetPropertyUint32(ctx, out, nout++, JS_NewStringLen(ctx, p, n));
+        p = end ? end + 1 : p + n;
+    }
+    /* THE SAME INVARIANT THE COMPOSER ASSERTS, READ FROM THE OTHER END. A record that says there are ancestors
+       and yields none is a grammar whose two ends have come apart, and the failure it would produce — a frame
+       silently reporting itself top-level — is the one this whole field exists to prevent. */
+    CHECK(nout >= 1,
+          "§3.1.3's list arrived from a peer instance stating that there ARE ancestors and parsed to none — "
+          "the two ends of this record disagree about its grammar, and the answer it would install is the "
+          "one an absent field would have given");
+    return out;
+}
+
+/* §3.1.3's LIST FOR A CHILD NAVIGABLE WHOSE DOCUMENT WILL BE BUILT IN A PEER INSTANCE — see document.h. */
+char *document_ancestor_origins_for_child(JSContext *ctx, JSValueConst container, const Origin *child_origin)
+{
+    /* BORROWED, like every read of it — see document.h. §7.3.1.3's "let parentNavigable be element's node
+       navigable" runs in the EMBEDDER's realm, which is this one, so this is that navigable. */
+    JSValueConst parent_nav = document_window_proxy(ctx);
+    JSValue list;
+    char *text;
+
+    DCHECK(JS_IsObject(container),
+           "§3.1.3's list was composed for a cross-instance child with no CONTAINER ELEMENT — §7.3.1.3's "
+           "create-a-new-child-navigable is handed one and step 6 reads it, and an AUXILIARY navigable has no "
+           "container document at all so its list is the EMPTY one and never this call's answer");
+    list = doc_compose_ancestor_origins(ctx, parent_nav, container, child_origin);
+    text = document_ancestor_origins_serialize(ctx, list);
+    JS_FreeValue(ctx, list);
+    return text;
 }
 
 /* WHAT PERMISSIONS POLICY §9.7 READS OFF A NAVIGABLE CONTAINER, gathered for the navigable this Document is

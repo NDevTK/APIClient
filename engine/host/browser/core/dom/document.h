@@ -113,6 +113,41 @@ JSValue document_selection(JSContext *ctx, JSValueConst doc);
    Document with no browsing context is answered by §7.2.4's FIRST step (the Location's own empty list) and
    never reaches this. */
 JSValue document_ancestor_origins(JSContext *ctx);
+
+/* HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST IN THE FORM IT CROSSES AN INSTANCE
+ * BOUNDARY, which is the only form it can cross one in: §Security makes what crosses TEXT, and this list is
+ * already held as §7.1.1 serializations of origins for its two in-heap consumers.
+ *
+ * WHAT CROSSES IS THE CHILD'S FINISHED LIST, COMPOSED IN THE CREATOR — never the creator's own list with the
+ * steps left to run at the far end. §3.1.3's step 10 asks whether an ancestor "is same origin with parentDoc's
+ * origin", and §7.1.1's same origin compares an opaque origin by IDENTITY while every opaque origin serializes
+ * to the same three bytes `null`. A peer given the text alone would therefore mask an entry that is not the
+ * parent's whenever the parent is itself opaque — a wrong list, silently, in exactly the `data:`-iframe case
+ * that made this crossing necessary. Steps 6-8 are no better placed there: the container element is in the
+ * CREATOR's tree and an element does not cross at all. So the creator runs §3.1.3 ONCE, with all three of its
+ * inputs in one heap, and its RESULT travels — the identical division Permissions Policy §9.5's answer makes
+ * on the same record, for the identical reason.
+ *
+ * THE GRAMMAR IS SPACE-SEPARATED SERIALIZED ORIGINS, and the separator is a THEOREM rather than a taste: URL
+ * §3.2 "Host miscellaneous" makes U+0020 SPACE a FORBIDDEN HOST CODE POINT, and §7.1.1's serialization of an
+ * origin is `null` or a scheme, "://", a host and an optional port — none of which admits one. (A `;` would
+ * NOT do: it is not forbidden in a host, and `permissions_policy.h`'s record beside this one gets away with it
+ * only because its entries are §4.1's feature tokens.) The EMPTY LIST IS A WORD because an empty field and a
+ * host that stopped writing the field are two different facts and only one is a bug — the same distinction
+ * PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER draws one field along, and here the bug it catches is a
+ * cross-origin frame silently reporting itself top-level to `location.ancestorOrigins`.
+ *
+ * `document_ancestor_origins_for_child` is what §7.3.1.3's create calls in the CREATING instance, for a child
+ * whose Document a peer will build; the other two are the peer's side. OWNED — the caller frees. */
+#define DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE "none"
+char *document_ancestor_origins_for_child(JSContext *ctx, JSValueConst container, const Origin *child_origin);
+char *document_ancestor_origins_serialize(JSContext *ctx, JSValueConst list);
+/* Whether that record states any ancestors at all, which is §3.1.3's step 3 answered from the record: an
+   empty list means no container document, which by §7.3.1.3 means no parent. CHECKs an ABSENT field, because
+   the bytes come from another instance and a DCHECK would be compiled out of the build that faces them. */
+bool document_ancestor_origins_serialized_has_ancestors(const char *text);
+JSValue document_ancestor_origins_deserialize(JSContext *ctx, const char *text);
+
 const char *document_base_url(JSContext *ctx);
 /* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS — §4.5's `document.URL`. A DIFFERENT question from the one above, and
    the caller has to say which it is asking: §7.2.4's Location url, §7.2.5's can-have-its-URL-rewritten,

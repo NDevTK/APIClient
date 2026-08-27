@@ -112,6 +112,23 @@ typedef struct {
        POD AND OWNED BY THE COMPONENT, exactly like `top_level_url`: proxy_strdup'd, inside the bytes proxy_of
        captures, never freed on a navigation because a parked flow's saved bytes still name it. */
     char   *remote_container;
+    /* AND WHAT §3.1.3's STEPS ANSWERED FOR THAT SAME NAVIGABLE, FOR THAT SAME NAVIGABLE ONLY — HTML §3.1.3
+       "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST, as core/dom/document.h serializes one.
+       IT IS THE SLOT ABOVE'S SIBLING AND NOT ITS DUPLICATE: both are facts the creating instance computed
+       because both of §3.1.3's and §9.5's inputs live in its heap, and both are results rather than inputs for
+       the same reason — a peer given the inputs would be a second site running one algorithm, and here it
+       would run it WRONG. §3.1.3's step 10 compares an ancestor against "parentDoc's origin" and §7.1.1's same
+       origin decides an opaque origin by IDENTITY, which a serialization does not carry; every opaque origin
+       is the same three bytes `null`. Steps 6-8 read the CONTAINER ELEMENT, which is in the creator's tree and
+       does not cross at all.
+       NULL IS "NOBODY STATED IT" AND IS NOT AN ANSWER, exactly as above. A navigable whose parent is a remote
+       proxy is a child navigable by §7.3.1.3, so its Document HAS ancestors; core/dom/document.c crashes on the
+       absence rather than reading it as the empty list, which would tell a cross-origin frame it is the top of
+       its own tree — a fact no page can distinguish from the truth and one nothing else would report.
+       POD AND OWNED BY THE COMPONENT, like every other string here: proxy_strdup'd into the never-released
+       list, inside the bytes proxy_of captures, so a parked flow's saved bytes still name live memory. It is
+       NOT on PROXY_VALS, which names only this record's JSValues. */
+    char   *remote_ancestor_origins;
     char   *name;      /* §7.2.2.1's name: the BROWSING CONTEXT's, not the element's (owned; see proxy_of) */
     /* WHETHER ANYONE STATED THIS NAVIGABLE'S NAME, which is what decides whether `name` is a computed value or
        unknown external input. §7.4 STATES it — `open(url, "chan42")` names the navigable it creates, and the
@@ -2521,6 +2538,35 @@ const char *window_proxy_remote_container(JSValueConst proxy)
 
     DCHECK(p != NULL, "§7.3.1.3's remote container of something that is not a WindowProxy was asked for");
     return p->remote_container;
+}
+
+/* HTML §3.1.3 "Ancestor origins"' LIST FOR A NAVIGABLE WHOSE ANCESTORS ARE IN ANOTHER WASM INSTANCE — see the
+   field. It is stated at the same moment and by the same zone as the remote container beside it, because both
+   are answers the creating instance computed out of a tree only it holds; §7.3.1.3's own order puts both after
+   the mint, which is where a host rooting an instance stands.
+   WRITTEN ONCE, like the two links it is composed from: §3.1.3's list is a SNAPSHOT of the tree the Document
+   was created in, so a second statement would be about a second creation. */
+void window_proxy_set_remote_ancestor_origins(JSValueConst proxy, const char *serialized_list)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§3.1.3's ancestor origins were stated for something that is not a WindowProxy");
+    DCHECK(serialized_list != NULL && *serialized_list != '\0',
+           "§3.1.3's internal ancestor origin objects list for a navigable in another instance was stated as "
+           "NOTHING — the composed list and that grammar's word for the EMPTY one are the two things a "
+           "provisioning record can say, and an empty field is neither");
+    DCHECK(p->remote_ancestor_origins == NULL,
+           "a navigable was given a SECOND cross-instance §3.1.3 ancestor origins list — the list is a "
+           "snapshot taken when its Document was created, so a second statement describes a second creation");
+    p->remote_ancestor_origins = proxy_strdup(serialized_list);
+}
+
+const char *window_proxy_remote_ancestor_origins(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§3.1.3's remote ancestor origins of something that is not a WindowProxy were asked for");
+    return p->remote_ancestor_origins;
 }
 
 /* §7.3.1.3's CONTAINER OF A NAVIGABLE, as the standard defines it: "the navigable container whose content

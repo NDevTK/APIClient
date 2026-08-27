@@ -655,16 +655,19 @@ try {
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
-     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>policy`, built by core/frame/navigable.c. The policy is LAST
+     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>ancestorOrigins<TAB>policy`, built by
+     core/frame/navigable.c. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
      HTML §7.1.4's three values are fixed tokens, RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to`
-     endpoint those two fields carry, a navigable identity is a one-letter tag over '.'-terminated base64, and
-     Permissions Policy §4.1's feature tokens and §4.2's `Enabled`/`Disabled` hold none either.
+     endpoint those two fields carry, a navigable identity is a one-letter tag over '.'-terminated base64,
+     Permissions Policy §4.1's feature tokens and §4.2's `Enabled`/`Disabled` hold none either, and HTML
+     §3.1.3's ancestor list is origin serializations joined by SPACE — URL §3.2 "Host miscellaneous" makes both
+     TAB and SPACE forbidden host code points, so neither byte can occur inside one.
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 14)
-    fail(`the create notice carries ${create.length} field(s) where the record has fourteen — ` +
+  if (create.length < 15)
+    fail(`the create notice carries ${create.length} field(s) where the record has fifteen — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -744,8 +747,21 @@ try {
          'presents, so Permissions Policy §9.5\'s "container is null" is what the record must say. A feature ' +
          'map here would be §9.5 run over an element that presents some other navigable, and the peer would ' +
          'inherit a policy from a frame it is not in');
-  if (create.slice(13).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(13).join('\t')}\`) and this ` +
+  /* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST, ASSERTED ON THE SAME ARM AND
+     COMPLETING THE SAME TRIPLE. An auxiliary navigable has no CONTAINER DOCUMENT — §7.3.1.7 step 8 creates it
+     out of a target name, with no element anywhere in the algorithm — so §3.1.3's steps 2-3 return an EMPTY
+     output, and the record must say so in that grammar's own word rather than by leaving the field blank. It
+     is the third member of a set that is true or false TOGETHER: no parent, no container, no ancestors. A
+     composed list here would be §3.1.3 run against a parent this navigable does not have, and the peer would
+     answer `location.ancestorOrigins` with a frame tree the creator never built — which no page could tell
+     from the truth, since the member's whole job is to report a tree the reader cannot otherwise see. */
+  if (create[13] !== 'none')
+    fail(`the create notice's §3.1.3 ancestor origins statement is \`${create[13]}\` and this document ` +
+         'created the child with `window.open` — HTML §7.3.1.7 step 8 makes that an AUXILIARY navigable, ' +
+         'which has no container document, so §3.1.3\'s step 3 returns the empty list and `none` is what the ' +
+         'record must say. A list here would give the peer ancestors it has none of');
+  if (create.slice(14).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(14).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

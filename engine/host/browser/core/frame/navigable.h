@@ -368,4 +368,33 @@ JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPol
  * assert about each other: core/frame/window_proxy.h's window_proxy_set_remote_container and the definition. */
 void navigable_root_container(JSContext *ctx, JSValueConst proxy, const char *container_policy);
 
+/* AND HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST FOR THAT NAVIGABLE'S DOCUMENT,
+ * composed by the instance that holds the ancestors and carried as text in the form core/dom/document.h
+ * serializes one, or that grammar's DOCUMENT_ANCESTOR_ORIGINS_SERIALIZED_NONE for a Document with no
+ * container document at all.
+ *
+ * IT IS A THIRD STATEMENT AND NOT A DERIVATION OF THE FIRST TWO, which is the whole reason it is its own call.
+ * §3.1.3's steps read the PARENT DOCUMENT's own recorded list, that Document's ORIGIN RECORD, and the
+ * CONTAINER ELEMENT. The parent statement above carries a navigable IDENTITY, which names a navigable and says
+ * nothing about a Document's recorded ancestry; the container statement carries Permissions Policy §9.5's
+ * answer, which is a different algorithm over two of the same inputs. Neither yields this one.
+ *
+ * WHY THE ANSWER RATHER THAN §3.1.3's INPUTS. Two of the three cannot cross at all — an element is an object,
+ * and an ORIGIN RECORD is precisely what a serialization drops, since §7.1.1 decides an opaque origin by
+ * IDENTITY and every opaque origin is the three bytes `null`. Step 10 compares an ancestor against "parentDoc's
+ * origin", so a peer running the steps over carried text would mask an ancestor that is not the parent's
+ * whenever the parent is opaque — and that is the ORDINARY case here, not a corner: a `data:` iframe is in a
+ * peer instance BECAUSE its origin is opaque. A LIVE read is not the alternative either, for the reason the
+ * container's is not: §Security makes a cross-instance read a suspend point and a Document's install has no
+ * flow under it to suspend.
+ *
+ * IT MUST BE MADE BEFORE THE FIRST DOCUMENT OF THAT NAVIGABLE IS INSTALLED, because §7.3.2.1 runs §3.1.3's
+ * steps once per Document a navigable is given and reads it there. A host that skips it does not get an empty
+ * list — which would be the positive claim that this Document is top-level, invisible to any page: that
+ * install CRASHES, naming this call.
+ *
+ * WHERE THE PAIRING WITH §7.3.1.3's PARENT IS ASSERTED, and what each direction of a disagreement would mean:
+ * the definition. */
+void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const char *ancestor_origins);
+
 #endif
