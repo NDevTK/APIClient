@@ -5575,7 +5575,7 @@ test("§ 13.10 opaque-key obj-lit access distributes over all known props", `
          r.fetchCallSites.some(function(s) { return s.url === "/api/v41/guest"; });
 });
 
-test("WHATWG URL § 5.5 + URLSearchParams.set: chained mutations reflected in href", `
+test("WHATWG URL § 6.2 URLSearchParams class + URLSearchParams.set: chained mutations reflected in href", `
   var u = new URL("https://api.example.com/v42/items");
   u.searchParams.set("page", "1");
   u.searchParams.set("limit", "50");
@@ -5586,7 +5586,7 @@ test("WHATWG URL § 5.5 + URLSearchParams.set: chained mutations reflected in hr
   });
 });
 
-test("WHATWG URL § 5.5 + URLSearchParams.append: appended param reflected in href", `
+test("WHATWG URL § 6.2 URLSearchParams class + URLSearchParams.append: appended param reflected in href", `
   var u = new URL("https://api.example.com/v43");
   u.searchParams.append("role", "admin");
   fetch(u.href);
@@ -5596,7 +5596,7 @@ test("WHATWG URL § 5.5 + URLSearchParams.append: appended param reflected in hr
   });
 });
 
-test("WHATWG URL § 5.5 + URLSearchParams.delete: removes existing param", `
+test("WHATWG URL § 6.2 URLSearchParams class + URLSearchParams.delete: removes existing param", `
   var u = new URL("https://api.example.com/v44?token=secret&role=admin");
   u.searchParams.delete("token");
   fetch(u.href);
