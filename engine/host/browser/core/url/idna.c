@@ -1,4 +1,4 @@
-/* IDNA — WHATWG URL §4.2's "domain to ASCII", which is Unicode UTS-46 over RFC 3492's Punycode.
+/* IDNA — WHATWG URL §3.3 "IDNA"'s domain parser ("domain to ASCII"), which is Unicode UTS-46 over RFC 3492's Punycode.
  *
  * WHY IT IS HERE. The URL parser reached a DFAIL naming this on the canonical corpus: five wpt files —
  * url-constructor, url-setters, url-origin and both IdnaTestV2 variants — stopped at the first non-ASCII

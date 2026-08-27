@@ -148,7 +148,7 @@ static void js_fetch_visit(JSContext *ctx, void *st, JSStepVisit *v)
    URL LIST, and the list is what the fetch — which is the trusted host's — observed. A captured request URL
    cannot express a redirect at all, so `redirected` had nothing to read and was the literal `false`. The list
    rides the reply record instead, and this capture is gone with the question it answered. */
-/* THE REPLY'S DELIVERY IS A STEP MACHINE, because settling the promise is the PAGE'S code. 27.2.1.3.2 step 8
+/* THE REPLY'S DELIVERY IS A STEP MACHINE, because settling the promise is the PAGE'S code. 27.5.1.3 step 2.f
  * reads `Get(resolution, "then")` off the value being resolved with, and the value here is a Response — an
  * ordinary object whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
  * page's, and prototype pollution is a gadget class this engine exists to RUN rather than assume away. It was a
@@ -814,7 +814,7 @@ static JSValue js_fetch_fini(JSContext *ctx, void *st, bool take_result)
    request — an invalid header value, a bad method, a URL that will not parse — REJECTS that promise instead of
    propagating. A page writes `fetch(u, init).catch(...)`, and a synchronous throw goes straight past the catch
    it wrote; wpt asserts it directly, with `promise_rejects_js` over a fetch whose header value carries a NUL.
-   The reject is called AS A FLOW like every other settle: 27.2.1.3.1 runs none of the page's code, but the
+   The reject is called AS A FLOW like every other settle: 27.5.1.3's rejectSteps runs none of the page's code, but the
    rule that a settle has a flow base under it is not a per-call judgement about whether this one happens to. */
 static int fetch_reject_pending(JSContext *ctx, struct JSFetchState *s)
 {

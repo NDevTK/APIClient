@@ -384,7 +384,7 @@ static void xhr_mime_stored(MimeType *out, const char *serialized)
     }
 }
 
-/* §3.6.6 "get a response MIME type": Fetch §2.2.3's "extract a MIME type" over the response's header list, and
+/* §3.6.6 "get a response MIME type": Fetch §2.2.2 "Headers"'s "extract a MIME type" over the response's header list, and
    `text/xml` when that is failure. `out` always ends holding a record. */
 static void xhr_response_mime(JSContext *ctx, XhrData *d, MimeType *out)
 {

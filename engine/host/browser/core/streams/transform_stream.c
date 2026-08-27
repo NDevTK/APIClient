@@ -210,13 +210,13 @@ enum {
     X(S_PULL, "Streams §6.4 TransformStreamDefaultSourcePullAlgorithm steps 3-4 (clear the backpressure and " \
               "answer with the change promise)") \
     X(S_PROMISE_OF, "Streams §6 (PromiseResolve over what one of §6.4's algorithms returned, then its " \
-                    "reaction — 27.2.1.3.2 step 8's `then` read is the page's)") \
+                    "reaction — 27.5.1.3 step 2.f's `then` read is the page's)") \
     X(S_ERROR_SEQ, "Streams §6.4 TransformStreamError / TransformStreamErrorWritableAndUnblockWrite (the " \
                    "shared error sub-sequence, which half it errors being the only difference)") \
     X(S_SETBP, "Streams §6.4 TransformStreamSetBackpressure steps 2-4 (resolve the old change promise, then " \
                "a fresh one)") \
     X(S_SETTLE, "Streams §6 (settling the promise the step before this one named — the resolving function's " \
-                "27.2.1.3.2 step 8 `then` read is the page's code)") \
+                "27.5.1.3 step 2.f `then` read is the page's code)") \
     X(S_RESULT, "Streams §6 (settling this entry's OWN capability, for the answers §6.4's algorithms " \
                 "short-circuit with)") \
     X(S_DONE, "Streams §6 (the operation is complete; its promise, where it has one, is this machine's result)")

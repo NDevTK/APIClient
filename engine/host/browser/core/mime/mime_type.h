@@ -67,7 +67,7 @@ bool mime_type_is_font(const MimeType *m);
 bool mime_type_is_zip_based(const MimeType *m);
 bool mime_type_is_archive(const MimeType *m);
 
-/* Fetch §2.2.3 "extract a MIME type", over the `Content-Type` value as "get a header" has already joined the
+/* Fetch §2.2.2 "Headers" "extract a MIME type", over the `Content-Type` value as "get a header" has already joined the
    list's duplicates (0x2C 0x20 between them) — which is exactly the string Fetch §2.2's "get, decode, and
    split" takes, and why this takes a VALUE rather than a header list: its two callers hold their lists
    differently (a HeaderList in Fetch, a JS array in XHR) and both can produce the joined value.

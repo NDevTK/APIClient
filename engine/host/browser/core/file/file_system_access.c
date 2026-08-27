@@ -144,7 +144,7 @@ void fs_access_grant(JSContext *ctx, JSValueConst handle, bool readwrite)
                    "prompt arm are two worlds; settings's origin is same origin with its top-level origin)")    \
     X(FSA_REQUEST, "File System Access §2.2 the permission request algorithm step 8 (Request permission to use " \
                    "desc — Permissions §5.2, whose step 3 asks the user for express permission)")               \
-    X(FSA_SETTLE,  "File System Access §2.3.1/§2.3.2 step 2.2 (resolve result with state — 27.2.1.3.2 step 8's " \
+    X(FSA_SETTLE,  "File System Access §2.3.1/§2.3.2 step 2.2 (resolve result with state — 27.5.1.3 step 2.f's " \
                    "`then` read is the page's)")
 enum { IDL_STEP_STAGE_BASE(FSA_STAGES) FSA_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FSA_STEPS[] = { FSA_STAGES(JS_STEP_STAGE_LABEL) NULL };

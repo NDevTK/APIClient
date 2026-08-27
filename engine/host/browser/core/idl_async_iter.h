@@ -26,7 +26,7 @@
  *
  * WHAT SUSPENDS. Everything in it: the component's "get the next iteration result" is a STEP (it may read the
  * page's objects, and it may have to ask the host), and so is every settle — Call(capability.[[Resolve]], …)
- * reaches 27.2.1.3.2 step 8's `then` read on whatever it is resolved with, which for a pair declaration is an
+ * reaches 27.5.1.3 step 2.f's `then` read on whatever it is resolved with, which for a pair declaration is an
  * Array and therefore one `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code.
  *
  * WHAT TIME-TRAVELS. §3.7.10.1's `ongoing promise` and `is finished` are per-ITERATOR state a flow WRITES, so
@@ -52,7 +52,7 @@
  * IT IS A STEP, with the same return contract as the two algorithms below, because §3.7.10 step 3.1.6 runs it
  * INSIDE the member and what a standard writes there is not bounded by this file. Streams §4.2.5's step 1 is
  * `? AcquireReadableStreamDefaultReader(stream)`, and §4.3's acquisition SETTLES the reader's `closed` promise
- * at once on a stream that has already closed or errored — a resolving function, which reaches 27.2.1.3.2 step
+ * at once on a stream that has already closed or errored — a resolving function, which reaches 27.5.1.3's resolveSteps step
  * 8's `then` read. A plain C body could only have driven that to completion.
  * >0 means it parked (the member returns that code and this is re-entered at the same point with the answer in
  * `in`), 0 means the iterator is initialised, -1 means it threw — and the member then throws rather than

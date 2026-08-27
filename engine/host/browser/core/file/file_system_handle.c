@@ -11,7 +11,7 @@
  * standard says to.
  *
  * EVERY METHOD IS A STEP MACHINE, and every one of them for the same two reasons. Each returns a PROMISE, and
- * settling one calls a resolving function — 27.2.1.3.2 step 8 reads `then` off whatever it is resolved with,
+ * settling one calls a resolving function — 27.5.1.3 step 2.f reads `then` off whatever it is resolved with,
  * which is the page's code and therefore a request rather than a call from C. And `createWritable` runs §2.5's
  * stream creation, which suspends on its own start promise. A member that ran either from a C activation would
  * be the drive-to-completion this engine aborts on.
@@ -236,7 +236,7 @@ static JSValue fsh_get_name(JSContext *ctx, JSValueConst this_val, int magic)
     X(FSH_STREAM, "File System §2.3.2 createWritable() step 3.5.2 (create a new FileSystemWritableFileStream " \
                   "for entry — which suspends on §5.4's start promise)") \
     X(FSH_SETTLE, "File System §2.3-§2.4 the queued storage task of this member (resolve or reject result — " \
-                  "27.2.1.3.2 step 8's `then` read is the page's)")
+                  "27.5.1.3 step 2.f's `then` read is the page's)")
 enum { IDL_STEP_STAGE_BASE(FSH_STAGES) FSH_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FSH_STEPS[] = { FSH_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -671,7 +671,7 @@ typedef struct {
 } FsDirIterWork;
 
 /* WHERE §2.4.1's ITERATION RESTS — at its SETTLE, which is a Call of a resolving function and therefore reaches
-   27.2.1.3.2 step 8's `then` read on the value pair it is handed (an Array, one
+   27.5.1.3 step 2.f's `then` read on the value pair it is handed (an Array, one
    `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code). Numbered from
    IDL_ASYNC_ITER_STEP_FIRST and joined onto Web IDL §3.7.10.2's own stages at the declaration, so a flow parked
    there reports the File System Standard's step rather than the Web IDL step that RUNS this algorithm. */
@@ -691,7 +691,7 @@ static void fsdir_iter_visit(JSContext *ctx, void *work, JSStepVisit *v)
 }
 
 /* §2.4.1's "To get the next iteration result for a FileSystemDirectoryHandle handle and its async iterator
-   iterator". A STEP because its last act settles a promise, and a resolving function reaches 27.2.1.3.2 step
+   iterator". A STEP because its last act settles a promise, and a resolving function reaches 27.5.1.3's resolveSteps step
    8's `then` read on what it is given — which for a value pair is an Array, one
    `Object.defineProperty(Array.prototype, "then", …)` away from being the page's code. */
 static int fsdir_iter_next(JSContext *ctx, JSStepHdr *hdr, void *work, JSValueConst target, JSValueConst iter,

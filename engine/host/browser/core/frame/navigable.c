@@ -757,7 +757,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
     OpenerPolicy response_coop;
     char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
-    /* The JOINED `Content-Type`, which is Fetch §2.2.3's input and therefore §13.2.3.2's; same ownership as
+    /* The JOINED `Content-Type`, which is Fetch §2.2.2 "Headers"'s input and therefore §13.2.3.2's; same ownership as
        resp_csp above. The type §7.4.5 dispatches on is NOT computed from it — see the read below. */
     char *resp_ctype = NULL;
     /* §7.4.5's COMPUTED TYPE for this response — a record this frame owns and frees on every path.
@@ -837,7 +837,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
         /* THE RESPONSE'S `Content-Type`, TWICE, BECAUSE TWO STANDARDS READ IT DIFFERENTLY AND BOTH ARE RIGHT.
-           Fetch §2.2.2's `get` JOINS every value with ", " and that is what Fetch §2.2.3's "extract a MIME
+           Fetch §2.2.2's `get` JOINS every value with ", " and that is what Fetch §2.2.2 "Headers"'s "extract a MIME
            type" takes — the form HTML §13.2.3.2 "Determining the character encoding" needs, since Fetch §3.5's
            "legacy extract an encoding" runs on the extraction's record. MIME Sniffing §5.1's supplied MIME type
            detection takes "the value of the LAST `Content-Type` header" UNJOINED, because §5's

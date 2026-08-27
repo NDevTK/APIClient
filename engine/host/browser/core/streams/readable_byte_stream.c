@@ -826,7 +826,7 @@ static const JSTrampStepDef js_byte_rxn_defs[4] = {
 /* ---- THE COMMIT LOOP -------------------------------------------------------------------------------------- */
 
 /* §4.9.5's ReadableByteStreamControllerCommitPullIntoDescriptor, for each descriptor a step produced. It is a
-   LOOP OF CALLS because answering one request is the page's code (27.2.1.3.2 step 8 reads `then` off the
+   LOOP OF CALLS because answering one request is the page's code (27.5.1.3 step 2.f reads `then` off the
    result object), so each iteration is a suspension point of its own. */
 typedef struct {
     JSValue filled;   /* an Array of pull-into descriptors */

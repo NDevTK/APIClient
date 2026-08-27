@@ -9,7 +9,7 @@
  * §6's data: URL processor returns one, and XHR §3.6.6 reads its essence AND its charset off one.
  *
  * THE APPROXIMATION WAS ALSO WRONG, in the ways a splitter always is. `text/plain;charset=gbk, text/html` is
- * two header values that "get a header" joined, and Fetch §2.2.3 says the answer is text/html; the splitter
+ * two header values that "get a header" joined, and Fetch §2.2.2 "Headers" says the answer is text/html; the splitter
  * answered type "text", subtype "plain" and charset "gbk, text/html". `text/html;charset="shift_jis"` is a
  * quoted-string whose closing quote the splitter kept as part of the label. `text/html;charset=` is a
  * parameter §4.4 drops and the splitter reported as the empty encoding label. None of those are edge cases
@@ -480,7 +480,7 @@ bool mime_type_is_archive(const MimeType *m)
            essence_is(m, "application", "x-gzip");
 }
 
-/* ---- Fetch §2.2.3 "extract a MIME type" ----------------------------------------------------------------- */
+/* ---- Fetch §2.2.2 "Headers" "extract a MIME type" ----------------------------------------------------------------- */
 
 bool mime_type_extract(MimeType *out, const char *value)
 {

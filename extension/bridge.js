@@ -1469,7 +1469,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          answer and for a chokepoint that stopped writing the field — and on the arms where safeFetch REFUSED
          the request, this field carries the whole reason it refused. */
       DCHECK(typeof r.statusText === "string",
-             "safeFetch answered an XHR with no statusText — XMLHttpRequest §3.7.5's `statusText` getter is " +
+             "safeFetch answered an XHR with no statusText — XMLHttpRequest §3.6.3 `The statusText getter`'s `statusText` getter is " +
              "read straight off it, and the chokepoint writes one on every path including the refusals whose " +
              "reason it is");
       /* THE BYTES BESIDE THE RECORD, for the reason `fetched` states: §3.6.6's "get a text response" DECODES

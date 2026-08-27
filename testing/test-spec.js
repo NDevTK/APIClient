@@ -3878,7 +3878,7 @@ specTest("WHATWG DOM: shadowed `document` does NOT fire", `
   return !(av && av.kind === "const" && av.value === "/hide?id=5");
 }, { domContext: { byId: { hide5: { href: "/hide?id=5" } } } });
 
-specTest("ECMA § 27.2.4.7: Promise.resolve(x) passes through x to await/then in spec eval", `
+specTest("ECMA § 27.5.4.7: Promise.resolve(x) passes through x to await/then in spec eval", `
   async function f() {
     this.u = await Promise.resolve("/api/promise-passthrough");
   }
@@ -3888,7 +3888,7 @@ specTest("ECMA § 27.2.4.7: Promise.resolve(x) passes through x to await/then in
   return av && av.kind === "const" && av.value === "/api/promise-passthrough";
 });
 
-specTest("ECMA § 27.2.4.7: shadowed `Promise` does NOT fire passthrough", `
+specTest("ECMA § 27.5.4.7: shadowed `Promise` does NOT fire passthrough", `
   async function f() {
     var Promise = { resolve: function() { return "shadow"; } };
     this.u = await Promise.resolve("/api/p");
@@ -4041,7 +4041,7 @@ specTest("§ 14.10 multi-stmt return with param: `if(p) return p; return 'defaul
   return leaves.length === 2 && leaves.indexOf("/api/foo") >= 0 && leaves.indexOf("/api/default") >= 0;
 });
 
-test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
+test("§ 27.5.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   (async function(){
     fetch(await Promise.resolve("/api/await-promise"));
   })();
@@ -4050,7 +4050,7 @@ test("§ 27.2.4.7 + § 14.2.16: `await Promise.resolve(x)` passthrough", `
   return result.fetchCallSites[0].url === "/api/await-promise";
 });
 
-test("§ 27.2.4.7 + 27.2.5.4: function returning Promise.resolve, .then unwrap", `
+test("§ 27.5.4.7 + 27.5.5.4: function returning Promise.resolve, .then unwrap", `
   function getUrl() { return Promise.resolve("/api/inter-proc-promise"); }
   getUrl().then(function(url) { fetch(url); });
 `, function(result) {
@@ -4058,7 +4058,7 @@ test("§ 27.2.4.7 + 27.2.5.4: function returning Promise.resolve, .then unwrap",
   return result.fetchCallSites[0].url === "/api/inter-proc-promise";
 });
 
-test("§ 27.2.5.4: `Promise.resolve(x).then(v => fetch(v))` resolves callback param via receiver", `
+test("§ 27.5.5.4: `Promise.resolve(x).then(v => fetch(v))` resolves callback param via receiver", `
   Promise.resolve("/api/then-callback").then(function(url) { fetch(url); });
 `, function(result) {
   if (!result.fetchCallSites || result.fetchCallSites.length === 0) return false;
@@ -5478,7 +5478,7 @@ test("§ 9.1.1 closure-captured param composed with caller arg (build base + arg
   return r.fetchCallSites.some(function(s) { return s.url === "/api/v29/items"; });
 });
 
-test("§ 27.2.5.4 Promise.then cb param binding from resolve value", `
+test("§ 27.5.5.4 Promise.then cb param binding from resolve value", `
   Promise.resolve("/api/v30").then(function(u) { return fetch(u + "/data"); });
 `, function(r) {
   return r.fetchCallSites.some(function(s) { return s.url === "/api/v30/data"; });

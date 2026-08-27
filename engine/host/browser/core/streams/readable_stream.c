@@ -633,7 +633,7 @@ static int js_fwd_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **ou
 /* ONE STAGE, because the whole of this machine is the call — it holds nothing between entries. */
 #define FWD_STAGES(X) \
     X(FWD_CALL, "Streams §4 (a reaction forwarding a promise's settlement to a resolving function — that " \
-                "function's 27.2.1.3.2 step 8 `then` read is the page's code)")
+                "function's 27.5.1.3 step 2.f `then` read is the page's code)")
 enum { FWD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FWD_STEPS[] = { FWD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -823,7 +823,7 @@ static const JSTrampStepDef js_rxn_defs[4] = {
 
 /* ---- §4.3's reader ---------------------------------------------------------------------------------------- */
 
-/* §4.3's `read()`. A MACHINE, because settling the promise it returns is the PAGE'S code: 27.2.1.3.2 step 8
+/* §4.3's `read()`. A MACHINE, because settling the promise it returns is the PAGE'S code: 27.5.1.3 step 2.f
  * reads `Get(resolution, "then")` off the result object, whose prototype the page owns. The same reason
  * body.c's readers are machines, and the same shape.
  *
@@ -2267,7 +2267,7 @@ typedef struct {
     uint8_t read_again;
     uint8_t canceled[2];
     /* §4.9.1's cloneForBranch2. The public `tee()` never sets it — both branches get the SAME chunk, which is
-       what the standard says and what a page teeing its own stream expects. Fetch §5.2's "clone a body" DOES:
+       what the standard says and what a page teeing its own stream expects. Fetch §2.2.4 "Bodies"'s "clone a body" DOES:
        `response.clone()` must give the second branch a value the first cannot reach, or a page that mutates
        the chunk it read has changed what the clone will read. Fourteen of response-clone's subtests are
        exactly that assertion, one per BufferSource type. */
@@ -3287,7 +3287,7 @@ static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
     return 0;
 }
 
-/* WHERE THIS MACHINE RESTS. It is Fetch §5.2's "fully read a body" step 5 — "read all bytes from reader" —
+/* WHERE THIS MACHINE RESTS. It is Fetch §2.2.4 "Bodies"'s "fully read a body" step 5 — "read all bytes from reader" —
    which the Streams standard states as a chain of reads, so each entry is one link of that chain. */
 #define DS_STAGES(X) \
     X(DS_START, "Fetch §5.2 fully read a body step 5 → Streams read all bytes (what the previous read " \
@@ -3594,7 +3594,7 @@ JSValue readable_reader_closed(JSContext *ctx, JSValueConst reader)
     X(RSC_CALL, "Streams §4.9.4 SetUpReadableStreamDefaultController step 9 (the start algorithm — the " \
                 "source's own `start`, invoked with the controller)") \
     X(RSC_RESOLVE, "Streams §4.9.4 SetUpReadableStreamDefaultController step 10 (a promise resolved with " \
-                   "startResult — 27.2.1.3.2 step 8's `then` read is the page's)") \
+                   "startResult — 27.5.1.3 step 2.f's `then` read is the page's)") \
     X(RSC_THEN, "Streams §4.9.4 SetUpReadableStreamDefaultController steps 11-12 (the start promise's two " \
                 "reactions are attached and the stream is the constructor's result)")
 enum { RSC_STAGES(JS_STEP_STAGE_ENUM) };
@@ -3936,7 +3936,7 @@ void readable_stream_init(JSContext *ctx)
         g_tee_clone_id = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_tee_clone_decl, 0);
     }
 
-    /* Fetch §5.2's "fully read", whose record is a class for the reason every other one here is: it is a
+    /* Fetch §2.2.4 "Bodies"'s "fully read", whose record is a class for the reason every other one here is: it is a
        cycle (record -> reader -> stream) and the collector has to see it. */
     {
         JSClassDef dd = { "ReadableStream drain", .finalizer = drain_finalizer, .gc_mark = drain_gc_mark };

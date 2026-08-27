@@ -2,7 +2,7 @@
    straight to solver/endpoint.c, so there is no table to initialise and none to free. */
 #include "solver/multipart_batch.h"
 #include "solver/endpoint.h"
-#include "core/mime/mime_type.h"     /* Fetch §2.2.3's extract a MIME type — the request's own STATEMENT */
+#include "core/mime/mime_type.h"     /* Fetch §2.2.2 "Headers"'s extract a MIME type — the request's own STATEMENT */
 #include "core/fetch/headers.h"
 #include "check.h"
 #include <stdlib.h>

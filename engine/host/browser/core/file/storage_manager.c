@@ -73,7 +73,7 @@ static bool sm_brand(JSContext *ctx, JSValueConst this_val)
     X(SM_RUN,    "File System §3 getDirectory() steps 1-7 (the bottle map, the bucket file system's root " \
                  "directory entry, and the handle over it)") \
     X(SM_SETTLE, "File System §3 getDirectory() step 8 (return a promise resolved with handle — " \
-                 "27.2.1.3.2 step 8's `then` read is the page's)")
+                 "27.5.1.3 step 2.f's `then` read is the page's)")
 enum { IDL_STEP_STAGE_BASE(SM_STAGES) SM_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const SM_STEPS[] = { SM_STAGES(JS_STEP_STAGE_LABEL) NULL };
 

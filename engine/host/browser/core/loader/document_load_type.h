@@ -28,7 +28,7 @@ typedef enum {
    answer, which §8.1 "Sniffing in a browsing context" makes the algorithm a navigation runs, produced by
    core/mime/mime_sniff.h.
    IT TAKES A RECORD AND NOT A HEADER VALUE, and the difference is the whole algorithm. It used to take the
-   response's `Content-Type` string and run Fetch §2.2.3's extraction on it, which is not what §7.4.5 says:
+   response's `Content-Type` string and run Fetch §2.2.2 "Headers"'s extraction on it, which is not what §7.4.5 says:
    "the computed type" is not the SUPPLIED type, and the gap between them is every response a server labelled
    nothing, `text/plain`, or `application/unknown` — for which the extraction answers failure or a generic and
    §7 answers what the BYTES are. A response with no `Content-Type` therefore reached the `Otherwise` arm and

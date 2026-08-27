@@ -61,7 +61,7 @@ void document_load_computed_type(MimeType *out, const HeaderList *response_heade
            "bytes those headers describe, so half of it is a type computed for some other response, and no "
            "bytes at all is a caller that has no response and is not asking this question");
     /* §5.1 "Interpreting the resource metadata" — the SUPPLIED MIME type and §5's check-for-apache-bug flag.
-       THE LAST `Content-Type` HEADER, UNJOINED, which is what §5.1 says and is NOT Fetch §2.2.3's "extract a
+       THE LAST `Content-Type` HEADER, UNJOINED, which is what §5.1 says and is NOT Fetch §2.2.2 "Headers"'s "extract a
        MIME type" over the joined list: §5's apache-bug table is a byte-exact comparison against four literal
        header values that a joined list can never equal. A caller that also needs the JOINED value (HTML
        §13.2.3.2 "Determining the character encoding" does) reads it separately — two standards read this one
@@ -97,7 +97,7 @@ DocumentLoadType document_load_type_of(const MimeType *m)
 {
     /* THE INPUT IS mimesniff §7's COMPUTED type, which is never undefined (core/mime/mime_sniff.h states why),
        so there is no "could not tell" arm here any more and an empty record is a CALLER that ran something
-       else — Fetch §2.2.3's extraction, say, whose failure is a real answer and is not this one. */
+       else — Fetch §2.2.2 "Headers"'s extraction, say, whose failure is a real answer and is not this one. */
     DCHECK(m != NULL && m->type != NULL && m->subtype != NULL,
            "HTML §7.4.5's load-a-document dispatch was handed something that is not a MIME type — its input "
            "is the COMPUTED type of the response (mimesniff §7), which every arm of that algorithm produces, "

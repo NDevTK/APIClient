@@ -12,7 +12,7 @@
  * an interface's own `take` and its own reader table, so neither is a condition this file tests.
  *
  * THE BYTES ARE ALREADY HERE, so the promise is settled before the page ever sees it — but SETTLING it is not a
- * C-private act. 27.2.1.3.2 step 8 reads `Get(resolution, "then")` off the value, which for `json()`'s result is
+ * C-private act. 27.5.1.3 step 2.f reads `Get(resolution, "then")` off the value, which for `json()`'s result is
  * an ordinary object whose prototype the page owns: `Object.prototype.then = { get(){…} }` makes that read the
  * page's code, and prototype pollution is a gadget class this engine exists to run rather than assume away.
  * Performed with a JS_Call from C it would run in an activation with no flow base, so a loop in that getter
@@ -68,7 +68,7 @@ static const ByteReaderIface *iface_of(JSValueConst v)
       "Fetch §5.2 consume body step 6 → fully read a body step 5 (read all bytes from the reader)") \
     X(BR_SETTLE, \
       "Fetch §5.2 consume body steps 3-4 (resolve promise with the converted value, or reject it with the " \
-      "error) — 27.2.1.3.2 step 8's `then` read is the page's")
+      "error) — 27.5.1.3 step 2.f's `then` read is the page's")
 enum { BYTE_READER_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const js_byte_reader_steps[] = { BYTE_READER_STAGES(JS_STEP_STAGE_LABEL) NULL };
 

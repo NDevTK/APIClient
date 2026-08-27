@@ -19,7 +19,7 @@
  * before. So the `arg` at each definition says which entry, and they converge on the stages below — the shape
  * §4.5's controller and §4.4's iterator already have, at a larger size because §5 is larger.
  *
- * EVERY SETTLE IS A CALL REQUEST, for the reason §4's are: 27.2.1.3.2 step 8 reads `then` off the resolution and
+ * EVERY SETTLE IS A CALL REQUEST, for the reason §4's are: 27.5.1.3 step 2.f reads `then` off the resolution and
  * a page owns that prototype. Where §5 settles SEVERAL promises in a stated order, that is a chain of stages,
  * one settle each, not a loop of C calls. */
 #include <stddef.h>
@@ -610,7 +610,7 @@ enum {
     X(S_RELEASE2, "Streams §5.3 WritableStreamDefaultWriterRelease steps 7-8 (detach the writer from the " \
                   "stream)") \
     X(S_SETTLE, "Streams §5 (settling the promise the step before this one named — the resolving function's " \
-                "27.2.1.3.2 step 8 `then` read is the page's code)") \
+                "27.5.1.3 step 2.f `then` read is the page's code)") \
     X(S_RESULT, "Streams §5 (settling this member's OWN capability, for the short-circuit answers §5.2 " \
                 "abort step 1, close step 2 and §5.3 write step 5 return)") \
     X(S_DONE, "Streams §5 (the operation is complete; its promise, where it has one, is this machine's result)")
@@ -1536,7 +1536,7 @@ enum { SNK_ABORT = 0, SNK_CLOSE, SNK_START, SNK_TYPE, SNK_WRITE, SNK_N };
     X(WSC_CALL, "Streams §5.4 SetUpWritableStreamDefaultController step 15 (the start algorithm — the sink's " \
                 "own `start`, invoked directly so a throw propagates out of the constructor)") \
     X(WSC_RESOLVE, "Streams §5.4 SetUpWritableStreamDefaultController step 16 (a promise resolved with " \
-                   "startResult — 27.2.1.3.2 step 8's `then` read is the page's)") \
+                   "startResult — 27.5.1.3 step 2.f's `then` read is the page's)") \
     X(WSC_THEN, "Streams §5.4 SetUpWritableStreamDefaultController steps 17-18 (the start promise's two " \
                 "reactions are attached and the stream is the constructor's result)")
 enum { WSC_STAGES(JS_STEP_STAGE_ENUM) };

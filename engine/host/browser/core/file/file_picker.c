@@ -499,7 +499,7 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, const
     X(FPK_NOTIFY,    "File System Access §3.3/§3.4/§3.5 step 7.11 (PERFORM THE ACTIVATION NOTIFICATION STEPS "  \
                      "in global's browsing context)")                                                           \
     X(FPK_SETTLE,    "File System Access §3.3/§3.4/§3.5 step 7.12's resolve, or the reject step 7.6 and §3.1 "  \
-                     "reach (27.2.1.3.2 step 8's `then` read is the page's)")
+                     "reach (27.5.1.3 step 2.f's `then` read is the page's)")
 enum { IDL_STEP_STAGE_BASE(FPK_STAGES) FPK_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const FPK_STEPS[] = { FPK_STAGES(JS_STEP_STAGE_LABEL) NULL };
 

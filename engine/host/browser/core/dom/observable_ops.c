@@ -159,7 +159,7 @@ static void ops_abort_enter(JSContext *ctx, JSObsState *s, JSValueConst sig, int
 }
 
 /* §2.3.3's "resolve p with v" / "reject p with e" — a CALL of the capability's resolving function, because
-   RESOLVING is where 27.2.1.3.2 step 8 reads `then` off whatever it was handed, and that is the page's code
+   RESOLVING is where 27.5.1.3 step 2.f reads `then` off whatever it was handed, and that is the page's code
    whenever a page object reaches it. `value` is CONSUMED. */
 static void ops_settle_enter(JSContext *ctx, JSObsState *s, JSValueConst rec, int reject, JSValue value,
                              int ret)
@@ -679,7 +679,7 @@ int obs_ops_stage(JSContext *ctx, JSObsState *s, JSValue *pcb, JSValue **out_cb,
                           out_cb, out_argc);
         if (r > 0) { *pr = r; return 1; }
         *pcb = JS_UNDEFINED;
-        /* A capability's resolving functions never throw: 27.2.1.3.2's own abrupt case is turned into a
+        /* A capability's resolving functions never throw: 27.5.1.3's resolveSteps's own abrupt case is turned into a
            REJECTION of the same promise before it returns. */
         DCHECK(!JS_IsException(out), "a promise capability's resolving function raised");
         if (JS_IsException(out)) JS_FreeValue(ctx, JS_GetException(ctx));

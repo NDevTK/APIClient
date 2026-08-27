@@ -184,7 +184,7 @@ static JSValue ait_iter_result(JSContext *ctx, JSValue value, bool done)
       "this call onto an outstanding ongoing promise or running nextSteps/returnSteps here)") \
     X(AIT_REJECT_THIS, \
       "Web IDL §3.7.10.2 next step 7.2 / return step 7.2 (Call(thisValidationPromiseCapability.[[Reject]], " \
-      "undefined, « a new TypeError ») — a resolving function reaches 27.2.1.3.2 step 8's `then` read)") \
+      "undefined, « a new TypeError ») — a resolving function reaches 27.5.1.3 step 2.f's `then` read)") \
     X(AIT_STEPS, \
       "Web IDL §3.7.10.2 next step 8.2 / return steps 8.2-8.3 (whether `is finished` short-circuits this " \
       "iteration step, and the return algorithm's setting of it)") \
@@ -441,7 +441,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
                           (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
         if (r > 0) return r;
         DCHECK(!JS_IsException(settled),
-               "a promise capability's [[Reject]] threw — 27.2.1.3.1 answers undefined for every input, which "
+               "a promise capability's [[Reject]] threw — 27.5.1.3's rejectSteps answers undefined for every input, which "
                "is why §3.7.10.2 marks this Call `!`");
         JS_FreeValue(ctx, settled);
         return JS_STEP_DONE;               /* step 7.3 */
@@ -479,7 +479,7 @@ static int ait_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_c
                           (JSValueConst *)&s->value, cb_result, &settled, out_cb, out_argc);
         if (r > 0) return r;
         DCHECK(!JS_IsException(settled),
-               "a promise capability's [[Resolve]] threw — 27.2.1.3.2 rejects rather than throwing for every "
+               "a promise capability's [[Resolve]] threw — 27.5.1.3's resolveSteps rejects rather than throwing for every "
                "input, including a thenable whose `then` getter throws, which is why this Call is `!`");
         JS_FreeValue(ctx, settled);
         cb_result = JS_UNDEFINED;

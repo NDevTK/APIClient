@@ -169,7 +169,7 @@ enum {
     X(S_ITER_RETURN_FN, "Observable §2.3.1 (IteratorClose step 4: Get(iterator, \"return\"))") \
     X(S_ITER_RETURN_CALL, "Observable §2.3.1 (IteratorClose step 6: calling `return`)") \
     X(S_ASYNC_PROMISE, "Observable §2.3.1 nextAlgorithm step 5 (a promise resolved with what the async " \
-                       "iterator's `next` returned — 27.2.1.3.2 step 8's `then` read is the page's)") \
+                       "iterator's `next` returned — 27.5.1.3 step 2.f's `then` read is the page's)") \
     X(S_ASYNC_REACT, "Observable §2.3.1 nextAlgorithm step 6 (reacting to nextPromise)") \
     X(S_PROMISE_REACT, "Observable §2.3.1 \"From Promise\" (reacting to the value)") \
     X(S_PROMISE_DONE, "Observable §2.3.1 \"From Promise\" (the subscriber's complete(), after its next())") \
@@ -186,7 +186,7 @@ enum {
     X(S_OP_TAIL, "Observable §2.3.2/§2.3.3 (an operator's LAST step, reached after the emit its previous step " \
                  "made: take's complete() after its next(), flatMap's complete() after its inner one's)") \
     X(S_OP_SETTLE, "Observable §2.3.3 (resolving or rejecting the operator's promise — a call of the " \
-                   "capability's resolving function, which is where 27.2.1.3.2 reads `then`)") \
+                   "capability's resolving function, which is where 27.5.1.3's resolveSteps reads `then`)") \
     X(S_OP_ABORT, "Observable §2.3.3 (signal abort the operator's own controller, after its promise settled — " \
                   "every()'s false, first()'s value, find()'s hit, and every predicate that threw)") \
     X(S_DONE, "Observable §2.1/§2.2 (the operation is complete)")

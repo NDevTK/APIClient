@@ -34,7 +34,7 @@
 /* §5.1 "Interpreting the resource metadata" — the SUPPLIED MIME TYPE DETECTION ALGORITHM, for a resource
    retrieved via HTTP. `last_content_type_value` is §5.1's "the value of the LAST `Content-Type` header
    associated with the resource", or NULL for a resource that carried none.
-   IT IS THE LAST HEADER AND NOT Fetch §2.2.3's "extract a MIME type" over the joined list. The two algorithms
+   IT IS THE LAST HEADER AND NOT Fetch §2.2.2 "Headers"'s "extract a MIME type" over the joined list. The two algorithms
    answer the same question differently and this one is what §7's input is defined as: Fetch's merges a charset
    forward across values, §5.1's takes one value whole, and §5's check-for-apache-bug flag is a BYTE-EXACT
    comparison against four literal header values that only the unjoined one can ever equal.

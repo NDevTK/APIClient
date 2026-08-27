@@ -123,12 +123,13 @@ static const char *const FONT_SYSTEM_FAMILY[] = {
     "caption", "icon", "menu", "message-box", "small-caption", "status-bar",
 };
 
-/* css-values-4 §6.5 states the four `<angle>` units. `oblique`'s argument is the only place §2.7's grammar
+/* css-values-4 §7.1 "Angle Units: the `<angle>` type and deg, grad, rad, turn units" states the four
+   `<angle>` units. `oblique`'s argument is the only place §2.7's grammar
    admits one, and telling an angle from a length is what stops `font: oblique 12px serif` reading the size as
    the slant. */
 static const char *const FONT_ANGLE_UNITS[] = { "deg", "grad", "rad", "turn" };
 
-/* A `<number>` — CSS Values §5.2's production, answered by whether the whole span is one. `*out` receives the
+/* A `<number>` — css-values-4 §5.3 "Real Numbers: the `<number>` type"'s production, answered by whether the whole span is one. `*out` receives the
    value so the range checks the two numeric grammars carry (`<number [1,1000]>` for a weight,
    `<number [0,∞]>` for a line-height) are made by their own callers rather than here. */
 static bool font_number(const char *w, size_t n, double *out)

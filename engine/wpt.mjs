@@ -225,7 +225,7 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       standard adds no file to disk — `ecmascript-binding` is its only subdirectory — and adds
                       the two tests that were being excluded. */
                    "webidl", "webidl/ecmascript-binding",
-                   /* location.c — HTML §7.10's Location, whose own directory was never checked out even though
+                   /* location.c — HTML §7.2.4 "The Location interface", whose own directory was never checked out even though
                       the component is named in the project's own architecture. */
                    "html/browsers/history/the-location-interface",
                    /* THE COMPONENT'S OWN SPEC TESTS. readable_stream.c was written, and then measured against
@@ -269,9 +269,9 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       the standard's own level holds `idlharness.any.js` and `bindings-inject-key.any.js`,
                       which cone mode checks out and a subdirectory-only listing collects with nothing. */
                    "IndexedDB", "IndexedDB/resources",
-                   /* HTML §7.2.5.1 AND §7.4 — WindowProxy and popups. `window.open`, `opener`, `parent`,
+                   /* HTML §7.2.2 "The Window object" AND §7.4 "Navigation and session history" — WindowProxy and popups. `window.open`, `opener`, `parent`,
                       `top`, `frames`, named access, and what a cross-origin WindowProxy may expose. This
-                      engine has just grown a WindowProxy member surface and §7.4's open(), and neither had a
+                      engine has just grown a WindowProxy member surface and §7.2.2.1 "Opening and closing windows"'s open(), and neither had a
                       spec directory: a component whose spec directory is not checked out is a component whose
                       gate cannot fail, which is the same defect as asserting only the spelling that existed
                       when the assertion was written. */

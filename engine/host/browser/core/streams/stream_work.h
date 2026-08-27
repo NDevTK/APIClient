@@ -58,9 +58,9 @@ void stream_work_visit(JSContext *ctx, StreamWork *w, JSStepVisit *v)
    TypeError live. */
 int stream_callback_member(JSContext *ctx, JSValueConst v, const char *kind, const char *name);
 
-/* PromiseResolve(%Promise%, v) — 27.2.4.7 — as a sub-sequence. §4.5 reacts to what `start` and `pull` RETURNED,
+/* PromiseResolve(%Promise%, v) — 27.5.4.7 — as a sub-sequence. §4.5 reacts to what `start` and `pull` RETURNED,
  * which may be a plain value, a page THENABLE, or a promise; the one operation covering all three is a
- * capability whose RESOLVE function is called with it, and calling that function is exactly where 27.2.1.3.2
+ * capability whose RESOLVE function is called with it, and calling that function is exactly where 27.5.1.3's resolveSteps
  * step 8 reads `then` off the page's object. So it is a call request like every other run of the page's code,
  * rather than a `JS_IsFunction(then)` test that would answer a patched thenable wrongly.
  * Takes `w->value`; leaves the capability's promise in `w->func`. */

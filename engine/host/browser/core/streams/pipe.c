@@ -196,7 +196,7 @@ enum {
     X(S_FINALIZE, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (release the writer)") \
     X(S_REL_READER, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (release the reader)") \
     X(S_SETTLE, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (settle the pipe's promise — the " \
-                "resolving function's 27.2.1.3.2 step 8 `then` read is the page's)") \
+                "resolving function's 27.5.1.3 step 2.f `then` read is the page's)") \
     X(S_RESULT, "Streams §4.2 pipeTo steps 1-2 (settling this member's OWN capability, for the answers it " \
                 "rejects with before any pipe exists)") \
     X(S_DONE, "Streams §4.2 pipeTo step 4 / pipeThrough steps 5-6 (the operation is complete)")

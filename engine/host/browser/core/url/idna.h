@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* WHATWG URL §4.2's "domain to ASCII". `domain` is the percent-decoded UTF-8 bytes the host parser produced.
+/* WHATWG URL §3.3 "IDNA"'s domain parser ("domain to ASCII"). `domain` is the percent-decoded UTF-8 bytes the host parser produced.
    Returns 0 with `*out` a malloc'd NUL-terminated A-label domain, or -1 for the spec's FAILURE. */
 int  idna_domain_to_ascii(const char *domain, size_t len, char **out, size_t *out_len);
 void idna_free(char *s);

@@ -668,7 +668,7 @@ int fs_writable_new_run(JSContext *ctx, StreamWork *w, JSValueConst entry, bool 
     }
     /* "Set up stream" hands §5.4 a START PROMISE, and §2.5 declares no start algorithm — so the promise is one
        resolved with undefined, built through the same PromiseResolve sub-sequence §6's TransformStream starts
-       its two halves through. Resolving is where 27.2.1.3.2 step 8 reads `then`, which is why this is a
+       its two halves through. Resolving is where 27.5.1.3 step 2.f reads `then`, which is why this is a
        request and not a call. */
     r = stream_promise_of_run(ctx, w, 0, in, out_cb, out_argc);
     if (r > 0) return r;

@@ -554,7 +554,7 @@ bool mime_sniff_supplied(MimeType *out, bool *apache_bug, const char *value)
 /* §7 step 2's second condition: the supplied MIME type's essence is `unknown/unknown`, `application/unknown`,
    or the WILDCARD ESSENCE — U+002A, U+002F, U+002A, which cannot be written out in a C comment and is the
    third entry of the step's own list.
-   THE WILDCARD REACHES HERE BECAUSE §5.1 PARSES THE HEADER VALUE WITH §4.4 and does not run Fetch §2.2.3's
+   THE WILDCARD REACHES HERE BECAUSE §5.1 PARSES THE HEADER VALUE WITH §4.4 and does not run Fetch §2.2.2 "Headers"'s
    extraction, which SKIPS a wildcard candidate ("if temporaryMimeType is failure or its essence is the
    wildcard, then continue"). Two algorithms over one header, and this step exists precisely for the value the
    other one throws away — which is one of the reasons mime_sniff_supplied is not mime_type_extract. */

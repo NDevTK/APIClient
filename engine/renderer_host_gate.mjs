@@ -184,8 +184,7 @@ const fs = require('node:fs'), path = require('node:path'), nodeUrl = require('n
 const STAGING_MARK = ${JSON.stringify(STAGING_MARK)};
 globalThis.self = globalThis;
 
-/* THE THIRD ARGUMENT IS OPTIONAL AND ITS ABSENCE IS A POSITIVE STATEMENT — HTML §9.5 "the WindowPostMessage
-   interface" declares \`postMessage(message, targetOrigin, transfer)\` with \`transfer\` defaulting to an empty
+/* THE THIRD ARGUMENT IS OPTIONAL AND ITS ABSENCE IS A POSITIVE STATEMENT — HTML §9.3.3 "Posting messages" declares \`postMessage(message, targetOrigin, transfer)\` with \`transfer\` defaulting to an empty
    sequence, so "this post carries no handles" is what \`undefined\` MEANS here. The default is written on the
    PRODUCING side, once, and every consumer below then reads a \`ports\` field that is always present. */
 const parent = {

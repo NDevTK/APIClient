@@ -1237,9 +1237,9 @@ static int obs_run(JSContext *ctx, JSObsState *s, int op, JSValue cb_result, JSV
             continue;
 
         case S_ASYNC_PROMISE:
-            /* 27.2.4.7 PromiseResolve over what `next` answered — a plain value, a page thenable or a real
+            /* 27.5.4.7 PromiseResolve over what `next` answered — a plain value, a page thenable or a real
                promise, all three covered by calling a capability's resolving function, which is where
-               27.2.1.3.2 step 8 reads `then` off the page's object. */
+               27.5.1.3 step 2.f reads `then` off the page's object. */
             r = stream_promise_of_run(ctx, &s->sw, s->reject, cb_result, out_cb, out_argc);
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;

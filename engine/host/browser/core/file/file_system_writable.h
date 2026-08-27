@@ -13,7 +13,7 @@ void fs_writable_free(JSRuntime *rt);
 /* §2.5's CREATE A NEW FileSystemWritableFileStream given a file entry, as a SUB-SEQUENCE.
  *
  * It is a sub-sequence and not a call because "set up stream" hands §5.4's controller a START PROMISE, and
- * building one means RESOLVING a capability — 27.2.1.3.2 step 8 reads `then` off whatever it is resolved with,
+ * building one means RESOLVING a capability — 27.5.1.3 step 2.f reads `then` off whatever it is resolved with,
  * which is the page's code and therefore a request. §6's TransformStream starts its two halves through exactly
  * this seam (core/streams/transform_stream.c), so this is the same operation and not a second one.
  *

@@ -2397,11 +2397,11 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
  *
  * AND IT REORDERED THE PAGE'S MICROTASKS, which is the reason it could not merely be tidied. Every delivery
  * below runs through JS_CallAsFlow, which builds a CALL-ROOT FLOW: the native resolving function is a step
- * machine and offers a park at every re-entry, and 27.2.1.3.2 "Promise Resolve Functions" step 9's
+ * machine and offers a park at every re-entry, and 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s resolveSteps step 9's
  * `Get(resolution, "then")` is a read on an object whose prototype the page owns, so the settle of reply A can
  * PARK part-way. The drain did not stop for that. It went on and delivered reply B, whose settle ran to
- * completion — so B's promise reached 27.2.1.4 "FulfillPromise" step 7's TriggerPromiseReactions FIRST, and
- * 27.2.1.8 "TriggerPromiseReactions ( reactions, argument )" step 1.b enqueued B's reaction jobs ahead of A's.
+ * completion — so B's promise reached 27.5.1.4 "FulfillPromise" step 7's TriggerPromiseReactions FIRST, and
+ * 27.5.1.8 "TriggerPromiseReactions ( reactions, arg )" step 1.b enqueued B's reaction jobs ahead of A's.
  * §9.5.5 "HostEnqueuePromiseJob ( job, realm )" then requires that "Jobs must run in the same order as the
  * HostEnqueuePromiseJob invocations that scheduled them", and the queue honours that faithfully — so the
  * page's `.then` handlers ran B before A, in an order the forced preempt alone decided. A park is only ever
@@ -2454,7 +2454,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
         }
         /* NO ENTRY IS DELIVERED WHILE A SETTLE OF THIS REGISTER IS STILL PARKED — the invariant this function
            was rewritten around, asserted where the next delivery would begin rather than left as a property
-           somebody maintains. A settle that parked has not reached 27.2.1.4 "FulfillPromise" step 7 yet, so its
+           somebody maintains. A settle that parked has not reached 27.5.1.4 "FulfillPromise" step 7 yet, so its
            reactions are not on the queue; anything delivered in front of it enqueues first and §9.5.5
            "HostEnqueuePromiseJob ( job, realm )" then runs them in that order — the page observes an order the
            preempt chose. Both homes of the park are asked, because a park rides the Flow while it is switched
@@ -2476,7 +2476,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                "a reply was delivered while another flow was switched in — the page's resolving function would "
                "run against that flow's delta and the reactions it triggers would be queued on that flow");
         /* TAKEN OFF THE REGISTER BEFORE IT IS DELIVERED, and that ordering is the record's own lifetime. The
-           delivery below runs the PAGE's code — 27.2.1.3.2 "Promise Resolve Functions" step 9 reads
+           delivery below runs the PAGE's code — 27.5.1.3 "CreateResolvingFunctions ( toResolve )"'s resolveSteps step 9 reads
            `Get(resolution, "then")` off an object whose prototype the page owns — and that code can issue
            another fetch, which appends to this very register. As a C array the walk held a `FlowPending *` into
            storage the append could realloc out from under it; as a JS record the reference here is what keeps
@@ -2642,7 +2642,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             DCHECK(kind == FLOW_PENDING_RESOLVE,
                    "a synchronous host request's answer reached the reply delivery — its asking machine never "
                    "resumed to take it, so its parked continuation is the thing to look for");
-            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.2.1.3.2 "Promise
+            /* AS A FLOW, not a JS_Call. The delivery settles the page's promise, and 27.5.1.3's resolveSteps "Promise
                Resolve Functions" step 9 reads `Get(resolution, "then")` off the Response — an ordinary object
                whose prototype the page owns, so `Object.prototype.then = { get(){…} }` makes that read the
                page's code. Out of a plain call it ran in a C activation with no flow base, which is the
