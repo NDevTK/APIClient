@@ -27,6 +27,7 @@
 #include "quickjs.h"
 #include "core/agent_state.h"
 #include "core/html/html_iframe.h"
+#include "core/html/referrer_policy_attribute.h"   /* §7.1.6 returns §2.5.5's attribute STATE, not its bytes */
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
@@ -57,6 +58,41 @@ bool iframe_element_is(const lxb_dom_node_t *n)
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
     q = lxb_dom_element_qualified_name(lxb_dom_interface_element((lxb_dom_node_t *)n), &qn);
     return q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6);
+}
+
+/* HTML §7.1.6 "iframe element referrer policy" — "TO DETERMINE THE IFRAME ELEMENT REFERRER POLICY given an
+ * element-or-null embedder: if embedder is an `iframe` element, then return embedder's `referrerpolicy`
+ * attribute's STATE'S CORRESPONDING KEYWORD. Return the empty string." Two steps, and each is a claim the
+ * caller must not make for itself.
+ *
+ * "THE STATE'S CORRESPONDING KEYWORD" IS NOT THE ATTRIBUTE'S VALUE, and reading the value instead was wrong in
+ * both directions at once. §2.5.5 makes this an ENUMERATED attribute, so §2.3.3 matches ASCII case-insensitively
+ * and hands back a CANONICAL keyword: `referrerpolicy="No-Referrer"` is the no-referrer state, which a byte
+ * comparison against the raw text says it is not, and `referrerpolicy="bogus"` is the empty string state, which
+ * a byte comparison says is the string "bogus". The first of those silently failed to mask an origin in §3.1.3's
+ * internal ancestor origin objects list creation steps — the section's one consumer, and the reason its note
+ * says this exists at all: "this is used for allowing masking of some origins in the internal ancestor origin
+ * objects list creation steps."
+ *
+ * "IF EMBEDDER IS AN `IFRAME` ELEMENT" IS THE OTHER HALF, and it is not a formality. `<object>` and `<embed>`
+ * are navigable containers too and neither has a referrer policy attribute, so an author who writes one on an
+ * `<object>` gets the EMPTY STRING — a caller that read the attribute off whatever container it was handed
+ * would honour bytes the standard defines no meaning for. The embedder may also be NULL (an AUXILIARY navigable
+ * has no container element at all), which is the same arm: the empty string.
+ *
+ * IT RETURNS BORROWED, NEVER-NULL BYTES, and both properties are load-bearing. The answer is always one of
+ * Referrer Policy §3's nine keywords, which are string literals in core/html/referrer_policy_attribute.c's
+ * table, so there is nothing to free — and a caller that had to free it would be a caller whose "" and whose
+ * NULL are two spellings of one state, which is precisely the hole a default gets filled into. */
+const char *iframe_element_referrer_policy(JSValueConst embedder)
+{
+    lxb_dom_node_t *n;
+
+    /* §7.1.6 takes "an element-or-null embedder", and an auxiliary navigable's is null. */
+    if (!JS_IsObject(embedder)) return "";
+    n = node_of(embedder);
+    if (!iframe_element_is(n)) return "";                                       /* STEP 2 */
+    return referrer_policy_attribute_keyword(lxb_dom_interface_element(n));     /* STEP 1 */
 }
 
 /* This element's navigable IN THIS FLOW, or JS_UNDEFINED. */

@@ -12,19 +12,11 @@
  * — the exact opposite of what the page said — and would answer false for the `<img>` and the `<a href>` whose
  * Auto state the section says are draggable.
  *
- * EACH IS AN ENUMERATED ATTRIBUTE — HTML §2.3.3 Keywords and enumerated attributes — and that section's
- * determine-the-state algorithm is written ONCE here, in its stated ORDER: an absent attribute is the missing
- * value default; a value ASCII case-insensitively matching a keyword is that keyword's state; an EMPTY value is
- * the empty value default; anything else is the invalid value default. The keyword match comes BEFORE the empty
- * check because §2.3.3 puts it there, and `translate=""` (Yes) versus `translate="maybe"` (Inherit) is the pair
- * that tells the two defaults apart.
- *
- * THE STATE IS READ OFF LEXBOR AND NOT THROUGH THE TAINT SHADOW. solver/attr_shadow.c keeps an attacker value a
- * flow stashed in an attribute so the taint survives a round trip through the DOM, and `getAttribute` answers
- * from it; what is asked here is not the attribute's VALUE but its STATE, which §2.3.3 decides by matching a
- * fixed keyword set, and a concolic value matches no keyword. So the concrete string Lexbor holds gives the
- * same state the shadow would and gives it without wrapping every ancestor on the walk. WRITES still go through
- * core/dom/element.c's chokepoint, because a write is what the per-flow DOM delta has to capture.
+ * EACH IS AN ENUMERATED ATTRIBUTE — HTML §2.3.3 Keywords and enumerated attributes — whose determine-the-state
+ * algorithm is core/html/enumerated_attribute.c, asked here with each attribute's own keyword table and its own
+ * three special states. What every table below has to get right is which state goes in which position: the
+ * keyword match comes BEFORE the empty check because §2.3.3 puts it there, and `translate=""` (Yes) versus
+ * `translate="maybe"` (Inherit) is the pair that tells the empty and invalid value defaults apart.
  *
  * THE WALKS ARE ANCESTOR WALKS AND THEY ARE NOT BOUNDED. A tree is finite and the walk is one step per level;
  * §NO BOUNDS is about work items, not about the height of a document. */
@@ -37,6 +29,7 @@
 #include "quickjs.h"
 #include "solver/dom_cow.h"
 #include "core/dom/element.h"
+#include "core/html/enumerated_attribute.h"
 #include "core/html/global_attributes.h"
 #include "core/html/html_element.h"
 #include "core/html/html_form.h"
@@ -50,48 +43,11 @@ static int g_id_set_content_editable = -1;
 static int g_id_set_draggable = -1;
 static bool g_ready;
 
-/* ---- HTML §2.3.3 Keywords and enumerated attributes ------------------------------------------------------ */
-
-/* A state is an index into the attribute's own keyword table; the three defaults are states too, which is why
-   they are the same type and not a separate flag. */
-typedef struct { const char *keyword; int state; } EnumKeyword;
-
-static bool ascii_ci_equal(const char *a, const lxb_char_t *b, size_t blen)
-{
-    size_t i;
-
-    for (i = 0; i < blen; i++) {
-        char x = a[i], y = (char)b[i];
-        if (!x) return false;
-        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
-        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
-        if (x != y) return false;
-    }
-    return a[blen] == 0;
-}
-
-/* §2.3.3's DETERMINE THE STATE, in the section's own order. `empty` is passed as `invalid` by an attribute that
-   defines no empty value default, which is what "otherwise, if the attribute has an invalid value default"
-   reduces to when the value is the empty string and there is no empty default. */
-static int enum_state(lxb_dom_element_t *el, const char *attr, const EnumKeyword *kw,
-                      int missing, int empty, int invalid)
-{
-    size_t len = 0;
-    const lxb_char_t *v;
-    int i;
-
-    DCHECK(el != NULL, "an enumerated attribute's state was asked for with no element");
-    if (!lxb_dom_element_has_attribute(el, (const lxb_char_t *)attr, strlen(attr)))
-        return missing;                                            /* step 1 */
-    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)attr, strlen(attr), &len);
-    /* An attribute PRESENT with no value at all (`<div translate>`) is the empty string, which lexbor stores as
-       a NULL value pointer — the same distinction core/dom/element.c's boolean reflection had to make. */
-    if (!v) len = 0;
-    for (i = 0; kw[i].keyword; i++)                                /* step 2 */
-        if (v && ascii_ci_equal(kw[i].keyword, v, len)) return kw[i].state;
-    if (len == 0) return empty;                                    /* step 3 */
-    return invalid;                                                /* step 4 */
-}
+/* §2.3.3's DETERMINE THE STATE was written here, and it is now core/html/enumerated_attribute.c — this file's
+   header still says the algorithm is written once, and that is only true of a component every asker can reach.
+   The copy that stood here was complete (all four steps, all three special states) and was still the wrong
+   shape, because a `static` cannot be a second caller's answer: §2.5.5's referrer policy attribute would have
+   been the fifth hand-rolled copy in this tree rather than the first reuse of this one. */
 
 /* The element's PARENT ELEMENT — DOM §4.4's "parent element", which is null when the parent is not an element
    (a Document or a DocumentFragment), and which is what every inheritance below walks. */
@@ -135,7 +91,9 @@ static lxb_dom_element_t *receiver(JSContext *ctx, JSValueConst this_val, const 
 /* ---- HTML §3.2.6.3 The translate attribute ---------------------------------------------------------------- */
 
 enum { TRANSLATE_YES, TRANSLATE_NO, TRANSLATE_INHERIT };
-static const EnumKeyword TRANSLATE_KW[] = { { "yes", TRANSLATE_YES }, { "no", TRANSLATE_NO }, { NULL, 0 } };
+static const EnumeratedKeyword TRANSLATE_KW[] = {
+    { "yes", TRANSLATE_YES }, { "no", TRANSLATE_NO }, { NULL, 0 }
+};
 
 /* §3.2.6.3's TRANSLATION MODE: Yes is translate-enabled, No is no-translate, and otherwise — the Inherit state,
    OR an element that is not an HTML element and therefore has no translate attribute — it is the parent
@@ -145,7 +103,8 @@ static bool translation_enabled(lxb_dom_element_t *el)
 {
     for (; el; el = parent_element(el)) {
         if (!element_is_html(el)) continue;
-        switch (enum_state(el, "translate", TRANSLATE_KW, TRANSLATE_INHERIT, TRANSLATE_YES, TRANSLATE_INHERIT)) {
+        switch (enumerated_attribute_state(el, "translate", TRANSLATE_KW,
+                                           TRANSLATE_INHERIT, TRANSLATE_YES, TRANSLATE_INHERIT)) {
         case TRANSLATE_YES: return true;
         case TRANSLATE_NO:  return false;
         default:            break;
@@ -176,7 +135,7 @@ static JSValue js_translate_set(JSContext *ctx, JSValueConst this_val, JSValueCo
 /* ---- HTML §6.8.5 Spelling and grammar checking ------------------------------------------------------------ */
 
 enum { SPELLCHECK_TRUE, SPELLCHECK_FALSE, SPELLCHECK_DEFAULT };
-static const EnumKeyword SPELLCHECK_KW[] = {
+static const EnumeratedKeyword SPELLCHECK_KW[] = {
     { "true", SPELLCHECK_TRUE }, { "false", SPELLCHECK_FALSE }, { NULL, 0 }
 };
 
@@ -189,8 +148,8 @@ static const EnumKeyword SPELLCHECK_KW[] = {
 static bool spellcheck_enabled(lxb_dom_element_t *el)
 {
     for (; el; el = parent_element(el)) {
-        switch (enum_state(el, "spellcheck", SPELLCHECK_KW, SPELLCHECK_DEFAULT, SPELLCHECK_TRUE,
-                           SPELLCHECK_DEFAULT)) {
+        switch (enumerated_attribute_state(el, "spellcheck", SPELLCHECK_KW,
+                                           SPELLCHECK_DEFAULT, SPELLCHECK_TRUE, SPELLCHECK_DEFAULT)) {
         case SPELLCHECK_TRUE:  return true;
         case SPELLCHECK_FALSE: return false;
         default:               break;   /* Default: inherit-by-default while there is a parent element */
@@ -221,7 +180,7 @@ static JSValue js_spellcheck_set(JSContext *ctx, JSValueConst this_val, JSValueC
 /* ---- HTML §6.8.6 Writing suggestions ---------------------------------------------------------------------- */
 
 enum { WS_TRUE, WS_FALSE, WS_DEFAULT };
-static const EnumKeyword WS_KW[] = { { "true", WS_TRUE }, { "false", WS_FALSE }, { NULL, 0 } };
+static const EnumeratedKeyword WS_KW[] = { { "true", WS_TRUE }, { "false", WS_FALSE }, { NULL, 0 } };
 
 /* §6.8.6's COMPUTED WRITING SUGGESTIONS VALUE, whose recursion is over the parent element and stops the moment
    an element states a value: False is "false"; Default recurses and is "false" only if the parent's computed
@@ -230,7 +189,7 @@ static const EnumKeyword WS_KW[] = { { "true", WS_TRUE }, { "false", WS_FALSE },
 static bool writing_suggestions_offered(lxb_dom_element_t *el)
 {
     for (; el; el = parent_element(el)) {
-        int st = enum_state(el, "writingsuggestions", WS_KW, WS_DEFAULT, WS_TRUE, WS_TRUE);
+        int st = enumerated_attribute_state(el, "writingsuggestions", WS_KW, WS_DEFAULT, WS_TRUE, WS_TRUE);
 
         if (st == WS_FALSE) return false;
         if (st != WS_DEFAULT) return true;
@@ -268,7 +227,7 @@ static JSValue js_writing_suggestions_set(JSContext *ctx, JSValueConst this_val,
 /* ---- HTML §6.8.8 Autocorrection --------------------------------------------------------------------------- */
 
 enum { AUTOCORRECT_ON, AUTOCORRECT_OFF };
-static const EnumKeyword AUTOCORRECT_KW[] = {
+static const EnumeratedKeyword AUTOCORRECT_KW[] = {
     { "on", AUTOCORRECT_ON }, { "off", AUTOCORRECT_OFF }, { NULL, 0 }
 };
 
@@ -285,11 +244,11 @@ static bool autocorrect_inheriting(lxb_dom_element_t *el)
    names, and the only three of that enumeration this file has any question about. */
 static bool input_type_bars_autocorrect(lxb_dom_element_t *el)
 {
-    static const EnumKeyword TYPE_KW[] = { { "url", 1 }, { "email", 1 }, { "password", 1 }, { NULL, 0 } };
+    static const EnumeratedKeyword TYPE_KW[] = { { "url", 1 }, { "email", 1 }, { "password", 1 }, { NULL, 0 } };
 
     if (!element_is_html(el) || !local_name_is(el, "input")) return false;
     /* The missing, empty and invalid value defaults are all the Text state, which is not one of the three. */
-    return enum_state(el, "type", TYPE_KW, 0, 0, 0) == 1;
+    return enumerated_attribute_state(el, "type", TYPE_KW, 0, 0, 0) == 1;
 }
 
 /* §6.8.8's USED AUTOCORRECTION STATE. Step 3 is the form-owner arm, and the owner is asked for by RUNNING
@@ -303,13 +262,13 @@ static bool autocorrect_on(JSContext *ctx, JSValueConst wrap, lxb_dom_element_t 
 
     if (input_type_bars_autocorrect(el)) return false;                              /* step 1 */
     if (lxb_dom_element_has_attribute(el, (const lxb_char_t *)"autocorrect", 11))   /* step 2 */
-        return enum_state(el, "autocorrect", AUTOCORRECT_KW, AUTOCORRECT_ON, AUTOCORRECT_ON,
-                          AUTOCORRECT_ON) == AUTOCORRECT_ON;
+        return enumerated_attribute_state(el, "autocorrect", AUTOCORRECT_KW,
+                                          AUTOCORRECT_ON, AUTOCORRECT_ON, AUTOCORRECT_ON) == AUTOCORRECT_ON;
     if (!autocorrect_inheriting(el)) return true;                                   /* step 4 */
     owner = html_form_owner_of(ctx, wrap);                                          /* step 3 */
     form = element_of_value(owner);
-    on = form ? enum_state(form, "autocorrect", AUTOCORRECT_KW, AUTOCORRECT_ON, AUTOCORRECT_ON,
-                           AUTOCORRECT_ON) == AUTOCORRECT_ON
+    on = form ? enumerated_attribute_state(form, "autocorrect", AUTOCORRECT_KW,
+                                           AUTOCORRECT_ON, AUTOCORRECT_ON, AUTOCORRECT_ON) == AUTOCORRECT_ON
               : true;
     JS_FreeValue(ctx, owner);
     return on;
@@ -337,13 +296,13 @@ static JSValue js_autocorrect_set(JSContext *ctx, JSValueConst this_val, JSValue
 /* ---- HTML §6.8.1 Making document regions editable: The contenteditable content attribute ------------------- */
 
 enum { CE_TRUE, CE_FALSE, CE_PLAINTEXT_ONLY, CE_INHERIT };
-static const EnumKeyword CE_KW[] = {
+static const EnumeratedKeyword CE_KW[] = {
     { "true", CE_TRUE }, { "false", CE_FALSE }, { "plaintext-only", CE_PLAINTEXT_ONLY }, { NULL, 0 }
 };
 
 static int content_editable_state(lxb_dom_element_t *el)
 {
-    return enum_state(el, "contenteditable", CE_KW, CE_INHERIT, CE_TRUE, CE_INHERIT);
+    return enumerated_attribute_state(el, "contenteditable", CE_KW, CE_INHERIT, CE_TRUE, CE_INHERIT);
 }
 
 /* §6.8.1: "an editing host is either an HTML element with its contenteditable attribute in the true state or
@@ -417,13 +376,13 @@ static JSValue js_content_editable_set(JSContext *ctx, JSValueConst this_val, JS
     if (!el) return JS_EXCEPTION;
     s = JS_ToCString(ctx, val);
     if (!s) return JS_EXCEPTION;
-    if (ascii_ci_equal("inherit", (const lxb_char_t *)s, strlen(s))) {
+    if (enumerated_attribute_keyword_match("inherit", s, strlen(s))) {
         JS_FreeCString(ctx, s);
         dom_cow_remove_attribute(el, "contenteditable");
         return JS_UNDEFINED;
     }
     for (i = 0; KEEP[i]; i++) {
-        if (!ascii_ci_equal(KEEP[i], (const lxb_char_t *)s, strlen(s))) continue;
+        if (!enumerated_attribute_keyword_match(KEEP[i], s, strlen(s))) continue;
         JS_FreeCString(ctx, s);
         element_attr_set(ctx, this_val, "contenteditable", KEEP[i]);
         return JS_UNDEFINED;
@@ -448,16 +407,17 @@ static JSValue js_is_content_editable(JSContext *ctx, JSValueConst this_val, int
 /* ---- HTML §6.11.7 The draggable attribute ------------------------------------------------------------------ */
 
 enum { DRAGGABLE_TRUE, DRAGGABLE_FALSE, DRAGGABLE_AUTO };
-static const EnumKeyword DRAGGABLE_KW[] = {
+static const EnumeratedKeyword DRAGGABLE_KW[] = {
     { "true", DRAGGABLE_TRUE }, { "false", DRAGGABLE_FALSE }, { NULL, 0 }
 };
 
 /* §6.11.7: "The attribute's missing value default and invalid value default are both the Auto state." It
    declares NO empty value default, so `<div draggable="">` falls to the invalid one — which is what passing
-   Auto in the `empty` position expresses, exactly as enum_state's own comment states. */
+   Auto in the `empty` position expresses, exactly as core/html/enumerated_attribute.h's own comment states. */
 static int draggable_state(lxb_dom_element_t *el)
 {
-    return enum_state(el, "draggable", DRAGGABLE_KW, DRAGGABLE_AUTO, DRAGGABLE_AUTO, DRAGGABLE_AUTO);
+    return enumerated_attribute_state(el, "draggable", DRAGGABLE_KW,
+                                      DRAGGABLE_AUTO, DRAGGABLE_AUTO, DRAGGABLE_AUTO);
 }
 
 /* §6.11.7's THREE-BRANCH getter, in the section's own order: "If an element's draggable content attribute has

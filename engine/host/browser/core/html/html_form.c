@@ -86,9 +86,10 @@ static bool has_attr(lxb_dom_element_t *el, const char *name)
 }
 
 /* An ASCII CASE-INSENSITIVE match against a lower-case literal — which is what an ENUMERATED attribute's
-   keywords are compared with (§2.3.2), and what §4.10.22.4 step 5.9 says of `_charset_`. Written here rather
-   than reached for as `strncasecmp` because that one is the C LOCALE's, and a Turkish locale folds `I` to `ı`:
-   an attribute keyword is ASCII by definition and must not depend on where the process is running. */
+   keywords are compared with (§2.3.3 Keywords and enumerated attributes), and what §4.10.22.4 step 5.9 says
+   of `_charset_`. Written here rather than reached for as `strncasecmp` because that one is the C LOCALE's,
+   and a Turkish locale folds `I` to `ı`: an attribute keyword is ASCII by definition and must not depend on
+   where the process is running. */
 static bool ascii_ci_is(const char *a, size_t alen, const char *lower)
 {
     size_t i, n = strlen(lower);
@@ -109,8 +110,9 @@ static bool ascii_ci_is(const char *a, size_t alen, const char *lower)
  * cannot. */
 
 /* §4.10.5.1's STATES OF THE `type` ATTRIBUTE, resolved once against the keyword table §4.10.5.1 is a section
-   per. The keywords are ASCII case-insensitive like every enumerated attribute's (§2.3.2), and a missing or
-   unrecognised one is the TEXT state — both defaults §4.10.5.1.2 declares. */
+   per. The keywords are ASCII case-insensitive like every enumerated attribute's (§2.3.3 Keywords and
+   enumerated attributes), and a missing or unrecognised one is the TEXT state — both defaults
+   §4.10.5.1.2 declares. */
 HtmlInputState html_form_input_state(const lxb_dom_node_t *n)
 {
     static const struct { const char *keyword; HtmlInputState state; } TYPES[] = {

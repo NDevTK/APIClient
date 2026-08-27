@@ -2767,15 +2767,15 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * the attribute's value here is the value the standard snapshots. A later write to `referrerpolicy` must not
  * change this list, and it cannot: nothing re-runs these steps.
  *
- * WHAT IS READ IS THE RAW ATTRIBUTE AND WHAT §7.3.2.1 PASSES IS §7.1.6's ANSWER, AND THEY ARE NOT THE SAME
- * FUNCTION. HTML §7.1.6 "iframe element referrer policy" is "if embedder is an `iframe` element, then return
- * embedder's `referrerpolicy` attribute's STATE's corresponding keyword; return the empty string" — a state,
- * so an enumerated attribute's ASCII case-insensitive match with an invalid-value default of the empty string,
- * and the empty string for a container that is not an `iframe` at all. This reads the bytes and compares them
- * exactly, so `referrerpolicy="No-Referrer"` does not mask and an `<object>`'s attribute would. That is a
- * MISSING COMPONENT (§7.1.6 has no implementation in this tree) rather than a shortcut taken here, and it is
- * named at the site instead of being quietly widened: when §7.1.6 exists, this takes its answer as the
- * argument the standard makes it and stops touching the element.
+ * THE POLICY IS §7.1.6's ANSWER AND NOT THE RAW ATTRIBUTE, which is what §7.3.2.1 "Creating browsing contexts"
+ * passes as `iframeReferrerPolicy` and is a different function from reading the element. HTML §7.1.6 "iframe
+ * element referrer policy" is "if embedder is an `iframe` element, then return embedder's `referrerpolicy`
+ * attribute's STATE's corresponding keyword; return the empty string" — a STATE, so §2.5.5's enumerated
+ * attribute resolved by §2.3.3's ASCII case-insensitive match with an invalid value default of the empty string
+ * state, and the empty string for a container that is not an `iframe` at all. This site used to compare the raw
+ * bytes with `strcmp`, which failed to mask for `referrerpolicy="No-Referrer"` and would have honoured the
+ * attribute on an `<object>`; core/html/html_iframe.c owns §7.1.6 now and this asks it, so the two questions
+ * ("which state" and "does it mask") are answered in the two places the standard answers them.
  *
  * THE MASKED SAME-ORIGIN COMPARISON ASKS THE PARENT'S ORIGIN RECORD, NOT ITS TEXT. Step 10's condition is
  * "ancestorOrigin is same origin with parentDoc's origin", and §7.1.1's same origin is FALSE for two opaque
@@ -2792,7 +2792,7 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
     const Origin *porigin;
     const char *pser;
     bool masked = false, popaque;
-    char *rp;
+    const char *rp;   /* §7.1.6's keyword — borrowed from its own table, so there is nothing to free */
     JSValue len;
 
     CHECK(!JS_IsException(out), "§3.1.3's ancestor origins list could not be allocated");
@@ -2812,19 +2812,22 @@ static JSValue doc_compose_ancestor_origins(JSContext *ctx, JSValueConst parent_
     DCHECK(porigin != NULL, "§3.1.3's step 9 needs the parent Document's origin and its navigable has none");
     popaque = origin_is_opaque(porigin);
     pser = origin_serialized(porigin);
-    /* STEPS 6-8: the container element and the referrer policy snapshot — see §7.1.6 above for what this read
-       is standing in for. */
-    rp = JS_IsObject(container) ? element_attr_get(ctx, container, "referrerpolicy") : NULL;
-    if (rp && !strcmp(rp, "no-referrer")) {
+    /* STEPS 6-8: the container element and the referrer policy snapshot. The keyword §7.1.6 returns is already
+       canonical, so the two comparisons below are against the standard's own spellings and are exact by
+       construction — the case-insensitivity lives once, inside §2.3.3's match, and not at every consumer. */
+    rp = iframe_element_referrer_policy(container);
+    DCHECK(rp != NULL, "§7.1.6 answered with no keyword — its two arms both return one (a state's corresponding "
+                       "keyword, or the empty string), so a NULL is an arm that returned nothing at all and "
+                       "step 8 would read it as 'no policy' rather than crashing");
+    if (!strcmp(rp, "no-referrer")) {
         masked = true;                                                              /* STEP 8, first arm */
-    } else if (rp && !strcmp(rp, "same-origin")) {                                  /* STEP 8, second arm */
+    } else if (!strcmp(rp, "same-origin")) {                                        /* STEP 8, second arm */
         DCHECK(child_origin != NULL,
                "§3.1.3's step 8 compares this Document's origin against its parent's and the navigable being "
                "created has none — every navigable is created with the origin its Document will have, so an "
                "absent one is a create that had not computed it yet rather than a Document without one");
         masked = !origin_same(porigin, child_origin);
     }
-    free(rp);
     /* STEP 9: "if masked is true, then append a new opaque origin to output; otherwise, append parentDoc's
        origin to output." */
     JS_SetPropertyUint32(ctx, out, nout++,

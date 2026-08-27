@@ -51,9 +51,9 @@ static int g_id_enum_set[2] = { -1, -1 };   /* one per enumerated reflection —
 
 /* ---- HTML §4.12.3's content attributes ------------------------------------------------------------------- */
 
-/* §2.3.9: an enumerated attribute's keywords are matched ASCII case-insensitively. `strcasecmp` is the LOCALE's
-   answer, and the standard's is ASCII's — a Turkish locale folds `I` to `ı` and would fail to recognise
-   `shadowrootmode="OPEN"`. One comparison, written once, over a length the caller already has. */
+/* §2.3.3 Keywords and enumerated attributes: a keyword is matched ASCII case-insensitively. `strcasecmp`
+   is the LOCALE's answer, and the standard's is ASCII's — a Turkish locale folds `I` to `ı` and would
+   fail to recognise `shadowrootmode="OPEN"`. One comparison, written once, over a length the caller already has. */
 static bool ascii_ieq(const char *a, size_t an, const char *b)
 {
     size_t i;

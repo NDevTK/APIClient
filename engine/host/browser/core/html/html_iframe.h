@@ -16,6 +16,17 @@ void iframe_init(JSContext *ctx);
    in two files, and four copies of a comparison are four places for the next element type that gets a content
    navigable — §4.8.6's `<embed>` and §4.8.7's `<object>` — to be added to three of. */
 bool iframe_element_is(const lxb_dom_node_t *n);
+/* HTML §7.1.6 "iframe element referrer policy" — "determine the iframe element referrer policy given an
+   element-or-null embedder". Returns the `referrerpolicy` attribute's STATE's corresponding keyword when the
+   embedder is an `iframe`, and the empty string otherwise (a different container element, or no element at
+   all). NEVER NULL and NEVER OWNED: the answer is one of Referrer Policy §3's nine keywords, held as a literal
+   in core/html/referrer_policy_attribute.c's table.
+   THE CALLER MUST NOT READ THE ATTRIBUTE ITSELF, which is the whole reason this is a function. A referrer
+   policy attribute is ENUMERATED (§2.5.5), so its state is an ASCII case-insensitive match with an invalid
+   value default of the empty string state — a `strcmp` against the raw bytes misses `="No-Referrer"` and
+   invents a state for `="bogus"`, and it honours the attribute on an `<object>`, for which §7.1.6 says the
+   answer is the empty string. */
+const char *iframe_element_referrer_policy(JSValueConst embedder);
 /* Install §4.8.5's `contentWindow` on HTMLIFrameElement's prototype. */
 /* Declared once per AGENT; iframe_install then names the cached ids for each realm's prototype. */
 void iframe_declare(JSContext *ctx);
