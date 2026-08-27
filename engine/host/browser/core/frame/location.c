@@ -966,12 +966,22 @@ static JSValue js_loc_ancestor_origins(JSContext *ctx, JSValueConst this_val, in
     }
     loc_assert_same_origin_domain(ctx);
     DFAIL("§7.2.4's ancestorOrigins reached its last step and this Document has no ANCESTOR ORIGINS LIST — "
-          "HTML §7.3.2.1 \"Creating browsing contexts\" is where a Document is given one (\"set document's "
+          "and the field to build is TWO fields, which is what a reader who stops at the §7.3.2.1 step will "
+          "miss. HTML §7.3.2.1 \"Creating browsing contexts\" sets BOTH, in this order: \"set document's "
+          "internal ancestor origin objects list to the result of running the internal ancestor origin "
+          "objects list creation steps given document and iframeReferrerPolicy\", and then \"set document's "
           "ancestor origins list to the result of running the ancestor origins list creation steps given "
-          "document\"), and core/dom/document.h holds no such field. Build it THERE, at the creation, and not "
-          "here by walking window_proxy_parent at the read: the list is a SNAPSHOT taken when the browsing "
-          "context was created, so a walk performed now would report the ancestors a later navigation left "
-          "behind rather than the ones this document was created under");
+          "document\". Both algorithms are defined in HTML §3.1.3 \"Ancestor origins\", and the second is "
+          "only a SERIALIZATION of the first — so building the list this member returns WITHOUT the internal "
+          "one produces the unmasked answer, which is wrong in exactly the case the internal list exists for: "
+          "the masking that makes a `referrerpolicy=\"no-referrer\"` container hide its origin (and "
+          "\"same-origin\" hide it when the parent is cross-origin) lives entirely in the internal list's "
+          "steps, which append a NEW OPAQUE ORIGIN in place of each masked ancestor and stop masking at the "
+          "first ancestor that is not same origin with the parent. core/dom/document.h holds NEITHER field. "
+          "Build them THERE, at the creation, and not here by walking window_proxy_parent at the read: the "
+          "lists are a SNAPSHOT taken when the browsing context was created, so a walk performed now would "
+          "report the ancestors a later navigation left behind rather than the ones this document was "
+          "created under");
     return JS_UNDEFINED;
 }
 
