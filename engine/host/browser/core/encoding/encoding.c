@@ -21,6 +21,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "solver/cow.h"
+#include "solver/concolic.h"
 #include "core/encoding/encoding.h"
 #include "core/encoding/encoding_table.h"
 #include "core/idl_args.h"
@@ -151,7 +152,7 @@ static void decoder_finalizer(JSRuntime *rt, JSValue val)
 
 static void encoder_finalizer(JSRuntime *rt, JSValue val)
 {
-    (void)rt; (void)val;   /* a TextEncoder holds no state: §7.2 makes its encoding always UTF-8 */
+    (void)rt; (void)val;   /* a TextEncoder holds no state: §7.3 makes its encoding always UTF-8 */
 }
 
 static void decoder_reset(EncDecoder *d)
@@ -1076,16 +1077,18 @@ static const IdlStepDecl js_dec_ctor_decl = {
     "Encoding §7.1 new TextDecoder(label, options)", DEC_CTOR_STEPS
 };
 
-/* ---- §7.2's TextEncoder ------------------------------------------------------------------------------------
+/* ---- §7.4 Interface TextEncoder ---------------------------------------------------------------------------
  *
- * Always UTF-8, by the standard rather than by simplification: §7.2 gives the constructor no arguments and
- * fixes `encoding` at "utf-8", because a page that wants other bytes is meant to build them itself. */
+ * Always UTF-8, by the standard rather than by simplification: §7.4 gives the constructor no arguments and
+ * §7.3 Interface mixin TextEncoderCommon fixes `encoding` at "utf-8", because a page that wants other bytes is
+ * meant to build them itself. */
 
 static JSValue js_encoder_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     (void)magic;
     if (!JS_GetOpaque(this_val, g_enc_class) && !JS_IsObject(this_val))
         return JS_ThrowTypeError(ctx, "not a TextEncoder");
+    /* §7.3 Interface mixin TextEncoderCommon: "The `encoding` getter steps are to return "utf-8"." */
     return JS_NewString(ctx, "utf-8");
 }
 
@@ -1098,16 +1101,47 @@ static JSValue js_encoder_encode(JSContext *ctx, JSValueConst this_val, int argc
     (void)magic;
     if (JS_GetOpaque(this_val, g_enc_class) == NULL && !JS_IsObject(this_val))
         return JS_ThrowTypeError(ctx, "not a TextEncoder");
+    /* AN UNKNOWN INPUT MAKES THIS AN OPERATOR, and §7.4's IDL is what says so: `[NewObject] Uint8Array
+       encode(optional USVString input = "")` — the page OBSERVES the result, so the answer is this operation's
+       own derived unknown and never a conversion. The Web IDL declaration passes unknown external input
+       through as itself, so the JS_ToCStringLen below would hand a concolic to a boundary that owes C real
+       bytes (quickjs.c's js_force_tostring names this line when it does).
+       THE OPERAND IS UNKNOWN BY CONSTRUCTION AT THE SITE THIS WAS MEASURED ON. `{orphan….arg0}` is an argument
+       to an orphan-driven function — §Attacker sources force-invokes a function the bundle shipped and never
+       called, so there is no caller to supply its parameters and there never will be. A site that cannot
+       accept one is a site orphan-driving can never reach, which is why the answer here cannot be a
+       placeholder string: that would de-taint the bytes and report a Uint8Array of a value nothing computed.
+       THE EXAMPLE IS THE REAL ENCODER RUN ON THE OPERAND'S OWN EXAMPLE, never a predicted one — §Solver-half's
+       rule that the example propagates because the engine RUNS the real op. An operand with no example yields
+       a derived unknown with none either, which is honest: this flow has no concrete bytes to show. */
+    if (argc > 0 && concolic_is(argv[0])) {
+        JSValue ex = concolic_example(ctx, argv[0]), real = JS_UNDEFINED;
+        DCHECK(!concolic_is(ex),
+               "a concolic's EXAMPLE is itself unknown — the example is the concrete member of the triple, and "
+               "a nested unknown would send the conversion below straight back to the ToString boundary this "
+               "arm exists to keep off");
+        if (JS_IsString(ex)) {
+            size_t elen = 0;
+            const char *p = JS_ToCStringLen(ctx, &elen, ex);
+            if (p) {
+                real = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)p, elen);
+                JS_FreeCString(ctx, p);
+            }
+        }
+        JS_FreeValue(ctx, ex);
+        return concolic_builtin_hook(ctx, argv[0], "TextEncoder.encode", real);
+    }
     /* The declaration already ran the USVString conversion, so lone surrogates are U+FFFD and this is the
-       string's UTF-8 — which is exactly what §7.2 says to answer with. */
+       string's UTF-8 — which is exactly what §7.4's encode(input) steps say to answer with. */
     s = argc > 0 && !JS_IsUndefined(argv[0]) ? JS_ToCStringLen(ctx, &len, argv[0]) : NULL;
     r = JS_NewUint8ArrayCopy(ctx, (const uint8_t *)(s ? s : ""), s ? len : 0);
     if (s) JS_FreeCString(ctx, s);
     return r;
 }
 
-/* §7.2's encodeInto(). It writes into the page's own buffer and reports how far it got, and the report is the
-   whole point: it must never write a PARTIAL code unit sequence, so the loop stops at the last whole one. */
+/* §7.4's encodeInto(source, destination). It writes into the page's own buffer and reports how far it got, and
+   the report is the whole point: it must never write a PARTIAL code unit sequence, so the loop stops at the
+   last whole one. */
 static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
 {
@@ -1120,11 +1154,24 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     (void)magic;
     if (JS_GetOpaque(this_val, g_enc_class) == NULL && !JS_IsObject(this_val))
         return JS_ThrowTypeError(ctx, "not a TextEncoder");
-    /* §7.2 declares the destination as `Uint8Array`, not as a BufferSource — an Int8Array or a Float32Array is
+    /* §7.4 declares the destination as `Uint8Array`, not as a BufferSource — an Int8Array or a Float32Array is
        a TypeError, because `written` counts BYTES and a view with a wider element would report a length in
        units the caller cannot use. "Is it a typed array" accepted all of them. */
     if (argc < 2 || JS_GetTypedArrayType(argv[1]) != JS_TYPED_ARRAY_UINT8)
         return JS_ThrowTypeError(ctx, "the destination is not a Uint8Array");
+    /* AN UNKNOWN SOURCE IS A DIFFERENT QUESTION FROM encode()'s, AND THIS ENGINE CANNOT ANSWER IT YET. encode()
+       hands the page a NEW Uint8Array, so its unknown result is one derived value; §7.4's encodeInto WRITES
+       INTO THE PAGE'S OWN BUFFER, and a Uint8Array element is a number — there is nowhere in one to put an
+       unknown byte. Its `read`/`written` are derivable and its DESTINATION is not, and answering the pair
+       while leaving the bytes untouched would report a write that did not happen: the page then reads real
+       zeroes out of a buffer it believes holds the encoding of attacker-controlled input.
+       BUILD: concolic bytes in a typed array's backing store — the same capability a concolic element read
+       would need — so the destination carries the unknown and the COW capture above records it. */
+    DCHECK(!concolic_is(argv[0]),
+           "§7.4 encodeInto(source, destination) was given an unknown SOURCE — its destination is a "
+           "Uint8Array, whose elements are numbers, so this engine has nowhere to write the unknown bytes and "
+           "would report `read`/`written` over a buffer it never touched. Build concolic bytes in a typed "
+           "array's backing store");
     view = JS_GetArrayBufferView(ctx, argv[1], &off, &dlen);
     if (JS_IsException(view)) return JS_EXCEPTION;
     dst = JS_GetArrayBuffer(ctx, &whole, view);
@@ -1165,11 +1212,11 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
     return r;
 }
 
-/* WHERE THIS MACHINE RESTS. §7.2's constructor steps "are to do nothing" — so the one stage this machine has
+/* WHERE THIS MACHINE RESTS. §7.4's constructor steps "are to do nothing" — so the one stage this machine has
    is the object §3.7.1 creates, and there is nothing after it. */
 #define ENC_CTOR_STAGES(X) \
     X(ENC_CTOR_BUILD = IDL_STEP_FIRST, \
-      "Encoding §7.2 new TextEncoder() (the constructor steps are to do nothing; Web IDL §3.7.1's `new` " \
+      "Encoding §7.4 new TextEncoder() (the constructor steps are to do nothing; Web IDL §3.7.1's `new` " \
       "requirement and the object it creates are the whole of it)")
 enum { ENC_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const ENC_CTOR_STEPS[] = { ENC_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -1183,7 +1230,7 @@ static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 {
     (void)st; (void)argc; (void)argv; (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
-    DCHECK(hdr->stage == ENC_CTOR_BUILD, "the TextEncoder constructor resumed at a stage §7.2 does not have");
+    DCHECK(hdr->stage == ENC_CTOR_BUILD, "the TextEncoder constructor resumed at a stage §7.4 does not have");
     if (JS_IsUndefined(hdr->this_val))
         return JS_ThrowTypeError(ctx, "constructor TextEncoder requires 'new'"), -1;
     {
@@ -1197,7 +1244,7 @@ static int js_enc_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
 
 static const IdlStepDecl js_enc_ctor_decl = {
     js_enc_ctor_step, sizeof(JSEncoderCtorState), js_enc_ctor_visit, NULL,
-    "Encoding §7.2 new TextEncoder()", ENC_CTOR_STEPS
+    "Encoding §7.4 new TextEncoder()", ENC_CTOR_STEPS
 };
 
 /* ---- install ---------------------------------------------------------------------------------------------- */
@@ -1269,7 +1316,7 @@ void encoding_init(JSContext *ctx)
                                      js_decoder_decode, 0);
     idl_optional_from(0);   /* §7.1: `decode(optional BufferSource input, optional TextDecodeOptions options)` */
     g_id_encode = idl_method_id(ctx, ENCODE_ARGS, 1, js_encoder_encode, 0);
-    idl_optional_from(0);   /* §7.2: `encode(optional USVString input = "")` */
+    idl_optional_from(0);   /* §7.4: `encode(optional USVString input = "")` */
     g_id_encode_into = idl_method_id(ctx, ENCODE_INTO_ARGS, 2, js_encoder_encode_into, 0);
 
     g_dec_ctor_stepid = idl_method_id_step(ctx, DEC_CTOR_ARGS, 2, DECODER_OPTIONS,
@@ -1280,7 +1327,7 @@ void encoding_init(JSContext *ctx)
     realm_declare_intrinsic(encoding_install_protos);
 }
 
-/* §7.1's AND §7.2's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+/* §7.2's AND §7.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
 void encoding_install_protos(JSContext *ctx)
 {
     JSValue dec_p, enc_p, prev;

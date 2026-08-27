@@ -21,6 +21,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/idl_iter.h"
+#include "solver/concolic.h"
 
 /* A PAIR CARRIES ITS LENGTHS, because a name or a value may contain U+0000 — `?a=b%00c` is one pair whose
    value is three characters, and every strlen in this file would have made it one. */
@@ -127,11 +128,37 @@ enum { USP_APPEND = 0, USP_DELETE, USP_GET, USP_GETALL, USP_HAS, USP_SET, USP_SO
 /* THE AGENT'S POOL ENTRIES, one per §6.2 operation — the OBJECTS they are installed as are each realm's. */
 static int g_usp_id[USP_MEMBER_N];
 
+/* WHAT A HALF THAT IS A HOLE CANNOT DO YET, SAID ONCE. §6.2's list is a list of tuples of USVStrings and this
+   one holds their BYTES, so an unknown enters it as its display shape (see UrlEncodedPair). Bytes are enough
+   for the two things §6.2 does with a stored half that this engine can already answer — §5.2 serializing it
+   onto the associated URL, and §5.2 serializing it as a request body — because the serializer copies a hole
+   verbatim and the emission reads it by its braces.
+   THEY ARE NOT ENOUGH FOR THE OTHER TWO, and each is a WRONG ANSWER rather than a missing one, which is why
+   this crashes instead of proceeding:
+     - an EQUALITY. `USP_NAME_IS`/`USP_VALUE_IS` memcmp the halves, and a shape against real bytes compares
+       FALSE while having proven nothing — so `get(unknown)` answers null and `delete(name, unknown)` removes
+       nothing, both of them decisions this flow never made. §Solver-half's forced multi-path execution runs
+       BOTH arms of an undecided equality; a memcmp runs neither.
+     - a READ BACK AS A VALUE. §6.2's `get`, `getAll` and the pair iterator hand the page a half, and a page
+       branching on what it gets back must branch on the UNKNOWN. Answering with the shape as a real String
+       de-taints it: the value that came out of `navigator.language` is indistinguishable from a literal, and
+       every gate downstream of it is decided concretely.
+   BUILD: §6.2's list carrying the VALUE and not its bytes — a concolic rides a JSValue, and the FormData
+   entry list (core/html/form_data.c) already holds one per entry and projects to bytes at its serializers.
+   §5.1's byte list stays bytes: it is produced by a parser over bytes and consumed by a serializer over
+   bytes, and it is the INTERFACE that has USVStrings. */
+#define USP_HOLE_WHY(what)                                                                          \
+    "a URLSearchParams " what " — §6.2's list holds USVStrings and this list holds their BYTES, so " \
+    "an unknown is in it as its display shape and this operation would decide or de-taint it. Build " \
+    "the value-carrying §6.2 list (form_data.c's entry list is the worked example); §5.1's byte list " \
+    "stays bytes"
+
 static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     UspObj *u = usp_of(ctx, this_val);
     const char *name = NULL, *value = NULL;
     size_t nn = 0, vn = 0;
+    int nhole = 0, vhole = 0;
     JSValue r = JS_UNDEFINED;
     int i, w;
 
@@ -139,6 +166,9 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (magic == USP_SORT) {
         /* §6.2 sort(): by the NAMES' code units, and STABLE — the relative order of equal names is preserved,
            which is why this is an insertion sort and not qsort. */
+        for (i = 0; i < u->list.n; i++)
+            DCHECK(!u->list.e[i].nhole,
+                   USP_HOLE_WHY("sort() ordered a name that is a hole by its display shape's code units"));
         for (i = 1; i < u->list.n; i++) {
             UspPair tmp = u->list.e[i];
             int j;
@@ -156,8 +186,28 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
         return r;
     }
 
-    name = JS_ToCStringLen(ctx, &nn, argc > 0 ? argv[0] : JS_UNDEFINED);
-    if (!name) return JS_EXCEPTION;
+    /* §6.2's members take USVStrings, and an UNKNOWN one has no bytes to be. The Web IDL declaration passes
+       unknown external input through as itself on purpose, so a JS_ToCString here is the one thing this
+       boundary must not do (quickjs.c's js_force_tostring says so at the crash): a `const char *` cannot carry
+       a concolic, and §7.1.19 ToString ( arg ) over an unknown is the identity, so there is nothing to convert.
+       NEITHER HALF IS AN OPERATOR — none of the four members reaching this line returns the converted string.
+       `append` and `set` STORE it, and §6.1's update steps then serialize it onto the associated URL, which is
+       what `vscode.dev`'s `e.searchParams.set("vscode-lang", navigator.language.toLowerCase())` does one line
+       before it assigns `e.href` to `window.location.href`. `delete` and `has` MATCH against it. So each half
+       is a NAME in js_force_tostring's sense — an unknown denotes its own display SHAPE, a real string, stable
+       per source — and the pair records WHICH halves are holes so §5.2's serializer does not encode them out
+       of existence.
+       THE LENGTH IS strlen FOR A HOLE AND JS_ToCStringLen's FOR DATA, and the difference is not cosmetic: a
+       real USVString may contain U+0000 (`?a=b%00c` is one pair whose value is three characters), while a
+       display shape is ASCII with no NUL — which url_encoded_list_append asserts, because §5.2 measures a hole
+       half with strlen. Both spellings return an OWNED string, so there is one free path below. */
+    {
+        JSValueConst a0 = argc > 0 ? argv[0] : JS_UNDEFINED;
+        nhole = concolic_is(a0);
+        name = nhole ? concolic_name_cstr(ctx, a0) : JS_ToCStringLen(ctx, &nn, a0);
+        if (!name) return JS_EXCEPTION;
+        if (nhole) nn = strlen(name);
+    }
 #define USP_NAME_IS(i)  (u->list.e[i].nlen == nn && !memcmp(u->list.e[i].name, name, nn))
 #define USP_VALUE_IS(i) (!value || (u->list.e[i].vlen == vn && !memcmp(u->list.e[i].value, value, vn)))
     /* §6.2: `delete` and `has` take an OPTIONAL value, and its presence changes what they match — `delete(name)`
@@ -165,13 +215,22 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
        optional-argument rule is what tells the two apart, so undefined must reach here as undefined. */
     if (magic == USP_APPEND || magic == USP_SET ||
         ((magic == USP_DELETE || magic == USP_HAS) && argc > 1 && !JS_IsUndefined(argv[1]))) {
-        value = JS_ToCStringLen(ctx, &vn, argv[1]);
+        vhole = concolic_is(argv[1]);
+        value = vhole ? concolic_name_cstr(ctx, argv[1]) : JS_ToCStringLen(ctx, &vn, argv[1]);
         if (!value) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+        if (vhole) vn = strlen(value);
     }
+    /* THE EQUALITY BARRIER. Everything but `append` memcmps the NAME against the stored halves, and
+       `delete`/`has` memcmp the VALUE too — see USP_HOLE_WHY. `set` is in the first group: it compares names
+       to find the tuple to overwrite, and only its VALUE is free to be a hole. */
+    DCHECK(!nhole || magic == USP_APPEND,
+           USP_HOLE_WHY("member matched an unknown NAME against the stored names by memcmp"));
+    DCHECK(!vhole || magic == USP_APPEND || magic == USP_SET,
+           USP_HOLE_WHY("delete()/has() matched an unknown VALUE against the stored values by memcmp"));
 
     switch (magic) {
     case USP_APPEND:
-        usp_list_append(&u->list, name, nn, value, vn);
+        usp_list_append(&u->list, name, nn, nhole, value, vn, vhole);
         usp_update(ctx, u);
         break;
     case USP_DELETE:
@@ -186,16 +245,27 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
     case USP_GET:
         r = JS_NULL;   /* §6.2: absent is null, not "" */
         for (i = 0; i < u->list.n; i++)
-            if (USP_NAME_IS(i)) { r = JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen); break; }
+            if (USP_NAME_IS(i)) {
+                /* THE READ-BACK BARRIER — see USP_HOLE_WHY. §6.2 get() hands the page the tuple's VALUE, and a
+                   page branching on what it gets back must branch on the UNKNOWN this list stored the shape
+                   of; a real String here de-taints it and every gate below decides concretely. */
+                DCHECK(!u->list.e[i].vhole,
+                       USP_HOLE_WHY("get() answered with a value that is a hole, as a real String"));
+                r = JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen);
+                break;
+            }
         break;
     case USP_GETALL: {
         uint32_t k = 0;
         r = JS_NewArray(ctx);
         if (JS_IsException(r)) break;
         for (i = 0; i < u->list.n; i++)
-            if (USP_NAME_IS(i))
+            if (USP_NAME_IS(i)) {
+                DCHECK(!u->list.e[i].vhole,
+                       USP_HOLE_WHY("getAll() answered with a value that is a hole, as a real String"));
                 JS_SetPropertyUint32(ctx, r, k++,
                                      JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen));
+            }
         break;
     }
     case USP_HAS:
@@ -215,6 +285,7 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
                     free(u->list.e[i].value);
                     u->list.e[i].value = usp_strdup(value, vn);
                     u->list.e[i].vlen = vn;
+                    u->list.e[i].vhole = vhole ? 1u : 0u;   /* the hole bit rides the value it describes */
                     u->list.e[w++] = u->list.e[i];
                 } else {
                     free(u->list.e[i].name);
@@ -225,7 +296,7 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
             u->list.e[w++] = u->list.e[i];
         }
         u->list.n = w;
-        if (found < 0) usp_list_append(&u->list, name, nn, value, vn);
+        if (found < 0) usp_list_append(&u->list, name, nn, nhole, value, vn, vhole);
         usp_update(ctx, u);
         break;
     }
@@ -257,6 +328,11 @@ static void usp_pair_at(JSContext *ctx, JSValueConst target, int i, JSValue *key
 {
     UspObj *u = JS_GetOpaque(target, g_usp_class);
     DCHECK(u != NULL && i < u->list.n, "a URLSearchParams pair was asked for past the end of the list");
+    /* THE READ-BACK BARRIER, over §6.2's "value pairs to iterate over" — see USP_HOLE_WHY. `for (const [k, v]
+       of params)` hands the page both halves, and a half this list holds the display shape of would arrive as
+       a real String with its provenance gone. */
+    DCHECK(!u->list.e[i].nhole && !u->list.e[i].vhole,
+           USP_HOLE_WHY("pair iterator answered with a half that is a hole, as a real String"));
     *key = JS_NewStringLen(ctx, u->list.e[i].name, u->list.e[i].nlen);
     *value = JS_NewStringLen(ctx, u->list.e[i].value, u->list.e[i].vlen);
 }
@@ -352,28 +428,42 @@ static int usp_record_key_ok(JSContext *ctx, JSValueConst key, void *user)
    that convert to the same USVString are ONE entry — it keeps the first's position and takes the last's value.
    `{"\uD835x": "1", "xx": "2", "\uD83Dx": "3"}` is two pairs and not three, because both surrogate keys become
    "\uFFFDx". A sequence has no such rule: `[["a",1],["a",2]]` is two pairs. */
+/* THE SAME QUESTION THIS COMPONENT'S MEMBERS ASK, ASKED AT ITS OTHER ENTRY. §6.2's initialize builds the list
+   from the sequence and record arms, and its Web IDL USVString conversion passes UNKNOWN external input
+   through as itself exactly as a member's does — so `new URLSearchParams({lang: navigator.language})` reaches
+   this line with a concolic. An entry that skipped the question would report the same absent capability as an
+   unrelated ToString failure one boundary away, which is why it is asked at every entry that builds a pair.
+   See js_usp_member's conversions for why each half is a NAME, and USP_HOLE_WHY for what a hole cannot do. */
 static int usp_take_pair(JSContext *ctx, UspList *out, JSValueConst k, JSValueConst v, int as_record)
 {
     size_t nn = 0, vn = 0;
-    const char *kn = JS_ToCStringLen(ctx, &nn, k);
+    int nhole = concolic_is(k), vhole = concolic_is(v);
+    const char *kn = nhole ? concolic_name_cstr(ctx, k) : JS_ToCStringLen(ctx, &nn, k);
     const char *vv;
     int i;
 
     if (!kn) return -1;
-    vv = JS_ToCStringLen(ctx, &vn, v);
+    if (nhole) nn = strlen(kn);
+    vv = vhole ? concolic_name_cstr(ctx, v) : JS_ToCStringLen(ctx, &vn, v);
     if (!vv) { JS_FreeCString(ctx, kn); return -1; }
+    if (vhole) vn = strlen(vv);
     if (as_record) {
+        /* §6.2 initialize step 2 over Web IDL §3.2.23's MAP: the key dedup is an EQUALITY, so an unknown key
+           takes USP_HOLE_WHY's first arm — a shape against real bytes compares false having proven nothing. */
+        DCHECK(!nhole, USP_HOLE_WHY("record init deduplicated an unknown KEY against the stored names by "
+                                    "memcmp"));
         for (i = 0; i < out->n; i++) {
             if (out->e[i].nlen != nn || memcmp(out->e[i].name, kn, nn)) continue;
             free(out->e[i].value);
             out->e[i].value = usp_strdup(vv, vn);
             out->e[i].vlen = vn;
+            out->e[i].vhole = vhole ? 1u : 0u;
             JS_FreeCString(ctx, kn);
             JS_FreeCString(ctx, vv);
             return 0;
         }
     }
-    usp_list_append(out, kn, nn, vv, vn);
+    usp_list_append(out, kn, nn, nhole, vv, vn, vhole);
     JS_FreeCString(ctx, kn);
     JS_FreeCString(ctx, vv);
     return 0;

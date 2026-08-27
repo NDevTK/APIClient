@@ -167,19 +167,34 @@ UrlRecord *url_record_of(JSValueConst v);
 enum { URL_SET_C0 = 0, URL_SET_FRAGMENT, URL_SET_QUERY, URL_SET_SPECIAL_QUERY, URL_SET_PATH,
        URL_SET_USERINFO, URL_SET_COMPONENT, URL_SET_URLENCODED };
 
-/* §5.1's `application/x-www-form-urlencoded` LIST — the URL Standard's, not URLSearchParams'. That
-   interface is one view over it and `.formData()` is the other, so it lives with the spec that defines it.
+/* The `application/x-www-form-urlencoded` LIST — the URL Standard's (§5 application/x-www-form-urlencoded),
+   not URLSearchParams'. That interface is one view over it and `.formData()` is the other, so it lives with
+   the spec that defines it.
    A pair carries its LENGTHS because a name or a value may contain U+0000: `?a=b%00c` is one pair whose value
-   is three characters, and a strlen would make it one. */
-typedef struct { char *name, *value; size_t nlen, vlen; } UrlEncodedPair;
+   is three characters, and a strlen would make it one.
+   AND EACH HALF CARRIES WHETHER IT IS A HOLE RATHER THAN DATA. §6.2's members take USVStrings and this list
+   holds their BYTES, so an unknown reaches it as its display SHAPE (`{navigator.language}.toLowerCase()`) —
+   a NAME for a value the code did not compute, never bytes the page produced. §5.2
+   application/x-www-form-urlencoded serializing runs every half through §1.3 Percent-encoded bytes'
+   urlencoded set, and `{` and `}` are IN that set (they enter at the path set and are inherited by the
+   component and urlencoded sets), so a shape serialized as data comes out `%7B…%7D`. The brace is the only
+   thing an emission has to read a hole by — solver/concolic.c's concolic_hole_key returns NULL without one —
+   so an encoded shape is reported as a LITERAL parameter value with no provenance and no domain, which is a
+   plausible datum and not a measurement. A hole half is therefore emitted verbatim; see the serializer. */
+typedef struct { char *name, *value; size_t nlen, vlen; unsigned nhole : 1, vhole : 1; } UrlEncodedPair;
 typedef struct { UrlEncodedPair *e; int n, cap; } UrlEncodedList;
 
 void  url_encoded_list_free(UrlEncodedList *l);
-void  url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, const char *value, size_t vn);
-/* §5.1's PARSER: split on `&`, split each sequence at its FIRST `=`, turn `+` into a space in BOTH halves and
-   only then percent-decode — the other order would decode a `%2B` into a `+` and then into a space. */
+/* `nhole`/`vhole` say that half's bytes are a display SHAPE and not data — see UrlEncodedPair. Bytes that came
+   off the wire are always data, so §5.1's parser passes 0 for both and only §6.2's members ever pass 1. */
+void  url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, int nhole,
+                              const char *value, size_t vn, int vhole);
+/* §5.1 application/x-www-form-urlencoded parsing: split on `&`, split each sequence at its FIRST `=`, turn `+`
+   into a space in BOTH halves and only then percent-decode — the other order would decode a `%2B` into a `+`
+   and then into a space. */
 void  url_encoded_parse(UrlEncodedList *out, const char *s, size_t len);
-/* §5.1's SERIALIZER: `name=value` joined by `&`, each half through the urlencoded encode set. */
+/* §5.2 application/x-www-form-urlencoded serializing: `name=value` joined by `&`, each DATA half through the
+   urlencoded encode set and each HOLE half verbatim. */
 char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n);
 /* §6.2's ordering, which is by UTF-16 CODE UNITS and not by UTF-8 bytes. */
 int   url_encoded_name_cmp(const UrlEncodedPair *a, const UrlEncodedPair *b);

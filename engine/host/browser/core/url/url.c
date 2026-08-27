@@ -1450,8 +1450,23 @@ void url_encoded_list_free(UrlEncodedList *l)
     l->e = NULL; l->n = l->cap = 0;
 }
 
-void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, const char *value, size_t vn)
+void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, int nhole,
+                             const char *value, size_t vn, int vhole)
 {
+    /* A HOLE IS A DISPLAY SHAPE, AND THE SERIALIZER READS IT BY ITS BRACES — so the brace is asserted where the
+       half is BORN rather than where it is written out: a shape that lost its braces would serialize verbatim
+       and be reported as a literal parameter value, which is the one outcome the hole bit exists to prevent.
+       Asserted here and not at the caller because every caller converges on this line. */
+    DCHECK(!nhole || (name && memchr(name, '{', nn) != NULL && memchr(name, 0, nn) == NULL),
+           "an urlencoded pair's NAME was appended as a hole that is not a display shape — a shape carries "
+           "braces (the serializer and the emission both read a hole by them) and contains no U+0000 (§5.2 "
+           "copies a hole half verbatim and measures it with strlen). A half failing either test is a real "
+           "string that has been mislabelled, and it would be written into a query unencoded");
+    DCHECK(!vhole || (value && memchr(value, '{', vn) != NULL && memchr(value, 0, vn) == NULL),
+           "an urlencoded pair's VALUE was appended as a hole that is not a display shape — a shape carries "
+           "braces (the serializer and the emission both read a hole by them) and contains no U+0000 (§5.2 "
+           "copies a hole half verbatim and measures it with strlen). A half failing either test is a real "
+           "string that has been mislabelled, and it would be written into a query unencoded");
     if (l->n >= l->cap) {
         l->cap = l->cap ? l->cap * 2 : 8;
         l->e = realloc(l->e, (size_t)l->cap * sizeof(UrlEncodedPair));
@@ -1461,6 +1476,8 @@ void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, con
     l->e[l->n].value = url_encoded_strdup(value, vn);
     l->e[l->n].nlen = nn;
     l->e[l->n].vlen = vn;
+    l->e[l->n].nhole = nhole ? 1u : 0u;
+    l->e[l->n].vhole = vhole ? 1u : 0u;
     l->n++;
 }
 
@@ -1504,15 +1521,22 @@ void url_encoded_parse(UrlEncodedList *out, const char *s, size_t len)
             vdec = url_percent_decode(vplus, vn, &vdn);
             nstr = encoding_utf8_decode_without_bom(ndec, ndn, &nsn);   /* step 3.5 */
             vstr = encoding_utf8_decode_without_bom(vdec, vdn, &vsn);
-            url_encoded_list_append(out, nstr, nsn, vstr, vsn);
+            url_encoded_list_append(out, nstr, nsn, 0, vstr, vsn, 0);   /* bytes off the wire are always data */
             free(nplus); free(vplus); free(ndec); free(vdec); free(nstr); free(vstr);
         }
         if (end >= len) break;
     }
 }
 
-/* THE SERIALIZER. `name=value` joined by `&`, each half through the urlencoded encode set — whose own rule
-   writes SPACE as `+`, which is why that is in the set and not here. */
+/* §5.2 application/x-www-form-urlencoded serializing. `name=value` joined by `&`, each DATA half through the
+   urlencoded encode set — whose own rule writes SPACE as `+`, which is why that is in the set and not here.
+ *
+ * A HOLE HALF IS NOT ENCODED, and that is a statement about what a hole IS rather than an exception to §5.2.
+ * The steps run over a tuple of USVStrings the page produced; a hole is this engine's display SHAPE for a
+ * value the code did not compute, put into the list by §6.2's members because a `const char *` cannot carry a
+ * concolic. Percent-encoding it spells its braces `%7B`/`%7D`, and the brace is the only thing an emission has
+ * to tell a hole from a literal by — so an encoded shape reaches the @H surface as a parameter value nothing
+ * constrained, which §Solver-half calls a wrong report and not a partial one. See UrlEncodedPair. */
 char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
 {
     char *out = NULL;
@@ -1526,13 +1550,17 @@ char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
            It is the serializer's assert and it is about its PRODUCERS — every one of them has to make it hold,
            which §5.1's parser does by running UTF-8 decode without BOM and §6.2's members do by taking
            USVString. It could not be written while the parser stored the raw percent-decoded bytes, because
-           the bytes of `a=%FF` are not a scalar value string and this is the line that would have said so. */
+           the bytes of `a=%FF` are not a scalar value string and this is the line that would have said so.
+           A HOLE IS ASSERTED TOO: a display shape is ASCII, so it is a scalar value string like any other and
+           there is nothing here for the hole bit to exempt. */
         DCHECK(encoding_is_scalar_value_string(l->e[i].name, l->e[i].nlen) &&
                encoding_is_scalar_value_string(l->e[i].value, l->e[i].vlen),
                "§5.2's assert: an urlencoded tuple's name or value is not a scalar value string — the producer "
                "of this list skipped UTF-8 decode without BOM");
-        en = url_percent_encode(l->e[i].name, l->e[i].nlen, URL_SET_URLENCODED);
-        ev = url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
+        en = l->e[i].nhole ? url_encoded_strdup(l->e[i].name,  l->e[i].nlen)
+                           : url_percent_encode(l->e[i].name,  l->e[i].nlen, URL_SET_URLENCODED);
+        ev = l->e[i].vhole ? url_encoded_strdup(l->e[i].value, l->e[i].vlen)
+                           : url_percent_encode(l->e[i].value, l->e[i].vlen, URL_SET_URLENCODED);
         need = strlen(en) + strlen(ev) + 3;
         if (n + need > cap) {
             cap = (n + need) * 2;
