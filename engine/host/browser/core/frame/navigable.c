@@ -16,6 +16,7 @@
 #include "core/frame/browsing_context_group.h"   /* and §7.1.3.2's swap, which is what that decision reaches */
 #include "core/frame/remote_object.h"   /* the ONE grammar a navigable's IDENTITY crosses an instance in */
 #include "core/frame/secure_context.h"  /* §8.1.3.5, which §7.1.3 step 2 asks of the reserved environment */
+#include "core/frame/session_history.h" /* §7.4.2.2 step 11's test — the arm THIS function must never serve */
 #include "core/fetch/headers.h"         /* the response's header list, as the field lines it crosses the ABI in */
 #include "core/dom/document.h"
 #include "core/dom/node.h"           /* §7.3.1.3's container is an ELEMENT, and §7.1.4.2 wants its node document */
@@ -1297,6 +1298,37 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
     /* §7.1.7's INITIATOR POLICY CONTAINER — this document's, because THIS realm is the one whose script ran.
        It is the whole container and never one of its items: §7.1.7's clone moves every item at once, and the
        operation is what says whose clone it is. */
+    /* §7.4.2.2 STEP 11 IS ASKED BY THE CALLER AND CLOSED HERE, which is the shape a dispatch over "what is this
+       destination" has to have: one component answers it (core/frame/session_history.h's
+       session_history_is_fragment_navigation, over the ACTIVE SESSION HISTORY ENTRY's URL) and every consumer
+       that must not serve an arm asserts it is unreachable for that arm. Without this the fragment arm is
+       silent rather than absent: a destination that differs from the current address only in its fragment would
+       be FETCHED, and the response would install a SECOND Document over the one whose script is mid-flight —
+       every `location.hash = "#/route"` router torn down by its own route change, with nothing to say so.
+       IT IS NOT A SECOND OPINION. The predicate has one implementation and this is a reader of it, so a caller
+       that routes correctly and a caller that does not are told apart HERE rather than each deciding for
+       itself. `open(url, name)` at an address that differs only in its fragment is the route that reaches this:
+       §7.4.2.2 owes it §7.4.2.3.3 too, and what it needs is the same conversion core/frame/location.c's members
+       took — the member becomes a machine, because §7.4.2.3.3 runs the page's `navigate` and `popstate`
+       listeners and this function cannot suspend.
+       IT IS ASKED ONLY OF THIS REALM'S OWN NAVIGABLE, because §7.4.2.2 step 11 compares against the TARGET
+       navigable's active session history entry and this engine's session history is a PER-REALM record: asking
+       `ctx` about a navigable whose record is another realm's would answer a different navigable's question and
+       assert on the answer. A cross-navigable navigate (`open(url, "someFrame")`) therefore reaches this
+       unasked, which is a gap named at the one site that could close it rather than a silently different
+       answer — core/frame/session_history.c's sh_entries is where the one-navigable-per-record assumption is
+       already asserted, and giving the predicate a navigable is what lifts both. */
+    DCHECK(JS_VALUE_GET_PTR(proxy) != JS_VALUE_GET_PTR(document_window_proxy(ctx)) ||
+           !session_history_is_fragment_navigation(ctx, addr),
+           "§7.4.2.2's navigate reached its cross-document arm with a destination its own step 11 says is a "
+           "FRAGMENT NAVIGATION — the address equals this navigable's active session history entry's URL with "
+           "exclude fragments set to true and has a non-null fragment, so the spec runs §7.4.2.3.3's NAVIGATE "
+           "TO A FRAGMENT and RETURNS. That algorithm is built (core/frame/session_history.h's "
+           "session_history_fragment_nav_*) and this call site cannot drive it, because it fires the page's "
+           "`navigate` and `popstate` listeners and this is a plain C function with no flow to suspend. Route "
+           "the CALLER: make it a step machine that asks session_history_is_fragment_navigation before it gets "
+           "here and drives session_history_fragment_nav_run when the answer is yes, exactly as "
+           "core/frame/location.c's setters and its assign/replace do");
     /* §7.4.5: "if url matches about:blank or about:srcdoc, set aboutBaseURL to initiatorBaseURL" — the
        INITIATOR is the document whose script ran, which is this realm, and its base URL is what a relative URL
        inside the loaded `about:blank` Document must resolve against. It is decided HERE for the reason the

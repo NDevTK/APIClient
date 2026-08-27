@@ -56,10 +56,12 @@
  * cross: it is then the statement of which two members survive the filter.
  *
  * WHAT §7.2.4 STILL WANTS AND THIS BUILD DOES NOT HAVE, named at the ONE place each is reached rather than as
- * a list here that a reader would have to re-check: §7.4.2.3.3 "Fragment navigations"' same-document
- * navigation crashes inside loc_navigate, `reload`'s last step crashes in its own body, and `ancestorOrigins`
- * crashes at the step that wants §7.3.2.1's ancestor origins list. Every one of them is REACHED only after the
- * steps in front of it have run, which is what makes the crash name a subproblem instead of a surface. The §7.2.4.1-.10 EXOTIC INTERNAL METHODS are a separate surface from the members: two
+ * a list here that a reader would have to re-check: `reload`'s last step crashes in its own body, and
+ * `ancestorOrigins` crashes at the step that wants §7.3.2.1's ancestor origins list. Each is REACHED only after
+ * the steps in front of it have run, which is what makes the crash name a subproblem instead of a surface.
+ * §7.4.2.3.3 "Fragment navigations" USED TO BE ON THAT LIST and is not: every member here that navigates now
+ * takes §7.4.2.2's same-document arm when the destination selects it, which is what makes `location.hash =
+ * "#/route"` a route change instead of a second Document over the router that ran it. The §7.2.4.1-.10 EXOTIC INTERNAL METHODS are a separate surface from the members: two
  * of them ([[PreventExtensions]] returning false and [[SetPrototypeOf]] being SetImmutablePrototype) have no
  * hook in quickjs's exotic table at all, so they are a quickjs-side capability rather than something this
  * component can express.
@@ -86,6 +88,7 @@
 #include "core/dom/document.h"   /* this realm's address — the one place a document's URL lives */
 #include "core/encoding/encoding.h"      /* §7.2.4's search setter parses in the DOCUMENT's encoding */
 #include "core/frame/navigable.h"        /* §7.4.2.2's navigate — what "Location-object navigate" performs */
+#include "core/frame/session_history.h"  /* §7.4.2.2's same-document test, and §7.4.2.3.3's own machine */
 #include "core/frame/window_proxy.h"     /* §7.5.10 step 8's null browsing context — the relevant Document */
 #include "core/html/dom_string_list.h"   /* §2.6.5's DOMStringList — `ancestorOrigins` answers with one */
 
@@ -397,34 +400,76 @@ static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc,
  * them computes a URL and hands it here, so what §7.4 owes this component is owed ONCE and crashes ONCE,
  * naming itself, instead of twelve bodies each deciding separately what to do about it.
  *
- * §7.4.2.2 "BEGINNING NAVIGATION" IS WHAT PERFORMS IT, and core/frame/navigable.h has it — this used to be
- * the "navigation from a Location is not built" that kept every setter out of this file. What it does NOT have
- * is the branch §7.4.2.2 takes when nothing needs fetching, and that branch is not a refinement: its four
- * conjuncts are "documentResource is null; response is null; url equals navigable's active session history
- * entry's URL WITH EXCLUDE FRAGMENTS SET TO TRUE; and url's fragment is non-null", and when they hold the
- * algorithm runs §7.4.2.3.3 "Fragment navigations"'s NAVIGATE TO A FRAGMENT and RETURNS. That is a
- * SAME-DOCUMENT operation — it appends a session history entry, fires `hashchange`, and the Document, its
- * realm and every flow suspended in it survive — where navigable_navigate would fetch the address again and
- * build a second Document. Doing the second thing where the spec says the first is not a partial
- * implementation, it is a silent one: `location.hash = "#/route"` would tear down the router that ran it.
+ * §7.4.2.2 "BEGINNING NAVIGATION" IS WHAT PERFORMS IT, AND IT HAS TWO ARMS. Its steps 9-10 resolve
+ * historyHandling, and its step 11 then asks four conjuncts — "documentResource is null; response is null; url
+ * equals navigable's active session history entry's URL WITH EXCLUDE FRAGMENTS SET TO TRUE; and url's fragment
+ * is non-null" — and when they hold it runs §7.4.2.3.3 "Fragment navigations"'s NAVIGATE TO A FRAGMENT and
+ * RETURNS. That is a SAME-DOCUMENT operation: it appends a session history entry, fires `popstate` and queues
+ * `hashchange`, and the Document, its realm and every flow suspended in it survive. The other arm FETCHES and
+ * builds a new Document. Taking the second where the spec takes the first is not a weaker answer, it is a
+ * different one — `location.hash = "#/route"` would tear down the router that ran it.
  *
- * SO IT CRASHES THERE, and the crash is the work queue. This condition is asked HERE rather than in
- * navigable.c only because navigable_navigate takes a STRING and resolves it itself, so the parsed record the
- * comparison needs exists on this side of the call; §7.4.2.2 owns the branch, and the day navigable.c grows it
- * this check is deleted with the DFAIL it guards rather than left as a second opinion.
+ * THE TEST IS NOT ASKED HERE. core/frame/session_history.h's session_history_is_fragment_navigation is the one
+ * implementation, because §7.4.2.2 compares against the ACTIVE SESSION HISTORY ENTRY's URL — that component's
+ * field, not this one's address — and because a question some entries ask and others do not is one capability
+ * wearing two names. This file's own version of it compared against the DOCUMENT's URL and said the two agree;
+ * they do agree for a navigable showing one document, and they are different fields with different writers, so
+ * the sentence was a claim rather than a check. navigable_navigate now asserts the negative, so the cross-
+ * document loader is UNREACHABLE for a destination this arm owns instead of quietly fetching it.
  *
- * `history_handling` IS §7.4.2.2's ARGUMENT and it is READ, not carried for show: navigable_navigate has no
- * parameter for it, because a cross-document navigation in this engine rebuilds the session history record
- * outright (core/frame/session_history.c's session_history_install_document starts a fresh list at step 0 and
- * asserts one Document per realm), so "push" and "replace" leave byte-identical state and there is nothing yet
- * for the argument to change. The one algorithm that WOULD see the difference is the fragment navigation
- * above — §7.4.2.3.3 step 4 fires its navigate event with navigationType set to historyHandling — so the value
- * rides into that crash, which is the site that has to consume it. */
-static void loc_navigate(JSContext *ctx, const UrlRecord *target, const char *history_handling)
+ * `history_handling` IS §7.4.2.2's ARGUMENT AND IT IS RESOLVED, not passed through. The Location algorithms
+ * hand over a NavigationHistoryBehavior — "auto" for eleven of them, "replace" for `replace()` — and §7.4.2.2
+ * steps 9-10 turn that into the "push"/"replace" §7.4.2.3.3 fires its navigate event with. The cross-document
+ * arm still reads nothing from it: this engine rebuilds the session history record outright for a new Document
+ * (core/frame/session_history.c's session_history_install_document starts a fresh list at step 0 and asserts
+ * one Document per realm), so "push" and "replace" leave byte-identical state there. */
+
+/* §7.4.2.2 STEPS 9 AND 10, over §7.2.4's NavigationHistoryBehavior. Returns a STATIC string, because the answer
+ * outlives a park: §7.4.2.3.3 carries it across its navigate event and hands it on as the NavigationType at
+ * three later steps.
+ *
+ * STEP 9's SECOND CONJUNCT IS TRUE BY THIS FILE'S OWN PRECONDITION and is asserted rather than computed:
+ * "initiatorOriginSnapshot is same origin with navigable's active document's origin", where the initiator is
+ * the document whose script ran — which loc_assert_this_realm has already established is this one.
+ * STEP 10's "THE NAVIGATION MUST BE A REPLACE given url and document" is two disjuncts and both are real here:
+ * "url's scheme is `javascript`" (a `javascript:` URL never gets a history entry of its own) or "document's is
+ * initial about:blank is true" (the Document a navigable is created with is replaced rather than pushed past). */
+static const char *loc_resolve_history_handling(JSContext *ctx, const UrlRecord *target, const char *requested)
 {
-    UrlRecord here;
-    char *addr, *bare_target, *bare_here;
-    bool same_document;
+    const char *resolved = requested;
+
+    DCHECK(requested != NULL && (!strcmp(requested, "auto") || !strcmp(requested, "replace")),
+           "§7.2.4's Location-object navigate was given a NavigationHistoryBehavior none of its callers "
+           "passes — eleven of the twelve pass \"auto\" and `replace()` passes \"replace\"");
+    if (strcmp(requested, "auto") == 0) {
+        /* STEP 9's FIRST CONJUNCT is URL §4.6 equivalence with exclude fragments FALSE — the WHOLE address,
+           fragment included, which is what makes `location.href = location.href` a replace and
+           `location.hash = "#b"` from `#a` a push. */
+        char *whole = url_serialize(target, /*exclude_fragment*/ false);
+
+        CHECK(whole != NULL, "location: the destination could not be serialized for §7.4.2.2 step 9");
+        resolved = strcmp(whole, document_url(ctx)) == 0 ? "replace" : "push";
+        free(whole);
+    }
+    /* STEP 10. */
+    if (target->scheme && strcmp(target->scheme, "javascript") == 0) resolved = "replace";
+    if (session_history_is_initial_about_blank(ctx)) resolved = "replace";
+    return resolved;
+}
+
+/* §7.2.4 step 4 / §7.4.2.2, PERFORMED. Answers TRUE when the destination took §7.4.2.2's SAME-DOCUMENT arm and
+ * `w` now holds a begun §7.4.2.3.3 — the caller's next stage drives it, because that algorithm runs the page's
+ * `navigate`, `currententrychange`, `dispose` and `popstate` listeners and therefore suspends. FALSE means the
+ * cross-document arm enqueued the load and the member is finished.
+ *
+ * §7.4.2.2's FIRST TWO CONJUNCTS ARE STRUCTURAL AT THIS CALL AND SAY SO: `documentResource` is a POST resource
+ * that only §4.10.22's form submission produces, and `response` is what §7.4.2.3.1's cross-document case
+ * carries — a Location has neither, which is why the predicate takes neither. */
+static bool loc_navigate_begin(JSContext *ctx, SessionHistoryFragmentNav *w, const UrlRecord *target,
+                               const char *requested_handling)
+{
+    const char *history_handling;
+    char *addr;
     JSValue r;
 
     DCHECK(!loc_document_is_null(ctx),
@@ -432,54 +477,23 @@ static void loc_navigate(JSContext *ctx, const UrlRecord *target, const char *hi
            "of the twelve algorithms that reach it returns at its own step 1 in that case, so arriving here "
            "means a body skipped it and is about to navigate a navigable that has no browsing context");
 
-    /* URL §4.6 "URL equivalence" with exclude fragments, which is the third conjunct — and it is a comparison
-       of SERIALIZATIONS and nothing else: "Let serializedA be the result of serializing A, with exclude
-       fragment set to exclude fragments … Return true if serializedA is serializedB; otherwise false."
-       The record here is this Location's url; §7.4.2.2 says the active SESSION HISTORY ENTRY's URL, and for a
-       navigable showing one document the two are the same string — §7.4.4's URL and history update steps write
-       both, which is what keeps them so after a `history.pushState`. */
-    loc_url(ctx, &here);
-    bare_here = url_serialize(&here, /*exclude_fragment*/ true);
-    bare_target = url_serialize(target, /*exclude_fragment*/ true);
-    CHECK(bare_here && bare_target, "location: a URL could not be serialized for §4.6's equality");
-    same_document = strcmp(bare_here, bare_target) == 0 && target->fragment != NULL;
-    free(bare_here);
-    free(bare_target);
-    url_record_free(&here);
-
-    if (same_document) {
-        /* THE MESSAGE CARRIES historyHandling BECAUSE THE MISSING ALGORITHM CONSUMES IT — §7.4.2.3.3 step 4
-           fires its navigate event "with navigationType set to historyHandling" — so whoever builds it needs
-           to know which value this call site was going to hand over. A crash that names a mechanism and not
-           its argument is one the reader has to re-derive; sized past the format's minimum so the tail that
-           names the file to build in survives. */
-        char why[512];
-
-        snprintf(why, sizeof why,
-                 "§7.4.2.2's navigate reached its SAME-DOCUMENT branch with historyHandling \"%s\" — the "
-                 "destination equals this navigable's URL with exclude fragments set to true and has a "
-                 "non-null fragment, so the spec runs §7.4.2.3.3's NAVIGATE TO A FRAGMENT and returns. That "
-                 "algorithm appends a session history entry and fires `hashchange` while the Document, its "
-                 "realm and every flow suspended in it survive; navigable_navigate would fetch the address "
-                 "again and build a SECOND Document, which is not a weaker answer but a different one — every "
-                 "`location.hash = ...` router would be torn down by its own route change. BUILD §7.4.2.3.3 "
-                 "in core/frame/navigable.c (fire a push/replace/reload navigate event with navigationType "
-                 "set to that historyHandling, append the entry, apply the history step) and give "
-                 "navigable_navigate the branch, then delete this check with the DFAIL it guards",
-                 history_handling);
-        DFAIL(why);
-    }
-
+    history_handling = loc_resolve_history_handling(ctx, target, requested_handling);
     addr = url_serialize(target, /*exclude_fragment*/ false);
     CHECK(addr != NULL, "location: the destination could not be serialized");
-    /* §7.4.2.2 step 4. navigable_navigate answers JS_UNDEFINED only for an address that does not parse, and
-       this one is a SERIALIZATION of a record the parser produced, so a failure here is this file's bug. */
+    if (session_history_is_fragment_navigation(ctx, addr)) {
+        session_history_fragment_nav_begin(ctx, w, addr, history_handling);
+        free(addr);
+        return true;
+    }
+    /* §7.4.2.2's other arm. navigable_navigate answers JS_UNDEFINED only for an address that does not parse,
+       and this one is a SERIALIZATION of a record the parser produced, so a failure here is this file's bug. */
     r = navigable_navigate(ctx, document_window_proxy(ctx), addr);
     free(addr);
     CHECK(!JS_IsUndefined(r),
           "§7.4.2.2's navigate refused a URL this component serialized out of a parsed record — a serialized "
           "URL re-parses, so this is a round-trip the URL component broke rather than anything a page did");
     JS_FreeValue(ctx, r);
+    return false;
 }
 
 /* THE ASSIGNED VALUE, AS BYTES. §7.2.4's setters write into a URL RECORD, which is bytes — so unknown external
@@ -562,15 +576,65 @@ static bool loc_encoding_parse(JSContext *ctx, const char *v, size_t vlen, UrlRe
  *      fragment it computed equals the one already there — "necessary for compatibility with deployed content,
  *      which redundantly sets location.hash on scroll".
  * So url_member_set is deliberately NOT reused: it is the OTHER interface's algorithm, and the three
- * differences are the whole of what a Location is. */
-static JSValue js_loc_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+ * differences are the whole of what a Location is.
+ *
+ * AND IT IS A MACHINE, BECAUSE ITS LAST STEP RUNS THE PAGE'S CODE. §7.2.4 step 4's navigate reaches
+ * §7.4.2.3.3, which fires a `navigate` event a router may cancel and then `currententrychange`, `dispose` and
+ * `popstate` — so `location.hash = "#/route"` SUSPENDS inside its own assignment, siblings run, and it resumes
+ * with the address already moved. A plain C body could not: reaching for a dispatch from one is a C activation
+ * hosting the page's loops, which is the drive-to-completion this engine aborts on. The head of the algorithm —
+ * everything that computes copyURL — runs none of the page's code and is one stage; §7.4.2.3.3 is the other,
+ * and its own rest points are its work record's. */
+#define LOC_NAV_STAGES(X)                                                                                     \
+    X(LOC_NAV_COMPUTE,  "HTML §7.2.4's attribute setters and its `assign`/`replace` (the relevant-Document "   \
+                        "and same origin-domain checks, and the one write into a copy of this Location's "     \
+                        "url that the member is), ending at §7.2.4's Location-object navigate step 4")         \
+    X(LOC_NAV_FRAGMENT, "HTML §7.4.2.2 beginning navigation step 11 (navigate to a fragment given navigable, " \
+                        "url, historyHandling, userInvolvement, sourceElement, navigationAPIState and "        \
+                        "navigationId — §7.4.2.3.3, whose own steps its work record names)")
+enum { IDL_STEP_STAGE_BASE(LOC_NAV_STAGES) LOC_NAV_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const LOC_NAV_STEPS[] = { LOC_NAV_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* WHAT THE MEMBER HOLDS ACROSS THE SUSPENSION, and it is nothing of its own. Every value the head computes is
+   consumed by the head — the URL record is freed where it was made, and the destination goes onto §7.4.2.3.3's
+   own record as the string that parks. So the state IS that record, and the ownership is declared once, by the
+   visit below, which forwards to the one list that names it. */
+static void loc_nav_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
+    session_history_fragment_nav_visit(ctx, st, v);
+}
+
+/* THERE IS NO `release`. Everything this state holds is a JSValue the visit above names, so the teardown frees
+   them through that one list — and idl_args.c asserts across a `release` that it freed nothing the declaration
+   owns, which a second list here would break. */
+
+static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                      JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    SessionHistoryFragmentNav *w = st;
+    JSValueConst this_val = hdr->this_val, val;
     UrlRecord copy;
     const char *v;
     size_t vlen = 0;
-    bool navigate = true;
+    /* `navigate` is §7.2.4's OWN flag — the four setters whose steps say "terminate these steps" without
+       throwing clear it — and `fragment` is which ARM of §7.4.2.2 the destination took. They are two different
+       questions and were briefly one variable, which reads as "did we navigate" answering "is a suspension in
+       flight". */
+    bool navigate = true, fragment = false;
+    int magic = idl_step_magic(hdr), r;
 
-    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    STEP_DISPATCH(LOC_NAV_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(LOC_NAV_COMPUTE);
+    /* Nothing has been asked for yet, so this entry's request answer belongs to nobody; the fragment stage
+       below collects its own. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    session_history_fragment_nav_start(w);
+    DCHECK(argc >= 1, "§7.2.4's setter body ran with no value — a step setter is delivered as a ONE-argument "
+                      "call, so the assigned value is argv[0] and the declaration placed it there");
+    val = argv[0];
+    if (!loc_brand(ctx, this_val)) return JS_STEP_ABRUPT;
     loc_assert_this_realm(ctx, this_val);
     DCHECK(magic >= 0 && magic < LOC_N, "a Location setter was installed with a magic that is not a member "
                                         "index — the magic IS the index into the one member X-list");
@@ -578,12 +642,12 @@ static JSValue js_loc_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
                                 "declared — a mistake in the install below and not anything a page can cause");
 
     /* STEP 1 of every one of them: "If this's relevant Document is null, then return." */
-    if (loc_document_is_null(ctx)) return JS_UNDEFINED;
+    if (loc_document_is_null(ctx)) return JS_STEP_DONE;
     /* STEP 2 for every member but `href`, whose note says it intentionally has none. */
     if (magic != LOC_HREF) loc_assert_same_origin_domain(ctx);
 
     v = loc_value_bytes(ctx, val, &vlen);
-    if (!v) return JS_EXCEPTION;
+    if (!v) return JS_STEP_ABRUPT;
 
     /* §7.2.4's href setter has no copyURL at all: it ENCODING-PARSES the whole value against the entry
        settings object and navigates to the result, so a failure is a SyntaxError rather than a no-op. */
@@ -594,13 +658,15 @@ static JSValue js_loc_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
         if (!loc_encoding_parse(ctx, v, vlen, &target)) {
             url_record_free(&target);
             JS_FreeCString(ctx, v);
-            return JS_ThrowDOMException(ctx, "SyntaxError",
-                                        "the value assigned to location.href is not a URL");
+            JS_ThrowDOMException(ctx, "SyntaxError", "the value assigned to location.href is not a URL");
+            return JS_STEP_ABRUPT;
         }
         JS_FreeCString(ctx, v);
-        loc_navigate(ctx, &target, "auto");
+        fragment = loc_navigate_begin(ctx, w, &target, "auto");
         url_record_free(&target);
-        return JS_UNDEFINED;
+        if (!fragment) return JS_STEP_DONE;
+        STEP_GOTO(hdr->stage, LOC_NAV_FRAGMENT, NULL);
+        return JS_STEP_YIELD;
     }
 
     /* "Let copyURL be a copy of this's url." Every remaining setter starts here, and the copy is what makes a
@@ -632,8 +698,9 @@ static JSValue js_loc_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
             free(with_colon);
             url_record_free(&copy);
             JS_FreeCString(ctx, v);
-            return JS_ThrowDOMException(ctx, "SyntaxError",
-                                        "the value assigned to location.protocol is not a scheme");
+            JS_ThrowDOMException(ctx, "SyntaxError",
+                                 "the value assigned to location.protocol is not a scheme");
+            return JS_STEP_ABRUPT;
         }
         free(with_colon);
         /* "If copyURL's scheme is not an HTTP(S) scheme, then terminate these steps." A well-formed scheme the
@@ -726,47 +793,106 @@ static JSValue js_loc_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
     }
 
     JS_FreeCString(ctx, v);
-    if (navigate) loc_navigate(ctx, &copy, "auto");
+    if (navigate) fragment = loc_navigate_begin(ctx, w, &copy, "auto");
     url_record_free(&copy);
-    return JS_UNDEFINED;
+    if (!fragment) return JS_STEP_DONE;
+    /* THE PHASE LIST STEP_GOTO WOULD ASSERT OVER IS EMPTY BY CONSTRUCTION, not by inspection: the work record
+       was started at the top of THIS entry and nothing has issued a request since, so there is no sub-sequence
+       for the next stage's request site to collect the answer of. Reaching into the record's own phases from
+       here would be this file reading fields session_history.h says nobody outside it reads. */
+    STEP_GOTO(hdr->stage, LOC_NAV_FRAGMENT, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(LOC_NAV_FRAGMENT);
+    /* §7.4.2.3.3, DRIVEN. It owns every rest point past this line — its navigate event, then §7.4.6.2's
+       navigation-API update and its `popstate` — and re-enters itself at whichever of them its record holds,
+       so a resume here runs none of the member's own steps again. A navigation a `navigate` listener CANCELED
+       answers 0 exactly as a completed one does, and the member returns undefined either way: §7.2.4's setters
+       have no return value and §7.4.2.3.3 step 5's return is not an error. */
+    r = session_history_fragment_nav_run(ctx, w, cb_result, out_cb, out_argc);
+    if (r != 0) return r;
+    /* SET ON THE ENTRY THAT FINISHES, not once in the head: `presult` is an out-parameter of EACH entry, so a
+       member that wrote it before it parked would leave the resumed entry's answer as whatever the driver's
+       slot held. */
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl LOC_SET_DECL = {
+    js_loc_set, sizeof(SessionHistoryFragmentNav), loc_nav_visit, NULL,
+    "HTML §7.2.4's Location attribute setters, over its Location-object navigate", LOC_NAV_STEPS
+};
 
 /* §7.2.4's `assign(url)` and `replace(url)`, which are ONE body because they differ in exactly two things the
  * standard states one line apart: `replace` has no security check ("the replace() method intentionally has no
  * security check") and it navigates with historyHandling "replace". Everything else — step 1's null relevant
  * Document, the encoding-parse against the entry settings object, and the SyntaxError a failed parse throws —
- * is written identically in both. */
-static JSValue js_loc_assign_replace(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-                                     int magic)
+ * is written identically in both.
+ *
+ * IT IS THE SAME MACHINE AS THE SETTERS AND SHARES THEIR STAGE LIST, because it is the same algorithm with a
+ * different head: `location.assign("#/route")` and `location.hash = "#/route"` reach §7.4.2.2 with the same
+ * destination and must take the same arm. Two stage lists over one algorithm is the drift one declaration
+ * exists to remove — and a version of this member that stayed a plain C body would have had to CRASH on a
+ * fragment destination the setter beside it handles, which is one capability answering differently depending
+ * on how the page spelled the call. */
+static int js_loc_assign_replace(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
+    SessionHistoryFragmentNav *w = st;
+    JSValueConst this_val = hdr->this_val;
     UrlRecord target;
     const char *v;
     size_t vlen = 0;
+    int magic = idl_step_magic(hdr), r;
+    bool fragment;
 
-    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    STEP_DISPATCH(LOC_NAV_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(LOC_NAV_COMPUTE);
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    session_history_fragment_nav_start(w);
+    if (!loc_brand(ctx, this_val)) return JS_STEP_ABRUPT;
     loc_assert_this_realm(ctx, this_val);
     DCHECK(argc >= 1, "§7.2.4's assign/replace ran with no argument — `USVString url` is required, so §3.6's "
                       "arity check answered that before this body was entered");
     DCHECK(magic == LOC_ASSIGN || magic == LOC_REPLACE,
            "§7.2.4's assign/replace body ran with a magic neither of its two members declares");
 
-    if (loc_document_is_null(ctx)) return JS_UNDEFINED;             /* step 1, both */
+    if (loc_document_is_null(ctx)) return JS_STEP_DONE;             /* step 1, both */
     if (magic == LOC_ASSIGN) loc_assert_same_origin_domain(ctx);    /* step 2, assign only */
 
     v = loc_value_bytes(ctx, argv[0], &vlen);
-    if (!v) return JS_EXCEPTION;
+    if (!v) return JS_STEP_ABRUPT;
     url_record_init(&target);
     if (!loc_encoding_parse(ctx, v, vlen, &target)) {
         url_record_free(&target);
         JS_FreeCString(ctx, v);
-        return JS_ThrowDOMException(ctx, "SyntaxError", "the URL passed to location.%s could not be parsed",
-                                    magic == LOC_ASSIGN ? "assign" : "replace");
+        JS_ThrowDOMException(ctx, "SyntaxError", "the URL passed to location.%s could not be parsed",
+                             magic == LOC_ASSIGN ? "assign" : "replace");
+        return JS_STEP_ABRUPT;
     }
     JS_FreeCString(ctx, v);
-    loc_navigate(ctx, &target, magic == LOC_ASSIGN ? "auto" : "replace");
+    fragment = loc_navigate_begin(ctx, w, &target, magic == LOC_ASSIGN ? "auto" : "replace");
     url_record_free(&target);
-    return JS_UNDEFINED;
+    if (!fragment) return JS_STEP_DONE;
+    STEP_GOTO(hdr->stage, LOC_NAV_FRAGMENT, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(LOC_NAV_FRAGMENT);
+    r = session_history_fragment_nav_run(ctx, w, cb_result, out_cb, out_argc);
+    if (r != 0) return r;
+    /* SET ON THE ENTRY THAT FINISHES, not once in the head: `presult` is an out-parameter of EACH entry, so a
+       member that wrote it before it parked would leave the resumed entry's answer as whatever the driver's
+       slot held. */
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl LOC_ASSIGN_DECL = {
+    js_loc_assign_replace, sizeof(SessionHistoryFragmentNav), loc_nav_visit, NULL,
+    "HTML §7.2.4's `assign` and `replace`, over its Location-object navigate", LOC_NAV_STEPS
+};
 
 /* §7.2.4's `reload()`: "let document be this's relevant Document; if document is null, then return; if
  * document's origin is not same origin-domain with the entry settings object's origin, then throw a
@@ -1006,9 +1132,9 @@ void location_init(JSContext *ctx)
        `USVString url` for both assign and replace; `reload()` takes nothing, which is a NULL type list. */
     for (i = 0; i < LOC_N; i++)
         g_loc_set[i] = LOC_READONLY[i] ? -1
-                                       : idl_setter_id(ctx, IDL_USVSTRING, false, js_loc_set, i);
-    g_loc_assign  = idl_method_id(ctx, URL_ARG, 1, js_loc_assign_replace, LOC_ASSIGN);
-    g_loc_replace = idl_method_id(ctx, URL_ARG, 1, js_loc_assign_replace, LOC_REPLACE);
+                                       : idl_setter_id_step(ctx, IDL_USVSTRING, false, &LOC_SET_DECL, i);
+    g_loc_assign  = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_ASSIGN);
+    g_loc_replace = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_REPLACE);
     g_loc_reload  = idl_method_id(ctx, NULL, 0, js_loc_reload, 0);
     /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS. A source's browser delivery is a fact about the COMPONENT,
        not about a document, so it belongs beside the class registration and not in the per-realm install. A

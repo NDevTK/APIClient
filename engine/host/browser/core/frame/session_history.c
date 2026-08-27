@@ -1,5 +1,5 @@
-/* HTML §7.4.1's session history, §7.4.3's traversal and §7.4.4's URL and history update steps — see
-   session_history.h. */
+/* HTML §7.4.1's session history, §7.4.3's traversal, and the two synchronous history updates — §7.4.4's URL
+   and history update steps and §7.4.2.3.3's navigate to a fragment — see session_history.h. */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -554,6 +554,53 @@ static bool sh_fragment_equal(const char *a_url, const char *b_url)
     return same;
 }
 
+/* §7.4.2.2's THIRD AND FOURTH CONJUNCTS — see session_history.h for the other two and for why this is a
+ * component rather than an `if` at a call site.
+ *
+ * THE THIRD IS URL §4.6 "URL equivalence" WITH EXCLUDE FRAGMENTS, and that algorithm is a comparison of
+ * SERIALIZATIONS and of nothing else: "let serializedA be the result of serializing A, with exclude fragment
+ * set to exclude fragments … return true if serializedA is serializedB; otherwise false". A field-by-field
+ * comparison is a different predicate — it would call two records that serialize alike unequal whenever the
+ * parser had a choice, and §4.6 exists precisely so that nobody makes that choice twice.
+ *
+ * THE FOURTH IS `url's fragment is NON-NULL`, and null is not the empty string: `/a` has no fragment and `/a#`
+ * has the empty one. `location.href = "/a"` from `/a#x` therefore fails this conjunct and is a CROSS-DOCUMENT
+ * navigation that re-fetches — which is what browsers do and what a folded comparison would silently turn into
+ * a no-op. */
+bool session_history_is_fragment_navigation(JSContext *ctx, const char *url)
+{
+    UrlRecord target, active;
+    JSValue entry;
+    const char *active_url;
+    char *bare_target, *bare_active;
+    bool same;
+
+    DCHECK(g_slot >= 0, "§7.4.2.2's same-document test ran before session_history_init declared the record");
+    DCHECK(url != NULL, "§7.4.2.2's same-document test was asked about no URL — its caller has a destination "
+                        "or it is not navigating");
+    url_record_init(&target);
+    url_record_init(&active);
+    CHECK(url_parse(&target, url, strlen(url), NULL),
+          "session history: §7.4.2.2's destination is not a URL — every caller hands over a SERIALIZATION of a "
+          "record the parser produced, and a serialized URL re-parses");
+    entry = sh_active_entry(ctx);
+    active_url = sh_entry_url(ctx, entry);
+    CHECK(url_parse(&active, active_url, strlen(active_url), NULL),
+          "session history: the active entry's URL is not a URL — every writer of the field serialized a URL "
+          "record");
+    bare_target = url_serialize(&target, /*exclude_fragment*/ true);
+    bare_active = url_serialize(&active, /*exclude_fragment*/ true);
+    CHECK(bare_target && bare_active, "session history: a URL could not be serialized for §4.6's equivalence");
+    same = strcmp(bare_target, bare_active) == 0 && target.fragment != NULL;
+    free(bare_target);
+    free(bare_active);
+    JS_FreeCString(ctx, active_url);
+    JS_FreeValue(ctx, entry);
+    url_record_free(&target);
+    url_record_free(&active);
+    return same;
+}
+
 /* ---- §7.4.6's APPLY THE HISTORY STEP — ONE ALGORITHM, TWO ENTRY POINTS ---------------------------------------
  *
  * §7.4.6.1's apply-the-history-step is an enormous algorithm because it coordinates a traversable with every
@@ -567,8 +614,8 @@ static bool sh_fragment_equal(const char *a_url, const char *b_url)
  * WHAT SPLITS THE BODY IN HALF IS THE STANDARD'S OWN SPLIT, not this engine's. §7.4.6.1 queues the per-navigable
  * work as two tasks and says why: "this set of steps are split into two parts to allow synchronous navigations to
  * be processed before documents unload. State is stored in changingNavigableContinuations for the second part."
- * SHApply IS that changing navigable continuation state — the standard's struct, with the length/index and the
- * previous entry the second half is also handed — and _begin and _finish are its two parts.
+ * SessionHistoryApply IS that changing navigable continuation state — the standard's struct, with the
+ * length/index and the previous entry the second half is also handed — and _begin and _finish are its two parts.
  *
  * ONLY ONE OF THE TWO HALVES CAN RUN THE PAGE'S CODE, and that is what lets a caller that cannot park still
  * reach the algorithm. A PUSH or a REPLACE takes the update-only exit — §7.4.4 synchronously set the navigable's
@@ -605,35 +652,15 @@ static const char *const SH_APPLY_STEPS[] = { SH_APPLY_STAGES(JS_STEP_STAGE_LABE
 #define SH_APPLY_ALGORITHM "HTML §7.4.6.1 apply the history step, as the traversable's queued session history " \
                            "traversal steps"
 
-/* §7.4.6.1's CHANGING NAVIGABLE CONTINUATION STATE — "a struct with: displayed document, target entry,
-   navigable, update only" — plus the four values §7.4.6.1's second half is handed alongside it (the history
-   object length and index, the previous entry, and the navigation type) and §7.4.6.2's own oldURL.
-   THE NAVIGABLE IS NOT A FIELD because there is exactly one here and it is this realm's: sh_entries asserts
-   that at the one place a second one would matter. The DISPLAYED DOCUMENT is not one either, for the same
-   reason — §7.4.6.1 compares it against targetEntry's document to decide whether the traversal unloads
-   anything, and that comparison is made below against the entry's document state's id. */
-typedef struct {
-    uint32_t    target_step;
-    uint32_t    begin_step;      /* the traversable's current session history step when this application began */
-    uint32_t    length, index;   /* §7.4.6.1's (scriptHistoryLength, scriptHistoryIndex) */
-    bool        update_only;
-    const char *navigation_type; /* the spec's NavigationType: "push", "replace" or "traverse" */
-    uint16_t    stage;
-    JSValue     target_entry;    /* owned */
-    JSValue     displayed_entry; /* owned — the navigable's active entry when this began; §7.4.6.1's previousEntry */
-    JSValue     old_url;         /* owned string — §7.4.6.2 step 6.1's oldURL, held ACROSS the popstate dispatch */
-    JSValue     popstate;        /* owned across the dispatch */
-    uint8_t     fire_phase;
-    EventFireCb fire_cb;
-    /* §7.4.6.2 step 6.4.2's request. It sits BESIDE the popstate fire rather than sharing its buffer, because
-       the two are different dispatches at different targets and the algorithm runs one strictly before the
-       other — a shared phase would resume the navigation API's walk into the popstate's answer. */
-    NavigationUpdateWork nav;
-} SHApply;
+/* §7.4.6.1's CHANGING NAVIGABLE CONTINUATION STATE is SessionHistoryApply, and it is DECLARED IN THE HEADER —
+   see there for what its fields are and why. It moved out of this file when §7.4.2.3.3's fragment navigation
+   became a machine a MEMBER hosts: §7.4.2.3.3 step 14 calls update-document-for-history-step-application, whose
+   three rest points are this struct's `stage`, so the record has to be a field of a work record a caller
+   outside this file declares. Nothing else about it changed, and every function below still takes it. */
 
 static void sh_restore_history_object_state(JSContext *ctx, JSValueConst entry);
 
-static void sh_apply_free(JSContext *ctx, SHApply *a)
+static void sh_apply_free(JSContext *ctx, SessionHistoryApply *a)
 {
     int k;
 
@@ -717,7 +744,7 @@ static void sh_activate_history_entry(JSContext *ctx, JSValueConst entry)
  * "navigationType is 'reload' or previousEntryForActivation's document is not document" — which is evaluated
  * here and is false for both callers, because neither a push/replace nor a same-document traversal changes the
  * document. */
-static int sh_update_document_for_history_step(JSContext *ctx, SHApply *a, JSValue in,
+static int sh_update_document_for_history_step(JSContext *ctx, SessionHistoryApply *a, JSValue in,
                                                JSValue **out_cb, int *out_argc)
 {
     JSValue rec, latest, global;
@@ -870,7 +897,7 @@ activation_branch:
 
 /* ---- §7.4.6.1's APPLY THE HISTORY STEP, first half --------------------------------------------------------- */
 
-static void sh_apply_history_step_begin(JSContext *ctx, SHApply *a, uint32_t step, const char *nav_type)
+static void sh_apply_history_step_begin(JSContext *ctx, SessionHistoryApply *a, uint32_t step, const char *nav_type)
 {
     JSValue entries = sh_entries(ctx), trec = sh_traversable_record(ctx);
     int k;
@@ -977,7 +1004,7 @@ static void sh_apply_history_step_begin(JSContext *ctx, SHApply *a, uint32_t ste
 
 /* ---- §7.4.6.1's APPLY THE HISTORY STEP, second half -------------------------------------------------------- */
 
-static int sh_apply_history_step_finish(JSContext *ctx, SHApply *a, JSValue in, JSValue **out_cb, int *out_argc)
+static int sh_apply_history_step_finish(JSContext *ctx, SessionHistoryApply *a, JSValue in, JSValue **out_cb, int *out_argc)
 {
     JSValue trec;
     int r;
@@ -1055,7 +1082,7 @@ static int sh_apply_history_step_finish(JSContext *ctx, SHApply *a, JSValue in, 
    the page's code, which is the standard's own reason `popstate` does not fire for `pushState`. */
 static void sh_apply_push_replace_history_step(JSContext *ctx, uint32_t target_step, const char *history_handling)
 {
-    SHApply a;
+    SessionHistoryApply a;
     JSValue *cb = NULL;
     int cb_argc = 0, r;
 
@@ -1324,6 +1351,321 @@ int session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, J
     return 0;
 }
 
+/* ---- §7.4.2.3.3's NAVIGATE TO A FRAGMENT ----------------------------------------------------------------------
+ *
+ * THE OTHER SYNCHRONOUS HISTORY UPDATE, AND IT SITS HERE SO THE TWO CAN BE READ AGAINST EACH OTHER. §7.4.4's
+ * own closing note is the comparison: "although both fragment navigation and the URL and history update steps
+ * perform synchronous history updates, only fragment navigation contains a synchronous call to UPDATE DOCUMENT
+ * FOR HISTORY STEP APPLICATION. The URL and history update steps instead perform a few select updates inside
+ * the above algorithm, omitting others. This is somewhat of an unfortunate historical accident … For example,
+ * this means that popstate events fire for fragment navigations, but not for history.pushState() calls."
+ *
+ * SO THE STEPS ABOVE ARE NOT REUSED AND MUST NOT BE. Four of their differences are observable and none of them
+ * is a refinement: this algorithm fires a navigate event of its own (step 4) where §7.2.5's caller fires
+ * §7.4.4's; its entry carries the ACTIVE entry's NAVIGATION API STATE where §7.4.4's takes §7.4.1.1's initial
+ * serialized `undefined`; it sets neither the Document's LATEST ENTRY nor `history.state` from a serialization,
+ * because §7.4.6.2 steps 6.2 and 6.3 do both when step 14 calls it; and it has no is-initial-about:blank step,
+ * because §7.4.2.2 resolved historyHandling before it branched here.
+ *
+ * ITS ENTRY IS PER-FLOW STATE AND THAT IS THE WHOLE POINT. Two forked flows exploring two routes each assign
+ * `location.hash` and each appends its own entry; the entries are ordinary JS objects in a JS array on the
+ * per-realm record, so every append, every step assignment and the active-entry write are PROPERTY WRITES the
+ * heap COW delta already captures. One flow's route change is therefore invisible to its sibling, and a flow
+ * parked mid-`popstate` resumes with the history it built and not with the one that overtook it. A malloc'd
+ * list here would revert its head/tail POINTERS on a context switch and leave the entries reachable from
+ * nothing, which is the leak the runtime's own GC walk cannot see. */
+#define SHFRAG_STAGES(X)                                                                                       \
+    X(SHFRAG_EVENT,  "HTML §7.4.2.3.3 navigate to a fragment steps 1-4 (the destination navigation API state, " \
+                     "then firing a push/replace/reload navigate event at the navigation API with "             \
+                     "isSameDocument set to true)")                                                             \
+    X(SHFRAG_UPDATE, "HTML §7.4.2.3.3 navigate to a fragment steps 5-14 (the event's answer, the new session "  \
+                     "history entry, the history object's best-guess index and length, the document's URL, "    \
+                     "the navigable's active session history entry, and update document for history step "      \
+                     "application)")                                                                            \
+    X(SHFRAG_TAIL,   "HTML §7.4.2.3.3 navigate to a fragment steps 15-17 (scroll to the fragment, and the "     \
+                     "queued finalize-a-same-document-navigation)")
+enum { SHFRAG_STAGES(JS_STEP_STAGE_ENUM) };
+/* THERE IS NO `steps` ARRAY HERE, and that is what SH_APPLY_STAGES does too: the array is materialized where a
+   JSTrampStepDef declares it, and no def declares THIS algorithm — the MEMBER that drives it declares its own
+   stages, and its label for the one that drives this names the algorithm rather than restating its steps. The
+   X-list is where the labels live either way, and STEP_DISPATCH is generated from it. */
+/* ONE NAME FOR THE ALGORITHM THESE STAGES ARE STEPS OF — the dispatch's abort reads it, so a record entered at
+   a stage it does not declare says which algorithm's stage list it was measured against. */
+#define SHFRAG_ALGORITHM "HTML §7.4.2.3.3 navigate to a fragment"
+
+void session_history_fragment_nav_start(SessionHistoryFragmentNav *w)
+{
+    int k;
+
+    /* A zeroed JSValue is the INTEGER 0, not undefined, so every slot the visit walks is started here — on the
+       one call that precedes every stage — rather than by whichever stage happens to write it first. */
+    w->stage = SHFRAG_EVENT;
+    w->history_handling = NULL;
+    w->url = w->history_entry = w->to_replace = JS_UNDEFINED;
+    navigate_event_fire_work_start(&w->fire);
+    /* §7.4.6.1's continuation state has no _start of its own — sh_apply_history_step_begin is the only other
+       producer and it is §7.4.6.1's entry, which this algorithm is not — so its slots are started here, on the
+       same one call. Step 14 below writes the rest of them out of values steps 6-13 compute. */
+    w->apply.target_entry = w->apply.displayed_entry = JS_UNDEFINED;
+    w->apply.old_url = w->apply.popstate = JS_UNDEFINED;
+    STEP_CB_FOREACH(w->apply.fire_cb, k) w->apply.fire_cb[k] = JS_UNDEFINED;
+    w->apply.fire_phase = 0;
+    w->apply.stage = 0;
+    w->apply.update_only = false;
+    w->apply.navigation_type = NULL;
+    w->apply.target_step = w->apply.begin_step = w->apply.length = w->apply.index = 0;
+    navigation_update_work_start(&w->apply.nav);
+}
+
+void session_history_fragment_nav_visit(JSContext *ctx, SessionHistoryFragmentNav *w, JSStepVisit *v)
+{
+    int k;
+
+    v->val(ctx, &w->url);
+    v->val(ctx, &w->history_entry);
+    v->val(ctx, &w->to_replace);
+    navigate_event_fire_work_visit(ctx, &w->fire, v);
+    v->val(ctx, &w->apply.target_entry);
+    v->val(ctx, &w->apply.displayed_entry);
+    v->val(ctx, &w->apply.old_url);
+    v->val(ctx, &w->apply.popstate);
+    STEP_CB_FOREACH(w->apply.fire_cb, k) v->val(ctx, &w->apply.fire_cb[k]);
+    navigation_update_work_visit(ctx, &w->apply.nav, v);
+}
+
+void session_history_fragment_nav_begin(JSContext *ctx, SessionHistoryFragmentNav *w, const char *url,
+                                        const char *history_handling)
+{
+    DCHECK(g_slot >= 0, "§7.4.2.3.3's navigate to a fragment ran before session_history_init declared the "
+                        "record");
+    DCHECK(url != NULL && *url, "§7.4.2.3.3 was begun with no destination — §7.4.2.2's fourth conjunct is that "
+                                "the URL has a non-null FRAGMENT, so a caller that reached this branch has one");
+    DCHECK(history_handling != NULL &&
+           (!strcmp(history_handling, "push") || !strcmp(history_handling, "replace")),
+           "§7.4.2.3.3 was begun with a history handling behaviour that is neither \"push\" nor \"replace\" — "
+           "§7.4.2.2's step 9 resolves \"auto\" to one of the two before it branches here, and its \"reload\" "
+           "reaches §7.4.3 and never this algorithm");
+    DCHECK(JS_IsUndefined(w->url),
+           "§7.4.2.3.3's _begin ran twice over one work record — the algorithm builds ONE entry, and the second "
+           "would leave the first as the navigable's active entry and in no list");
+    DCHECK(session_history_is_fragment_navigation(ctx, url),
+           "§7.4.2.3.3 was begun for a destination §7.4.2.2's own test says is NOT a fragment navigation — the "
+           "four conjuncts are what selects this algorithm, so a caller that asked a different question has "
+           "routed a CROSS-DOCUMENT navigation into the one algorithm that never fetches");
+    /* THE DESTINATION IS TAKEN WITH THE OPERATION, as a string, and it is never read back off the navigable.
+       Between the navigate event below and step 12's write every `navigate` listener the page has runs, and any
+       of them may push an entry or change the address — so a re-read on resume would resolve this navigation
+       against whatever a listener left behind. */
+    w->url = JS_NewString(ctx, url);
+    CHECK(!JS_IsException(w->url), "session history: §7.4.2.3.3's destination could not be held across its "
+                                   "navigate event");
+    w->history_handling = history_handling;
+}
+
+int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *w, JSValue in,
+                                     JSValue **out_cb, int *out_argc)
+{
+    JSValue rec, active;
+    const char *url;
+    int r;
+
+    STEP_DISPATCH(SHFRAG_STAGES, w->stage, SHFRAG_ALGORITHM, JS_STEP_ABRUPT);
+
+    STEP_ARM(SHFRAG_EVENT);
+    DCHECK(JS_IsString(w->url), "§7.4.2.3.3's _run reached a work record with no destination — _begin takes it "
+                                "and must run first");
+    /* STEP 1 is "let navigation be navigable's active window's NAVIGATION API" — this realm's, which
+       core/frame/navigation.c answers for; the steps below reach it through that component rather than holding
+       one across the dispatch.
+       STEPS 2-3: "let destinationNavigationAPIState be navigable's ACTIVE session history entry's navigation
+       API state. If navigationAPIState is not null, then set destinationNavigationAPIState to
+       navigationAPIState." Every caller here is a navigation, not `navigation.navigate(url, {state})`, so the
+       argument is null and step 3 does not fire — which is the standard's own note: "for other fragment
+       navigations, including user-initiated ones, the navigation API state is CARRIED OVER from the previous
+       entry". It is carried at step 6 below, straight off the active entry, so nothing has to hold it here.
+       STEP 4: "let continue be the result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with
+       navigationType set to historyHandling, isSameDocument set to TRUE, … destinationURL set to url, and
+       navigationAPIState set to destinationNavigationAPIState."
+       ITS classicHistoryAPIState IS NULL AND THAT IS THE SPEC'S OWN ASYMMETRY, not an omission: §7.2.5's
+       pushState passes the bytes it serialized and this wrapper has none to pass, which is the same sentence
+       §7.4.1.1 states about the entry ("the classic history API state is never carried over"). */
+    url = JS_ToCString(ctx, w->url);
+    CHECK(url != NULL, "session history: §7.4.2.3.3's destination could not be read");
+    navigate_event_fire_push_replace_reload_begin(ctx, &w->fire, w->history_handling, url,
+                                                  /*is_same_document*/ true, /*classic_state*/ NULL);
+    JS_FreeCString(ctx, url);
+    /* AND IT RETURNS RATHER THAN RUNNING ON: the dispatch is the next stage, and a body that sets its stage and
+       falls into the next arm has crossed a boundary the driver never saw. `in` is this entry's request answer
+       and nothing below has asked for one, so it is released here rather than carried across the rest point. */
+    JS_FreeValue(ctx, in);
+    STEP_GOTO(w->stage, SHFRAG_UPDATE, &w->fire.phase, &w->fire.abort.phase, &w->fire.abort.sig.phase,
+              &w->apply.nav.phase, &w->apply.fire_phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(SHFRAG_UPDATE);
+    /* WHAT THIS TEST IS, AND WHAT IT IS NOT. It is not "have I started" — a stage can never answer that, and a
+       machine that needs one keeps a byte. It asks whether STEP 14's continuation state has been BUILT, which
+       is a fact about a field with exactly one writer: `target_entry` is JS_UNDEFINED until step 14's arguments
+       are assembled and an object for ever after. On the first entry to this stage the navigate event has just
+       answered and steps 5-13 have not run; on every resume through §7.4.6.2's own three rest points it has,
+       and none of those steps runs twice. */
+    if (JS_IsUndefined(w->apply.target_entry)) {
+        bool proceed = false;
+
+        /* §7.2.6.10.4 answers, having dispatched `navigate` at this realm's Navigation and run every listener
+           the page registered for it. */
+        r = navigate_event_fire_run(ctx, &w->fire, in, out_cb, out_argc, &proceed);
+        if (r != 0) return r;
+        in = JS_UNDEFINED;
+        /* STEP 5: "if continue is FALSE … return." A router's `navigate` listener called preventDefault(), so
+           the address does not move, no entry is appended, and the member that asked answers exactly as it does
+           when the navigation succeeded — §7.2.4's setters have no return value and this return is not an
+           error.
+           STEP 5.1 IS NOT WRITTEN, AND THAT IS THE ABSENCE OF A READER RATHER THAN A DEFERRED STEP. It sets the
+           navigable's ONGOING NAVIGATION to this navigation's id, and the standard's own note says what that is
+           for: "this makes intercepted hash navigations cancelable by browser UI or window.stop()". This build
+           has no browser UI, and its `window.stop()` is §7.2.2.1's documented no-effect body (window.c's
+           js_win_noeffect, whose comment gives the same reason — there is no in-flight navigation to abort
+           because §7.4.2.5's ABORT A NAVIGATION is not built). A field written here would be a field with one
+           writer and no reader, which is the shape that makes an unwritten producer indistinguishable from a
+           measured one. The two land together: §7.4.2.5's abort, and the navigable's ongoing-navigation field
+           it reads — at which point `stop()` stops sharing the no-effect body and this line writes it. */
+        if (!proceed) return 0;
+        /* STEP 6: "let historyEntry be a NEW SESSION HISTORY ENTRY, with URL url, document state navigable's
+           active session history entry's DOCUMENT STATE, navigation API state destinationNavigationAPIState,
+           and scroll restoration mode navigable's active session history entry's scroll restoration mode."
+           THE DOCUMENT STATE IS SHARED BY REFERENCE, which is §7.4.1.2's "several contiguous entries in a
+           session history can share the same document state" and is what makes ten hash routes ten entries of
+           ONE Document rather than ten documents. THE CLASSIC HISTORY API STATE IS NOT IN THE LIST, so the
+           entry takes §7.4.1.1's initial value — StructuredSerializeForStorage(NULL) — which is the standard's
+           "the classic history API state is never carried over", and is why a hash route nulls `history.state`
+           even when the entry it left carried one. */
+        active = sh_active_entry(ctx);
+        {
+            JSValue doc_state = JS_GetPropertyStr(ctx, active, SH_E_DOCSTATE);
+            JSValue nav_state = JS_GetPropertyStr(ctx, active, SH_E_NAV_STATE);
+            JSValue scroll_v = JS_GetPropertyStr(ctx, active, SH_E_SCROLL);
+            const char *scroll = JS_ToCString(ctx, scroll_v);
+            StructuredData null_state;
+            const char *dest;
+
+            DCHECK(JS_IsObject(doc_state), "a session history entry held no §7.4.1.2 document state");
+            CHECK(scroll != NULL, "session history: an entry's scroll restoration mode could not be read");
+            sh_serialize_primitive(ctx, JS_NULL, &null_state);
+            dest = JS_ToCString(ctx, w->url);
+            CHECK(dest != NULL, "session history: §7.4.2.3.3's destination could not be read back after the "
+                                "navigate event");
+            w->history_entry = sh_entry_new(ctx, dest, doc_state, sh_state_buffer(ctx, &null_state), nav_state,
+                                            scroll);
+            JS_FreeCString(ctx, dest);
+            structured_data_free(ctx, &null_state);
+            JS_FreeCString(ctx, scroll);
+            JS_FreeValue(ctx, scroll_v);
+        }
+        /* STEP 7: "let entryToReplace be navigable's active session history entry if historyHandling is
+           'replace', otherwise null." */
+        w->to_replace = strcmp(w->history_handling, "replace") == 0 ? JS_DupValue(ctx, active) : JS_NULL;
+        /* STEPS 8-11. The history object's index and length are read BEFORE they are adjusted, which is what
+           makes them §7.4.4 step 6's "temporary best-guess values for immediate synchronous access" — a
+           `popstate` listener really does observe them, because step 14 below runs it. Step 11's THREE
+           sub-steps fire only for a push: `history.state` is nulled, the index is incremented, and the length
+           becomes the index + 1. The null is not redundant with the entry's initial classic state: §7.4.6.2
+           step 6.3 restores the state from the entry a moment later, and between here and there a `navigate`
+           listener has already returned and the popstate has not yet been minted. */
+        rec = sh_record(ctx);
+        w->apply.index = rec_uint(ctx, rec, SH_R_INDEX);
+        w->apply.length = rec_uint(ctx, rec, SH_R_LENGTH);
+        if (strcmp(w->history_handling, "push") == 0) {
+            JS_SetPropertyStr(ctx, rec, SH_R_STATE, JS_NULL);
+            w->apply.index += 1;
+            w->apply.length = w->apply.index + 1;
+        }
+        /* STEP 12: "set navigable's active document's URL to url". It moves BEFORE step 14 fires anything, so
+           a `popstate` listener reading `location.href` sees the new address — which is the whole reason a
+           router listens for it. */
+        {
+            const char *dest = JS_ToCString(ctx, w->url);
+
+            CHECK(dest != NULL, "session history: §7.4.2.3.3's destination could not be read for step 12");
+            document_set_url(ctx, dest);
+            JS_FreeCString(ctx, dest);
+        }
+        /* STEP 13: "set navigable's ACTIVE session history entry to historyEntry" — and NOT its current entry
+           and not the entries list, which is the standard's own worked example: "note that this does not yet
+           update the current session history entry, current session history step, or the session history
+           entries list; those updates cannot be done synchronously, and instead must be done as part of the
+           queued steps". Step 17's finalize is those queued steps. */
+        JS_SetPropertyStr(ctx, rec, SH_R_ACTIVE, JS_DupValue(ctx, w->history_entry));
+        JS_FreeValue(ctx, rec);
+        /* STEP 14's ARGUMENTS, ONTO §7.4.6.1's CONTINUATION STATE: "update document for history step
+           application given navigable's active document, historyEntry, TRUE, scriptHistoryIndex,
+           scriptHistoryLength, and historyHandling". The third argument is doNotReactivate, which is the field
+           §7.4.6.1 calls update-only; the Document is this realm's, so it is not a field (sh_entries asserts
+           the one place a second navigable would matter).
+           `displayed_entry` IS THE ENTRY THIS ALGORITHM JUST REPLACED, because §7.4.6.2 step 7 is the only
+           reader and what it wants is previousEntryForActivation. Reading the ACTIVE entry here would answer
+           with historyEntry, which step 13 has just installed, and the step-7 assertion would then be checking
+           the new entry against itself. */
+        w->apply.displayed_entry = active;         /* the reference sh_active_entry returned, kept */
+        w->apply.target_entry = JS_DupValue(ctx, w->history_entry);
+        w->apply.update_only = true;
+        w->apply.navigation_type = w->history_handling;
+        /* `target_step` AND `begin_step` ARE §7.4.6.1's OWN AND STAY AT THEIR START VALUES, because step 14 is
+           not §7.4.6.1: the only reader of either is sh_apply_history_step_finish, which the finalize at step
+           17 reaches through its OWN continuation state and not through this one. A step 17 that reused this
+           record would be applying a history step whose target step nobody computed. */
+    }
+    /* STEP 14, DRIVEN. §7.4.6.2 owns three rest points of its own — the navigation API's `currententrychange`
+       and `dispose`, then the `popstate` dispatch — and it re-enters itself at whichever of them the record
+       holds, so a resume at this stage runs none of the steps above again; the `target_entry` test above is
+       what keeps steps 5-13 on the first entry only.
+       THE hashchange IS QUEUED AND THE popstate IS NOT, and that asymmetry is §7.4.6.2's own: step 6.4.3 fires
+       `popstate` synchronously at the Window, and step 6.4.5 QUEUES A GLOBAL TASK on the DOM manipulation task
+       source to fire `hashchange`. A router that listens for both therefore sees popstate inside its own
+       assignment and hashchange in a later task — which is observable, is what every browser does, and is why
+       neither may be turned into the other here. */
+    r = sh_update_document_for_history_step(ctx, &w->apply, in, out_cb, out_argc);
+    if (r != 0) return r;
+    STEP_GOTO(w->stage, SHFRAG_TAIL, &w->fire.phase, &w->fire.abort.phase, &w->fire.abort.sig.phase,
+              &w->apply.nav.phase, &w->apply.fire_phase, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(SHFRAG_TAIL);
+    JS_FreeValue(ctx, in);
+    /* STEP 15: "SCROLL TO THE FRAGMENT given navigable's active document" — §7.4.6.4, which is more than a
+       scroll: it sets the Document's TARGET ELEMENT (the `:target` pseudo-class), runs the ancestor revealing
+       algorithm, runs the FOCUSING STEPS for that element and moves the sequential focus navigation starting
+       point. None of it has a producer in this build, and the assertion is asked against the member whose
+       arrival makes the algorithm expressible at all rather than being written down as a claim. */
+    realm_awaits(ctx, "scrollTo",
+                 "HTML §7.4.2.3.3 step 15 SCROLLS TO THE FRAGMENT after a hash route, and §7.4.6.4 is four "
+                 "observable things and not one: it sets the Document's TARGET ELEMENT from its INDICATED PART "
+                 "(which is what `:target` selects, and what §6.6.7's flush autofocus candidates step 4 reads "
+                 "— core/html/autofocus.c asserts against this same member for it), runs the ancestor "
+                 "revealing algorithm, runs §6.6.3's focusing steps for that element with the viewport as the "
+                 "fallback target, and moves the sequential focus navigation starting point. This build now "
+                 "has a way to scroll a scrolling box: write §7.4.6.4 in core/rendering, give the Document its "
+                 "target element and its indicated part (§7.4.6.4's own definition: the node the URL's "
+                 "fragment identifies, or null), and call it here and at §7.4.6.2 step 8's try-to-scroll");
+    /* STEPS 16-17: "let traversable be navigable's TRAVERSABLE NAVIGABLE. Append the following session history
+       SYNCHRONOUS NAVIGATION STEPS involving navigable to traversable: finalize a same-document navigation …;
+       invoke WebDriver BiDi fragment navigated …". The finalize is what gives the entry its STEP and its place
+       in the list, and it is the same one §7.4.4 step 13 reaches — one implementation, so a fragment route and
+       a `pushState` cannot disagree about what a push after a traversal discards.
+       IT RUNS IN THIS TURN, which is the degenerate case of the standard's queue and not a shortcut past it:
+       the navigable and its traversable are one event loop here (sh_entries asserts it), so there is no second
+       writer for the queue to order against, and its step 2 — "if targetNavigable's active session history
+       entry is not targetEntry, then return" — is the assertion inside the finalize rather than a return.
+       There is no WebDriver BiDi in this build at all; it is a remote-control protocol for a browser under
+       test, and every one of its invocations in §7.4 is a report to an agent that does not exist. */
+    sh_finalize_same_document_navigation(ctx, w->history_entry, w->to_replace, w->history_handling);
+    /* AND THE ALGORITHM IS BACK AT ITS FIRST STEP: the record a caller holds names the step it would be
+       re-entered at rather than the last one it rested at. */
+    STEP_GOTO(w->stage, SHFRAG_EVENT, &w->fire.phase, &w->fire.abort.phase, &w->fire.abort.sig.phase,
+              &w->apply.nav.phase, &w->apply.fire_phase, NULL);
+    return 0;
+}
+
 /* ---- §7.4.3's TRAVERSE THE HISTORY BY A DELTA, AS A JOB -------------------------------------------------------
  *
  * IT IS A WORK ITEM AND THE STANDARD SAYS SO: every step of §7.4.3 after the first three is inside "APPEND THE
@@ -1342,12 +1684,12 @@ int session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, J
  * or `await` is in flight, and the traversal resumes at the exact step it rested at — SH_APPLY_STAGES names
  * which one. It is a flow on the ONE frontier, not a driver: nothing here loops over anything.
  *
- * THE MACHINE OWNS NOTHING BUT THE CONTINUATION STATE. Its `visit` walks SHApply's five value fields plus the
- * fire request's buffer, which is the same list `fini` releases — one list, so a field added to the struct is
+ * THE MACHINE OWNS NOTHING BUT THE CONTINUATION STATE. Its `visit` walks SessionHistoryApply's five value
+ * fields plus the fire request's buffer, which is the same list `fini` releases — one list, so a field added to the struct is
  * added to both by being added to sh_apply_free and to this. */
 typedef struct {
-    JSStepHdr hdr;      /* FIRST — the driver writes the def and the operand bounds through it */
-    SHApply   apply;
+    JSStepHdr           hdr;   /* FIRST — the driver writes the def and the operand bounds through it */
+    SessionHistoryApply apply;
 } SHTraverseState;
 
 static void js_sh_traverse_visit(JSContext *ctx, void *st, JSStepVisit *v)

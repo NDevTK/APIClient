@@ -1,5 +1,5 @@
-/* HTML §7.4.1's SESSION HISTORY, §7.4.3's TRAVERSAL, and §7.4.4's URL and history update steps — see
- * session_history.c.
+/* HTML §7.4.1's SESSION HISTORY, §7.4.3's TRAVERSAL, and the TWO SYNCHRONOUS HISTORY UPDATES — §7.4.4's URL
+ * and history update steps and §7.4.2.3.3's navigate to a fragment — see session_history.c.
  *
  * WHAT WAS HERE BEFORE was nothing at all, and document_lifecycle.c said so at two of its steps: "STEP 9 IS
  * SESSION HISTORY, which this engine does not hold: there is no session history entry to null a document out
@@ -43,7 +43,8 @@
  * THAT SECOND CALL IS WHY §7.4.4 IS NO LONGER A PLAIN C ALGORITHM: §7.2.6.4 fires `currententrychange` and then
  * `dispose` at every entry a push threw off the forward history, so a `pushState` runs the page's code and the
  * steps are a request its caller parks on.
- * WHAT §7.2.6 IS STILL MISSING is its navigate event and its navigation methods, and navigation.h names them.
+ * WHAT §7.2.6 IS STILL MISSING is its navigation methods, and navigation.h names them; its NAVIGATE EVENT is
+ * built (core/frame/navigate_event_fire.h) and both synchronous history updates fire one.
  * NOR IS A CROSS-DOCUMENT TRAVERSAL OR A RELOAD HERE: both need §7.4.5's populate-a-session-history-entry (a
  * fetch) and §7.4.6.1's deactivate-a-document (pageswap, unload, pagehide), and each is asserted at the step
  * that would reach it rather than approximated. */
@@ -55,6 +56,8 @@
 
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/events/event_target.h"   /* EventFireCb — the width of §7.4.6.2 step 6.4.3's popstate fire */
+#include "core/frame/navigate_event_fire.h" /* §7.4.2.3.3 step 4's push/replace/reload navigate event */
 #include "core/frame/navigation.h"      /* NavigationUpdateWork — §7.4.4 step 11 is a request */
 #include "core/structured_clone.h"
 
@@ -118,6 +121,112 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
                                       const StructuredData *serialized, bool push);
 int  session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValue in,
                                     JSValue **out_cb, int *out_argc);
+
+/* ---- §7.4.6.1's CHANGING NAVIGABLE CONTINUATION STATE ---------------------------------------------------------
+ *
+ * "A struct with: displayed document, target entry, navigable, update only" — plus the four values §7.4.6.1's
+ * second half is handed alongside it (the history object length and index, the previous entry, and the
+ * navigation type) and §7.4.6.2's own oldURL.
+ * THE NAVIGABLE IS NOT A FIELD because there is exactly one and it is the realm's: session_history.c's
+ * sh_entries asserts that at the one place a second one would matter. The DISPLAYED DOCUMENT is not one either,
+ * for the same reason — §7.4.6.1 compares it against targetEntry's document to decide whether the traversal
+ * unloads anything, and that comparison is made against the entry's document state's id.
+ *
+ * IT IS DECLARED HERE RATHER THAN IN session_history.c BECAUSE `stage` IS A REST POINT SOMEBODY ELSE HOSTS.
+ * §7.4.6.2's three rest points (the navigation API update, the popstate dispatch, and the traversal's own
+ * resolve) are this field, and §7.4.2.3.3 step 14 CALLS §7.4.6.2 from inside a work record a MEMBER's machine
+ * carries — so the struct has to be nameable outside the file that drives it. Nobody outside session_history.c
+ * reads or writes a field of it; what a caller does is hold one and hand it back. */
+typedef struct {
+    uint32_t    target_step;
+    uint32_t    begin_step;      /* the traversable's current session history step when this application began */
+    uint32_t    length, index;   /* §7.4.6.1's (scriptHistoryLength, scriptHistoryIndex) */
+    bool        update_only;
+    const char *navigation_type; /* the spec's NavigationType: "push", "replace" or "traverse" */
+    uint16_t    stage;
+    JSValue     target_entry;    /* owned */
+    JSValue     displayed_entry; /* owned — the navigable's active entry when this began; §7.4.6.1's previousEntry */
+    JSValue     old_url;         /* owned string — §7.4.6.2 step 6.1's oldURL, held ACROSS the popstate dispatch */
+    JSValue     popstate;        /* owned across the dispatch */
+    uint8_t     fire_phase;
+    EventFireCb fire_cb;
+    /* §7.4.6.2 step 6.4.2's request. It sits BESIDE the popstate fire rather than sharing its buffer, because
+       the two are different dispatches at different targets and the algorithm runs one strictly before the
+       other — a shared phase would resume the navigation API's walk into the popstate's answer. */
+    NavigationUpdateWork nav;
+} SessionHistoryApply;
+
+/* ---- HTML §7.4.2.2's SAME-DOCUMENT TEST, AND §7.4.2.3.3's NAVIGATE TO A FRAGMENT -------------------------------
+ *
+ * THE TEST IS §7.4.2.2 "Beginning navigation"'s, verbatim, and it is FOUR conjuncts: "documentResource is null;
+ * response is null; url equals navigable's ACTIVE SESSION HISTORY ENTRY's URL with EXCLUDE FRAGMENTS SET TO
+ * TRUE; and url's fragment is non-null". When they hold, navigate runs §7.4.2.3.3's NAVIGATE TO A FRAGMENT and
+ * RETURNS — it never fetches and never builds a second Document.
+ *
+ * THE FIRST TWO ARE STRUCTURAL HERE and the last two are the question. `documentResource` is a POST resource
+ * (§4.10.22's form submission is its only producer) and `response` is what §7.4.2.3.1's cross-document case
+ * carries; every caller of this predicate is navigating to a URL and has neither, which is asserted at the
+ * caller rather than restated as a parameter nobody can pass anything but null for.
+ *
+ * IT IS ONE COMPONENT WITH N CALLERS AND NEVER AN `if` AT ONE OF THEM. A dispatch deciding WHICH ALGORITHM a
+ * destination gets must be asked at every entry that navigates, or the entry that skips it reports an unrelated
+ * subsystem failing on input that subsystem should never have been shown — here, a fragment-only destination
+ * handed to the cross-document loader, which fetches the page again and installs a SECOND Document over the one
+ * whose script is mid-flight. §7.4.2.2 compares against the ACTIVE SESSION HISTORY ENTRY's URL and not against
+ * the Document's address, which is why the answer belongs to this component: the two agree for a navigable
+ * showing one document and they are different fields with different writers, and reading the wrong one is how a
+ * same-document navigation silently becomes a reload.
+ * `url` is a SERIALIZED URL. */
+bool session_history_is_fragment_navigation(JSContext *ctx, const char *url);
+
+/* §7.4.2.3.3's NAVIGATE TO A FRAGMENT, as the machine its steps 4 and 14 make it.
+ *
+ * IT IS NOT §7.4.4 WITH EXTRAS, and the standard closes its own §7.4.4 with the note that says why: "although
+ * both fragment navigation and the URL and history update steps perform synchronous history updates, only
+ * fragment navigation contains a synchronous call to UPDATE DOCUMENT FOR HISTORY STEP APPLICATION. The URL and
+ * history update steps instead perform a few select updates … For example, this means that popstate events fire
+ * for fragment navigations, but not for history.pushState() calls." So this algorithm fires `popstate` and
+ * queues `hashchange`, and §7.4.4 fires neither; and this one's entry takes the active entry's NAVIGATION API
+ * state while §7.4.4's takes §7.4.1.1's initial value. Neither is a refinement of the other.
+ *
+ * TWO REST POINTS, BOTH THE PAGE'S OWN CODE. Step 4 fires a push/replace/reload navigate event at the
+ * Navigation, which a router's `navigate` listener may cancel; step 14's update-document fires
+ * `currententrychange`, `dispose` and then `popstate`. A member that reaches this therefore cannot be a plain C
+ * body — `location.hash = "#/route"` suspends inside its own assignment, siblings run, and it resumes.
+ *
+ * ITS DESTINATION RIDES THE RECORD. Between step 4 and step 14 every `navigate` listener the page has runs, and
+ * each of them may push an entry or change the address — so an algorithm that read the destination back off the
+ * navigable when it resumed would resolve this navigation against whatever a listener left behind. `_begin`
+ * takes the URL as a JS string, which is what parks; nothing below reads the navigable for it again.
+ *
+ *   `url` is the destination, SERIALIZED and WITH its fragment; COPIED.
+ *   `history_handling` is §7.4.2.2's resolved historyHandling — "push" or "replace", a static string, because
+ *      it outlives a park and because §7.4.2.3.3 hands it on as the NavigationType at three separate steps.
+ * §7.4.2.3.3's other four arguments are at values a script-initiated navigation gives them and are not
+ * parameters, for the reason navigate_event_fire.h states about the same four: userInvolvement is "none",
+ * sourceElement is null, navigationAPIState is null (so step 3 leaves destinationNavigationAPIState at the
+ * active entry's, which is the standard's "for other fragment navigations … the navigation API state is carried
+ * over from the previous entry"), and navigationId is the browser's own and is read by nothing here.
+ *
+ * `_run` answers JS_STEP_CALL/JS_STEP_YIELD to be returned, 0 when the algorithm has finished, JS_STEP_ABRUPT
+ * when it threw. A navigation a `navigate` listener CANCELED also answers 0: §7.4.2.3.3 step 5 returns, and the
+ * member that asked for it answers exactly as it does when the navigation succeeded. */
+typedef struct {
+    uint8_t             stage;            /* SHFRAG_STAGES in session_history.c */
+    const char         *history_handling; /* "push" or "replace" */
+    JSValue             url;              /* owned string — the destination, taken WITH the operation */
+    JSValue             history_entry;    /* owned — step 6's historyEntry */
+    JSValue             to_replace;       /* owned — step 7's entryToReplace, JS_NULL for a push */
+    NavigateEventFireWork fire;           /* step 4 */
+    SessionHistoryApply   apply;          /* step 14's update-document, and the three rest points inside it */
+} SessionHistoryFragmentNav;
+
+void session_history_fragment_nav_start(SessionHistoryFragmentNav *w);
+void session_history_fragment_nav_visit(JSContext *ctx, SessionHistoryFragmentNav *w, JSStepVisit *v);
+void session_history_fragment_nav_begin(JSContext *ctx, SessionHistoryFragmentNav *w, const char *url,
+                                        const char *history_handling);
+int  session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *w, JSValue in,
+                                      JSValue **out_cb, int *out_argc);
 
 /* HTML §7.4.3's TRAVERSE THE HISTORY BY A DELTA, given this realm's navigable's traversable and an integer.
  *
