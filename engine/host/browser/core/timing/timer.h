@@ -51,8 +51,12 @@ void timer_set_script_sink(void (*queue)(uint32_t doc, const char *src));
 /* FIRE THE EARLIEST DUE TIMER — the event loop's step, asked by whoever DRIVES the loop and only when it has
    nothing else to run. Nothing is queued when a timer is set: §8.1.7 runs a task from a source that has one
    DUE, and the timer source's task is due at its expiry. Asking here, at the one moment the driver knows the
-   queues are empty and the host owes nothing, is what keeps virtual time from stepping over work that is
-   already due — a long timeout must not land in the middle of the work it was set to outlast.
+   queues are empty, is what keeps virtual time from stepping over work that is already due — a long timeout
+   must not land in the middle of the work it was set to outlast.
+   "THE QUEUES ARE EMPTY" IS THE WHOLE CONDITION, AND "THE HOST OWES NOTHING" USED TO BE HALF OF IT. A reply
+   still in flight is on no task queue — §8.1.7.3 "Processing model" step 2 asks for "a task queue with at
+   least one runnable task" and a `fetch()` runs in parallel until it completes — so it is not work this
+   source could step over, and waiting for it starved every due timer of a flow with one request outstanding.
    IT FIRES THE RUNNING FLOW'S TIMER, because it is asked from inside that flow's step and the maps it walks
    are that flow's COW state. A flow whose timer is due while another is being stepped fires it when the WFQ
    next schedules it — no timer wheel beside the frontier, and no cross-flow wakeup.

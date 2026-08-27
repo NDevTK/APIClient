@@ -5165,7 +5165,32 @@ static int flow_step(JSContext *ctx, Flow *f) {
                nothing else, in the order it becomes due: first the load lifecycle, which is already due (a
                parser finishing waits on no clock), and only then the two CLOCK-DRIVEN sources — and by the
                time control reaches here everything that was already due (this flow's jobs above, a reply that
-               has arrived) has been offered a turn. */
+               has arrived) has been offered a turn.
+             *
+             * AND THE LINE THROUGH THE MIDDLE OF THIS LADDER IS "DUE NOW" VERSUS "FINISHED", WHICH IS WHERE THE
+             * HOST-OWED RETURN BELONGS AND NOT ONE RUNG HIGHER. Everything from here down to that return is
+             * work HTML §8.1.7.3 "Processing model" would run on this turn whatever else is in flight — its
+             * step 2 asks only "If the event loop has a task queue with at least one runnable task", and a
+             * `fetch()` is not on a task queue at all until it completes and queues its own task. Everything
+             * BELOW that return is the opposite kind of claim: that no handler will ever be attached to a
+             * rejection, that nothing ever called a function. An outstanding reply is exactly what can still
+             * falsify those two and cannot falsify anything above them, so it gates them and nothing else. */
+            /* A FLOW SUSPENDED MID-EXPRESSION RUNS NOTHING ELSE OF ITS OWN, AND THAT IS ASKED ONCE, HERE, FOR
+               EVERYTHING BELOW IT. flow_blocked is an unanswered synchronous cross-instance read (a HOSTREQ):
+               the flow is parked AT that operand, so a `load` listener, a rendering opportunity or a timer
+               callback run now would interleave two program points of one flow — which is not a scheduling
+               preference but the same thing as resuming a generator into the middle of its own frame.
+               IT USED TO BE TRUE BY ACCIDENT BELOW THIS ARM, and an accident is not an invariant. Only the
+               lifecycle arm asked it; the clock-driven arms were protected because the host-owed return sat in
+               front of them and a blocked flow always has an unanswered entry, so the two conditions coincided
+               without either one meaning the other. Moving that return down to where it belongs would have
+               taken the protection with it silently — which is the shape of every route that goes missing —
+               so the question is stated positively at the one place that owes the answer, and an arm added
+               below inherits it instead of having to remember it.
+               IT RETURNS OWED because only the host can change it: the peer's answer arrives through
+               engine_host_answer and nothing this flow does can produce it. */
+            else if (flow_blocked(f))
+                return FLOW_STEP_OWED;
             /* A DOCUMENT FINISHED LOADING, in this flow's world — DOMContentLoaded across the agent's
                documents in tree order, then `load` innermost-first, one per turn. It comes BEFORE the two
                clock-driven sources and that is the spec's order rather than a preference: the parser
@@ -5191,24 +5216,18 @@ static int flow_step(JSContext *ctx, Flow *f) {
              *     far above already holds the flow at) and one a script INJECTED (SCRIPT) — §4.12.1.1
              *     "Processing model": "Whenever a script element el's delaying the load event is true, the
              *     user agent must delay the load event of el's preparation-time document."
-             *   - A HOSTREQ is not a delay source at all and is a stronger thing: the flow is SUSPENDED
-             *     mid-expression on a synchronous cross-instance read, so running a `load` listener here would
-             *     interleave two program points of one flow. flow_blocked is that question and it is asked
-             *     first.
+             *   - A HOSTREQ is not a delay source at all and is a stronger thing — the flow is SUSPENDED
+             *     mid-expression — so it is not this condition's business: the arm directly above answers it
+             *     for this arm and for every arm below, which is why flow_blocked no longer appears here.
              *   - A `fetch()` (RESOLVE) and a dynamic `import()` (MODULE) delay nothing, and are exactly what
              *     this arm now runs in front of.
              * The remaining sources of step 8 are per-ELEMENT flags — `img`, the media elements, `script` — and
              * they belong to those components rather than to this register; core/dom/document.c's
              * document_load_event_delayed names them at the gate they are missing from. */
-            else if (!flow_blocked(f) &&
-                     !pending_outstanding_kind(f->pending, FLOW_PENDING_SCRIPT) &&
+            else if (!pending_outstanding_kind(f->pending, FLOW_PENDING_SCRIPT) &&
                      !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
                      g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = "document-lifecycle-stage"; return 0; }
-            /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished. Below the lifecycle for the reason
-               above — a debt the load event does not wait on must not decide when the load event fires. */
-            else if (pending_count(f->pending) > 0)
-                return FLOW_STEP_OWED;
             /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
                that can defer: it compares the next rendering opportunity with the earliest timer expiry and
                yields when the timer is earlier. Without a rendering opportunity there is no
@@ -5217,9 +5236,35 @@ static int flow_step(JSContext *ctx, Flow *f) {
                page's code hangs off exactly those. */
             else if (g_rendering_hook && g_rendering_hook(ctx)) {
                 g_step_unit = "queue-rendering-opportunity"; return 0; }
+            /* AND THE TIMER TASK SOURCE — §8.7 "Timers"'s timer initialization steps end by "queues a global
+               task on the timer task source given global to run task", so a due timer IS a runnable task and
+               §8.1.7.3 step 2 runs it. */
             else if (g_timer_hook && g_timer_hook(ctx)) { g_step_unit = "fire-due-timer"; return 0; }
-            /* HTML §8.1.7.5 "notify about rejected promises". The flow has nothing left to run, so every
-               rejection still on its list is one no handler will ever be attached to. The browser half keeps
+            /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished.
+             *
+             * BELOW THE TWO CLOCK-DRIVEN SOURCES, which is the same sentence the lifecycle arm makes one rung
+             * up, said about the clock instead of about `load`: a debt no task source waits on must not decide
+             * when a task source runs. §8.1.7.3 step 2 conditions the whole loop on "a task queue with at
+             * least one runnable task" and on nothing else; a `fetch()` runs in parallel and is not on a queue
+             * until it completes. Held ABOVE them, ONE request in the air took a flow out of the pick — a
+             * marked flow is not picked again until a HOST EVENT clears it — and with it went every due timer,
+             * every rendering opportunity, and therefore every requestAnimationFrame and observer delivery,
+             * for the rest of the session.
+             * THE SHAPE IT PRODUCED IS THE ONE THAT NAMES IT. testharness.js sets `all_loaded` inside a
+             * `setTimeout(…, 0)` queued from its own `load` handler, so a document could run every one of its
+             * subtests, pass every one, fire `load`, run the handler — and then never get the zero-delay timer
+             * that is the last thing between it and `Tests.all_done()`. Every subtest reported, `num_pending`
+             * 0, completion never. A flow that keeps its work and is never picked again is STARVED, and
+             * §scheduler's razor makes no distinction there: "drops, starves, skips, reorders, or forgets ANY
+             * flow — it is a CAP, banned".
+             * AND IT IS STILL ABOVE THE TWO ARMS BELOW, for the reason the preamble gives: those two claim the
+             * run is FINISHED (no handler will ever be attached; nothing ever called this function) and an
+             * outstanding reply's continuation can still attach the handler and still make the call. */
+            else if (pending_count(f->pending) > 0)
+                return FLOW_STEP_OWED;
+            /* HTML §8.1.4.7 "Unhandled promise rejections" — its "notify about rejected promises". The flow
+               has nothing left to run, so every rejection still on its list is one no handler will ever be
+               attached to. The browser half keeps
                the lists and fires `unhandledrejection`; those fires are JOBS, so the flow has work again and
                the loop picks them up like any other. Only what the page did not cancel comes back through the
                report hook — and what it means then is this half's answer, the same thing a script that threw

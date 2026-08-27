@@ -425,10 +425,17 @@ void timer_clear_map(JSContext *ctx)
  * work: testharness arms one per file, and it fired while the tests it guards were still queued, marking 140
  * stream subtests that go on to pass as "Test timed out".
  *
- * HTML SAYS WHEN INSTEAD. §8.1.7's event loop runs a task from a task source that has one DUE; the timer
+ * HTML SAYS WHEN INSTEAD. §8.1.7 "Event loops" runs a task from a task source that has one DUE; the timer
  * source's task becomes due at its expiry. So nothing is queued in advance — the DRIVER asks this, and only
  * when it has nothing else to run, which is exactly when "the clock may move" is true. Everything that is
- * already due (a queued task, a pending microtask, a reply the host owes) is by construction ahead of it.
+ * already due (a queued task, a pending microtask, a reply that has ARRIVED) is by construction ahead of it.
+ * A REPLY THE HOST STILL OWES IS NOT DUE AND MUST NOT BE AHEAD OF IT, which is the half this paragraph used
+ * to get backwards. §8.1.7.3 "Processing model" step 2 conditions the loop on "a task queue with at least one
+ * runnable task"; a `fetch()` runs in parallel and is on no queue until it completes. A driver that parked
+ * the flow on that debt BEFORE asking here would leave a due timer unfired for as long as the request was in
+ * the air — for ever, where nothing is going to answer — and the flow keeps the timer while never being
+ * picked again, which is the razor's "starves" and so a cap. The order is stated at the driver
+ * (solver/engine.c's step ladder); what this file owes it is only the honest "there is none" below.
  *
  * AND IT IS THE RUNNING FLOW'S TIMER, WITHOUT ASKING WHICH FLOW THAT IS. The driver calls this from inside a
  * flow's step, so that flow's COW delta is the one applied: every map it walks holds exactly the entries that
