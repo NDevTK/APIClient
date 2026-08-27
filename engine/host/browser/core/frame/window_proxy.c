@@ -1816,11 +1816,21 @@ static JSValueConst proxy_forward_window(JSContext *ctx, JSValueConst obj, Proxy
 /* WHERE A FORWARDED WRITE LANDS, for the COW delta — see JSClassExoticMethods.forwarded_object. The delta must
    name the Window the define below writes, never this stand-in: an entry naming the proxy restores its baseline
    ONTO the proxy as a real own property, which from then on shadows the Window for every flow. */
+/* THE RECEIVER OF A CLASS HOOK IS NOT §3.7.6's QUESTION, AND THAT IS WHY THIS IS AN ASSERT RATHER THAN A
+ * RESOLUTION. A member installed on §7.2.3's surface is a Web IDL attribute and can be handed any receiver a
+ * page can write, which is the sentence proxy_member_get reads. A hook in JSClassExoticMethods is reached by
+ * quickjs off the object's OWN class id, so `obj` is a WindowProxy by construction and its opaque was set by
+ * the only function that mints one — there is no fourth thing it can be, and `if (!p) return <default>` was
+ * five more of the plausible datum this component has just been cleaned of: [[GetOwnProperty]] reporting "no
+ * such property", [[Delete]] reporting success, [[DefineOwnProperty]] reporting refusal and [[OwnPropertyKeys]]
+ * reporting an empty window, each indistinguishable from the real answer. The finalizer and the gc_mark keep
+ * their test: those two DO run against an object whose opaque may never have been set, which is exactly why
+ * they reach it through JS_GetOpaque instead of proxy_of. */
 static JSValueConst proxy_forwarded_object(JSContext *ctx, JSValueConst obj, JSAtom prop)
 {
     ProxyData *p = proxy_of(obj);
 
-    if (!p) return JS_UNINITIALIZED;
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
     return proxy_forward_window(ctx, obj, p, prop);
 }
 
@@ -1836,7 +1846,7 @@ static int proxy_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSVal
     JSValueConst w;
     uint32_t idx;
 
-    if (!p) return 0;
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
     if (!proxy_same_origin(p)) {                                        /* step 3 */
         JS_ThrowDOMException(ctx, "SecurityError",
                              "the origins do not permit defining a member of that Window");
@@ -1867,7 +1877,7 @@ static int proxy_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
     JSValueConst w;
     uint32_t idx;
 
-    if (!p) return 1;
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
     if (!proxy_same_origin(p)) {                                        /* step 3 */
         JS_ThrowDOMException(ctx, "SecurityError",
                              "the origins do not permit deleting a member of that Window");
@@ -1907,7 +1917,7 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
     uint32_t idx;
     int i;
 
-    if (!p) return 0;
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
     /* A NAME TABLE THAT WAS NEVER FILLED COMPARES EVERY PROPERTY AGAINST JS_ATOM_NULL and matches none, which
        would refuse §7.2.1.3.1's whole list rather than answer it — a filter that throws for everything passes
        any test that only checks the throw. */
@@ -2036,7 +2046,7 @@ static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
 
     *ptab = NULL;
     *plen = 0;
-    if (!p) return 0;
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
 
     if (!proxy_same_origin(p)) {
         /* §7.2.3.10 step 5, AND THE TWO THINGS IT NEEDS THAT DO NOT EXIST. Step 2's maxProperties is the child
