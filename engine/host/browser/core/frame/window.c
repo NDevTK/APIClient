@@ -254,11 +254,19 @@ static JSValue js_win_opener(JSContext *ctx, JSValueConst this_val, int magic)
      null  -> DISOWN: the navigable's opener link is severed, and NO own property is defined. A page writes this
               to cut a popup loose from the document that opened it, and defining an own `null` instead would
               answer null to the page while leaving the link intact for everything that reads the navigable.
-     other -> Web IDL's CreateDataPropertyOrThrow(this, "opener", V) — the same operation [Replaceable] performs,
-              reached through the same one implementation. */
+     other -> §7.2.2.4's own step 2, "perform ? DefinePropertyOrThrow(this, "opener", { [[Value]]: the given
+              value, [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true })" — the descriptor
+              [Replaceable]'s CreateDataPropertyOrThrow builds, reached through the same one implementation.
+   THE TWO BRANCHES NAME TWO DIFFERENT THINGS AND §3.7.6 RESOLVES THE RECEIVER ONCE FOR BOTH: the disown is
+   about the NAVIGABLE, the define is about the OBJECT, and for a receiver that is null or undefined those are
+   this realm's WindowProxy and this realm's GLOBAL. Handing the raw `this_val` to the define wrote the page's
+   value onto `undefined` — the same half-applied receiver rule that had the WindowProxy's own spelling of this
+   member answering `undefined` where §7.2.2.4 answers `null`. */
 static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+    JSValue js;
+    int r;
 
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
@@ -266,7 +274,10 @@ static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueC
         window_proxy_disown_opener(ctx, nav);
         return JS_UNDEFINED;
     }
-    return idl_replace_with_value(ctx, this_val, "opener", val) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    js = window_proxy_this_object(ctx, this_val);
+    r = idl_replace_with_value(ctx, js, "opener", val);
+    JS_FreeValue(ctx, js);
+    return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
 /* §7.2.2.1's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is

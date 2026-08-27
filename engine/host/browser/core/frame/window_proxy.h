@@ -298,6 +298,14 @@ void window_proxy_install_proto(JSContext *ctx);
    a throw and not an answer about some other window. */
 JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val);
 
+/* THE SAME §3.7.6 SENTENCE, ANSWERED AS THE OBJECT RATHER THAN AS THE NAVIGABLE — the platform object the
+   member was invoked on, which is what §7.2.2.4's opener setter's "DefinePropertyOrThrow(this, "opener", …)"
+   and [Replaceable]'s CreateDataPropertyOrThrow write to. The two answers DIFFER exactly where the receiver is
+   missing: the navigable is this realm's WindowProxy and the object is its GLOBAL, and a define aimed at the
+   proxy lands where §7.2.3.5 answers out of §7.2.3's own surface and the page can never read it back.
+   OWNED. Both are derived from ONE test of "null or undefined", stated in window_proxy.c. */
+JSValue window_proxy_this_object(JSContext *ctx, JSValueConst this_val);
+
 /* §7.2.2.1's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same answer.
    It is the spec's OR: true if the browsing context is null (the destruction ran) or is closing is true.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */

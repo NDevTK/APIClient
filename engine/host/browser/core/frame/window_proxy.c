@@ -2166,20 +2166,39 @@ JSValue window_proxy_top_navigable(JSContext *ctx, JSValueConst self)
    answered with a proxy the page had never seen. */
 static JSValue win_or_proxy(JSContext *ctx, JSValue v)
 {
-    if (JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx))) {
+    /* ONLY AN OBJECT CAN NAME A NAVIGABLE, and this mapping is asked about values that are not one: §7.2.2.4's
+       `opener` is null for a navigable nothing opened, and `parent`/`top` are null for a destroyed one. A
+       JSValue carrying no pointer has no pointer to read — JS_MKVAL initialises the union's `int32` and leaves
+       the rest of it unspecified — so comparing one against this realm's proxy is a comparison against
+       whatever the other half of that union happens to hold. */
+    if (JS_IsObject(v) && JS_VALUE_GET_PTR(v) == JS_VALUE_GET_PTR(document_window_proxy(ctx))) {
         JS_FreeValue(ctx, v);
         return JS_GetGlobalObject(ctx);
     }
     return v;
 }
 
+/* §7.2.3's OWN SURFACE ANSWERING ONE MEMBER — and its receiver is §3.7.6's, not this object.
+ *
+ * IT RETURNED `JS_UNDEFINED` FOR A RECEIVER IT COULD NOT MAP, and that is the defaulted-field defect performed
+ * on the ES receiver rule: a member of §7.2.1.3.1's cross-origin list answered `undefined` where §7.2.2.4
+ * answers `null`, and a page reads the difference directly — `window.opener === null` is how a document asks
+ * whether it is a popup, and `undefined` sends it down the other arm. The reach is not exotic: §7.2.3.5 step 3
+ * hands `Object.getOwnPropertyDescriptor(w, "opener")` an ACCESSOR, so `desc.get()` is an ordinary call with no
+ * receiver, which §3.7.6 resolves to the getter's own realm's global and this resolved to nothing at all. */
 static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    ProxyData *p = proxy_of(this_val);   /* CAPTURED: `closed` and `name` are per-flow state a read may precede */
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+    ProxyData *p;
 
     DCHECK(magic >= 0 && magic < WP_MEMBER_N,
            "a WindowProxy member was declared with a magic this component does not name");
-    if (!p) return JS_UNDEFINED;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* §3.7.6's TypeError, already thrown */
+    p = proxy_of(nav);   /* CAPTURED: `closed` and `name` are per-flow state a read may precede */
+    DCHECK(p != NULL,
+           "§3.7.6's receiver resolved to something that is not a WindowProxy — window_proxy_this_navigable "
+           "answers with a navigable or throws, so a third outcome is a mapping that grew an arm without "
+           "telling this member what it may now be handed");
 
     /* A LOCAL PROXY CAN STILL BE CROSS-ORIGIN — this agent is one ORIGIN, but a proxy it holds may name a
        navigable it navigated elsewhere — so §7.2.1's check comes first either way. */
@@ -2196,17 +2215,22 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
        delegation only ever ran for a same-origin child, which is why it survived until one existed. */
     switch (magic) {
     case WP_WINDOW: case WP_SELF: case WP_FRAMES: case WP_GLOBALTHIS:
-        return JS_DupValue(ctx, this_val);
+        /* THE NAVIGABLE, MAPPED — not the raw receiver. §7.2.3.7 makes `w.window` the WindowProxy, and for the
+           ASKING realm's own navigable the object a page holds as `window` is the global (win_or_proxy). A raw
+           `this_val` was indistinguishable from both while a receiver was always a proxy; §3.7.6's missing one
+           resolves to this realm's navigable, and handing that back unmapped would make `windowGet() === window`
+           false for the one realm that can ask it. */
+        return win_or_proxy(ctx, JS_DupValue(ctx, nav));
     case WP_PARENT:
         /* §7.2.2.4: the parent navigable's proxy, or THIS one when there is no parent. */
-        return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, this_val)
+        return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, nav)
                                                            : JS_DupValue(ctx, p->parent));
     case WP_TOP:
-        return win_or_proxy(ctx, window_proxy_top_navigable(ctx, this_val));
+        return win_or_proxy(ctx, window_proxy_top_navigable(ctx, nav));
     case WP_OPENER:
         return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
     case WP_NAME:
-        return window_proxy_name_value(ctx, this_val);
+        return window_proxy_name_value(ctx, nav);
     case WP_DOCUMENT:
         /* §7.2.2's `document`, and reaching it means the read was PERMITTED — which for a same-origin-only
            member means the origins match, which in an origin-keyed agent means this agent holds the realm. So
@@ -2214,7 +2238,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            are one heap and the corpus appends nodes across exactly this edge. A destroyed navigable has no
            active document. */
         if (wp_closed(p)) return JS_NULL;
-        return JS_DupValue(ctx, document_object(proxy_realm(ctx, this_val, p)));
+        return JS_DupValue(ctx, document_object(proxy_realm(ctx, nav, p)));
     case WP_LOCATION:
         /* §7.2.4: a navigable has ONE Location, and it is the ACTIVE DOCUMENT's — so it is read off that
            document's realm, exactly as `document` is. A destroyed navigable has no active document and so no
@@ -2231,7 +2255,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            global — and a JS_GetPropertyStr that reaches a getter aborts, because a C activation has no flow
            base under it. location.h's location_object is the same answer without the property read, exactly as
            document_object is above. */
-        return location_object(proxy_realm(ctx, this_val, p));
+        return location_object(proxy_realm(ctx, nav, p));
     default:
         DFAIL("a WindowProxy member with no navigable-own answer reached this switch — WP_LENGTH, WP_CLOSED "
               "and anything added beside them are answered by the instance holding the navigable's document "
@@ -2370,10 +2394,35 @@ JSValueConst window_proxy_navigable_of(JSContext *ctx, JSValueConst v)
     bool is_global;
 
     if (window_proxy_is(v)) return v;
+    /* AND THE SAME NON-OBJECT RULE win_or_proxy STATES, read in this direction: §3.7.6's receiver may be any
+       value a page can write — `openerGet.call(42)` is a TypeError, not a question about a global — and a
+       primitive has no pointer to compare against one. */
+    if (!JS_IsObject(v)) return JS_UNDEFINED;
     g = JS_GetGlobalObject(ctx);
     is_global = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(v);
     JS_FreeValue(ctx, g);
     return is_global ? document_window_proxy(ctx) : JS_UNDEFINED;
+}
+
+/* §3.7.6's FIRST CLAUSE, WRITTEN ONCE — "if it is not null or undefined". The sentence has TWO consumers that
+   want DIFFERENT answers out of it (the navigable the member is about, and the ES object the member is invoked
+   on), and writing the test twice is how they come to disagree: one of them would keep answering `undefined`
+   for a missing receiver while the other resolved it. Side-effect-free. */
+static bool wp_this_absent(JSValueConst this_val)
+{
+    return JS_IsUndefined(this_val) || JS_IsNull(this_val);
+}
+
+/* §3.7.6's `jsValue` ITSELF — the PLATFORM OBJECT the member was invoked on, which is what §7.2.2.4's opener
+   setter means by "perform ? DefinePropertyOrThrow(this, "opener", …)" and what [Replaceable]'s
+   CreateDataPropertyOrThrow writes to. It is NOT the navigable: for a missing receiver the navigable is
+   `document_window_proxy(ctx)` and the object is the realm's GLOBAL, and defining the page's value on the
+   proxy instead would put it where §7.2.3.5 answers out of the surface and nothing the page can read.
+   OWNED. */
+JSValue window_proxy_this_object(JSContext *ctx, JSValueConst this_val)
+{
+    if (wp_this_absent(this_val)) return JS_GetGlobalObject(ctx);
+    return JS_DupValue(ctx, this_val);
 }
 
 /* WEB IDL §3.7.6 "Attributes"' `jsValue`, RESOLVED TO THE NAVIGABLE THE MEMBER IS ABOUT — and it is a
@@ -2406,7 +2455,7 @@ JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val)
 {
     JSValueConst nav;
 
-    if (JS_IsUndefined(this_val) || JS_IsNull(this_val))
+    if (wp_this_absent(this_val))
         return document_window_proxy(ctx);
     nav = window_proxy_navigable_of(ctx, this_val);
     if (!JS_IsUndefined(nav)) return nav;
@@ -2434,14 +2483,17 @@ JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val)
    navigable's one name. */
 static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueConst v, int magic)
 {
-    ProxyData *p = proxy_of(this_val);
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+    ProxyData *p;
 
     (void)magic;
-    if (!p) return JS_UNDEFINED;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* §3.7.6's TypeError, already thrown */
+    p = proxy_of(nav);
+    DCHECK(p != NULL, "§3.7.6's receiver resolved to something that is not a WindowProxy");
     if (!proxy_read_permitted(p, WP_NAME))
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "the origins do not permit setting the name of that Window");
-    return window_proxy_name_assign(ctx, this_val, v);
+    return window_proxy_name_assign(ctx, nav, v);
 }
 
 /* §7.2.2.4's `opener` SETTER, THROUGH THE PROXY — `attribute any opener`, and it had none here at all, so
@@ -2450,7 +2502,10 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
    is the same member on the same navigable:
      null  -> DISOWN: the navigable's opener link is severed and NO own property is defined, so everything that
               reads the navigable sees the cut rather than a `null` that only the page can see;
-     other -> Web IDL's CreateDataPropertyOrThrow(this, "opener", V), which is what makes the write OBSERVABLE:
+     other -> §7.2.2.4's step 2, DefinePropertyOrThrow(this, "opener", {value, writable, enumerable,
+              configurable}) — Web IDL's [Replaceable] performs CreateDataPropertyOrThrow, which builds the same
+              descriptor, and this member reaches it through that one implementation. It is what makes the write
+              OBSERVABLE:
               the data property lands on THIS object and quickjs finds a shape property before it reaches the
               exotic hook, so §7.2.3.5 answers the page's value from then on.
    THE NAVIGABLE IS `this_val`'s, not the reading realm's — the one difference from window.c's spelling, and
@@ -2458,10 +2513,15 @@ static JSValue proxy_name_set(JSContext *ctx, JSValueConst this_val, JSValueCons
    because the Window it is installed on IS its realm's navigable, and this one is handed the target. */
 static JSValue proxy_opener_set(JSContext *ctx, JSValueConst this_val, JSValueConst v, int magic)
 {
-    ProxyData *p = proxy_of(this_val);
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+    ProxyData *p;
+    JSValue js;
+    int r;
 
     (void)magic;
-    if (!p) return JS_UNDEFINED;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* §3.7.6's TypeError, already thrown */
+    p = proxy_of(nav);
+    DCHECK(p != NULL, "§3.7.6's receiver resolved to something that is not a WindowProxy");
     /* §7.2.1.3.1 lists `opener` with [[NeedsSetter]] FALSE, so a cross-origin write of it is not a member of
        the cross-origin surface at all — §7.2.1.3.6 CrossOriginSet ( O, P, V, Receiver ) calls the setter only
        when the descriptor §7.2.1.3.4 built HAS one, and its last step throws a SecurityError. proxy_read_permitted
@@ -2470,10 +2530,17 @@ static JSValue proxy_opener_set(JSContext *ctx, JSValueConst this_val, JSValueCo
         return JS_ThrowDOMException(ctx, "SecurityError",
                                     "the origins do not permit setting the opener of that Window");
     if (JS_IsNull(v)) {
-        window_proxy_disown_opener(ctx, this_val);
+        window_proxy_disown_opener(ctx, nav);
         return JS_UNDEFINED;
     }
-    return idl_replace_with_value(ctx, this_val, "opener", v) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
+    /* §7.2.2.4's setter step 2 names `this` — §3.7.6's `jsValue`, the OBJECT — and the two answers part company
+       for a missing receiver: the navigable above is this realm's proxy, the define below lands on its GLOBAL.
+       Aiming the define at the navigable instead would write the page's value onto an object §7.2.3.5 answers
+       out of §7.2.3's own surface, so the very next read would return the opener again. */
+    js = window_proxy_this_object(ctx, this_val);
+    r = idl_replace_with_value(ctx, js, "opener", v);
+    JS_FreeValue(ctx, js);
+    return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
 /* §7.2.2.1's `close()`. THE WHOLE METHOD IS document_lifecycle.c's, and this member is one of its two
@@ -2485,9 +2552,14 @@ static JSValue proxy_opener_set(JSContext *ctx, JSValueConst this_val, JSValueCo
    nothing to ask a peer: `this_val` IS thisTraversable, and `ctx` is the INCUMBENT realm step 6 asks about. */
 static JSValue proxy_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
+    /* §3.7.7 Operations carries §3.7.6's receiver sentence verbatim, so a detached `close` closes the realm's
+       own navigable rather than returning quietly — which is what `window.close.call(undefined)` means and what
+       the silent no-op here made unobservable. */
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
     (void)argc; (void)argv; (void)magic;
-    if (!window_proxy_is(this_val)) return JS_UNDEFINED;
-    document_lifecycle_window_close(ctx, this_val);
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* §3.7.7's TypeError, already thrown */
+    document_lifecycle_window_close(ctx, nav);
     return JS_UNDEFINED;
 }
 
@@ -2560,7 +2632,7 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                           JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
 {
     ProxyGetState *s = st;
-    JSValueConst answer;
+    JSValueConst answer, nav;
     int magic = idl_step_magic(hdr);
     ProxyData *p;
 
@@ -2569,8 +2641,17 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     DCHECK(magic >= 0 && magic < WP_MEMBER_N,
            "a WindowProxy member was declared with a magic this component does not name");
 
-    p = JS_GetOpaque(hdr->this_val, g_proxy_class);
-    if (!p) { *presult = JS_UNDEFINED; return JS_STEP_DONE; }
+    /* §3.7.6's RECEIVER, RESOLVED BY THE ONE PLACE THAT RESOLVES IT — the same sentence proxy_member_get reads,
+       and it has to be read here too: `closed` and `length` are on §7.2.1.3.1's cross-origin list, so a page
+       reaches both of them through a descriptor's `.get` with no receiver exactly as it reaches `opener`.
+       A `JS_UNDEFINED` here was `otherW.closed` answering neither true nor false. */
+    nav = window_proxy_this_navigable(ctx, hdr->this_val);
+    if (JS_IsUninitialized(nav)) return JS_STEP_ABRUPT;   /* §3.7.6's TypeError, already thrown */
+    /* JS_GetOpaque AND NOT proxy_of, which is this machine's own existing choice and is kept: neither member
+       below WRITES the record, and a capture here would put an entry in the running flow's delta for storage
+       the read never touches. proxy_member_get captures because `name`'s SETTER shares its record. */
+    p = JS_GetOpaque(nav, g_proxy_class);
+    DCHECK(p != NULL, "§3.7.6's receiver resolved to something that is not a WindowProxy");
     if (!proxy_read_permitted(p, magic)) {
         JS_ThrowDOMException(ctx, "SecurityError",
                              "the origins do not permit reading this member of that Window");
