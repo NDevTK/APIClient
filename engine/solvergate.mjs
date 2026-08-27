@@ -218,15 +218,23 @@ async function child(docPath, schedName) {
          are the section's own "a new embedder policy", because §7.1.7 gives every container one and there is
          therefore no absence to spell. The two values are §7.1.4's token strings; main.c refuses one that
          names none of the three rather than reading it as the default.
-         AND THE LAST IS HTML §7.3.1.3's PARENT NAVIGABLE, `u` — this gate's fixture documents are rooted with
-         no embedder, so their navigables are top-level traversables. It is the engine's own encoding for the
-         absence rather than an empty string, because a navigable either has a parent or is a top-level
-         traversable and both are facts a host states. */
+         AND THE SECOND-LAST IS HTML §7.3.1.3's PARENT NAVIGABLE, `u` — this gate's fixture documents are
+         rooted with no embedder, so their navigables are top-level traversables. It is the engine's own
+         encoding for the absence rather than an empty string, because a navigable either has a parent or is a
+         top-level traversable and both are facts a host states.
+         AND THE LAST IS Permissions Policy §9.5's CONTAINER, `null` — the same fact one algorithm over, and it
+         is stated separately for the reason §7.3.1.3 defines the two links separately: a parent is a
+         navigable, a container is the ELEMENT that presents it, and a document can be told about one without
+         the other. §9.5 takes "null or an element (container)", and null is what this gate's fixtures are:
+         it invents them, so nothing presents them, and §9.7 step 1 then returns "Enabled" for every feature.
+         Stating it rather than letting the record default is the whole point — the engine refuses a record
+         that states NOTHING for the container, because a silent absence and a stated null are different
+         claims and only one of them is this gate's. */
       e.M.ccall("qjs_init", "number",
                 ["number", "number", "number", "number", "number", "number", "number", "number",
-                 "number", "number", "number", "number", "number"],
+                 "number", "number", "number", "number", "number", "number"],
                 [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url), e.cs(""), e.cs(""),
-                 e.cs("unsafe-none"), e.cs(""), e.cs("unsafe-none"), e.cs(""), e.cs("u")]);
+                 e.cs("unsafe-none"), e.cs(""), e.cs("unsafe-none"), e.cs(""), e.cs("u"), e.cs("null")]);
       e.M._free(hp);
     }
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);
