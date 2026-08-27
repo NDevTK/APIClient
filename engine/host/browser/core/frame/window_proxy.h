@@ -210,6 +210,22 @@ bool window_proxy_is_top_level(JSValueConst proxy);
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
 
+/* HTML §7.2.2 "The Window object"'s "A WINDOW'S NAVIGABLE" — "the navigable whose active document is the
+ * Window's associated Document's, or null if there is no such navigable" — answered as "is it null". §7.2.2.4
+ * "Accessing related windows" opens `top`, `parent` and `frameElement` with a test over it, so it is ONE
+ * question three members ask and it is asked in ONE place.
+ *
+ * IT IS A FOURTH FACT AND NOT A SPELLING OF THE THREE ABOVE, AND THE DIFFERENCE IS WHEN IT BECOMES TRUE.
+ * §7.5.10's step 9 is one writer, and §7.5.10's descendant form runs in parallel and queues a task per
+ * document — so `window_proxy_destroyed` is not true until a job has run. §7.3.1.6's destroy-a-child-navigable
+ * step 3 is the other, it is SYNCHRONOUS inside the tree mutation, and it is the one a page reads: §7.2.2.4's
+ * own closing example asserts `iframeWindow.top === null` on the line after `element.remove()`. So this is a
+ * WALK up §7.3.1.3's container relation rather than a field — removing one `<iframe>` severs one link and
+ * leaves every container element below it intact, so a grandchild is detached by an ancestor's sever and by
+ * nothing of its own. It stops at a link whose container element is in another instance, because what is above
+ * that is the peer's tree. Per-flow, side-effect-free, and it runs no page code. */
+bool window_proxy_navigable_null(JSContext *ctx, JSValueConst proxy);
+
 /* "THIS NAVIGABLE'S BROWSING CONTEXT IS NULL" — the fact itself, rather than either of the two writes that
  * make it true, and the reader this record was missing.
  *

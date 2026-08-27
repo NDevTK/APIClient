@@ -181,9 +181,14 @@ static JSValue js_win_frame_element(JSContext *ctx, JSValueConst this_val, int m
 
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
-    /* Steps 1-2. A Document §7.5.10 destroyed is no navigable's active document any more, so §7.3.1's "the
-       navigable whose active document is document" has no answer and this Window's node navigable is null. */
-    if (window_proxy_destroyed(nav)) return JS_NULL;
+    /* Steps 1-2. §7.2.2's "the navigable whose active document is document" has no answer once the navigable
+       has been detached from the tree or its Document destroyed — one question, asked where `top` and `parent`
+       ask it (window_proxy.h). IT WAS `window_proxy_destroyed` HERE, which is only half of the fact and the
+       half that arrives LATE: §7.5.10's destroy is a queued task, while §7.3.1.6 step 3's sever happens inside
+       the removing steps, so this answered a container ELEMENT for a frame whose own subtree had already been
+       detached — steps 3-4 saved it for the removed frame itself, whose element's slot is cleared on that same
+       line, and could not save it for anything nested inside one. */
+    if (window_proxy_navigable_null(ctx, nav)) return JS_NULL;
     /* Steps 3-4: §7.3.1.3's container, null for a navigable nested through nothing. */
     container = window_proxy_container(ctx, nav);
     if (JS_IsNull(container)) return JS_NULL;

@@ -2188,6 +2188,76 @@ static JSValue win_or_proxy(JSContext *ctx, JSValue v)
     return v;
 }
 
+/* HTML §7.2.2 "The Window object": "A Window's navigable is the navigable whose ACTIVE DOCUMENT IS the
+ * Window's associated Document's, or null if there is no such navigable." §7.2.2.4 opens `top`, `parent` and
+ * `frameElement` with a null test over it, so it is ONE question three members ask, asked in one place.
+ *
+ * IT BECOMES TRUE AT TWO DIFFERENT TIMES AND THE EARLIER ONE IS THE ONE PAGES READ. §7.5.10 "Destroying
+ * documents" step 9 — "set document's node navigable's active session history entry's document state's
+ * document to null" — is what makes the reverse lookup fail, and §7.5.10's descendant form performs its steps
+ * IN PARALLEL and queues a global task per document to run them. So `destroyed` is not true until a job has
+ * run. But §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable step 3, "set container's content
+ * navigable to null", is SYNCHRONOUS, inside the tree mutation (core/html/html_iframe.c clears the element's
+ * slot on the removing steps' own line): from that instant nothing in the navigable tree names the navigable,
+ * and §7.2.2.4's own closing example reads exactly that on the NEXT LINE —
+ *
+ *     element.remove();
+ *     console.assert(iframeWindow.top === null);
+ *
+ * which html/browsers carries twice over (window-top-null.html, window-parent-null.html). A test that asked
+ * `destroyed` alone would keep answering the window that used to be above it until a task ran, which is a real
+ * object in place of the null and the one shape a page cannot tell from an answer.
+ *
+ * SO IT IS A WALK, AND IT HAS TO BE. Removing one `<iframe>` severs ONE link; every navigable below it keeps
+ * its own container element, because the inner document is not touched at all. A grandchild is therefore
+ * detached by an ANCESTOR's sever and by nothing of its own, and window-top-null.html's second subtest is that
+ * case exactly (`frame2Window.top` after the OUTER frame is removed).
+ *
+ * §7.3.1.3's CONTAINER ALREADY ANSWERS PER FLOW, which is why nothing new is recorded here. window_proxy_container
+ * confirms the navigable's stored container against THAT ELEMENT's own content navigable, so it reports the
+ * running flow's severance rather than some other arm's — and it keeps reporting it after the removed element
+ * is appended back, because §4.8.5's post-connection steps create a NEW navigable and the element's slot then
+ * names that one, so the old proxy's confirm fails for ever. The corpus asserts both halves.
+ *
+ * A CONTAINER IN ANOTHER INSTANCE IS NOT AN ABSENT ONE. SECURITY.md keys an instance on
+ * `(browsing context group, origin)`, so the navigable an instance is ROOTED in is routinely a cross-origin
+ * `<iframe>` whose element belongs to the CREATING instance — its §7.3.1.3 link crosses as an ANSWER rather
+ * than an object (window_proxy_remote_container), and its local `container` is null because there is no local
+ * element to hold. Reading that null as a sever would report every cross-origin frame's own document as
+ * detached from itself. The walk stops at that link instead: what is above it is the peer's tree, and the peer
+ * is the agent that can answer for it.
+ *
+ * Runs no page code: proxy_of is a capture and window_proxy_container is one own-slot read of a wrapper, which
+ * is what lets this be asked from a plain C getter with no flow base under it.
+ *
+ * §7.2.2.4's `frameElement` asks it about the NODE NAVIGABLE, which is the Window's associated Document's and
+ * so the same navigable and the same sentence — core/frame/window.c reads it through the declaration in
+ * window_proxy.h rather than testing a field of its own. */
+bool window_proxy_navigable_null(JSContext *ctx, JSValueConst proxy)
+{
+    JSValueConst cur = proxy;
+
+    for (;;) {
+        ProxyData *q = proxy_of(cur);   /* CAPTURED: severance is per-flow state this read may precede */
+        JSValue container;
+
+        DCHECK(q != NULL,
+               "§7.2.2's \"a Window's navigable\" was walked through something that is not a WindowProxy — "
+               "every link this climbs is `parent`, and §7.2.2.4 says a navigable's parent is one");
+        if (q->destroyed) return true;
+        /* §7.3.1.3 "Child navigables": a navigable "is a child navigable", "which means that its parent is
+           non-null". A top-level traversable is at the top of the tree, so it is attached by being one. */
+        if (!window_proxy_is(q->parent)) return false;
+        if (window_proxy_remote_container(cur) != NULL) return false;
+        container = window_proxy_container(ctx, cur);
+        if (JS_IsNull(container)) return true;   /* §7.3.1.6 step 3 ran, in THIS flow */
+        JS_FreeValue(ctx, container);
+        /* BORROWED, exactly as window_proxy_top_navigable borrows: each link is held by the record of the
+           navigable below it, and that record is held by the object this iteration is standing on. */
+        cur = q->parent;
+    }
+}
+
 /* §7.2.3's OWN SURFACE ANSWERING ONE MEMBER — and its receiver is §3.7.6's, not this object.
  *
  * IT RETURNED `JS_UNDEFINED` FOR A RECEIVER IT COULD NOT MAP, and that is the defaulted-field defect performed
@@ -2236,7 +2306,7 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            If navigable is null, then return null. If navigable's parent is not null, then set navigable to
            navigable's parent. Return navigable's active WindowProxy." STEP 2 IS THE ONE THAT WAS MISSING —
            see the paragraph on WP_TOP below, which is the same sentence and the same omission. */
-        if (p->destroyed) return JS_NULL;
+        if (window_proxy_navigable_null(ctx, nav)) return JS_NULL;
         return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, nav)
                                                            : JS_DupValue(ctx, p->parent));
     case WP_TOP:
@@ -2249,21 +2319,19 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
          *
          * "THIS'S NAVIGABLE IS NULL" IS NOT "THIS IS CLOSED", AND IT IS NOT "THIS'S BROWSING CONTEXT IS NULL"
          * EITHER — §7.2.2.4 spells three of its four getters' step 1 three different ways on purpose, and this
-         * record keeps the three facts apart for exactly that reason (see window_proxy.h). §7.2.2 defines "a
-         * Window's navigable" as "the navigable whose active document is the Window's associated Document's, or
-         * null if there is no such navigable", so the writer is §7.5.10's destroy, whose step 9 nulls this
-         * navigable's active document — `destroyed`, the same field js_win_frame_element reads for its own
-         * step 1, which is the same sentence written about the node navigable. `closing` is not it (a
-         * traversable that is closing still has its documents), and neither is §7.1.3.2's group swap
-         * (`bc_discarded`): that discards the BROWSING CONTEXT, which is what the `opener` getter below asks
-         * about and what `closed` reports, while the Document stays active in the navigable this record names —
-         * which is the whole reason a read through the opener's handle still answers about THAT document.
+         * record keeps the three facts apart for exactly that reason (see window_proxy.h). The navigable's
+         * spelling is window_proxy_navigable_null above, which is a WALK and goes true SYNCHRONOUSLY at
+         * §7.3.1.6's sever; `closing` is not it (a traversable that is closing still has its documents), and
+         * neither is §7.1.3.2's group swap (`bc_discarded`), which discards the BROWSING CONTEXT — the question
+         * the `opener` getter below asks and the one `closed` reports — while the Document stays active in the
+         * navigable this record names, which is the whole reason a read through the opener's handle still
+         * answers about THAT document.
          *
          * IT IS ASKED BEFORE THE WALK RATHER THAN INSIDE IT. window_proxy_top_navigable climbs `parent` links,
-         * which §7.5.10 does not sever, so a destroyed navigable walks to a live traversable and answers with a
+         * which §7.3.1.6 does not sever, so a detached navigable walks to a live traversable and answers with a
          * window that is no longer above it — a real object in place of the null, which is the one shape that
          * cannot be told from an answer. */
-        if (p->destroyed) return JS_NULL;
+        if (window_proxy_navigable_null(ctx, nav)) return JS_NULL;
         return win_or_proxy(ctx, window_proxy_top_navigable(ctx, nav));
     case WP_OPENER:
         /* §7.2.2.4's opener getter steps: "Let current be this's browsing context. If current is null, then
