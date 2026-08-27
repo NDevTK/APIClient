@@ -2356,6 +2356,20 @@ static const char *HTML =
     " var _cst = 'nothrow';"
     " try { Reflect.construct(function(){}.bind(null), [], _cnt); } catch (_cse) { _cst = 'threw'; }"
     " fetch('/api/conshape?c=' + _cst + '&s=' + new _CShape(1, 2).s);"
+
+    /* (2c) THE CONTROL FOR (2b), AND IT IS APPENDED AT THE END OF THIS SCRIPT FOR THE SAME REASON THE SCRIPT
+       ITSELF WAS: a statement added here shifts no column, not even inside this script, so the four statements
+       above keep the coordinates they were measured at.
+       WHY A CONTROL AND NOT A GUESS. (2b) came back with `/api/getfork` failing both its rows, and the reading
+       that (2b) is red because the accessor is broken is INDISTINGUISHABLE, from the rows alone, from the
+       reading that `cfg.admin` is simply no longer two-armed this late in the document — which would make (2b)
+       a broken FIXTURE asserting something no run can satisfy, and a row that is red forever reads as a
+       capability gap. The two are told apart by ONE comparison and no reasoning: the SAME ternary, over the
+       SAME source, in the SAME frame, at the SAME point in the document, WITHOUT an accessor in the way. If
+       this carries both values and `/api/getfork` does not, the difference is the accessor and nothing else.
+       If this carries one, the premise (2b) rests on is false and (2b) is mine to fix rather than the engine's.
+       It costs no fork of its own: the ternary is decided inside each arm that already exists. */
+    " fetch('/api/getbase?v=' + (cfg.admin ? 'gbADMIN' : 'gbPUBLIC'));"
     "</script>"
     "</body></html>";
 
@@ -6013,23 +6027,54 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        machine ran its callback once; zero means the endpoint is absent and `rest_args` already said so. */
     int rest_loop = (param_value_count(js, "/api/rest", "e") == 2);
 
-    /* THE ZERO-ARGUMENT ACCESSOR FORKED, WHICH IS WHAT RUNS THE CLONE'S ACCESSOR ARM. Both arms must be
-       present: one alone is a sibling that lost its arm or read its parent's continuation record. */
+    /* ─── THE ACCESSOR, AS A LADDER RATHER THAN TWO ANSWERS ────────────────────────────────────────────────
+       THE FIRST VERSION OF THIS WAS TWO ROWS AND THEY CAME BACK 0 AND 0, WHICH IS THREE STATES BEHIND ONE
+       ANSWER — the defect this file already names and the one I reproduced building the instrument meant to
+       end it. `param_value_count` returns 0 for "no such endpoint" AND for "no such param on it", so a
+       collapsed row cannot tell an accessor that never ran from one that ran once from one that returned a
+       shape, and every one of those is a different thing to go fix. Four rungs, each with a strictly earlier
+       observation site than the one above it, so the LOWEST 0 is the localisation.
+       Rung 1 is asked WITHOUT param_values_span deliberately: the helper answers NULL for an absent endpoint
+       and for an absent param alike, so the endpoint's own presence has to be read off the document directly
+       or the bottom of the ladder collapses in exactly the way the ladder exists to prevent. */
+    int getter_url = strstr(js, "\"url\":\"/api/getfork\"") != NULL;
+    /* Rung 2: the getter returned a value the run DETERMINED. A 0 here with rung 1 at 1 says the ternary
+       propagated its operand instead of forking — the value is a shape, and no count of it is about the
+       clone. */
+    int getter_concrete = (param_value_has(js, "/api/getfork", "v", "gxADMIN") ||
+                           param_value_has(js, "/api/getfork", "v", "gxPUBLIC"));
+    /* Rung 3: BOTH arms reached the sink, which is the claim (2b) is in the document to make. */
     int getter_fork = (param_value_has(js, "/api/getfork", "v", "gxADMIN") &&
                        param_value_has(js, "/api/getfork", "v", "gxPUBLIC"));
-    /* AND EXACTLY TWO, because the getter's branch is the only fork in that statement — a third value is a
-       flow that got there some way this fixture does not describe. */
+    /* Rung 4: and exactly two — a third value is a flow that got there some way this fixture does not
+       describe, which is a finding rather than a stronger pass. */
     int getter_arms = (param_value_count(js, "/api/getfork", "v") == 2);
+    /* AND THE CONTROL, WHICH IS WHAT MAKES THE LADDER ABOVE MEAN THE ACCESSOR. The same ternary over the same
+       source in the same frame with no accessor in the way: `base_fork` at 1 while `getter_fork` is 0 isolates
+       the difference to the accessor, and `base_fork` at 0 says `cfg.admin` is not two-armed at this point in
+       the document at all — in which case (2b) asserts something no run can satisfy and the fixture is what
+       needs fixing. Without this row those two are one number, and the wrong one gets worked on. */
+    int base_fork = (param_value_has(js, "/api/getbase", "v", "gbADMIN") &&
+                     param_value_has(js, "/api/getbase", "v", "gbPUBLIC"));
 
     /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
        that never threw produces, which is the failure mode of asserting only the consequence. */
     int con_threw = param_value_only(js, "/api/conshape", "c", "threw");
-    /* AND THE NEXT CONSTRUCT IN THE SAME FRAME COMPLETED. `new _CShape(1, 2)` pushes two operands; a shape
-       left standing by the abrupt path makes it pop NONE of them, and this row is the wrong half of that to
-       watch — the dev build never reaches it, because the idle-register check fires at the first opcode
-       boundary after the catch and names the register. What this row states is the RELEASE-shaped half and
-       the one a reader can act on: the frame came back usable. A `@WHY` naming the pending-call registers is
-       this statement's real signature, and it arrives before any row is printed. */
+    /* AND THE NEXT CONSTRUCT IN THE SAME FRAME COMPLETED — TWO RUNGS, AND THE FIRST ONE IS NEW BECAUSE THE
+       ROW BELOW CAME BACK 0 IN A STATE THAT CANNOT PRODUCE IT. `con_threw` is 1, so `/api/conshape` was
+       emitted and its `c` merged to exactly one value; every emission of that endpoint therefore also carried
+       an `s`, computed by `'' + 1 + 2` from two literals, which no flow can disagree about. And the pending-
+       call idle check did NOT fire, so the shape this statement is about was not left standing either. A 0
+       below under those three facts is not the defect this statement was written for and must not be read as
+       it — `param_value_only` is false for a value that is WRONG and for a param carrying more than one
+       value, and those are different findings. This rung separates them: 1 here says the construct produced
+       ONE answer across every flow and the row below is about WHICH answer; 0 here says it produced several
+       or none, which is a fact about the flows and not about the operand shape at all. */
+    int con_s_one = (param_value_count(js, "/api/conshape", "s") == 1);
+    /* AND IT IS THE RIGHT ONE. When the shape IS left standing the dev build never reaches this row at all —
+       the idle-register check fires at the first opcode boundary after the catch and names the register — so
+       a `@WHY` over the pending-call registers is this statement's signature and this row is the release-
+       shaped half of it. */
     int con_shape = param_value_only(js, "/api/conshape", "s", "12");
 
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
@@ -6233,9 +6278,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "faw-depth", faw_depth, "fawREJ", SESS_EXPLORE },
         { "rest-args", rest_args, "_fr.length", SESS_EXPLORE },
         { "rest-loop", rest_loop, "_fr.length", SESS_EXPLORE },
+        /* THE ACCESSOR LADDER, LOWEST RUNG FIRST — read them in this order and the lowest 0 is the answer. */
+        { "getter-url", getter_url, "_gx.x", SESS_EXPLORE },
+        { "getter-concrete", getter_concrete, "_gx.x", SESS_EXPLORE },
         { "getter-fork", getter_fork, "_gx.x", SESS_EXPLORE },
         { "getter-arms", getter_arms, "_gx.x", SESS_EXPLORE },
+        /* AND ITS CONTROL, keyed on its OWN statement — it is a different statement making a different claim,
+           so it carries its own key rather than borrowing the accessor's. */
+        { "base-fork", base_fork, "gbADMIN", SESS_EXPLORE },
         { "con-threw", con_threw, "_CShape", SESS_EXPLORE },
+        { "con-s-one", con_s_one, "_CShape", SESS_EXPLORE },
         { "con-shape", con_shape, "_CShape", SESS_EXPLORE },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
