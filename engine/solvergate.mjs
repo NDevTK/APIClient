@@ -49,7 +49,7 @@
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
  * `_sinkTainted`, `_sinkSuppressed`), the routed-delivery pair and the four ends of the task it queues
  * (`_routedDelivered`, `_routedRefused`, `_routedTasksFired`, `_routedTasksTargetOrigin`,
- * `_routedTasksTargetGone`, `_routedTasksThrew`), and a
+ * `_routedTasksTargetGone`, `_routedTasksThrew`), the orphan census (`_orphansDriven`, `_orphansAsked`), and a
  * parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
  * interleaving scheduler and a FIFO one (result.c says so), so comparing it would fail every schedule by
  * construction. THE ARRIVAL
@@ -540,7 +540,19 @@ const DROP = new Map([
                 /* §9.3.3 step 8's four task ends, each counted per queued task PER ARM — engine.h's
                    conservation law is an inequality for exactly that reason. */
                 "_routedTasksFired", "_routedTasksTargetOrigin", "_routedTasksTargetGone",
-                "_routedTasksThrew"])],
+                "_routedTasksThrew",
+                /* THE ORPHAN CENSUS, AND `_orphansDriven` IS ARGUED IN RATHER THAN WAIVED. `_orphansAsked`
+                   counts the times a flow reached the end of its OWN work, which is the schedule's to choose
+                   and never converges — the ground `_switches` is dropped on. `_orphansDriven` looks like it
+                   converges on a draining frontier (every uncalled function is eventually taken, and the bit
+                   is consumed once per session), and it still does not: a take can ROUTE to a flow already
+                   waiting for that body instead of driving a fresh one, and which of those a schedule reaches
+                   first decides whether the count moves. It is a count of EVENTS either way, which is the
+                   arrival census's ground. WHAT IS HELD INVARIANT IS THE FINDING THE DRIVE PRODUCES — the
+                   endpoint lands in `fetchCallSites`, which is compared — so a schedule that drove the same
+                   uncalled code and learned the same endpoints passes whatever these two say, and one that
+                   learned less fails on the surface rather than on the counter. */
+                "_orphansDriven", "_orphansAsked"])],
   /* `turns` IS A SWITCH-IN COUNT, WHICH IS `_switches` ONE LEVEL DOWN. solve.c counts it in solve_flow_begin —
      the scheduler's every switch-in of a candidate flow — and says so where it counts it: "IT IS SWITCH-INS AND
      NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a second copy of `tried`: a

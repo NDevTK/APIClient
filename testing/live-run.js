@@ -88,6 +88,12 @@ function snapshot(pg) {
 const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "unitsDone",
                   "worldSegmentsHeld", "worldSegmentsMade", "worldSegmentsForked",
                   "sourceReads", "sinkReached", "sinkTainted", "sinkSuppressed",
+                  /* AND THE ORPHAN PAIR, for the same sentence this list's own comment makes about the four
+                     before it: they are the columns that say whether there was anything to find. §What-the-
+                     tool-produces makes the drive of never-called code the headline surface, and `driven`
+                     alone cannot tell a bundle with no uncalled code from a frontier that never reached the
+                     question — `asked` is the one that separates them. */
+                  "orphansDriven", "orphansAsked",
                   "endpoints", "sinks", "park", "resumed"];
 
 async function oneRun(browser, pg, url, budgetMs) {
