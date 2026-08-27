@@ -9,6 +9,7 @@
 
 #include "core/mime/mime_type.h"
 #include "solver/dom_cow.h"   /* DomParseRootKind — whose tree a parse builds, declared by whoever opens it */
+#include "core/html/html_parse.h"   /* HtmlScriptingMode — HTML §13.2.4.5's flag, stated by whoever opens the parse */
 
 /* §7.5.2's "To load an HTML document, given navigation params navigationParams", over a Document the caller
    has already created and the characters the response decoded to.
@@ -27,6 +28,7 @@
  * `about:blank` does NOT come through here: it has no response, so it has no computed type, and it is an HTML
  * document by §7.4 rather than by anything this could dispatch on. */
 lxb_status_t html_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                HtmlScriptingMode scripting,
                                 const MimeType *type, const lxb_char_t *html, size_t size);
 
 #endif

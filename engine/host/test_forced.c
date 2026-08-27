@@ -3245,6 +3245,81 @@ static void secure_hash_selftest(void)
     }
 }
 
+/* HTML §13.2.4.5 "Other parsing state flags"' SCRIPTING FLAG, exercised through the one place it is OBSERVABLE
+   in a tree: §13.2.6.4.7 'The "in body" insertion mode', whose rule is `A start tag whose tag name is
+   "noscript", if scripting mode is not Disabled — Follow the generic raw text element parsing algorithm`.
+   WHAT THIS ASSERTS IS THE DESIGN EXPECTATION AND NOT ONE CRASH. A `<noscript>` in a SCRIPTED document holds
+   exactly one child and it is a Text node — that is the whole of what RAWTEXT means here, it is what real
+   Chrome answers (`noscript.children.length === 0`, `firstChild.nodeType === 3`), and it stays true however
+   the parser is later rewritten. The regression it happens to guard is deliberately NOT what is written down:
+   a guard against one document gets deleted after use (CLAUDE.md §Testing), and this outlives it.
+   THE UNSCRIPTED HALF IS ASSERTED BESIDE IT, because a test that only pins the Enabled arm passes just as well
+   for a parser that ignores the flag entirely — the two arms differing IS the flag existing. */
+static lxb_dom_node_t *scripting_find_noscript(lxb_dom_node_t *n)
+{
+    lxb_dom_node_t *c, *hit;
+    size_t len;
+    const lxb_char_t *name;
+
+    for (c = n->first_child; c; c = c->next) {
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            name = lxb_dom_element_local_name(lxb_dom_interface_element(c), &len);
+            if (len == 8 && memcmp(name, "noscript", 8) == 0)
+                return c;
+        }
+        hit = scripting_find_noscript(c);
+        if (hit != NULL)
+            return hit;
+    }
+    return NULL;
+}
+
+static void html_scripting_flag_selftest(void)
+{
+    /* The `</Link>` is not a typo: it is what a React `<Link>` component serializes into a `<noscript>`
+       fallback, it is a BOGUS END TAG per §13.2.6.4.7, and it is why the `<a>` before it never closes. Under
+       the Disabled arm that open `<a>` enters the list of active formatting elements and the SECOND `<a>`
+       below then runs §13.2.6.4.7's adoption agency algorithm over it. */
+    static const char *SRC =
+        "<html><body>"
+        "<noscript><a href=\"https://x.example\">t</Link></noscript>"
+        "<div><h1><a href=\"/\">R</a></h1>"
+        "</body></html>";
+    lxb_html_document_t *on = dom_document_create();
+    lxb_html_document_t *off = dom_document_create();
+    lxb_dom_node_t *ns, *c;
+    unsigned elems;
+
+    CHECK(on != NULL && off != NULL, "the scripting-flag fixture could not allocate its two documents");
+
+    html_parse_document(on, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED,
+                        (const lxb_char_t *)SRC, strlen(SRC));
+    ns = scripting_find_noscript(lxb_dom_interface_node(on));
+    CHECK(ns != NULL, "§13.2.6.4.7's `noscript` start tag produced no element at all in a scripted document — "
+                      "the generic raw text element parsing algorithm still INSERTS the element and only its "
+                      "CONTENT is text");
+    CHECK(ns->first_child != NULL && ns->first_child->next == NULL &&
+          ns->first_child->type == LXB_DOM_NODE_TYPE_TEXT,
+          "a `<noscript>` in a SCRIPTED document does not hold exactly one Text node — §13.2.6.4.7 sends its "
+          "contents through the generic raw text element parsing algorithm when scripting mode is not "
+          "Disabled, so markup inside it is CHARACTERS. An element child here is this engine running the "
+          "scripting-Disabled arm for a document whose scripts it executes, which is what left an unclosed "
+          "`<a>` in the list of active formatting elements and drove the adoption agency over it");
+
+    html_parse_document(off, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
+                        (const lxb_char_t *)SRC, strlen(SRC));
+    ns = scripting_find_noscript(lxb_dom_interface_node(off));
+    CHECK(ns != NULL, "the unscripted arm produced no `noscript` element");
+    elems = 0;
+    for (c = ns->first_child; c; c = c->next)
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) elems++;
+    CHECK(elems > 0,
+          "a `<noscript>` in an UNSCRIPTED document holds no element children — §13.2.6.4.7 takes the raw "
+          "text arm only when scripting mode is not Disabled, so with it Disabled this markup is a TREE. The "
+          "two arms answering alike is a parser that does not read §13.2.4.5's flag at all, which every "
+          "assertion above would still pass for");
+}
+
 static void csp_element_matching_selftest(void)
 {
     static const char *SRC =
@@ -3259,7 +3334,7 @@ static void csp_element_matching_selftest(void)
     const char *S = "p{color:red}";
     size_t slen = strlen(S);
 
-    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)SRC, strlen(SRC));
     /* The two `<style>` elements are the head's only element children, in source order and with no whitespace
        text between them — which is why the fixture is written on one line. */
     for (child = lxb_dom_interface_node(lxb_html_document_head_element(dom))->first_child; child;
@@ -3409,7 +3484,7 @@ static void document_policy_selftest(void)
     lxb_html_document_t *plain;
     const Origin *self_origin = origin_parse("https://x.test");
 
-    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)SRC, strlen(SRC));
     p = document_policy_new(dom, NULL, self_origin, serialized_embedder_policy_new());
     CHECK(policy_container_csp(p) != NULL, "the meta scan found no policy in a document that declares two");
     CHECK(!csp_ok(p, CSP_INLINE_SCRIPT_ATTRIBUTE),
@@ -3420,7 +3495,7 @@ static void document_policy_selftest(void)
     /* A page with no CSP at all is the overwhelmingly common one, and the scan must not invent a policy for
        it — an empty container that answered "blocked" would suppress every real finding on every such page. */
     plain = dom_document_create();
-    html_parse_document(plain, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)"<html><body></body></html>", 26);
+    html_parse_document(plain, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)"<html><body></body></html>", 26);
     empty = document_policy_new(plain, NULL, self_origin, serialized_embedder_policy_new());
     CHECK(csp_ok(empty, CSP_INLINE_SCRIPT_ATTRIBUTE), "a document with no meta CSP must permit everything");
 
@@ -9707,7 +9782,7 @@ static void tree_construction_write_selftest(void)
     /* THE INSTALL IS ASSERTED FROM OUTSIDE THE PARSE, because inside it every §13.2.6 write has already
        happened: a table that was still lexbor's would have produced a byte-identical tree here (the default
        IS the vendor's behaviour), so the equality below would pass while nothing this lane built had run. */
-    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)SRC, strlen(SRC));
+    html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)SRC, strlen(SRC));
     CHECK(dom_cow_owns_tree_construction(),
           "§13.2.6's DOM writes are not this engine's after a parse — html_parse_new_parser installs them and "
           "the whole fixture below would be measuring lexbor's own default instead");
@@ -9814,6 +9889,9 @@ int main(int argc, char **argv) {
     /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would
        otherwise be reported as a CSP verdict being wrong. */
     secure_hash_selftest();
+    html_scripting_flag_selftest();   /* HTML §13.2.4.5's scripting flag, read through §13.2.6.4.7's
+                                        `noscript` rule — both arms, because one arm alone passes for a
+                                        parser that never reads the flag */
     csp_element_matching_selftest();
     csp_url_matching_selftest();
     document_policy_selftest();
@@ -9887,8 +9965,10 @@ int main(int argc, char **argv) {
     g_probe_ctx = ctx;
     g_sess = cold_park_path ? SESS_PARK : cold_resume_path ? SESS_RESUME : SESS_EXPLORE;
     lxb_html_document_t *dom = dom_document_create();
-    /* SHARED: the fixture's ACTIVE document, whose tree every flow this run seeds reads. */
-    html_parse_document(dom, DOM_PARSE_ROOT_SHARED, (const lxb_char_t *)doc, strlen(doc));
+    /* SHARED: the fixture's ACTIVE document, whose tree every flow this run seeds reads.
+       §13.2.4.5 ENABLED: this fixture's whole purpose is to run that document's scripts, so its parser takes
+       the arm the production entry takes (core/html/html_parse.h). */
+    html_parse_document(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, (const lxb_char_t *)doc, strlen(doc));
     g_body = lxb_dom_interface_element(lxb_html_document_body_element(dom));   /* the DOM sink's target element */
     {
         /* The fixture built this document, so the navigable's name is the initial "" and is known. */

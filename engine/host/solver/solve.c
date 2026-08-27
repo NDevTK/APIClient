@@ -1349,7 +1349,7 @@ static void html_fire(Cand *e, const char *html) {
                        "security half rather than a missing measurement");
     /* THE PARSE IS RUN ON ITS OWN LINE, never inside the assert's condition: this one is a CHECK and would
        survive release, but a later reader converting it to a DCHECK would delete the whole parse with it. */
-    st = html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)html, strlen(html));
+    st = html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)html, strlen(html));
     CHECK(st == LXB_STATUS_OK,
           "the parse of an @S markup breakout did not complete — HTML §13.2 tree construction is "
           "error-recovering and rejects no input, so this is the allocation floor, and answering `did not "

@@ -29,6 +29,7 @@
 #include "check.h"
 
 lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
+                           HtmlScriptingMode scripting,
                            const MimeType *type, const lxb_char_t *text, size_t size)
 {
     DocumentLoadType arm;
@@ -43,9 +44,9 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
        to this switch — it is the closure at the consumer, which catches a route that reaches a loader WITHOUT
        coming through here, and this switch cannot. */
     case DOC_LOAD_HTML:
-        return html_document_load(document, root_kind, type, text, size);
+        return html_document_load(document, root_kind, scripting, type, text, size);
     case DOC_LOAD_TEXT:
-        return text_document_load(document, root_kind, type, text, size);
+        return text_document_load(document, root_kind, scripting, type, text, size);
     case DOC_LOAD_XML:
     case DOC_LOAD_MULTIPART:
     case DOC_LOAD_MEDIA:

@@ -320,7 +320,12 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
        type it does not serve is at that loader, where the parse is. The CHECK_FAIL below is also this host's
        RELEASE half of an unbuilt arm: `DFAIL` is compiled out at APICLIENT_DEV=0 and the router then answers
        with a status, so the response stops here rather than reaching a parser that does not serve it. */
-    st = document_load(dom, DOM_PARSE_ROOT_SHARED, &computed, (const lxb_char_t *)html, html_n);
+    /* §13.2.4.5 ENABLED: this is the document this agent was STARTED to run. Its scripts are `g_scripts` two
+       statements below and the boot flow drives every one of them, so its parser takes the arm a browser's
+       does — and it cannot be read off the Document here, because the navigable and the realm are given to it
+       AFTER this returns (core/html/html_parse.h states why the flag is a parameter). */
+    st = document_load(dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed,
+                       (const lxb_char_t *)html, html_n);
     mime_type_free(&computed);
     if (st != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");

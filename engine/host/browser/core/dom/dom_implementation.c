@@ -141,7 +141,7 @@ static JSValue js_impl_create_html_document(JSContext *ctx, JSValueConst this_va
     dom = dom_document_create();
     CHECK(dom != NULL, "createHTMLDocument: OOM building a second Document");
     /* FLOW-PRIVATE for the reason every §4.5.1 creation is: this operation made the Document. */
-    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE,
+    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
                               (const lxb_char_t *)SKELETON, sizeof SKELETON - 1) == LXB_STATUS_OK,
           "createHTMLDocument: the skeleton its own steps 3-5 and 7 describe did not parse");
     /* §4.5's "a new document": address `about:blank`, content type "text/html". The record has to exist before

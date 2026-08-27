@@ -307,13 +307,17 @@ bool html_parse_insertion_point_defined(const lxb_dom_document_t *doc)
 }
 
 lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                      const lxb_char_t *html, size_t size)
+                                      HtmlScriptingMode scripting, const lxb_char_t *html, size_t size)
 {
     lxb_html_document_opt_t opt;
     lxb_dom_document_t *doc;
     lxb_status_t st;
 
     DCHECK(document != NULL, "no document was parsed");
+    DCHECK(scripting == HTML_SCRIPTING_ENABLED || scripting == HTML_SCRIPTING_DISABLED,
+           "an HTML parse was opened with a scripting mode that is neither of HTML §13.2.4.5's — the flag is "
+           "the caller's statement about the Document it is parsing into, and a third value is a caller that "
+           "never made one");
     DCHECK(html != NULL,
            "a document was parsed from a NULL pointer — an empty parse is a zero SIZE over a real pointer, "
            "which is what lexbor's chunk process takes and what every caller here already builds");
@@ -375,6 +379,19 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRoo
        §8.4.3 "document.write()" step 11 re-enters. */
     dom_cow_parse_declare(((lxb_html_parser_t *)doc->parser)->tree,
                           lxb_dom_interface_node(document), root_kind);
+    /* HTML §13.2.4.5's SCRIPTING FLAG, set before the first token because that section fixes it "when the
+       parser was created" and §13.2.6's insertion modes read it per token. lexbor holds it on the document and
+       DEFAULTS IT TO FALSE, which is why the absence of this line was not a hole a reader could see: every
+       document this engine parsed answered §13.2.6.4.7's `noscript` rule as if scripting were Disabled, while
+       the engine ran that document's scripts. core/html/html_parse.h's HtmlScriptingMode states the whole
+       argument, including why this cannot be derived from `root_kind` and why the Document cannot be asked.
+       IT MOVES MORE THAN ONE SECTION AND THAT IS THE POINT. §13.2.6.4.4 'The "in head" insertion mode' takes
+       its `noscript` arm on this flag too, and §13.2.6.4.5 'The "in head noscript" insertion mode' is the mode
+       reached only when it is Disabled — so an Enabled document no longer enters that mode at all. Both have
+       been running their Disabled arms for every document this engine has ever parsed, so the first Enabled
+       run is the FIRST HONEST MEASUREMENT of them rather than a regression, and a failure there is the work
+       queue (CLAUDE.md §a directory that ABORTS is not better than one reporting errors). */
+    document->scripting = (scripting == HTML_SCRIPTING_ENABLED);
     /* THE `opt` BRACKET IS LEXBOR'S OWN AND IS KEPT BYTE-FOR-BYTE. `lxb_html_document_parse` saves
        `document->opt` across the prepare and the chunk and writes it back on BOTH its exits, while
        `lxb_html_document_parse_chunk_begin` — the entry this pair is built out of — does not. Dropping it
@@ -470,9 +487,9 @@ lxb_status_t html_parse_document_close(lxb_html_document_t *document)
 }
 
 lxb_status_t html_parse_document(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                 const lxb_char_t *html, size_t size)
+                                 HtmlScriptingMode scripting, const lxb_char_t *html, size_t size)
 {
-    lxb_status_t st = html_parse_document_open(document, root_kind, html, size);
+    lxb_status_t st = html_parse_document_open(document, root_kind, scripting, html, size);
 
     /* THE FAILURE PATH DOES NOT CLOSE, which is `lxb_html_document_parse`'s own `goto failed` — a parse that
        did not begin has no EOF token to emit and no stage `chunk_end` would accept. */

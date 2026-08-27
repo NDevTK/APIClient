@@ -288,9 +288,15 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
        child with no response is an HTML document by §7.4 with no type to compute and nothing to dispatch on.
        The status is CHECKed on both, which is what makes the router's release behaviour real — a `DFAIL` is
        compiled out at APICLIENT_DEV=0 and this CHECK is not. */
-    CHECK((body ? document_load(dom, DOM_PARSE_ROOT_PRIVATE, computed_type,
+    /* §13.2.4.5 ENABLED ON BOTH ARMS, AND THIS IS THE SITE THAT PROVES THE FLAG IS NOT `root_kind`. The
+       declaration beside it is PRIVATE and correct — no other flow can reach this tree while §13.2.6 builds
+       it — and this Document is an `<iframe>`'s, whose scripts this engine runs. Deriving the scripting mode
+       from the COW declaration would give every framed document §13.2.6.4.7's Disabled arm. §7.4's initial
+       `about:blank` takes it too: a page writes into that document and §13.2.6.4.4 PREPARES the written
+       `script`, so it is script-running before it has a single byte of its own. */
+    CHECK((body ? document_load(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED, computed_type,
                                 (const lxb_char_t *)body, body_len)
-                : html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE,
+                : html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED,
                                       (const lxb_char_t *)EMPTY, sizeof EMPTY - 1)) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
     return dom;

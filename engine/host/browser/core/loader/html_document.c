@@ -20,6 +20,7 @@
 #include "check.h"
 
 lxb_status_t html_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                HtmlScriptingMode scripting,
                                 const MimeType *type, const lxb_char_t *html, size_t size)
 {
     DCHECK(document != NULL,
@@ -33,5 +34,5 @@ lxb_status_t html_document_load(lxb_html_document_t *document, DomParseRootKind 
            "HTML §13.2's parser was reached with a response HTML §7.4.5's load-a-document sends to some other "
            "§7.5 subsection — the arm is a fact about the COMPUTED TYPE and this loader re-asks it, so this is "
            "a route into the HTML parse that never asked what it fetched");
-    return html_parse_document(document, root_kind, html, size);
+    return html_parse_document(document, root_kind, scripting, html, size);
 }

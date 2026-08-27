@@ -259,7 +259,7 @@ static int quote_ends_value(const char *witness, size_t at, char q) {
     w = splice(witness, at, ins, &wl);
     doc = dom_document_create();
     CHECK(doc != NULL, "solve_html: OOM creating an attribute-state discrimination parse");
-    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
+    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
         Locate lo;
         if (locate(doc, &lo) && lo.kind == LOC_ATTR_VALUE)
             ends = memchr(lo.val, q, lo.val_n) == NULL;
@@ -280,7 +280,7 @@ static int space_starts_attribute(const char *witness, size_t at) {
     int found = 0;
 
     CHECK(doc != NULL, "solve_html: OOM creating an attribute-state discrimination parse");
-    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
+    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
         Locate lo;
         if (locate(doc, &lo) && lo.kind == LOC_ATTR_VALUE && lo.el) {
             lxb_dom_attr_t *a;
@@ -419,7 +419,7 @@ static int breakouts_at(const char *witness, size_t after, const SolveDelivered 
     int n = 0;
 
     CHECK(doc != NULL, "solve_html: OOM parsing a sink output for its breakout context");
-    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE,
+    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
                             (const lxb_char_t *)witness, strlen(witness)) != LXB_STATUS_OK) {
         dom_document_destroy(doc);
         DFAIL("the real HTML parser refused a string an HTML sink was handed - HTML 13.2 makes every byte "

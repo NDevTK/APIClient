@@ -190,7 +190,7 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
        an allocation, exactly as it is at the engine's three other document parses. */
     /* FLOW-PRIVATE: the Document was created a statement ago and nothing between the two runs the page's code,
        so no sibling flow can hold it and §13.2.6's writes need no delta entry (solver/dom_cow.h). */
-    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, (const lxb_char_t *)html, len) == LXB_STATUS_OK,
+    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)html, len) == LXB_STATUS_OK,
           "DOMParser: the markup handed to parseFromString could not be parsed");
     /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
        which for this arm is "text/html", the string that makes a Document an HTML document. */

@@ -2580,9 +2580,12 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        makes the same split for the same reason. The parser this runner reaches for a response is now whichever
        one §7.4.5's arm names, and the assert that keeps the HTML parser unreachable for a type it does not
        serve is at that loader (core/loader/html_document.c), where the parse is. */
+    /* §13.2.4.5 ENABLED: this runner executes the test document's scripts, which is the whole of what it is
+       for, so its parser takes the same arm a browser's does. */
     CHECK((computed_defined
-             ? document_load(g_wpt_dom, DOM_PARSE_ROOT_SHARED, &computed, (const lxb_char_t *)src, html_n)
-             : html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED,
+             ? document_load(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED, &computed,
+                             (const lxb_char_t *)src, html_n)
+             : html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED, HTML_SCRIPTING_ENABLED,
                                    (const lxb_char_t *)src, html_n)) == LXB_STATUS_OK,
           "the runner's document did not parse");
     if (computed_defined)

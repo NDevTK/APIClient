@@ -9,6 +9,7 @@
 
 #include "core/mime/mime_type.h"
 #include "solver/dom_cow.h"   /* DomParseRootKind — whose tree a parse builds, declared by whoever opens it */
+#include "core/html/html_parse.h"   /* HtmlScriptingMode — HTML §13.2.4.5's flag, stated by whoever opens the parse */
 
 /* §7.4.5's load-a-document, from the computed type through to a parsed Document: the ONE route from a
    RESPONSE to a parser in this engine.
@@ -33,7 +34,10 @@
  * response §7.4.5 does not load as HTML from being handed to the HTML parser anyway. The caller's own always-
  * fatal CHECK on the status is what makes the release half real, so a caller that ignores the return value has
  * reinstated the silent wrong tree this component exists to abolish. */
+/* `scripting` is core/html/html_parse.h's HTML §13.2.4.5 flag, carried through unread: every response this
+ * dispatches on belongs to a Document whose browsing context the CALLER knows and this component does not. */
 lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
+                           HtmlScriptingMode scripting,
                            const MimeType *type, const lxb_char_t *text, size_t size);
 
 #endif

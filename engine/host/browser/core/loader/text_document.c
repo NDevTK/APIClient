@@ -64,6 +64,7 @@ static const lxb_char_t TEXT_DOC_PRE[] = "<pre>";
 static const lxb_char_t TEXT_DOC_LF[]  = "\n";
 
 lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                HtmlScriptingMode scripting,
                                 const MimeType *type, const lxb_char_t *text, size_t size)
 {
     lxb_dom_document_t *doc;
@@ -89,7 +90,7 @@ lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind 
            "a route into the text loader that never asked what it fetched");
 
     /* §7.5.4 step 4's `pre` START TAG, alone. See the file comment for why the LINE FEED is not here. */
-    st = html_parse_document_open(document, root_kind, TEXT_DOC_PRE, sizeof TEXT_DOC_PRE - 1);
+    st = html_parse_document_open(document, root_kind, scripting, TEXT_DOC_PRE, sizeof TEXT_DOC_PRE - 1);
     if (st != LXB_STATUS_OK)
         return st;
 

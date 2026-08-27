@@ -9,6 +9,7 @@
 
 #include "core/mime/mime_type.h"
 #include "solver/dom_cow.h"   /* DomParseRootKind — whose tree a parse builds, declared by whoever opens it */
+#include "core/html/html_parse.h"   /* HtmlScriptingMode — HTML §13.2.4.5's flag, stated by whoever opens the parse */
 
 /* §7.5.4's "To load a text document, given a navigation params navigationParams and a string type", over a
    Document the caller has already created and the characters the response decoded to.
@@ -31,6 +32,7 @@
  * and the close are one uninterrupted operation exactly as `html_parse_document` is, so this loader adds no
  * capture question of its own. */
 lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                HtmlScriptingMode scripting,
                                 const MimeType *type, const lxb_char_t *text, size_t size);
 
 #endif

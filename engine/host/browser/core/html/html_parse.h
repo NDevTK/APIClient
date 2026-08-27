@@ -132,6 +132,45 @@ lxb_html_parser_t *html_parse_new_parser(void);
  * return, 9 the undefined-insertion-point arm, 10 the insert into the input stream, 11 the parser processing —
  * and a citation nobody can look up is one nobody can check, which is the whole value of citing at all. */
 
+/* HTML §13.2.4.5 "Other parsing state flags"' SCRIPTING FLAG, which the section defines over the DOCUMENT the
+ * parser is associated with: "set to enabled if scripting was enabled for the Document with which the parser is
+ * associated when the parser was created, and … disabled otherwise".
+ *
+ * IT IS A PARAMETER BECAUSE THE FACT DOES NOT EXIST ON THE DOCUMENT YET. Every script-running Document in this
+ * engine is PARSED BEFORE it is given its navigable and its realm — `qjs_init` parses at engine_parse_document
+ * and roots the navigable afterwards, and core/frame/navigable.c's child_document parses before
+ * engine_child_realm — so `document_window_of` answers null for the very documents whose flag must be Enabled.
+ * Asking the Document is therefore not a stricter way to get this right, it is a way to get it wrong for every
+ * caller at once. The caller is the only party that holds the fact at the moment the parser is created, which is
+ * exactly the moment §13.2.4.5 fixes the flag at, so the caller states it.
+ *
+ * AND IT IS NOT `root_kind` WEARING A SECOND NAME, which is the mistake this comment exists to stop. The two
+ * questions look aligned across most of this tree and they are different questions with a live counterexample:
+ * core/frame/navigable.c parses a CHILD NAVIGABLE's Document as DOM_PARSE_ROOT_PRIVATE — correctly, because the
+ * creating flow is the only one that can reach that tree while §13.2.6 builds it — and that Document is an
+ * `<iframe>`'s, which runs scripts. Deriving one from the other would hand every framed document the
+ * scripting-Disabled arm of §13.2.6.4.7 while its scripts ran.
+ *
+ * WHAT IT COST TO HAVE NEITHER. Nothing in this engine ever set lexbor's `scripting`, so every document it has
+ * ever parsed took §13.2.4.5's Disabled mode while the engine executed that document's JavaScript. §13.2.6.4.7
+ * "The 'in body' insertion mode" says: `A start tag whose tag name is "noscript", if scripting mode is not
+ * Disabled — Follow the generic raw text element parsing algorithm`, so a `<noscript>`'s contents are RAWTEXT in
+ * a scripted document and MARKUP in an unscripted one. React ships `</Link>` into `<noscript>` fallbacks, which
+ * as markup leaves an `<a>` open in the list of active formatting elements; the page's next `<a>` then takes the
+ * same section's `A start tag whose tag name is "a"` rule ("run the adoption agency algorithm for the token"),
+ * and the adoption agency's re-insertion aborted the engine at solver/dom_cow.c's parse-root assert. 162 bytes
+ * of regex101.com's own document reproduce it with no script anywhere in the file. */
+typedef enum {
+    /* §13.2.4.5 Disabled — a Document with no browsing context, whose scripts this engine will never run:
+       §8.5.1 `parseFromString`, §4.5.1 `createHTMLDocument`, XHR's responseXML, §13.4's temporary document, an
+       @S fire oracle's scratch parse. */
+    HTML_SCRIPTING_DISABLED = 0,
+    /* §13.2.4.5 Enabled — a Document that will be given a navigable and whose scripts this engine RUNS: the
+       root and joined documents of this agent, a child navigable's, and §7.4's initial `about:blank`, which is
+       script-running for the same reason (a page writes into it and the written `<script>` is prepared). */
+    HTML_SCRIPTING_ENABLED = 1
+} HtmlScriptingMode;
+
 /* THE ONE PLACE A DOCUMENT IS PARSED, WITH ITS INPUT STREAM LEFT OPEN — the parser created here first so the
    tokenizer is owned before its first token, then lexbor's own chunk begin/process over `html`. On return the
    whole of `html` has been tokenized and the insertion point is just before the end of the input stream.
@@ -142,9 +181,11 @@ lxb_html_parser_t *html_parse_new_parser(void);
  * fact about the CALLER'S operation (it created this Document a statement ago, with nothing in between that
  * runs the page's code) and not about the Document, whose node looks identical either way. solver/dom_cow.h
  * states the whole argument at DomParseRootKind. DOM_PARSE_ROOT_PRIVATE for a Document this same operation
- * created; DOM_PARSE_ROOT_SHARED for the ACTIVE document, whose tree every flow reads. */
+ * created; DOM_PARSE_ROOT_SHARED for the ACTIVE document, whose tree every flow reads.
+ *
+ * `scripting` IS §13.2.4.5's FLAG, stated by the caller for the reason above. */
 lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                      const lxb_char_t *html, size_t size);
+                                      HtmlScriptingMode scripting, const lxb_char_t *html, size_t size);
 
 /* §13.2.3.5's QUESTION, asked of a real parser: is `doc`'s insertion point DEFINED. False for a document with
    no parser at all and for one whose parse has reached §13.2.7 "The end" — both of which are the standard's
@@ -185,9 +226,9 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
 lxb_status_t html_parse_document_close(lxb_html_document_t *document);
 
 /* THE COMPLETE PARSE — open then close, in one call. What every caller that wants a finished Document uses.
-   Carries `root_kind` through for the reason the open does. */
+   Carries `root_kind` and §13.2.4.5's `scripting` through for the reason the open does. */
 lxb_status_t html_parse_document(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                 const lxb_char_t *html, size_t size);
+                                 HtmlScriptingMode scripting, const lxb_char_t *html, size_t size);
 
 /* Whether every token `doc`'s parses produced went through this component. TRUE for a document with no parser
    at all, which is a POSITIVE statement rather than a hole: lexbor's entry creates the parser it uses, so a
