@@ -2656,7 +2656,14 @@ async function hostSchedule(pool, ops) {
            "changed under a host still speaking the old one");
     // DEV __forcepark: request the park only after N dispatches, so it captures MID-EXPLORATION residue
     // (recipes with real decvecs + handler-driven async flows), mirroring a production RAM-pressure park.
-    if (target._forceparkSteps > 0 && --target._forceparkSteps === 0) await ops.requestPark(target);
+    /* AND ONLY WHILE THERE IS A SESSION TO PARK, which is the SAME statement `st !== 0` makes on the line
+       below and for the same reason: DONE means the step DRAINED the frontier and closed the session inside
+       itself, so a park asked after it is asked of an engine that has nothing left to write — and the engine
+       aborts saying exactly that, because storing an empty residue over a real one is the cold-tier corruption
+       the park exists to prevent. It is not a rare race: the counter is 2, and a small dev fixture reaches its
+       last program well inside two dispatches, so the step that decrements to zero is the very step that
+       drained. A DONE engine wants no park; this round's release ends it. */
+    if (st !== 0 && target._forceparkSteps > 0 && --target._forceparkSteps === 0) await ops.requestPark(target);
     // INCREMENTAL MERGE: a lone UNBOUNDED engine never reaches st===0, so without this its already-emitted
     // breadth surfaces only at finalize. Snapshot + merge on a coarse cadence on every non-final step.
     /* AWAITED, AND THAT IS A CORRECTNESS REQUIREMENT RATHER THAN TIDINESS. streamPartial asks the engine to
