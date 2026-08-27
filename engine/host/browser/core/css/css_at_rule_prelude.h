@@ -211,6 +211,72 @@ void css_layer_names_free(CssLayerNames *p);
    is in. OWNED through `css_layer_names_free`. */
 void css_layer_name_segments(const char *name, CssLayerNames *out);
 
+/* CSS Conditional Rules 5 §5.4 "Container Queries: the @container rule"'s WHOLE prelude —
+ *
+ *   @container <container-condition># { <rule-list> }
+ *   <container-condition> = [ <container-name>? <container-query>? ]!
+ *   <container-name>      = <custom-ident>
+ *   <container-query>     = not <query-in-parens>
+ *                         | <query-in-parens> [ [ and <query-in-parens> ]* | [ or <query-in-parens> ]* ]
+ *   <query-in-parens>     = ( <container-query> ) | ( <size-feature> ) | style( <style-query> )
+ *                         | scroll-state( <scroll-state-query> ) | <general-enclosed>
+ *
+ * TWO STRINGS PER CONDITION, BECAUSE §9.1 "The CSSContainerRule interface" ASKS FOR EXACTLY TWO. Its
+ * `conditions` is a `FrozenArray<CSSContainerCondition>` over the dictionary `{ name, query }`, built "with
+ * name set to the serialized <container-name> of condition if specified, or "" otherwise, and query set to the
+ * <container-query> specified in condition". `containerName`, `containerQuery` and §7.2's `conditionText` are
+ * then all defined in terms of that list, so this parse produces the list and nothing derives a second one.
+ *
+ * THE NAME IS SERIALIZED AND THE QUERY IS RAW, WHICH IS THE SAME SPLIT `@layer` AND `@supports` ALREADY MAKE.
+ * A `<container-name>` is a `<custom-ident>` this engine has a canonical spelling for — CSSOM §2.1's
+ * serialize-an-identifier, exactly as a `<layer-name>` segment is — so it crosses serialized and `cssText`
+ * re-parses. A `<container-query>` crosses as the AUTHOR'S RAW SPAN, trimmed, because §9.1 forbids a round
+ * trip through this engine's understanding of it: the query must be carried "without any logical
+ * simplifications, so that the returned query will evaluate to the same result as the specified query in any
+ * conformant implementation of this specification (INCLUDING IMPLEMENTATIONS THAT IMPLEMENT FUTURE EXTENSIONS
+ * ALLOWED BY THE <general-enclosed> EXTENSIBILITY MECHANISM)". That is CSS Conditional §7.4's sentence for
+ * `@supports` word for word, and it has the same consequence: re-serializing from a parsed form would delete
+ * precisely the constructs `<general-enclosed>` exists to carry.
+ *
+ * THE STRUCTURE IS CHECKED AND THE FEATURES ARE NOT, AND THE GRAMMAR IS WHY RATHER THAN CONVENIENCE. Every arm
+ * of `<query-in-parens>` is a BALANCED GROUP at the token level — a `(`-block or a `name(`-block — and the last
+ * arm, `<general-enclosed> = [ <function-token> <any-value>? ) ] | [ ( <any-value>? ) ]`, accepts ANY of them.
+ * So a group this build cannot read is not a parse failure, it is the extensibility arm doing its job, and
+ * §5.4 says what it then means: "As with media queries, <general-enclosed> evaluates to unknown." Descending
+ * into a group to validate a `<size-feature>` would therefore REJECT rules the standard requires to be kept —
+ * the identical reasoning core/css/css_supports.h gives for `<supports-in-parens>`, which is why these two
+ * grammars are checked the same way and neither carries a table of feature names.
+ * What IS structural, and is enforced: `and` and `or` MAY NOT MIX without a layer of parentheses (the three
+ * alternatives of `<container-query>` have no production admitting both), and the `not` arm takes exactly ONE
+ * `<query-in-parens>` and nothing after it. The keywords are matched as IDENT tokens, which is what enforces
+ * the space with no space rule written here: CSS Syntax tokenizes `not(x)` as a single FUNCTION token, so it
+ * never reaches the `not` arm and falls to `<general-enclosed>` — a valid query that is unknown.
+ *
+ * `!` IS THE ONE THING THAT MAKES AN EMPTY CONDITION A FAILURE. Both terms are optional individually and the
+ * group is not, so `@container { }` and the empty entry in `@container a, , b` match no production — an
+ * at-rule whose grammar failed, which CSS Syntax §8 "CSS stylesheets" drops with its contents.
+ *
+ * Answers false when the prelude is not a `<container-condition>#`, in which case NOTHING is allocated. Never
+ * answers zero conditions: the `#` multiplier has no zero-length arm. */
+typedef struct {
+    /* §9.1's `name`: the `<container-name>` SERIALIZED, or the EMPTY STRING when the condition declares none —
+       which is §9.1's own "or "" otherwise" and not an absence this record has to distinguish from it. Never
+       NULL. OWNED. */
+    char *name;
+    /* §9.1's `query`: the `<container-query>` as the author wrote it, trimmed, or the EMPTY STRING when the
+       condition declares none (a bare `<container-name>`, which §5.4 admits — "if the <container-query> is
+       omitted, the query container is eligible as long as the <container-name> matches"). Never NULL. OWNED. */
+    char *query;
+} CssContainerCondition;
+
+typedef struct {
+    CssContainerCondition *v;
+    unsigned               n;   /* at least one on a match — the `#` multiplier has no zero-length arm */
+} CssContainerConditions;
+
+bool css_prelude_container_conditions(const char *prelude, size_t len, CssContainerConditions *out);
+void css_container_conditions_free(CssContainerConditions *p);
+
 /* ---- CSS Properties and Values API 1 §3 "The @property Rule" ------------------------------------------------
  *
  * ITS DESCRIPTORS ARE IN HERE BESIDE ITS PRELUDE, AND THAT IS THE `<keyframe-block>` DECISION AGAIN. §3 gives

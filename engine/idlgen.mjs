@@ -358,6 +358,12 @@ const INTERFACES = {
   CSSConditionRule:     "core/css/css_rule.c",
   CSSMediaRule:         "core/css/css_rule.c",
   CSSSupportsRule:      "core/css/css_rule.c",
+  /* CSS Conditional 5 §9.1, the THIRD sibling under CSSConditionRule and the same component again. It is
+     expected to report NOTHING missing: §9.1 declares `containerName`, `containerQuery` and `conditions`, all
+     three are installed, and it declares NO `matches` — its two siblings each have one because their condition
+     is a fact about the document, while a container query is a fact about an element's query container and has
+     no receiver on the rule. A `matches` appearing in this row's MISSING list would mean §9.1 grew one. */
+  CSSContainerRule:     "core/css/css_rule.c",
   /* §6.4.4, §6.4.9 and CSS Fonts §12.1's rule, same component and the same reason. CSSImportRule is EXPECTED
      to report `styleSheet` missing, and that is the audit doing its job rather than a row to silence: this
      engine fetches no CSS subresource, so the member has no answer that is not indistinguishable from the

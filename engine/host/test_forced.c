@@ -430,6 +430,69 @@ static const char *HTML =
     "fetch('/api/csswkkfText?v=' + (kt === '@-webkit-keyframes spin { \\n  0% { opacity: 0; }\\n"
     "  100% { opacity: 1; }\\n}~@keyframes spin2 { \\n  0%, 50% { opacity: 0; }\\n}'"
     " ? 'WKKFTEXTOK' : 'WKKFTEXTBAD:' + kt));</script>"
+    /* ---- CSS Conditional 5 §9.1 "The CSSContainerRule interface" -------------------------------------------
+       THE SHEET IS BUILT AND DISABLED IN ONE SCRIPT, AND THAT IS THE PROBE'S DESIGN RATHER THAN A DODGE. This
+       build has the `@container` CSSOM OBJECT and does NOT have its cascaded effect: §5.4's condition is
+       evaluated per ELEMENT against a query container selected from that element's ancestors, and the author
+       cascade flattens the rules that apply into one text matched by selector, so it crashes by name rather
+       than resolve a per-element condition to a document-wide boolean (core/css/css_rule.c's cascade arm says
+       what to build). §6.1.1's disabled flag — "whether the style sheet is applied" — is what keeps those two
+       apart HONESTLY: the cascade skips a disabled sheet before it walks a single rule, so every member below
+       is exercised on a real rule in a real sheet while the unbuilt half stays unbuilt and keeps its crash. An
+       enabled one would abort this document at the first of its twenty-four getComputedStyle calls, which is
+       the forcing function working and not a fixture to write.
+       SIX RULES ARE WRITTEN AND FOUR SURVIVE. `not (x) and (y)` mixes the `not` arm with a combinator, which
+       §5.4's three alternatives admit no production for, and `@container { }` is its `!` refusing a condition
+       with neither term — both are at-rules whose grammar failed, which CSS Syntax §8 drops with their
+       contents, so the LENGTH carries both claims. The four that survive are the shapes §9.1's `containerName`
+       and `containerQuery` answer differently: a named single condition, an unnamed one, and a LIST — for which
+       both attributes return "" however many names the rule really declares ("if the length of conditions is
+       1 … return ''"), which is why `conditions` is asserted beside them rather than instead.
+       THE FOURTH IS `not (…)` AND IT IS THE ONE THAT CAUGHT A REAL BUG. `not` is the ONLY bare ident a
+       `<container-query>` may begin with, so it is the one place where "this ident is excluded from
+       `<container-name>`" must mean THIS CONDITION HAS NO NAME and not THIS CONDITION IS INVALID — the parser
+       first written here refused the whole at-rule on meeting it, which drops a rule §5.4 admits and which no
+       other shape in this sheet can detect.
+       `cssText` IS ASSERTED BY ITS PREFIX ONLY, because that prefix is what this rule contributes: the body's
+       bytes come from the shared group-rule serializer that the `@media` and `@keyframes` probes above already
+       pin, and asserting them again here would be a second copy of one claim. */
+    "<script>var cel = document.createElement('style');"
+    "cel.textContent = '@container card (min-width: 400px) { .cq-a { color: red } }'"
+    " + '@container (min-width: 10px) { .cq-b { color: red } }'"
+    " + '@container card, wide (min-width: 1px) { .cq-c { color: red } }'"
+    " + '@container not (min-width: 5px) { .cq-d { color: red } }'"
+    " + '@container not (min-width: 1px) and (max-width: 9px) { .cq-bad { color: red } }'"
+    " + '@container { .cq-bad2 { color: red } }';"
+    "document.body.appendChild(cel);"
+    "var csh = cel.sheet; csh.disabled = true;"
+    "var cqr = csh.cssRules;"
+    /* The interface, the chain and §6.4.2's frozen table answering 0 for a rule it never named. */
+    "var cq1 = cqr.length + '|' + csh.disabled + '|' + (cqr[0] instanceof CSSContainerRule) + '|'"
+    " + (cqr[0] instanceof CSSConditionRule) + '|' + (cqr[0] instanceof CSSGroupingRule) + '|' + cqr[0].type"
+    " + '|' + cqr[0].cssRules.length;"
+    "fetch('/api/csscontainer?v=' + (cq1 === '4|true|true|true|true|0|1' ? 'CQOK' : 'CQBAD:' + cq1));"
+    /* §9.1's three members over the three shapes, and §7.2's `conditionText` redefined by §9.1's algorithm —
+       which is where the name comes back through CSSOM §2.1's serialize-an-identifier and the conditions are
+       joined by its ", " while each query keeps the author's own bytes. */
+    "var cq2 = cqr[0].containerName + '|' + cqr[0].containerQuery + '|' + cqr[0].conditionText"
+    " + '~' + cqr[1].containerName + '|' + cqr[1].containerQuery + '|' + cqr[1].conditionText"
+    " + '~' + cqr[2].containerName + '|' + cqr[2].containerQuery + '|' + cqr[2].conditionText"
+    " + '~' + cqr[3].containerName + '|' + cqr[3].containerQuery + '|' + cqr[3].conditionText;"
+    "fetch('/api/csscontainerText?v=' + (cq2 === 'card|(min-width: 400px)|card (min-width: 400px)"
+    "~|(min-width: 10px)|(min-width: 10px)~||card, wide (min-width: 1px)"
+    "~|not (min-width: 5px)|not (min-width: 5px)'"
+    " ? 'CQTEXTOK' : 'CQTEXTBAD:' + cq2));"
+    /* §9.1's `conditions`: the pair the two legacy attributes collapse, FROZEN per Web IDL §3.2.27 and MINTED
+       PER GET — it is not [SameObject] and its algorithm builds a new list of new dictionaries every run, so
+       two reads must not be the same object and a write to one must not reach the rule. */
+    "var cqc = cqr[2].conditions;"
+    "var cq3 = cqc.length + '|' + cqc[0].name + '|' + cqc[0].query + '|' + cqc[1].name + '|' + cqc[1].query"
+    " + '|' + Object.isFrozen(cqc) + '|' + (cqr[2].conditions === cqr[2].conditions);"
+    "fetch('/api/csscontainerConds?v=' + (cq3 === '2|card||wide|(min-width: 1px)|true|false'"
+    " ? 'CQCONDOK' : 'CQCONDBAD:' + cq3));"
+    "fetch('/api/csscontainerText2?v=' + (cqr[0].cssText.indexOf"
+    "('@container card (min-width: 400px) {') === 0 ? 'CQCSSTEXTOK' : 'CQCSSTEXTBAD:' + cqr[0].cssText));"
+    "</script>"
     "<script>var cfg = { admin: state.admin };"
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */

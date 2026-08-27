@@ -661,6 +661,195 @@ void css_layer_name_segments(const char *name, CssLayerNames *out)
     *out = got;
 }
 
+/* ---- CSS Conditional 5 §5.4's `@container` — its `<container-condition>#` prelude -------------------------
+ *
+ * See css_at_rule_prelude.h for the grammar, for why the name crosses serialized while the query crosses raw,
+ * and for why a group this build cannot read is the `<general-enclosed>` arm rather than a parse failure. */
+
+void css_container_conditions_free(CssContainerConditions *p)
+{
+    unsigned i;
+
+    DCHECK(p != NULL, "an `@container` at-rule's conditions were freed through no list");
+    for (i = 0; i < p->n; i++) {
+        free(p->v[i].name);
+        free(p->v[i].query);
+    }
+    free(p->v);
+    p->v = NULL;
+    p->n = 0;
+}
+
+static void pre_container_push(CssContainerConditions *c, char *name, char *query)
+{
+    CssContainerCondition *grown = realloc(c->v, (size_t)(c->n + 1) * sizeof *grown);
+
+    CHECK(grown != NULL, "cssom: OOM extending an `@container` rule's condition list");
+    c->v = grown;
+    c->v[c->n].name = name;
+    c->v[c->n].query = query;
+    c->n++;
+}
+
+/* IS `name` A KEYWORD A `<container-name>` CANNOT BE — CSS Values §4.2's exclusions from `<custom-ident>` (the
+   CSS-wide keywords and the reserved `default`), read from the one place that holds them, plus §5.4's own
+   addition on top: "the keywords none, and, not, and or are excluded from the <custom-ident> above". That is
+   the clause §4.2 reserves for a specification using the production, which is why these four are spelled here
+   and the rest is not — the same arrangement `css_prelude_keyframes_name_excluded` has for its one keyword.
+   ONE OF THE FOUR IS ALSO WHAT KEEPS THE TWO OPTIONAL TERMS APART. `not` is the only bare ident a
+   `<container-query>` can begin with, so excluding it from the name is what makes `@container not (width >
+   0px)` a NAMELESS condition rather than a condition named `not` followed by a query that cannot parse — and
+   the caller must therefore treat an excluded ident as "not a name" and read on, never as a failure. */
+static bool pre_container_name_excluded(const char *name)
+{
+    DCHECK(name != NULL, "a `<container-name>` exclusion was asked about with no name");
+    return css_custom_ident_excluded(name) || pre_keyword_is(name, "none") || pre_keyword_is(name, "and") ||
+           pre_keyword_is(name, "not") || pre_keyword_is(name, "or");
+}
+
+/* ONE BALANCED GROUP, consumed — the whole of `<query-in-parens>` at the token level, for the reason the header
+   gives: `<general-enclosed>` admits any `( <any-value>? )` and any `<function-token> <any-value>? )`, so every
+   arm of that production is "a group that opens and closes" and nothing inside one decides whether the RULE is
+   valid. Depth counts the two tokens that OPEN a group — CSS Syntax's `(` and its `name(` — because
+   `((a) or (b))` closes three and the first `)` is not the outer one's. False at EOF: an unterminated group is
+   a prelude the tokenizer ran off the end of, which matches no production. */
+static bool pre_query_in_parens(Prelude *p)
+{
+    lxb_css_syntax_token_t *t = pre_peek_ws(p);
+    size_t depth = 1;
+
+    if (!t) return false;
+    if (t->type != LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS && t->type != LXB_CSS_SYNTAX_TOKEN_FUNCTION) return false;
+    pre_take(p);
+    for (;;) {
+        t = pre_peek(p);
+        if (!t || t->type == LXB_CSS_SYNTAX_TOKEN__EOF) return false;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION || t->type == LXB_CSS_SYNTAX_TOKEN_L_PARENTHESIS) depth++;
+        else if (t->type == LXB_CSS_SYNTAX_TOKEN_R_PARENTHESIS && --depth == 0) { pre_take(p); return true; }
+        pre_take(p);
+    }
+}
+
+/* §5.4's `<container-query>`, CONSUMED, leaving the cursor on the token that ends it (a comma or the EOF, which
+   is the caller's to check — the `not` arm takes ONE `<query-in-parens>` and admits nothing after it, so a
+   trailing `and (x)` has to be refused where the whole condition's terminator is decided rather than here).
+   THE MIXING RULE IS THE LOOP'S ONE PIECE OF STATE. §5.4's three alternatives contain no production admitting
+   both `and` and `or`, so the first combinator seen fixes which the rest must be — `(a) and (b) or (c)` is not
+   a query, and `(a) and ((b) or (c))` is, which is what "without a layer of parentheses" means. */
+static bool pre_container_query(Prelude *p)
+{
+    lxb_css_syntax_token_t *t = pre_peek_ws(p);
+    char op = 0;
+
+    if (!t) return false;
+    /* `not <query-in-parens>` — matched as an IDENT, which is what enforces the space: CSS Syntax tokenizes
+       `not(x)` as ONE function token, so it falls to the `<query-in-parens>` arm below and is a
+       `<general-enclosed>` that evaluates to unknown rather than a negation. */
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT && pre_name_is(t, "not")) {
+        pre_take(p);
+        return pre_query_in_parens(p);
+    }
+    if (!pre_query_in_parens(p)) return false;
+    for (;;) {
+        t = pre_peek_ws(p);
+        if (!t) return false;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF || t->type == LXB_CSS_SYNTAX_TOKEN_COMMA) return true;
+        if (t->type != LXB_CSS_SYNTAX_TOKEN_IDENT) return false;
+        if (pre_name_is(t, "and")) { if (op == 'o') return false; op = 'a'; }
+        else if (pre_name_is(t, "or")) { if (op == 'a') return false; op = 'o'; }
+        else return false;
+        pre_take(p);
+        if (!pre_query_in_parens(p)) return false;
+    }
+}
+
+/* ONE `<container-condition> = [ <container-name>? <container-query>? ]!`, both halves OWNED and never NULL on
+   a match — §9.1's dictionary has no absent member, only an empty string. */
+static bool pre_container_condition(Prelude *p, CssContainerCondition *out)
+{
+    lxb_css_syntax_token_t *t = pre_peek_ws(p);
+    char *name = NULL, *query = NULL;
+    size_t qbegin;
+
+    if (!t) return false;
+    /* `<container-name>?`. A bare IDENT here is the name UNLESS the production excludes it, and an excluded
+       one is NOT REFUSED HERE — it is simply not a name, and the parse falls through to `<container-query>?`
+       with the cursor still on it. That distinction is the whole reason the exclusion test decides this rather
+       than a lookahead: `@container not (width > 0px)` is a NAMELESS condition whose query begins with the
+       `not` arm, and refusing the condition on meeting `not` would drop a rule §5.4 admits. The other excluded
+       keywords cannot begin a query either, so they fall through and are refused one line down by the grammar
+       that really excludes them rather than by a second copy of the rule here — `@container none { }` and
+       `@container and (width > 0px) { }` are at-rules whose grammar failed. */
+    if (t->type == LXB_CSS_SYNTAX_TOKEN_IDENT) {
+        const lxb_css_syntax_token_string_t *s = lxb_css_syntax_token_string(t);
+        char *raw = pre_copy((const char *)s->data, s->length);
+
+        if (!pre_container_name_excluded(raw)) {
+            name = css_serialize_identifier(raw, s->length);
+            pre_take(p);
+        }
+        free(raw);
+    }
+    /* `<container-query>?`. Its RAW SPAN runs from the first token of the query to wherever the condition
+       ends, trimmed — see the header for why nothing re-serializes it. */
+    t = pre_peek_ws(p);
+    if (!t) { free(name); return false; }
+    if (t->type != LXB_CSS_SYNTAX_TOKEN__EOF && t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) {
+        qbegin = pre_at(p, t);
+        if (!pre_container_query(p)) { free(name); return false; }
+        t = pre_peek(p);
+        if (!t) { free(name); return false; }
+        query = pre_span_trimmed(p, qbegin, pre_at(p, t));
+        /* The `not` arm returns without checking what follows it, and the loop arm returns only ON the
+           terminator, so this is where BOTH are held to the same rule — `not (a) and (b)` ends here with the
+           cursor on an IDENT and is refused, which is §5.4's grammar and not an extra restriction. */
+        t = pre_peek_ws(p);
+        if (!t || (t->type != LXB_CSS_SYNTAX_TOKEN__EOF && t->type != LXB_CSS_SYNTAX_TOKEN_COMMA)) {
+            free(name);
+            free(query);
+            return false;
+        }
+    }
+    /* The `!` — the group is not optional even though both of its terms are. */
+    if (!name && !query) return false;
+    out->name = name ? name : pre_copy("", 0);
+    out->query = query ? query : pre_copy("", 0);
+    return true;
+}
+
+bool css_prelude_container_conditions(const char *prelude, size_t len, CssContainerConditions *out)
+{
+    Prelude p = { NULL, NULL, 0 };
+    CssContainerConditions got = { NULL, 0 };
+    lxb_css_syntax_token_t *t;
+
+    DCHECK(out != NULL, "an `@container` at-rule's prelude was parsed with nowhere to report its conditions");
+    if (!pre_open(&p, prelude, len)) return false;
+    for (;;) {
+        CssContainerCondition one = { NULL, NULL };
+
+        if (!pre_container_condition(&p, &one)) goto fail;
+        pre_container_push(&got, one.name, one.query);
+        t = pre_peek_ws(&p);
+        if (!t) goto fail;
+        if (t->type == LXB_CSS_SYNTAX_TOKEN__EOF) break;
+        /* The `#` multiplier. A trailing comma re-enters the condition parse with EOF in front of it, where
+           the `!` refuses it — `@container a, ` is not a rule. */
+        if (t->type != LXB_CSS_SYNTAX_TOKEN_COMMA) goto fail;
+        pre_take(&p);
+    }
+    pre_close(&p);
+    DCHECK(got.n > 0, "an `@container` prelude matched the grammar and produced no conditions — the `#` "
+                      "multiplier has no zero-length arm and the loop above appends before it can break");
+    *out = got;
+    return true;
+
+fail:
+    css_container_conditions_free(&got);
+    pre_close(&p);
+    return false;
+}
+
 /* ---- CSS Properties and Values API 1 §3's `@property` — its prelude AND its descriptors --------------------
  *
  * See css_at_rule_prelude.h for why one at-rule's grammar stays in one file even when half of it is a body,

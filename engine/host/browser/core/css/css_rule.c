@@ -61,7 +61,12 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
        /* CSS Properties and Values API 1 §6.1's CSSPropertyRule — also numberless, and for the same reason the
           two above it are: §6.4.2's table is frozen and that standard adds no `partial interface CSSRule` to
           it, so `propertyRule.type` is 0. */
-       RULE_TYPE_PROPERTY };
+       RULE_TYPE_PROPERTY,
+       /* CSS Conditional 5 §9.1's CSSContainerRule — numberless too, and it is the clearest case of the
+          sentence above being the SPEC'S decision rather than a gap: CSS Conditional adds a `partial interface
+          CSSRule` for §7.1's SUPPORTS_RULE = 12 and adds NONE for the interface it declares in §9.1, which is
+          §6.4.2's freeze taking effect inside one standard. */
+       RULE_TYPE_CONTAINER };
 
 /* WHERE A RULE MAY SIT IN A STYLE SHEET. A sheet's rules are a PROLOGUE followed by a body, and three standards
    write that prologue between them:
@@ -209,6 +214,18 @@ typedef struct CssRuleData {
        "not an `@property`", and the getter's brand check is what decides which question was asked. That is the
        same doubling §6.4.4's `layerName` and `supportsText` carry, for the same reason. (OWNED) */
     JSValue property_initial_value;
+    /* CSS Conditional 5 §9.1's `conditions` — the `FrozenArray<CSSContainerCondition>` an `@container` rule's
+       prelude IS, as the Array that TYPE's values are references to (Web IDL §2.13.35, the same reading
+       `layer_names` above is held to). Each entry is a frozen `{ name, query }`. JS_NULL on every rule that is
+       not an `@container`.
+       IT IS THE ONLY STORED FORM OF THE CONDITION, and that is what keeps §9.1's four members one fact: §9.1
+       defines `containerName`, `containerQuery` AND §7.2's `conditionText` over this very list ("let conditions
+       be the result of getting the conditions attribute"), so a second field holding a name or a joined text
+       would be a second answer able to disagree with the list a page reads. It is not `layer_names` beside it
+       for the reason `at_name` is not `keyframes_name`: a layer name list is a list of ONE kind of string, and
+       this is a list of PAIRS whose halves obey different rules — the name is serialized and canonical, the
+       query is the author's raw span that §9.1 forbids re-serializing. (OWNED) */
+    JSValue container_conditions;
     uint16_t type;
 } CssRuleData;
 
@@ -218,8 +235,8 @@ static JSClassID g_rule_class;
    CSSGroupingRule or CSSConditionRule) and the rest are concrete; all are held the same way because a rule is
    built with an EXPLICIT prototype chosen from its type, so the class's own proto slot decides nothing. */
 enum { PROTO_RULE = 0, PROTO_GROUPING, PROTO_STYLE, PROTO_CONDITION, PROTO_MEDIA, PROTO_SUPPORTS,
-       PROTO_IMPORT, PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN, PROTO_KEYFRAMES,
-       PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_PROPERTY, PROTO_N };
+       PROTO_CONTAINER, PROTO_IMPORT, PROTO_NAMESPACE, PROTO_FONT_FACE, PROTO_PAGE, PROTO_MARGIN,
+       PROTO_KEYFRAMES, PROTO_KEYFRAME, PROTO_LAYER_BLOCK, PROTO_LAYER_STATEMENT, PROTO_PROPERTY, PROTO_N };
 static int g_proto_slot[PROTO_N];
 static int g_id_set_selector = -1, g_id_set_page_selector = -1, g_id_set_key_text = -1,
            g_id_set_keyframes_name = -1, g_id_set_css_text = -1, g_id_insert_rule = -1, g_id_delete_rule = -1,
@@ -246,6 +263,7 @@ static const uint16_t RULE_VALS[] = {
     (uint16_t)offsetof(CssRuleData, property_syntax),
     (uint16_t)offsetof(CssRuleData, property_inherits),
     (uint16_t)offsetof(CssRuleData, property_initial_value),
+    (uint16_t)offsetof(CssRuleData, container_conditions),
 };
 static const CowRecord RULE_REC = { sizeof(CssRuleData), RULE_VALS,
                                     (int)(sizeof(RULE_VALS) / sizeof(RULE_VALS[0])) };
@@ -317,6 +335,7 @@ static void rule_finalizer(JSRuntime *rt, JSValue val)
     JS_FreeValueRT(rt, r->property_syntax);
     JS_FreeValueRT(rt, r->property_inherits);
     JS_FreeValueRT(rt, r->property_initial_value);
+    JS_FreeValueRT(rt, r->container_conditions);
     free(r);
 }
 
@@ -345,6 +364,7 @@ static void rule_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func
     JS_MarkValue(rt, r->property_syntax, mark_func);
     JS_MarkValue(rt, r->property_inherits, mark_func);
     JS_MarkValue(rt, r->property_initial_value, mark_func);
+    JS_MarkValue(rt, r->container_conditions, mark_func);
 }
 
 /* ---- §6.4's CSS RULE LIST, as INFRA's list operations over an Array ---------------------------------------- */
@@ -391,7 +411,8 @@ static void rules_remove_at(JSContext *ctx, JSValueConst list, uint32_t i)
 static bool rule_type_has_child_rules(uint16_t type)
 {
     return type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_SUPPORTS ||
-           type == RULE_TYPE_PAGE || type == RULE_TYPE_KEYFRAMES || type == RULE_TYPE_LAYER_BLOCK;
+           type == RULE_TYPE_CONTAINER || type == RULE_TYPE_PAGE || type == RULE_TYPE_KEYFRAMES ||
+           type == RULE_TYPE_LAYER_BLOCK;
 }
 
 /* IS THIS RULE TYPE A §6.4.5 GROUPING RULE — "an at-rule that CONTAINS OTHER RULES nested inside itself", plus
@@ -412,7 +433,7 @@ static bool rule_type_has_child_rules(uint16_t type)
 static bool rule_type_is_grouping(uint16_t type)
 {
     bool grouping = type == RULE_TYPE_STYLE || type == RULE_TYPE_MEDIA || type == RULE_TYPE_SUPPORTS ||
-                    type == RULE_TYPE_PAGE || type == RULE_TYPE_LAYER_BLOCK;
+                    type == RULE_TYPE_CONTAINER || type == RULE_TYPE_PAGE || type == RULE_TYPE_LAYER_BLOCK;
 
     DCHECK(!grouping || rule_type_has_child_rules(type),
            "a rule type is a §6.4.5 grouping rule and yet holds no child rules — CSSGroupingRule is DEFINED as "
@@ -493,6 +514,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     r->property_syntax = JS_NULL;
     r->property_inherits = JS_NULL;
     r->property_initial_value = JS_NULL;
+    r->container_conditions = JS_NULL;
     JS_SetOpaque(obj, r);
     return obj;
 }
@@ -595,6 +617,63 @@ static JSValue supports_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
     r = JS_GetOpaque(obj, g_rule_class);
     JS_FreeValue(ctx, r->supports_text);
     r->supports_text = JS_NewString(ctx, prelude);
+    return obj;
+}
+
+/* THE CONDITIONS AN `@container` AT-RULE DECLARES, as the record's own FLAT Array — `[name0, query0, name1,
+   query1, …]`, frozen.
+   IT IS FLAT AND NOT AN ARRAY OF `{name, query}` OBJECTS, WHICH LOOKS LIKE THE IDL VALUE AND IS NOT ONE.
+   §9.1's `conditions` is a `FrozenArray<CSSContainerCondition>` and is NOT `[SameObject]`, and its algorithm
+   says what that means in full: "Let result be an empty list … Append dict to result. Return result" — a NEW
+   list of NEW dictionary objects on every get. Storing the IDL value and handing the same one back would make
+   `rule.conditions === rule.conditions` answer true where the platform answers false, and — worse — would let
+   a page write `rule.conditions[0].name` into the rule's own record, because Web IDL §3.2.27's freeze is
+   `SetIntegrityLevel(array, "frozen")` on the ARRAY and says nothing about the dictionaries inside it. So the
+   record holds the FACTS and the one member that returns dictionaries mints them, which is also why the three
+   readers that do NOT return dictionaries (`containerName`, `containerQuery`, §7.2's `conditionText`) read the
+   pairs directly rather than through a list they would only take apart again.
+   The freeze is still applied here, for the reason `layer_names_array` gives one level up: it is the record's
+   value and nothing in this build may write it. */
+static JSValue container_conditions_array(JSContext *ctx, const CssContainerConditions *c)
+{
+    JSValue a = JS_NewArray(ctx);
+    unsigned i;
+
+    CHECK(!JS_IsException(a), "cssom: an `@container` rule's condition list could not be allocated");
+    for (i = 0; i < c->n; i++) {
+        DCHECK(c->v[i].name != NULL && c->v[i].query != NULL,
+               "an `@container` rule's parsed conditions hold a NULL where §9.1's `name` or `query` belongs — "
+               "the one parser writes the EMPTY STRING for a term the condition omits, which is §9.1's own "
+               "answer and a different fact from an absent one");
+        JS_SetPropertyUint32(ctx, a, 2 * i, JS_NewString(ctx, c->v[i].name));
+        JS_SetPropertyUint32(ctx, a, 2 * i + 1, JS_NewString(ctx, c->v[i].query));
+    }
+    CHECK(idl_freeze_array(ctx, a) == 0, "cssom: an `@container` rule's condition list could not be frozen");
+    return a;
+}
+
+/* A CSS Conditional 5 §9.1 CSSContainerRule over the `@container` at-rule's own prelude, which IS §5.4's
+   `<container-condition>#`. JS_UNDEFINED — the builder's drop — when that prelude matches no production, which
+   is CSS Syntax §8 "CSS stylesheets"'s disposal for an at-rule "invalid according to its grammar": discard the
+   rule, contents included, exactly as `@supports display:flex {}` is discarded one function up. */
+static JSValue container_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
+                                  const char *prelude)
+{
+    CssContainerConditions conds = { NULL, 0 };
+    JSValue obj;
+    CssRuleData *r;
+
+    DCHECK(prelude != NULL,
+           "a CSSContainerRule was built with no prelude — `@container {}` has an EMPTY one, which §5.4's `!` "
+           "refuses and which is therefore a DROP, and the ABSENCE of one is a parse that never reported the "
+           "prelude at all");
+    if (!css_prelude_container_conditions(prelude, strlen(prelude), &conds)) return JS_UNDEFINED;
+    obj = rule_new(ctx, PROTO_CONTAINER, RULE_TYPE_CONTAINER, parent_style_sheet, parent_rule);
+    if (JS_IsException(obj)) { css_container_conditions_free(&conds); return obj; }
+    r = JS_GetOpaque(obj, g_rule_class);
+    JS_FreeValue(ctx, r->container_conditions);
+    r->container_conditions = container_conditions_array(ctx, &conds);
+    css_container_conditions_free(&conds);
     return obj;
 }
 
@@ -1457,6 +1536,15 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        this build does not have and whose absence the parse walk already records. */
     if (strcmp(at, "supports") == 0)
         return pr->has_block ? supports_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
+    /* CSS Conditional 5 §5.4 makes `@container` a BLOCK at-rule (`@container <container-condition># {
+       <rule-list> }`) exactly as §6 does `@supports`, so `@container card (width > 0px);` is an at-rule whose
+       grammar failed and CSS Syntax §8 drops it — the same sentence and the same JS_UNDEFINED as the arm above.
+       ITS BODY IS A RULE LIST AND NOTHING ELSE, so the declarations the parse reports for it are not read, for
+       the reason `@supports` and `@layer` do not read theirs: a declaration written where §5.4 admits only
+       rules would be CSSOM's CSSNestedDeclarations, a rule interface this build does not have and whose absence
+       the parse walk already records. */
+    if (strcmp(at, "container") == 0)
+        return pr->has_block ? container_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
     /* CSS Cascade §2 makes `@import` a STATEMENT at-rule terminated by a semicolon, so `@import url(x) {}` is
        an at-rule whose grammar failed and CSS Syntax DROPS it. It is dropped HERE and not asserted against,
        because the shape reaches this file from the PAGE: lexbor parses an at-rule it does not know as
@@ -1592,14 +1680,14 @@ static void rule_unbuilt_fail(const char *name)
     "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
     "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
     "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
-    "CSSMediaRule, §7.4's CSSSupportsRule, CSS Fonts 5 §9.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's "      \
-    "CSSKeyframeRule and CSSKeyframesRule, CSS Cascade §8.1/§8.2's CSSLayerBlockRule and "                      \
-    "CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's CSSPropertyRule are built; what "        \
-    "remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Contain's CSSContainerRule, CSS Counter Styles 3 "       \
-    "§9.2's CSSCounterStyleRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule — the last two have their "    \
-    "§6.4.2 TYPE NUMBER declared (11 and 14) and no interface behind it, which is what puts them on this list " \
-    "rather than off it, while the other two have no number at all (§6.4.2's table is frozen, so their `type` " \
-    "is 0, like the CSSLayer* and CSSProperty rules above them). Build the one this names and mint it in "      \
+    "CSSMediaRule, §7.4's CSSSupportsRule, CSS Conditional 5 §9.1's CSSContainerRule, CSS Fonts 5 §9.1's "     \
+    "CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule, CSS Cascade §8.1/§8.2's "\
+    "CSSLayerBlockRule and CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's CSSPropertyRule "  \
+    "are built; what remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Counter Styles 3 §9.2's "                \
+    "CSSCounterStyleRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule — the last two have their §6.4.2 "    \
+    "TYPE NUMBER declared (11 and 14) and no interface behind it, which is what puts them on this list rather " \
+    "than off it, while CSSScopeRule has no number at all (§6.4.2's table is frozen, so its `type` is 0, like " \
+    "the CSSLayer*, CSSProperty and CSSContainer rules above it). Build the one this names and mint it in "     \
     "rule_from_parse — do NOT skip the rule, because every index after it would then name a different rule "    \
     "than the page's"
 
@@ -2134,6 +2222,72 @@ static bool group_rules_serialize(JSContext *ctx, JSValueConst rule, const char 
     return true;
 }
 
+/* HOW MANY `<container-condition>`s the rule declares — the flat Array's length halved, asserted even. */
+static uint32_t container_count(JSContext *ctx, CssRuleData *r)
+{
+    uint32_t n = array_len(ctx, r->container_conditions);
+
+    DCHECK(JS_IsArray(r->container_conditions),
+           "an `@container` rule's condition list is not an Array — its one creator builds one before the rule "
+           "is handed to anybody, and the freeze means nothing replaces it");
+    DCHECK((n % 2) == 0 && n > 0,
+           "an `@container` rule's condition list holds an ODD or EMPTY number of strings. It is a flat list "
+           "of `name, query` PAIRS, so an odd length is a writer that appended one half of a condition, and "
+           "an empty one is a rule the `#` multiplier cannot have produced");
+    return n / 2;
+}
+
+/* One half of condition `i` — `half` 0 for §9.1's `name` and 1 for its `query`. OWNED. */
+static char *container_part(JSContext *ctx, CssRuleData *r, uint32_t i, unsigned half)
+{
+    JSValue v = JS_GetPropertyUint32(ctx, r->container_conditions, 2 * i + half);
+    size_t l = 0;
+    char *out = rule_text_copy(ctx, v, &l);
+
+    JS_FreeValue(ctx, v);
+    DCHECK(out != NULL,
+           "an `@container` rule's condition list holds something that is not a string — its one creator fills "
+           "it from core/css/css_at_rule_prelude.h and then FREEZES it, so a null here is the string "
+           "conversion itself having failed");
+    return out;
+}
+
+/* CSS Conditional 5 §9.1's `conditionText`, WHICH IS A CSSContainerRule-SPECIFIC REDEFINITION of §7.2's, given
+   there as an algorithm rather than as a stored string: join the conditions with ", ", and within each, emit
+   the name if it is not empty, then a single space if the query is also not empty, then the query.
+   THAT IS NOT THE SAME AS THE PRELUDE THE PAGE WROTE, and the difference is the point of running the algorithm
+   rather than storing the span: the name comes back through CSSOM §2.1's serialize-an-identifier and the
+   separators are normalised, so `@container  CARD ( width > 0px ),foo` reads back with one space after the
+   name and ", " between the conditions while the query inside each keeps every byte the author typed. OWNED. */
+static char *container_condition_text(JSContext *ctx, CssRuleData *r)
+{
+    uint32_t n = container_count(ctx, r), i;
+    RBuf out = { NULL, 0, 0 };
+
+    for (i = 0; i < n; i++) {
+        char *name = container_part(ctx, r, i, 0);
+        char *query = container_part(ctx, r, i, 1);
+
+        if (!name || !query) { free(name); free(query); free(out.s); return NULL; }
+        if (i) rbuf_add(&out, ", ");
+        if (name[0]) {
+            rbuf_add(&out, name);
+            if (query[0]) rbuf_add(&out, " ");
+        }
+        rbuf_add(&out, query);
+        free(name);
+        free(query);
+    }
+    /* An `RBuf` nothing was appended to holds a NULL, and the empty string is not a `conditionText` this rule
+       can have — the `!` in §5.4's `<container-condition>` refuses a condition with neither term — so the
+       loop above has written at least one byte per condition and there is at least one condition. */
+    DCHECK(out.s != NULL,
+           "an `@container` rule serialized its condition text to NOTHING. §5.4's `[ <container-name>? "
+           "<container-query>? ]!` admits no condition in which both terms are empty, so an empty result "
+           "means a rule was built from a prelude the grammar refuses");
+    return out.s;
+}
+
 /* §6.4's CSSMediaRule arm's step 1: "@media", a SPACE, and the media query list. The space is UNCONDITIONAL
    here where §6.4.7's and §8.1's are not, and the grammars are why: `@media`'s `<media-query-list>` always
    exists (an absent one is the EMPTY list, which is what `@media {}`'s two spaces are), while a page selector
@@ -2195,6 +2349,30 @@ static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigne
    THE SPACE IS INSIDE THE CONDITIONAL, which is the whole of why `@layer {}` reads back as "@layer {\n}" and
    not as "@layer  {\n}" — the `?` in the grammar means there is no separator to write for a rule that declares
    no name, which is the identical reason §6.4.7's `@page {}` has one space and not two. */
+/* CSS Conditional 5 §5.4's `@container`, THROUGH THE SAME ARM AND ON THE SAME DERIVATION AS `@layer`'s. §6.4
+   states no arm for CSSContainerRule either — it predates the interface — and §5.4's first sentence supplies
+   the one it would have: "The @container rule is a CONDITIONAL GROUP RULE whose condition contains a container
+   query", and §6.4 states exactly one arm for a conditional group rule. So this differs from the `@media` arm
+   above it only in step 1's PREFIX.
+   THE PREFIX IS THE `conditionText` ALGORITHM AND NOT THE STORED PRELUDE, which is what makes `cssText`
+   re-parse as the rule it came from: §9.1 defines that algorithm to reproduce a `<container-condition>#`, name
+   through CSSOM §2.1's serialize-an-identifier and conditions joined by §2.1's ", ", so running it is how the
+   serialization and the attribute cannot disagree about one rule. */
+static bool container_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
+{
+    RBuf prefix = { NULL, 0, 0 };
+    char *text = container_condition_text(ctx, r);
+    bool ok;
+
+    if (!text) return false;
+    rbuf_add(&prefix, "@container ");
+    rbuf_add(&prefix, text);
+    free(text);
+    ok = group_rules_serialize(ctx, rule, prefix.s, prefix.len, out);
+    free(prefix.s);
+    return ok;
+}
+
 /* CSS Conditional §7.4's arm, DERIVED the same way CSS Cascade §8.1's below it is and from the same place:
    CSSOM §6.4's serialize-a-CSS-rule states no arm for CSSSupportsRule at all — its list runs CSSStyleRule,
    CSSImportRule, CSSMediaRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframesRule,
@@ -2489,6 +2667,7 @@ static bool rule_serialize(JSContext *ctx, JSValueConst rule, RBuf *out)
     switch (r->type) {
     case RULE_TYPE_MEDIA:     return media_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_SUPPORTS:  return supports_rule_serialize(ctx, r, rule, out);
+    case RULE_TYPE_CONTAINER: return container_rule_serialize(ctx, r, rule, out);
     case RULE_TYPE_IMPORT:    return import_rule_serialize(ctx, r, out);
     case RULE_TYPE_NAMESPACE: return namespace_rule_serialize(ctx, r, out);
     case RULE_TYPE_FONT_FACE: return decl_body_rule_serialize(ctx, r, "font-face", out);
@@ -2512,7 +2691,8 @@ enum { CR_PARENT_RULE = 0, CR_PARENT_STYLE_SHEET, CR_TYPE, CR_CSS_TEXT, CR_SELEC
        CR_SUPPORTS_TEXT,
        CR_NAMESPACE_URI, CR_PREFIX, CR_PAGE_SELECTOR_TEXT, CR_MARGIN_NAME, CR_KEY_TEXT, CR_KEYFRAMES_NAME,
        CR_KEYFRAMES_CSS_RULES, CR_KEYFRAMES_LENGTH, CR_LAYER_BLOCK_NAME, CR_LAYER_NAME_LIST,
-       CR_PROPERTY_NAME, CR_PROPERTY_SYNTAX, CR_PROPERTY_INHERITS, CR_PROPERTY_INITIAL_VALUE };
+       CR_PROPERTY_NAME, CR_PROPERTY_SYNTAX, CR_PROPERTY_INHERITS, CR_PROPERTY_INITIAL_VALUE,
+       CR_CONTAINER_NAME, CR_CONTAINER_QUERY, CR_CONTAINER_CONDITIONS };
 
 /* §6.4.5's `[SameObject] cssRules` and CSS Animations §6.3.2's, which are one read of one Array. The
    collection is remembered on the record because both are [SameObject], and it SHARES the very Array the
@@ -2566,11 +2746,13 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     /* CSS Conditional §7.2's `conditionText`, WHICH EACH DERIVED INTERFACE REDEFINES — §7.2 says so outright
        ("Since what this condition does varies between the derived interfaces of CSSConditionRule, those
        derived interfaces may specify different behavior for this attribute") and then both of them do, so this
-       is one member with two definitions and not one definition with two receivers.
+       is one member with THREE definitions and not one definition with three receivers.
        §7.3's, for a `@media`: "must return the value of media.mediaText on the rule" — not a second copy of
        the condition but ONE read of the MediaList, which is where a media rule's condition lives.
        §7.4's, for a `@supports`: "must return the condition that was specified, without any logical
        simplifications" — the stored prelude, for the reason supports_rule_new gives.
+       CSS Conditional 5 §9.1's, for an `@container`: an ALGORITHM over the rule's `conditions` rather than any
+       stored string, which is the third shape again — see `container_condition_text`.
        The BRAND is CSSConditionRule's, so a `@supports` reaching `CSSMediaRule.prototype.conditionText` is the
        same TypeError a style rule gets: both conditional types answer here and nothing else does. */
     case CR_CONDITION_TEXT: {
@@ -2578,13 +2760,15 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         JSValue out;
 
         r = rule_of(this_val);
-        if (!r || (r->type != RULE_TYPE_MEDIA && r->type != RULE_TYPE_SUPPORTS)) {
+        if (!r || (r->type != RULE_TYPE_MEDIA && r->type != RULE_TYPE_SUPPORTS &&
+                   r->type != RULE_TYPE_CONTAINER)) {
             JS_ThrowTypeError(ctx, "a CSSConditionRule member was reached on something that is not a "
                                    "CSSConditionRule");
             return JS_EXCEPTION;
         }
         if (r->type == RULE_TYPE_SUPPORTS) return JS_DupValue(ctx, r->supports_text);
-        text = media_list_text(ctx, r->media);
+        text = r->type == RULE_TYPE_CONTAINER ? container_condition_text(ctx, r)
+                                              : media_list_text(ctx, r->media);
         if (!text) return JS_EXCEPTION;
         out = JS_NewString(ctx, text);
         free(text);
@@ -2751,6 +2935,65 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_PROPERTY_INITIAL_VALUE:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_PROPERTY, "CSSPropertyRule");
         return r ? JS_DupValue(ctx, r->property_initial_value) : JS_EXCEPTION;
+    /* CSS Conditional 5 §9.1's `containerName` and `containerQuery`, WHICH ANSWER "" FOR A RULE THAT DECLARES
+       MORE THAN ONE CONDITION and that is the definition rather than a shortfall: both are "if the length of
+       conditions is 1: return the only conditions item's name/query", "return ''" otherwise. §9.1's own note
+       says why they are shaped that way — "we should try to remove containerName and containerQuery, since
+       they don't deal with multiple conditions correctly" — so `conditions` is the member that carries the
+       whole truth and these two are the legacy pair, kept because pages read them.
+       THE EMPTY STRING IS THEREFORE THREE DIFFERENT FACTS AT ONE MEMBER (no name declared, more than one
+       condition, or — for the query — a bare `<container-name>` with no query) and §9.1 collapses all three
+       deliberately. Nothing here may un-collapse them: `conditions` is where a caller that needs them apart
+       looks, which is the whole reason it exists. */
+    case CR_CONTAINER_NAME:
+    case CR_CONTAINER_QUERY: {
+        char *part;
+        JSValue out;
+
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_CONTAINER, "CSSContainerRule");
+        if (!r) return JS_EXCEPTION;
+        if (container_count(ctx, r) != 1) return JS_NewString(ctx, "");
+        part = container_part(ctx, r, 0, magic == CR_CONTAINER_NAME ? 0u : 1u);
+        if (!part) return JS_EXCEPTION;
+        out = JS_NewString(ctx, part);
+        free(part);
+        return out;
+    }
+    /* §9.1's `conditions` — "let result be an empty list … append dict to result … return result", MINTED PER
+       GET. It is not `[SameObject]`, and the algorithm builds a new list of new `CSSContainerCondition`
+       dictionaries every time it runs, so handing back a stored value would answer `===` the way the platform
+       does not AND would let a page write into the rule's own record (Web IDL §3.2.27 freezes the ARRAY, never
+       the dictionaries in it). The array itself IS frozen, which is that same section: "perform
+       SetIntegrityLevel(array, "frozen")". */
+    case CR_CONTAINER_CONDITIONS: {
+        uint32_t n, i;
+        JSValue a;
+
+        r = rule_here_typed(ctx, this_val, RULE_TYPE_CONTAINER, "CSSContainerRule");
+        if (!r) return JS_EXCEPTION;
+        n = container_count(ctx, r);
+        a = JS_NewArray(ctx);
+        if (JS_IsException(a)) return a;
+        for (i = 0; i < n; i++) {
+            char *name = container_part(ctx, r, i, 0);
+            char *query = container_part(ctx, r, i, 1);
+            JSValue dict = JS_NewObject(ctx);
+
+            if (!name || !query || JS_IsException(dict)) {
+                free(name); free(query); JS_FreeValue(ctx, dict); JS_FreeValue(ctx, a);
+                return JS_EXCEPTION;
+            }
+            /* Both members are `required` in §9.1's dictionary, so each is present on every entry and neither
+               is ever the absence the empty string would otherwise be mistaken for. */
+            JS_SetPropertyStr(ctx, dict, "name", JS_NewString(ctx, name));
+            JS_SetPropertyStr(ctx, dict, "query", JS_NewString(ctx, query));
+            free(name);
+            free(query);
+            JS_SetPropertyUint32(ctx, a, i, dict);
+        }
+        if (idl_freeze_array(ctx, a) != 0) { JS_FreeValue(ctx, a); return JS_EXCEPTION; }
+        return a;
+    }
     /* §6.4.5: "The cssRules attribute must return a CSSRuleList object for the child CSS rules." [SameObject],
        so the collection is remembered on the record — and it shares the very Array the children live in, which
        is what its liveness IS. */
@@ -3347,7 +3590,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
            order unless the condition is true or unless the conditional group rule can evaluate differently for
            different elements in the document." A `@media` is global to the document, so a false condition is
            the first arm and the children — layers included — are simply not walked. The second arm is the
-           element-sensitive conditional (`@container`, `@scope`), which this build has no rule type for. */
+           element-sensitive conditional, which `@container` below is and which is why that rule cannot reach
+           this shape however much its IDL resembles this one's. */
         if (!applies) return true;
         kids = rule_child_rules(ctx, rule);
         ok = cascade_emit(ctx, kids, e, cur, nest);
@@ -3370,6 +3614,49 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         ok = cascade_emit(ctx, kids, e, cur, nest);
         JS_FreeValue(ctx, kids);
         return ok;
+    }
+    /* CSS Conditional 5 §5.4's `@container` IS THE ELEMENT-SENSITIVE CONDITIONAL, and that is what makes it a
+       different problem from the two arms above rather than a third copy of them. A media query and a feature
+       query are facts about the DOCUMENT, so each is asked once and its children are walked or not. §5.4's
+       condition is asked PER ELEMENT: "for each element, the query container to be queried is selected from
+       among the element's ancestor query containers", and two elements matching one selector inside one
+       `@container` can therefore get opposite answers.
+       THERE IS NO ARM OF THIS WALK THAT IS RIGHT, WHICH IS WHY THIS CRASHES INSTEAD OF PICKING ONE. This
+       cascade flattens the rules that apply into TEXT that is re-parsed and matched by selector, so emitting
+       the children applies them to every element the selector matches — the query is then true for everybody —
+       and not emitting them applies them to nobody, which is the query being false for everybody. Both are a
+       plausible answer that reads exactly like a right one, and §5.4 says the third possibility is the common
+       case rather than an edge: "if no ancestor is an eligible query container, then the container query is
+       UNKNOWN for that element."
+       AND SKIPPING IT IS WRONG EVEN FOR THE LAYERS. §6.4.3's sentence one arm up has a second clause written
+       for exactly this rule — layers inside a conditional group rule contribute "unless the conditional group
+       rule can evaluate differently for different elements in the document" — so a `@container`'s layers
+       contribute to the layer order UNCONDITIONALLY, which the `@media` arm's false branch does not do and
+       must not be reused for.
+       WHAT TO BUILD, IN ORDER: §5.1 "Creating Query Containers: the container-type property" resolved on
+       ancestors (so the query container can be SELECTED, which is a cascade result feeding a cascade input and
+       is the part that has to be designed rather than added), then §6.1 "Size Container Features" against that
+       container's principal box — which needs core/browser/layout — and §6.2 "Style Container Features", which
+       needs only the computed value of a custom property on the container and is therefore the arm that can
+       land first. §5.4's three-valued outcome is MQ4's and not a boolean: `<general-enclosed>` and an
+       unselectable container are both UNKNOWN, which does not match. */
+    if (r->type == RULE_TYPE_CONTAINER) {
+        DFAIL("CSS Conditional 5 §5.4 \"Container Queries: the @container rule\" reached the author cascade, "
+              "and this build cannot decide it: a container query is evaluated PER ELEMENT against a query "
+              "container selected from that element's ancestors (§5.4), while this walk flattens the rules "
+              "that apply into one text matched by selector, so it has nowhere to put a condition that is true "
+              "for one matching element and unknown for its sibling. Do NOT resolve it to a boolean here — "
+              "emitting the children makes the query true for every element and dropping them makes it false "
+              "for every element, and §5.4's own answer for a document with no eligible container is UNKNOWN, "
+              "which is neither. Build §5.1's `container-type` resolution so a query container can be "
+              "selected, then §6.2's style container features (which need only a computed custom property on "
+              "the container) and §6.1's size features (which need core/browser/layout); and note that "
+              "§6.4.3's layer sentence puts THIS rule in its second arm — a `@container`'s layers contribute "
+              "to the layer order whatever its condition says, so the `@media` arm's skip is not the shape to "
+              "copy. The CSSOM object is complete and is NOT what is missing: core/css/css_rule.c builds a "
+              "CSSContainerRule with §9.1's `conditions`, `containerName`, `containerQuery` and "
+              "`conditionText`, so the rule, its children and its `cssText` are all readable by the page and "
+              "only its CASCADED EFFECT is unbuilt");
     }
     /* AN `@namespace` IS EMITTED, and it is the one non-style rule that must be: it declares a prefix the
        SELECTORS below are written against, so a sheet whose `@namespace svg url(...)` were dropped would hand
@@ -3656,6 +3943,8 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_CONDITION] = realm_value_declare(ctx, "CSS Conditional §7.2 CSSConditionRule.prototype");
     g_proto_slot[PROTO_MEDIA] = realm_value_declare(ctx, "CSS Conditional §7.3 CSSMediaRule.prototype");
     g_proto_slot[PROTO_SUPPORTS] = realm_value_declare(ctx, "CSS Conditional §7.4 CSSSupportsRule.prototype");
+    g_proto_slot[PROTO_CONTAINER] =
+        realm_value_declare(ctx, "CSS Conditional 5 §9.1 CSSContainerRule.prototype");
     g_proto_slot[PROTO_IMPORT] = realm_value_declare(ctx, "CSSOM §6.4.4 CSSImportRule.prototype");
     g_proto_slot[PROTO_NAMESPACE] = realm_value_declare(ctx, "CSSOM §6.4.9 CSSNamespaceRule.prototype");
     g_proto_slot[PROTO_FONT_FACE] = realm_value_declare(ctx, "CSS Fonts 5 §9.1 CSSFontFaceRule.prototype");
@@ -3697,7 +3986,8 @@ void css_rule_init(JSContext *ctx)
 
 void css_rule_install_proto(JSContext *ctx)
 {
-    JSValue base, grouping, style, condition, media, supports, import_rule, ns, font_face, page, margin;
+    JSValue base, grouping, style, condition, media, supports, container, import_rule, ns, font_face, page,
+            margin;
     JSValue keyframes, keyframe, layer_block, layer_statement, property_rule;
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
@@ -3755,6 +4045,23 @@ void css_rule_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(supports), "CSSSupportsRule.prototype could not be allocated");
     idl_interface_tag(ctx, supports, "CSSSupportsRule");
     idl_install_accessor(ctx, supports, "matches", js_rule_get, CR_SUPPORTS_MATCHES, -1);
+
+    /* CSS Conditional 5 §9.1's CSSContainerRule.prototype — `interface CSSContainerRule : CSSConditionRule`,
+       so it chains off `condition` beside CSSMediaRule and CSSSupportsRule and NOT off either of them: the
+       three conditional at-rules are siblings. `conditionText` is §7.2's, inherited from the prototype above
+       and redefined for this interface by §9.1's own algorithm rather than by a second accessor here — the
+       same arrangement CSSSupportsRule has, and for the same reason (two definitions of one attribute on one
+       chain is not what §7.2's "derived interfaces may specify different behavior" means).
+       THERE IS NO `matches` HERE, and its absence is §9.1's rather than a gap: CSSMediaRule and
+       CSSSupportsRule each declare one because their condition is a fact about the DOCUMENT, and a container
+       query is a fact about an ELEMENT's query container — there is no receiver on the rule for it to be
+       asked of. §9.1 declares three members and this installs three. */
+    container = JS_NewObjectProto(ctx, condition);
+    CHECK(!JS_IsException(container), "CSSContainerRule.prototype could not be allocated");
+    idl_interface_tag(ctx, container, "CSSContainerRule");
+    idl_install_accessor(ctx, container, "containerName", js_rule_get, CR_CONTAINER_NAME, -1);
+    idl_install_accessor(ctx, container, "containerQuery", js_rule_get, CR_CONTAINER_QUERY, -1);
+    idl_install_accessor(ctx, container, "conditions", js_rule_get, CR_CONTAINER_CONDITIONS, -1);
 
     /* §6.4.4's CSSImportRule.prototype. It derives from CSSRule and NOT from CSSGroupingRule — an `@import`
        contains no rules — which is why `cssRules`, `insertRule` and `deleteRule` are unreachable on one and
@@ -3895,6 +4202,7 @@ void css_rule_install_proto(JSContext *ctx)
     realm_value_set(ctx, g_proto_slot[PROTO_CONDITION], condition);
     realm_value_set(ctx, g_proto_slot[PROTO_MEDIA], media);
     realm_value_set(ctx, g_proto_slot[PROTO_SUPPORTS], supports);
+    realm_value_set(ctx, g_proto_slot[PROTO_CONTAINER], container);
 }
 
 void css_rule_install(JSContext *ctx, JSValueConst global)
@@ -3914,6 +4222,9 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
         /* CSS Conditional §7.4: `interface CSSSupportsRule : CSSConditionRule` — index 3, the SAME parent
            CSSMediaRule has, because the two conditional at-rules are siblings and not a chain. */
         { "CSSSupportsRule",   PROTO_SUPPORTS,   3 },
+        /* CSS Conditional 5 §9.1: `interface CSSContainerRule : CSSConditionRule` — index 3 again, the THIRD
+           sibling under it. */
+        { "CSSContainerRule",  PROTO_CONTAINER,  3 },
         /* Each of the three derives from CSSRule directly — none of them contains rules. */
         { "CSSImportRule",     PROTO_IMPORT,     0 },
         { "CSSNamespaceRule",  PROTO_NAMESPACE,  0 },
