@@ -117,7 +117,17 @@ function assertResultDocument(r) {
      tracks the fields somebody thought of asserts the document as it was, and the next field added to
      result.c joins the unchecked half by default. `engine/route.mjs` reads all six and asserts them, so
      nothing here is asserting a name with no writer; what this adds is that the EXTENSION — the consumer
-     that runs in production, where route.mjs never runs — notices the same break. */
+     that runs in production, where route.mjs never runs — notices the same break.
+     AND THIS LIST'S TWO HALVES SHIP AT DIFFERENT TIMES, WHICH IS A SHAPE THE PRODUCER/CONSUMER RULE DOES NOT
+     COVER AND WHICH NOTHING ELSE IN THE TREE STATES. §Architecture's rule — a consumer never defaults a
+     producer's field, it asserts it — assumes both halves arrive together. Here they do not: this file is
+     JavaScript and is live the moment it is pushed, while the field it asserts exists only in a wasm somebody
+     has to BUILD. So adding a counter to result.c and to this list in one commit makes the extension hard-fail
+     against every artifact that already exists, until the next build. The assert is still right and softening
+     it would be the defect; what was missing is that its MESSAGE named only the other cause, so a reader hit
+     it and went looking for a change to result.c that was already there. The message now names both and says
+     which to check first. A JS reader landed ahead of its C writer is not a broken contract, it is a
+     SCHEDULED one — and the only thing that makes it dangerous is a crash that describes it as the other. */
   for (const k of ["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                    "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
                    "_routedDelivered", "_routedRefused", "_routedTasksFired",
@@ -125,9 +135,18 @@ function assertResultDocument(r) {
                    "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
                    "_orphansDriven", "_orphansAsked"]) {
     DCHECK(typeof r[k] === "number",
-           "the engine's result document carries no " + k + " count — solver/result.c emits every cost " +
-           "counter and the whole @S arrival census in one snprintf, so a missing one is that composition " +
-           "having changed under this seam, not a run that happened not to do the thing. They are the only " +
+           "the engine's result document carries no " + k + " count. TWO CAUSES, AND THE SECOND IS THE " +
+           "ORDINARY ONE — check it first. (1) THE LOADED WASM IS OLDER THAN THIS FILE: this half of the " +
+           "contract ships the instant it is pushed and the other half ships only when someone BUILDS, so a " +
+           "field added to result.c and to this list in one commit is red for every artifact until the next " +
+           "build lands. That is not a stale contract, it is a SCHEDULED one, and it is what a freshly added " +
+           "name almost always means. Read extension/lib/qjs/qjs.mjs.build.json's `head` and ask whether the " +
+           "commit that added " + k + " is an ancestor of it; if it is not, the answer is to build, and " +
+           "nothing here is wrong. (2) Otherwise the composition changed under this seam: result.c emits " +
+           "every cost counter and the whole @S arrival census in ONE snprintf, so a field missing from a " +
+           "wasm that should have it is that snprintf having been edited without this list. NEVER SOFTEN " +
+           "THIS INTO A DEFAULT for either cause — a name the engine stops writing becomes a zero the " +
+           "diagnostic reports forever, which is the defect this loop exists to end. They are the only " +
            "OBSERVABLE that the single BFS context-switches, forks and pumps jobs rather than running its " +
            "flows FIFO, and the only thing that tells an empty finding set from a run that never looked");
   }
