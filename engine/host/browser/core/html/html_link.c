@@ -25,6 +25,7 @@
 #include "core/frame/policy_container.h"
 #include "core/css/media_query.h"   /* §4.2.4.1's "matches the environment", which is HTML §2.3.10's predicate */
 #include "solver/dom_cow.h"      /* the taint an `href` composed out of unknown input carries */
+#include "solver/flow.h"         /* §4.2.4.3 ends in a FETCH, and a fetch parks on a flow — see link_trigger */
 #include "core/mime/mime_type.h"    /* §4.6.8.20's "a string type matches a preload destination" */
 #include "core/html/html_link.h"
 
@@ -607,6 +608,43 @@ static void link_trigger(JSContext *ctx, lxb_dom_element_t *el)
        PER LINK TYPE, so a type this file has no steps for is a type whose times it does not register — the
        standard's own structure, and the reason the dispatch's other arms are asserts rather than live paths. */
     if (link_external_type_of(el) != LINK_EXT_PRELOAD) return;
+    /* §4.2.4.3's default fetch and process the linked resource ENDS IN A FETCH — "Set request's synchronous
+     * flag … Fetch request with processResponseConsumeBody set to …" — with no task and no microtask anywhere
+     * in it, so every trigger below reaches a request. THIS ENGINE CANNOT ISSUE ONE OUTSIDE A FLOW: the park
+     * pushes onto the flow's own pending register (solver/engine.c), which is per-flow because a global one
+     * would resolve one flow's fetch into another flow's COW, so a caller with no flow has nowhere to be owed
+     * a reply and nowhere to resume when it arrives.
+     *
+     * THE THREE LIVE TIMES HAVE A FLOW AND THE PARSED WALK DOES NOT, WHICH IS WHY THE ASSERT IS HERE AND NOT
+     * AT THE PARK. `html_link_inserted` and `html_link_attr_changed` are reached from script or from a job,
+     * and both of those ARE flows. `html_link_parsed` is reached from core/dom/document.c's parsed-tree walk,
+     * which that file states is "still the pre-boot BASELINE" — this engine performs there the steps a browser
+     * performs during TREE CONSTRUCTION, because a lexbor parse has no per-token seam. Measured on a real
+     * document: gitlab.com/explore ships four `<link rel=preload as=font>` in its head, and a document whose
+     * ENTIRE content is one such element and no script at all aborted the engine before a single flow ran —
+     * which on a page that also ships scripts means every endpoint that page's bundle names is lost.
+     *
+     * `<img>` DOES NOT REACH THIS AND THE DIFFERENCE IS NOT A DESIGN. §4.8.4.3.5's "update the image data"
+     * queues the SPEC'S OWN microtask before it fetches, and §scheduler makes every enqueued job a flow, so the
+     * image half of the same walk hands its fetch to a flow by the standard's structure rather than by anyone
+     * having arranged it. Queueing one HERE to match would be inventing a step §4.2.4.3 does not have, and
+     * §Browser-half makes ORDER the spec: a preload's request would then be issued after work the parse
+     * ordered before it.
+     *
+     * WHAT TO BUILD, AND THE LINE IT FALLS ON: the baseline walk may RECORD the address — an endpoint is what
+     * the page COMPOSED and recording it is not a request, which is why link_preload's endpoint_record stands
+     * before this and stays — but it may not ISSUE one. The issue belongs to the BOOT FLOW, beside where that
+     * document's parsed scripts are driven (core/loader/document_scripts.h's inventory is the same shape one
+     * step earlier: the walk inventories, the flow runs). Until it is there, this crashes rather than letting a
+     * document's own preloads go unrequested in silence — a `<link rel=preload as=script>` that never fires
+     * `load` is a lazy-chunk graph that never loads, which is the surface this component exists for. */
+    DCHECK(flow_running() != NULL,
+           "§4.2.4.3's fetch and process the linked resource was entered with no running flow, which means the "
+           "PARSED-TREE WALK reached it: core/dom/document.c performs at pre-boot baseline the steps HTML "
+           "defines over tree construction, and this one ends in a fetch that has no flow to park on. Drive "
+           "the parsed document's preload triggers from the BOOT FLOW instead, where that document's parsed "
+           "scripts are driven — not by queueing a task here, which invents a step §4.2.4.3 does not have and "
+           "reorders the request against the rest of the parse");
     link_fetch_and_process(ctx, el);
 }
 

@@ -77,9 +77,31 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
        and it cannot decide about a method it was never told. */
     const char *url = req ? req->url : NULL;
     JSValue e;
-    /* A live fetch is ALWAYS issued from a running flow — both explore and @S verify are the ONE scheduler now
-       (run_scheduler), so flow_running() is set; the flow's stall drains it (flow_step). */
-    DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow");
+    /* A PARK NEEDS A FLOW TO PARK ON, AND THE ENTRIES THAT HAVE ONE ARE THE ONES THAT RUN AS FLOWS. The
+       register this pushes onto is `f->pending` — per-flow, because §State-isolation forbids a global one (one
+       flow's delivery resolving another flow's fetch routes the reaction into the wrong COW) — so a caller
+       with no flow has nowhere to be owed an answer and nowhere to resume.
+       THE LINE HERE USED TO CLAIM THE PRECONDITION ALWAYS HOLDS: "a live fetch is ALWAYS issued from a running
+       flow — both explore and @S verify are the ONE scheduler now (run_scheduler), so flow_running() is set".
+       That is true of script and of every enqueued job, and it is FALSE of the pre-boot BASELINE, which is
+       where this engine performs the steps a browser performs during TREE CONSTRUCTION. Three lines of HTML
+       falsify it — a document whose whole content is one `<link rel=preload as=font>` and no script at all
+       aborts here — because core/dom/document.c's parsed-tree walk runs at baseline (its own comment: "this
+       line is still the pre-boot BASELINE") and HTML §4.2.4.3 "Fetching and processing a resource from a link
+       element" ends in "Fetch request", with no task and no microtask anywhere in it.
+       WHY `<img>` DOES NOT REACH THIS AND `<link>` DOES, WHICH IS THE WHOLE OF THE DIFFERENCE: §4.8.4.3.5's
+       "update the image data" queues the SPEC'S OWN microtask before it fetches, and a queued job is a flow, so
+       the image walk hands its fetch to a flow by the standard's own structure. The link has no such step. That
+       is an accident of two algorithms, not a design, and it is why the crash belongs at the entry rather than
+       here: this park is right to refuse, and a second park that answered without a flow would be the global
+       register §State-isolation bans.
+       SO THE FIX IS AT THE BASELINE ENTRY — the parsed-tree walk may RECORD an address (an endpoint is not a
+       request) but may not ISSUE one; the issue belongs to the boot flow, beside where that document's parsed
+       scripts are driven. core/html/html_link.c asserts that at its own baseline entry and names it. */
+    DCHECK(f != NULL, "engine_pending_fetch_url: a live fetch issued outside a running flow — see the comment "
+                      "above this line: the callers that HAVE a flow are script and enqueued jobs, and the "
+                      "caller that does not is the pre-boot baseline tree walk performing a step HTML defines "
+                      "over tree construction. Issue it from the boot flow, not from the walk");
     e = pending_push(&f->pending, FLOW_PENDING_RESOLVE);
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
