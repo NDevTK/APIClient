@@ -30,6 +30,18 @@ testing/profile-lane/
 # at — not the transcript. Anything here that deserves to last is quoted somewhere that is not this directory.
 testing/corpus/logs/
 testing/corpus/census-*.jsonl
+# AND THE LINE THAT RULE DOES NOT REACH: `testing/corpus/mirror/` AND `provenance.json` ARE A RUN'S INPUT AND
+# ARE COMMITTED. The principle above is about OUTPUT — a transcript is one sample whose meaning died with the
+# run that wrote it. A mirror is the opposite artifact and the test that separates them is which direction it
+# faces: CLAUDE.md §Testing requires a before/after to be on FROZEN BYTES, "a mirror, a fixture, a recorded
+# payload replayed — where the only thing that changed is the engine", and live sites are for DISCOVERING
+# signatures rather than for comparison. Bytes that are not committed cannot be frozen HERE: this container is
+# ephemeral, so an ignored mirror dies with the session and the next one re-fetches a site that has moved
+# under it. `provenance.json` would then record a (url, date, sha256) triple naming bytes nobody can produce
+# — which is worse than recording nothing, because it reads as provenance. So the corpus's own header points
+# at that triple as what makes a row re-checkable, and the triple is only true while the bytes are in the
+# tree. A mirror is third-party minified JavaScript and it is large; that is a cost this discipline pays
+# rather than a reason to ignore it, and a site is mirrored because a measurement needs it, never by default.
 # COW build artifact: cow-barrier-instrumented wasm base64 blob (~38MB), regenerable via
 # `node engine/build.mjs cow`. Never committed — production ships the SINGLE_FILE qjs_worker.js.
 extension/lib/qjs/*.cow.gen.js
