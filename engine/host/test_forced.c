@@ -2246,6 +2246,117 @@ static const char *HTML =
     " (document.currentScript === null ? 'null' : 'LEAK'));</script>"
     "<script id=csC>fetch('/api/csend?el=' + __cs + '|' +"
     " document.currentScript.getAttribute('id'));</script>"
+
+    /* ─── THREE OPERAND-SHAPE STATEMENTS, APPENDED RATHER THAN INSERTED ────────────────────────────────────
+       THE APPEND IS THE POINT AND IT IS NOT TIDINESS. This document is ONE LINE with no newlines, so a `@WHY`
+       frame's COLUMN is the only coordinate a reader has into it, and three separate investigations located
+       their defect by mapping one into this string. An insertion moves every column after it, which does not
+       break a run — it breaks the READER, silently, in the direction of confidence: the column still lands
+       inside a statement, just not the one that produced the frame. Appending in front of `</body></html>`
+       moves nothing: every script above keeps its own text, its own byte offset in this literal and its own
+       internal columns, and the new script's columns start where no old coordinate pointed.
+       WHAT THE THREE HAVE IN COMMON is the contract quickjs's height and idle asserts are about: the operand
+       shape a site DECLARES versus the shape execution actually takes. Each one is a path whose declared shape
+       was wrong and whose only symptom was a value read one slot off — none of them crashes at the site, and
+       none of them is reached by any other statement in this document. */
+    "<script id=stk>"
+
+    /* (1) A `for await` HEAD THAT REJECTS. ECMAScript §14.7.5.7 ForIn/OfBodyEvaluation steps 3.a-3.d are `?`
+       and not a try region, so the head runs under a catch offset of its own whose handler drops the enum_rec
+       and rethrows. A CATCH OFFSET'S SLOT IS ITS HANDLER'S OPERAND DEPTH — the unwind pops down to the offset,
+       consumes it, and pushes the exception into the slot it vacated — so anything that MOVES the offset after
+       `OP_catch` makes the handler run at a depth compute_stack_size did not record for it. The async head
+       moved it (the offset landed above the promise and `OP_await` wants the promise on top), and the engine's
+       own height assert then reported the mismatch against the FIRST instruction of the handler: a false
+       positive naming the wrong lowering, which is worse than silence.
+       ONLY A REJECTED HEAD REACHES THE HANDLER. Every other `for await` in this fixture drives a generator that
+       yields, so the handler had no statement anywhere in this tree and the first real page with a rejecting
+       `for await` would have been the first execution of it. `next()` returns a rejected promise, so the throw
+       arrives THROUGH the await — the suspend/resume path, not a synchronous throw at the call.
+       `after` is the assertion the handler left the stack where the next opcode expects it: it is computed in
+       the SAME frame after the catch, so a handler that dropped one thing too few or too many either crashes
+       here or writes a different number. `Symbol.asyncIterator` is ASSIGNED rather than written as a computed
+       key in the literal so the statement asks about the head lowering and nothing else. */
+    "(async function(){"
+    " var _fawi = {}; _fawi[Symbol.asyncIterator] = function(){"
+    "   return { next: function(){ return Promise.reject(new Error('fawREJ')); } }; };"
+    " var _fawv = 'noreject';"
+    " try { for await (var _fawx of _fawi) { _fawv = 'body' + _fawx; } } catch (_fawe) { _fawv = _fawe.message; }"
+    " fetch('/api/faw?v=' + _fawv + '&after=' + ((1 + 2) * (3 + 4)));"
+    "})();"
+
+    /* (2a) A STEP BUILTIN'S CALLBACK WITH A REST PARAMETER — the one argument shape that can OBSERVE whose
+       storage a callback frame's arguments are, because it is the only one that BUILDS an object out of the
+       slots rather than reading them one at a time. `(v)`, `(a,b,c)`, `.call`, `.apply`, a bound callback and
+       a thisArg all read and cannot tell. `narg_alloc == 0` means BORROW the slots in place, which is sound for
+       one producer of them — the caller's operand stack, which the caller frees and which outlives the frame —
+       and a C-builtin callback's slots are the continuation record's own buffer, which it neither owns nor
+       outlives. The rest array built out of those slots leaked the whole runtime graph on every
+       continuation-holding builtin, and the leak is reported by the `gc_obj_list` walk in `JS_FreeRuntime`
+       rather than by this row: what this row states is that the callback RAN with its arguments intact.
+       THREE ARGUMENTS, ASSERTED AS THREE. `forEach` passes (element, index, array), so `n` is 3 and `t` is the
+       array's type — a frame that lost the tail of its arguments still answers `e` correctly and fails here,
+       which is why the length and the last slot are separate params. `e` carries TWO values because the
+       callback is invoked twice, and that is the claim that the drive is a loop and not one call.
+       AND IT IS THE NON-ZERO HALF OF THE RULE, WHICH IS NOT THE SAME CLAUSE (2b) BELOW IS ABOUT. A callback
+       with three arguments never reaches the borrow at all — the clause that raises the allocation to the
+       argument count for any callback or owned list takes it first — so what this statement exercises is that
+       clause and the rest array built over the slots it owns. (2b) is the ZERO-argument shape, which is the
+       only one that still reaches the branch where the pointer is decided. Naming them as one rule and letting
+       one statement stand for both is how a fixture comes to read as coverage it does not have: two clauses,
+       two statements, and each says which. */
+    "[1,2].forEach(function(..._fr){"
+    " fetch('/api/rest?n=' + _fr.length + '&e=' + _fr[0] + '&t=' + (typeof _fr[2])); });"
+
+    /* (2b) A FORKING ZERO-ARGUMENT ACCESSOR — the ORDINARY shape of the borrow above, not an edge. §10.1.8.1
+       OrdinaryGet ( O, P, Receiver ) step 7 calls the getter with NO arguments, so `eff_argc` is 0, so
+       `narg_alloc` is 0, so every getter and every trap reached through a property operation used to build a
+       frame naming the property-operation record's own buffer. Nothing indexed it, which is why it survived as
+       a latent pointer instead of a crash — and the evidence it was load-bearing is what the flow clone had to
+       carry for it: a hand-written repoint per record layout, each an EQUALITY against one field standing in
+       for a fact about the whole record, so a vector starting at any other slot passed silently and handed two
+       flows one buffer.
+       THE FORK IS WHAT RUNS THE CLONE. `cfg.admin` is server-injected absent state, so the branch inside the
+       getter forks WHILE THE GETTER'S FRAME IS ON THE CHAIN, which is the only way to reach the clone's
+       accessor arm at all — a getter that does not fork is never cloned and asserts nothing about it. Both
+       values must be present: one alone is a sibling that lost its arm or read its parent's. */
+    "var _gx = { get x(){ return cfg.admin ? 'gxADMIN' : 'gxPUBLIC'; } };"
+    " fetch('/api/getfork?v=' + _gx.x);"
+
+    /* (3) A CONSTRUCT AFTER A CAUGHT CONSTRUCT-TIME THROW IN THE SAME FRAME. The construct side's operand
+       shape is a register set immediately before a `goto`, and five construct entries push nothing into it and
+       read its neutral -1 as "the arguments ARE the operands" — so an arm that throws BETWEEN the set and the
+       read leaves the next construct popping the previous construct's count off a stack that never held it.
+       THE PATH IS NARROW AND EVERY LINK OF IT IS LOAD-BEARING, which is why it is spelled out rather than
+       reduced. §28.1.2 Reflect.construct ( target, args [ , newTarget ] ) is a step machine: it requests its
+       Construct with NO operands, so the shape it hands over is neutral and a throw under it proves nothing.
+       What makes the shape non-neutral is §10.4.1.2 [[Construct]] ( argList, newTarget ) on a BOUND target:
+       flattening the bound arguments REWRITES the operand shape to the pop count it resolved, and that value
+       is what rides into the constructor entry. So the target is bound.
+       WHAT THROWS is §10.1.14 GetPrototypeFromConstructor ( ctor, intrinsicDefaultProto ) step 3.a — reached
+       only when step 2's `Get(ctor, 'prototype')` answers a NON-object — whose `? GetFunctionRealm(ctor)` is
+       §7.3.24 GetFunctionRealm ( func ): step 2 forwards a bound function to its [[BoundTargetFunction]] and
+       step 3.a performs ValidateNonRevokedProxy, which throws. A bound function has no own `prototype` and its
+       [[Prototype]] was captured by §10.4.1.3 BoundFunctionCreate BEFORE the revoke, so step 2 answers
+       `undefined` without throwing and step 3.a is reached — a bare revoked proxy as new.target throws at the
+       `prototype` read instead and never gets there, which is the shape this statement is deliberately not.
+       (This is NOT §10.1.13 OrdinaryCreateFromConstructor step 3; §10.1.13 has no step 3 that reads a realm —
+       its step 2 delegates the whole question to §10.1.14, which is where the fallback lives.)
+       THE SECOND CONSTRUCT IS THE ASSERTION. `new _CShape(1, 2)` runs in the same frame after the catch and
+       pushes two operands; with the previous construct's shape still standing it pops NONE of them, so the two
+       operands stay live under the result and the stack stands two slots high. In a dev build that is named
+       before it is felt — the pending-call idle check fires at the first opcode boundary after the catch and
+       prints the surviving register — so the `@WHY`, and not either row below, is this statement's signature.
+       `c` states that the throw happened at all: without it a green `s` is also what a statement that never
+       threw produces. */
+    "var _rvk = Proxy.revocable(function(){}, {});"
+    " var _cnt = Function.prototype.bind.call(_rvk.proxy);"
+    " _rvk.revoke();"
+    " function _CShape(a, b){ this.s = '' + a + b; }"
+    " var _cst = 'nothrow';"
+    " try { Reflect.construct(function(){}.bind(null), [], _cnt); } catch (_cse) { _cst = 'threw'; }"
+    " fetch('/api/conshape?c=' + _cst + '&s=' + new _CShape(1, 2).s);"
+    "</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -5874,6 +5985,53 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        A session that rebuilt its flows and then went nowhere reports nothing here. */
     int cold_fired = (strstr(js, "\"sink\":\"eval\"") && strstr(js, "{state}.code")
                       && strstr(js, "';X9()//")) ? 1 : 0;
+    /* ─── THE THREE OPERAND-SHAPE STATEMENTS (script id=stk) ───────────────────────────────────────────────
+       Each is TWO rows, never one, because each has two independent ways to be wrong and a folded row would
+       name neither: whether the path RAN, and whether the operand stack was where the next opcode expected it
+       when it came back. Every claim is an exactly-one value, because every one of these values is DETERMINED
+       by the code — a second entry means the flow forked where the statement says it cannot, which is a
+       finding rather than a match, and `param_value_only` is what says so. */
+
+    /* THE HEAD REJECTED AND ITS HANDLER RAN: `v` is the rethrown Error's own message, which no other statement
+       in this document produces. Nothing else here reaches the head's abrupt handler at all — every other
+       `for await` drives a generator that yields — so a 0 in this row is the handler being unreachable and not
+       a value being wrong. */
+    int faw_handler = param_value_only(js, "/api/faw", "v", "fawREJ");
+    /* AND THE HANDLER LEFT THE STACK WHERE THE NEXT OPCODE EXPECTS IT. `(1+2)*(3+4)` is evaluated in the same
+       frame AFTER the catch, so a handler that dropped one thing too few or too many either aborts on the
+       height assert or computes this from the wrong slots. It is a separate row from the one above because
+       "the handler ran" and "the handler balanced" are different failures with different fixes. */
+    int faw_depth = param_value_only(js, "/api/faw", "after", "21");
+
+    /* A CALLBACK FRAME OWNS ITS ARGUMENTS: the rest parameter is the only arg shape that BUILDS an object out
+       of the callee's argument slots, so it is the only one that can observe them being someone else's. `n`
+       and `t` are the length and the LAST of forEach's three arguments — a frame that lost the tail of its
+       arguments still answers `e` and fails these two. */
+    int rest_args = (param_value_only(js, "/api/rest", "n", "3") &&
+                     param_value_only(js, "/api/rest", "t", "object"));
+    /* AND THE DRIVE IS A LOOP: two invocations, two elements, so `e` carries exactly two values. One means the
+       machine ran its callback once; zero means the endpoint is absent and `rest_args` already said so. */
+    int rest_loop = (param_value_count(js, "/api/rest", "e") == 2);
+
+    /* THE ZERO-ARGUMENT ACCESSOR FORKED, WHICH IS WHAT RUNS THE CLONE'S ACCESSOR ARM. Both arms must be
+       present: one alone is a sibling that lost its arm or read its parent's continuation record. */
+    int getter_fork = (param_value_has(js, "/api/getfork", "v", "gxADMIN") &&
+                       param_value_has(js, "/api/getfork", "v", "gxPUBLIC"));
+    /* AND EXACTLY TWO, because the getter's branch is the only fork in that statement — a third value is a
+       flow that got there some way this fixture does not describe. */
+    int getter_arms = (param_value_count(js, "/api/getfork", "v") == 2);
+
+    /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
+       that never threw produces, which is the failure mode of asserting only the consequence. */
+    int con_threw = param_value_only(js, "/api/conshape", "c", "threw");
+    /* AND THE NEXT CONSTRUCT IN THE SAME FRAME COMPLETED. `new _CShape(1, 2)` pushes two operands; a shape
+       left standing by the abrupt path makes it pop NONE of them, and this row is the wrong half of that to
+       watch — the dev build never reaches it, because the idle-register check fires at the first opcode
+       boundary after the catch and names the register. What this row states is the RELEASE-shaped half and
+       the one a reader can act on: the frame came back usable. A `@WHY` naming the pending-call registers is
+       this statement's real signature, and it arrives before any row is printed. */
+    int con_shape = param_value_only(js, "/api/conshape", "s", "12");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -6068,6 +6226,17 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            producing something executable out of the data state would show up first and which a `poc`-shaped
            row cannot see until it has already fired. */
         { "s-park-noescape", st_lpark < S_ESCAPED, "location.hash", SESS_EXPLORE },
+        /* THE THREE OPERAND-SHAPE STATEMENTS. Each key is the piece of PROGRAM TEXT that only its own statement
+           puts in the document — the rejected head's error message, the rest parameter's own read, the accessor
+           read, the constructor's name — so a row selects on the statement it is about and on nothing else. */
+        { "faw-handler", faw_handler, "fawREJ", SESS_EXPLORE },
+        { "faw-depth", faw_depth, "fawREJ", SESS_EXPLORE },
+        { "rest-args", rest_args, "_fr.length", SESS_EXPLORE },
+        { "rest-loop", rest_loop, "_fr.length", SESS_EXPLORE },
+        { "getter-fork", getter_fork, "_gx.x", SESS_EXPLORE },
+        { "getter-arms", getter_arms, "_gx.x", SESS_EXPLORE },
+        { "con-threw", con_threw, "_CShape", SESS_EXPLORE },
+        { "con-shape", con_shape, "_CShape", SESS_EXPLORE },
         /* THE TWO COLD SESSIONS. Their key is the @S sink whose candidate sessions are what makes a park write
            a 'c' record at all, so the row still names a statement of the document it runs over; the SESSION is
            what tells the two apart, because they run the SAME document and one is about what a park WROTE while
