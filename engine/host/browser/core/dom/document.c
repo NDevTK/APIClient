@@ -2762,10 +2762,30 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * with A NEW OPAQUE ORIGIN rather than dropping it, so the list's LENGTH still reports the depth of the frame
  * tree — which is why the corpus asserts `['null']` and not `[]`.
  *
- * THE POLICY IS READ OFF THE CONTAINER ELEMENT AT THIS MOMENT, and that is the snapshot §7.4.2's beginning-
- * navigation step 16 describes for a navigation. For the INITIAL about:blank this creation IS that moment, so
- * the attribute's value here is the value the standard snapshots. A later write to `referrerpolicy` must not
- * change this list, and it cannot: nothing re-runs these steps.
+ * THE POLICY IS READ OFF THE CONTAINER ELEMENT AT THIS MOMENT, AND FOR A NAVIGATION THAT IS THE WRONG MOMENT.
+ * This paragraph used to claim the read WAS the standard's snapshot and cite "§7.4.2's beginning-navigation
+ * step 16" for it. All three parts were wrong: the section is §7.4.2.2 "Beginning navigation", its step 16 is
+ * the is-delaying-load-events one, and the snapshot is its STEP 17 — "let targetSnapshotParams be the result of
+ * snapshotting target snapshot params given navigable". §7.4.2.1 "Supporting concepts" defines that struct as
+ * exactly two items, "sandboxing flags" and "IFRAME ELEMENT REFERRER POLICY", and says it "is snapshotted at
+ * the beginning of a navigation and used throughout the navigation's lifetime"; the second item is "the result
+ * of determining the iframe element referrer policy given targetNavigable's container", which is §7.1.6 — the
+ * function core/html/html_iframe.c now owns.
+ *
+ * SO THE VALUE IS CAPTURED WHEN THE NAVIGATION STARTS AND CONSUMED WHEN THE DOCUMENT IS CREATED, AND THOSE ARE
+ * DIFFERENT INSTANTS. Reading the element here is correct for the INITIAL about:blank, whose creation is not
+ * preceded by a navigation at all — there is no earlier moment for it to have been snapshotted at. It is wrong
+ * for every Document a navigation produces: a page that writes `referrerpolicy` after starting the navigation
+ * and before the load completes is answered with the NEW value, where the standard answers with the one that
+ * was live when the navigation began. That is observable and the corpus observes it — an ancestor origin comes
+ * back unmasked because the attribute was cleared while the response was still in flight.
+ *
+ * WHAT CLOSES IT IS THE FIELD, NOT A RE-READ HERE. This engine already carries target snapshot params for the
+ * sandboxing flags (core/frame/navigable.c); the struct's OTHER field is this one, and once the navigation
+ * carries it, this function takes it as an argument the way §7.3.2.1 already passes `iframeReferrerPolicy`, and
+ * stops touching the container element for a navigated Document. Reading the attribute earlier and stashing it
+ * on the element would be the same defect moved: the operation must carry its inputs, not re-derive them from
+ * the object it acts on (CLAUDE.md, §scheduler).
  *
  * THE POLICY IS §7.1.6's ANSWER AND NOT THE RAW ATTRIBUTE, which is what §7.3.2.1 "Creating browsing contexts"
  * passes as `iframeReferrerPolicy` and is a different function from reading the element. HTML §7.1.6 "iframe
