@@ -100,6 +100,13 @@ function buildFormFields(schema, initialData = null) {
             _exampleValue: param._exampleValue === undefined ? null : param._exampleValue,
             _exampleValueSource: param._exampleValueSource || null,
             _range: param._range || null,
+            /* THE DOMAIN THE CODE'S OWN GATES STATED, beside the range the observations spanned. The two are
+               different measurements of the same kind of fact and both are constraints, never values: an
+               `_excludedValues` entry is a token the forced execution PROVED this parameter is not on every
+               path it saw reach the request. `undefined` and `null` are one statement here (nothing was
+               observed), which is why this is written the way `_exampleValue` is and not with a `||` that
+               would also swallow an empty array arriving as "unconstrained". */
+            _excludedValues: param._excludedValues === undefined ? null : param._excludedValues,
           },
           "param",
           0,
@@ -347,6 +354,15 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   // observed key. The input below is NOT prefilled from it (pickExampleValue deleted its "range-min" tier).
   if (fieldDef._range) {
     labelHtml += ` <span class="field-stat badge-range" title="the domain this field's observations spanned — a constraint, not a value the code computed">range ${esc(String(fieldDef._range.min))}–${esc(String(fieldDef._range.max))}</span>`;
+  }
+  /* AND THE DOMAIN THE CODE ITSELF STATED. `_range` is what the observed values spanned; this is what the
+     bundle's own equality gates PROVED the value is not, on the arms the forced execution took. It renders
+     as a constraint and never as a value — `≠ admin` cannot be mistaken for a key to send — and its ABSENCE
+     is not rendered at all, because "nothing was proved" and "proved to be nothing in particular" are the
+     same statement about what the reviewer may assume. Without it a param this run proved is neither
+     "admin" nor "prod" looked exactly like a param nothing ever tested. */
+  if (Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0) {
+    labelHtml += ` <span class="field-stat badge-excluded" title="values the forced execution proved this parameter is NOT, on every observed path to this request — a constraint the code stated, never a value it computed">${fieldDef._excludedValues.map((v) => "\u2260 " + esc(String(v))).join(", ")}</span>`;
   }
   // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
   // reads, so the box can never show a value the label does not attribute — which is what happened for a
@@ -709,7 +725,11 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       const inp = document.createElement("input");
       inp.type = "text";
       inp.className = "form-input form-input-string";
-      inp.placeholder = type || "value";
+      /* The DOMAIN in the placeholder, which is greyed and never submitted — the box states what the value
+         must satisfy without asserting a member of it, exactly as the numeric input does for `_range`. */
+      inp.placeholder = (Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0)
+        ? (type || "value") + " other than " + fieldDef._excludedValues.map(String).join(", ")
+        : (type || "value");
       if (pf.value !== null) {
         inp.value =
           typeof pf.value === "object"

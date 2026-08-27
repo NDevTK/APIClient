@@ -51,9 +51,20 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                         const EndpointHeader *hdrs, int nhdrs, const EndpointBody *body);
 
 /* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
-   JS-object round-trip. `[ {"method":..,"url":..,"params":[{"name":..,"location":..,"validValues":[..]}]}, ... ]`.
+   JS-object round-trip.
+   `[ {"method":..,"url":..,"params":[{"name":..,"location":..,"validValues":[..],"excludes":[..]}]}, ... ]`.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
+   AND EVERY PARAM STATES BOTH OF THE TWO FACTS A SHAPE IS MADE OF. `validValues` is PROVENANCE-and-example —
+   who must supply the value, and what the code computed for it where it computed one. `excludes` is DOMAIN —
+   what this endpoint's own equality gates PROVED the value is not, on every observed path to the request.
+   Carrying only the first is a WRONG report and not a partial one: a param proved to be neither "admin" nor
+   "prod" and a param nothing ever tested render with identical bytes, so the silence about the gate is read
+   as the positive statement "anything goes". Forced multi-path is what makes the second fact plentiful — it
+   runs BOTH arms of every equality gate, so a pin and an exclusion are minted at the same rate, and the arm
+   that is not the one the shipped bundle took is exactly the arm this tool exists to explore.
+   `excludes` is OMITTED where no such constraint held on every observed path, and that absence IS the
+   statement — never an empty array, which a consumer could not tell apart from an unconstrained param.
    It is an array and not a document
    because the DOCUMENT is one thing the host reads once (result.h): a surface that wrapped itself could not
    be composed with the others without a host-side splice, which is the host owning structure again. */

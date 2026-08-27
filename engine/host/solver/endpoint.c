@@ -15,7 +15,15 @@
 typedef enum { EP_QUERY = 0, EP_PATH, EP_BODY } EpLoc;
 static const char *const ep_loc_name[] = { "query", "path", "body" };
 
-typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap; } Param;   /* validValues merged across same-shape hits */
+/* A PARAM STATES TWO FACTS AND THEY MERGE BY OPPOSITE RULES, which is the whole reason they are two fields.
+   `vals` is PROVENANCE-and-example — each entry is a value the code COMPUTED on some path, so the merge is a
+   UNION: another path computing another value adds knowledge and takes none away.
+   `excl` is DOMAIN — each entry is a token some flow's own equality gate PROVED this hole is not, so the
+   merge is an INTERSECTION: the record's claim is about the ENDPOINT, and only a constraint every observed
+   path to it obeyed is true of the endpoint. Unioning them would state, of one request, a constraint that no
+   single run of the program ever satisfied. */
+typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
+                 char **excl; int nexcl; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; } Endpoint;
@@ -89,10 +97,21 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
 
 /* THE PARAMS OF ONE OBSERVED REQUEST, in the order a reviewer meets them: path, then query, then body. Owned
    until they are merged into the surface. */
-typedef struct { char *name; char *val; EpLoc loc; } KV;
+/* `excl`/`nexcl` are OWNED COPIES of what the running flow's path constraint held at the moment this param
+   was read. They are copied here rather than borrowed because the constraint is a growable head that a later
+   narrowing REALLOCS, and a borrowed row would then name freed memory — a lifetime rule this file would have
+   to keep true across every future edit to the two producers below. Copying makes it unbreakable. */
+typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; } KV;
 typedef struct { KV *e; int n, cap; } KvBuf;
 
-static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, size_t vlen, EpLoc loc) {
+/* `hole` is the value's HOLE KEY — the name the flow's own equality gates recorded their domain under — or
+   NULL when this param's value is a concrete one the code computed and there is no domain to look up. It is
+   passed EXPLICITLY by each producer rather than derived here, because the two producers know it from
+   different places: a path param IS its hole (the name is the brace-stripped segment), while a query or body
+   param carries its hole inside the VALUE text. Deriving it from one of the two would silently answer NULL
+   for the other, and a NULL hole is indistinguishable from a hole with no constraint on it. */
+static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, size_t vlen, EpLoc loc,
+                   const char *hole) {
     DCHECK(nlen > 0, "an endpoint param was minted with no NAME — a nameless param cannot be substituted back "
                      "into a request, so every producer here must refuse the unnamed case at its own site "
                      "rather than emit a record keyed by the empty string");
@@ -111,11 +130,33 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
     if (vlen) memcpy(b->e[b->n].val, val, vlen);
     b->e[b->n].val[vlen] = 0;
     b->e[b->n].loc = loc;
+    /* THE DOMAIN IS READ HERE BECAUSE HERE IS WHERE THE FLOW STILL EXISTS. The path constraint is per-flow and
+       the serializer runs at the end of the run with no flow under it, so a domain fetched there would be
+       whichever flow happened to park last — or none. */
+    b->e[b->n].excl = NULL;
+    b->e[b->n].nexcl = 0;
+    if (hole) {
+        int nex = 0, k;
+        const char *const *ex = concolic_excluded(hole, &nex);
+        if (nex > 0) {
+            b->e[b->n].excl = malloc((size_t)nex * sizeof(char *));
+            CHECK(b->e[b->n].excl, "endpoint: OOM taking a param's observed domain off the flow");
+            for (k = 0; k < nex; k++) {
+                b->e[b->n].excl[k] = strdup(ex[k]);
+                CHECK(b->e[b->n].excl[k], "endpoint: OOM copying a value a flow proved a param is not");
+            }
+            b->e[b->n].nexcl = nex;
+        }
+    }
     b->n++;
 }
 
 static void kv_free(KvBuf *b) {
-    for (int i = 0; i < b->n; i++) { free(b->e[i].name); free(b->e[i].val); }
+    for (int i = 0; i < b->n; i++) {
+        free(b->e[i].name); free(b->e[i].val);
+        for (int k = 0; k < b->e[i].nexcl; k++) free(b->e[i].excl[k]);
+        free(b->e[i].excl);
+    }
     free(b->e); b->e = NULL; b->n = b->cap = 0;
 }
 
@@ -129,7 +170,11 @@ static void kv_pairs(KvBuf *b, const char *text, EpLoc loc) {
         const char *name = tok, *val = "";
         if (eq) { *eq = 0; val = eq + 1; }
         if (!name[0]) continue;   /* `&&` / a leading `=`: no name, so no param — see kv_add's assert */
-        kv_add(b, name, strlen(name), val, strlen(val), loc);
+        {   /* the VALUE carries the hole here: `page={state.page}` is one unknown wearing a known name */
+            char *hole = concolic_hole_key(val);
+            kv_add(b, name, strlen(name), val, strlen(val), loc, hole);
+            free(hole);
+        }
     }
     free(dup);
 }
@@ -236,7 +281,11 @@ static char *path_scan(KvBuf *out, const char *shape, const char *ex) {
                    "matching /\\{([^}/]+)\\}/ against this path, so a name outside that grammar names a hole "
                    "no substitution can find");
             json_buf_puts(&p, "{"); json_buf_puts(&p, name); json_buf_puts(&p, "}");
-            kv_add(out, name, nlen, aligned ? b : "", aligned ? bn : 0, EP_PATH);
+            /* THE NAME *IS* THE HOLE KEY on this path — both are the segment with every brace stripped, which
+               is concolic_hole_key's own rule, so a path param looks its domain up by the same string the
+               popup substitutes it by. The VALUE here is the concrete example aligned out of the URL and
+               carries no braces to read a hole out of. */
+            kv_add(out, name, nlen, aligned ? b : "", aligned ? bn : 0, EP_PATH, name);
         }
         free(seg); free(name);
         if (!ae) break;
@@ -318,7 +367,11 @@ static void body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
                 const char *key = JS_AtomToCString(ctx, tab[i].atom);
                 char *val = body_field_text(ctx, pv);
                 CHECK(key, "endpoint: OOM naming a JSON request body's field");
-                if (key[0]) kv_add(out, key, strlen(key), val ? val : "", val ? strlen(val) : 0, EP_BODY);
+                if (key[0]) {
+                    char *hole = concolic_hole_key(val ? val : "");
+                    kv_add(out, key, strlen(key), val ? val : "", val ? strlen(val) : 0, EP_BODY, hole);
+                    free(hole);
+                }
                 free(val);
                 JS_FreeCString(ctx, key);
                 JS_FreeValue(ctx, pv);
@@ -332,6 +385,38 @@ static void body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     }
     free(text);
     mime_type_free(&mt);
+}
+
+/* THE DOMAIN'S FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
+static void param_set_excl(Param *p, char *const *ex, int n) {
+    int i;
+    DCHECK(p->nexcl == 0 && p->excl == NULL,
+           "an endpoint param's exclusion set was seeded twice — the first sighting takes the set and every "
+           "later one INTERSECTS it, so a second seed would replace a constraint that had already been "
+           "narrowed by another path and state, of this endpoint, something no run of the program obeyed");
+    if (n <= 0) return;
+    p->excl = malloc((size_t)n * sizeof(char *));
+    CHECK(p->excl, "endpoint: OOM recording what a flow proved a param is not");
+    for (i = 0; i < n; i++) {
+        p->excl[i] = strdup(ex[i]);
+        CHECK(p->excl[i], "endpoint: OOM copying a value a flow proved a param is not");
+    }
+    p->nexcl = n;
+}
+
+/* …AND EVERY LATER ONE NARROWS IT. A constraint the record still carries is one EVERY observed path to this
+   endpoint obeyed; a token this flow did not exclude is a token some path allowed, and the claim goes. The
+   set only ever shrinks, which is also why a merge earns the WFQ nothing: there is no later event here that
+   ADDS structure, and the endpoint's own first sighting already earned its point. */
+static void param_intersect_excl(Param *p, char *const *ex, int n) {
+    int i, j, k = 0;
+    for (i = 0; i < p->nexcl; i++) {
+        int keep = 0;
+        for (j = 0; j < n; j++) if (!strcmp(p->excl[i], ex[j])) { keep = 1; break; }
+        if (keep) p->excl[k++] = p->excl[i];
+        else free(p->excl[i]);
+    }
+    p->nexcl = k;
 }
 
 static void param_add_val(Param *p, const char *v) {   /* merge a validValue (dedup, skip empty) */
@@ -378,7 +463,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
         if (same_identity(&g_eps[i], method, path, &kvb)) {
-            for (int j = 0; j < kvb.n; j++) param_add_val(&g_eps[i].params[j], kvb.e[j].val);
+            for (int j = 0; j < kvb.n; j++) {
+                param_add_val(&g_eps[i].params[j], kvb.e[j].val);
+                param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
+            }
             /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
                with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
                (same_identity), so a
@@ -409,6 +497,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         e->params[e->np].name = strdup(kvb.e[j].name);
         e->params[e->np].loc = kvb.e[j].loc;
         param_add_val(&e->params[e->np], kvb.e[j].val);
+        param_set_excl(&e->params[e->np], kvb.e[j].excl, kvb.e[j].nexcl);
         e->np++;
     }
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
@@ -443,7 +532,19 @@ char *endpoint_json_array(void) {
             json_buf_puts(&b, ",\"location\":"); json_buf_str(&b, ep_loc_name[e->params[j].loc]);
             json_buf_puts(&b, ",\"validValues\":[");
             for (int k = 0; k < e->params[j].nvals; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].vals[k]); }
-            json_buf_puts(&b, "]}");
+            json_buf_puts(&b, "]");
+            /* THE DOMAIN, AND ONLY WHERE ONE WAS OBSERVED. An empty array would be a third state beside "the
+               field is absent" and "the field lists tokens", and a consumer cannot tell an empty constraint
+               from an unconstrained param — so the ABSENCE is the statement: no equality gate over this hole
+               took its false arm on every path that built this request. §Solver-half's asymmetry is what this
+               field exists for: without it a param proved to be neither "admin" nor "prod" rendered with the
+               same bytes as one nothing had ever tested, and that silence reads as "anything goes". */
+            if (e->params[j].nexcl) {
+                json_buf_puts(&b, ",\"excludes\":[");
+                for (int k = 0; k < e->params[j].nexcl; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].excl[k]); }
+                json_buf_puts(&b, "]");
+            }
+            json_buf_puts(&b, "}");
         }
         json_buf_puts(&b, "]");
         /* The transport half, and ONLY when there is one — an endpoint with no learned header must not claim an
@@ -470,7 +571,13 @@ int endpoint_count(void) { return g_eps_n; }
 void endpoint_free(void) {
     for (int i = 0; i < g_eps_n; i++) {
         free(g_eps[i].method); free(g_eps[i].path);
-        for (int j = 0; j < g_eps[i].np; j++) { free(g_eps[i].params[j].name); for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]); free(g_eps[i].params[j].vals); }
+        for (int j = 0; j < g_eps[i].np; j++) {
+            free(g_eps[i].params[j].name);
+            for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);
+            free(g_eps[i].params[j].vals);
+            for (int k = 0; k < g_eps[i].params[j].nexcl; k++) free(g_eps[i].params[j].excl[k]);
+            free(g_eps[i].params[j].excl);
+        }
         free(g_eps[i].params);
         for (int j = 0; j < g_eps[i].nh; j++) { free(g_eps[i].hdrs[j].name); free(g_eps[i].hdrs[j].value); }
         free(g_eps[i].hdrs);

@@ -188,6 +188,20 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                 ...(pDef.format ? { format: pDef.format } : {}),
                 ...(pDef._defaultValue != null ? { default: pDef._defaultValue } : {}),
                 ...(pDef._range ? { minimum: pDef._range.min, maximum: pDef._range.max } : {}),
+                /* THE DOMAIN THE CODE'S OWN GATES STATED, in the standard's own vocabulary for it.
+                   JSON Schema Core 2020-12 §10.2.1.4 "not": "An instance is valid against this keyword if it
+                   fails to validate successfully against the schema defined by this keyword"; JSON Schema
+                   Validation 2020-12 §6.1.2 "enum": "An instance validates successfully against this keyword
+                   if its value is equal to one of the elements in this keyword's array value". Composed, they
+                   say exactly what the forced execution proved: any value except these.
+                   IT IS NOT `enum`, WHICH ASSERTS THE OPPOSITE — that these are the only values the parameter
+                   takes — and that inversion is the one way this export could turn an observation into a lie.
+                   OAS 3.0.3 Schema Object carries both keywords, with `not` required to be a Schema Object
+                   rather than a standard JSON Schema, which `{enum:[…]}` is.
+                   Emitted only where a constraint held on every observed path; the absence is the statement,
+                   matching endpoint.c's own omission rule. */
+                ...(Array.isArray(pDef._excludedValues) && pDef._excludedValues.length
+                    ? { not: { enum: pDef._excludedValues.slice() } } : {}),
               };
               /* NO DEFAULT. `endpoint.c` emits a `location` per param and `learn.js` writes it onto every
                  parameters entry, so an absent one means a record older than that producer — a stale IDB

@@ -51,6 +51,9 @@ typedef struct {
     JSValue example;    /* concrete example, or JS_UNDEFINED */
     int cmp_op;         /* for an EQUALITY RESULT: OPCMP_EQ/NE — `src <op> cmp_tok` (else OPCMP_NONE) */
     char *cmp_tok;      /* the concrete side of the equality */
+    char *cmp_subj;     /* …and the HOLE KEY of the unknown side — see concolic_cmp_subject. The three are ONE
+                           observation: written together at pred_new, asserted together there, and read
+                           together by decide.c, which pins on one arm and excludes on the other. */
 } Concolic;
 
 /* ── THE ONE ENCODING ───────────────────────────────────────────────────────────────────────────────────────
@@ -237,9 +240,33 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               principal. It is a separate field and not `val` because it is a different claim: writing the
               lowercased token under `message.origin` would make a later read of `event.origin` ITSELF answer
               it, which is a fabricated value in exactly the direction §Solver-half forbids.
-   All three are per-flow and travel together, which is why they are ONE entry rather than three maps that a
+     excl  — the tokens an equality gate over this HOLE proved it is NOT, on the arm `val` does not cover.
+              Forced multi-path runs both arms of every `x === "admin"`, so a pin and an exclusion are minted
+              at the same rate; without this the second of the two flows knew nothing it could report about
+              its own parameter. It is keyed by the HOLE KEY rather than by a source's `src` — the two differ
+              for every derived value (see concolic_hole_key) and the emission has only the hole.
+   All four are per-flow and travel together, which is why they are ONE entry rather than four maps that a
    fork, a suspend and a resume would each have to remember to carry. */
-typedef struct { char *key; char *val; signed char truth; signed char pinned_root; } Cons;
+typedef struct { char *key; char *val; char **excl; int nexcl; signed char truth; signed char pinned_root; } Cons;
+
+/* ONE FREE FOR ONE ENTRY, because there are now two places that dispose of an array of them (the live head and
+   a frozen segment) and a field added to the struct must not be freed in one of them only. */
+static void cons_entry_free(Cons *e) {
+    int i;
+    free(e->key);
+    free(e->val);
+    for (i = 0; i < e->nexcl; i++) free(e->excl[i]);
+    free(e->excl);
+}
+/* …and one measurement, for the same reason: the freeze's byte census reads exactly the fields the free above
+   disposes of, so a field that grows the entry is counted where it is counted for every other. */
+static long cons_entry_bytes(const Cons *e) {
+    long n = (long)strlen(e->key) + 1 + (e->val ? (long)strlen(e->val) + 1 : 0);
+    int i;
+    n += (long)e->nexcl * (long)sizeof(char *);
+    for (i = 0; i < e->nexcl; i++) n += (long)strlen(e->excl[i]) + 1;
+    return n;
+}
 
 /* THE CONSTRAINT IS A MUTABLE HEAD OVER IMMUTABLE, REFCOUNTED, STRUCTURALLY-SHARED SEGMENTS — the third
    instance of the one primitive cow.c's `CowSeg` and dom_cow.c's `DomSeg` already are, and it is here for the
@@ -339,6 +366,21 @@ static Cons *cons_entry(const char *key) {
     g_pins[g_pins_n].key = strdup(key); CHECK(g_pins[g_pins_n].key, "concolic: OOM constraint key");
     g_pins[g_pins_n].val = (below && below->val) ? strdup(below->val) : NULL;
     CHECK(!(below && below->val) || g_pins[g_pins_n].val, "concolic: OOM copying an inherited pin value");
+    /* THE EXCLUSIONS COPY UP WITH THE REST OF THE ENTRY. They are a fact this flow proved, so a copy-up that
+       dropped them would make the very same path report an unconstrained parameter the moment a context
+       switch happened to fall between the gate and the request that carries the value. */
+    g_pins[g_pins_n].excl = NULL;
+    g_pins[g_pins_n].nexcl = 0;
+    if (below && below->nexcl) {
+        int k;
+        g_pins[g_pins_n].excl = malloc((size_t)below->nexcl * sizeof(char *));
+        CHECK(g_pins[g_pins_n].excl, "concolic: OOM copying an inherited exclusion set");
+        for (k = 0; k < below->nexcl; k++) {
+            g_pins[g_pins_n].excl[k] = strdup(below->excl[k]);
+            CHECK(g_pins[g_pins_n].excl[k], "concolic: OOM copying an inherited excluded value");
+        }
+        g_pins[g_pins_n].nexcl = below->nexcl;
+    }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     /* INHERITED WITH THE REST OF THE ENTRY. A principal demand this flow made before its last freeze is still
        this flow's demand, and a copy-up that dropped it would make the very same path answer "unpinned" the
@@ -373,6 +415,78 @@ void concolic_pin(const char *src, const char *root, const char *val) {
        is taken only after the first has been written, and nothing below may reach back through `c`. */
     if (root) cons_entry(root)->pinned_root = 1;
 }
+/* THE HOLE KEY — see concolic.h. One speller, because it is read at two ends that would otherwise normalise
+   the same hole differently and never meet. */
+char *concolic_hole_key(const char *shape) {
+    char *r;
+    size_t i, n = 0;
+
+    if (!shape || !strchr(shape, '{')) return NULL;
+    r = malloc(strlen(shape) + 1);
+    CHECK(r, "concolic: OOM naming the hole a domain is a fact about");
+    for (i = 0; shape[i]; i++) if (shape[i] != '{' && shape[i] != '}') r[n++] = shape[i];
+    r[n] = 0;
+    if (!n) { free(r); return NULL; }   /* `{}` — the value this engine cannot name; it gets no domain either */
+    return r;
+}
+
+/* THE NEGATIVE HALF OF THE EQUALITY OBSERVATION — see concolic.h. The token is the concrete side of a
+   predicate the PAGE wrote, so nothing here is chosen: this records that the flow took the arm on which the
+   value is not that token, which is as much an observation as the pin on the other arm is. */
+/* THE CONSTRAINT KEY AN EXCLUSION SET LIVES UNDER. It is COMPOSED and not the raw hole, because the one map
+   already holds two other kinds of key — a pin's raw `src` and a branch's composed `branch` identity — and a
+   raw shape sharing a namespace with a raw source name is a collision waiting for the first page whose member
+   path spells a declared source. Composition is this file's own encoding (length-prefixed fields under a tag),
+   so an `excl` key can never equal a `branch` key or a bare `src`. Caller frees. */
+static char *excl_key(const char *hole) {
+    const char *f[1];
+    f[0] = hole;
+    return concolic_ident_compose("excl", f, 1);
+}
+
+void concolic_exclude(const char *hole, const char *tok) {
+    Cons *c;
+    char **a;
+    char *key;
+    int i;
+
+    DCHECK(hole && *hole,
+           "an equality's false arm was recorded against no HOLE — the subject is what the emission looks the "
+           "domain up by, so a nameless one is a constraint stored where nothing can read it and a parameter "
+           "that renders as unconstrained while this flow has proved otherwise");
+    DCHECK(tok != NULL,
+           "an equality's false arm named no TOKEN to exclude — the token is the concrete side the page's own "
+           "predicate wrote, and without it there is no fact, only the knowledge that some fact existed");
+    key = excl_key(hole);
+    CHECK(key, "concolic: the exclusion key could not be composed — a hole is a real string, so the only way "
+               "this fails is allocation, and a lost constraint reports an unconstrained parameter");
+    c = cons_entry(key);
+    free(key);
+    for (i = 0; i < c->nexcl; i++) if (!strcmp(c->excl[i], tok)) return;   /* the same gate, tested again */
+    a = realloc(c->excl, (size_t)(c->nexcl + 1) * sizeof(char *));
+    CHECK(a, "concolic: OOM recording a value this flow proved its input is not");
+    c->excl = a;
+    c->excl[c->nexcl] = strdup(tok);
+    CHECK(c->excl[c->nexcl], "concolic: OOM copying a value this flow proved its input is not");
+    c->nexcl++;
+}
+
+const char *const *concolic_excluded(const char *hole, int *n) {
+    const Cons *c = NULL;
+
+    DCHECK(n != NULL, "the exclusion set was asked for with nowhere to put its SIZE — a borrowed array with no "
+                      "count is an array the caller has to guess the end of");
+    if (hole) {
+        char *key = excl_key(hole);
+        CHECK(key, "concolic: the exclusion key could not be composed at the read");
+        c = cons_lookup(key);
+        free(key);
+    }
+    if (!c || !c->nexcl) { *n = 0; return NULL; }
+    *n = c->nexcl;
+    return (const char *const *)c->excl;
+}
+
 void concolic_constrain_branch(const char *key, int truth) {
     cons_entry(key)->truth = (signed char)(truth ? 1 : 0);
 }
@@ -389,7 +503,7 @@ static void cons_seg_unref(ConsSeg *s) {
         ConsSeg *base = s->base;
         int i;
         g_cons_seg_live--; g_cons_seg_entries_live -= s->n; g_cons_seg_bytes_live -= s->bytes;
-        for (i = 0; i < s->n; i++) { free(s->e[i].key); free(s->e[i].val); }
+        for (i = 0; i < s->n; i++) cons_entry_free(&s->e[i]);
         free(s->e); free(s->hash); free(s);
         s = base;
     }
@@ -397,7 +511,7 @@ static void cons_seg_unref(ConsSeg *s) {
 
 void concolic_clear_pins(void) {
     int i;
-    for (i = 0; i < g_pins_n; i++) { free(g_pins[i].key); free(g_pins[i].val); }
+    for (i = 0; i < g_pins_n; i++) cons_entry_free(&g_pins[i]);
     free(g_pins); g_pins = NULL; g_pins_n = g_pins_cap = 0;
     free(g_pins_hash); g_pins_hash = NULL; g_pins_hash_cap = 0;
     cons_seg_unref(g_pins_base); g_pins_base = NULL;
@@ -432,7 +546,7 @@ void *concolic_pins_suspend(void) {
             s->bytes = (long)sizeof *s + (long)s->n * (long)sizeof(Cons)
                      + (long)s->hash_cap * (long)sizeof(int);
             for (k = 0; k < s->n; k++)
-                s->bytes += (long)strlen(s->e[k].key) + 1 + (s->e[k].val ? (long)strlen(s->e[k].val) + 1 : 0);
+                s->bytes += cons_entry_bytes(&s->e[k]);
             g_cons_seg_live++; g_cons_seg_entries_live += s->n; g_cons_seg_bytes_live += s->bytes;
         }
         g_pins = NULL; g_pins_n = g_pins_cap = 0;
@@ -484,6 +598,7 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->root);
     free(c->ident);
     free(c->cmp_tok);
+    free(c->cmp_subj);
     JS_FreeValueRT(rt, c->example);
     free(c);
 }
@@ -861,7 +976,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
  * and `tok` are the PIN, which only an equality against a concrete side has (an ordering narrows a domain and
  * determines no value — §Solver-half: a range-gated parameter stays a domain-annotated shape). */
 static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const char *root, char *ia, char *ib,
-                        int eq_kind, const char *tok)
+                        int eq_kind, const char *tok, const char *subj)
 {
     const char *f[3];
     char *ident;
@@ -872,9 +987,17 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
            "a comparison result was minted with no OPERATOR. The operator is half the predicate: without it "
            "`x < 700` and `x > 700` compose to one identity, the flow's record of either DECIDES the other, "
            "and the arm it deletes is one nothing contradicts");
-    DCHECK(eq_kind == OPCMP_NONE || tok != NULL,
-           "a comparison result declares that its taken arm PINS but names no value to pin to — the two are "
-           "written together at the mint and read together by concolic_cmp");
+    /* THE PIN IS THREE FIELDS. The operator says an arm determines something, the token says WHAT, and the
+       subject says WHICH HOLE the report must state it under — decide.c pins on one arm and EXCLUDES on the
+       other, and it reads all three at the same line.
+       THE SUBJECT IS THE ONE OF THE THREE THAT MAY BE HONESTLY ABSENT, and its absence is a POSITIVE
+       statement rather than a hole: a value whose shape is the unnameable `{}` has no hole the @H surface
+       will print (endpoint.c's path scan mints no param for one either), so there is no name to file a domain
+       under. The pin is unaffected, because a pin is keyed by `src` and every concolic has one. */
+    DCHECK(eq_kind == OPCMP_NONE ? (tok == NULL && subj == NULL) : (tok != NULL),
+           "a comparison result's operator and pin token disagree about whether its arms determine anything "
+           "— the two are written together at this mint and read together by decide.c, which pins on one arm "
+           "and records the exclusion on the other");
     f[0] = op; f[1] = ia; f[2] = ib;
     ident = concolic_ident_compose("?", f, 3);
     free(ia); free(ib);
@@ -885,6 +1008,8 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     c->cmp_op = eq_kind;
     c->cmp_tok = tok ? strdup(tok) : NULL;
     CHECK(!tok || c->cmp_tok, "concolic: OOM recording the value an equality pins to");
+    c->cmp_subj = subj ? strdup(subj) : NULL;
+    CHECK(!subj || c->cmp_subj, "concolic: OOM recording the hole an equality is a fact about");
     return r;
 }
 
@@ -901,8 +1026,11 @@ JSValue concolic_new_cmp(JSContext *ctx, const char *src, int op, const char *to
     sf[0] = src;
     kf[0] = "s"; kf[1] = tok;   /* the token is a string literal by construction here */
     /* THE COMPONENT'S OWN MEMBER IS A SOURCE READ, so it is its own root exactly as concolic_new's is. */
+    /* THE COMPONENT'S SOURCE IS ITS OWN HOLE. A declared source's shape is its provenance in braces
+       (concolic_source_wrap asserts exactly that), so stripping them gives `src` back — stated here rather
+       than by calling the stripper on a shape this function was never handed. */
     return pred_new(ctx, op == OPCMP_NE ? "!=" : "==", src, src,
-                    concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok);
+                    concolic_ident_compose("s", sf, 1), concolic_ident_compose("k", kf, 2), op, tok, src);
 }
 /* …AND THE TWIN FOR A RELATION OVER TWO LIVE VALUES, for a browser component whose own algorithm compares two
  * operands either of which may be unknown (HTML §8.7's timer task source orders one expiry against another).
@@ -932,7 +1060,7 @@ JSValue concolic_new_rel(JSContext *ctx, const char *op, JSValueConst a, JSValue
            "in the frontier over a question the engine can already answer");
     opq = concolic_is(a) ? a : b;
     return pred_new(ctx, op, concolic_src_c(opq), concolic_root_c(opq),
-                    ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL);
+                    ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL, NULL);
 }
 
 int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
@@ -940,6 +1068,12 @@ int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
     if (!c || c->cmp_op == OPCMP_NONE) return OPCMP_NONE;
     if (psrc) *psrc = c->src; if (ptok) *ptok = c->cmp_tok;
     return c->cmp_op;
+}
+
+const char *concolic_cmp_subject(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c || c->cmp_op == OPCMP_NONE) return NULL;
+    return c->cmp_subj;   /* NULL = the operand's shape names no hole this surface prints — see pred_new */
 }
 
 /* JSConcolicCmpHook for == / === : a concolic operand -> a concolic bool whose IDENTITY is the operator and
@@ -955,7 +1089,7 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
     int ca = concolic_is(a), cb = concolic_is(b);
     JSValueConst opq, other;
     const char *src, *root;
-    char *tok = NULL, *iu, *io;
+    char *tok = NULL, *iu, *io, *subj;
     JSValue res;
 
     if (!ca && !cb) return 0;
@@ -989,8 +1123,13 @@ int concolic_cmp_hook(JSContext *ctx, JSValue *sp, int is_neq) {
            "disagreed about whether it can be spelled at all — one of them is reading a value the other says "
            "this engine cannot name");
     if (ca && cb && iu && io && strcmp(iu, io) > 0) { char *t = iu; iu = io; io = t; }
+    /* THE HOLE THE REPORT WILL PRINT FOR THIS OPERAND — taken from the SHAPE and not from `src`, which for
+       every derived value is the braced shape itself and would be looked up under a name the emission never
+       spells. Minted only where there is a token, because the subject and the token are one observation. */
+    subj = tok ? concolic_hole_key(concolic_shape_c(opq)) : NULL;
     res = pred_new(ctx, is_neq ? "!=" : "==", src, root, iu, io,
-                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok);
+                   tok ? (is_neq ? OPCMP_NE : OPCMP_EQ) : OPCMP_NONE, tok, subj);
+    free(subj);
     free(tok);
     JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
     sp[-2] = res;
@@ -1066,7 +1205,7 @@ int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     {
         JSValueConst opq = ca ? a : b;
         JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq),
-                               ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL);
+                               ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL, NULL);
         JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
         sp[-2] = res;
     }

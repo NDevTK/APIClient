@@ -266,6 +266,29 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
   };
 
+  /* THE OTHER FACT THE SHAPE STATES. `validValues` says WHO must supply the parameter and what the code
+     computed for it; `excludes` says WHAT the value must look like — the tokens this endpoint's own equality
+     gates PROVED it is not, on every path the engine observed reaching the request. Neither substitutes for
+     the other, and the failure is asymmetric: a param carrying provenance alone renders identically whether
+     the run proved something about it or never tested it at all, and that silence is read as "anything goes".
+     THE MERGE IS AN INTERSECTION, WHICH IS THE OPPOSITE OF `_mergeAstValues`' UNION, and the two rules are
+     opposite because the facts are. A value is knowledge that only accumulates; a constraint is a CLAIM about
+     the endpoint, and a later observation that did not obey it is a path that disproves the claim.
+     ABSENCE IS TWO DIFFERENT THINGS AND THEY ARE KEPT APART. A target with no `_excludedValues` has never had
+     an engine observation, so the first one is TAKEN whole; a target that has one and meets a call site with
+     no `excludes` had its claim disproved, so the claim goes. Treating the first case as an empty set would
+     erase every domain the engine emits the moment a form scan or a live request created the param first. */
+  const _mergeExcludes = (target, p) => {
+    if (!("excludes" in p)) { target._excludedValues = []; return; }
+    DCHECK(Array.isArray(p.excludes) && p.excludes.length > 0,
+           "an @H param carries an `excludes` that is not a non-empty array — endpoint.c omits the key " +
+           "entirely where no constraint held on every observed path, so an empty or non-array one here is " +
+           "the engine stating a domain it does not have");
+    if (!Array.isArray(target._excludedValues)) { target._excludedValues = p.excludes.map(String); return; }
+    const seen = p.excludes.map(String);
+    target._excludedValues = target._excludedValues.filter((v) => seen.indexOf(String(v)) >= 0);
+  };
+
   /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
      `location` on every param — "path" for a `{hole}` the code interpolated into the address (its example
      value aligned out of the concolic's concrete URL), "query" for the display URL's query string, "body"
@@ -293,6 +316,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
       if (p.location === "path") m.parameters[p.name].required = true;
     }
     _mergeAstValues(m.parameters[p.name], p.validValues);
+    _mergeExcludes(m.parameters[p.name], p);
   }
 
   // Reverse cross-doc reconcile: if THIS method is templated ({hole} path
@@ -392,6 +416,11 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
         schema.properties[bp.name] = { type: _inferType(bp.validValues), _astInferred: true };
       }
       _mergeAstValues(schema.properties[bp.name], bp.validValues);
+      /* A BODY FIELD'S DOMAIN IS THE SAME FACT AS A QUERY PARAM'S. endpoint.c reads the request body in the
+         body's own format and mints a param per field, so a gate over a value the page then POSTs is observed
+         exactly as one over a value it appends to the query is. Leaving it out here would make the report's
+         silence mean two different things in two halves of the same record. */
+      _mergeExcludes(schema.properties[bp.name], bp);
     }
     if (!m.request) m.request = { $ref: schemaName };
   }

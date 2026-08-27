@@ -916,6 +916,23 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        recover, because by the time the value reaches a sink the identity that was pinned is gone. */
     if (src && tok && ((op == OPCMP_EQ && arm == 1) || (op == OPCMP_NE && arm == 0)))
         concolic_pin(src, concolic_root_c(cond), tok);
+    /* AND THE OTHER ARM, WHICH IS AN OBSERVATION AND NOT AN ABSENCE — the half this line did not have.
+       Forced multi-path runs BOTH arms of every `x === "admin"`, so the two branches of this `if` fire at
+       exactly the same rate: one flow leaves knowing the value IS "admin", and its sibling leaves having
+       PROVED it is not. The first fact rode the value as its example and reached the report; the second had
+       nowhere to go, so the sibling — which is the arm this tool exists to explore, the one the shipped
+       bundle did not take — emitted its parameter with the SAME BYTES as a parameter nothing had ever tested.
+       §Solver-half calls that a wrong report rather than a partial one, because the silence about the gate is
+       read as the positive statement "anything goes".
+       IT INVENTS NOTHING. `tok` is the concrete side the PAGE wrote, and `arm` is the arm this run took; the
+       line between a pin and a domain is whether a VALUE was determined, never whether a constraint was.
+       A NULL subject is a POSITIVE statement and the one thing this reads as one: an operand whose shape is
+       the unnameable `{}` has no hole the @H surface prints, so there is no name to file the fact under and
+       nothing downstream could read it if there were. */
+    else if (tok && ((op == OPCMP_EQ && arm == 0) || (op == OPCMP_NE && arm == 1))) {
+        const char *subj = concolic_cmp_subject(cond);
+        if (subj) concolic_exclude(subj, tok);
+    }
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 

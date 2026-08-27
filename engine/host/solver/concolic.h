@@ -341,6 +341,47 @@ const char *concolic_name_cstr(JSContext *ctx, JSValueConst v);
    not be one entry: `event.origin.toLowerCase() === X` pins the DERIVED value, and writing `X` under
    `message.origin` would make a later read of `event.origin` itself answer the lowercased token. */
 void        concolic_pin(const char *src, const char *root, const char *val);
+/* THE HOLE A REPORT PRINTS, SPELLED ONCE — the joint between a constraint recorded at a BRANCH and a domain
+   emitted at a REQUEST, which are the two ends §Solver-half's two-facts rule has to connect.
+   A shape is what the @H surface renders where the code computed no value, and the BRACES DO NOT SIT IN THE
+   SAME PLACE in the two spellings that reach it: a source read displays `{location.hash}`, while a member read
+   composes `"%s.%s"` over its parent's, so `state.id` displays as `{state}.id` with the member path OUTSIDE
+   the braces, and endpoint.c's path scan re-spells that same segment again as `{state.id}`. Three spellings,
+   one hole. The key is the shape with EVERY brace removed, which makes all three one name — and it is the only
+   thing left of the value by the time the emission runs, because a request's address is a STRING and the
+   concolic that carried each hole is long gone.
+   Returns malloc'd, or NULL when `shape` names no hole at all (a concrete value has no domain to look up and
+   must not borrow one) and for the unnameable `{}` (endpoint.c mints no param for it either). */
+char       *concolic_hole_key(const char *shape);
+/* THE SUBJECT OF A COMPARISON RESULT — the hole key of the unknown operand the predicate is ABOUT, borrowed.
+   `src` is NOT it and substituting one for the other is the failure this exists to prevent: a member read's
+   `src` IS its braced shape, so a domain recorded under `src` at the branch would be looked up under the
+   brace-stripped name at the emission and never found — a constraint observed, stored, and unreadable.
+   Present exactly when the pin is (concolic_cmp answers something other than OPCMP_NONE): the operator, the
+   token and the subject are ONE observation, asserted together at the mint. */
+const char *concolic_cmp_subject(JSValueConst v);
+/* THE NEGATIVE HALF OF THE EQUALITY OBSERVATION — the arm concolic_pin does NOT cover, and it is an
+   OBSERVATION rather than an absence.
+   Forced multi-path execution runs BOTH arms of every equality gate, so each `x === "admin"` in a bundle
+   produces exactly one pinned flow and exactly one flow that has PROVEN `x != "admin"`. The pin rides the
+   value as its example; the negation had nowhere to go, so the arm the tool exists to explore — the one that
+   is not the value the code happened to test for — reported its parameter with the SAME BYTES as a parameter
+   nothing constrained at all. §Solver-half calls that a wrong report and not a partial one, because the
+   report's silence about the gate is read as the positive statement "anything goes".
+   It is keyed by the HOLE KEY of the value, not by its `src`, for the reason concolic_cmp_subject states.
+   `tok` is the concrete side of the equality — a value the code WROTE, never one this engine chose, so
+   recording it invents nothing. Repeats are idempotent.
+   IT DOES NOT TRAVEL THROUGH A DERIVATION, AND THAT IS THE ANSWER RATHER THAN THE GAP. A gate over `x` is a
+   fact about `x`; the request may carry `encodeURIComponent(x)`, which is a different hole with a different
+   shape and therefore a different key, so nothing is filed under it. Propagating the parent's exclusion onto
+   the child would be a claim the run never made — `x.length !== 3` says nothing whatever about `x` — and it
+   is exactly the recorded transform-expression §Re-execution forbids, arriving as a convenience. The
+   constraint on the transformed value is observed the only way it can be: by the flow branching on IT. */
+void        concolic_exclude(const char *hole, const char *tok);
+/* What this flow has proven `hole` is NOT — borrowed, valid until the running flow's constraint next grows,
+   and `*n` is 0 with a NULL return when the flow proved nothing about it. That is a POSITIVE statement (no
+   equality gate over this value took its false arm on the path that built this request), never a hole. */
+const char *const *concolic_excluded(const char *hole, int *n);
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
    branch records its outcome under `key` — which decide.c composes from the IDENTITY of the value the branch

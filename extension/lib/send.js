@@ -80,6 +80,13 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
             _exampleValueSource: pDef._exampleValueSource || null,
             // AST-discovered valid values
             _astValidValues: pDef._astValidValues || null,
+            /* AND THE OTHER HALF OF THE SHAPE. A param's two facts are PROVENANCE-and-example (above) and
+               DOMAIN — what the forced execution's own equality gates proved this value is NOT. A projection
+               that carried only the first would put the popup back where the engine was before it emitted
+               one: a range-gated parameter and an unconstrained one rendering with identical bytes. Written
+               like `_exampleValue` rather than with a `||`, because an empty array must not arrive here as
+               "nothing was observed" — lib/learn.js writes `[]` to mean a claim that was DISPROVED. */
+            _excludedValues: pDef._excludedValues === undefined ? null : pDef._excludedValues,
             /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
                from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
                emitted one and lib/learn.js's copy of it read a field the engine's param record does not

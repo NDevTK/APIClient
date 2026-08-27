@@ -284,6 +284,11 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
     _exampleValue: prop._exampleValue === undefined ? null : prop._exampleValue,
     _exampleValueSource: prop._exampleValueSource || null,
     _astValidValues: prop._astValidValues || null,
+    /* THE BODY FIELD'S DOMAIN. endpoint.c mints a param per request-body field and learn.js merges its
+       `excludes` onto the schema property, so a gate over a value the page POSTS is observed exactly as one
+       over a value it appends to the query is — and a projection that dropped it here would make the popup's
+       silence mean two different things in two halves of one record. */
+    _excludedValues: prop._excludedValues === undefined ? null : prop._excludedValues,
   };
 }
 

@@ -1341,6 +1341,9 @@ details summary:hover {
 .badge-enum-detected { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-default { color: #79c0ff; background: rgba(121,192,255,0.1); }
 .badge-range { color: #d2a8ff; background: rgba(210,168,255,0.1); }
+/* A NEGATIVE CONSTRAINT, coloured apart from every badge that carries a value: `≠ admin` is what the code
+   proved the parameter is not, and a reviewer must not read it in the same voice as a default or a prefill. */
+.badge-excluded { color: #ffa198; background: rgba(255,161,152,0.1); }
 .badge-prefill { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-format { color: #f0883e; background: rgba(240,136,62,0.1); }
 
