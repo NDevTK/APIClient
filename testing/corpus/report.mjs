@@ -15,6 +15,7 @@
 //                  within the dwell (a result document stored on the doc) or was still exploring.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { siteList } from './list.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
 /* SEVERAL PASSES, BECAUSE ONE RUN IS NOT A MEASUREMENT. Pass every census file and the table reports each
@@ -24,12 +25,32 @@ const ROOT = new URL('.', import.meta.url).pathname;
    never attribute one pass's abort to another pass's log. */
 const files = process.argv.slice(2);
 if (!files.length) files.push('census.jsonl');
-const passes = files.map((f) => ({
-  label: (f.match(/census-(.+)\.jsonl$/) || [, f])[1],
-  rows: readFileSync(join(ROOT, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)),
-}));
-const stacks = new Map(readFileSync(join(ROOT, 'sites.tsv'), 'utf8').trim().split('\n')
-  .map((l) => l.split('\t')).map(([id, u, s]) => [id, s]));
+const passes = files.map((f) => {
+  const rows = readFileSync(join(ROOT, f), 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  /* WHETHER THIS PASS'S INSTRUMENT COULD ANSWER THE @S ARRIVAL QUESTION AT ALL — which is a fact about the
+     site.mjs that wrote it, not about the pages it measured, and the two are indistinguishable in the table.
+     A pass whose rows carry no `sourceReads` FIELD predates the counter; a pass whose rows carry it as `null`
+     is one whose runs produced no counters. Both print `-`, and a comment in this file used to be the only
+     place that said so — which is asking a reader to hold a fact the output cannot show them. Measured on
+     this project's own baseline: of four passes quoted as one four-pass measurement, exactly ONE carried
+     these fields, and its `70>0>0>0` — the observation the whole security half was argued from — is n=1. */
+  const measured = rows.filter((r) => !r.fatal);
+  return { label: (f.match(/census-(.+)\.jsonl$/) || [, f])[1], rows,
+           /* THREE STATES, NOT TWO: this pass carried the field, this pass predates it, or this pass measured
+              nothing to ask (every row fatal). A pass with no measured rows is not evidence either way and
+              must not be reported as an old instrument. */
+           arrival: measured.length === 0 ? 'nothing-measured'
+             : measured.some((r) => 'sourceReads' in r) ? 'carried' : 'predates' };
+});
+/* THE LIST THIS CENSUS MEASURED, NAMED AND THEN CHECKED AGAINST THE ROWS. This file used to read `sites.tsv`
+   unconditionally and look every row's id up in it — and the app-page census walks twelve ids that appear in
+   NO line of that file, so all twelve missed and `|| ''` turned every miss into a blank column. A report that
+   was handed the wrong list printed as a complete table, which is the defaulted-field defect performed in the
+   one artifact a reader trusts to say what was measured. The list is now a parameter (`SITES`, the spelling
+   run.sh already used) and a row whose id it does not contain is FATAL: that row's every other column is a
+   claim about a corpus nobody selected. */
+const list = siteList();
+const stacks = new Map([...list.byId].map(([id, r]) => [id, r.stack]));
 
 const unesc = (s) => s.replace(/\\\\/g, '\\').replace(/\\"/g, '"').replace(/\\n/g, '\n');
 
@@ -112,6 +133,11 @@ const seen = new Map();      // id -> [per-pass measurement]
    speak announces itself with the text to teach them, instead of subtracting one entry from the ranking. */
 const unnamed = [];
 for (const p of passes) for (const r of p.rows) {
+  if (!stacks.has(r.id))
+    throw new Error(`report.mjs: census row \`${r.id}\` (pass ${p.label}) is not in \`${list.rel}\`, the site\n` +
+      `  list this report was handed. A census is a measurement OF a list, so a row the list does not name\n` +
+      `  means the two were paired by accident and every column beside it describes a corpus nobody selected.\n` +
+      `  Pass the list the census walked:  SITES=<list>.tsv node report.mjs <census files>`);
   if (!r.fatal && typeof r.logFile !== 'string')
     throw new Error(`report.mjs: row \`${r.id}\` in ${p.label} carries no \`logFile\`. site.mjs writes that\n` +
       `  field with the transcript it wrote; a row without one comes from a build of site.mjs that named the\n` +
@@ -151,7 +177,22 @@ for (const p of passes) for (const r of p.rows) {
        and the artifact line printed a bare `@` -- a reader-with-no-writer, defaulted to empty by `|| ''`. */
     load: Array.isArray(r.loadAfter) ? r.loadAfter[0] : null,
   });
-  for (const s of sigs) { if (!bySig.has(s)) bySig.set(s, new Set()); bySig.get(s).add(r.id); }
+  /* KEYED ON THE SOURCE LOCATION, NOT ON THE LOCATION PLUS ITS REASON TEXT. A `check.h` assert's reason is
+     the fixed `cond` ("unreachable"), so those merged; a `quickjs-check.h` assert's whole MESSAGE is the
+     cond, and it quotes the OPERAND — so `quickjs.c:6462` reached over `navigator.language.toLowerCase()` on
+     one site and over a different expression on another, and ONE unbuilt capability at ONE line ranked as two
+     one-site entries. That is precisely the split `degensym` above exists to prevent, one level up: it folds
+     out an address or a hash and cannot fold out a source expression, because a source expression is not
+     noise — it is the operand that reached the gap, and it is worth PRINTING rather than keying on. So the
+     key is the line and the reasons collect under it. The measured cost of getting this wrong: with the
+     reasons in the key, the top of this ranking read "every signature hit exactly one site", which is false
+     of the corpus and is the one sentence a work queue must not get wrong. */
+  for (const s of sigs) {
+    const [at, ...rest] = s.split(' :: ');
+    if (!bySig.has(at)) bySig.set(at, { sites: new Set(), reasons: new Set() });
+    bySig.get(at).sites.add(r.id);
+    bySig.get(at).reasons.add(rest.join(' :: '));
+  }
 }
 
 /* A SPREAD, NOT AN AVERAGE. min-max over the passes that ANSWERED; a pass that produced no number is counted
@@ -178,8 +219,9 @@ const table = [...seen.entries()].map(([id, ms]) => ({
   n: ms.length,
   ep: spread(ms, 'endpoints'), fl: spread(ms, 'flows'), sw: spread(ms, 'switches'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
-  /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. All `-` means the runs that
-     carried counters carried none of these, which is an OLDER census, not a page with no sources. */
+  /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. A `-` here is one of two facts
+     and only the shouted line under the table tells them apart: the pass's INSTRUMENT could not answer (its
+     rows carry no such field at all), or its RUNS carried no counters. */
   arrival: ['src', 'reach', 'taint', 'sup'].map((k) => spread(ms, k)).join('>'),
   epMax: Math.max(-1, ...ms.map((m) => m.endpoints).filter((x) => typeof x === 'number')),
   epAnswered: ms.filter((m) => typeof m.endpoints === 'number').length,
@@ -191,6 +233,7 @@ const table = [...seen.entries()].map(([id, ms]) => ({
    and found clean, and `String(null)` would have printed "null" into a numeric column. */
 const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 console.log(`${passes.length} pass(es): ${passes.map((p) => p.label + '(' + p.rows.length + ')').join(' ')}`);
+console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measured here)`);
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('flows', 12) + pad('switches', 12) +
   pad('load', 10) + 'signature');
@@ -199,16 +242,65 @@ for (const t of table)
     pad(t.finishedPasses + '/' + t.n, 7) + pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.fl, 12) + pad(t.sw, 12) + pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
+/* WHICH PASSES COULD ANSWER THE @S ARRIVAL QUESTION AT ALL, printed where the column is read. `n/N` above
+   counts the passes that MEASURED; it says nothing about how many of them carried this particular counter,
+   and a reader cannot recover the difference from a `-`. This is not hypothetical bookkeeping: this
+   project's own baseline was quoted as a four-pass measurement in which one site read `70>0>0>0`, and that
+   observation — the one the whole security-half argument rested on — came from a SINGLE pass, because the
+   other three predate the field. An n of 1 stated as an n of 4 is the loaded-machine defect in reverse: not
+   a number about nothing, a number about less than it claims. */
+const predates = passes.filter((p) => p.arrival === 'predates').map((p) => p.label);
+const carried = passes.filter((p) => p.arrival === 'carried').map((p) => p.label);
+if (predates.length)
+  console.log('\n*** THE `src>reach>taint>sup` COLUMN IS OVER ' + carried.length + ' OF ' + passes.length +
+    ' PASS(ES) — ' + predates.join(', ') + ' predate(s) those counters entirely (the rows carry no such ' +
+    'field), so a `-` there is this instrument being unable to ask, NOT a page with no attacker sources. ' +
+    'Every other column is over all ' + passes.length + '. ***');
+
 /* THE WORK QUEUE. A DFAIL's reason names what to build, so it is printed rather than summarised -- but only
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this
    section exists to show. `-v` prints them whole. */
 const verbose = process.env.SIGS === 'full';
 console.log('\n=== distinct crash signatures, ranked by sites hit ===');
-for (const [s, ids] of [...bySig.entries()].sort((a, b) => b[1].size - a[1].size)) {
-  const [at, ...rest] = s.split(' :: ');
-  const why = rest.join(' :: ');
-  console.log(`${ids.size}  ${at}\n     ${verbose || why.length <= 300 ? why : why.slice(0, 300) + ' …(SIGS=full for the rest)'}\n     sites: ${[...ids].join(', ')}`);
+/* EACH SITE CARRIES ITS OBSERVED STACK HERE, WHICH IS WHAT MAKES THE RANKING GENERALISE. A signature hit by
+   three sites is one number; a signature hit by three sites that all ship the same bundler is a statement
+   about what to reproduce, and one hit by three unrelated stacks is a statement that it is not the bundler.
+   This is also the reader the `stack` column never had: it was looked up for every row and printed nowhere,
+   so the lookup could be wrong for an entire census — as it was — with nothing in the output to show it. */
+for (const [at, e] of [...bySig.entries()].sort((a, b) => b[1].sites.size - a[1].sites.size)) {
+  const sites = [...e.sites].map((i) => i + ' [' + (stacks.get(i) || '').slice(0, 44) + ']').join('\n            ');
+  /* EVERY DISTINCT REASON THIS LINE GAVE, because when one line has several the difference between them is
+     the OPERAND that reached the gap — which is the most specific thing this report can hand the next
+     reader, and the thing a merged count would throw away in the act of merging. */
+  const why = [...e.reasons].map((w) => verbose || w.length <= 300 ? w : w.slice(0, 300) + ' …(SIGS=full for the rest)');
+  console.log(`${e.sites.size}  ${at}` + (e.reasons.size > 1 ? `   (${e.reasons.size} distinct operands)` : '') +
+              why.map((w) => '\n     ' + w).join('') + `\n     sites: ${sites}`);
 }
+/* THE SAME QUEUE ONE LEVEL COARSER, BECAUSE A DEFECT FAMILY OUTRANKS ITS MEMBERS AND THE FINE RANKING HIDES
+   IT. The queue above keys on `file:line`, which is right for "what do I open" and wrong for "what is the
+   biggest thing wrong" — the previous census's top cause was three layout files (`flow_position.c`,
+   `scrolling_area.c`, `replaced_element.c`) hitting three different sites, and every one of them ranked as a
+   one-site entry BELOW a two-site entry, so the thing to build read as three small things. Nobody derived
+   "the layout family is #1" from this output; they derived it by eye, which means the output was not the
+   work queue it claims to be. Grouping by the signature's DIRECTORY is the coarsening that costs nothing and
+   is not a guess: `browser/core/layout` is a component boundary this tree already draws. Both views print,
+   because a family with one member is exactly as informative as the file ranking and a family with five is
+   not something the file ranking can say at all. */
+const byDir = new Map();
+for (const [s, ids] of bySig) {
+  const dir = s.split(' :: ')[0].replace(/\/[^/]*:\d+$/, '') || '(root)';
+  if (!byDir.has(dir)) byDir.set(dir, { sites: new Set(), sigs: new Set() });
+  const e = byDir.get(dir);
+  for (const i of ids) e.sites.add(i);
+  e.sigs.add(s.split(' :: ')[0]);
+}
+console.log('\n=== the same aborts grouped by COMPONENT, ranked by sites hit ===');
+for (const [dir, e] of [...byDir.entries()].sort((a, b) => b[1].sites.size - a[1].sites.size ||
+                                                          b[1].sigs.size - a[1].sigs.size))
+  console.log(`${e.sites.size} site(s) hit, ${e.sigs.size} distinct source location(s)  ${dir}\n` +
+              `     ${[...e.sigs].map((x) => x.split('/').pop()).join(' ')}\n` +
+              `     sites: ${[...e.sites].join(', ')}`);
+
 /* AND WHAT THE QUEUE ABOVE IS MISSING, PRINTED WHERE THE QUEUE IS READ. A ranking is only a work queue if a
    defect that cannot be named is louder than the ones that can -- otherwise the queue's own gaps are its
    quietest entries. The line is quoted verbatim so the fix is to teach signatures() that emitter's shape,

@@ -1,13 +1,34 @@
 # Real-site corpus
 
-The gate for "does this work on real webapps". Four instruments; the mirror tree
-itself is NOT checked in (102 MiB) and is rebuilt from `sites.tsv`.
+The gate for "does this work on real webapps". Five instruments; the mirror tree
+itself is NOT checked in (102 MiB) and is rebuilt from a site list.
 
-    node mirror.mjs                     # fetch + freeze 30 sites, write provenance.json
+    node list.mjs                       # (a module) the one reader of a site list
+    SITES=apps.tsv node mirror.mjs      # fetch + freeze that list, write provenance.json
     node serve-faithful.mjs <id> <port> # serve one frozen site
     node site.mjs <id> <url> [pass]     # drive it in Chrome, emit one ROW of JSON
-    LANE=/tmp/mylane ./run.sh a1        # one whole pass, one virgin browser per site
-    node report.mjs census-a1.jsonl …   # the table + the ranked abort queue, over N passes
+    LANE=/tmp/mylane ./run.sh a1                          # one pass, frozen bytes, sites.tsv
+    LANE=/tmp/mylane SITES=apps.tsv AT=live ./run.sh r1   # one pass, live, the app pages
+    SITES=apps.tsv node report.mjs census-r1.jsonl …      # the table + the ranked abort queue
+
+## Two lists, and a census is a measurement OF one
+
+`sites.tsv` is thirty LOGIN pages. `apps.tsv` is twelve JS-heavy APP pages — the list that produced this
+project's standing headline (ten of twelve ENGINE-ABORT, `fin/n` 0 everywhere, `sinks: 0` on every
+measurable site). That list and its driver existed only under `/tmp`, so the one artifact needed to
+re-measure the headline was the one artifact the checkout did not have; both are now here.
+
+`SITES` names the list and every instrument takes it — `run.sh` always did, `mirror.mjs` and `report.mjs`
+each hard-coded `sites.tsv`. That was not untidiness. `report.mjs` looked all twelve app ids up in
+`sites.tsv`, matched none, and filled every miss with `|| ''`, so a report handed the WRONG LIST printed
+twelve complete-looking rows. It now refuses a census whose ids the list does not contain, and it PRINTS
+each site's observed stack beside the signature it hit — which is both the reader that column never had and
+the thing that makes a ranking generalise: three sites on one signature is a number, three sites on one
+signature that all ship the same bundler is something to reproduce.
+
+`AT=live` and `AT=frozen` are the same driver. §Testing is why they are not the same measurement: a
+before/after belongs on frozen bytes; a live pass is for DISCOVERING signatures, and its endpoint column is
+noise on any site that aborted.
 
 `run.sh` needs a LANE: a directory holding a COPY of `testing/harness.js` and of `extension/`, because
 harness.js derives its extension directory from its own location. That copy is what makes the browser

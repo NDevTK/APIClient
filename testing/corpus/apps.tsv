@@ -1,0 +1,30 @@
+## THE APP-PAGE CENSUS LIST — twelve JS-heavy application pages, the corpus §What-the-tool-produces names
+## ("target JS-heavy app/feature pages, not marketing pages"). It is a SECOND list beside sites.tsv, not a
+## replacement: sites.tsv is thirty LOGIN pages and this is twelve APP pages, and the two answer different
+## questions about the same engine.
+##
+## IT IS CHECKED IN BECAUSE THE MEASUREMENT IT NAMES WAS NOT. The census that produced this project's
+## standing headline — ten of twelve ENGINE-ABORT, `fin/n` 0 everywhere, `sinks: 0` on every measurable
+## site — was driven from a list and a driver that existed only under /tmp, so the one artifact needed to
+## re-measure it was the one artifact the checkout did not have. A number nobody can re-measure is not a
+## baseline, it is an anecdote, and CLAUDE.md §Testing's whole demand (report a live number with its run
+## count and its spread) presupposes somebody can run it again.
+##
+## THE THIRD COLUMN IS AN OBSERVATION, NOT A LABEL. It records what the SHIPPED DOCUMENT says about its own
+## bundler — the script names and module attributes actually present in the bytes this list's URLs served —
+## because a stack named from recollection is the citation-without-a-number defect wearing a build tool's
+## name. A page whose document names nothing says so.
+##
+## Lines beginning `#` are comments. Columns: id, url, observed stack.
+squoosh	https://squoosh.app/	no <script src> in the 75KiB document — bootstrap is inline
+excalidraw	https://excalidraw.com/	Vite (<script type=module crossorigin src=/assets/index-<hash>.js>)
+astexplorer	https://astexplorer.net/	webpack (vendors~app-<hash>.js, parsers~app-<hash>.js, app-<hash>.js)
+vscodedev	https://vscode.dev/	hand-rolled loader (342KiB document, <script src=""> + type=module)
+codesandbox	https://codesandbox.io/	Next.js app router (/_next/static/chunks/main-app-<hash>.js)
+slack	https://app.slack.com/	custom rollup (a.slack-edge.com/bv1-13/rollup-marketing.<hash>.min.js)
+replit	https://replit.com/	Next.js pages router (__NEXT_DATA__, cdn.replit.com/_next/static/chunks/)
+npmjs	https://www.npmjs.com/package/react	unknown — curl gets 403 and a 5.7KiB body; see NET/FIXTURE in the census
+figma	https://www.figma.com/	Next.js app router behind Netlify (/_netlify/_next/static/chunks/)
+mdn	https://developer.mozilla.org/en-US/docs/Web/JavaScript	webpack (/static/client/runtime.<hash>.js + numbered chunks)
+telegram	https://web.telegram.org/k/	Vite (<script type=module crossorigin src=./index-<hash>.js>)
+tldraw	https://www.tldraw.com/	Vite (/assets/index-<hash>.js) + an inline /theme-init.js

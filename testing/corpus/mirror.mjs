@@ -14,9 +14,16 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { siteList } from './list.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
-const rows = readFileSync(join(ROOT, 'sites.tsv'), 'utf8').trim().split('\n').map(l => l.split('\t'));
+/* THE LIST IS A PARAMETER (`SITES`), because a corpus that cannot be FROZEN cannot carry a before/after.
+   This read `sites.tsv` and nothing else, so the twelve app pages the census actually walks had no way to be
+   mirrored at all — and CLAUDE.md §Testing puts a before/after on frozen bytes, "where the only thing that
+   changed is the engine". A list you can drive live but not freeze is a corpus you can only ever measure
+   once. The mirror TREE and `provenance.json` stay one shared store keyed by id: a list is a SELECTION of
+   sites, not a second corpus, so freezing one list leaves every other list's rows untouched (`put` merges). */
+const rows = siteList().rows.map(r => [r.id, r.url, r.stack]);
 const only = process.argv[2];
 
 function get(url) {
