@@ -11,16 +11,26 @@
 // this document's console.debug, and a `@WHY` there carries the assert's cond + file:line — the crash
 // signature the census ranks by.
 //
-// usage: node site.mjs <id> <url>      (caller restarts Chrome around each invocation)
+// usage: node site.mjs <id> <url> [pass]   (caller restarts Chrome around each invocation)
+//
+// THE PASS IS PART OF THE TRANSCRIPT'S NAME, AND THE ROW SAYS WHICH NAME IT WROTE. `logs/<id>.log` is one
+// path per site, so the second pass of a census OVERWRITES the first pass's transcript and every row of every
+// pass is then read against the LAST pass's console. That is cross-attribution of a crash, not a missing
+// file: a site that RAN in pass 1 and aborted in pass 3 has pass 3's @WHY sitting in the only log pass 1's
+// row can find, so the clean pass is published as an abort. report.mjs went looking for a pass-qualified
+// name first -- and NOTHING in this tree wrote one, so that lookup could only ever fall through, which is the
+// read-with-no-writer defect with a filename for a field. The name is now WRITTEN here and CARRIED on the
+// row (`logFile`), so the reader is told rather than left to guess between two spellings.
 import puppeteer from 'puppeteer';
 import { writeFileSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadavg, cpus } from 'node:os';
 
-const id = process.argv[2], url = process.argv[3];
+const id = process.argv[2], url = process.argv[3], pass = process.argv[4] || '';
 const DWELL = Number(process.env.DWELL || 40000);
 const CDP = Number(process.env.CDP || 9451);
 const OUT = new URL('./logs/', import.meta.url);
+const LOG_NAME = (pass ? pass + '-' : '') + id + '.log';
 
 const b = await puppeteer.connect({ browserURL: `http://127.0.0.1:${CDP}` });
 
@@ -226,7 +236,11 @@ const row = {
   crashesFlag: cur.crashes,
   consoleLines: sink.length,
   probeError: cur.probeError,
+  /* THE TRANSCRIPT THIS ROW BELONGS TO, BY NAME. A reader that reconstructs the name from `id` has to know
+     which passes ran and in what order; a reader handed the name reads exactly the console the row's own
+     counters came out of. `pass` is echoed beside it so a census file alone says how its rows were grouped. */
+  pass, logFile: LOG_NAME,
 };
-try { writeFileSync(new URL(id + '.log', OUT), j); } catch (e) { row.logWriteErr = String(e.message); }
+try { writeFileSync(new URL(LOG_NAME, OUT), j); } catch (e) { row.logWriteErr = String(e.message); }
 console.log('ROW ' + JSON.stringify(row));
 await b.disconnect();

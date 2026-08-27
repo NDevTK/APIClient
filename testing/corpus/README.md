@@ -5,7 +5,7 @@ itself is NOT checked in (102 MiB) and is rebuilt from `sites.tsv`.
 
     node mirror.mjs                     # fetch + freeze 30 sites, write provenance.json
     node serve-faithful.mjs <id> <port> # serve one frozen site
-    node site.mjs <id> <url>            # drive it in Chrome, emit one ROW of JSON
+    node site.mjs <id> <url> [pass]     # drive it in Chrome, emit one ROW of JSON
     LANE=/tmp/mylane ./run.sh a1        # one whole pass, one virgin browser per site
     node report.mjs census-a1.jsonl …   # the table + the ranked abort queue, over N passes
 
@@ -58,7 +58,11 @@ a max, because every entry carries the run's cumulative total and the log is not
 cleared between page loads: summing counted one endpoint once per snapshot, and a
 max over a non-decreasing log cannot report a fall. `distinctEndpoints` is the
 headline. An ABSENT count and a zero are kept apart -- a run that reported no
-document is not a page that was analysed and found clean.
+document is not a page that was analysed and found clean. It also NAMES the
+transcript it wrote (`logFile`, pass-qualified when a pass label is given), so
+`report.mjs` reads the console this row's counters came out of instead of
+reconstructing a filename: one path per site is overwritten by the next pass, and
+a site that ran cleanly in pass 1 then inherits pass 3's abort.
 
 ## Measuring
 

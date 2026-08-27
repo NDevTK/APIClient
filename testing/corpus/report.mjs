@@ -96,9 +96,14 @@ function signatures(text) {
 }
 
 /* ONE MEASUREMENT PER (site, pass). The signature comes from the ROW; the log is a supplement for a crash
-   that happened before any result document existed and so had nowhere else to go. It is read from the
-   PASS-QUALIFIED name when the runner wrote one, because logs/<id>.log is overwritten by every later pass and
-   reading it for an earlier pass's row attributes one run's abort to another's numbers. */
+   that happened before any result document existed and so had nowhere else to go. THE ROW NAMES ITS OWN
+   TRANSCRIPT (`logFile`, written by site.mjs) and this file no longer GUESSES between two spellings: it tried
+   `<label>-<id>.log` and fell back to `<id>.log`, and nothing in the tree ever wrote the first name, so the
+   fallback was the only arm that ever ran -- and `<id>.log` is ONE path per site, overwritten by every later
+   pass. Every row of every pass was therefore read against the LAST pass's console, which cross-attributes a
+   crash: a site that RAN in pass 1 and aborted in pass 3 is published as an abort in both. A row without
+   `logFile` is a census produced by an older site.mjs and is REFUSED rather than half-read, because the log
+   it would be paired with is the wrong pass's by construction. */
 const bySig = new Map();
 const seen = new Map();      // id -> [per-pass measurement]
 /* AN ABORT THIS FILE CANNOT NAME IS THE ONE THING THE QUEUE MUST SHOUT ABOUT, because it is the state in
@@ -107,10 +112,13 @@ const seen = new Map();      // id -> [per-pass measurement]
    speak announces itself with the text to teach them, instead of subtracting one entry from the ranking. */
 const unnamed = [];
 for (const p of passes) for (const r of p.rows) {
+  if (!r.fatal && typeof r.logFile !== 'string')
+    throw new Error(`report.mjs: row \`${r.id}\` in ${p.label} carries no \`logFile\`. site.mjs writes that\n` +
+      `  field with the transcript it wrote; a row without one comes from a build of site.mjs that named the\n` +
+      `  log after the SITE alone, so its transcript has already been overwritten by a later pass and pairing\n` +
+      `  the two would attribute one pass's abort to another's counters. Re-run the census.`);
   let log = '';
-  for (const n of [p.label + '-' + r.id + '.log', r.id + '.log']) {
-    try { log = readFileSync(join(ROOT, 'logs', n), 'utf8'); break; } catch { }
-  }
+  if (r.logFile) { try { log = readFileSync(join(ROOT, 'logs', r.logFile), 'utf8'); } catch { } }
   const blob = log + '\n' + JSON.stringify(r.pageErrors || []) + '\n' + JSON.stringify(r.why || []) + '\n' + JSON.stringify(r.atE || []);
   const sigs = signatures(blob);
   const netBad = r.fatal || r.nav !== 'ok' || (r.status !== 200 && r.status !== 304);

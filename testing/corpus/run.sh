@@ -68,7 +68,11 @@ while IFS=$'\t' read -r id url stack; do
     echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"port $PORT is not serving our extension $MYID\"}" >> "$OUT"
     kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; continue
   fi
-  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "http://127.0.0.1:$FIXPORT/" 2>&1 | grep '^ROW ' | head -1)
+  # THE PASS LABEL GOES TO THE DRIVER, so its transcript is logs/<label>-<id>.log rather than one path per
+  # site that the next pass overwrites. Without it every pass's rows are read against the LAST pass's console
+  # and a site that ran cleanly in one pass inherits another pass's abort. report.mjs reads the name off the
+  # row, so passing it here is what makes a multi-pass census one measurement per (site, pass).
+  R=$(cd "$CORP" && timeout 360 node site.mjs "$id" "http://127.0.0.1:$FIXPORT/" "$LABEL" 2>&1 | grep '^ROW ' | head -1)
   [ -z "$R" ] && R="ROW {\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"driver produced no row\"}"
   echo "${R#ROW }" >> "$OUT"
   kill -TERM $SRV 2>/dev/null; wait $SRV 2>/dev/null
