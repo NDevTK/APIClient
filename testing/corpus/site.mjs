@@ -283,6 +283,23 @@ const row = {
      nowhere. */
   jobsQueued: counted.length ? counted[counted.length - 1].jobsQueued : null,
   jobsRun: counted.length ? counted[counted.length - 1].jobsRun : null,
+  /* …AND THE PRECONDITION FOR RUNNING ONE, WHICH IS WHAT MAKES `jobsRun` READABLE AT ALL — the third time this
+     row has been the consumer that never asked for the field written to answer its own ambiguity. Every job arm
+     is under HTML §8.1.4.4 "Calling scripts"' clean-up-after-running-script step 3 boundary (the JavaScript
+     execution context stack is empty), so a low `jobsRun` beside a huge `jobsQueued` has TWO opposite readings
+     and this row could state neither: flows are reaching that boundary and finding nothing to do, or NO FLOW
+     EVER REACHES IT — no program in the document finishes, so the reaction pump is never eligible. Those need
+     opposite fixes. `solver/engine.c`'s g_units_done exists for precisely that distinction and says so at its
+     own site; `bridge.js` has been relaying it onto every run record under a comment naming the same two
+     readings; `popup.js` renders it. This file, the one that ranks the corpus, was the only reader missing, and
+     a written field with no reader is the same broken contract as a read field with no writer.
+     WHAT IT COST, MEASURED: openlibrary.org over three passes read `jobsQueued` 63946/74944/78738 against
+     `jobsRun` 67/67/67 — an identical integer across runs whose flow counts differ by 30%, which is a lock-out
+     and not a throughput limit — and the row could not say which of the two it was. Read off the live
+     offscreen, `unitsDone` was 2 at 116093 jobs queued and 1012 flows: the second reading, and the reason
+     `sinkReached`, `orphansAsked` and the endpoint surface above it were all zero on a page that ships nine
+     `innerHTML` sites. The @S rungs beside it are uninterpretable without this one. */
+  unitsDone: counted.length ? counted[counted.length - 1].unitsDone : null,
   parked: counted.length ? counted[counted.length - 1].park : null,
   docsAnswered: mine.filter(d => d.answered).length,
   docsSeenMine: mine.length,
