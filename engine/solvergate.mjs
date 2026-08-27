@@ -517,13 +517,31 @@ function runChild(doc, sched) {
   const emit = out.match(/^@EMIT (\{.*\})$/m);
   if (emit) return { ok: true, out, result: JSON.parse(emit[1]).result };
 
-  /* WHICH OF THE FOUR THIS IS, said out loud — the same distinction engine/wpt.mjs draws, and for the same
-     reason: a DCHECK naming a missing capability, this gate's own corpus refusal, a genuine cost, and a fact
-     about the box are four different pieces of work, and a message naming them all distinguishes none. */
+  /* WHICH OF THE FIVE THIS IS, said out loud — the same distinction engine/wpt.mjs draws, and for the same
+     reason: a DCHECK naming a missing capability, this gate's own corpus refusal, an ABI this artifact does
+     not have, a genuine cost, and a fact about the box are five different pieces of work, and a message naming
+     them all distinguishes none. */
   const gf = out.match(/^@GATEFAIL (.*)$/m);
   const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
+  /* THE ARTIFACT DOES NOT HAVE THE ABI THIS DRIVER CALLS, and it is its own cause because it is its own piece
+     of work — a REBUILD — and because it arrives looking exactly like the thing this gate is for. This is not
+     hypothetical: `qjs_init` grew Permissions Policy §9.5's container argument, this driver was updated with
+     it, a lane then rebuilt the SHARED artifact from an older checkout, and every document under every
+     schedule died in emscripten's own export wrapper before a single flow ran. The revision block below
+     already says the artifact is not a build of this revision, but it says it ONCE at the end while
+     twenty-eight runs each reported `the child exited 1 with no @EMIT line and no @WHY` — which is the
+     three-states-behind-one-answer defect this file argues about @S candidates, performed by its own reporter.
+     Matched on emscripten's message because that is where the fact is: the wrapper knows the arity the wasm
+     exports and this driver knows the arity it passed, and nothing else in the run compares the two. */
+  const abi = out.match(/native function `([a-z_0-9]+)` called with (\d+) args but expects (\d+)/);
   const cause = gf ? "CORPUS: " + gf[1]
               : why ? "DCHECK: " + why[1]
+              : abi
+                ? `BUILD: the artifact does not export the ABI this driver calls — \`${abi[1]}\` takes ` +
+                  `${abi[3]} arguments in extension/lib/qjs and this gate passed ${abi[2]}. Nothing about the ` +
+                  "solver was measured: the run died in emscripten's export wrapper before qjs_begin. The " +
+                  "artifact is a build of some OTHER revision (see the [rev] block) and the fix is to rebuild " +
+                  "it — `node engine/build.mjs` — never to reshape the call to match what happens to be built"
               : (r.signal === "SIGXCPU" || r.signal === "SIGKILL")
                 ? `this document did not DRAIN inside ${CPU_BUDGET_S}s of CPU actually consumed. That is a ` +
                   "statement about the document, not about the box and not about the solver: the invariant " +
