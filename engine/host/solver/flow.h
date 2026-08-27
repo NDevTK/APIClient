@@ -270,6 +270,34 @@ typedef struct Flow {
        state was rebuilt somewhere other than a fork. */
     int   started;
     void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
+    /* IS THAT FRAME THE ROW'S PROGRAM, OR THE REPORT THE ROW'S PROGRAM OWES?
+     *
+     * HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet reports an abrupt completion
+     * BEFORE step 8.3.2's clean up — which is where the microtask checkpoint is — so the report is the flow's
+     * very next work and takes the frame slot the program has just vacated. It is a CONTINUATION OF THE SAME
+     * ROW and not a row of its own, which is the whole content of this flag: while it is set, `script_i` still
+     * names the script that threw, and the three things a program's completion does belong to the report's
+     * completion instead of to the throw's.
+     *
+     * WITHOUT IT ALL THREE ARE WRONG AND TWO OF THEM ARE SILENT. `script_i++` at the throw would advance past
+     * the row while the report is still standing on it, so the report's own completion would advance a second
+     * time and the flow would SKIP the next script — a work item dropped, which §scheduler's razor forbids.
+     * §4.12.1.1 "Processing model"'s execute-the-script-element runs the classic script at step 3 and restores
+     * `document.currentScript` at step 4, and the report is INSIDE step 3, so a page's `error` listener reads
+     * the throwing `<script>` element from `document.currentScript`; restoring at the throw would hand it null.
+     * And a report frame that itself completes abruptly is a should-never-happen — reporting a report is what
+     * §8.1.4.6 step 6's error-reporting-mode flag exists to stop — which cannot be told from a page script's
+     * throw without this.
+     *
+     * `JS_FlowIsCall` CANNOT ANSWER IT. A report frame is a call root and so is a driven orphan's, and an
+     * orphan flow runs ordinary programs too (a lazy chunk it loaded is a row of its sequence), so a flow can
+     * hold either kind of call frame with the same `orphan` bit set. The two completions mean opposite things
+     * — an orphan's throw is this engine's invocation on unknown input and is nobody's defect; a report's is a
+     * defect in this engine — so the fact has to be written down at the moment it is true.
+     * Carried by a fork like every other field of the flow: an arm branching inside an `error` listener is
+     * standing in the same report its parent is. It is NOT cold-tier state — a resumed flow replays the
+     * document, the script throws again and the report is owed again. */
+    int   reporting;
     /* THE DOCUMENT'S LOAD STAGE IS NOT HERE, and the field that was is DELETED. One integer cannot hold N
        documents: an agent is an origin-keyed CLUSTER, so a flow reaches several Documents and HTML gives each
        its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness

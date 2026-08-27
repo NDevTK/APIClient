@@ -3,6 +3,8 @@
 #include "solver/engine.h"
 #include "quickjs-step.h"   /* a host answer is TAKEN by a step machine, and a throw ends it JS_STEP_ABRUPT */
 #include "core/html/unhandled_rejection.h"
+#include "core/events/report_exception.h"   /* HTML §8.1.4.4 step 8: what a classic script's abrupt completion
+                                               owes the page, as the frame the scheduler runs it as */
 #include "core/idl_args.h"   /* the one point every Web API member passes through — see idl_slowest_step */   /* HTML §8.1.7.5: what the browser half owes this checkpoint */
 #include "solver/result.h"
 #include "solver/solve.h"
@@ -2960,6 +2962,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
     sib->started = 1;                 /* HOT: resume from the blobs (and the cloned frame, when there is one) */
     sib->frame = clone;               /* the frame snapshot taken AT the branch — NULL for a fork between tasks */
     sib->script_i = parent->script_i; /* same position in the script sequence */
+    /* …AND WHAT THAT FRAME IS. A branch taken inside an `error` listener is a branch inside its parent's
+       §8.1.4.4 step 8 report, standing on the same row of the sequence: the arm has to finish the report and
+       take the row's completion out of it, exactly as the parent would have. Left at zero the arm would read
+       its own report frame as the row's PROGRAM — advancing the cursor a second time and skipping the next
+       script, and restoring `document.currentScript` at a step §4.12.1.1 does not restore it at. */
+    sib->reporting = parent->reporting;
     /* AND HOW FAR THE SEQUENCE HAS ALREADY BEEN RUN, which is what makes the no-replay assert at the compile
        site mean anything for an arm. Every sibling inherited -1, so a sibling that reached the compile with a
        cursor its parent had already compiled passed a check that only ever compared against "nothing yet" —
@@ -5411,6 +5419,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                flow's queue, run by the checkpoint above, which is why nothing here waits for it. */
             if (stype == SCRIPT_TYPE_MODULE) { f->script_i++; return 0; }
         }
+        /* HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet — built at the completion
+           below and INSTALLED after that completion's frame has been freed, which is the only reason it is
+           declared out here rather than beside the completion it belongs to: the report takes the slot, so it
+           cannot be put there while the slot is still occupied. NULL for every completion that owes none, which
+           is every completion but a classic script's abrupt one. */
+        JSValue *report = NULL;
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
@@ -5431,6 +5445,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
                the peer would resume with `undefined` where the spec propagates a throw. */
             if (r == 0 && flow_dyn_kind(f) == DYN_CROSS_AGENT_OP)
                 flow_answer_perform(ctx, f, cv);
+            /* THE REPORT ITSELF COMPLETING ABRUPTLY IS THIS ENGINE'S DEFECT, and it is asked FIRST because a
+               report frame is a call root and so is a driven orphan's — the arm below would read it as the
+               exploration surface and swallow it, which is the one reading that hides an engine bug inside the
+               one category of throw this engine deliberately ignores. Nothing the PAGE writes reaches here:
+               DOM §2.9's inner invoke step 2.11 CATCHES a listener's throw and reports it (event_target.c
+               declares catches_abrupt for exactly that), and HTML §8.1.4.6 step 6's error reporting mode is
+               what stops the report of a report. So what completed abruptly is a step of §8.1.4.6 itself. */
+            else if (JS_IsException(cv) && f->reporting) {
+                JSValue e = JS_GetException(ctx);
+                /* THE THROWN VALUE'S OWN TEXT, RECORDED BEFORE THE ABORT DISCARDS IT. `msg` reaches the
+                   assertion line unescaped (check.h says so), so the exception's message cannot be put in it —
+                   and an assert that names a failure while freeing the value describing it names a problem
+                   nobody can act on (result.h states the same rule and the same cost). */
+                result_page_error_value(ctx, e);
+                JS_FreeValue(ctx, e);
+                /* THE FLAG IS NOT CLEARED HERE, AND THAT IS WHAT KEEPS THE RELEASE BUILD HONEST. This DFAIL
+                   compiles out in release, so control falls through to the tail — where the flag is what says
+                   this frame was the row's remaining work and therefore owes §4.12.1.1 step 4's restore.
+                   Clearing it at the abort would leave `document.currentScript` set for the rest of the
+                   session in exactly the build that cannot report why. */
+                DFAIL("HTML §8.1.4.4 \"Calling scripts\" step 8's report of a classic script's abrupt "
+                      "completion ITSELF completed abruptly. DOM §2.9 inner invoke step 2.11 catches a "
+                      "listener's throw and §8.1.4.6 step 6's error reporting mode stops a report of a report, "
+                      "so this is a step of §8.1.4.6 throwing rather than the page — the value's own text is "
+                      "the last entry of the result document's `pageErrors`, and what it names is built in "
+                      "core/events/report_exception.c");
+            }
             /* A DRIVEN ORPHAN THAT THREW IS THE EXPLORATION SURFACE AND NOT A PAGE ERROR — the one completion
                here that is nobody's defect. The page never called this function; this engine did, with unknown
                input in place of every argument and the receiver, so `this.config.url` throwing a TypeError is
@@ -5444,11 +5485,27 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 JSValue e = JS_GetException(ctx);
                 JS_FreeValue(ctx, e);
             }
-            /* A SCRIPT THAT THREW names a capability the page needed and this engine does not have. Ending the
-               flow there is intentional; losing WHICH capability was not. */
+            /* HTML §8.1.4.4 "Calling scripts", RUN A CLASSIC SCRIPT STEP 8, THIRD BULLET: "Otherwise, rethrow
+               errors is false. Perform the following steps: 1. Report an exception given by
+               evaluationStatus.[[Value]] for script's settings object's global object. …"
+               THIS IS AN `error` EVENT AT THE GLOBAL AND NOT A DIAGNOSTIC, and the difference is a capability
+               the engine claimed and did not have: a page that installs `window.onerror` for its own routing or
+               telemetry took one path in a browser and another here, and the message that named the missing
+               capability reached the result document without ever reaching the page. The console line is still
+               written — §8.1.4.6 step 7.3, at the one place the standard puts it, behind step 7's notHandled,
+               through the hook registered beside the unhandled-rejection one — so a script that throws with
+               nothing listening reports exactly as it did, and one whose listener calls `preventDefault()` now
+               correctly reports nowhere.
+               THE OTHER TWO BULLETS OF STEP 8 ARE `rethrow errors is true`, and this engine has exactly one
+               caller that wants the throw back: a peer's operation, whose completion the arm at the top of this
+               chain hands to the agent that ASKED. That arm is step 8's first bullet, reached before this one
+               and for the reason the standard separates them — so the third bullet is unconditional here.
+               THE REALM IS THE PROGRAM'S. "script's settings object's global object" is the document the row
+               belongs to, which is the realm the program was COMPILED in — not whichever realm the scheduler
+               happens to be holding, and not the session's. */
             else if (JS_IsException(cv)) {
                 JSValue e = JS_GetException(ctx);
-                result_page_error_value(ctx, e);
+                report = report_exception_flow(doc_realm(flow_dyn_doc(f)), e);
                 JS_FreeValue(ctx, e);
             }
             /* ONE PROGRAM'S COMPLETION VALUE IS READ, AND IT DECIDES A NAVIGATION. HTML §7.4.2.3.2's
@@ -5467,6 +5524,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                       "`document.fetch\\t<url>`), so build the navigate that takes a RESPONSE THE ENGINE ALREADY "
                       "HAS and route this through it");
             JS_FreeValue(ctx, cv);
+            /* §8.1.4.4 step 8 IS ABOUT AN evaluationStatus, and a frame that suspended or detached has none.
+               Both returns below advance past this row without ever reaching the install, so a report built on
+               one of those paths would be dropped silently — and the exception it carries would have come from
+               somewhere that is not this program's completion. */
+            DCHECK(report == NULL || r == 0,
+                   "§8.1.4.4 step 8's report was built for a frame that has not COMPLETED — a suspended or "
+                   "detached base has no evaluation status to be abrupt, so the exception this report carries "
+                   "belongs to something other than this program's run");
             if (r == 1) {
                 /* A MID-FRAME YIELD, and the one case where it is not "more work". A flow that suspended
                    inside a machine holding an unanswered synchronous host request has no work at all until the
@@ -5488,6 +5553,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "was open — the restore is at the program's completion and a detached base never "
                        "reaches one, so this document's currentScript would stay set for the rest of the "
                        "session. Route the restore through whatever drives the detached continuation");
+                /* THIS ROW IS OVER, WHICH THE CURSOR ALREADY SAYS AND THE FLAG MUST SAY WITH IT. A frame this
+                   flow no longer owns cannot be §8.1.4.4 step 8's report of the row the cursor is about to
+                   leave; left standing, the flag would make the NEXT program's completion read as a report. */
+                f->reporting = 0;
                 f->frame = NULL; f->script_i++;
                 return 0;
             }
@@ -5506,18 +5575,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
                program's own completion is the fact in hand — the same line `g_completed` is written at, and for
                the same reason. It covers a program that RAN TO ITS END and one that THREW alike, because
                §8.1.4.4's run-a-classic-script REPORTS the exception rather than propagating it and the restore
-               is after the run either way; the throw was consumed a few lines above and this is still that
-               program's completion.
+               is after the run either way.
+               AND "AFTER THE RUN" IS NOW A DIFFERENT LINE, WHICH IS THE WHOLE OF WHAT THE REPORT MOVED. That
+               sentence was written while the report did not exist, so "after the run" and "after the throw"
+               were the same instant; they are not. §4.12.1.1 restores at STEP 4, after step 3's run a classic
+               script, and §8.1.4.4 step 8's report is a step INSIDE that run — so a page's `error` listener
+               reads the throwing `<script>` out of `document.currentScript`, exactly as it does in a browser,
+               and restoring at the throw would hand it null. A program that owes a report has therefore NOT
+               finished step 3, and the restore travels to the report frame's own completion.
                A PARKED PROGRAM NEVER GETS HERE, which is the whole design: a mid-frame yield returned above
                with the frame still live, and the slot went with the flow's delta.
                `is_call` IS THE GUARD BECAUSE THE CURSOR IS NOT ONE. A driven orphan's call frame sits past the
                end of the sequence — where flow_dyn_el answers NULL — but a row the running call QUEUED moves
                the cursor back inside it, so without this the completion of a CALL would restore a row whose
-               program has not started. */
-            if (!is_call && flow_dyn_el(f))
+               program has not started. `f->reporting` is what tells the ONE call frame that IS this row's
+               remaining work from the one that is somebody else's — see flow.h. */
+            if (!report && (f->reporting || !is_call) && flow_dyn_el(f))
                 document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f));
         }
-        JS_FlowFree(ctx, (JSValue *)f->frame); f->frame = NULL; f->script_i++;   /* this script done -> next */
+        JS_FlowFree(ctx, (JSValue *)f->frame);
+        /* §8.1.4.4 STEP 8.3.1 TAKES THE SLOT STEP 8'S PROGRAM JUST VACATED, and the cursor does NOT move: the
+           report is the rest of this row's run-a-classic-script, so the row is finished by the report's
+           completion and advanced exactly once, there. Everything the `if (!f->frame)` block above would do —
+           step 8.3.2's microtask checkpoint first among them — is skipped for as long as this frame lives,
+           which is the order §8.1.4.4 states and the reason the report is a frame at all. */
+        if (report) { f->frame = report; f->reporting = 1; return 0; }
+        f->reporting = 0;
+        f->frame = NULL; f->script_i++;   /* this script done -> next */
         return 0;
     }
 }
@@ -6074,6 +6158,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
+    /* AND THE SAME SENTENCE ONE SECTION UP — HTML §8.1.4.6 step 7.3, "the user agent may report exception to a
+       developer console", reached only when step 7's notHandled is true. `pageErrors` IS that console: one
+       line per distinct message, carried out of the run, which is exactly what a console is for a host whose
+       output is a document. It is registered HERE rather than performed at the throw so that every caller of
+       report-an-exception writes one — a §2.9 listener that threw, a custom element reaction, an
+       animation-frame or IntersectionObserver callback — where before only a classic script did, and so that a
+       page that cancels the `error` event stops it, which is what cancelling means. */
+    report_exception_set_console_hook(result_page_error_value);
     /* THE FRONTIER IS SEEDED ONCE, FROM ONE OF TWO PLACES, and they are alternatives rather than layers. A
        document nobody has explored starts with ONE flow: the page's scripts over an empty decision vector. A
        document with a PARKED RESIDUE starts with that residue — every flow the last session could not finish,

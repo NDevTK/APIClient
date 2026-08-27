@@ -56,6 +56,34 @@ JSValue extract_error_information(JSContext *ctx, JSValueConst exception, const 
 void report_exception_init(JSContext *ctx);
 void report_exception_free(JSContext *ctx);
 
+/* §8.1.4.6 STEP 7.3 — "Otherwise, the user agent may report exception to a developer console."
+ *
+ * WHO gets told is the HOST's question, exactly as unhandled_rejection.h's report hook is, and the two are one
+ * sentence of one standard read a section apart: an exception nothing handled and a rejection nothing handled
+ * are the same fact about the page. It is reached ONLY when step 7's notHandled is true — a listener that
+ * called `preventDefault()` cancelled the event, which is the page saying it did its own reporting, and a
+ * console line written anyway would report as unhandled an exception the page handled.
+ * Registering none is a positive statement, never a hole: step 7 runs either way. */
+void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst exception));
+
+/* HTML §8.1.4.4 "Calling scripts", run a classic script step 8's THIRD BULLET, as the FLOW it has to be.
+ *
+ * The third reach of the one algorithm, and the caller it exists for is the SCHEDULER: a classic script's
+ * evaluation completed abruptly, and the scheduler has no step machine to hold the request form above. What it
+ * has is a frame slot, so the report is handed back AS a frame — `JS_FlowResume`d, preempted per opcode,
+ * forked with the flow and parked to the cold tier like the program that threw, because the `error` listeners
+ * it runs are the page's code and may do any of those.
+ *
+ * IT MUST BE THE FLOW'S VERY NEXT WORK AND NOT A QUEUE ENTRY. The report is step 8.3.1 and "clean up after
+ * running script" is 8.3.2, whose step 3 performs the microtask checkpoint — so the `error` listeners run
+ * BEFORE anything the script queued, which neither a microtask (behind what the script queued) nor a task
+ * (behind the whole checkpoint) can express.
+ *
+ * `ctx` IS THE PROGRAM'S REALM — "script's settings object's global object" — and never whichever realm the
+ * scheduler happens to hold. `exception` is BORROWED (the caller took it off the context with
+ * JS_GetException and owns it); the frame dups it. Returns the handle JS_FlowNew returns. */
+JSValue *report_exception_flow(JSContext *ctx, JSValueConst exception);
+
 void report_exception_work_start(ReportExceptionWork *w);
 void report_exception_work_visit(JSContext *ctx, ReportExceptionWork *w, JSStepVisit *v);
 /* STEP 6.1'S FLAG, GIVEN BACK — the half of this record's teardown that is NOT a reference and therefore not

@@ -86,6 +86,32 @@ static const char *const RX_STEPS[] = { RX_STAGES(JS_STEP_STAGE_LABEL) NULL };
 static JSValue g_key;
 static int g_ready;
 
+/* §8.1.4.6 STEP 7.3'S DEVELOPER CONSOLE, which is the HOST's and not this file's — the same shape and the same
+   argument as unhandled_rejection.h's report hook, because it is the same sentence of the same standard read
+   one section apart. A host that publishes a result document writes the message into it; one whose output is a
+   stream of lines prints it as it happens. Registering none is a positive statement ("this host has no
+   console"), never a hole: step 7 is performed either way and the hook only decides whether anything says so.
+   THE FUNCTION IS THE HOST'S AND OUTLIVES THE AGENT; THE REGISTRATION IS THE AGENT'S AND DOES NOT — which is
+   why report_exception_free gives it back and why it is not declared to core/agent_state.h: that header's
+   two-sided check requires a component that declares agent state to carry a RELEASE on the platform column,
+   and this component's row carries none (its releases are called by each host directly). */
+static void (*g_console)(JSContext *ctx, JSValueConst exception);
+
+/* §8.1.4.4 step 8's third bullet, as a machine this runtime can be handed — see report_exception_flow. */
+static int g_flow_stepid = -1;
+
+void report_exception_set_console_hook(void (*fn)(JSContext *ctx, JSValueConst exception))
+{
+    /* THE SAME CLAIMANT MAY SAY SO AGAIN, AND A DIFFERENT ONE MAY NOT. A host that opens a second session on
+       one instance registers the same console a second time, which is one claim restated; two DIFFERENT
+       non-null claimants is one report written to a console nobody is reading, because only the second
+       survives. */
+    DCHECK(fn == NULL || g_console == NULL || g_console == fn,
+           "two different hosts claimed §8.1.4.6 step 7.3's developer console — only the second claimant's is "
+           "reachable, so every report the first was registered for goes to a console nothing reads");
+    g_console = fn;
+}
+
 void report_exception_init(JSContext *ctx)
 {
     DCHECK(!g_ready, "report_exception_init ran twice — the key is one per AGENT");
@@ -100,6 +126,15 @@ void report_exception_free(JSContext *ctx)
     JS_FreeValue(ctx, g_key);
     g_key = JS_UNDEFINED;
     g_ready = 0;
+    /* THE STEP DEFINITION NAMES A RUNTIME THAT IS GOING AWAY. `JS_RegisterStepDef` hands out an index into the
+       runtime's own tail, so an id kept across a teardown is an index into a table the next agent has not
+       built — the stale-handle defect core/agent_state.h records four instances of, and the only reason this
+       one is not declared there is that this component's row carries no release for that column to check. */
+    g_flow_stepid = -1;
+    /* …AND SO DOES THE CONSOLE. It is the HOST's function and outlives this agent, but the registration is the
+       agent's: giving it back is the inverse of the claim, and a hook left standing is what would make the
+       next host's claim read as a second, different one. */
+    g_console = NULL;
 }
 
 static bool reporting_mode(JSContext *ctx, JSValueConst global, int set, bool on)
@@ -308,10 +343,23 @@ int report_exception_run(JSContext *ctx, ReportExceptionWork *w, JSValueConst ex
     reporting_mode(ctx, global, /*set*/ 1, false);      /* step 6.3 */
     w->reporting = 0;                                   /* given back at the step that gives it back */
 not_handled:
-    /* STEP 7's notHandled is `not_canceled`: an `onerror` that returns true cancels the event, and that is how
-       a page says it handled the error. Step 7.1 nulls errorInfo[error], whose only readers are 7.2 and 7.3;
-       7.3 is a developer console this build does not have, and 7.2 is the WORKER branch — which is also the one
-       caller in the standard that passes step 5's omitError true. */
+    /* STEP 7's notHandled is `not_canceled`: a listener that called `preventDefault()` cancelled the event, and
+       that is how a page says it handled the error. Step 7.1 nulls errorInfo[error], whose only readers are 7.2
+       and 7.3; 7.2 is the WORKER branch — also the one caller in the standard that passes step 5's omitError
+       true — and 7.3 is "the user agent MAY report exception to a developer console", which is the hook below.
+       THE CONSOLE IS WHERE THE EXCEPTION'S NAME SURVIVES, and this file used to say this build had none. It
+       has: solver/result.h's `pageErrors` is exactly a developer console — one line per distinct message,
+       carried out of the run — and the sentence that denied it was written before the classic-script arm had
+       any route through this algorithm at all. Every earlier caller (a §2.9 listener that threw, a custom
+       element reaction, an animation-frame callback, an IntersectionObserver callback, an Observable) was
+       therefore reporting into a fire and nowhere else: the page's `error` listeners ran and, if nothing was
+       listening, the exception's message left no trace anywhere. That is not a smaller report than the classic
+       arm's, it is the SAME step, so it belongs at this one site rather than at each caller.
+       IT IS BEHIND notHandled, WHICH IS THE WHOLE OF WHAT `preventDefault()` BUYS A PAGE. A page that cancels
+       the `error` event is doing its own reporting, so §8.1.4.6 stops here — and a console line written anyway
+       would report as unhandled an exception the page handled. */
+    if (not_canceled && g_console)
+        g_console(ctx, exception);
     if (not_canceled)
         realm_awaits(ctx, "Worker",
                      "§8.1.4.6 step 7.2 queues a global task on the DOM manipulation task source, at the "
@@ -327,4 +375,110 @@ not_handled:
        ENTERED at rather than the last one it rested at, so a record reached again is asked from step 2. */
     STEP_GOTO(w->stage, RX_EXTRACT, &w->phase, NULL);
     return 0;
+}
+
+/* ---- HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet ---------------------------
+ *
+ * "Otherwise, rethrow errors is false. Perform the following steps: 1. Report an exception given by
+ * evaluationStatus.[[Value]] for script's settings object's global object. 2. Clean up after running script
+ * with settings. 3. Return evaluationStatus."
+ *
+ * THE OTHER TWO BULLETS BELONG TO A CALLER THIS ENGINE DOES NOT HAVE YET, and saying which is the whole of why
+ * this one is unconditional here. Step 8's first two bullets are both `rethrow errors is true` — the parameter
+ * §8.1.4.4 defaults to FALSE and which only a caller that wants the throw back sets. §4.12.1.1 "Processing
+ * model"'s execute-the-script-element passes nothing, so every `<script>` in every document takes this bullet;
+ * the two that rethrow are §7.4.2.3.2's `javascript:` URL and the event-handler compile, neither of which
+ * reaches this file. A day one of them does, `rethrow errors` becomes a PARAMETER of the classic-script entry
+ * and the muted-errors arm ("throw a NetworkError DOMException") is written at the same site — which is also
+ * where this engine's absence of script muted errors stops being the identity §8.1.4.6 step 3 permits.
+ *
+ * IT IS A FLOW AND NOT A QUEUED TASK, AND THE DIFFERENCE IS OBSERVABLE IN ONE LINE OF PAGE CODE. The report is
+ * step 8.3.1 and "clean up after running script" is 8.3.2, whose own step 3 performs the MICROTASK CHECKPOINT.
+ * So `<script>Promise.resolve().then(m); throw e</script>` runs the page's `error` listeners BEFORE `m`, and
+ * anything that enqueued the report — a microtask lands behind everything the script already queued, a task
+ * lands behind the whole checkpoint — would run them after. The report therefore has to be the very next thing
+ * the flow does, which is what a FRAME is and what a queue entry cannot be.
+ *
+ * AND A FRAME IS ALSO WHAT MAKES IT SUSPEND. §Every-runtime-job-is-a-scheduler-flow: the listeners are the
+ * page's code and may loop, await, fork or park to the cold tier, so the report is preemptible per opcode and
+ * resumable at any depth exactly like the program that threw. A `JS_Call` from the scheduler would be a C
+ * activation with no flow base under it — the drive-to-completion this engine aborts on. */
+#define RXF_STAGES(X)                                                                                       \
+    X(RXF_REPORT, "HTML §8.1.4.4 run a classic script step 8's third bullet, sub-step 1 (report an exception " \
+                  "given by evaluationStatus.[[Value]] for script's settings object's global object)")
+enum { RXF_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const RXF_STEPS[] = { RXF_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct JSReportFlow {
+    JSStepHdr hdr;              /* FIRST — the driver writes the def and the operand bounds through it */
+    uint8_t   started;
+    ReportExceptionWork rep;    /* §8.1.4.6, as a request, held by the machine that asks for it */
+} JSReportFlow;
+
+static void js_report_flow_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    report_exception_work_visit(ctx, &((JSReportFlow *)st)->rep, v);
+}
+
+static JSValue js_report_flow_fini(JSContext *ctx, void *st, bool take_result)
+{
+    (void)take_result;
+    /* §8.1.4.6 step 6.1's FLAG, if the report was abandoned holding it. Not a reference, so no declaration
+       names it and the visit above is what releases the record's references. */
+    report_exception_work_unlock(ctx, &((JSReportFlow *)st)->rep);
+    /* §8.1.4.4 step 8.3.3 returns evaluationStatus, and nothing in this engine reads it: the flow's completion
+       value is not the page's (a <script> has none) and the scheduler discards it. */
+    return JS_UNDEFINED;
+}
+
+static int js_report_flow_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    JSReportFlow *s = st;
+    int r;
+
+    DCHECK(s->hdr.stage == RXF_REPORT,
+           "§8.1.4.4 step 8's report resumed into a stage it does not have — this machine is ONE step of the "
+           "standard and delegates the whole of §8.1.4.6 to the record it holds, which keeps its own");
+    if (!s->started) {
+        /* EVERY OWNED FIELD PLACED BEFORE THE FIRST THING THAT CAN FAIL — the failure path tears this state
+           down through `fini`, which gives back exactly what the state holds and nothing else. */
+        report_exception_work_start(&s->rep);
+        s->started = 1;
+    }
+    r = report_exception_run(ctx, &s->rep, step_arg(&s->hdr, 0), cb_result, out_cb, out_argc);
+    if (r)
+        return r;   /* parked inside the `error` event's own dispatch, or at one of §8.1.4.6's rest points */
+    return JS_STEP_DONE;
+}
+
+static const JSTrampStepDef js_report_flow_def = {
+    sizeof(JSReportFlow), js_report_flow_step, js_report_flow_fini, 0, .visit = js_report_flow_visit,
+    .algorithm = "HTML §8.1.4.4 run a classic script step 8's third bullet — report an abrupt completion",
+    .steps = RXF_STEPS
+};
+
+JSValue *report_exception_flow(JSContext *ctx, JSValueConst exception)
+{
+    JSValue fn;
+    JSValue *base;
+
+    DCHECK(g_ready, "a classic script's abrupt completion asked for §8.1.4.4 step 8's report before this "
+                    "component was declared — the error reporting mode has no key, so step 6 cannot be asked");
+    if (g_flow_stepid < 0) {
+        g_flow_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_report_flow_def);
+        CHECK(g_flow_stepid >= 0, "§8.1.4.4 step 8's report machine could not be registered with this runtime");
+    }
+    /* MINTED IN THE REALM THAT USES IT, per report. `js_call_c_function` takes the callee's own realm, so this
+       object is what decides WHICH global §8.1.4.6 reports for — "script's settings object's global object",
+       which is the realm the program was compiled in and not the one the scheduler happens to hold. A function
+       held in a static would answer every document's report with the first document's ctx, which is the
+       per-realm defect §Browser-half names; there is nothing to cache here anyway, since a report is the
+       thing that just went wrong. */
+    fn = JS_NewCFunction2(ctx, NULL, "reportAnException", 1, JS_CFUNC_step, g_flow_stepid);
+    CHECK(!JS_IsException(fn), "§8.1.4.4 step 8's report callee could not be allocated");
+    base = JS_FlowNewCall(ctx, fn, JS_UNDEFINED, 1, &exception);
+    JS_FreeValue(ctx, fn);   /* JS_FlowNewCall dup'd the callee and the argument into the frame */
+    CHECK(base != NULL, "§8.1.4.4 step 8's report frame could not be allocated — the exception has already "
+                        "been taken off the context, so there is no second chance to report it");
+    return base;
 }
