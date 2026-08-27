@@ -607,9 +607,18 @@ try {
      embeds it — no parent and no element presenting it are one document's two facts, stated one link each.
      Neither is part of the container: a policy container is five policies and says nothing about a frame tree,
      and Permissions Policy §9.5's answer is a sixth thing again, set by a different step of §7.3.2.1. */
+  /* AND ITS ANCESTOR ORIGINS, `none`, WHICH IS THE THIRD MEMBER OF THE SET THE TWO ABOVE BELONG TO. This call
+     was one argument short of the mojom from the moment §3.1.3's list joined the record, and `mojo.js`'s
+     send-side check could not say so while the artifact it compared against still declared thirteen — the
+     assert was right and had nothing to be right about yet. The rule is the one this file already states at
+     its CHILD path: no parent, no container, no ancestors are true or false TOGETHER, so a document this gate
+     loaded itself states all three, one link each. `none` is the word and not the empty string, because an
+     empty field is "a host that stopped writing this" and `none` is "this document has no ancestors" — the
+     distinction the mojom's own `why` draws, and the one that decides whether a peer answers
+     `location.ancestorOrigins` with an empty list or refuses. */
   const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
                                                OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '', 'u',
-                                               'null');
+                                               'null', 'none');
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');

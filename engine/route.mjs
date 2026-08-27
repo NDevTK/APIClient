@@ -71,9 +71,11 @@
        flow's. This driver is what makes that decidable — it is the only place both sessions are visible. */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
-const factory = await import(join(ENGINE, '..', 'extension', 'lib', 'qjs', 'qjs.mjs'));
+const GLUE_PATH = join(ENGINE, '..', 'extension', 'lib', 'qjs', 'qjs.mjs');
+const factory = await import(GLUE_PATH);
 const boot = factory.default ?? factory;
 
 /* THE READ IS LAST AND BOTH ARMS MAKE IT, so two DIFFERENT worlds ask the same question of one peer — which is
@@ -204,6 +206,37 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
      end the parse at the first one. `bs` is the same helper the reply bodies use, for the same reason. */
   {
     const [hp, hn] = bs(html);
+    /* THE ONE CALLER OF `qjs_init` THAT NOTHING CHECKED AT EITHER END, WHICH IS WHY IT IS THE ONE THAT PRODUCES
+       A NAMELESS ERROR. There are four: `renderer.html`'s placement table (checked at bind by `rendererImpl`
+       and before launch by `assertEngineAbiPairing`), `renderer_host_gate.mjs` and `bridge.js` (both checked
+       on SEND by `mojo.js`'s `checkValues`, which names the two counts and the mojom) — and this one, a raw
+       `ccall` that bypasses mojo entirely and is invisible to a harness gate that reads the extension's table.
+       So when the ABI widened and this side went short, the only thing that spoke was emscripten's own
+       `createExportWrapper` assert: "native function `qjs_init` called with 15 args but expects 14". That
+       message is ACCURATE AND POINTS NOWHERE — it names emscripten and a number, never the parameter, the
+       record, or the commit, so a reader has every reason to suspect their own wasm or the harness.
+       WORSE, IT IS ONE-SIDED. Its own comment says too FEW arguments are zero-filled without an assert, so the
+       reverse skew — a wider engine driven by a narrower caller — is silent here, and the field arrives NULL.
+       This asks the glue what it declares and refuses BOTH directions, naming which side is short. It is the
+       cheap close; routing this list through the one declaration the other three already share is the
+       structural one and is its own diff, because these two arrays are a fourth and fifth hand-aligned copy of
+       a list that has now gone short twice.
+       READ FROM THE GLUE'S SOURCE, NOT FROM THE FUNCTION OBJECT. `nargs` is a closure variable inside
+       `createExportWrapper`'s returned arrow, so `String(M._qjs_init)` does not contain it — a check written
+       that way parses nothing, matches nothing and passes always, which is the vacuous check this whole file's
+       neighbourhood exists to prevent. The declaration is in the emitted text, which is where
+       `assertEngineAbiPairing` already reads it from, so this asks the same artifact the same question. */
+    const want = Number((readFileSync(GLUE_PATH, 'utf8')
+      .match(/createExportWrapper\("qjs_init",\s*wasmExports\["qjs_init"\],\s*(\d+)\)/) || [])[1]);
+    if (!Number.isFinite(want))
+      throw new Error('route.mjs could not read qjs_init\'s declared arity out of ' + GLUE_PATH + ' — the ' +
+        'glue\'s shape changed, and an unanswerable check must say so rather than pass.');
+    if (want !== 15)
+      throw new Error(`route.mjs places 15 operand(s) into qjs_init and the built glue declares ${want} — ` +
+        'one side of the ABI is older than the other, and emscripten cannot tell you which: its wrapper ' +
+        'asserts only on too MANY (too few are zero-filled silently), and its message names a number rather ' +
+        'than a parameter. Regenerate with `node engine/build.mjs`; ' +
+        'extension/lib/qjs/qjs.mjs.build.json carries the revision the glue was built from.');
     M.ccall('qjs_init', 'number',
       ['number','number','number','number','number','number','number','number',
        'number','number','number','number','number','number','number'],
