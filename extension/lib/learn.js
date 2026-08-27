@@ -289,6 +289,68 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     target._excludedValues = target._excludedValues.filter((v) => seen.indexOf(String(v)) >= 0);
   };
 
+  /* ONE SIDE OF AN INTERVAL, READ OUT OF THE ENGINE'S OWN VOCABULARY. endpoint.c emits JSON Schema Validation
+     2020-12 §6.2's keywords directly — §6.2.4 "minimum" / §6.2.5 "exclusiveMinimum" below, §6.2.2 "maximum" /
+     §6.2.3 "exclusiveMaximum" above — so nothing between the engine and the OpenAPI export renames them, and
+     there is one spelling of a bound in the whole pipeline instead of three that have to agree.
+     `null` IS THE ANSWER FOR AN UNBOUNDED SIDE and it is a positive one: no ordering gate over this hole
+     claimed anything in that direction on every observed path. */
+  const _boundSide = (b, low) => {
+    const inc = low ? "minimum" : "maximum", exc = low ? "exclusiveMinimum" : "exclusiveMaximum";
+    if (inc in b) return { v: b[inc], incl: true };
+    if (exc in b) return { v: b[exc], incl: false };
+    return null;
+  };
+  const _boundSideWrite = (out, side, low) => {
+    if (!side) return;
+    out[side.incl ? (low ? "minimum" : "maximum") : (low ? "exclusiveMinimum" : "exclusiveMaximum")] = side.v;
+  };
+
+  /* THE ORDERING GATE'S FACT, MERGED BY WIDENING. It is `_mergeExcludes`' rule spelled for an ORDERED domain
+     and not a second rule: a claim belongs on the record only where EVERY observed path to the endpoint obeyed
+     it, which over a set means intersecting the exclusions and over an interval means taking the HULL. Two
+     paths reaching one request with `x >= 5` and `x >= 10` leave `x >= 5`; with `x >= 5` and `x <= 3` they
+     leave nothing, because neither claim survives the other path. A sighting with no bound on a side ERASES
+     that side for the same reason a sighting with no `excludes` erases the exclusions.
+     THE THREE ABSENCES ARE KEPT APART, and they are three different facts. `_bounds` absent = this target has
+     never had an engine observation, so the first one is taken whole; `_bounds` null = a claim that WAS made
+     and has since been disproved by another path; a side missing inside a `_bounds` object = unbounded in that
+     direction. Collapsing any two of them would let a form scan or a live request that created the parameter
+     first erase every domain the engine emits. */
+  const _mergeBounds = (target, p) => {
+    if (!("bounds" in p)) { target._bounds = null; return; }
+    DCHECK(p.bounds && typeof p.bounds === "object" && !Array.isArray(p.bounds),
+           "an @H param carries a `bounds` that is not an object — endpoint.c omits the key entirely where " +
+           "no ordering gate's claim survived every observed path, so anything else here is the engine " +
+           "stating a domain it does not have");
+    DCHECK(["minimum", "exclusiveMinimum", "maximum", "exclusiveMaximum"]
+             .filter((k) => k in p.bounds).length > 0,
+           "an @H param carries an empty `bounds` — the object is written only as a side is written, so one " +
+           "with neither side is an interval that was allocated and never narrowed");
+    DCHECK(!("minimum" in p.bounds && "exclusiveMinimum" in p.bounds) &&
+           !("maximum" in p.bounds && "exclusiveMaximum" in p.bounds),
+           "an @H param states a bound as inclusive AND exclusive on one side — the two are alternative " +
+           "spellings of one side and a consumer reading both would apply the looser one silently");
+    DCHECK(Object.keys(p.bounds).every((k) => typeof p.bounds[k] === "number" && isFinite(p.bounds[k])),
+           "an @H param's bound is not a finite number — JSON Schema Validation 2020-12 §6.2 requires a " +
+           "number for all four keywords, and concolic_rel_hook records a bound only for a finite Number " +
+           "operand, so a string or an Infinity here is the two ends disagreeing about what a bound is");
+    if (!("_bounds" in target)) {
+      target._bounds = Object.assign({}, p.bounds);
+      return;
+    }
+    if (target._bounds === null) return;   // already disproved by an earlier path — nothing re-establishes it
+    const hull = (a, b, low) => {
+      if (!a || !b) return null;           // one path unbounded on this side disproves the other's claim
+      if (a.v === b.v) return a.incl ? a : b;   // tie: the INCLUSIVE side is the weaker claim, so it survives
+      return (low ? (a.v < b.v) : (a.v > b.v)) ? a : b;
+    };
+    const out = {};
+    _boundSideWrite(out, hull(_boundSide(target._bounds, true), _boundSide(p.bounds, true), true), true);
+    _boundSideWrite(out, hull(_boundSide(target._bounds, false), _boundSide(p.bounds, false), false), false);
+    target._bounds = Object.keys(out).length ? out : null;
+  };
+
   /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
      `location` on every param — "path" for a `{hole}` the code interpolated into the address (its example
      value aligned out of the concolic's concrete URL), "query" for the display URL's query string, "body"
@@ -317,6 +379,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     }
     _mergeAstValues(m.parameters[p.name], p.validValues);
     _mergeExcludes(m.parameters[p.name], p);
+    _mergeBounds(m.parameters[p.name], p);
   }
 
   // Reverse cross-doc reconcile: if THIS method is templated ({hole} path
@@ -421,6 +484,10 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
          exactly as one over a value it appends to the query is. Leaving it out here would make the report's
          silence mean two different things in two halves of the same record. */
       _mergeExcludes(schema.properties[bp.name], bp);
+      /* …and the ordering gate's, for the same reason: a body field the page POSTs is gated by the same
+         predicates a query param is, and a projection that carried one fact and not the other would make the
+         report's silence mean two different things in two halves of one record. */
+      _mergeBounds(schema.properties[bp.name], bp);
     }
     if (!m.request) m.request = { $ref: schemaName };
   }

@@ -1344,6 +1344,10 @@ details summary:hover {
 /* A NEGATIVE CONSTRAINT, coloured apart from every badge that carries a value: `≠ admin` is what the code
    proved the parameter is not, and a reviewer must not read it in the same voice as a default or a prefill. */
 .badge-excluded { color: #ffa198; background: rgba(255,161,152,0.1); }
+/* THE ORDERING GATE'S INTERVAL, coloured apart from `.badge-range` ON PURPOSE. That one is what observed
+   traffic SPANNED (a statistic); this is what the bundle's own predicate REQUIRES (a constraint the code
+   stated). Rendering the two in one colour would make a reviewer read a sample as a rule. */
+.badge-bounds { color: #ffa198; background: rgba(255,161,152,0.1); }
 .badge-prefill { color: #7ee787; background: rgba(126,231,135,0.1); }
 .badge-format { color: #f0883e; background: rgba(240,136,62,0.1); }
 

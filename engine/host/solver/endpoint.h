@@ -52,7 +52,8 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
 
 /* The @H surface as a malloc'd JSON ARRAY (caller frees) — findings are C data, so the emit is C, never a
    JS-object round-trip.
-   `[ {"method":..,"url":..,"params":[{"name":..,"location":..,"validValues":[..],"excludes":[..]}]}, ... ]`.
+   `[ {"method":..,"url":..,"params":[{"name":..,"location":..,"validValues":[..],"excludes":[..],
+      "bounds":{"minimum"|"exclusiveMinimum":N,"maximum"|"exclusiveMaximum":N}}]}, ... ]`.
    Every param states WHERE IT LANDED — "path", "query" or "body" — because that is what the reviewer replays
    it with, and because a consumer that has to default the field cannot tell an unknown from a query param.
    AND EVERY PARAM STATES BOTH OF THE TWO FACTS A SHAPE IS MADE OF. `validValues` is PROVENANCE-and-example —
@@ -65,6 +66,16 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    that is not the one the shipped bundle took is exactly the arm this tool exists to explore.
    `excludes` is OMITTED where no such constraint held on every observed path, and that absence IS the
    statement — never an empty array, which a consumer could not tell apart from an unconstrained param.
+   `bounds` IS THE SAME FACT OVER AN ORDERED DOMAIN — what this endpoint's own ORDERING gates proved the value
+   must be greater or less than, on every observed path — and it is emitted in JSON Schema Validation 2020-12
+   §6.2 Validation Keywords for Numeric Instances (number and integer)'s own vocabulary: at most one of
+   §6.2.4 "minimum" / §6.2.3's exclusive twin "exclusiveMinimum", and at most one of §6.2.2 "maximum" /
+   §6.2.3 "exclusiveMaximum". Each value is a JSON NUMBER, spelled as the page's own literal.
+   BOTH SIDES CAN BE PRESENT, because `if (x > 5 && x < 100)` is TWO observations of one parameter and a
+   record holding only one of them is a wrong report by this rule's own terms.
+   It carries NO member of the interval: §@H forbids inventing `6` for `x > 5`, so a value appears in
+   `validValues` only where the code COMPUTED one. `bounds` is omitted entirely where no ordering gate's claim
+   survived every observed path, and that absence is the statement, exactly as `excludes`' is.
    It is an array and not a document
    because the DOCUMENT is one thing the host reads once (result.h): a surface that wrapped itself could not
    be composed with the others without a host-side splice, which is the host owning structure again. */

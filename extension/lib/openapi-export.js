@@ -187,7 +187,31 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
                 ...(pDef.enum ? { enum: pDef.enum } : {}),
                 ...(pDef.format ? { format: pDef.format } : {}),
                 ...(pDef._defaultValue != null ? { default: pDef._defaultValue } : {}),
-                ...(pDef._range ? { minimum: pDef._range.min, maximum: pDef._range.max } : {}),
+                /* THE OBSERVED SPAN IS NOT A SCHEMA ASSERTION AND MUST STOP BEING WRITTEN AS ONE.
+                   `_range` is the min and max of the values live traffic HAPPENED TO CARRY (lib/learn.js's
+                   analyzeRange over fieldStats). Written as §6.2.4 "minimum" / §6.2.2 "maximum" it asserts
+                   that the API REJECTS anything outside, which no run of anything ever observed — a domain
+                   claim manufactured out of a sample, and the same defect §@H names when it forbids inventing
+                   `6` for `x > 5`. It also collided head-on with the line below, which writes those two
+                   keywords from a bound the code actually stated: two producers, one keyword, last spread
+                   wins, and nothing to say which claim the reader is looking at.
+                   The datum is KEPT, as an OAS 3.0.3 Specification Extension (`^x-` on a Schema Object),
+                   where it annotates without validating. The popup renders it under its own "range" badge,
+                   which already says "the domain this field's observations spanned". */
+                ...(pDef._range ? { "x-observed-range": { min: pDef._range.min, max: pDef._range.max } } : {}),
+                /* AND THE ORDERING GATE'S INTERVAL, in the standard's own vocabulary — which is also the
+                   vocabulary endpoint.c emitted and learn.js merged, so this is a spread and not a rename.
+                   JSON Schema Validation 2020-12 §6.2 Validation Keywords for Numeric Instances (number and
+                   integer): §6.2.2 "maximum" ("an inclusive upper limit for a numeric instance"), §6.2.3
+                   "exclusiveMaximum" ("strictly less than (not equal to)"), §6.2.4 "minimum" ("an inclusive
+                   lower limit"), §6.2.5 "exclusiveMinimum" ("strictly greater than (not equal to)"). All four
+                   take a NUMBER in 2020-12; the draft-04 boolean form is a different keyword and would be
+                   read here as a bound of 1.
+                   It states the interval and never a member of it — §@H's line between a domain and an
+                   invented value — so `enum`/`default` stay driven by values the code COMPUTED. Emitted only
+                   where the claim survived every observed path; lib/learn.js writes `null` where another path
+                   disproved it, which is why this is a presence test and not a `||`. */
+                ...(pDef._bounds && typeof pDef._bounds === "object" ? { ...pDef._bounds } : {}),
                 /* THE DOMAIN THE CODE'S OWN GATES STATED, in the standard's own vocabulary for it.
                    JSON Schema Core 2020-12 §10.2.1.4 "not": "An instance is valid against this keyword if it
                    fails to validate successfully against the schema defined by this keyword"; JSON Schema

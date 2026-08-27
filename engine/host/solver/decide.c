@@ -933,6 +933,34 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
         const char *subj = concolic_cmp_subject(cond);
         if (subj) concolic_exclude(subj, tok);
     }
+    /* AND THE ORDERING, WHICH IS THE SAME OBSERVATION OVER AN ORDERED DOMAIN AND WHOSE *BOTH* ARMS CARRY ONE.
+       An equality splits into a determined VALUE and a determined non-value; an ordering determines no value
+       on either side and a BOUND on each, so this is a sibling of the two branches above rather than a third
+       case of them — which is why it is not an `else`: a comparison result is an equality or an ordering and
+       never both, and writing it as an `else` would make that mutual exclusion an accident of ordering rather
+       than a property concolic_rel asserts.
+       THE FALSE ARM'S RELATION IS §13.10.1's OWN, not a textual negation — rel_op_negate names the paired
+       production and states there what the pairing does with §7.2.12's `undefined`. `x < 5` taken false is
+       recorded as `x >= 5`.
+       IT INVENTS NO VALUE, which is the line §@H draws: `{int>5}` is what the run observed and `6` is what it
+       must never emit. Nothing here picks a member of the interval; the emission stays a domain-annotated
+       shape and the concrete example, where one exists, still comes only from a value the code COMPUTED. */
+    {
+        const char *rtok = NULL, *rsubj = NULL;
+        double rnum = 0;
+        RelOp rel = concolic_rel(cond, &rtok, &rnum, &rsubj);
+        if (rel != REL_NONE) {
+            DCHECK(op == OPCMP_NONE,
+                   "one comparison result answered as an equality AND as an ordering — the two are minted by "
+                   "different hooks over different operands, so a value carrying both is one predicate whose "
+                   "two records would state two different domains for one hole");
+            DCHECK(arm == 0 || arm == 1,
+                   "a bound was about to be recorded for an arm that is neither taken nor not-taken — the "
+                   "relation a flow stands on is decided by WHICH arm it took, so an undecided one would "
+                   "file the true arm's constraint under a path that may run the false one");
+            concolic_bound(rsubj, arm ? rel : rel_op_negate(rel), rnum, rtok);
+        }
+    }
     return forked ? (arm | SOLVER_FORKED_BIT) : arm;   /* the bit tells the interpreter to snapshot-fork this frame */
 }
 

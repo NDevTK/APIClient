@@ -13,6 +13,7 @@
 #define ENGINE_HOST_SOLVER_CONCOLIC_H
 
 #include "quickjs.h"
+#include "solver/rel_op.h"   /* the four relations a bound can be stated in — see concolic_bound */
 
 /* Register the Concolic class in ctx's runtime (once, at engine init). */
 void concolic_init(JSContext *ctx);
@@ -382,6 +383,41 @@ void        concolic_exclude(const char *hole, const char *tok);
    and `*n` is 0 with a NULL return when the flow proved nothing about it. That is a POSITIVE statement (no
    equality gate over this value took its false arm on the path that built this request), never a hole. */
 const char *const *concolic_excluded(const char *hole, int *n);
+/* THE ORDERING'S HALF OF THE SAME RULE — the exclusion's twin over an ORDERED domain, and the second-largest
+   gate class a real minified bundle contains.
+   An equality determines a VALUE on one arm and an exclusion on the other. An ordering determines NO value on
+   either arm and a BOUND on both, which is why it needs its own recorder rather than a third state on the pin:
+   §@H forbids inventing `6` for `x > 5` and requires stating `{int>5}`, and those two sentences are the same
+   sentence — the line between a pin and a domain is whether a VALUE was determined, never whether a constraint
+   was. `rel` is normalised SUBJECT-ON-THE-LEFT by the hook, `num` is the literal the page wrote, and `txt` is
+   that literal's own §6.1.6.1.20 Number::toString, kept so no consumer re-spells a double into a number the
+   source file does not contain.
+   WITHIN ONE FLOW REPEATED OBSERVATIONS CONJOIN. `if (x > 5 && x < 100)` is two facts about one parameter and
+   a record holding only one of them is a wrong report by this rule's own terms, so the two sides are stored
+   apart and each keeps the TIGHTER of what it held and what arrived (an exclusive bound beating an inclusive
+   one at the same number). Across flows and across sightings of one endpoint the merge is the OPPOSITE and
+   lives in endpoint.c, for the reason stated there.
+   IT DOES NOT TRAVEL THROUGH A DERIVATION, for the reason concolic_exclude gives: `x.length < 3` is a fact
+   about the LENGTH, and carrying it onto `x` would be the recorded transform-expression §Re-execution
+   forbids. */
+void        concolic_bound(const char *hole, RelOp rel, double num, const char *txt);
+/* THE INTERVAL THIS FLOW NARROWED `hole` TO. Returns 1 and fills `*out` when some side was observed, 0 with
+   every field of `*out` cleared when none was — and that zero is a POSITIVE statement (no ordering gate over
+   this value ran on the path that built this request), never a hole a caller may fill with a guess.
+   `lo_txt`/`hi_txt` are BORROWED and valid until the running flow's constraint next grows. */
+typedef struct {
+    int has_lo, has_hi;         /* whether each side was observed at all */
+    double lo, hi;              /* the numbers, for ordering two bounds against each other */
+    int lo_incl, hi_incl;       /* 1 = `>=` / `<=` (inclusive), 0 = `>` / `<` (exclusive) */
+    const char *lo_txt, *hi_txt;/* …and the page's own spelling of each, which is what a report prints */
+} ConcolicBound;
+int         concolic_bound_read(const char *hole, ConcolicBound *out);
+/* THE ORDERING A COMPARISON RESULT CARRIES — the relation subject-left, its concrete side both spelled and as
+   a double, and the hole key the bound is a fact ABOUT. REL_NONE when this result is not an ordering over a
+   concrete finite Number, which is a positive statement: the predicate still forks, and only the bound is
+   absent (see concolic_rel_hook for the two ways that happens and why each is the honest answer).
+   All four are ONE observation, written together at the mint and asserted together here. */
+RelOp       concolic_rel(JSValueConst v, const char **ptok, double *pnum, const char **psubj);
 /* THE OTHER HALF OF THE PATH CONSTRAINT. A predicate that pins nothing still narrows: taking the true arm of
    `if (cfg.admin)` says the value is truthy FOR THIS FLOW, and a bundle tests the same flag over and over. The
    branch records its outcome under `key` — which decide.c composes from the IDENTITY of the value the branch

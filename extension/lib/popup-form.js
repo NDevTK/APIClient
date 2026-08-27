@@ -107,6 +107,10 @@ function buildFormFields(schema, initialData = null) {
                observed), which is why this is written the way `_exampleValue` is and not with a `||` that
                would also swallow an empty array arriving as "unconstrained". */
             _excludedValues: param._excludedValues === undefined ? null : param._excludedValues,
+            /* …and the ORDERING gate's interval, which is the same kind of fact and a different measurement
+               from `_range` above: `_range` is what live traffic's values happened to span, this is what the
+               bundle's own predicates REQUIRE on every path the engine saw reach the request. */
+            _bounds: param._bounds === undefined ? null : param._bounds,
           },
           "param",
           0,
@@ -257,6 +261,24 @@ function typeOfScalar(v) {
   return "string";
 }
 
+/* AN ORDERING GATE'S INTERVAL, SPELLED ONCE — read by the badge and by both placeholders, because a domain
+   rendered two ways in one form is two claims a reviewer has to reconcile. It states a CONSTRAINT and never a
+   member of it: `> 5` cannot be typed into a box and sent, which is exactly why §@H requires it where
+   inventing `6` is forbidden.
+   The keys are JSON Schema Validation 2020-12 §6.2's own, carried unrenamed from endpoint.c so there is one
+   vocabulary from the C emission to the OpenAPI export. Returns "" when there is no bound to state, which
+   every caller reads as the positive statement it is (no ordering gate's claim survived every observed
+   path). */
+function boundsPhrase(b) {
+  if (!b || typeof b !== "object") return "";
+  const parts = [];
+  if ("minimum" in b) parts.push("≥ " + b.minimum);
+  else if ("exclusiveMinimum" in b) parts.push("> " + b.exclusiveMinimum);
+  if ("maximum" in b) parts.push("≤ " + b.maximum);
+  else if ("exclusiveMaximum" in b) parts.push("< " + b.exclusiveMaximum);
+  return parts.join(" and ");
+}
+
 // Form-builder iterative driver. The three public entry points
 // (createFieldInput, _buildRepeatedMessageItem, _buildMessageGroup)
 // each seed a build queue, build the root wrapper synchronously, and
@@ -363,6 +385,17 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
      "admin" nor "prod" looked exactly like a param nothing ever tested. */
   if (Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0) {
     labelHtml += ` <span class="field-stat badge-excluded" title="values the forced execution proved this parameter is NOT, on every observed path to this request — a constraint the code stated, never a value it computed">${fieldDef._excludedValues.map((v) => "\u2260 " + esc(String(v))).join(", ")}</span>`;
+  }
+  /* …AND THE ORDERING GATE'S HALF OF THE SAME RULE. `_range` above is a statistic over observed traffic; this
+     is a CONSTRAINT the bundle's own `x > 5` stated, and the two must not be read in one voice — so it gets
+     its own badge, its own colour, and a title that says which of the two it is. Without it a parameter this
+     run proved must exceed 5 rendered exactly like a parameter nothing had ever ordered, and §Solver-half
+     calls that silence a wrong report rather than a partial one. It renders a CONSTRAINT and never a value:
+     `> 5` is not something a reviewer can mistake for a key to send, which is the whole reason @H may state
+     it where inventing `6` is forbidden. */
+  const _bp = boundsPhrase(fieldDef._bounds);
+  if (_bp) {
+    labelHtml += ` <span class="field-stat badge-bounds" title="the interval the forced execution proved this parameter obeys, on every observed path to this request — a constraint the code stated, never a value it computed">${esc(_bp)}</span>`;
   }
   // A PREFILLED BOX ALWAYS CARRIES ITS PROVENANCE. The badge is driven by the SAME resolvePrefill() the input
   // reads, so the box can never show a value the label does not attribute — which is what happened for a
@@ -661,6 +694,7 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
     if (pf.value !== null && pf.value !== undefined) inp.value = String(pf.value);
     /* The DOMAIN, where one is known and no value was resolved: shown as a placeholder, which is greyed and
        never submitted, so the box states what the value must satisfy without asserting a member of it. */
+    else if (boundsPhrase(fieldDef._bounds)) inp.placeholder = (type || "value") + " " + boundsPhrase(fieldDef._bounds);
     else if (fieldDef._range) inp.placeholder = (type || "value") + " in " + fieldDef._range.min + "–" + fieldDef._range.max;
     const dl = document.createElement("datalist");
     dl.id = dlId;
@@ -707,8 +741,11 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       const inp = document.createElement("input");
       inp.type = "number";
       inp.className = "form-input form-input-number";
-      // The DOMAIN in the placeholder where one is known — a constraint stated, never a member picked.
-      inp.placeholder = fieldDef._range ? (type + " in " + fieldDef._range.min + "\u2013" + fieldDef._range.max) : type;
+      /* The DOMAIN in the placeholder where one is known — a constraint stated, never a member picked. The
+         PROVED interval is preferred over the observed span: the first is what the code requires, the second
+         is only what a sample happened to contain, and a box can state one thing. */
+      inp.placeholder = boundsPhrase(fieldDef._bounds) ? (type + " " + boundsPhrase(fieldDef._bounds))
+        : fieldDef._range ? (type + " in " + fieldDef._range.min + "\u2013" + fieldDef._range.max) : type;
       if (type === "double" || type === "float") inp.step = "any";
       if (pf.value !== null) inp.value = pf.value;
       return inp;
@@ -729,6 +766,7 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
          must satisfy without asserting a member of it, exactly as the numeric input does for `_range`. */
       inp.placeholder = (Array.isArray(fieldDef._excludedValues) && fieldDef._excludedValues.length > 0)
         ? (type || "value") + " other than " + fieldDef._excludedValues.map(String).join(", ")
+        : boundsPhrase(fieldDef._bounds) ? (type || "value") + " " + boundsPhrase(fieldDef._bounds)
         : (type || "value");
       if (pf.value !== null) {
         inp.value =

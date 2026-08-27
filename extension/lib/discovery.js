@@ -289,6 +289,8 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
        over a value it appends to the query is — and a projection that dropped it here would make the popup's
        silence mean two different things in two halves of one record. */
     _excludedValues: prop._excludedValues === undefined ? null : prop._excludedValues,
+    /* …and the ordering gate's interval beside it, for the same reason and by the same rule. */
+    _bounds: prop._bounds === undefined ? null : prop._bounds,
   };
 }
 

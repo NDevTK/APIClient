@@ -21,9 +21,21 @@ static const char *const ep_loc_name[] = { "query", "path", "body" };
    `excl` is DOMAIN — each entry is a token some flow's own equality gate PROVED this hole is not, so the
    merge is an INTERSECTION: the record's claim is about the ENDPOINT, and only a constraint every observed
    path to it obeyed is true of the endpoint. Unioning them would state, of one request, a constraint that no
-   single run of the program ever satisfied. */
+   single run of the program ever satisfied.
+   `bnd` IS THE SAME KIND OF FACT AS `excl` OVER AN ORDERED DOMAIN, AND ITS MERGE IS THE SAME CLAIM SPELLED FOR
+   AN INTERVAL: the record may state a bound only where EVERY observed path obeyed it, so a second sighting
+   WIDENS to the interval hull rather than narrowing to the overlap. Two paths that reached one endpoint with
+   `x >= 5` and `x >= 10` leave `x >= 5` — the weaker bound is the one both obeyed; two that reached it with
+   `x >= 5` and `x <= 3` leave NO lower and NO upper bound, because neither claim survives the other path.
+   That is exactly what intersecting the exclusion sets does over an unordered domain — the complement of the
+   union of the two domains — and it is the same sentence, not a second rule. A sighting that observed NO
+   bound on a side therefore ERASES that side: a path allowed to reach the request without obeying the claim
+   is a path that disproves it.
+   WITHIN ONE FLOW THE OPPOSITE HOLDS AND IT IS NOT A CONTRADICTION: `if (x > 5 && x < 100)` conjoins, because
+   both gates are on ONE path. concolic.c owns that half; this file owns the across-paths half. */
+typedef struct { int has_lo, has_hi; double lo, hi; int lo_incl, hi_incl; char *lo_txt, *hi_txt; } ParamBound;
 typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
-                 char **excl; int nexcl; } Param;
+                 char **excl; int nexcl; ParamBound bnd; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; } Endpoint;
@@ -101,7 +113,9 @@ static char *url_display(JSContext *ctx, JSValueConst url) {
    was read. They are copied here rather than borrowed because the constraint is a growable head that a later
    narrowing REALLOCS, and a borrowed row would then name freed memory — a lifetime rule this file would have
    to keep true across every future edit to the two producers below. Copying makes it unbreakable. */
-typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; } KV;
+/* …and `bnd` for the same reason, one step further: concolic_bound_read hands back BORROWED spellings that
+   live in the flow's constraint head, which the very next narrowing reallocs. */
+typedef struct { char *name; char *val; EpLoc loc; char **excl; int nexcl; ParamBound bnd; } KV;
 typedef struct { KV *e; int n, cap; } KvBuf;
 
 /* `hole` is the value's HOLE KEY — the name the flow's own equality gates recorded their domain under — or
@@ -148,7 +162,35 @@ static void kv_add(KvBuf *b, const char *name, size_t nlen, const char *val, siz
             b->e[b->n].nexcl = nex;
         }
     }
+    /* …AND THE INTERVAL, off the SAME flow at the SAME instant, for the same reason. A param whose gate was
+       `x > 5` and one nothing ordered at all render with identical bytes without this, and that silence is
+       read as the positive statement "anything goes" — §Solver-half calls it a wrong report, not a partial
+       one, and it is the second-largest gate class a real minified bundle contains. */
+    memset(&b->e[b->n].bnd, 0, sizeof b->e[b->n].bnd);
+    if (hole) {
+        ConcolicBound cb;
+        if (concolic_bound_read(hole, &cb)) {
+            b->e[b->n].bnd.has_lo = cb.has_lo; b->e[b->n].bnd.has_hi = cb.has_hi;
+            b->e[b->n].bnd.lo = cb.lo;         b->e[b->n].bnd.hi = cb.hi;
+            b->e[b->n].bnd.lo_incl = cb.lo_incl; b->e[b->n].bnd.hi_incl = cb.hi_incl;
+            if (cb.has_lo) {
+                b->e[b->n].bnd.lo_txt = strdup(cb.lo_txt);
+                CHECK(b->e[b->n].bnd.lo_txt, "endpoint: OOM copying the bound a flow proved a param obeys");
+            }
+            if (cb.has_hi) {
+                b->e[b->n].bnd.hi_txt = strdup(cb.hi_txt);
+                CHECK(b->e[b->n].bnd.hi_txt, "endpoint: OOM copying the bound a flow proved a param obeys");
+            }
+        }
+    }
     b->n++;
+}
+
+/* ONE DISPOSER FOR ONE INTERVAL, because there are two places that hold one (a request's KV row and the
+   endpoint's merged Param) and a side added to ParamBound must be freed at both or one of them leaks. */
+static void param_bound_free(ParamBound *b) {
+    free(b->lo_txt); free(b->hi_txt);
+    memset(b, 0, sizeof *b);
 }
 
 static void kv_free(KvBuf *b) {
@@ -156,6 +198,7 @@ static void kv_free(KvBuf *b) {
         free(b->e[i].name); free(b->e[i].val);
         for (int k = 0; k < b->e[i].nexcl; k++) free(b->e[i].excl[k]);
         free(b->e[i].excl);
+        param_bound_free(&b->e[i].bnd);
     }
     free(b->e); b->e = NULL; b->n = b->cap = 0;
 }
@@ -419,6 +462,43 @@ static void param_intersect_excl(Param *p, char *const *ex, int n) {
     p->nexcl = k;
 }
 
+/* THE INTERVAL'S FIRST OBSERVATION — this endpoint's record takes what the recording flow proved. The strings
+   are re-copied rather than moved because the KV row that carries them is freed by kv_free whether it was
+   merged or seeded, and one owner per string is the only rule that survives a new caller. */
+static void param_set_bound(ParamBound *d, const ParamBound *s) {
+    DCHECK(!d->has_lo && !d->has_hi && !d->lo_txt && !d->hi_txt,
+           "an endpoint param's interval was seeded twice — the first sighting takes it and every later one "
+           "WIDENS it, so a second seed would replace a bound another path had already disproved and state, "
+           "of this endpoint, a constraint no run of the program obeyed");
+    *d = *s;
+    d->lo_txt = d->hi_txt = NULL;
+    if (s->has_lo) { d->lo_txt = strdup(s->lo_txt); CHECK(d->lo_txt, "endpoint: OOM recording a param's lower bound"); }
+    if (s->has_hi) { d->hi_txt = strdup(s->hi_txt); CHECK(d->hi_txt, "endpoint: OOM recording a param's upper bound"); }
+}
+
+/* …AND EVERY LATER ONE WIDENS IT TO THE INTERVAL HULL. A bound the record still carries is one EVERY observed
+   path to this endpoint obeyed, so the surviving lower bound is the LOOSER of the two (and no lower bound at
+   all if this path had none), and likewise above. It is `param_intersect_excl`'s claim over an ordered domain
+   and not a second rule: intersecting exclusion sets is the complement of the UNION of the two paths' domains,
+   and the hull is the strongest interval containing that union.
+   ON A TIE AT THE SAME NUMBER THE INCLUSIVE SIDE WINS, which is the mirror of concolic.c's within-a-flow rule
+   where the EXCLUSIVE one does: there the two facts are conjoined and the tighter survives; here they are
+   hulled and the looser does. */
+static void param_widen_bound(ParamBound *d, const ParamBound *s) {
+    if (!s->has_lo) { free(d->lo_txt); d->lo_txt = NULL; d->has_lo = 0; }
+    else if (d->has_lo && (s->lo < d->lo || (s->lo == d->lo && s->lo_incl && !d->lo_incl))) {
+        free(d->lo_txt);
+        d->lo = s->lo; d->lo_incl = s->lo_incl;
+        d->lo_txt = strdup(s->lo_txt); CHECK(d->lo_txt, "endpoint: OOM widening a param's lower bound");
+    }
+    if (!s->has_hi) { free(d->hi_txt); d->hi_txt = NULL; d->has_hi = 0; }
+    else if (d->has_hi && (s->hi > d->hi || (s->hi == d->hi && s->hi_incl && !d->hi_incl))) {
+        free(d->hi_txt);
+        d->hi = s->hi; d->hi_incl = s->hi_incl;
+        d->hi_txt = strdup(s->hi_txt); CHECK(d->hi_txt, "endpoint: OOM widening a param's upper bound");
+    }
+}
+
 static void param_add_val(Param *p, const char *v) {   /* merge a validValue (dedup, skip empty) */
     if (!v || !v[0]) return;
     for (int i = 0; i < p->nvals; i++) if (!strcmp(p->vals[i], v)) return;
@@ -466,6 +546,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             for (int j = 0; j < kvb.n; j++) {
                 param_add_val(&g_eps[i].params[j], kvb.e[j].val);
                 param_intersect_excl(&g_eps[i].params[j], kvb.e[j].excl, kvb.e[j].nexcl);
+                param_widen_bound(&g_eps[i].params[j].bnd, &kvb.e[j].bnd);
             }
             /* A REQUIRED HEADER THIS ENDPOINT DID NOT HAVE IS EMITTED OUTPUT, and this path credited the WFQ
                with nothing for it. An endpoint's IDENTITY is method + path + param names AND locations
@@ -498,6 +579,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         e->params[e->np].loc = kvb.e[j].loc;
         param_add_val(&e->params[e->np], kvb.e[j].val);
         param_set_excl(&e->params[e->np], kvb.e[j].excl, kvb.e[j].nexcl);
+        param_set_bound(&e->params[e->np].bnd, &kvb.e[j].bnd);
         e->np++;
     }
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
@@ -544,6 +626,35 @@ char *endpoint_json_array(void) {
                 for (int k = 0; k < e->params[j].nexcl; k++) { if (k) json_buf_puts(&b, ","); json_buf_str(&b, e->params[j].excl[k]); }
                 json_buf_puts(&b, "]");
             }
+            /* …AND THE INTERVAL, IN THE STANDARD'S OWN VOCABULARY FOR IT, and only where a bound survived every
+               observed path. JSON Schema Validation 2020-12 §6.2 Validation Keywords for Numeric Instances
+               (number and integer) names all four: §6.2.2 "maximum" ("an inclusive upper limit"), §6.2.3
+               "exclusiveMaximum" ("strictly less than (not equal to)"), §6.2.4 "minimum" ("an inclusive lower
+               limit") and §6.2.5 "exclusiveMinimum" ("strictly greater than (not equal to)"). In 2020-12 each
+               is a NUMBER — the draft-04 boolean form, where `exclusiveMinimum:true` modified `minimum`, is a
+               different keyword shape and writing it here would be read as a bound of 1.
+               THE NUMBER IS THE PAGE'S OWN SPELLING, carried from the literal the predicate compared against
+               rather than re-printed from a double, so a report never states a number the bundle does not
+               contain. It is written UNQUOTED because these keywords take a number and a quoted one is a
+               different type; every spelling that reaches here came from §6.1.6.1.20 Number::toString of a
+               FINITE Number (concolic_rel_hook refuses the rest), which is a JSON number by construction.
+               IT STAYS A SHAPE. §@H forbids inventing `6` for `x > 5`, and nothing here picks a member of the
+               interval — `validValues` is still only what the code COMPUTED. */
+            if (e->params[j].bnd.has_lo || e->params[j].bnd.has_hi) {
+                int wrote = 0;
+                json_buf_puts(&b, ",\"bounds\":{");
+                if (e->params[j].bnd.has_lo) {
+                    json_buf_puts(&b, e->params[j].bnd.lo_incl ? "\"minimum\":" : "\"exclusiveMinimum\":");
+                    json_buf_puts(&b, e->params[j].bnd.lo_txt);
+                    wrote = 1;
+                }
+                if (e->params[j].bnd.has_hi) {
+                    if (wrote) json_buf_puts(&b, ",");
+                    json_buf_puts(&b, e->params[j].bnd.hi_incl ? "\"maximum\":" : "\"exclusiveMaximum\":");
+                    json_buf_puts(&b, e->params[j].bnd.hi_txt);
+                }
+                json_buf_puts(&b, "}");
+            }
             json_buf_puts(&b, "}");
         }
         json_buf_puts(&b, "]");
@@ -577,6 +688,7 @@ void endpoint_free(void) {
             free(g_eps[i].params[j].vals);
             for (int k = 0; k < g_eps[i].params[j].nexcl; k++) free(g_eps[i].params[j].excl[k]);
             free(g_eps[i].params[j].excl);
+            param_bound_free(&g_eps[i].params[j].bnd);
         }
         free(g_eps[i].params);
         for (int j = 0; j < g_eps[i].nh; j++) { free(g_eps[i].hdrs[j].name); free(g_eps[i].hdrs[j].value); }

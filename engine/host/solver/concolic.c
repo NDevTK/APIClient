@@ -54,6 +54,15 @@ typedef struct {
     char *cmp_subj;     /* …and the HOLE KEY of the unknown side — see concolic_cmp_subject. The three are ONE
                            observation: written together at pred_new, asserted together there, and read
                            together by decide.c, which pins on one arm and excludes on the other. */
+    /* …AND THE ORDERING'S OWN THREE FIELDS, which are the SAME observation for the other half of §Solver-half's
+       two-facts rule and are deliberately NOT the equality's. An equality determines a VALUE on one arm; an
+       ordering determines a BOUND on both, so the two cannot share `cmp_op` without one of them answering a
+       question it was not asked. `rel_op` is normalised SUBJECT-ON-THE-LEFT (`5 < x` arrives as `x > 5`), so
+       decide.c reads a relation it can state without knowing which operand the page wrote first. */
+    RelOp rel_op;       /* for an ORDERING RESULT: the relation, subject-left (else REL_NONE)  */
+    char *rel_tok;      /* the concrete side SPELLED — the page's own §6.1.6.1.20 Number::toString */
+    double rel_num;     /* …and its value, which is what a merge orders two bounds by */
+    char *rel_subj;     /* …and the HOLE KEY of the unknown side. All four written and asserted together. */
 } Concolic;
 
 /* ── THE ONE ENCODING ───────────────────────────────────────────────────────────────────────────────────────
@@ -245,9 +254,41 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
               at the same rate; without this the second of the two flows knew nothing it could report about
               its own parameter. It is keyed by the HOLE KEY rather than by a source's `src` — the two differ
               for every derived value (see concolic_hole_key) and the emission has only the hole.
-   All four are per-flow and travel together, which is why they are ONE entry rather than four maps that a
+     bnd   — the INTERVAL an ordering gate over this HOLE narrowed it to, which is the exclusion's twin over an
+              ORDERED domain and the second-most-frequent gate class in real minified bundles. It is a pointer
+              rather than six inline fields because an entry either holds a domain over an ordered value or it
+              does not, and paying six words on every pin and every branch outcome would grow the chain the
+              cold tier measures for a fact most entries never carry.
+              WITHIN ONE FLOW THE TWO SIDES CONJOIN. `if (x > 5 && x < 100)` is TWO observations of one
+              parameter and a representation holding only one of them is a wrong report by the same rule that
+              made `excl` necessary — so a lower and an upper bound are separate fields, each narrowed
+              (max for the lower, min for the upper) as the flow observes more gates, and a tie between an
+              inclusive and an exclusive bound at the same number keeps the EXCLUSIVE one, which is the
+              tighter fact.
+   All five are per-flow and travel together, which is why they are ONE entry rather than five maps that a
    fork, a suspend and a resume would each have to remember to carry. */
-typedef struct { char *key; char *val; char **excl; int nexcl; signed char truth; signed char pinned_root; } Cons;
+/* One side of an interval, and the SPELLING beside the number. The number is what a merge orders two bounds
+   by; the text is the page's own §6.1.6.1.20 Number::toString of the literal it wrote, kept so nothing
+   downstream re-spells a double and reports a bound the source file does not contain. */
+typedef struct { double num; char *txt; signed char present; signed char inclusive; } BoundSide;
+typedef struct { BoundSide lo, hi; } Bound;
+typedef struct { char *key; char *val; char **excl; int nexcl; Bound *bnd;
+                 signed char truth; signed char pinned_root; } Cons;
+
+static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
+/* THE ONE COPY OF ONE SIDE, because a bound is copied at the fork's copy-up and nowhere else, and a field
+   added to BoundSide must be copied there or a sibling silently inherits half a fact. */
+static void bound_side_copy(BoundSide *d, const BoundSide *s) {
+    DCHECK(!s->present == !s->txt,
+           "a bound side's presence and its spelling disagree — the two are written by one line, and a side "
+           "that is present with no text is a bound the emission would read as a number it cannot print");
+    *d = *s;
+    d->txt = NULL;
+    if (s->present) {
+        d->txt = strdup(s->txt);
+        CHECK(d->txt, "concolic: OOM copying an inherited bound's spelling");
+    }
+}
 
 /* ONE FREE FOR ONE ENTRY, because there are now two places that dispose of an array of them (the live head and
    a frozen segment) and a field added to the struct must not be freed in one of them only. */
@@ -257,6 +298,7 @@ static void cons_entry_free(Cons *e) {
     free(e->val);
     for (i = 0; i < e->nexcl; i++) free(e->excl[i]);
     free(e->excl);
+    if (e->bnd) { bound_side_free(&e->bnd->lo); bound_side_free(&e->bnd->hi); free(e->bnd); }
 }
 /* …and one measurement, for the same reason: the freeze's byte census reads exactly the fields the free above
    disposes of, so a field that grows the entry is counted where it is counted for every other. */
@@ -265,6 +307,11 @@ static long cons_entry_bytes(const Cons *e) {
     int i;
     n += (long)e->nexcl * (long)sizeof(char *);
     for (i = 0; i < e->nexcl; i++) n += (long)strlen(e->excl[i]) + 1;
+    if (e->bnd) {
+        n += (long)sizeof(Bound);
+        if (e->bnd->lo.txt) n += (long)strlen(e->bnd->lo.txt) + 1;
+        if (e->bnd->hi.txt) n += (long)strlen(e->bnd->hi.txt) + 1;
+    }
     return n;
 }
 
@@ -381,6 +428,17 @@ static Cons *cons_entry(const char *key) {
         }
         g_pins[g_pins_n].nexcl = below->nexcl;
     }
+    /* …AND SO DOES THE INTERVAL, for exactly the reason above. A flow that observed `x > 5`, was preempted,
+       and resumed to build its request would otherwise report an unbounded parameter — the fact lost to a
+       context switch rather than to anything the program did. */
+    g_pins[g_pins_n].bnd = NULL;
+    if (below && below->bnd) {
+        Bound *nb = malloc(sizeof *nb);
+        CHECK(nb, "concolic: OOM copying an inherited bound");
+        bound_side_copy(&nb->lo, &below->bnd->lo);
+        bound_side_copy(&nb->hi, &below->bnd->hi);
+        g_pins[g_pins_n].bnd = nb;
+    }
     g_pins[g_pins_n].truth = below ? below->truth : -1;
     /* INHERITED WITH THE REST OF THE ENTRY. A principal demand this flow made before its last freeze is still
        this flow's demand, and a copy-up that dropped it would make the very same path answer "unpinned" the
@@ -485,6 +543,96 @@ const char *const *concolic_excluded(const char *hole, int *n) {
     if (!c || !c->nexcl) { *n = 0; return NULL; }
     *n = c->nexcl;
     return (const char *const *)c->excl;
+}
+
+/* THE CONSTRAINT KEY AN INTERVAL LIVES UNDER — composed under its own tag for the reason excl_key states, and
+   a SEPARATE tag from that one because the two are different claims about one hole: `≠ "admin"` and `> 5` are
+   both domain facts, and filing them together would make a consumer that reads one see the other's shape.
+   Caller frees. */
+static char *bnd_key(const char *hole) {
+    const char *f[1];
+    f[0] = hole;
+    return concolic_ident_compose("bound", f, 1);
+}
+
+/* ONE SIDE NARROWED. Within one flow the observations CONJOIN — `if (x > 5 && x < 100)` is two facts about one
+   parameter, and each side keeps the TIGHTER of what it held and what just arrived. On a tie between an
+   inclusive and an exclusive bound at the same number the exclusive one wins, because `x > 5` is strictly more
+   than `x >= 5` says and a flow that observed both stands on both. */
+static void bound_side_narrow(BoundSide *s, int is_lower, double num, int inclusive, const char *txt) {
+    if (s->present) {
+        int tighter = is_lower ? (num > s->num) : (num < s->num);
+        if (!tighter) {
+            if (num != s->num) return;                     /* the looser fact adds nothing */
+            if (inclusive || !s->inclusive) return;        /* same number: only exclusive-over-inclusive wins */
+        }
+        bound_side_free(s);
+    }
+    s->num = num;
+    s->inclusive = (signed char)(inclusive ? 1 : 0);
+    s->txt = strdup(txt);
+    CHECK(s->txt, "concolic: OOM copying the spelling of a bound a flow observed");
+    s->present = 1;
+}
+
+void concolic_bound(const char *hole, RelOp rel, double num, const char *txt) {
+    Cons *c;
+    char *key;
+
+    DCHECK(hole && *hole,
+           "an ordering gate was recorded against no HOLE — the subject is what the emission looks a domain "
+           "up by, so a nameless one is a constraint stored where nothing can read it and a parameter that "
+           "renders as unbounded while this flow has proved otherwise");
+    DCHECK(rel != REL_NONE,
+           "an ordering gate was recorded with no RELATION — `x < 5` and `x > 5` are the two answers this "
+           "field distinguishes, so a bound with neither is a number filed under a claim nobody made");
+    DCHECK(txt && *txt,
+           "an ordering gate was recorded with no SPELLING for its bound — the text is the page's own literal "
+           "and the only thing a report may print, because re-spelling the double here would state a number "
+           "the source file does not contain");
+    key = bnd_key(hole);
+    CHECK(key, "concolic: the bound key could not be composed — a hole is a real string, so the only way this "
+               "fails is allocation, and a lost constraint reports an unbounded parameter");
+    c = cons_entry(key);
+    free(key);
+    if (!c->bnd) {
+        c->bnd = calloc(1, sizeof *c->bnd);
+        CHECK(c->bnd, "concolic: OOM recording the interval a flow narrowed its input to");
+    }
+    if (rel == REL_GT || rel == REL_GE)
+        bound_side_narrow(&c->bnd->lo, 1, num, rel == REL_GE, txt);
+    else
+        bound_side_narrow(&c->bnd->hi, 0, num, rel == REL_LE, txt);
+}
+
+int concolic_bound_read(const char *hole, ConcolicBound *out) {
+    const Cons *c = NULL;
+
+    DCHECK(out != NULL, "the interval was asked for with nowhere to put it — a bound returned only as a "
+                        "yes/no is a constraint the caller cannot state");
+    out->has_lo = out->has_hi = 0;
+    out->lo_incl = out->hi_incl = 0;
+    out->lo = out->hi = 0;
+    out->lo_txt = out->hi_txt = NULL;
+    if (hole) {
+        char *key = bnd_key(hole);
+        CHECK(key, "concolic: the bound key could not be composed at the read");
+        c = cons_lookup(key);
+        free(key);
+    }
+    if (!c || !c->bnd) return 0;
+    if (c->bnd->lo.present) {
+        out->has_lo = 1; out->lo = c->bnd->lo.num;
+        out->lo_incl = c->bnd->lo.inclusive; out->lo_txt = c->bnd->lo.txt;
+    }
+    if (c->bnd->hi.present) {
+        out->has_hi = 1; out->hi = c->bnd->hi.num;
+        out->hi_incl = c->bnd->hi.inclusive; out->hi_txt = c->bnd->hi.txt;
+    }
+    DCHECK(out->has_lo || out->has_hi,
+           "a hole carries a bound record with neither side present — concolic_bound allocates the record "
+           "only as it writes a side, so an empty one is a narrowing that was allocated and then not made");
+    return 1;
 }
 
 void concolic_constrain_branch(const char *key, int truth) {
@@ -599,6 +747,8 @@ static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     free(c->ident);
     free(c->cmp_tok);
     free(c->cmp_subj);
+    free(c->rel_tok);
+    free(c->rel_subj);
     JS_FreeValueRT(rt, c->example);
     free(c);
 }
@@ -1013,6 +1163,28 @@ static JSValue pred_new(JSContext *ctx, const char *op, const char *src, const c
     return r;
 }
 
+/* THE ORDERING'S OBSERVATION, STAMPED ON A PREDICATE pred_new HAS JUST MINTED. It is a second call rather than
+   four more parameters because only ONE of pred_new's callers has an ordering to state, and a signature every
+   caller has to spell `REL_NONE, NULL, 0, NULL` into is a signature that invites a caller to spell it wrong.
+   The three facts are written HERE, together, so the assert that they are one observation has a single site. */
+static void pred_set_bound(JSValueConst pred, RelOp rel, const char *tok, double num, const char *subj) {
+    Concolic *c = JS_GetOpaque(pred, g_concolic_class);
+
+    DCHECK(c != NULL, "an ordering's bound was stamped on something that is not a comparison result");
+    DCHECK(rel != REL_NONE && tok != NULL && subj != NULL,
+           "an ordering's relation, token and subject were not all present at the one line that writes them — "
+           "decide.c reads all three at once to state a bound, so a result carrying some of them is a "
+           "constraint that can be observed and never reported");
+    DCHECK(c->rel_op == REL_NONE, "a comparison result was given a second bound — a predicate is one relation "
+                                  "over one pair, so a second write is two facts wearing one identity");
+    c->rel_op = rel;
+    c->rel_num = num;
+    c->rel_tok = strdup(tok);
+    CHECK(c->rel_tok, "concolic: OOM recording the literal an ordering bounds a value by");
+    c->rel_subj = strdup(subj);
+    CHECK(c->rel_subj, "concolic: OOM recording the hole an ordering is a fact about");
+}
+
 /* A COMPARISON-RESULT bool carrying `src <op> tok`, for a component whose IDL member IS a comparison over its
    own source (HTML §6.2's `document.hidden` is `visibilityState === "hidden"`). It composes the identity the
    page's own `x === tok` composes for the same source and token, which is what makes the two ONE constraint
@@ -1068,6 +1240,19 @@ int concolic_cmp(JSValueConst v, const char **psrc, const char **ptok) {
     if (!c || c->cmp_op == OPCMP_NONE) return OPCMP_NONE;
     if (psrc) *psrc = c->src; if (ptok) *ptok = c->cmp_tok;
     return c->cmp_op;
+}
+
+RelOp concolic_rel(JSValueConst v, const char **ptok, double *pnum, const char **psubj) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c || c->rel_op == REL_NONE) return REL_NONE;
+    DCHECK(c->rel_tok != NULL && c->rel_subj != NULL,
+           "an ordering result carries a relation with no token or no subject — the three are one observation, "
+           "written together at the mint, so a result holding only some of them is a bound whose own producer "
+           "does not know what it is about");
+    if (ptok)  *ptok  = c->rel_tok;
+    if (pnum)  *pnum  = c->rel_num;
+    if (psubj) *psubj = c->rel_subj;
+    return c->rel_op;
 }
 
 const char *concolic_cmp_subject(JSValueConst v) {
@@ -1188,24 +1373,67 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
    < 700` and `parseInt(gCS(b).width) < 300` produced the same key and the second was DECIDED by the first,
    pruning an arm the flow's constraint does not contradict. `x < 700` and `x > 700` were one fact too.
    ORDERING IS NOT SYMMETRIC, so the operands keep the order the program wrote them: `x < 700` and `700 < x`
-   are two predicates and neither may answer the other. */
+   are two predicates and neither may answer the other.
+   AND IT NOW STATES ITS BOUND, which is the other half of §Solver-half's two-facts rule and the half the
+   identity above cannot carry. An identity only tells predicates APART; a report has to SAY what one requires.
+   `rel169` is a fact this run observed and could not print, so a parameter gated by `> 5` rendered with the
+   same bytes as one nothing had ever tested — the exact asymmetry that made an equality's false arm a wrong
+   report rather than a partial one, arriving on the second-most-frequent gate class in a real bundle.
+   IT INVENTS NO VALUE. What is recorded is the relation the page wrote, the literal the page wrote, and the
+   arm this run took; §@H's "never invent `6` for `x > 5`" is about the VALUE, and no value is determined here
+   — the emission stays a domain-annotated shape. */
 int concolic_rel_hook(JSContext *ctx, JSValue *sp, int op) {
     JSValue a = sp[-2], b = sp[-1];
     int ca = concolic_is(a), cb = concolic_is(b);
     char opid[24];
+    RelOp rel;
     int w;
 
     if (!ca && !cb) return 0;
     /* THE OPERATOR ARRIVES AS THE ENGINE'S OWN OPCODE FOR IT (see the hook's contract in quickjs.h), which is
-       an identity and not a name. Nothing here interprets it — an ordering never pins, so the four operators
-       need only stay TOLD APART — and it is composed as a field like any other. */
+       an identity and not a name. The IDENTITY keeps the raw opcode — the four operators need only stay TOLD
+       APART for the constraint key, and re-spelling them there would put a second encoding beside this file's
+       one. The NAME is asked of solver/rel_op.h, which reads it off the engine's own opcode table.
+       IT IS ASKED HERE, ON EVERY ORDERING, and not down beside the one branch that uses it: rel_op_of_opcode
+       is what catches the host's rebuild of the opcode table drifting from quickjs.c's, and an assert placed
+       under the numeric-operand test would only fire on a bundle that happens to compare against a literal —
+       so a drifted build could run a whole document naming no relation and reporting nothing wrong. */
+    rel = rel_op_of_opcode(op);
     w = snprintf(opid, sizeof opid, "rel%d", op);
     DCHECK(w > 0 && (size_t)w < sizeof opid, "a relational operator's id did not fit its own buffer");
     (void)w;
     {
-        JSValueConst opq = ca ? a : b;
+        JSValueConst opq = ca ? a : b, other = ca ? b : a;
         JSValue res = pred_new(ctx, opid, concolic_src_c(opq), concolic_root_c(opq),
                                ident_of_operand(ctx, a), ident_of_operand(ctx, b), OPCMP_NONE, NULL, NULL);
+        /* A BOUND EXISTS ONLY WHERE THE RELATION'S OWN MEANING IS DETERMINED, and §7.2.12 IsLessThan is what
+           decides that. Step 3 takes the STRING comparison when px and py are BOTH Strings and the numeric
+           one otherwise, so a concrete side that is a Number puts the comparison on the numeric path whatever
+           the unknown turns out to be — and a concrete side that is a String leaves the page performing
+           either a lexicographic or a numeric comparison depending on a value this engine does not have.
+           Stating a bound there would be naming which comparison the page ran, which is the same invention as
+           naming a value, so it is left absent.
+           NON-FINITE IS THE SAME ANSWER FOR A DIFFERENT REASON: `x < Infinity` narrows nothing, `x < NaN` is
+           false for every x (§7.2.12 answers undefined and §13.10.1 turns that into false), and neither
+           Infinity nor NaN is a JSON number a report could carry. */
+        /* Where neither holds, the predicate still forks and only the BOUND is absent. */
+        if (!concolic_is(other) && JS_IsNumber(other)) {
+            double num = 0;
+            int gotn = JS_ToFloat64(ctx, &num, other);
+            DCHECK(gotn == 0, "a Number operand did not convert to a double — §7.1.4 ToNumber over a value "
+                              "JS_IsNumber has already answered for cannot fail, so this is the tag test and "
+                              "the conversion disagreeing about what the operand is");
+            if (gotn == 0 && isfinite(num)) {
+                char *subj = concolic_hole_key(concolic_shape_c(opq));
+                char *txt = subj ? literal_tok(ctx, other) : NULL;
+                /* NORMALISED SUBJECT-LEFT EXACTLY ONCE. `700 < x` is `x > 700`; recording the relation as
+                   written would make every consumer downstream re-derive which operand the page put first,
+                   and the first one to forget reports the bound inverted. */
+                if (txt) pred_set_bound(res, ca ? rel : rel_op_mirror(rel), txt, num, subj);
+                free(txt);
+                free(subj);
+            }
+        }
         JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
         sp[-2] = res;
     }
@@ -1673,6 +1901,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     c->ident = ident;       /* consume — NULL means this engine cannot spell the value; see the struct */
     c->example = example;   /* consume */
     c->cmp_op = OPCMP_NONE;
+    c->rel_op = REL_NONE;   /* reclaim_calloc already zeroes it; stated beside cmp_op so the two stay one act */
     JS_SetOpaque(obj, c);
     return obj;
 }

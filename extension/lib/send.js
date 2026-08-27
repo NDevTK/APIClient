@@ -87,6 +87,13 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
                like `_exampleValue` rather than with a `||`, because an empty array must not arrive here as
                "nothing was observed" — lib/learn.js writes `[]` to mean a claim that was DISPROVED. */
             _excludedValues: pDef._excludedValues === undefined ? null : pDef._excludedValues,
+            /* …AND THE SAME FACT OVER AN ORDERED DOMAIN. `_range` above is what live traffic's observed
+               values SPANNED — a statistic; this is what the bundle's own ordering gates REQUIRE, on every
+               path the engine observed reaching the request. The two are different claims and are carried
+               apart so the popup can say which is which; collapsing them would state a constraint out of a
+               sample. Written like `_exampleValue` rather than with a `||`, because lib/learn.js writes
+               `null` to mean a claim that was DISPROVED and `undefined` to mean nothing was ever observed. */
+            _bounds: pDef._bounds === undefined ? null : pDef._bounds,
             /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
                from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
                emitted one and lib/learn.js's copy of it read a field the engine's param record does not
