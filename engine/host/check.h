@@ -51,6 +51,8 @@
 #define ENGINE_HOST_CHECK_H
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <unistd.h>   /* write(2) — the record is ONE syscall; see the emitter */
 
 #ifndef APICLIENT_DEV
 #define APICLIENT_DEV 1   /* development is the default; a release build compiles with -DAPICLIENT_DEV=0 */
@@ -70,45 +72,94 @@
  * JSON (RFC 8259 §7 "Strings") requires escapes for `"`, `\` and every code point below U+0020, and permits
  * any other Unicode character unescaped — so UTF-8 bytes (the `§` in every citation) pass straight through.
  *
- * ONE LOCK, BECAUSE THE RECORD IS MANY WRITES AND stderr IS UNBUFFERED. The old form was a single `fprintf`
- * and the escaping makes it a sequence; run-test262 drives the corpus on SEVERAL THREADS, so an unlocked
- * sequence lets a second thread's record interleave into the middle of this one and produce a line that
- * decomposes into a location from one assert and a reason from another — a plausible datum assembled out of
- * two true ones, which is the failure this file exists to make impossible. `flockfile` (POSIX.1-2001, and the
- * mechanism stdio defines for exactly this) holds the stream across the whole record. */
-static inline void apiclient_assert_emit_json(FILE *f, const char *s)
+ * ONE WRITE, BECAUSE A LOCK CANNOT REACH THE OTHER WRITER. The record is many appends once the escaping is a
+ * sequence, and an interleaved record is the failure this file exists to make impossible: a line that
+ * decomposes into a location from one assert and a reason from another is a plausible datum assembled out of
+ * two true ones. This was `flockfile` (POSIX.1-2001, the mechanism stdio defines for exactly this), reasoned
+ * about THREADS — run-test262 drives the corpus on several of them — and it is correct for threads and
+ * STRUCTURALLY UNABLE to help here, because the other writer is not a thread. wpt_runner.c forks a CHILD
+ * PROCESS for a peer instance, parent and child share this file descriptor, and `flockfile` locks a FILE in
+ * one address space: it has no visibility of the other process at all. It was not that the lock missed this
+ * emitter or that some path bypassed it — the lock covered it and could not work.
+ * So the record is COMPOSED into a stack buffer and emitted with ONE `write(2)`. That is atomic against every
+ * other writer for the two things stderr is here: a pipe (POSIX.1-2001 guarantees a write of at most PIPE_BUF
+ * — 4096 on Linux, which is why the buffer is sized under it — is not interleaved) and a regular file opened
+ * O_APPEND. It also removes stdio from the abort path entirely, which is worth having on its own: this runs
+ * where the heap may already be the reason we are aborting, and `write` allocates nothing.
+ * TRUNCATION IS VISIBLE AND THE RECORD STILL PARSES. A reason longer than the buffer is a real possibility —
+ * several in this tree cite a whole algorithm — so the tail is reserved, the record always closes, and an
+ * overlong one says so in its own `reason` rather than arriving as silently shortened prose. */
+/* Append to a fixed buffer, never past it. `*used` is the running length; every appender is bounds-checked
+   against `cap` so the caller can reserve a tail it knows will fit. */
+static inline void apiclient_assert_put(char *b, size_t cap, size_t *used, const char *s, size_t n)
+{
+  size_t room = cap - *used;
+  if (n > room) n = room;
+  memcpy(b + *used, s, n);
+  *used += n;
+}
+
+/* JSON (RFC 8259 §7 "Strings") requires escapes for `"`, `\` and every code point below U+0020, and permits
+   any other Unicode character unescaped — so UTF-8 bytes (the `§` in every citation) pass straight through. */
+static inline void apiclient_assert_emit_json(char *b, size_t cap, size_t *used, const char *s)
 {
   for (; *s != '\0'; s++) {
     unsigned char c = (unsigned char) *s;
+    char esc[8];
     switch (c) {
-    case '"':  fputs("\\\"", f); break;
-    case '\\': fputs("\\\\", f); break;
-    case '\n': fputs("\\n", f);  break;
-    case '\r': fputs("\\r", f);  break;
-    case '\t': fputs("\\t", f);  break;
+    case '"':  apiclient_assert_put(b, cap, used, "\\\"", 2); break;
+    case '\\': apiclient_assert_put(b, cap, used, "\\\\", 2); break;
+    case '\n': apiclient_assert_put(b, cap, used, "\\n",  2); break;
+    case '\r': apiclient_assert_put(b, cap, used, "\\r",  2); break;
+    case '\t': apiclient_assert_put(b, cap, used, "\\t",  2); break;
     default:
-      if (c < 0x20) fprintf(f, "\\u%04x", (unsigned) c);
-      else          fputc((int) c, f);
+      if (c < 0x20) { int k = snprintf(esc, sizeof esc, "\\u%04x", (unsigned) c);
+                      apiclient_assert_put(b, cap, used, esc, (size_t) k); }
+      else          apiclient_assert_put(b, cap, used, (const char *) &c, 1);
     }
+  }
+}
+
+/* ONE record, ONE write. Returns nothing and cannot fail in a way the caller could act on — it is the last
+   thing that happens before abort(). Partial writes are looped, because a signal can cut one short and half a
+   record is the interleaving this exists to prevent. */
+static inline void apiclient_assert_write(const char *b, size_t n)
+{
+  size_t off = 0;
+  while (off < n) {
+    ssize_t w = write(2, b + off, n - off);
+    if (w <= 0) break;   /* the fd is gone or refuses; there is nowhere left to report that */
+    off += (size_t) w;
   }
 }
 
 /* Emit the machine-readable assertion line the JS bridge (linesToAnalysis) surfaces (@E / @WHY), then abort. */
 #define APICLIENT_ASSERT_EMIT(tag, condstr, msg) do { \
+    /* Under PIPE_BUF (4096 on Linux) so a write to a pipe is atomic against the forked peer instance. */ \
+    char apiclient_b_[3072]; \
+    size_t apiclient_n_ = 0; \
+    const size_t apiclient_cap_ = sizeof apiclient_b_ - 64;   /* the reserved tail */ \
+    char apiclient_at_[32]; \
     fflush(stdout); \
-    flockfile(stderr); \
-    fputs(tag " {\"phase\":\"assert\",\"cond\":\"", stderr); \
-    apiclient_assert_emit_json(stderr, (condstr)); \
-    fputs("\",\"at\":\"", stderr); \
-    apiclient_assert_emit_json(stderr, __FILE__); \
-    fprintf(stderr, ":%d\",\"reason\":\"", __LINE__); \
-    apiclient_assert_emit_json(stderr, (msg)); \
-    fputs("\"}\n", stderr); \
-    funlockfile(stderr); \
-    fflush(stderr); \
+    apiclient_assert_put(apiclient_b_, apiclient_cap_, &apiclient_n_, tag " {\"phase\":\"assert\",\"cond\":\"", \
+                         sizeof(tag " {\"phase\":\"assert\",\"cond\":\"") - 1); \
+    apiclient_assert_emit_json(apiclient_b_, apiclient_cap_, &apiclient_n_, (condstr)); \
+    apiclient_assert_put(apiclient_b_, apiclient_cap_, &apiclient_n_, "\",\"at\":\"", 8); \
+    apiclient_assert_emit_json(apiclient_b_, apiclient_cap_, &apiclient_n_, __FILE__); \
+    apiclient_assert_put(apiclient_b_, apiclient_cap_, &apiclient_n_, apiclient_at_, \
+                         (size_t) snprintf(apiclient_at_, sizeof apiclient_at_, ":%d", __LINE__)); \
+    apiclient_assert_put(apiclient_b_, apiclient_cap_, &apiclient_n_, "\",\"reason\":\"", 12); \
+    apiclient_assert_emit_json(apiclient_b_, apiclient_cap_, &apiclient_n_, (msg)); \
+    /* THE TAIL IS RESERVED, so this always fits and the record always parses. A reason that ran out of room \
+       says so IN the reason rather than ending mid-sentence as prose nobody can tell was cut. */ \
+    if (apiclient_n_ == apiclient_cap_) \
+      apiclient_n_ += (size_t) snprintf(apiclient_b_ + apiclient_n_, 64, \
+                                        " [record truncated at %u bytes]\"}\n", (unsigned) apiclient_cap_); \
+    else \
+      apiclient_n_ += (size_t) snprintf(apiclient_b_ + apiclient_n_, 64, "\"}\n"); \
+    apiclient_assert_write(apiclient_b_, apiclient_n_); \
   } while (0)
 
-/* CHECK — always fatal (dev + release). */
 #define CHECK(cond, msg)  do { if (!(cond)) { APICLIENT_ASSERT_EMIT("@E", #cond, (msg)); abort(); } } while (0)
 #define CHECK_FAIL(msg)   do { APICLIENT_ASSERT_EMIT("@E", "unreachable", (msg)); abort(); } while (0)
 
