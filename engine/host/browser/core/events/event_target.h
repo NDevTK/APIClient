@@ -74,6 +74,16 @@ typedef struct EventTargetTree {
    first, and event_target_free asserts. */
 void event_target_set_tree(const EventTargetTree *tree);
 
+/* THE `is_window` PREDICATE ABOVE, ASKED OF ONE TARGET — the registered answer, reachable by the algorithms
+   that need it rather than only by the walk that happens to hold the struct. HTML §8.1.8.1's event handler
+   processing algorithm step 4 is the second caller: its `special error event handling` is true only when the
+   event's currentTarget "implements the WindowOrWorkerGlobalScope mixin", and the mixin's implementers are
+   Window and WorkerGlobalScope — a worker global being a different agent with its own dispatch, which never
+   reaches this walk. That is why the five-argument invocation is `window.onerror`'s and not `img.onerror`'s.
+   False when no component has claimed the tree, which is the same answer §2.9's walk takes for a host with no
+   tree at all: a target that is not in anyone's tree is not a global either. */
+bool event_target_is_window(JSContext *ctx, JSValueConst target);
+
 /* DOM §4.8's RETARGETING ALGORITHM — "to retarget an object A against an object B", the operation that decides
    what an object inside a shadow tree is CALLED when it is reported to something outside it. It is not an event
    algorithm and does not belong to any one caller: §2.9 runs it four times (the event's relatedTarget and each

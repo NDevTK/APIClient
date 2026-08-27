@@ -62,6 +62,22 @@ bool    event_canceled(JSContext *ctx, JSValueConst ev);        /* the canceled 
    the listener currently running is allowed to do. Routing that through preventDefault's algorithm would make a
    non-cancelable navigate event silently stay uncanceled. */
 void    event_set_canceled(JSContext *ctx, JSValueConst ev, bool on);
+/* DOM §2.2 Interface Event's SET THE CANCELED FLAG — the ALGORITHM the line above is deliberately not: "To set
+   the canceled flag, given an event event, if event's cancelable attribute value is true and event's in passive
+   listener flag is unset, then set event's canceled flag to true."
+   THREE ALGORITHMS PERFORM IT AND NONE OF THEM MAY SPELL IT AGAIN. §2.2's preventDefault() ("The
+   preventDefault() method steps are to set the canceled flag with this"), §2.2's legacy returnValue setter
+   ("set the canceled flag with this if the given value is false"), and HTML §8.1.8.1's event handler processing
+   algorithm step 6, which is where `return false` cancels. Two of those three were written out by hand and the
+   second of them had dropped the in-passive-listener half — so `e.returnValue = false` inside a `{passive:true}`
+   listener cancelled an event `preventDefault()` in the same listener could not, which is the one guarantee the
+   passive flag exists to give the user agent, given away through the spelling nobody looks at. */
+void    event_set_the_canceled_flag(JSContext *ctx, JSValueConst ev);
+/* §2.2's currentTarget — "the object whose event listener's callback is currently being invoked", which §2.9's
+   `invoke` writes at every path item. A new owned reference, or JS_NULL outside a dispatch. HTML §8.1.8.1 step
+   4 reads it (its special-error-event-handling test is about the CURRENT target, not the event's target) and
+   step 5 invokes the handler with it as the callback this value. */
+JSValue event_current_target(JSContext *ctx, JSValueConst ev);
 bool    event_stop_immediate(JSContext *ctx, JSValueConst ev);  /* the stop-immediate-propagation flag */
 bool    event_bubbles(JSContext *ctx, JSValueConst ev);         /* does it travel up the propagation path */
 bool    event_stop_propagation(JSContext *ctx, JSValueConst ev);

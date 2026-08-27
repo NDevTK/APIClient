@@ -265,6 +265,28 @@ void event_set_target(JSContext *ctx, JSValueConst ev, JSValueConst target)
     JS_FreeValue(ctx, slots);
 }
 
+/* DOM §2.2's SET THE CANCELED FLAG — see event.h for why it is one function and not three spellings.
+   "if event's cancelable attribute value is true and event's in passive listener flag is unset, then set
+   event's canceled flag to true". A passive listener's cancel does NOTHING, whichever of the three spellings
+   it reached for; that is the whole of the guarantee `{passive:true}` gives the user agent. */
+void event_set_the_canceled_flag(JSContext *ctx, JSValueConst ev)
+{
+    if (event_read_flag(ctx, ev, "cancelable") && !event_read_flag(ctx, ev, "inPassive"))
+        event_write_flag(ctx, ev, "canceled", true);
+}
+
+/* §2.2's currentTarget, read. The slot is JS_NULL between dispatches — §2.9 steps 7-10 put it back — so the
+   caller that needs an object DCHECKs for one rather than this answering with a placeholder. */
+JSValue event_current_target(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = event_slots(ctx, ev), v;
+
+    if (!JS_IsObject(slots)) { JS_FreeValue(ctx, slots); return JS_NULL; }
+    v = JS_GetPropertyStr(ctx, slots, "currentTarget");
+    JS_FreeValue(ctx, slots);
+    return v;
+}
+
 void event_set_current(JSContext *ctx, JSValueConst ev, JSValueConst current)
 {
     JSValue slots = event_slots(ctx, ev);
@@ -499,8 +521,12 @@ static JSValue js_event_get_return_value(JSContext *ctx, JSValueConst this_val, 
 static JSValue js_event_set_return_value(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     (void)magic;
-    if (!JS_ToBool(ctx, val) && event_read_flag(ctx, this_val, "cancelable"))
-        event_write_flag(ctx, this_val, "canceled", true);
+    /* "The returnValue setter steps are to SET THE CANCELED FLAG with this if the given value is false" — the
+       named algorithm, not a second copy of its condition. This body spelled the condition itself and had only
+       half of it: `cancelable` without the in-passive-listener flag, so a `{passive:true}` listener cancelled
+       through this spelling what preventDefault() in the same listener could not. */
+    if (!JS_ToBool(ctx, val))
+        event_set_the_canceled_flag(ctx, this_val);
     return JS_UNDEFINED;
 }
 
@@ -514,11 +540,8 @@ static JSValue js_event_flag(JSContext *ctx, JSValueConst this_val, int argc, JS
     if (!event_is(ctx, this_val))
         return JS_ThrowTypeError(ctx, "an Event method was called on something that is not an Event");
     if (magic == 0) {
-        /* §2.2: "If this's cancelable attribute value is true and this's in passive listener flag is unset,
-           then set this's canceled flag." A passive listener's preventDefault does NOTHING — that is the whole
-           of the guarantee `{passive:true}` gives the user agent, and honouring `cancelable` alone gave it away. */
-        if (event_read_flag(ctx, this_val, "cancelable") && !event_read_flag(ctx, this_val, "inPassive"))
-            event_write_flag(ctx, this_val, "canceled", true);
+        /* §2.2: "The preventDefault() method steps are to set the canceled flag with this." */
+        event_set_the_canceled_flag(ctx, this_val);
         return JS_UNDEFINED;
     }
     event_write_flag(ctx, this_val, "stopPropagation", true);

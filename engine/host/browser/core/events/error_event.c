@@ -113,6 +113,37 @@ JSValue error_event_new(JSContext *ctx, const char *type_name, bool cancelable, 
     return ev;
 }
 
+bool error_event_is(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = ee_slots(ctx, ev);
+    bool is = JS_IsObject(slots);
+
+    JS_FreeValue(ctx, slots);
+    return is;
+}
+
+void error_event_handler_arguments(JSContext *ctx, JSValueConst ev, JSValue *out)
+{
+    JSValue slots = ee_slots(ctx, ev);
+    int i;
+
+    DCHECK(out != NULL, "§8.1.8.1 step 5's five-argument invocation was asked for with nowhere to put them");
+    DCHECK(JS_IsObject(slots),
+           "§8.1.8.1 step 5's five-argument invocation was asked of an event that is not an ErrorEvent — step "
+           "4's `special error event handling` is the only thing that reaches this, and its first conjunct is "
+           "that the event IS one, so the two have disagreed");
+    for (i = 0; i < (int)(sizeof(EE_SLOT) / sizeof(EE_SLOT[0])); i++)
+        out[i] = JS_GetPropertyStr(ctx, slots, EE_SLOT[i]);
+    /* The five slots are placed together by ee_init_slots and by the constructor, and nothing else writes the
+       record — so a HOLE here is a fifth writer nobody declared, and the handler would silently be called with
+       `undefined` where the standard names an attribute value. */
+    DCHECK(JS_IsString(out[EE_MESSAGE]) && JS_IsString(out[EE_FILENAME]) &&
+               JS_IsNumber(out[EE_LINENO]) && JS_IsNumber(out[EE_COLNO]),
+           "an ErrorEvent's slot record is missing one of the four attributes §8.1.8.1 step 5 names before "
+           "`error` — the record is written in one place and read in another, and they have drifted");
+    JS_FreeValue(ctx, slots);
+}
+
 /* ---- the constructor -------------------------------------------------------------------------------------- */
 
 /* `constructor(DOMString type, optional ErrorEventInit eventInitDict = {})`. ErrorEventInit INHERITS EventInit,

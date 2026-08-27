@@ -585,8 +585,9 @@ static bool san_config_remove_unsafe(JSContext *ctx, JSValueConst cfg)
        WHAT WAS HERE INSTEAD was a bespoke walk of the allow-list plus a DFAIL for the other shape, and the
        DFAIL was right about why: filtering an allow-list for the entries that ARE handlers is only equivalent
        to this step while the configuration happens to be an allow-list. Over a remove-list the step is an
-       APPEND per name, which needs the names — event_target.c now enumerates them off the one X-list §8.1.7.2
-       defines the set by, so a handler added there is removed here without anything else being edited.
+       APPEND per name, which needs the names — event_target.c now enumerates them off the one X-list HTML
+       §8.1.8.1 Event handlers defines the set by ("an event handler content attribute is a content attribute
+       for a specific event handler"), so a handler added there is removed here without anything else edited.
        §8.6.5's built-in safe baseline has an EMPTY removeAttributes list precisely because the attributes it
        would otherwise carry are these, named here rather than duplicated there. */
     for (i = 0; i < event_target_handler_attribute_count(); i++)

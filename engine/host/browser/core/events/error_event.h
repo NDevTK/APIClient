@@ -26,4 +26,23 @@ JSValue error_event_proto(JSContext *ctx);
 JSValue error_event_new(JSContext *ctx, const char *type, bool cancelable, JSValueConst message,
                         JSValueConst filename, uint32_t lineno, uint32_t colno, JSValueConst error);
 
+/* IS THIS AN ErrorEvent — the slot record IS the brand, for the reason event.h's `event_is` gives: the record
+   hangs off a private Symbol a page cannot forge, so an object carrying five same-named properties is still not
+   one. HTML §8.1.8.1's event handler processing algorithm step 4 asks it: "let special error event handling be
+   true if event IS AN ErrorEvent OBJECT, …", and that test is what decides whether `window.onerror` is invoked
+   with five arguments or with the event. A `typeof`-shaped answer would hand a page's hand-rolled object the
+   legacy five-argument shape. */
+bool error_event_is(JSContext *ctx, JSValueConst ev);
+
+/* THE FIVE ARGUMENTS §8.1.8.1 STEP 5 INVOKES AN OnErrorEventHandler WITH, in the standard's own order:
+ * "« event's message, event's filename, event's lineno, event's colno, event's error »". `out` is five slots
+ * and receives five NEW OWNED values, which the caller releases.
+ *
+ * THEY ARE THE INTERNAL VALUES AND NOT THE IDL GETTERS' ANSWERS, which matters because a page may shadow
+ * `ErrorEvent.prototype.message`: §8.1.8.1 reads the attribute VALUES, so this reads the slot record, and going
+ * through the prototype chain would let the page rewrite the arguments its own handler is called with — and
+ * would make a host algorithm run the page's code from C, which is the drive-to-completion this engine aborts
+ * on rather than a subtle infidelity. */
+void error_event_handler_arguments(JSContext *ctx, JSValueConst ev, JSValue *out);
+
 #endif

@@ -28,6 +28,7 @@
 #include "solver/concolic.h"   /* §2.7's flattening decides C booleans out of values the page may not know */
 #include "core/dom/abort.h"
 #include "core/events/event.h"
+#include "core/events/event_handler.h"
 #include "core/events/event_path.h"
 #include "core/events/report_exception.h"
 
@@ -53,7 +54,7 @@ static const EventTargetTree *g_tree;
 static bool (*g_has_activation)(JSContext *ctx, JSValueConst el);
 static int (*g_run_activation)(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                uint8_t *phase, uint32_t *req);
-/* HTML §8.1.7's handler map key, and the MARKER that holds the handler's place in a listener list — see the
+/* HTML §8.1.8.1's handler map key, and the MARKER that holds the handler's place in a listener list — see the
    event-handler section below. Declared here because event_target_init mints them. */
 static JSValue g_handler_key;
 static JSValue g_handler_marker;
@@ -153,8 +154,8 @@ void event_target_init(JSContext *ctx)
     realm_declare_intrinsic(event_target_install);
     agent_state_flag("event_target", &g_ready, "the declaration latch");
     agent_state_value("event_target", &g_key, "§2.7's listener-map key");
-    agent_state_value("event_target", &g_handler_key, "HTML §8.1.7.2's handler-map key");
-    agent_state_value("event_target", &g_handler_marker, "HTML §8.1.7.2's handler placeholder in a listener list");
+    agent_state_value("event_target", &g_handler_key, "HTML §8.1.8.1's handler-map key");
+    agent_state_value("event_target", &g_handler_marker, "HTML §8.1.8.1's handler placeholder in a listener list");
     agent_state_class("event_target", &g_et_class, "§2.7's interface prototype slot and brand");
     agent_state_id("event_target", &g_add_stepid, "§2.7's addEventListener machine");
     agent_state_id("event_target", &g_remove_stepid, "§2.7's removeEventListener machine");
@@ -267,6 +268,13 @@ void event_target_set_tree(const EventTargetTree *tree)
     g_tree = tree;
 }
 
+bool event_target_is_window(JSContext *ctx, JSValueConst target)
+{
+    /* A host with no tree registered has no globals in anyone's propagation path either — the same answer
+       dispatch_get_parent takes for the same reason, rather than a second question about what a global is. */
+    return g_tree != NULL && g_tree->is_window(ctx, target);
+}
+
 void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
                                  int (*run)(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                             uint8_t *phase, uint32_t *req))
@@ -303,7 +311,7 @@ void event_target_free(JSRuntime *rt)
            "§2.9's activation behaviour was still registered when the event machinery was released — "
            "core/html/hyperlink.c claimed it and must give it back at hyperlink_free");
     DCHECK(g_handler_set_hook == NULL,
-           "HTML §8.1.7.2's handler-set hook was still registered when the event machinery was released — "
+           "HTML §8.1.8.1's handler-set hook was still registered when the event machinery was released — "
            "core/events/message_port.c claimed it and must give it back at message_port_free");
     JS_FreeValueRT(rt, g_key);
     JS_FreeValueRT(rt, g_handler_key);
@@ -888,7 +896,7 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
                                       "DOM §2.7 Interface EventTarget, addEventListener() and "
                                       "removeEventListener()", AEL_STEPS };
 
-/* ---- EVENT HANDLER IDL ATTRIBUTES — HTML §8.1.7.2 --------------------------------------------------------
+/* ---- EVENT HANDLER IDL ATTRIBUTES — HTML §8.1.8.1 Event handlers --------------------------------------------------------
  *
  * `el.onclick = f` is not a listener registration a page could have written itself with addEventListener; it is
  * its own mechanism, and it was absent entirely. That absence is the single largest entry in this engine's IDL
@@ -902,13 +910,14 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
  * rather than generating them from the IDL is the gap engine/idlgen.mjs exists to report; what must not happen
  * is an attribute that answers something its spec does not say.
  *
- * THE HANDLER IS NOT THE LISTENER, and that distinction is the whole design. §8.1.7 registers ONE listener the
+ * THE HANDLER IS NOT THE LISTENER, and that distinction is the whole design. §8.1.8.1's ACTIVATE AN EVENT
+ * HANDLER registers ONE listener the
  * first time a handler is set for a type, and later assignments change the HANDLER the listener reads — so the
  * listener keeps its position in the list. `el.onclick = a; el.addEventListener('click', b); el.onclick = c`
  * runs c then b, not b then c. Registering the handler function itself would append it and get that backwards.
  * So the listener list holds a MARKER for the handler slot, and the list snapshot resolves the marker to
  * whatever the handler is at dispatch time — a read of an engine-built map under a private Symbol, so it runs
- * none of the page's code and needs no request. Setting null removes the marker, which is §8.1.7's "deactivate".
+ * none of the page's code and needs no request. Setting null removes the marker, which is §8.1.8.1's "deactivate an event handler".
  *
  * The handler map is an own property under a private Symbol, for the reason the listener map is: it makes the
  * handler per-flow for free, so `onclick` assigned in one arm of a fork is invisible to its sibling. */
@@ -1107,6 +1116,23 @@ static void eh_assert_types(void)
 }
 
 
+/* WHICH ATTRIBUTE OF THE LIST ABOVE HANDLES `type`, or -1. §8.1.8.1's processing algorithm takes the NAME of an
+   event handler as an argument and the whole of what it uses it for is selecting the Web IDL callback function
+   type §8.1.8.2.1 declares — so the walk, which resolves a handler slot by TYPE, has to be able to name the
+   attribute it just resolved. The lookup goes through the one X-list rather than by prepending "on", because
+   that derivation is exactly the one this file already had to delete: it is right ninety-nine times and wrong
+   for the four legacy webkit aliases, where `webkitAnimationEnd` would name `onwebkitAnimationEnd`, which is
+   not an attribute at all — and an attribute that is not in the list has no declared IDL type to select. */
+static int eh_index_of_type(const char *type)
+{
+    int i;
+
+    for (i = 0; i < EH_COUNT; i++)
+        if (strcmp(EH_TYPE[i], type) == 0)
+            return i;
+    return -1;
+}
+
 /* The handler map (type -> handler) and the marker that stands for it in a listener list. The map is per
    TARGET; the marker is ONE object for the whole runtime, because it carries no information — its identity is
    the whole of what it means. */
@@ -1131,8 +1157,13 @@ static JSValue handler_map(JSContext *ctx, JSValueConst target, int create)
     return map;
 }
 
-/* The handler currently set for `type` on `target`, or JS_NULL. A map read, so no page code and no request —
-   which is what lets the dispatch walk resolve the marker in place. */
+/* §8.1.8.1's GETTING THE CURRENT VALUE of the event handler for `type` on `target`, or JS_NULL. A map read, so
+   no page code and no request — which is what lets the dispatch walk resolve the marker in place.
+   AN OBJECT, NOT A FUNCTION. `EventHandler` is `EventHandlerNonNull?` and Web IDL §3.2.19 Callback function
+   types says a callback function type IS a function object "except in the [LegacyTreatNonObjectAsNull] case,
+   when they can be ANY object" — so `el.onclick = {}` stores that object, `el.onclick` gives it back, and the
+   TypeError arrives at §3.12's invoke when the event fires. Filtering to callables here answered `null` for a
+   value the page had assigned and could read back in every browser. */
 static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *type)
 {
     JSValue map = handler_map(ctx, target, 0), h;
@@ -1140,7 +1171,7 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
     if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_NULL; }
     h = JS_GetPropertyStr(ctx, map, type);
     JS_FreeValue(ctx, map);
-    return JS_IsFunction(ctx, h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
+    return JS_IsObject(h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
 }
 
 static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
@@ -1149,7 +1180,7 @@ static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
     return handler_current(ctx, this_val, EH_TYPE[magic]);
 }
 
-/* HTML §8.1.7.2's handler attributes are ordinarily pure state — assign a function, it is called when the event
+/* HTML §8.1.8.1's handler attributes are ordinarily pure state — assign a function, it is called when the event
    fires, and nothing else happens. The platform has ONE exception: §9.4.2 says setting `onmessage` on a
    MessagePort also STARTS the port, which is why a page that assigns onmessage never calls start() and a page
    that only uses addEventListener must. A general side-effect mechanism for a single member would be more
@@ -1161,7 +1192,7 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
     /* ONE CLAIMANT. A second component setting this would replace the first with nothing anywhere recording
        that §9.4.2's port-start step had stopped running, which is a member that silently does half its job. */
     DCHECK(after_set == NULL || g_handler_set_hook == NULL,
-           "a second component claimed HTML §8.1.7.2's handler-set hook — there is ONE, and the second claim "
+           "a second component claimed HTML §8.1.8.1's handler-set hook — there is ONE, and the second claim "
            "silently replaces the first");
     g_handler_set_hook = after_set;
 }
@@ -1176,17 +1207,22 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
 
     map = handler_map(ctx, this_val, 1);
     if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
-    /* §8.1.7.1: anything that is not callable sets the handler to null. A page assigning a string here is
-       writing legacy markup-style code, which HTML compiles — this engine does not, and an uncompiled string
-       is honestly not a handler rather than one that silently never fires. */
-    if (JS_IsFunction(ctx, val)) {
+    /* THE TEST IS "IS IT AN OBJECT", AND WEB IDL IS WHY. The attribute's type is `EventHandler`, a NULLABLE
+       callback function annotated `[LegacyTreatNonObjectAsNull]`, and §3.2.20 Nullable types converts a
+       NON-OBJECT to null under exactly that annotation — which is what makes `el.onclick = "alert(1)"` and
+       `el.onclick = 5` deactivate rather than throw, and is the whole of the legacy in the name. §3.2.19
+       Callback function types then declines to throw for the non-callable OBJECT in the same case, so `{}` is
+       stored and read back, and its TypeError comes at §3.12's invoke when the event fires.
+       A page assigning a STRING is writing legacy markup-style code, which HTML compiles for a CONTENT
+       attribute and never for this one: §3.2.20 has already made it null before this setter's steps begin. */
+    if (JS_IsObject(val)) {
         JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, val));
-        /* §8.1.7: the listener is registered ONCE, the first time a handler is set for this type. */
+        /* §8.1.8.1 "activate an event handler": the listener is registered ONCE, the first time a handler is set for this type. */
         add_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false, /*once*/ false,
                                /*passive*/ -1, /*signal*/ JS_UNDEFINED);
     } else {
         JS_SetPropertyStr(ctx, map, type, JS_NULL);
-        remove_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false);   /* §8.1.7 "deactivate" */
+        remove_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false);   /* §8.1.8.1 "deactivate an event handler" */
     }
     /* AFTER the handler is registered, for the reason event_target.h gives: §9.4.2's start() delivers what is
        already queued, and running it first would fire those events at a target with no listener yet. */
@@ -1196,13 +1232,13 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     return JS_UNDEFINED;
 }
 
-/* HTML §8.1.7.2: an EVENT HANDLER CONTENT ATTRIBUTE is the content attribute of the same name as an event
+/* HTML §8.1.8.1: an EVENT HANDLER CONTENT ATTRIBUTE is the content attribute of the same name as an event
    handler IDL attribute, and that name set is exactly the list above — so the question is answered here rather
    than by a second list somewhere else. Trusted Types §3.8 step 2 asks it of every setAttribute: an event
    handler content attribute demands a TrustedScript, so `el.setAttribute("onclick", s)` throws under
    `require-trusted-types-for 'script'` while `el.setAttribute("title", s)` does not, and a copy of this list
    that fell one name behind would answer that question differently from the property that shares the name. */
-/* EVERY EVENT HANDLER CONTENT ATTRIBUTE NAME, ENUMERATED — §8.1.7.2 defines the set as the names of the event
+/* EVERY EVENT HANDLER CONTENT ATTRIBUTE NAME, ENUMERATED — §8.1.8.1 defines the set as the names of the event
    handler IDL attributes, so both this and the predicate below come off the one X-list rather than a second
    copy that would drift the first time a handler is added.
    IT IS AN ENUMERATION AND NOT A FILTER, which is the difference HTML §8.6.2's remove-unsafe needs: its step 4
@@ -1373,6 +1409,14 @@ typedef struct JSDispatchState {
        `reporting` is its resume marker, the third this walk needs: a listener can suspend on its operation
        lookup, on its own body, and on the report of what its body threw. */
     uint8_t   reporting;
+    /* HTML §8.1.8.1's EVENT HANDLER PROCESSING ALGORITHM, for the one listener kind that is not a listener.
+       `eh_index` names which event handler IDL attribute the marker just resolved to (-1 for an ordinary
+       listener), because §8.1.8.1 takes the attribute's NAME and the walk resolved the slot by TYPE; `eh` is
+       that algorithm's own record, and its non-zero stage is this walk's FOURTH resume marker — a handler can
+       suspend on its body and again on the Web IDL coercion of what it returned, and neither of those is a
+       call the `cphase` marker alone can distinguish from "between listeners". */
+    int16_t   eh_index;
+    EventHandlerWork eh;
     /* §2.9 step 6.7's SLOT-IN-CLOSED-TREE, and step 6.10's CLEARTARGETS. Both are one-bit walk state that has
        to survive a park between two ancestors, which is the whole reason they are on the state and not on the
        C stack of a loop that does not exist. */
@@ -1400,7 +1444,11 @@ typedef struct JSDispatchState {
     JSValue   arr;       /* that target's listener list SNAPSHOT (owned) */
     JSValue   ev;        /* the event (owned) */
     JSValue   result;    /* !canceled (owned) */
-    JSValue   cb[3];     /* the call request buffer: [this, listener, event] */
+    /* THE CALL REQUEST BUFFER: [this, callee, arguments…]. SEVEN slots, because HTML §8.1.8.1 step 5 invokes
+       an `OnErrorEventHandler` with FIVE arguments — `window.onerror` gets (message, filename, lineno, colno,
+       error) where an `addEventListener("error", …)` listener gets the one ErrorEvent — and the buffer a
+       request parks in has to hold the widest invocation this walk can make, not the commonest. */
+    JSValue   cb[7];
 } JSDispatchState;
 
 /* WHAT THIS MACHINE OWNS. The call buffer is in here because a fork mid-listener must not hand two arms one
@@ -1414,6 +1462,7 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->lcb);
     v->val(ctx, &s->exc);
     report_exception_work_visit(ctx, &s->rep, v);
+    event_handler_work_visit(ctx, &s->eh, v);
     v->val(ctx, &s->cur);
     v->val(ctx, &s->tgt);
     v->val(ctx, &s->slottable);
@@ -1421,7 +1470,10 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->arr);
     v->val(ctx, &s->ev);
     v->val(ctx, &s->result);
-    for (k = 0; k < 3; k++)
+    /* DERIVED FROM THE ARRAY, never a literal beside it: quickjs-step.h's paragraph on this is about exactly
+       the buffer below, which has now grown once — a visit one slot short leaves a live value the fork never
+       dups, and it fails nowhere near here. */
+    STEP_CB_FOREACH(s->cb, k)
         v->val(ctx, &s->cb[k]);
 }
 
@@ -1660,8 +1712,14 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         cb_result = JS_UNDEFINED;
         s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
         s->tgt = s->slottable = JS_UNDEFINED;
-        s->cb[0] = s->cb[1] = s->cb[2] = JS_UNDEFINED;
+        {
+            int k;
+            STEP_CB_FOREACH(s->cb, k)
+                s->cb[k] = JS_UNDEFINED;
+        }
         report_exception_work_start(&s->rep);
+        event_handler_work_start(&s->eh);
+        s->eh_index = -1;
         /* THREE ENTRIES, ONE MACHINE, and `arg` is decided at REGISTRATION so no call site chooses:
              DISPATCH_ARG  — dispatchEvent: the receiver is the target, the page supplied the event.
              CLICK_SYNTH   — §3.2.2 click(): the receiver is the target and the event is BUILT, because click
@@ -1908,8 +1966,11 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         goto activation;
     }
     /* A re-entry with no call in flight carries nothing this walk wants; the one that does is consumed by the
-       request it belongs to, at resume_listener. */
-    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0) { JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED; }
+       request it belongs to, at resume_listener. The handler algorithm's stage is one of the four things that
+       can be in flight: its Web IDL return-type coercion and its step 6 fork both park with `cphase` back at
+       zero, so a walk that asked only about the call would free the answer they are waiting for. */
+    if (s->cphase == 0 && s->lphase == 0 && s->reporting == 0 && s->eh.stage == 0)
+        { JS_FreeValue(ctx, cb_result); cb_result = JS_UNDEFINED; }
     /* §2.9 steps 6.13 and 6.14: TWO passes over the path, not three legs over parts of it. The old shape ran the
        target as a leg of its own with BOTH kinds of listener in registration order, which is a different answer
        from the spec's and one the corpus asks for directly: at the target a CAPTURING listener runs in the
@@ -1924,9 +1985,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                be observed — the flag was set by a listener that has already returned. */
             if (s->reporting)
                 goto report_throw;   /* re-entered inside the REPORT of what the last listener threw */
-            if (s->cphase == 0 && s->lphase == 0 && event_stop_immediate(ctx, s->ev))
+            if (s->cphase == 0 && s->lphase == 0 && s->eh.stage == 0 && event_stop_immediate(ctx, s->ev))
                 break;
-            if (s->cphase != 0) {
+            if (s->cphase != 0 || s->eh.stage != 0) {
                 /* RE-ENTERED INSIDE THE CALL BELOW. The record is NOT re-read: `once` has already removed it
                    from the live list and set its removed field, so a re-read would skip the very listener whose
                    answer is arriving and lose the call's result. The callee is held by the request buffer. */
@@ -1958,21 +2019,39 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 continue;
             }
             fn = rec_cb(ctx, rec);
-            /* §8.1.7: the HANDLER SLOT resolves HERE, at dispatch time, to whatever `ontype` currently is —
+            /* §8.1.8.1: the HANDLER SLOT resolves HERE, at dispatch time, to whatever `ontype` currently is —
                that is what keeps the slot's POSITION in the list while its handler changes underneath it. An
                UNSET handler is not a listener at all, which is why this one skip stays a skip: there is nothing
                to look an operation up on. */
+            s->eh_index = -1;
             if (JS_VALUE_GET_PTR(fn) == JS_VALUE_GET_PTR(g_handler_marker)) {
                 const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
                 JS_FreeValue(ctx, fn);
+                /* HTML §8.1.8.1 steps 2-3: GETTING THE CURRENT VALUE of the event handler, and returning when
+                   it is null. It is performed here rather than inside the algorithm because §2.9's inner
+                   invoke needs the same answer for its own reason — a handler slot whose handler is null is
+                   not a listener at all and the walk skips it without invoking anything — and one question
+                   asked twice is two answers. */
                 fn = t ? handler_current(ctx, s->cur, t) : JS_UNDEFINED;
+                s->eh_index = t ? (int16_t)eh_index_of_type(t) : -1;
                 if (t) JS_FreeCString(ctx, t);
-                if (!JS_IsFunction(ctx, fn)) {
+                /* NULL AND NOT-CALLABLE ARE DIFFERENT ANSWERS HERE. Step 3's null is this skip; a non-callable
+                   OBJECT is a handler the page assigned and Web IDL kept, and its TypeError belongs to §3.12's
+                   invoke inside the algorithm — where §2.9 inner invoke step 2.11 reports it and the walk
+                   carries on, which is what a browser does and what skipping it silently would not. */
+                if (!JS_IsObject(fn)) {
                     JS_FreeValue(ctx, fn);
                     JS_FreeValue(ctx, rec);
                     s->i++;
                     continue;
                 }
+                /* A HANDLER RAN FOR A TYPE THE ATTRIBUTE LIST DOES NOT NAME. The marker is placed by
+                   js_handler_set and by nothing else, and that setter is reached only through an accessor the
+                   list itself installs — so a resolved marker whose type is absent from the list means the
+                   two have come apart, and §8.1.8.1 would have no declared Web IDL callback type to select. */
+                DCHECK(s->eh_index >= 0,
+                       "an event handler slot resolved for an event type HTML §8.1.8.2's tables do not name — "
+                       "the marker and the attribute list are placed by one mechanism and have disagreed");
             }
             /* §2.9 "inner invoke" step 2.5: a `once` listener is removed BEFORE it is called, so a listener that
                re-enters this dispatch cannot see itself. Removing it after would let a re-entrant fire run it
@@ -1989,6 +2068,15 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             JS_FreeValue(ctx, rec);
             JS_FreeValue(ctx, s->lcb);
             s->lcb = fn;   /* held across the operation lookup below, which can run the page's code */
+            /* AN EVENT HANDLER IS A CALLBACK FUNCTION TYPE AND NOT A CALLBACK INTERFACE, so the operation
+               lookup below is not its algorithm: §8.1.8.1 step 5 invokes the callback ITSELF, and a
+               non-callable one is a TypeError at Web IDL §3.12's invoke rather than an object with a
+               `handleEvent` to find. Reading one off `el.onclick = {handleEvent(){…}}` would run a method no
+               browser runs, and would do it while reporting nothing. */
+            if (s->eh_index >= 0) {
+                fn = JS_DupValue(ctx, s->lcb);
+                goto resume_listener;
+            }
 resolve_operation:
             /* §2.9 "inner invoke" step 2.11 is "CALL A USER OBJECT'S OPERATION with listener's callback and
                `handleEvent`", and Web IDL §3.12 step 10 is what that means for a callback INTERFACE: a callable
@@ -2037,6 +2125,25 @@ resolve_operation:
                its one argument. A CALL REQUEST, so the listener is ordinary preemptible page code and this
                machine parks — which is the whole reason the engine's own firing can share this walk. */
 resume_listener:
+            /* AN EVENT HANDLER IS NOT DELIVERED LIKE A LISTENER — HTML §8.1.8.1's processing algorithm steps
+               4-6 are what §8.1.8.1's activate an event handler registered this slot to run. It decides the ARGUMENT LIST (five for an
+               `OnErrorEventHandler` at a global, one otherwise) and it READS THE RETURN VALUE, which is the
+               half DOM §2.9 discards for a plain listener and must go on discarding. Everything else about
+               this listener — the snapshot, the `once` removal, the passive flag, the report of a throw — is
+               the same walk, which is why this is one branch and not a second delivery path. */
+            if (s->eh_index >= 0) {
+                r = event_handler_run(ctx, &s->eh, &s->hdr, &s->cphase, STEP_CB(s->cb), fn, s->ev,
+                                      EH_NAME[s->eh_index], cb_result, out_cb, out_argc);
+                JS_FreeValue(ctx, fn);
+                cb_result = JS_UNDEFINED;
+                if (r > 0) return r;     /* parked in the handler's body, its coercion, or its step 6 fork */
+                if (r < 0) {
+                    /* §8.1.8.1 step 5 invokes with "rethrow", and §2.9 inner invoke step 2.11 is where that
+                       lands: report it and carry on down the listener list, exactly as for a listener. */
+                    goto listener_threw;
+                }
+                goto listener_returned;  /* the algorithm consumed the return value; there is no `ignored` */
+            }
             r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), fn, s->cur, 1, (JSValueConst *)&s->ev,
                               cb_result, &ignored, out_cb, out_argc);
             JS_FreeValue(ctx, fn);   /* the request DUP'd it into the buffer, which is what holds it parked */

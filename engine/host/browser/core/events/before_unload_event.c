@@ -159,38 +159,68 @@ JSValue before_unload_event_new(JSContext *ctx)
     return ev;
 }
 
-bool before_unload_event_asks_to_cancel(JSContext *ctx, JSValueConst ev)
+bool before_unload_event_is(JSContext *ctx, JSValueConst ev)
 {
-    JSValue slots, v;
+    JSValue slots = bue_slots(ctx, ev);
+    bool is = JS_IsObject(slots);
+
+    JS_FreeValue(ctx, slots);
+    return is;
+}
+
+/* "the returnValue attribute of event is not the empty string", asked the way both of its callers need it.
+   BYTE LENGTH, not truthiness — `e.returnValue = "0"` is not the empty string, and neither is a lone U+0000. */
+bool before_unload_event_return_value_is_empty(JSContext *ctx, JSValueConst ev)
+{
+    JSValue slots = bue_slots(ctx, ev), v;
     const char *s;
     size_t len = 0;
-    bool asks;
+    bool empty;
 
-    DCHECK(g_ready, "the unload cancel decision was read before before_unload_event_init ran");
-    slots = bue_slots(ctx, ev);
+    DCHECK(g_ready, "a BeforeUnloadEvent's returnValue was read before before_unload_event_init ran");
     DCHECK(JS_IsObject(slots),
-           "checking if unloading is canceled read its answer off something that is not the BeforeUnloadEvent "
-           "§7.5.9 fired — the two disjuncts are that event's canceled flag and that event's returnValue");
-    /* The FIRST disjunct: "eventFiringResult is false", which DOM §2.10 makes exactly "the canceled flag is
-       set". Asked first because it needs no allocation, not because it is the more likely one — shipped code
-       spells this with returnValue far more often than with preventDefault(). */
-    if (event_canceled(ctx, ev)) {
-        JS_FreeValue(ctx, slots);
-        return true;
-    }
+           "a BeforeUnloadEvent's returnValue was read off something that is not one — every caller reaches "
+           "this behind the brand test above, so the two have disagreed");
     v = JS_GetPropertyStr(ctx, slots, "returnValue");
     JS_FreeValue(ctx, slots);
     DCHECK(JS_IsString(v), "a BeforeUnloadEvent's returnValue slot held something that is not a string — the "
                            "attribute is a DOMString, its setter takes a converted one, and creation puts the "
                            "empty string there, so there is no third writer");
-    /* The SECOND: "the returnValue attribute of event is not the empty string". BYTE LENGTH, not truthiness —
-       `e.returnValue = "0"` is not the empty string and asks to cancel, and so does a lone U+0000. */
     s = JS_ToCStringLen(ctx, &len, v);
-    CHECK(s != NULL, "the BeforeUnloadEvent's returnValue could not be read for the unload cancel decision");
-    asks = len != 0;
+    CHECK(s != NULL, "the BeforeUnloadEvent's returnValue could not be read");
+    empty = len == 0;
     JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, v);
-    return asks;
+    return empty;
+}
+
+void before_unload_event_set_return_value(JSContext *ctx, JSValueConst ev, JSValueConst v)
+{
+    JSValue slots = bue_slots(ctx, ev);
+
+    DCHECK(g_ready, "a BeforeUnloadEvent's returnValue was written before before_unload_event_init ran");
+    DCHECK(JS_IsObject(slots),
+           "a BeforeUnloadEvent's returnValue was written on something that is not one");
+    DCHECK(JS_IsString(v), "a BeforeUnloadEvent's returnValue was written with something that is not a string "
+                           "— the DOMString conversion belongs to whoever produced the value, and a body that "
+                           "coerced one here would run the page's toString from C");
+    JS_SetPropertyStr(ctx, slots, "returnValue", JS_DupValue(ctx, v));
+    JS_FreeValue(ctx, slots);
+}
+
+bool before_unload_event_asks_to_cancel(JSContext *ctx, JSValueConst ev)
+{
+    DCHECK(g_ready, "the unload cancel decision was read before before_unload_event_init ran");
+    DCHECK(before_unload_event_is(ctx, ev),
+           "checking if unloading is canceled read its answer off something that is not the BeforeUnloadEvent "
+           "§7.5.9 fired — the two disjuncts are that event's canceled flag and that event's returnValue");
+    /* The FIRST disjunct: "eventFiringResult is false", which DOM §2.10 makes exactly "the canceled flag is
+       set". Asked first because it needs no allocation, not because it is the more likely one — shipped code
+       spells this with returnValue far more often than with preventDefault(). */
+    if (event_canceled(ctx, ev))
+        return true;
+    /* The SECOND: "the returnValue attribute of event is not the empty string". */
+    return !before_unload_event_return_value_is_empty(ctx, ev);
 }
 
 /* ---- install ------------------------------------------------------------------------------------------------ */
