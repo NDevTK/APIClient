@@ -285,6 +285,29 @@ function _mergeParamInto(ep, np) {
     ep._exampleConfidence = np._exampleConfidence;
   }
   if (np._astInferred) ep._astInferred = true;
+  /* THE DOMAIN HALF, WHICH THIS MERGE DID NOT CARRY AT ALL. `_excludedValues` and `_bounds` are what the
+     endpoint's own gates PROVED about this parameter, and lib/learn.js states their law where it applies it
+     to one call site: exclusions INTERSECT and an interval widens to the HULL, because a constraint is a
+     claim about the ENDPOINT and belongs on the record only where EVERY observed path obeyed it. This
+     function is the OTHER merge — one document's parameter into the cumulative moat's — and it is called
+     exactly when both sides already exist, which is to say when a SECOND document has reached the same
+     endpoint's same parameter. It carried `_astValidValues` by union (right: a value is knowledge that
+     accumulates) and neither of these, so the second document's domain observation was discarded and the
+     moat kept the first document's claim standing.
+     THE DIRECTION OF THAT ERROR IS WHY IT IS A WRONG REPORT RATHER THAN A THIN ONE. A page that reached the
+     request WITHOUT the constraint is a path that DISPROVES it, so what survived was `≠ admin` on a
+     parameter one observed path never tested — and §@H is explicit that a shape carrying the wrong half is
+     "a WRONG report, not a partial one", because a reviewer reads a surviving exclusion as a fact the run
+     established rather than as a claim nobody re-checked.
+     PRESENCE, NOT TRUTHINESS, IS WHAT IS TESTED — and the two fields are tested differently because their
+     vocabularies differ. A merged parameter may never have had an engine observation at all (a form scan or
+     a live request can create one), and that is a different fact from an observation that proved nothing:
+     the first must contribute NOTHING, and the second must erase. `_excludedValues` spells "proved nothing"
+     as the empty array, so its presence as an array is the whole test; `_bounds` spells it as `null`, so
+     `in` is the test and `null` is passed through to do the erasing. Collapsing either pair would let a
+     parameter no engine run ever touched wipe every domain the engine emits. */
+  if (Array.isArray(np._excludedValues)) intersectExcludedValues(ep, np._excludedValues);
+  if ("_bounds" in np) widenBoundsInto(ep, np._bounds);
 }
 
 /* THE PER-METHOD STATS UNION — `lib/stats.js`'s `mergeParamStats`, WHICH HAD NO CALLER.

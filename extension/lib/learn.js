@@ -21,6 +21,95 @@
    computed went out without it. One translation, at the boundary, for both.
 
    A `{hole}` in the value is the shape marker (concolic.c's own rendering), so it is what decides the kind. */
+/* THE TWO DOMAIN-MERGE RULES, AT MODULE SCOPE BECAUSE THEY HAVE TWO CALLERS AND HAD ONE.
+ *
+ * `_excludedValues` and `_bounds` are the DOMAIN half of §@H's shape — what this endpoint's own gates PROVED
+ * the value is not, and the interval its ordering gates proved it lies in. Both merge by the same law and it
+ * is the OPPOSITE of the law for values: a value is knowledge that only accumulates, so it unions, while a
+ * constraint is a CLAIM ABOUT THE ENDPOINT and belongs on the record only where EVERY observed path obeyed
+ * it — so exclusions INTERSECT and an interval widens to the HULL.
+ *
+ * WHY THEY MOVED. The law was stated and applied inside `learnFromAstCallSite` only, which merges ONE call
+ * site into ONE document. `lib/merge.js`'s `_mergeParamInto` is the OTHER merge — one document's parameter
+ * into the cumulative moat's — and it is called exactly when both sides already exist, i.e. when a second
+ * document has reached the same endpoint's same parameter. It carried `_astValidValues` (correctly, by
+ * union) and `_exampleValue`, and it carried NEITHER of these two, so the later document's domain
+ * observation was discarded and the moat kept the first document's claim untouched.
+ * THAT ERRS TOWARD OVERSTATING, WHICH IS THE DIRECTION THAT MAKES IT A WRONG REPORT RATHER THAN A THIN ONE:
+ * a second page that reached the request WITHOUT the constraint is a path that disproves it, and the moat
+ * went on rendering `≠ admin` for a parameter one observed path never tested. §@H says a shape carrying the
+ * wrong half is "a WRONG report, not a partial one", and a reviewer reads a surviving exclusion as a fact
+ * the run established.
+ * Hoisting rather than re-deriving is the point: two spellings of "intersect the claims" are two rules free
+ * to disagree about one parameter, and the hull below is subtle enough (the inclusive side wins a tie,
+ * because it is the WEAKER claim) that a second copy would get it wrong quietly.
+ *
+ * EACH CALLER STATES WHAT IT HAS, and the two callers genuinely hold different things. A CALL SITE is always
+ * an observation — the engine either emitted `excludes` or proved nothing, and both are facts about that run
+ * — so it passes the empty array for "no constraint" and lets the intersection erase. A MERGED PARAMETER may
+ * never have been observed at all (a form scan or a live request can create one), so `lib/merge.js` tests
+ * for the field's PRESENCE and passes nothing when it is absent. Collapsing those two would let a parameter
+ * that no engine run ever touched erase every domain the engine emits. */
+
+/* Exclusions: intersect, because only a token EVERY observed path proved the value is not belongs to the
+   endpoint. `observed` is the array this sighting proved (empty = this sighting proved nothing). A target
+   that has never carried the field takes the sighting whole — it has no claim to intersect against. */
+function intersectExcludedValues(target, observed) {
+  DCHECK(Array.isArray(observed),
+         "an exclusion merge was handed something that is not an array — a sighting either proved a set of " +
+         "tokens or proved none, and `none` is the EMPTY array rather than a missing argument, because the " +
+         "empty set is what erases a claim an earlier path had made");
+  if (!Array.isArray(target._excludedValues)) { target._excludedValues = observed.map(String); return; }
+  const seen = observed.map(String);
+  target._excludedValues = target._excludedValues.filter((v) => seen.indexOf(String(v)) >= 0);
+}
+
+/* ONE SIDE OF AN INTERVAL, READ OUT OF THE ENGINE'S OWN VOCABULARY. endpoint.c emits JSON Schema Validation
+   2020-12 §6.2's keywords directly — §6.2.4 "minimum" / §6.2.5 "exclusiveMinimum" below, §6.2.2 "maximum" /
+   §6.2.3 "exclusiveMaximum" above — so nothing between the engine and the OpenAPI export renames them, and
+   there is one spelling of a bound in the whole pipeline instead of three that have to agree.
+   `null` IS THE ANSWER FOR AN UNBOUNDED SIDE and it is a positive one: no ordering gate over this hole
+   claimed anything in that direction on every observed path. */
+function _boundSide(b, low) {
+  const inc = low ? "minimum" : "maximum", exc = low ? "exclusiveMinimum" : "exclusiveMaximum";
+  if (inc in b) return { v: b[inc], incl: true };
+  if (exc in b) return { v: b[exc], incl: false };
+  return null;
+}
+function _boundSideWrite(out, side, low) {
+  if (!side) return;
+  out[side.incl ? (low ? "minimum" : "maximum") : (low ? "exclusiveMinimum" : "exclusiveMaximum")] = side.v;
+}
+
+/* Bounds: widen to the hull, which is the exclusion rule spelled for an ORDERED domain and not a second rule.
+   Two paths reaching one request with `x >= 5` and `x >= 10` leave `x >= 5`; with `x >= 5` and `x <= 3` they
+   leave nothing, because neither claim survives the other path. A sighting with no bound on a side ERASES
+   that side for the same reason a sighting with no exclusions erases the exclusions.
+   `observed` is this sighting's bounds object, or NULL for "this sighting claimed no interval".
+   THE THREE ABSENCES ARE KEPT APART and they are three different facts. `_bounds` absent on the target = it
+   has never had an engine observation, so the first one is taken whole; `_bounds` null = a claim that WAS
+   made and has since been disproved by another path, and nothing re-establishes it; a side missing inside a
+   `_bounds` object = unbounded in that direction. Collapsing any two of them would let a form scan or a live
+   request that created the parameter first erase every domain the engine emits. */
+function widenBoundsInto(target, observed) {
+  DCHECK(observed === null || (observed && typeof observed === "object" && !Array.isArray(observed)),
+         "a bounds merge was handed something that is neither an interval nor null — `null` is how a " +
+         "sighting says it claimed no interval, and it is a value rather than an omission because it is " +
+         "what disproves a claim an earlier path had made");
+  if (!("_bounds" in target)) { target._bounds = observed ? Object.assign({}, observed) : null; return; }
+  if (target._bounds === null) return;   // already disproved by an earlier path — nothing re-establishes it
+  if (!observed) { target._bounds = null; return; }
+  const hull = (a, b, low) => {
+    if (!a || !b) return null;           // one path unbounded on this side disproves the other's claim
+    if (a.v === b.v) return a.incl ? a : b;   // tie: the INCLUSIVE side is the weaker claim, so it survives
+    return (low ? (a.v < b.v) : (a.v > b.v)) ? a : b;
+  };
+  const out = {};
+  _boundSideWrite(out, hull(_boundSide(target._bounds, true), _boundSide(observed, true), true), true);
+  _boundSideWrite(out, hull(_boundSide(target._bounds, false), _boundSide(observed, false), false), false);
+  target._bounds = Object.keys(out).length ? out : null;
+}
+
 function astHeaderRecord(headers) {
   DCHECK(headers && typeof headers === "object" && !Array.isArray(headers) && Object.keys(headers).length,
          "astHeaderRecord was handed something that is not a non-empty header record — endpoint.c omits the " +
@@ -274,51 +363,34 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
      THE MERGE IS AN INTERSECTION, WHICH IS THE OPPOSITE OF `_mergeAstValues`' UNION, and the two rules are
      opposite because the facts are. A value is knowledge that only accumulates; a constraint is a CLAIM about
      the endpoint, and a later observation that did not obey it is a path that disproves the claim.
-     ABSENCE IS TWO DIFFERENT THINGS AND THEY ARE KEPT APART. A target with no `_excludedValues` has never had
-     an engine observation, so the first one is TAKEN whole; a target that has one and meets a call site with
-     no `excludes` had its claim disproved, so the claim goes. Treating the first case as an empty set would
-     erase every domain the engine emits the moment a form scan or a live request created the param first. */
+     THE MERGE ITSELF IS `intersectExcludedValues` at module scope, because lib/merge.js's cross-document
+     merge must obey the identical law and two spellings of it are two rules free to disagree. What is
+     stated here is only what this caller knows: a call site is always an observation, so its no-key
+     arm passes the empty set rather than declining to speak. */
   const _mergeExcludes = (target, p) => {
-    if (!("excludes" in p)) { target._excludedValues = []; return; }
+    /* A CALL SITE IS ALWAYS AN OBSERVATION, which is why the no-key arm passes the EMPTY array rather than
+       returning: endpoint.c omits `excludes` exactly where no equality gate's claim survived every observed
+       path to this request, so its absence is the positive statement "this run proved nothing here" and the
+       intersection is what turns that into the erasure of an earlier path's claim. */
+    if (!("excludes" in p)) { intersectExcludedValues(target, []); return; }
     DCHECK(Array.isArray(p.excludes) && p.excludes.length > 0,
            "an @H param carries an `excludes` that is not a non-empty array — endpoint.c omits the key " +
            "entirely where no constraint held on every observed path, so an empty or non-array one here is " +
            "the engine stating a domain it does not have");
-    if (!Array.isArray(target._excludedValues)) { target._excludedValues = p.excludes.map(String); return; }
-    const seen = p.excludes.map(String);
-    target._excludedValues = target._excludedValues.filter((v) => seen.indexOf(String(v)) >= 0);
+    intersectExcludedValues(target, p.excludes);
   };
 
-  /* ONE SIDE OF AN INTERVAL, READ OUT OF THE ENGINE'S OWN VOCABULARY. endpoint.c emits JSON Schema Validation
-     2020-12 §6.2's keywords directly — §6.2.4 "minimum" / §6.2.5 "exclusiveMinimum" below, §6.2.2 "maximum" /
-     §6.2.3 "exclusiveMaximum" above — so nothing between the engine and the OpenAPI export renames them, and
-     there is one spelling of a bound in the whole pipeline instead of three that have to agree.
-     `null` IS THE ANSWER FOR AN UNBOUNDED SIDE and it is a positive one: no ordering gate over this hole
-     claimed anything in that direction on every observed path. */
-  const _boundSide = (b, low) => {
-    const inc = low ? "minimum" : "maximum", exc = low ? "exclusiveMinimum" : "exclusiveMaximum";
-    if (inc in b) return { v: b[inc], incl: true };
-    if (exc in b) return { v: b[exc], incl: false };
-    return null;
-  };
-  const _boundSideWrite = (out, side, low) => {
-    if (!side) return;
-    out[side.incl ? (low ? "minimum" : "maximum") : (low ? "exclusiveMinimum" : "exclusiveMaximum")] = side.v;
-  };
-
-  /* THE ORDERING GATE'S FACT, MERGED BY WIDENING. It is `_mergeExcludes`' rule spelled for an ORDERED domain
-     and not a second rule: a claim belongs on the record only where EVERY observed path to the endpoint obeyed
-     it, which over a set means intersecting the exclusions and over an interval means taking the HULL. Two
-     paths reaching one request with `x >= 5` and `x >= 10` leave `x >= 5`; with `x >= 5` and `x <= 3` they
-     leave nothing, because neither claim survives the other path. A sighting with no bound on a side ERASES
-     that side for the same reason a sighting with no `excludes` erases the exclusions.
-     THE THREE ABSENCES ARE KEPT APART, and they are three different facts. `_bounds` absent = this target has
-     never had an engine observation, so the first one is taken whole; `_bounds` null = a claim that WAS made
-     and has since been disproved by another path; a side missing inside a `_bounds` object = unbounded in that
-     direction. Collapsing any two of them would let a form scan or a live request that created the parameter
-     first erase every domain the engine emits. */
+  /* THE ORDERING GATE'S HALF OF THE SAME SHAPE. The RULE — widen to the hull, because a claim belongs
+     on the record only where every observed path obeyed it — is `widenBoundsInto` at module scope,
+     beside the exclusion rule it is the ordered-domain spelling of. What stays here is what is true of
+     THIS caller: the four DCHECKs are on the ENGINE's vocabulary, so they belong at the boundary the
+     engine's record crosses and nowhere else. */
   const _mergeBounds = (target, p) => {
-    if (!("bounds" in p)) { target._bounds = null; return; }
+    /* NULL IS HOW THIS CALLER SAYS "THIS RUN CLAIMED NO INTERVAL", and it is a value rather than an
+       omission for the reason the empty array above is one: endpoint.c omits `bounds` exactly where no
+       ordering gate's claim survived every observed path, so the absence disproves an earlier path's
+       claim instead of leaving it standing. */
+    if (!("bounds" in p)) { widenBoundsInto(target, null); return; }
     DCHECK(p.bounds && typeof p.bounds === "object" && !Array.isArray(p.bounds),
            "an @H param carries a `bounds` that is not an object — endpoint.c omits the key entirely where " +
            "no ordering gate's claim survived every observed path, so anything else here is the engine " +
@@ -335,20 +407,7 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
            "an @H param's bound is not a finite number — JSON Schema Validation 2020-12 §6.2 requires a " +
            "number for all four keywords, and concolic_rel_hook records a bound only for a finite Number " +
            "operand, so a string or an Infinity here is the two ends disagreeing about what a bound is");
-    if (!("_bounds" in target)) {
-      target._bounds = Object.assign({}, p.bounds);
-      return;
-    }
-    if (target._bounds === null) return;   // already disproved by an earlier path — nothing re-establishes it
-    const hull = (a, b, low) => {
-      if (!a || !b) return null;           // one path unbounded on this side disproves the other's claim
-      if (a.v === b.v) return a.incl ? a : b;   // tie: the INCLUSIVE side is the weaker claim, so it survives
-      return (low ? (a.v < b.v) : (a.v > b.v)) ? a : b;
-    };
-    const out = {};
-    _boundSideWrite(out, hull(_boundSide(target._bounds, true), _boundSide(p.bounds, true), true), true);
-    _boundSideWrite(out, hull(_boundSide(target._bounds, false), _boundSide(p.bounds, false), false), false);
-    target._bounds = Object.keys(out).length ? out : null;
+    widenBoundsInto(target, p.bounds);
   };
 
   /* WHERE EACH VALUE LANDED IS THE PRODUCER'S STATEMENT, NEVER THIS FILE'S DEFAULT. endpoint.c writes
