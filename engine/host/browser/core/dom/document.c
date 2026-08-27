@@ -2780,12 +2780,29 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * was live when the navigation began. That is observable and the corpus observes it — an ancestor origin comes
  * back unmasked because the attribute was cleared while the response was still in flight.
  *
- * WHAT CLOSES IT IS THE FIELD, NOT A RE-READ HERE. This engine already carries target snapshot params for the
- * sandboxing flags (core/frame/navigable.c); the struct's OTHER field is this one, and once the navigation
- * carries it, this function takes it as an argument the way §7.3.2.1 already passes `iframeReferrerPolicy`, and
- * stops touching the container element for a navigated Document. Reading the attribute earlier and stashing it
- * on the element would be the same defect moved: the operation must carry its inputs, not re-derive them from
- * the object it acts on (CLAUDE.md, §scheduler).
+ * WHAT CLOSES IT IS THE STRUCT, AND THE STRUCT DOES NOT EXIST — an earlier version of this paragraph said this
+ * engine "already carries target snapshot params for the sandboxing flags" and that the referrer policy was
+ * simply "the struct's OTHER field". That was false about this tree and it was written without grepping for the
+ * type: every occurrence of `targetSnapshotParams` here is PROSE inside a comment, naming the spec's struct to
+ * describe a computation done without it. A reader who trusted it would have gone looking for a record to add a
+ * field to and found nothing, which is the stale-DFAIL failure mode with the coordinates pointing at a struct
+ * rather than at a file.
+ *
+ * WHAT IS ACTUALLY THERE is a different mechanism for the OTHER half. §7.4.5's final sandboxing flag set is
+ * built as `window_proxy_creation_sandbox_flags(proxy) | csp_flags`, so the sandboxing half is a LATCH ON THE
+ * WINDOWPROXY, written when the navigable is created and read at §7.4.5. That is a snapshot — just not the
+ * standard's struct, and not at the standard's instant, since §7.4.2.1 takes it at the start of the NAVIGATION
+ * and the latch is taken at the creation of the NAVIGABLE. Whether those two instants are observably different
+ * for the `sandbox` attribute is NOT established here and must not be assumed in either direction; the referrer
+ * policy's are observably different, which is why only this half has a corpus failure behind it.
+ *
+ * SO THE WORK IS TO BUILD §7.4.2.1's TARGET SNAPSHOT PARAMS as a real record, snapshotted at §7.4.2.2 step 17,
+ * carrying both of the two items that section lists — this one, whose value is §7.1.6's answer, and the
+ * sandboxing flags, whose existing latch then moves onto it and gets taken at the right instant by
+ * construction. Once the navigation carries the record, this function takes the policy as an argument the way
+ * §7.3.2.1 already passes `iframeReferrerPolicy`, and stops touching the container element for a navigated
+ * Document. Reading the attribute earlier and stashing it on the element would be the same defect moved: the
+ * operation must carry its inputs, not re-derive them from the object it acts on (CLAUDE.md, §scheduler).
  *
  * THE POLICY IS §7.1.6's ANSWER AND NOT THE RAW ATTRIBUTE, which is what §7.3.2.1 "Creating browsing contexts"
  * passes as `iframeReferrerPolicy` and is a different function from reading the element. HTML §7.1.6 "iframe
