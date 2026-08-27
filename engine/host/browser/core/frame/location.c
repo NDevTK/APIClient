@@ -158,6 +158,12 @@ static const char *const LOC_CROSS_ORIGIN_OPERATIONS[] = { "replace" };
    Object.getOwnPropertyDescriptor and apply it — which a browser answers with a TypeError, so this does. */
 static JSClassID g_loc_class;
 static int g_obj_slot = -1;   /* this realm's one Location */
+/* §7.2.4 gives every Location an ASSOCIATED EMPTY DOMStringList, and it is a FIELD of the Location rather than
+   a value the getter mints, which is the whole of what its first step promises: a Location whose relevant
+   Document is null answers the SAME object on every read. Per realm because a Location is. The standard notes
+   why it can be shared this way — it "cannot carry state across navigations because it is only returned when
+   there is no relevant Document". */
+static int g_empty_asl_slot = -1;
 
 /* DECLARED ONCE PER AGENT, INSTALLED PER REALM — the IDL pool is sealed after agent init, so a helper that
    mints inline works for the first realm and aborts on the second (core/html/hyperlink.c states the same
@@ -958,31 +964,19 @@ static JSValue js_loc_ancestor_origins(JSContext *ctx, JSValueConst this_val, in
     if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
     loc_assert_this_realm(ctx, this_val);
 
-    if (loc_document_is_null(ctx)) {
-        JSValue empty = JS_NewArray(ctx);
-
-        CHECK(!JS_IsException(empty), "location: §7.2.4's empty DOMStringList could not be allocated");
-        return dom_string_list_new(ctx, empty);
-    }
+    /* "IF THIS'S RELEVANT DOCUMENT IS NULL, THEN RETURN THIS'S ASSOCIATED EMPTY DOMStringList." ASSOCIATED is
+       the load-bearing word and this arm was ignoring it: it MINTED a DOMStringList per read, so two reads of a
+       removed frame's `ancestorOrigins` answered two different objects. `location-ancestor-origins-new-object`
+       asserts that exact pair in sequence — a NEW object once the frame is removed (this list, not the
+       Document's) and the SAME object on every read after it. */
+    if (loc_document_is_null(ctx))
+        return realm_value_get(ctx, g_empty_asl_slot);
     loc_assert_same_origin_domain(ctx);
-    DFAIL("§7.2.4's ancestorOrigins reached its last step and this Document has no ANCESTOR ORIGINS LIST — "
-          "and the field to build is TWO fields, which is what a reader who stops at the §7.3.2.1 step will "
-          "miss. HTML §7.3.2.1 \"Creating browsing contexts\" sets BOTH, in this order: \"set document's "
-          "internal ancestor origin objects list to the result of running the internal ancestor origin "
-          "objects list creation steps given document and iframeReferrerPolicy\", and then \"set document's "
-          "ancestor origins list to the result of running the ancestor origins list creation steps given "
-          "document\". Both algorithms are defined in HTML §3.1.3 \"Ancestor origins\", and the second is "
-          "only a SERIALIZATION of the first — so building the list this member returns WITHOUT the internal "
-          "one produces the unmasked answer, which is wrong in exactly the case the internal list exists for: "
-          "the masking that makes a `referrerpolicy=\"no-referrer\"` container hide its origin (and "
-          "\"same-origin\" hide it when the parent is cross-origin) lives entirely in the internal list's "
-          "steps, which append a NEW OPAQUE ORIGIN in place of each masked ancestor and stop masking at the "
-          "first ancestor that is not same origin with the parent. core/dom/document.h holds NEITHER field. "
-          "Build them THERE, at the creation, and not here by walking window_proxy_parent at the read: the "
-          "lists are a SNAPSHOT taken when the browsing context was created, so a walk performed now would "
-          "report the ancestors a later navigation left behind rather than the ones this document was "
-          "created under");
-    return JS_UNDEFINED;
+    /* "Assert: this's relevant Document's ancestor origins list is not null. Return this's relevant Document's
+       ancestor origins list." §7.3.2.1 built BOTH lists at the creation (core/dom/document.c) — the internal
+       one of origins and this serialization of it — which is what makes the answer a snapshot of the tree this
+       Document was created in rather than a walk of the tree as it stands now. */
+    return document_ancestor_origins(ctx);
 }
 
 JSValue location_object(JSContext *ctx)
@@ -1143,6 +1137,13 @@ static void location_install_realm(JSContext *ctx)
        string would make a page believe it had navigated. */
     idl_install_accessor_unforgeable(ctx, global, "location", js_win_location, 0, -1);
     realm_value_set(ctx, g_obj_slot, loc);
+    {
+        /* §7.2.4's associated empty DOMStringList, built WITH the Location and never again. */
+        JSValue empty = JS_NewArray(ctx);
+
+        CHECK(!JS_IsException(empty), "location: §7.2.4's empty DOMStringList could not be allocated");
+        realm_value_set(ctx, g_empty_asl_slot, dom_string_list_new(ctx, empty));
+    }
     JS_FreeValue(ctx, global);
 }
 
@@ -1189,9 +1190,12 @@ void location_init(JSContext *ctx)
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_loc_class, &d) == 0,
           "Location: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "HTML §7.2.4 the Window's associated Location");
+    g_empty_asl_slot = realm_value_declare(ctx, "HTML §7.2.4 the Location's associated empty DOMStringList");
     realm_declare_intrinsic(location_install_realm);
     agent_state_class(LOC_COMPONENT, &g_loc_class, "§7.2.4's per-realm prototype slot and brand");
     agent_state_id(LOC_COMPONENT, &g_obj_slot, "the per-realm slot §7.2.4's one Location lives in");
+    agent_state_id(LOC_COMPONENT, &g_empty_asl_slot,
+                   "the per-realm slot §7.2.4's associated empty DOMStringList lives in");
 }
 
 /* THE AGENT'S HALF, UNDONE — core/platform.h's third column, which this component was NOT on: `location_free`
@@ -1220,6 +1224,7 @@ void location_free(void)
     /* The prototypes, the interface objects and the Locations are the REALMS' — each is released with its
        context. What the agent holds is the brand, the slot and the eleven member ids the IDL pool issued. */
     g_obj_slot = -1;
+    g_empty_asl_slot = -1;
     g_loc_class = 0;
     for (i = 0; i < LOC_N; i++) g_loc_set[i] = -1;
     g_loc_assign = g_loc_replace = g_loc_reload = -1;

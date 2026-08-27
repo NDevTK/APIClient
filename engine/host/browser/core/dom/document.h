@@ -107,6 +107,12 @@ JSValue document_selection(JSContext *ctx, JSValueConst doc);
    which HTML §2.4.2's parse a URL resolves every relative reference against. It is §2.4.3's DOCUMENT BASE URL
    and NOT the document's address: this header used to say the address, the code used to return it, and both
    were wrong for every page shipping a `<base href>`. ONE component owns it, so two answers cannot drift. */
+/* HTML §7.2.4's `ancestorOrigins` answers with this Document's ANCESTOR ORIGINS LIST — the DOMStringList
+   §7.3.2.1 "Creating browsing contexts" gave it at its creation. [SameObject]: the same object for the life of
+   the Document, which the corpus asserts by identity. Owned. Crashes for a Document that has none, because a
+   Document with no browsing context is answered by §7.2.4's FIRST step (the Location's own empty list) and
+   never reaches this. */
+JSValue document_ancestor_origins(JSContext *ctx);
 const char *document_base_url(JSContext *ctx);
 /* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS — §4.5's `document.URL`. A DIFFERENT question from the one above, and
    the caller has to say which it is asking: §7.2.4's Location url, §7.2.5's can-have-its-URL-rewritten,

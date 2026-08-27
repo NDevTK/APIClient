@@ -37,6 +37,7 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_style_element.h"
+#include "core/html/dom_string_list.h"   /* §3.1.3's ancestor origins list IS a DOMStringList */
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/html_base_element.h"   /* §4.2.3's frozen base URL, whose two facts this record holds */
 #include "core/url/url.h"                  /* §2.4.3's fallback base URL asks whether an address matches about: */
@@ -168,6 +169,21 @@ typedef struct Document {
        with NO browsing context, which is §4.1's "must return null otherwise" — the one place the two states
        differ, and the reason this is built by document_install and not by doc_rec_new. */
     JSValue              selection;
+    /* HTML §3.1.1 "The `Document` object" gives every Document an ANCESTOR ORIGINS LIST and, beside it, an
+       INTERNAL ANCESTOR ORIGIN OBJECTS LIST. Two fields because the standard has two and they answer different
+       questions: the internal one is a list of ORIGINS and is what a CHILD reads to build its own; the public
+       one is the DOMStringList §7.2.4's `ancestorOrigins` hands to script, and it is [SameObject] for the life
+       of the Document — `location-ancestor-origins-new-object.html` asserts that identity directly.
+       BOTH ARE A SNAPSHOT taken at §7.3.2.1 "Creating browsing contexts", never a walk performed at the read:
+       the list records the ancestors the Document was CREATED under, so a walk done later would report whatever
+       a subsequent navigation left in the tree. That is also why removing the frame does not empty this list —
+       it empties the ANSWER, because §7.2.4's first step finds no relevant Document at all.
+       THE INTERNAL LIST IS HELD AS SERIALIZED ORIGINS, which is what its only two consumers need: a child
+       composing its own list appends these verbatim, and the public list is their concatenation. An OPAQUE
+       origin is the three bytes `null`, and the one place that distinction still matters is the masking
+       comparison below, which is why that comparison asks the parent's origin RECORD and not this text. */
+    JSValue              ancestor_origins;          /* §7.2.4's DOMStringList — [SameObject], UNDEFINED with no browsing context */
+    JSValue              ancestor_origin_strings;   /* the internal list, as an Array of serialized origins */
     /* THE DOCUMENT'S ADDRESS — DOM §4.5 Interface Document's `URL`, and NOT its base URL. An INTERNED string
        this record owns (doc_addr_intern), never a buffer: DOM §4.5 states "Each document has an associated
        encoding …, content type …, URL (a URL) …" and "The URL and documentURI getter steps are to return
@@ -363,6 +379,11 @@ static void doc_rec_refs(Document *d, DocRefFn *fn, void *arg)
 {
     fn(d->realm, &d->impl, arg);
     fn(d->realm, &d->selection, arg);
+    /* §3.1.1's two ancestor-origins fields, both HELD and both here for the reason the list exists: they are
+       created together at §7.3.2.1 and a field one consumer walks and the other does not is the exact pair of
+       defects the paragraph above names. */
+    fn(d->realm, &d->ancestor_origins, arg);
+    fn(d->realm, &d->ancestor_origin_strings, arg);
     fn(d->realm, &d->proxy, arg);
     fn(d->realm, &d->win_obj, arg);
     fn(d->realm, &d->doc_obj, arg);
@@ -2711,6 +2732,136 @@ SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx
 
 const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return doc_here(ctx)->permissions_policy; }
 
+/* HTML §3.1.1 "The `Document` object" — the INTERNAL ANCESTOR ORIGIN OBJECTS LIST CREATION STEPS and the
+ * ANCESTOR ORIGINS LIST CREATION STEPS, run together because §7.3.2.1 "Creating browsing contexts" runs them
+ * together ("run the internal ancestor origin objects list creation steps given document and
+ * iframeReferrerPolicy" then "set document's ancestor origins list to the result of running the ancestor
+ * origins list creation steps given document").
+ *
+ * IT IS CALLED AT THE CREATION AND NOWHERE ELSE, which is the whole content of the member: §7.2.4's
+ * `ancestorOrigins` is a SNAPSHOT of the tree this Document was created in. Reading it by walking parents at
+ * the getter would answer with the tree as it is NOW, so a page that removed and re-inserted a frame would be
+ * told about ancestors this document never had.
+ *
+ * `masked` IS THE REFERRER POLICY'S DOING and the two arms are the standard's: "no-referrer" masks
+ * unconditionally, and "same-origin" masks only when the parent is cross-origin with this document. Masking
+ * replaces an origin with A NEW OPAQUE ORIGIN rather than dropping it, so the list's LENGTH still reports the
+ * depth of the frame tree — which is why the corpus asserts `['null']` and not `[]`.
+ *
+ * THE POLICY IS READ OFF THE CONTAINER ELEMENT AT THIS MOMENT, and that is the snapshot §7.4.2's beginning-
+ * navigation step 16 describes for a navigation. For the INITIAL about:blank this creation IS that moment, so
+ * the attribute's value here is the value the standard snapshots. A later write to `referrerpolicy` must not
+ * change this list, and it cannot: nothing re-runs these steps.
+ *
+ * THE MASKED SAME-ORIGIN COMPARISON ASKS THE PARENT'S ORIGIN RECORD, NOT ITS TEXT. Step 10's condition is
+ * "ancestorOrigin is same origin with parentDoc's origin", and §7.1.1's same origin is FALSE for two opaque
+ * origins — while both serialize to the same three bytes `null`. Comparing the stored text alone would
+ * therefore mask an entry that is not the parent's whenever the parent is itself opaque, so the text
+ * comparison is admitted only once the parent's origin is known to be a tuple. */
+static void doc_create_ancestor_origins(JSContext *ctx, Document *d, JSValueConst nav_proxy)
+{
+    JSValue out = JS_NewArray(ctx), parent_nav, container;
+    uint32_t n = 0, i, nout = 0;
+    JSContext *prealm;
+    Document *pd;
+    const Origin *porigin;
+    const char *pser;
+    bool masked = false, popaque;
+    char *rp;
+    JSValue len;
+
+    CHECK(!JS_IsException(out), "§3.1.1's ancestor origins list could not be allocated");
+    /* A DOCUMENT WITH NO BROWSING CONTEXT HAS NEITHER LIST, and that is a state §7.2.4 already answers: its
+       first step finds no relevant Document and returns the LOCATION's own empty list. Leaving both fields
+       UNDEFINED is what says so; an empty list here would be the positive claim that this Document sits at the
+       top of a tree, which is a different fact from having no tree at all. */
+    if (!window_proxy_is(nav_proxy)) { JS_FreeValue(ctx, out); return; }
+    /* STEP 2-3: "let parentDoc be document's container document; if parentDoc is null, then return output." A
+       top-level traversable has no container, and its list is empty for ever. */
+    parent_nav = window_proxy_parent_navigable(ctx, nav_proxy);
+    if (!window_proxy_is(parent_nav)) {
+        JS_FreeValue(ctx, parent_nav);
+        d->ancestor_origin_strings = out;
+        d->ancestor_origins = dom_string_list_new(ctx, JS_DupValue(ctx, out));
+        return;
+    }
+    /* A PEER'S PARENT IS NOT IN THIS HEAP TO BE ASKED, and this is the one place that is a statement rather
+       than a gap: the list would have to be composed by the instance that holds the ancestor, which is the
+       cross-instance read §Security describes. It crashes here rather than answering an empty list, because an
+       empty list is a POSITIVE claim that this document has no ancestors. */
+    DCHECK(!window_proxy_is_remote(parent_nav),
+           "§3.1.1's internal ancestor origin objects list reached a parent navigable this instance does not "
+           "hold — the ancestors live in a peer, so the list has to be composed there and cross the boundary "
+           "as text like every other cross-instance answer; an empty list here would claim this document is "
+           "top-level, which is a different fact");
+    prealm = window_proxy_realm(ctx, parent_nav);
+    pd = doc_here(prealm);
+    DCHECK(pd != NULL && JS_IsArray(pd->ancestor_origin_strings),
+           "§3.1.1's step 4 read a parent Document that has no INTERNAL ancestor origin objects list — every "
+           "Document of this agent is given one by this same function at its creation, so a parent without one "
+           "was installed past it and this child's list would silently start from nothing");
+    porigin = window_proxy_origin(pd->proxy);
+    DCHECK(porigin != NULL, "§3.1.1's step 9 needs the parent Document's origin and its navigable has none");
+    popaque = origin_is_opaque(porigin);
+    pser = origin_serialized(porigin);
+    /* STEPS 5-8: the container element and the referrer policy snapshot. */
+    container = window_proxy_container(ctx, nav_proxy);
+    rp = JS_IsObject(container) ? element_attr_get(ctx, container, "referrerpolicy") : NULL;
+    if (rp && !strcmp(rp, "no-referrer")) {
+        masked = true;                                                                     /* STEP 7 */
+    } else if (rp && !strcmp(rp, "same-origin")) {                                          /* STEP 8 */
+        const Origin *self = window_proxy_origin(nav_proxy);
+        DCHECK(self != NULL, "§3.1.1's step 8 compares this Document's origin and its navigable has none");
+        masked = !origin_same(porigin, self);
+    }
+    free(rp);
+    JS_FreeValue(ctx, container);
+    /* STEP 9: "if masked is true, then append a new opaque origin to output; otherwise, append parentDoc's
+       origin to output." */
+    JS_SetPropertyUint32(ctx, out, nout++,
+                         JS_NewString(ctx, masked ? "null" : (pser ? pser : "null")));
+    /* STEP 10: the parent's own ancestors, each masked when it is the parent's origin again. */
+    len = JS_GetPropertyStr(ctx, pd->ancestor_origin_strings, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue a = JS_GetPropertyUint32(ctx, pd->ancestor_origin_strings, i);
+        const char *s = JS_ToCString(ctx, a);
+
+        if (masked && !popaque && s && pser && !strcmp(s, pser)) {
+            JS_SetPropertyUint32(ctx, out, nout++, JS_NewString(ctx, "null"));
+        } else {
+            /* "Append ancestorOrigin to output AND SET MASKED TO FALSE." Masking is not a mode that runs to
+               the end of the list: it stops at the first ancestor that is not the parent's own origin, and the
+               standard attaches a note saying why that is not a leak — those further ancestors "might have
+               been previously masked when an ancestor document ran these steps", and what this list holds is
+               whatever the PARENT's list already recorded. Reading the loop without this line gives an answer
+               that is wrong only for a frame three deep, which is exactly the shape nothing shallower tests. */
+            JS_SetPropertyUint32(ctx, out, nout++, JS_DupValue(ctx, a));
+            masked = false;
+        }
+        JS_FreeCString(ctx, s);
+        JS_FreeValue(ctx, a);
+    }
+    JS_FreeValue(ctx, parent_nav);
+    d->ancestor_origin_strings = out;
+    /* THE ANCESTOR ORIGINS LIST CREATION STEPS, whose whole content is "append the SERIALIZATION of origin to
+       output" over the list above — which is what that list already holds, for the reason its field says. */
+    d->ancestor_origins = dom_string_list_new(ctx, JS_DupValue(ctx, out));
+}
+
+/* §7.2.4's `ancestorOrigins` answers with THIS — the list built at this Document's creation, [SameObject]. */
+JSValue document_ancestor_origins(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(!JS_IsUndefined(d->ancestor_origins),
+           "§7.2.4's ancestorOrigins was asked of a Document with no ANCESTOR ORIGINS LIST — §7.3.2.1 gives "
+           "one to every Document it creates, so a Document without one reached its realm by some other route "
+           "and its ancestry was never recorded");
+    return JS_DupValue(ctx, d->ancestor_origins);
+}
+
 /* WHAT PERMISSIONS POLICY §9.7 READS OFF A NAVIGABLE CONTAINER, gathered for the navigable this Document is
  * being created in. §9.5 takes "null or an element (container)" and §9.7 reads three things off it: "container's
  * node document"'s permissions policy (its steps 2 and 3), that document's ORIGIN (its step 7), and the `allow`
@@ -3120,6 +3271,11 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
        builds one and every other document keeps this — which §4.1's getSelection reads as its "must return
        null otherwise" rather than as a hole a first read would fill. */
     d->selection = JS_UNDEFINED;
+    /* §3.1.1's ancestor-origins pair. UNDEFINED is the state of a Document with NO browsing context — a
+       §4.5 createDocument, a DOMParser's — which is exactly the case §7.2.4's first step answers with the
+       Location's own empty list, so an absent list here is never read as an empty ancestry. */
+    d->ancestor_origins = JS_UNDEFINED;
+    d->ancestor_origin_strings = JS_UNDEFINED;
     /* THE RECORD'S FIRST ADDRESS. A NULL one is a Document install that has no address to give — the empty
        string is what this engine's readers test for, so it is stored as one rather than left NULL. */
     d->url = doc_addr_intern(d, url ? url : "");
@@ -3375,6 +3531,11 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        navigable's container when the element is removed, and a policy re-derived after that would silently
        become a top-level document's. */
     d->permissions_policy = document_create_permissions_policy(ctx, nav_proxy);
+    /* §7.3.2.1 "Creating browsing contexts" runs the two ancestor-origins step lists here, beside §9.5's
+       permissions policy and for the same reason: both are SNAPSHOTS of the container relation, both are
+       read off `nav_proxy` while it still names the tree this Document was created in, and both become
+       wrong the moment that relation is asked for again later. */
+    doc_create_ancestor_origins(ctx, d, nav_proxy);
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 
