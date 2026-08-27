@@ -30,6 +30,8 @@
 #include "core/dom/element.h"
 #include "core/dom/node.h"
 #include "core/dom/document.h"
+#include "core/events/event.h"
+#include "core/events/event_target.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/frame/navigable.h"
 #include "core/frame/sandboxing.h"
@@ -43,6 +45,18 @@
    prototype lookup and no page code can intercept it — the same arrangement the custom-element upgrade mark
    uses, and for the same reason. */
 static JSAtom g_atom_navigable = JS_ATOM_NULL;
+
+/* See html_iframe.h. The name is read off the node rather than off a wrapper because two of the askers are
+   inside tree walks that have a node and would have to mint a wrapper to ask. */
+bool iframe_element_is(const lxb_dom_node_t *n)
+{
+    size_t qn = 0;
+    const lxb_char_t *q;
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    q = lxb_dom_element_qualified_name(lxb_dom_interface_element((lxb_dom_node_t *)n), &qn);
+    return q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6);
+}
 
 /* This element's navigable IN THIS FLOW, or JS_UNDEFINED. */
 JSValue iframe_navigable(JSContext *ctx, JSValueConst wrap)
@@ -134,6 +148,50 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_navigable, JS_UNDEFINED, JS_PROP_WRITABLE);
 }
 
+/* HTML §4.8.5's IFRAME LOAD EVENT STEPS. Seven steps in the standard; five of them are one pair of flags and a
+ * resource-timing entry, and what is here is the two that this engine can state:
+ *
+ *   1. Assert: element's content navigable is not null.
+ *   2. Let childDocument be element's content navigable's active document.
+ *   3. If childDocument has its MUTE IFRAME LOAD flag set, then return.
+ *   4. [resource timing]
+ *   5. Set childDocument's IFRAME LOAD IN PROGRESS flag.
+ *   6. Fire an event named `load` at element.
+ *   7. Unset childDocument's iframe load in progress flag.
+ *
+ * THE TWO FLAGS ARE ONE PAIR WITH §8.4.1's DOCUMENT OPEN STEPS AND LAND WITH THEM, not before. They form a
+ * closed loop with exactly one participant outside this algorithm: §8.4.1's "opening the input stream" is the
+ * only reader of `iframe load in progress` and the only writer of `mute iframe load`, and this algorithm is the
+ * only writer of the first and the only reader of the second. So building either one here alone produces
+ * precisely the two defects CLAUDE.md names as a matched pair — a field written by this engine and read by
+ * nothing, and a field read by this engine and written by nothing, the second of which a page cannot tell from
+ * a flag that is simply always clear. `document.open()` is what closes the loop, and it closes both halves in
+ * the same diff or neither. Until then step 3 cannot be reached with a set flag by any program, so its absence
+ * changes no answer; what would change an answer is a `false` invented for it here.
+ *
+ * IT IS A QUEUED FIRE, WHICH IS §7.5.8's OWN WORD. Its caller queues an ELEMENT TASK on the DOM manipulation
+ * task source, so the dispatch belongs to the event loop and not to the line that finished the load —
+ * event_target_fire is that enqueue, and the listener body is then an ordinary call-root flow, preemptible and
+ * parkable like every other program, which a C activation could not host.
+ *
+ * `load` AT AN ELEMENT DOES NOT BUBBLE. DOM's "fire an event named e at target" with no initialisation is
+ * bubbles false and cancelable false, and this is the one `load` in the engine that is not the Window's — the
+ * Window's is §13.2.7 step 9.5 and carries a legacy target override this one has no business with. */
+void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrap)
+{
+    /* STEP 1, and it is an assert in the standard's own word. The caller is §7.5.8, which reached this element
+       by asking a NAVIGABLE for its container — so an element that answers as a container while holding no
+       content navigable means the two halves of §7.3.1.3's relation disagree, which is the one state
+       window_proxy_container's read-the-forward-slot-back construction exists to make impossible. */
+    DCHECK(iframe_has_navigable(ctx, wrap),
+           "§4.8.5's iframe load event steps step 1 asserts the element's content navigable is not null, and "
+           "this one has none in the running flow — §7.5.8 named this element as its document's navigable's "
+           "container, so the container link and the content-navigable slot are naming each other in only one "
+           "direction");
+    event_target_fire(ctx, wrap, event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
+                      JS_UNDEFINED);                                                              /* STEP 6 */
+}
+
 /* §4.8.5 FOR THE ELEMENTS THE PARSER INSERTED. A browser runs the insertion steps during tree construction, so
  * an `<iframe>` in the page's own markup has a navigable before the first script runs — `window.length` is 1 on
  * a document that never scripted anything. This engine's tree comes from a Lexbor parse that does not pass
@@ -144,14 +202,10 @@ void iframe_document_parsed(JSContext *ctx)
     lxb_dom_node_t *root = document_root_node(ctx), *n = root;
 
     while (n) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            size_t qn = 0;
-            const lxb_char_t *q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
-            if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
-                JSValue w = node_wrap(ctx, n);
-                iframe_create_navigable(ctx, w);
-                JS_FreeValue(ctx, w);
-            }
+        if (iframe_element_is(n)) {
+            JSValue w = node_wrap(ctx, n);
+            iframe_create_navigable(ctx, w);
+            JS_FreeValue(ctx, w);
         }
         if (n->first_child) { n = n->first_child; continue; }
         while (n && !n->next) n = (n == root) ? NULL : n->parent;
@@ -179,19 +233,15 @@ static JSValue child_navigables(JSContext *ctx, int want, int *out_n)
 
     if (out_n) *out_n = 0;
     while (n) {
-        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            size_t qn = 0;
-            const lxb_char_t *q = lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &qn);
-            if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
-                JSValue w = node_wrap(ctx, n);
-                JSValue nav = iframe_navigable(ctx, w);
-                JS_FreeValue(ctx, w);
-                if (!JS_IsUndefined(nav)) {
-                    if (want == seen) { if (out_n) *out_n = seen + 1; return nav; }
-                    seen++;
-                }
-                JS_FreeValue(ctx, nav);
+        if (iframe_element_is(n)) {
+            JSValue w = node_wrap(ctx, n);
+            JSValue nav = iframe_navigable(ctx, w);
+            JS_FreeValue(ctx, w);
+            if (!JS_IsUndefined(nav)) {
+                if (want == seen) { if (out_n) *out_n = seen + 1; return nav; }
+                seen++;
             }
+            JS_FreeValue(ctx, nav);
         }
         if (n->first_child) { n = n->first_child; continue; }
         while (n && !n->next) n = (n == root) ? NULL : n->parent;

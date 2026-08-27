@@ -2179,16 +2179,10 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                    (the child's name is minted locally), so it does not need the enqueue this walk's buffer
                    would otherwise demand; it joins <script> preparation and custom-element upgrades as one
                    more per-node effect. */
-                {
-                    size_t qn = 0;
-                    const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
-                    /* ASCII-case-insensitive: a parsed `<iframe>` and a `createElement('iframe')` are the same
-                       element and must not be told apart by how their name happened to be stored. */
-                    if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
-                        JSValue w = node_wrap(ctx, n);
-                        iframe_create_navigable(ctx, w);
-                        JS_FreeValue(ctx, w);
-                    }
+                if (iframe_element_is(n)) {
+                    JSValue w = node_wrap(ctx, n);
+                    iframe_create_navigable(ctx, w);
+                    JS_FreeValue(ctx, w);
                 }
                 /* HTML §4.12.1: an inserted `<script>` is PREPARED — and its step 1 is what makes a script the
                    fragment parse produced inert, because §13.4's default scripting mode marked it already
@@ -2262,9 +2256,7 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                document destroys its child navigable. Without it a removed frame kept answering as a live one —
                `contentWindow` stayed non-null and `closed` stayed false, which is precisely what the spec files
                distinguish a destroyed navigable by. */
-            size_t qn = 0;
-            const lxb_char_t *q = lxb_dom_element_qualified_name(el, &qn);
-            if (q && qn == 6 && !strncasecmp((const char *)q, "iframe", 6)) {
+            if (iframe_element_is(n)) {
                 JSValue w = node_wrap(ctx, n);
                 iframe_destroy_navigable(ctx, w);
                 JS_FreeValue(ctx, w);

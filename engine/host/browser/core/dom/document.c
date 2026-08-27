@@ -1673,6 +1673,87 @@ bool document_render_blocked(JSContext *ctx)
     return document_readiness(ctx) == 0;
 }
 
+/* HTML §7.5.8 "Finishing the loading process" — "to COMPLETELY FINISH LOADING a Document document":
+ *
+ *   1. Assert: document's browsing context is non-null.
+ *   2. Set document's completely loaded time to the current time.
+ *   3. Let container be document's node navigable's container.
+ *   4. If container is an `iframe` element, then queue an element task on the DOM manipulation task source
+ *      given container to run the iframe load event steps given container.
+ *   5. Otherwise, if container is non-null, then queue an element task on the DOM manipulation task source
+ *      given container to fire an event named `load` at container.
+ *
+ * THIS IS THE ONLY PLACE AN IFRAME'S `load` COMES FROM, and until it existed there was no place at all: the
+ * engine fired `load` at the child's WINDOW (step 9.5 above) and nothing whatever at the CONTAINER, so
+ * `frame.onload` was a handler that could not run and `frame.addEventListener('load', …)` was a listener
+ * nothing dispatched to. Every corpus test that appends a frame and waits for it — which is how a test gets a
+ * second document to ask questions of — waited for ever and reported a timeout, in an area whose failures are
+ * then about a frame tree nobody ever finished building.
+ *
+ * STEP 2 IS NOT HERE BECAUSE NOTHING IN THIS TREE ASKS IT. A "completely loaded time" is read by exactly one
+ * algorithm, §7.2.4's location-object navigate ("if location's relevant Document is not yet completely
+ * loaded … set historyHandling to 'replace'"), and core/frame/location.c answers that from the session
+ * history's own initial-about:blank test rather than from a clock. Writing a timestamp here that no reader
+ * consults is the mirror of a defaulted read: a field with a producer and no consumer, indistinguishable at a
+ * glance from a measurement.
+ *
+ * §4.8.5's OTHER CALLER OF THE LOAD EVENT STEPS IS DELIBERATELY NOT BUILT, AND THE REASON IS THIS ENGINE'S
+ * ORDER RATHER THAN A GAP. "Process the iframe attributes" step 3 fires a SYNCHRONOUS load event when the
+ * resolved url matches about:blank and initialInsertion is true, and the standard says in its own note why
+ * that special case exists: at the point create-a-new-child-navigable calls completely-finish-loading on the
+ * initial about:blank Document, "the container relationship has not yet been established", so step 3 above
+ * binds null and steps 4-5 do nothing. In THIS engine §7.3.1.3's create is handed the container element and
+ * writes the link as one of its own steps, and the initial about:blank child does not finish loading inside
+ * that create at all — it reaches this algorithm later, through document_lifecycle_step, by which time the
+ * container is there to be found. So the general path already covers the case the special path was written to
+ * rescue, and building both would fire `load` TWICE at one `<iframe>` — the same double-load shape §7.3.1.3's
+ * own create carries a paragraph about. What is lost is the TIMING: the standard's fire is synchronous inside
+ * the append and this one is a task after the child's own lifecycle completes.
+ *
+ * `ctx` IS THE CHILD'S REALM — the document whose loading finished — and the fire must be enqueued in the
+ * CONTAINER'S. §7.5.8's "element task" has the element's node document's relevant global for its global, which
+ * is the parent's, and the parent is where the listener was registered. */
+static void completely_finish_loading(JSContext *ctx)
+{
+    JSValueConst proxy = doc_here(ctx)->proxy;
+    JSValue container;
+    lxb_dom_node_t *cn;
+    JSContext *cctx;
+
+    /* STEP 1. Step 9.2 above already returned for a destroyed navigable, so what is left is a Document with no
+       navigable at all — §4.5's createDocument, a DOMParser's — and one of those never reaches §13.2.7's end
+       because document_lifecycle_step walks navigables. */
+    DCHECK(window_proxy_is(proxy),
+           "§7.5.8's completely-finish-loading was reached by a Document with no navigable — §13.2.7 \"The "
+           "end\" runs for the documents of this agent's navigables, so a Document that has none has no "
+           "loading process for this algorithm to finish");
+    container = window_proxy_container(ctx, proxy);                                          /* step 3 */
+    cn = node_of(container);
+    if (!cn) { JS_FreeValue(ctx, container); return; }   /* a top-level traversable: step 5's "non-null" fails */
+    /* STEP 4's BRANCH IS THE ONLY ONE THIS ENGINE CAN REACH, and step 5's is an ASSERT rather than three
+       written-but-unreachable lines. A content navigable is created for `<iframe>` and for nothing else here
+       (html_iframe.c is the only component that creates one from an element), so a container that is not an
+       `<iframe>` cannot exist — and the day §4.8.6's `<embed>` or §4.8.7's `<object>` gets one, this is the
+       site that must learn step 5, which is what makes the crash the instruction rather than a silent widening
+       of step 4 onto an element whose load event is not the iframe load event steps. */
+    DCHECK(iframe_element_is(cn),
+           "§7.5.8 step 5 — a navigable's container that is not an `<iframe>` finished loading. Content "
+           "navigables belong to `<iframe>` alone in this engine, so building §4.8.6's `<embed>` or §4.8.7's "
+           "`<object>` as navigable containers means teaching this site step 5: queue an element task on the "
+           "DOM manipulation task source given container to FIRE `load` AT IT, which is not the same algorithm "
+           "as §4.8.5's iframe load event steps");
+    /* THE CONTAINER'S REALM, asked of the container's own document. Two same-origin documents are one agent
+       and one heap, so this is a pointer and not a message; a CROSS-ORIGIN container is a peer's element and
+       is not in this heap to be found, which is the same boundary window_proxy_container is read across. */
+    cctx = document_realm_of(cn);
+    DCHECK(cctx != NULL,
+           "§7.5.8 reached a container element whose document has no realm — an element that presents a "
+           "navigable is an element in a document a flow ran the insertion steps in, so its realm is the one "
+           "that ran them");
+    iframe_run_load_event_steps(cctx, container);                                            /* step 4 */
+    JS_FreeValue(ctx, container);
+}
+
 static int document_done_stage(JSContext *ctx, int stage)
 {
     if (stage == 0) {
@@ -1720,6 +1801,7 @@ static int document_done_stage(JSContext *ctx, int stage)
     event_target_fire(ctx, doc_here(ctx)->win_obj,
                       page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
                       doc_here(ctx)->doc_obj);
+    completely_finish_loading(ctx);                                              /* step 9.12 */
     return 1;
 }
 
