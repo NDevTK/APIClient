@@ -53,6 +53,7 @@
 #include "core/dom/collections.h"
 #include "core/dom/node.h"
 #include "core/idl_args.h"
+#include "core/realm.h"
 #include "solver/cow.h"
 
 /* §7.2.2.1's `closed` IS THE NAVIGABLE'S, not the Window's — which is why it is not read from a byte here.
@@ -314,6 +315,118 @@ static JSValue js_win_set_name(JSContext *ctx, JSValueConst this_val, JSValueCon
     (void)magic;
     if (JS_IsUninitialized(nav)) return JS_EXCEPTION;
     return window_proxy_name_assign(ctx, nav, val);
+}
+
+/* HTML §7.2.2.5 "Historical browser interface element APIs" — `attribute DOMString status`, whose entire
+ * definition is one sentence: "For historical reasons, the status attribute on the Window object must, on
+ * getting, return the last string it was set to, and on setting, must set itself to the new value. When the
+ * Window object is created, the attribute must be set to the empty string. It does not do anything else."
+ *
+ * "IT DOES NOT DO ANYTHING ELSE" IS NOT A LICENCE TO OMIT IT. The spec COMPUTES a real value here — the empty
+ * string at creation, the last assignment afterwards — so the thing that is absent is a status BAR, not an
+ * answer, and §NO STUBS draws its line at exactly that: a member is honestly absent only where the spec
+ * defines no scriptable headless result. A missing member on the global is `undefined`, not a throw, and
+ * `undefined` is what document-domain-removed-iframe.html read on ALL FOUR of its subtests — including the
+ * control that removes nothing and sets no `document.domain`, which is how a member this cheap came to be
+ * invisible behind a file whose name says it is about something else entirely.
+ *
+ * IT IS THE WINDOW'S, WHICH IS WHY IT IS THE REALM'S RECORD AND NOT THE NAVIGABLE'S. `name` and `closed` above
+ * are read off the navigable because they SURVIVE a navigation — whoever opened the context named it and the
+ * name outlives the document. This is the opposite statement: it is reset to "" every time a Window object is
+ * created, so it belongs to the realm that Window is the global of, and a navigation gets a new one because a
+ * navigation gets a new realm. Reading it off the navigable would carry one document's status into the next.
+ *
+ * AND THAT IS WHAT MAKES ITS TEST A REGRESSION GUARD FOR §7.2.3 RATHER THAN A TEST OF THIS MEMBER.
+ * `contentWindow.status` is read on the line AFTER `iframe.remove()` and must still answer, because §7.2.3's
+ * internal methods are performed on W — the [[Window]] internal slot — and a Window OUTLIVES its browsing
+ * context; the file's own comment cites crbug.com/1095145, the browser bug where those properties went
+ * undefined. window_proxy.c's split between `wp_bc_null` (the sever, which `closed` and `opener` take) and
+ * `wp_closed` (this heap holds no active document, which the §7.2.3 forward takes) is what keeps that forward
+ * alive across the removal. That split had NOTHING READING IT through a member whose value survives the sever
+ * and whose absence is not a throw, so it could have been folded back into one predicate with every subtest
+ * still failing exactly as it already did. This is the member that makes it observable.
+ *
+ * THE RECORD IS A BASELINE JS OBJECT, unreachable from the page, which is §3.1.5's readiness record and
+ * §6.4.1's activation timestamps in the same shape and for the same two reasons: nothing but this component
+ * can write it, and the assignment is an ORDINARY PROPERTY WRITE that the heap COW captures — so one arm of a
+ * fork sets a status its sibling never sees, and a parked flow's status parks with it. A malloc'd C string
+ * would be a byte the delta cannot carry and the cold tier cannot serialize.
+ *
+ * §7.2.1 DOES NOT LIST IT, so a cross-origin `otherW.status` is a SecurityError and not `undefined` — that is
+ * already true without a line here, because §7.2.3.5 steps 4-6 answer every name the fixed list omits and this
+ * member is reached only through the same-origin forward that precedes them. */
+static int g_status_slot = -1;
+
+/* THIS REALM'S §7.2.2.5 RECORD. Owned — the caller frees. */
+static JSValue win_status_record(JSContext *ctx)
+{
+    JSValue rec = realm_value_get(ctx, g_status_slot);
+
+    DCHECK(JS_IsObject(rec), "a realm answered for its Window's §7.2.2.5 status with no record — window_install "
+                             "builds it with the realm so it is BASELINE, and a realm that reached a member "
+                             "without running that install is one nothing put a Window in");
+    return rec;
+}
+
+/* THE RECEIVER IS NOT WHAT THIS READS, AND THE ONE CASE WHERE THAT IS WRONG IS ASSERTED RATHER THAN GUESSED.
+ * A C member runs in the realm that DEFINED it (js_call_c_function takes `ctx` from the function object), so
+ * `ctx` here IS the Window whose status this is — which is exactly right for `window.status`, for a bare
+ * `status`, and for `frame.contentWindow.status`, where §7.2.3's forward hands the read to the FRAME's own
+ * global and therefore to the FRAME's own getter. It is also why the receiver reaching this may legitimately
+ * be a WindowProxy rather than a Window: the forward performs OrdinaryGetOwnProperty on W and quickjs calls
+ * the descriptor's getter with whatever object the read started from.
+ * THE WRONG CASE IS A FOREIGN REALM'S Window, which same-origin documents make reachable — they are one heap,
+ * so `Object.getOwnPropertyDescriptor(a, "status").get.call(b)` is a real expression — and the answer would be
+ * A's status wearing B's identity. That is the same missing edge window_proxy_this_navigable's own DCHECK
+ * names: a Window object to the thing it is the Window OF, without going through a realm. */
+static void win_status_assert_receiver(JSContext *ctx, JSValueConst this_val)
+{
+#if APICLIENT_DEV
+    JSValue g = JS_GetGlobalObject(ctx);
+    bool foreign = window_is(this_val) && JS_VALUE_GET_PTR(g) != JS_VALUE_GET_PTR(this_val);
+
+    JS_FreeValue(ctx, g);
+    DCHECK(!foreign, "§7.2.2.5's `status` was reached with ANOTHER realm's Window object as its receiver. The "
+                     "value is the RECEIVER's Window's, and this member reads the realm the getter was minted "
+                     "in — so the answer would be this document's status wearing that document's identity. "
+                     "BUILD the Window -> realm edge that does not go through ctx (window_proxy_this_navigable "
+                     "names the same missing edge) and read the record out of THAT realm");
+#else
+    (void)ctx; (void)this_val;
+#endif
+}
+
+static JSValue js_win_get_status(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSValue rec, v;
+
+    (void)magic;
+    win_status_assert_receiver(ctx, this_val);
+    rec = win_status_record(ctx);
+    v = JS_GetPropertyStr(ctx, rec, "status");
+    JS_FreeValue(ctx, rec);
+    DCHECK(JS_IsString(v), "§7.2.2.5's status record holds something that is not a string — it is born the "
+                           "empty string and the only writer is a setter whose IDL_DOMSTRING conversion has "
+                           "already run, so a non-string here is a second writer nobody declared");
+    return v;
+}
+
+/* §7.2.2.5's setter, and the DOMString is the DECLARATION'S — `idl_setter_id(ctx, IDL_DOMSTRING, ...)` runs
+   the conversion, so `window.status = {toString(){ for(;;){} }}` is the page's code under a flow base that can
+   park, exactly as `name`'s is, and this body receives a real string. Written as a bare JS_NewCFunction setter
+   the ToString would run from C, in an activation with no flow base, and the loop would drive to completion. */
+static JSValue js_win_set_status(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue rec;
+
+    (void)magic;
+    win_status_assert_receiver(ctx, this_val);
+    DCHECK(JS_IsString(val), "§7.2.2.5's status setter body was handed a value its IDL_DOMSTRING declaration "
+                             "should already have converted");
+    rec = win_status_record(ctx);
+    JS_SetPropertyStr(ctx, rec, "status", JS_DupValue(ctx, val));
+    JS_FreeValue(ctx, rec);
+    return JS_UNDEFINED;
 }
 
 /* §7.2.2.2's EXOTIC OWN-PROPERTY BEHAVIOUR — `window[0]`, and why it is not a property anyone sets.
@@ -581,6 +694,7 @@ static const char *const TOUCH_EXCLUDED[] = { "ontouchstart", "ontouchend", "ont
 static int g_id_close, g_id_blur, g_id_stop;   /* declared once per agent — see window_init */
 static int g_id_opener_set;   /* §7.2.2.4's `opener` setter, declared with them for the same reason */
 static int g_id_name_set;     /* §7.2.2.1's `name` setter — its DOMString conversion is the page's code */
+static int g_id_status_set;   /* §7.2.2.5's `status` setter — likewise */
 
 void window_init(JSContext *ctx)
 {
@@ -596,8 +710,15 @@ void window_init(JSContext *ctx)
        ONE, so declaring inside the install would mint a second entry for the second realm's prototype — which
        is the same shape as a per-wrapper mint and is what the pool's seal asserts against. */
     bar_prop_init(ctx);   /* §7.2.2.5's BarProp class, one per agent */
+    /* §7.2.2.5's `status` lives in a PER-REALM record, so the slot it lives in is declared once per AGENT —
+       a slot is a class id, and a class id is a registration in the one runtime. */
+    DCHECK(g_status_slot < 0, "window_init ran twice — §7.2.2.5's status slot is declared once per agent, and "
+                              "a second declaration would leave every realm built under the first one reading "
+                              "a slot nothing sets");
+    g_status_slot = realm_value_declare(ctx, "HTML §7.2.2.5 the Window's status");
     g_id_opener_set = idl_setter_id(ctx, IDL_ANY, false, js_win_set_opener, 0);
     g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
+    g_id_status_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_status, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
     g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
     g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 2);
@@ -690,6 +811,16 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_accessor(ctx, g, "opener", js_win_opener, 0, g_id_opener_set);
     /* §7.2.2.5's six user-interface bars. */
     bar_prop_install(ctx, g);
+    /* §7.2.2.5's `status`, and its BASELINE record — "when the Window object is created, the attribute must be
+       set to the empty string" is this line, and it runs with the realm rather than on first touch so the
+       empty string belongs to the baseline every flow forks from instead of to whichever flow read first. */
+    {
+        JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(rec), "this realm's §7.2.2.5 status record could not be allocated");
+        JS_SetPropertyStr(ctx, rec, "status", JS_NewString(ctx, ""));
+        realm_value_set(ctx, g_status_slot, rec);
+    }
+    idl_install_accessor(ctx, g, "status", js_win_get_status, 0, g_id_status_set);
 
     /* §7.2.2.4 `frameElement` — the element this navigable is nested THROUGH. */
     idl_install_accessor(ctx, g, "frameElement", js_win_frame_element, 0, -1);
@@ -755,5 +886,10 @@ void window_free(JSContext *ctx)
     (void)ctx;
     g_window_class = 0;
     g_window_props_class = 0;
+    /* THE SLOT IS THE AGENT'S AND ITS VALUES WENT WITH THE REALMS — a slot id is a class id in a runtime that
+       is going away, so what is given back here is the id, exactly as the two class ids above are. window_init
+       asserts it is back at -1, which is the half that makes a forgotten reset crash rather than hand a second
+       agent a slot in a runtime that no longer exists. */
+    g_status_slot = -1;
     bar_prop_free(ctx);
 }
