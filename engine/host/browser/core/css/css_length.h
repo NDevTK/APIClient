@@ -38,16 +38,27 @@
  *   line-height properties, if the element has no parent" — so `div{font-size:1.2em}` is 1.2 x the INHERITED
  *   size and `html{font-size:2rem}` is 2 x the INITIAL one rather than a definition of itself, and that is a
  *   property of the ANSWERS the caller supplies rather than of the arithmetic here.
- *   SIX MORE RESOLVE OUT OF THOSE TWO, and the number they are multiplied by is the SPEC's rather than this
- *   engine's: §6.1.1 states what MUST be assumed for `ex`, `ch` and `ic` when the metric cannot be
- *   determined, and a face with no glyph outlines is exactly that antecedent — core/css/font_metrics.h owns
- *   the three numbers and says why they are a real value here and not a stand-in. Each `r`-prefixed twin is
- *   "the value of the <unit> unit ON THE ROOT ELEMENT", so it is the same ratio over the `rem` base.
- *   THE LAST FOUR RESOLVE OUT OF A PICKED FACE, and that is the OTHER kind of multiplier: §6.1.1 states no
- *   must-assume value for a cap-height or for `normal`, so `cap`/`rcap` takes CSS 2.1 §10.8.1's `A` and
- *   `lh`/`rlh` takes its `AD`, both of which core/css/font_metrics.h PICKS — so those four carry an
- *   environment fact where the six above carry none, and the whole of the difference is which sentence of the
- *   spec answers. `lh` is also the one unit whose base is a PROPERTY: §6.1.1 gives it and `rlh` a resolution
+ *   SIX MORE RESOLVE OUT OF THOSE TWO, and the number they are multiplied by is SPLIT BETWEEN THE SPEC AND
+ *   THE FACE — which is a distinction with a table behind it and not a shading. `ex` is a HEIGHT of the first
+ *   available font, and the metrics-only sfnt this engine ships carries no 'OS/2', so §6.1.1's "In the cases
+ *   where it is impossible or impractical to determine the x-height, a value of 0.5em must be assumed" is
+ *   still the answer. `ch` and `ic` are ADVANCE MEASURES, and 'hmtx' is one of the tables the face DOES carry,
+ *   so they are measured whenever the face has the glyph and take §6.1.1's assumed value only when it does not
+ *   (this user agent's face has "0" and not "水", so today `ch` is a measurement and `ic` is the assumption).
+ *   core/css/font_metrics.h owns all three and says which is which. Each `r`-prefixed twin is "the value of
+ *   the <unit> unit ON THE ROOT ELEMENT", so it is the same ratio over the `rem` base.
+ *   THE LAST FOUR RESOLVE OUT OF THE PICKED FACE'S OWN TABLES, and that is the OTHER kind of multiplier:
+ *   §6.1.1 states no must-assume value for a cap-height or for `normal`, so `cap`/`rcap` takes CSS 2.1
+ *   §10.8.1's `A` and `lh`/`rlh` takes its `AD`, which core/css/font_metrics.h reads off 'hhea' — §10.8.1's
+ *   note's own source in the absence of an 'OS/2'. What the user agent picked is the FACE, not the ratio, so
+ *   those four carry an environment fact, and the whole of the difference is which sentence of the spec
+ *   answers.
+ *   OF THE SIX ABOVE, ONLY `em`/`rem` AND `ex`/`rex` CARRY NONE OF THEIR OWN TODAY, and `ch`/`rch` and
+ *   `ic`/`ric` carrying none is an OPEN DECISION rather than a settled one — their multiplier stopped being a
+ *   spec constant the day the face landed, so by core/frame/viewport.h's test they need a fact exactly as
+ *   `cap` does. What is not settled is how many facts a face is; core/css/font_metrics.h states the question
+ *   and why it could not be answered before the face existed.
+ *   `lh` is also the one unit whose base is a PROPERTY: §6.1.1 gives it and `rlh` a resolution
  *   rule of their own inside `line-height` (core/css/font_size_functions.h's second predicate), which the
  *   caller answers exactly as it answers the font-affecting one.
  *   media_query.c resolves `em` against the INITIAL font size and is right to, and §6.1.1 says so itself —
@@ -144,7 +155,7 @@ typedef enum {
        between them and would get one arm out of a single key. It is also separate from §6.1.1's assumed
        x-height, which is a spec constant with no freedom in it and therefore no fact at all. */
     CSS_ENV_FONT_ASCENT,
-    /* CSS 2.1 §10.8.1's `D` — "a depth below [the baseline]" of the same face, picked by the same component
+    /* CSS 2.1 §10.8.1's `D` — "a depth below [the baseline]" of the same face, read by the same component
        and a SEPARATE fact from `A` beside it for the same test: a page reads `1cap` for the ascent and `1lh`
        for their sum, so their difference is independently observable and one key for both would decide it on
        the example. §10.8.1 defines the pair together and this engine picks them together; that is why they
@@ -275,8 +286,9 @@ typedef struct {
    this file's. Threading an element and a tree through here to answer it would put the cascade inside the unit
    table; handing the two ANSWERS in would be worse still, for the reason below. */
 /* AND THE SAME SPLIT COVERS §6.1.1's FONT-METRIC UNITS, which is why they are rows of this enumeration rather
-   than a second seam. Each of `ex`, `ch` and `ic` is core/css/font_metrics.h's assumed ratio times one of the
-   two font sizes above — the LOCAL units against the element's, the `r`-prefixed twins against the root's,
+   than a second seam. Each of `ex`, `ch` and `ic` is core/css/font_metrics.h's ratio — measured off the face
+   for the two advances, §6.1.1's assumption for the x-height — times one of the two font sizes above: the
+   LOCAL units against the element's, the `r`-prefixed twins against the root's,
    because §6.1.1 defines each twin as "the value of the <unit> unit ON THE ROOT ELEMENT" and so carries the
    whole computation there, including the orientation question. So the caller answering this callback answers
    one question it already answers (which element's computed `font-size`) and one it alone can — WHICH OF THE
@@ -288,9 +300,11 @@ typedef struct {
    holding the element's computed `writing-mode` and `text-orientation` has it. This file's unit table stays a
    table.
    `cap` IS HERE ON THE SAME ARITHMETIC BUT NOT ON THE SAME FOOTING: §6.1.1 states no must-assume value for a
-   cap-height, only that an undeterminable one takes "the font's ascent", and that ascent is a PICKED metric of
-   the modelled face rather than a spec constant — so it carries CSS_ENV_FONT_ASCENT while the three above
-   carry nothing of their own. The row is the same shape because the multiplication is.
+   cap-height, only that an undeterminable one takes "the font's ascent", and CSS 2.2 §10.8.1's note says to
+   read that ascent off the face — so it carries CSS_ENV_FONT_ASCENT. Of the three above, `ex` carries nothing
+   of its own because §6.1.1 FIXES it; `ch` and `ic` carry nothing of their own only because the fact vocabulary
+   has not yet been extended to the face's advances, which core/css/font_metrics.h states as an open decision.
+   The row is the same shape because the multiplication is.
    `lh` IS THE TWELFTH AND IT IS A PROPERTY RATHER THAN A METRIC, which is why it is the last row and why it
    changes nothing about this table's shape: §6.1.1 makes it "the computed value of the line-height property of
    the element on which it is used, converting normal to an absolute length by using only the metrics of the

@@ -137,12 +137,14 @@ static const struct { const char *unit; double px; } CSS_ABSOLUTE[] = {
    THE TWELVE SPLIT BY WHERE THEIR MULTIPLIER COMES FROM, AND THE LINE IS THE SPEC'S OWN. §6.1.1 defines
    `em` as "the computed value of the font-size property of the element on which it is used" and `rem` as "the
    computed value of the em unit on the root element" — both are a computed `font-size` and nothing else. Six
-   more are a FONT METRIC times one of those two sizes, and §6.1.1 states what MUST be assumed for each when
-   the metric cannot be determined (an x-height is 0.5em, the "0" glyph is "0.5em wide by 1em tall", the "水"
-   glyph is 1em), which core/css/font_metrics.h owns and which is a real value for a user agent with no glyph
-   outlines rather than a stand-in. `cap`/`rcap` join them on the same arithmetic and a DIFFERENT footing:
+   more are a FONT METRIC times one of those two sizes, which core/css/font_metrics.h owns: the two ADVANCES
+   are measured off the first available font's own 'hmtx' whenever it has the glyph, and every one of the three
+   falls back to what §6.1.1 states MUST be assumed when the metric cannot be determined (an x-height is 0.5em,
+   the "0" glyph is "0.5em wide by 1em tall", the "水" glyph is 1em) — a real value for a user agent that
+   cannot measure rather than a stand-in. `cap`/`rcap` join them on the same arithmetic and a DIFFERENT
+   footing:
    §6.1.1 fixes no cap-height, only that an undeterminable one takes "the font's ASCENT", and that ascent is a
-   metric of the modelled face that core/css/font_metrics.h PICKS — so the product carries an environment fact
+   metric of the modelled face that core/css/font_metrics.h reads — so the product carries an environment fact
    where the three above carry none. All of them resolve through the ONE `CssFontMetrics` pair the caller
    holding the tree answers — one table, because the arithmetic is the same and only the base and the multiplier
    differ.
@@ -339,16 +341,18 @@ static CssPx css_len_unit_px(JSContext *realm, const CssFontMetrics *font, const
     /* §6.1.1's EIGHT RESOLVABLE FONT-RELATIVE UNITS, which are ONE arm because they are one multiplication.
        `em` is "the computed value of the font-size property of the element on which it is used" and `rem` is
        "the computed value of the em unit on the root element"; `ex`, `ch` and `ic` are a metric of the FIRST
-       AVAILABLE FONT, which for a face with no glyph outlines is §6.1.1's own must-assume ratio of the em
-       (core/css/font_metrics.h); and each `r`-prefixed twin is "the value of the <unit> unit ON THE ROOT
-       ELEMENT". So every one of them is a base times this declaration's own multiplier, and the whole of the
-       difference between them is WHICH base — which is the caller's walk (css_length.h), asked here and
-       nowhere else because it needs the element and the tree this file deliberately does not hold.
+       AVAILABLE FONT, which core/css/font_metrics.h answers either off the face's own OpenType tables or, for
+       a metric the face cannot supply, with §6.1.1's own must-assume ratio of the em; and each `r`-prefixed
+       twin is "the value of the <unit> unit ON THE ROOT ELEMENT". So every one of them is a base times this
+       declaration's own multiplier, and the whole of the difference between them is WHICH base — which is
+       the caller's walk (css_length.h), asked here and nowhere else because it needs the element and the tree
+       this file deliberately does not hold.
        THE SCALE CARRIES THE BASE'S ENVIRONMENT FACTS, so a `margin: 1em` reaches the page as a function of the
-       reader's default font size exactly as a `50vw` reaches it as a function of the viewport — and a
-       `width: 20ch` does too, because the assumed ratio is a spec constant with no freedom in it and the only
-       picked number in the product is the font size. The responsive ladder a `rem`- or `ch`-sized bundle
-       builds on that number keeps its second arm. */
+       reader's default font size exactly as a `50vw` reaches it as a function of the viewport, and the
+       responsive ladder a `rem`-sized bundle builds on that number keeps its second arm. A `width: 20ch`
+       carries that same fact and, since the face landed, is a function of a SECOND one this scale does not yet
+       name — the advance measure is no longer a spec constant with no freedom in it. css_length.h states that
+       open decision beside the unit list; it is a change to the fact vocabulary and not to this arithmetic. */
     if (css_len_font_metric_of(unit, &metric)) {
         CssPx base = font->resolve(font->ctx, metric);
 

@@ -903,10 +903,18 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
     if (!strcmp(u, "em") || !strcmp(u, "rem")) return n * e->font_size;
     if (!strcmp(u, "ex") || !strcmp(u, "rex"))
         return n * e->font_size * font_metrics_x_height_em();
+    /* §6.1.1's `ch`/`ic` ENTRY rather than the general advance measure: outside the context of an element the
+       units still mean what the section says they mean, including its assumed values for a face that cannot
+       supply the glyph. The direction is horizontal because there is no element to read `writing-mode` off, so
+       its initial value applies: css-writing-modes-4 §3.2 "Block Flow Direction: the writing-mode property"
+       gives `Initial: horizontal-tb`, whose typographic mode is horizontal, and §6.1.1's advance measure is
+       then the glyph's advance WIDTH. */
     if (!strcmp(u, "ch") || !strcmp(u, "rch"))
-        return n * e->font_size * font_metrics_advance_measure_em(0x0030, FONT_METRICS_ADVANCE_HORIZONTAL);
+        return n * e->font_size *
+               font_metrics_typical_advance_measure_em(0x0030, FONT_METRICS_ADVANCE_HORIZONTAL);
     if (!strcmp(u, "ic") || !strcmp(u, "ric"))
-        return n * e->font_size * font_metrics_advance_measure_em(0x6C34, FONT_METRICS_ADVANCE_HORIZONTAL);
+        return n * e->font_size *
+               font_metrics_typical_advance_measure_em(0x6C34, FONT_METRICS_ADVANCE_HORIZONTAL);
     if (!strcmp(u, "cap") || !strcmp(u, "rcap")) return n * e->ascent;
     if (!strcmp(u, "cm")) return n * 96.0 / 2.54;
     if (!strcmp(u, "mm")) return n * 96.0 / 25.4;

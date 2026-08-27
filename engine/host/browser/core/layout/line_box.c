@@ -285,16 +285,21 @@ static void lb_text(lxb_dom_element_t *parent, lxb_dom_node_t *n)
           "wrapping the line at a soft wrap opportunity\", and which opportunity that is depends on how wide "
           "the glyphs before it are. THE MISSING INPUT IS ONE NAMEABLE THING AND NOT A CHAPTER: the ADVANCE "
           "MEASURE of an arbitrary glyph — css-values-4 §6.1.1's own defined term, \"its advance width or "
-          "height, whichever is in the inline axis of the element\". THE ENTRY THAT ANSWERS IT EXISTS AND IS "
-          "`font_metrics_advance_measure_em` (core/css/font_metrics.h); call it per typographic character unit "
-          "of this run with the direction css-writing-modes-4 §5.1 resolves for that character. It answers for "
-          "exactly the two glyphs §6.1.1 states a MUST-ASSUME value for — the \"0\" of `ch` and the \"水\" of "
-          "`ic` — and CRASHES for every other codepoint, naming the FACE to build and the OpenType tables that "
-          "turn a codepoint into an advance. That crash is this line's real blocker and it is one file over. "
-          "Everything ELSE this line needs is already here: §10.8's steps 1 to 3 and §10.8.1's half-leading run "
-          "over `line-height`, `A` and `D` in this file, and a line box with no glyphs on it is measured "
-          "without asking. So the work is the face, then css-text-3 §5's break search over the advances it "
-          "answers, and this DFAIL becomes the loop that fills a line and starts the next");
+          "height, whichever is in the inline axis of the element\". THE ENTRY THAT ANSWERS IT IS "
+          "`font_metrics_advance_measure_em` (core/css/font_metrics.h) AND IT NOW ANSWERS FOR EVERY UNICODE "
+          "SCALAR VALUE, off the first available font's own OpenType 'cmap' and 'hmtx' — including a codepoint "
+          "the face does not cover, which css-fonts-4 §5.2 \"Matching font styles\" renders as \"the missing "
+          "character glyph from a default font\" and which therefore has a real advance too. Call it per "
+          "typographic character unit of this run with the direction css-writing-modes-4 §5.1 resolves for "
+          "that character. THE FACE IS NO LONGER THE BLOCKER; what is left is this file's own work and nothing "
+          "else's. Everything the surrounding measurement needs is already here: §10.8's steps 1 to 3 and "
+          "§10.8.1's half-leading run over `line-height`, `A` and `D` in this file, and a line box with no "
+          "glyphs on it is measured without asking. So the work is css-text-3 §5's soft-wrap-opportunity "
+          "search over the advances this entry answers, and this DFAIL becomes the loop that fills a line and "
+          "starts the next. TWO THINGS WILL CRASH ON THE WAY AND BOTH ARE THE RIGHT KIND: a VERTICAL advance "
+          "asks a face with no 'vhea'/'vmtx' and names css-writing-modes-4 §5.1.1's synthesis, and this "
+          "engine does not SHAPE — it has no 'GSUB'/'GPOS', so a run's advance is the sum of its glyphs' and a "
+          "ligature or a kern pair is a measurement it does not yet make");
 }
 
 /* ONE CHILD NODE of the inline formatting context. */

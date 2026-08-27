@@ -359,9 +359,11 @@ static lxb_dom_node_t *css_cv_root_element(lxb_dom_element_t *el)
    BOTH UNITS ASK IT, AND THAT IS A CHANGE FROM ANSWERING `ic` WITHOUT ASKING. `ic` is "the used advance
    measure of the '水' … glyph" — the same direction-selected quantity — so a resolution that skipped the
    question for one unit and made it for the other was one capability wearing two names. It was not visible as
-   a wrong number because §6.1.1's assumed ideographic advance measure is 1em in EITHER direction; the day a
-   real face lands, a `vmtx` advanceHeight and an `hmtx` advanceWidth for U+6C34 differ and the silence becomes
-   a wrong answer with nothing to say so. So the crash below is now reached by `ic` too, which is the point.
+   a wrong number because §6.1.1's assumed ideographic advance measure is 1em in EITHER direction, and it STILL
+   is for the face this engine ships — which has no glyph for U+6C34 and no 'vmtx' at all, so both directions
+   take the assumption. That is a property of ONE FACE and not of the question: any face carrying the glyph and
+   vertical metrics answers the two directions differently, and this resolution is what makes that difference
+   reachable at all. So the crash below is now reached by `ic` too, which is the point.
    THE ANSWER IS NOT THE INLINE AXIS. `horizontal-tb` puts the inline axis on the horizontal, so the advance is
    the glyph's HORIZONTAL one; `sideways-rl` and `sideways-lr` are vertical modes in which text is never
    typeset upright, so the glyph is rotated a quarter turn and the distance it advances DOWN the line is still
@@ -567,8 +569,12 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            `css_cv_advance_direction` reads as its NULL. */
         root = root_relative ? css_cv_root_element(f->el) : lxb_dom_interface_node(f->el);
         on = root == NULL ? NULL : lxb_dom_interface_element(root);
-        return css_px_scale(base, font_metrics_advance_measure_em(codepoint,
-                                                                 css_cv_advance_direction(on, codepoint)));
+        /* §6.1.1's OWN ENTRY FOR THESE TWO UNITS and not the general advance measure beside it. The section
+           fixes what `ch` and `ic` are worth when the face cannot supply the glyph's measure, and a face that
+           does not cover "水" — most Latin faces, this user agent's included — is that case; measuring
+           .notdef there would report the width of a tofu box as the typical advance of a CJK letter. */
+        return css_px_scale(base, font_metrics_typical_advance_measure_em(
+                                      codepoint, css_cv_advance_direction(on, codepoint)));
     }
     /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
        used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
