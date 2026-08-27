@@ -850,12 +850,9 @@ if (NATIVE) {
                   "[build] `node engine/wpt.mjs` builds it once (cmake + make) — run that first.");
     process.exit(1);
   }
-  /* The quiet list and -Werror=implicit-function-declaration are the SHIPPED build's, taken from the same place
-     rather than restated, so the sanitized program is the program. */
-  const quiet = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
-                 "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow",
-                 "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer",
-                 "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration"];
+  /* The quiet list and -Werror=implicit-function-declaration are the SHIPPED build's, taken from the
+     same place rather than restated, so the sanitized program is the program. */
+  const quiet = QUIET_WARNINGS;
   const cc = spawnSync("clang", [
     "-O1", "-g", "-fno-omit-frame-pointer",
     ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
@@ -977,6 +974,21 @@ const ABI_LIST = abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_"
    entry is the one that rots, and half a check is how it rots quietly.
    The two programs differ ONLY in which entry object enters the link, so compiling once into shared objects
    and linking twice costs one extra link and closes that hole completely. */
+/* THE WARNING LIST, ONE COPY. Two existed, and the comment above the second said it was "taken from the same
+   place rather than restated" while restating it — a second copy of a build's configuration, which is the same
+   defect as a second copy of its source list. Turning one diagnostic back on had to be done twice or the
+   sanitized program stops being the program.
+   `-Wformat-truncation` IS NOT IN IT, DELIBERATELY. It was, and it hid a real defect: a lane's new DFAIL wrote
+   526 bytes into 320, which is silent truncation of the one mechanism this project uses to say what to build —
+   a crash that names less than it knows. The diagnostic caught it and this build had switched it off. Measured
+   before removing it rather than argued: at the level `-Wall` gives, ONE warning across 40 host translation
+   units, plus three in url.c that are all `u->port` (max 65535) into a 7-byte buffer where the compiler cannot
+   see the range. That is the whole cost. The rest of the list stays quiet for the reason below. */
+const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
+  "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
+  "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
+  "-Werror=implicit-function-declaration"];
+
 const CFLAGS = [
   ...dashI(ENGINE_INCLUDE_ROOTS),   // declared once beside the source sets; see ENGINE_INCLUDE_ROOTS
   /* -Werror ON IMPLICIT DECLARATIONS, and the reason `-w` is NOT here beside it. A missing #include makes C
@@ -985,7 +997,7 @@ const CFLAGS = [
      strcmp. This line used to read `-w -Werror=implicit-function-declaration`, which does NOT work: `-w`
      suppresses the diagnostic outright, so the -Werror= promotion has nothing left to promote. The quiet list
      is explicit for that reason, and the moment it went in the gate found three more missing includes. */
-  "-O1", "-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses", "-Wno-format-truncation", "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized", "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough", "-Werror=implicit-function-declaration",
+  "-O1", ...QUIET_WARNINGS,
   "-D_GNU_SOURCE", "-DENABLE_DUMPS",
   /* `__FILE__` IS REPO-RELATIVE, AND THAT IS A CORRECTNESS FLAG AND NOT A TIDINESS ONE. Every source reaches
      the compiler by absolute path, so without this the string that bakes into an object — the one a DCHECK
