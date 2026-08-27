@@ -780,6 +780,91 @@ typedef struct { const char *component; char *src; char *encode; char prefix; So
 static SourceDelivery *g_srcs;
 static int g_srcs_n, g_srcs_cap;
 
+/* THE JOINT DOMAIN'S SEPARATOR — see concolic.h for what reaches it, why the identity is the SET and not an
+   expression over it, and why a narrowing of the joint narrows no member.
+   THE SEPARATOR IS PART OF THE IDENTITY, so a member that contained it would let two different sets compose to
+   one key — the truncation defect in a different costume, asserted at the mint rather than trusted.
+   IT IS DECLARED HERE, ABOVE THE REGISTRY, BECAUSE THE REGISTRY IS ITS SECOND READER. It used to sit beside
+   the mint three hundred lines below, which was right while the only thing that ever looked at a joint
+   identity was the code that composed one. */
+#define CONCOLIC_JOINT_SEP " & "
+
+/* MEMBER `i` OF A ROOT, AS A SLICE OF IT — the walk that makes "a provenance can name a SET" a fact the
+   registry can act on rather than a string it fails to match.
+   A root is either one source's name or several joined by the separator above, and the mint asserts that no
+   member contains that separator — which is exactly what makes this walk EXACT rather than a guess. `*p`/`*n`
+   point into `root` and are never copied: the registry compares them against declared names and nothing here
+   outlives the call. Answers 0 past the last member, so a caller LOOPS and never first asks whether the root
+   it holds is joint — there is no second spelling for the single-source case, which answers at i == 0 and
+   stops. */
+static int root_member(const char *root, int i, const char **p, size_t *n)
+{
+    size_t seplen = strlen(CONCOLIC_JOINT_SEP);
+    const char *at = root, *s;
+
+    if (!root) return 0;
+    for (; i > 0; i--) {
+        if (!(s = strstr(at, CONCOLIC_JOINT_SEP))) return 0;
+        at = s + seplen;
+    }
+    s = strstr(at, CONCOLIC_JOINT_SEP);
+    *p = at;
+    *n = s ? (size_t)(s - at) : strlen(at);
+    return 1;
+}
+
+/* THE DECLARED ROW FOR ONE MEMBER, matched over the slice rather than a copy of it. The terminator test is
+   half the comparison: `strncmp` alone would match `location.hash` against a declared `location.hashish`. */
+static int src_row(const char *p, size_t n)
+{
+    int i;
+
+    for (i = 0; i < g_srcs_n; i++)
+        if (!strncmp(g_srcs[i].src, p, n) && g_srcs[i].src[n] == '\0') return i;
+    return -1;
+}
+
+/* WHICH DECLARED SOURCE A ROOT NAMES, over a root that may name SEVERAL — the one walk both registry readers
+ * below share, so the rule that decides an ambiguous root is stated once instead of twice.
+ *
+ * WHY THIS EXISTS AT ALL. Both readers were an exact strcmp over the whole root, so a JOINT root matched no row
+ * and they answered 0 / NULL — and 0 / NULL is not "I could not tell", it is the POSITIVE statement "this
+ * source declares no delivery", which the report renders as "no component carries these bytes to the victim".
+ * That is the defaulted-field defect standing at the exact place a wrong answer becomes a wrong PoC, and it
+ * would have arrived the moment anything composed a provenance out of two attacker sources.
+ *
+ * A JOINT WITH ONE DECLARING MEMBER HAS AN ANSWER, AND IT IS THAT MEMBER'S. A value that is a joint function of
+ * `location.search` and the viewport width carries attacker bytes through the query and nothing at all through
+ * the viewport: the delivery is the query's, the encode set is the query's, and there is no second constraint
+ * to state. That case is the ordinary one, because most joints in this engine are over ENVIRONMENT facts that
+ * declare nothing.
+ *
+ * TWO DECLARING MEMBERS IS THE ONE WITH NO SINGLE HONEST ANSWER, so it crashes. Each declares its own
+ * percent-encode set and its own address component (`#` against `?` — the two sets deliberately differ, which
+ * is the whole reason those are two sources), so answering with either states one source's constraint as the
+ * whole constraint on bytes that came from both, and the envelope then tells a researcher to deliver through
+ * the component the payload did not ride. §@S: a shape carrying one of its two facts is a WRONG report rather
+ * than a partial one. Build the per-member emission — one candidate seeded per declaring member, each with its
+ * own envelope, the one that FIRES emitted — rather than a rule for picking. */
+static int root_declared_row(const char *root)
+{
+    const char *p;
+    size_t n;
+    int i, row, found = -1;
+
+    for (i = 0; root_member(root, i, &p, &n); i++) {
+        if ((row = src_row(p, n)) < 0) continue;
+        DCHECK(found < 0,
+               "a value's delivery ROOT names TWO declared attacker sources, and a report can state one "
+               "percent-encode set and one address component. Answering with either would present one "
+               "source's constraint as the whole constraint on bytes that arrived through both — the "
+               "envelope would name the component the payload did not ride. Seed one candidate per declaring "
+               "member, each carrying its own envelope, and emit the one that fires");
+        found = row;
+    }
+    return found;
+}
+
 /* THE TOKEN A REPORT CARRIES for a mechanism, spelled once so the engine owns the whole source vocabulary —
    the declaration side is the enum, the emission side is this, and a delivery layer switches on what comes out
    of here. A mechanism added to the enum without a token would cross as nothing at all, so it says so. */
@@ -965,26 +1050,22 @@ int concolic_principal_pinned(void)
     return 0;
 }
 
-int concolic_source_delivery(const char *src, const char **kind, char *prefix)
+int concolic_source_delivery(const char *root, const char **kind, char *prefix)
 {
-    int i;
+    int row = root_declared_row(root);
 
     DCHECK(kind != NULL && prefix != NULL, "a source's declared delivery was asked for with nowhere to put it");
-    for (i = 0; i < g_srcs_n; i++)
-        if (src && !strcmp(g_srcs[i].src, src)) {
-            *kind = deliver_token(g_srcs[i].deliver);
-            *prefix = g_srcs[i].prefix;
-            return 1;
-        }
-    return 0;
+    if (row < 0) return 0;
+    *kind = deliver_token(g_srcs[row].deliver);
+    *prefix = g_srcs[row].prefix;
+    return 1;
 }
 
-const char *concolic_source_encodes(const char *src)
+const char *concolic_source_encodes(const char *root)
 {
-    int i;
-    for (i = 0; i < g_srcs_n; i++)
-        if (src && !strcmp(g_srcs[i].src, src)) return g_srcs[i].encode;
-    return NULL;
+    int row = root_declared_row(root);
+
+    return row < 0 ? NULL : g_srcs[row].encode;
 }
 
 /* JSConcolicHooks.lead — the DOMAIN fact the delivery declaration already holds, read by a builtin that has to
@@ -2227,12 +2308,6 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
 #endif
     return concolic_new(ctx, shape, src, computed);
 }
-
-/* THE JOINT DOMAIN — see concolic.h for what reaches it, why the identity is the SET and not an expression over
-   it, and why a narrowing of the joint narrows no member.
-   THE SEPARATOR IS PART OF THE IDENTITY, so a member that contained it would let two different sets compose to
-   one key — the truncation defect in a different costume, and asserted here rather than trusted. */
-#define CONCOLIC_JOINT_SEP " & "
 
 /* The permutation that sorts `srcs`, so the composed key is a property of the set. Insertion sort: `n` is a
    component's fact count and never a page's data, and the sort must be over the same order the shapes are then

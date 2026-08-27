@@ -275,11 +275,20 @@ int         concolic_source_declared_by(const char *component, const char *src);
    FACT, not a default: server-injected page state (`window.__FLAGS`) is written by the attacker directly and
    no component transforms or carries it, so there is nothing to declare and a consumer must say exactly that
    rather than guess a vector. */
-/* BOTH OF THESE ARE ASKED ABOUT A `root`, NEVER ABOUT A `src`, AND THE PARAMETER IS NAMED FOR IT. They are an
-   exact strcmp over the declared rows, so a DERIVED identity matches nothing and the answer comes back as the
-   silence that means "this source declared none" — which is a different fact wearing the same shape. That is
-   how a fire-verified fragment XSS was reported as having no navigation that reproduces it. Ask
-   concolic_root_c, whose whole reason for existing is to be the argument here. */
+/* BOTH OF THESE ARE ASKED ABOUT A `root`, NEVER ABOUT A `src`, AND THE PARAMETER IS NAMED FOR IT. A DERIVED
+   identity matches no declared row and the answer comes back as the silence that means "this source declared
+   none" — which is a different fact wearing the same shape. That is how a fire-verified fragment XSS was
+   reported as having no navigation that reproduces it. Ask concolic_root_c, whose whole reason for existing is
+   to be the argument here.
+   AND A ROOT MAY NAME A SET, so neither is a strcmp over the whole of it any more. A joint provenance is its
+   members joined (concolic_source_wrap_joint), and matching the joined string against the rows found nothing
+   and answered that same silence — the defaulted-field defect standing exactly where a wrong answer becomes a
+   wrong PoC. They now walk the members: a joint whose only DECLARING member is one source answers that
+   member's declaration, which is the ordinary case because most joints in this engine are over environment
+   facts that declare nothing. A root with TWO declaring members has no single honest answer — each carries its
+   own percent-encode set and its own address component — so it CRASHES rather than presenting one source's
+   constraint as the whole of one; the mechanism to build is one candidate per declaring member, each with its
+   own envelope, and the one that fires is the one emitted. */
 int         concolic_source_delivery(const char *root, const char **kind, char *prefix);
 /* The bytes this source's component percent-encodes, or NULL if the source declared no delivery (it is handed
    over as-is). A PARKED @S search reports it because it is the constraint every candidate had to survive, and

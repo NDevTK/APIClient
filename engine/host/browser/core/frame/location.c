@@ -515,7 +515,18 @@ static bool loc_navigate_begin(JSContext *ctx, SessionHistoryFragmentNav *w, con
    IT IS THE @S OPEN-REDIRECT SHAPE, so the crash names what to build rather than pretending: `location.href =
    location.hash.slice(1)` and `location = new URLSearchParams(location.search).get("next")` are the two
    spellings, and both want the destination to stay concolic through the navigation so the sink is detected at
-   the address rather than lost at the assignment. Returns NULL with an exception pending. */
+   the address rather than lost at the assignment. Returns NULL with an exception pending.
+   AND THE SINK ITSELF IS THE OTHER HALF OF WHAT IS MISSING HERE, which the crash used to leave out. solve.h
+   names the URL class as "location = arg (or el.href = arg)" and the browser half calls its detector from ONE
+   production site — a form's action attribute — so `location =`, `location.href =`, `assign`, `replace` and
+   `window.open` reach no @S detector at all: the URL-context breakout (the `javascript:` scheme, the one class
+   whose vector is stated rather than derived) has no arrival to be searched from on the sink every open-redirect
+   and every `javascript:`-URL finding goes through. The two are one build and not two: the detector belongs at
+   §7.2.4's own convergence point (the location-object navigate all twelve algorithms end in, which is the only
+   place that sees the destination whichever spelling produced it), and it needs the destination to still BE a
+   concolic when it gets there — which is exactly what the record write below destroys. Building the concolic
+   URL-record write without the detector would carry a provenance nothing reads; building the detector without
+   it would announce a value whose taint has already been stripped. */
 static const char *loc_value_bytes(JSContext *ctx, JSValueConst val, size_t *len)
 {
     DCHECK(!concolic_is(val),
@@ -523,7 +534,9 @@ static const char *loc_value_bytes(JSContext *ctx, JSValueConst val, size_t *len
            "record as bytes, which takes the source identity and the domain off the triple, and the value is "
            "then a destination this engine navigates to with no @S record that it came from the attacker. "
            "Build the URL-record write over a concolic component (core/url/url.h's url_parse_override is where "
-           "the bytes land) and carry the provenance into §7.4.2.2's navigate");
+           "the bytes land), carry the provenance into §7.4.2.2's navigate, and announce it to the @S "
+           "URL-context detector THERE — §7.2.4's navigate is the one point all twelve of its algorithms reach, "
+           "and today the whole class is detected from a form action and nowhere else");
     return JS_ToCStringLen(ctx, len, val);
 }
 
