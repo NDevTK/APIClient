@@ -134,9 +134,18 @@ function danglingIncludes(rev) {
      must satisfy BOTH, which is what its own two links require.
      IF THE BUILD CANNOT ANSWER, THAT IS THE FINDING. There is no fallback to a remembered list here: a stale
      list is exactly what produced the false red, and a checker that quietly reverts to one when the question
-     fails is a checker whose answer nobody can interpret. */
+     fails is a checker whose answer nobody can interpret.
+     BUT "COULD NOT ASK" IS NOT "ASKED AND FOUND A DANGLING INCLUDE", AND THIS RETURNED THE FIRST AS THE SECOND.
+     The build's error string was handed back in the dangling list, so the reporter counted it as an include and
+     announced THIS REVISION DOES NOT COMPILE — the exact phantom the paragraph above was written to kill,
+     surviving on the one path that paragraph does not cover. Measured: a snapshot with no `engine/.work/emsdk`
+     cannot run `--list-include-roots` at all, and every gate run from such a snapshot published that verdict
+     over a revision whose full artifact had been built and linked an hour earlier. Absence of an answer and a
+     negative answer are different facts (§Architecture), so they are returned as different fields and the
+     reporter states them as different sentences. Refusing the fallback is still right; reporting the refusal
+     as a compile failure was not. */
   const manifest = askJson(ROOT, ["engine/build.mjs", "--list-include-roots"]);
-  if (typeof manifest === "string") return [manifest];
+  if (typeof manifest === "string") return { dangling: [], unaudited: [manifest] };
   const bad = [];
   const setsFor = (owner) => {
     const named = manifest.filter((g) => g.sources.includes(owner));
@@ -179,7 +188,7 @@ function danglingIncludes(rev) {
       bad.push(`${owner}:${no} includes "${inc}", which nothing provides on any include path that can reach it`);
     }
   }
-  return bad;
+  return { dangling: bad, unaudited: [] };
 }
 
 /* THE ARTIFACT CARRIES ITS OWN IDENTITY, BECAUSE AN MTIME IS NOT ONE — and the mtime answer was wrong in
@@ -321,7 +330,10 @@ export function gateRevision(cone, artifact = null) {
     /* ASKED OF HEAD, not of the working tree, and asked whenever the host is in the cone — a gate that links
        only quickjs sources cannot be broken by a host include, and reporting one at it would be the same
        category error as reporting a popup edit at a JS-engine number. */
-    dangling: cone.includes("engine/host") ? danglingIncludes("HEAD") : [],
+    /* TWO FIELDS, NEVER ONE: an audit that could not RUN is not an audit that found a broken include.
+       See danglingIncludes — collapsing them published "THIS REVISION DOES NOT COMPILE" over revisions
+       that build and link. A cone without engine/host asks neither question, so both are empty. */
+    ...(cone.includes("engine/host") ? danglingIncludes("HEAD") : { dangling: [], unaudited: [] }),
     cone,
   };
 }
@@ -379,6 +391,16 @@ export function revisionLines(rev) {
              `cause is a commit that staged a source and not the header it added (CLAUDE.md §Disposition: the ` +
              `index is shared, so stage and commit as ONE uninterrupted operation).`);
     for (const l of rev.dangling) out.push(`[rev]   ${l}`);
+  }
+  /* THE OTHER HALF OF THE SAME QUESTION, AND IT MUST NOT WEAR THE VERDICT ABOVE. This says the audit could not
+     be PUT, which licenses nothing about whether the revision compiles — it is the `unasked` half of `dirtyIn`
+     one function over, and the sentence this file's own header states: a run that could not ask and a run that
+     asked and got an answer must not read alike. It prints AFTER the verdict because it is not one. */
+  if (rev.unaudited.length) {
+    out.push(`[rev] THE DANGLING-INCLUDE AUDIT DID NOT RUN — the build could not be asked which include roots ` +
+             `it hands the compiler, so NOTHING here says whether this revision compiles. It is not a finding ` +
+             `about the tree; the reason is below and is usually a snapshot missing engine/.work/emsdk.`);
+    for (const l of rev.unaudited) out.push(`[rev]   ${l}`);
   }
   if (rev.stamp) {
     const s = rev.stamp;
