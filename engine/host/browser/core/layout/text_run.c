@@ -297,29 +297,75 @@ static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
       space to the LEFT is that character.
      "For soft wrap opportunities defined by the boundary between two characters …, the white-space property on
       the NEAREST COMMON ANCESTOR of the two characters controls breaking."
-   The second is a capability this engine does not have and does not need yet, because the only walk that fills
-   this accumulator (core/layout/intrinsic_size.c) crashes on an ELEMENT child — so every character in a
-   measurement is a child of one element and that element IS the nearest common ancestor. That is asserted
-   rather than assumed: an inline box's own text joining the run is exactly the case css-sizing-3 §5.2's
-   contribution walk will add, and it is the case that makes the two sides differ. */
+   The second is answered by the walk below. */
+
+/* THE NEAREST COMMON ANCESTOR OF THE TWO INLINE BOXES A BOUNDARY FALLS BETWEEN — the element css-text-3 §5.5
+   "Line Breaking Details" hands the decision to for "soft wrap opportunities defined by the boundary between
+   two characters or atomic inlines".
+   IT IS A WALK AND NOT A FIELD ON THE CHARACTER, because the question is asked of a PAIR and answered per
+   BOUNDARY: an ancestor stored per character would be one element chosen without knowing which neighbour it
+   would later be asked about, which is the wrong arity for the question rather than a cheaper form of it.
+   THE ANSWER IS AN ELEMENT, AND THAT IS A THEOREM ABOUT THE CALLER rather than a case checked defensively.
+   Both characters belong to ONE inline formatting context, and CSS 2.2 §9.4.2 says such a context "is
+   established by a block container box" — one box, an element, containing both. So a common ancestor exists
+   and the NEAREST one is at or below it. A Document, a fragment, or no common ancestor at all is two runs from
+   two trees accumulated through one measurement, which is the accumulator's own contract broken upstream. */
+static lxb_dom_element_t *tr_nearest_common_ancestor(lxb_dom_element_t *a, lxb_dom_element_t *b)
+{
+    lxb_dom_node_t *x, *y;
+
+    DCHECK(a != NULL && b != NULL,
+           "css-text-3 §5.5's nearest common ancestor was asked for with one of the two inline boxes missing. "
+           "Every character this accumulator collects carries the element whose computed properties it has, "
+           "written by `tr_append`, so a NULL here is a collection entry that was never filled");
+    if (a == b) return a;
+    for (x = lxb_dom_interface_node(a); x != NULL; x = x->parent)
+        for (y = lxb_dom_interface_node(b); y != NULL; y = y->parent)
+            if (x == y) {
+                DCHECK(x->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                       "css-text-3 §5.5's nearest common ancestor of two characters in ONE inline formatting "
+                       "context is not an ELEMENT. CSS 2.2 §9.4.2 establishes that context with \"a block "
+                       "container box\", which is one element containing both characters — so a Document or a "
+                       "fragment here means two formatting contexts were accumulated through one measurement, "
+                       "and every boundary between them is a break decided over text that shares no line");
+                return lxb_dom_interface_element(x);
+            }
+    DFAIL("two characters of ONE inline formatting context have NO common ancestor, so they are in different "
+          "trees. css-text-3 §5.5 gives a boundary between two characters to \"the white-space property on the "
+          "nearest common ancestor\", and there is none to read — which is not a missing capability but the "
+          "accumulator's contract broken by its caller: core/layout/text_run.h states that the nodes of ONE "
+          "formatting context are added in document order, and a node from a second tree cannot be in that "
+          "order. Find the walk that added it");
+    return a;
+}
+
 static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t i)
 {
     const TextRunChar *left = &m->chars[i - 1], *right = &m->chars[i];
+    lxb_dom_element_t *nca;
+    bool wraps;
 
     DCHECK(!right->collapsible_space,
            "[UAX14] LB7 \"do not break before spaces or zero width space\" was asked to allow a break before a "
            "collapsible space. core/layout/line_break.c returns PROHIBITED there unconditionally, so this is "
            "the rule chain and this file disagreeing about which side of a space the opportunity is on");
+    /* §5.5's FIRST case, which is about ONE character rather than a boundary: "for soft wrap opportunities
+       created by characters that disappear at the line break (e.g. U+0020 SPACE), properties on the box
+       DIRECTLY CONTAINING THAT CHARACTER control the line breaking at that opportunity." */
     if (left->collapsible_space) return left->wraps;
-    DCHECK(left->style == right->style,
-           "a soft wrap opportunity fell between two characters in DIFFERENT inline boxes, and css-text-3 §5.5 "
-           "\"Line Breaking Details\" gives it to \"the white-space property on the NEAREST COMMON ANCESTOR of "
-           "the two characters\" — which this component is not given and cannot derive from two elements alone. "
-           "BUILD it where the run is assembled: core/layout/intrinsic_size.c walks one box's children and "
-           "crashes on an element child today, so the ancestor is that box; when css-sizing-3 §5.2's "
-           "contribution walk descends into an inline box, the accumulator has to carry the box each character "
-           "came from and the common ancestor is a walk up two of them");
-    return left->wraps;
+    nca = tr_nearest_common_ancestor(left->style, right->style);
+    wraps = tr_wraps(nca);
+    /* TWO-SIDED, AND THE SIDE IT CHECKS IS THE COLLECTION'S. Where the two characters are in the SAME inline
+       box that box IS the nearest common ancestor, so this fresh read of `white-space` must produce exactly
+       the flag `tr_append` recorded when the character was collected. A disagreement is the cascade having
+       answered differently for one element at two times — a per-flow computed value read outside the flow
+       that collected it — which would silently move a break rather than fail. */
+    DCHECK(nca != left->style || wraps == left->wraps,
+           "css-text-3 §5's `white-space` read for one element answered differently at collection time and at "
+           "measurement time. The characters of an inline formatting context are collected and then measured "
+           "within one flow, so the cascade cannot have changed between them; this is a computed value being "
+           "read against a different flow's DOM than the one the run was collected from");
+    return wraps;
 }
 
 void text_run_measure_finish(TextRunMeasure *m)
