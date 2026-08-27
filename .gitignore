@@ -21,6 +21,15 @@ testing/.*.out
 testing/.*.jsonl
 testing/.*.json
 testing/profile-lane/
+# A LIVE RUN'S CAPTURED OUTPUT under testing/corpus/. The rule above states the principle and keys it on a
+# dot prefix, which a lane writing testing/corpus/logs/<site>.log does not carry — so the principle held and
+# the pattern did not. The shape is what makes these scratch, and for a LIVE site it is stronger than for a
+# fixture: CLAUDE.md §Testing says one run of a live site is not a measurement, so a raw per-run record is
+# meaningless without the run that wrote it AND without the spread it is one sample of. What survives a live
+# run is the distilled report — the number with its run count, its spread, and the revision it was measured
+# at — not the transcript. Anything here that deserves to last is quoted somewhere that is not this directory.
+testing/corpus/logs/
+testing/corpus/census-*.jsonl
 # COW build artifact: cow-barrier-instrumented wasm base64 blob (~38MB), regenerable via
 # `node engine/build.mjs cow`. Never committed — production ships the SINGLE_FILE qjs_worker.js.
 extension/lib/qjs/*.cow.gen.js
