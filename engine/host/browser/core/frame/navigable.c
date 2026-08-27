@@ -166,6 +166,31 @@ static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_
         *out_origin = (sandbox_flags & SANDBOX_ORIGIN) ? origin_determine(NULL, true, NULL) : origin_agent();
         return true;
     }
+    /* AND A `javascript:` URL IS NOT AN ADDRESS TO MAKE A CHILD OUT OF AT ALL — the wrong turn is HERE, one
+       algorithm before the place it becomes visible. §7.4.2.2 "Beginning navigation" branches on the scheme
+       before any Document is created from it — "if url's scheme is `javascript`: queue a global task on the
+       navigation and traversal task source … to navigate to a javascript: URL" and RETURN — so nothing that
+       runs §7.3.1's determine-the-origin can legally be holding one.
+       WHICH ANSWER IT PRODUCES IS WHY THIS IS WORSE THAN A MISSING BRANCH. URL §4.7 "Origin" switches on the
+       scheme and its last arm is "Otherwise: Return a new opaque origin", with the standard's own note: "This
+       does indeed mean that these URLs cannot be same origin with themselves." So a `javascript:` URL reaching
+       the parse below is given an OPAQUE origin, child_in_this_agent compares it against this agent's and
+       answers false, and §7.4's create provisions the popup as a CROSS-ORIGIN PEER INSTANCE — a second engine,
+       for a URL that was never a document. Everything after that is a correct consequence of the one wrong
+       answer, which is what makes it hard to read backwards: the page's own handle is a REMOTE WindowProxy, so
+       §7.2.1's cross-origin member list rejects a property set on it where the spec has a same-realm write,
+       and every read of it is a cross-instance suspend where the spec has a synchronous one. None of those
+       symptoms names a scheme.
+       BUILD THE BRANCH IN NAVIGATE, not a second `if` here — navigable_evaluate_javascript_url already
+       implements §7.4.2.3.2 and is reached from one entry. That is a claim about another site: read it before
+       building for it. */
+    DCHECK(strncmp(url, "javascript:", sizeof "javascript:" - 1) != 0,
+           "§7.3.1's child address was asked to turn a `javascript:` URL into an address and an origin — "
+           "§7.4.2.2 \"Beginning navigation\" routes that scheme to §7.4.2.3.2 \"The javascript: URL special "
+           "case\" and returns, so no Document is ever created from one. URL §4.7 \"Origin\" answers a NEW "
+           "OPAQUE origin for it, so this child is cross-origin to the document that opened it and gets "
+           "provisioned as a PEER INSTANCE with a remote WindowProxy. Build the scheme branch in navigate so "
+           "it reaches navigable_evaluate_javascript_url");
     base_url = document_base_url(ctx);
     url_record_init(&base);
     have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
