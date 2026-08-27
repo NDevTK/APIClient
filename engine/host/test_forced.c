@@ -3906,7 +3906,6 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
 {
     static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
-    PlatformAgent agent;
 
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
        site is the only thing a plain C body cannot do. */
@@ -3918,22 +3917,19 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* §8.6: a STRING handler is evaluated, as a flow */
 
-    agent.origin = origin;
-    agent.top_level_url = top_level_url;
-    /* §7.5.1's requestsOAC. This fixture's document comes from no response at all — it is a string of HTML
-       handed to the probe — so there is no `Origin-Agent-Cluster` header to have sent, and false is what
-       §8.1.2.2 allocates the cluster with. Stated rather than left to the struct's padding, because the field
-       decides an observable (`window.originAgentCluster`) and a fixture that read uninitialized memory for it
-       would be flaky in the one direction nobody looks at. */
-    agent.requests_oac = false;
-    /* §7.1.3's OPENER POLICY, and the same sentence: this fixture's document comes from no response, so there
-       is no `Cross-Origin-Opener-Policy` header to have sent and §7.1.3's INITIAL value is what §7.3.2.3
-       creates the browsing context group with — leaving its cross-origin isolation mode `none`. Stated rather
-       than left to the struct's padding, because it decides `window.crossOriginIsolated` and HR-TIME §4's
-       clock resolution, and a fixture reading uninitialized memory for it would be flaky in the one direction
-       nobody looks at. */
-    agent.opener_policy = OPENER_POLICY_UNSAFE_NONE;
-    platform_agent_init(ctx, &agent);
+    /* AND THEN THE FACTS. `false` is §7.5.1's requestsOAC: this fixture's document comes from no response at
+       all — it is a string of HTML handed to the probe — so there is no `Origin-Agent-Cluster` header to have
+       sent, and false is what §8.1.2.2 allocates the cluster with. `OPENER_POLICY_UNSAFE_NONE` is §7.1.3's
+       INITIAL value, for the same sentence: no response, so no `Cross-Origin-Opener-Policy` to have sent, and
+       §7.3.2.3 creates the browsing context group with a cross-origin isolation mode of `none`.
+       BOTH ARE STATED, AND STATING THEM IS NOW THE ONLY THING THIS CALL PERMITS. They used to be assignments
+       into a struct this function DECLARED UNINITIALIZED, with a comment on each saying it was
+       "stated rather than left to the struct's padding" — which was true of these two and could not be true of
+       the next fact anybody added, because nothing made the adder come here. It is an argument list now: a
+       fact added to core/platform.h stops this fixture compiling until it says which of the two answers above
+       applies to it. That matters most HERE, of the three hosts: the two that root an agent at a real response
+       get their answers from §7.4.6's navigation params in one line, and this one has to think. */
+    platform_agent_init(ctx, origin, top_level_url, false, OPENER_POLICY_UNSAFE_NONE);
 }
 
 /* ONE DOCUMENT — run once per document including the first. THE PLATFORM FIRST, then this fixture's own
@@ -3943,17 +3939,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
                              SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                              uint32_t doc_id, JSValueConst nav_proxy)
 {
-    PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
 
-    doc.dom = dom;
-    doc.url = url;
-    doc.origin = origin;
-    doc.policy = policy;
-    doc.sandbox_flags = sandbox_flags;
-    doc.doc_id = doc_id;
-    doc.nav_proxy = nav_proxy;
-    platform_document_install(ctx, g, &doc);
+    platform_document_install(ctx, g, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
 
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */

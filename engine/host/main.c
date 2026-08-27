@@ -156,25 +156,19 @@ static int                  g_joined_cap;
 static void engine_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
                               OpenerPolicyValue opener_policy)
 {
-    PlatformAgent agent;
-
     /* THE HOST'S NETWORK. SECURITY.md puts every byte of it behind the trusted chokepoint, so this host's
        answer is to PARK the request on the flow's pending register and let the trusted zone fetch it.
        fetch.c aborts on a fetch issued with no provider, which is what asserts this line is here. */
     { static const FetchProvider P = { engine_pending_fetch_url }; fetch_set_provider(&P); }
     timer_set_script_sink(engine_queue_script);   /* HTML 8.6: a string handler is evaluated, as a flow */
 
-    agent.origin = origin;
-    agent.top_level_url = top_level_url;
-    /* §7.5.1's requestsOAC, decided by the browser component that reads the response (§7.4.6's navigation
-       params) and merely CARRIED here — this host reads no header, which is the same split as the origin
-       beside it: the zone states bytes, the engine decides what they mean. */
-    agent.requests_oac = requests_oac;
-    /* §7.1.3's OPENER POLICY of the response that created this document, which §7.3.2.3's group is created
-       with — carried here for the same reason `requests_oac` beside it is: the browser component that reads a
-       response decided it (§7.4.6's navigation params), and this host reads no header. */
-    agent.opener_policy = opener_policy;
-    platform_agent_init(ctx, &agent);
+    /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's and `opener_policy` is §7.1.3's,
+       both decided by the browser component that reads the response (§7.4.6's navigation params, which
+       `qjs_init` and `qjs_join` run over the header list the zone hands them) and merely CARRIED through here.
+       They used to be assignments into a struct this function DECLARED UNINITIALIZED and filled field by
+       field, as did the two other hosts — see core/platform.h for why a fact added to that struct was garbage
+       in whichever host the adder was not editing, and why there is no such struct outside that file now. */
+    platform_agent_init(ctx, origin, top_level_url, requests_oac, opener_policy);
 }
 
 /* ONE DOCUMENT — the per-realm half, run once per document including the first.
@@ -182,23 +176,15 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
    passed the ORIGIN for both, so every document's §4.4 API BASE URL was `https://site` where the page was at
    `https://site/app/dashboard` — and the base URL is what `fetch("api/users")` resolves against, so the tool's
    own headline output named `https://site/api/users` for a request the page makes to
-   `https://site/app/api/users`. They are two FIELDS of the one document record now, which is what makes that
-   substitution unspellable rather than merely fixed. */
+   `https://site/app/api/users`. They are two ARGUMENTS of the one document install now, which is what makes
+   that substitution unspellable rather than merely fixed. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                                  SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
-    PlatformDocument doc;
     JSValue g = JS_GetGlobalObject(ctx);
 
-    doc.dom = dom;
-    doc.url = url;
-    doc.origin = origin;
-    doc.policy = policy;
-    doc.sandbox_flags = sandbox_flags;
-    doc.doc_id = doc_id;
-    doc.nav_proxy = nav_proxy;
-    platform_document_install(ctx, g, &doc);
+    platform_document_install(ctx, g, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 

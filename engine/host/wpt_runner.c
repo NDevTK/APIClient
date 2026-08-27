@@ -2205,8 +2205,6 @@ static JSRuntime *g_rt;
 static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *origin,
                            const char *top_level_url, bool requests_oac, OpenerPolicyValue opener_policy)
 {
-    PlatformAgent agent;
-
     /* THE COMPONENTS UNDER TEST ARE NOT NAMED HERE ANY MORE, and that is the fix rather than a convenience.
        This list used to be typed out one component at a time, "because a component that is not installed
        makes its tests fail LOUDLY on a missing global — which is the honest report". It is not the honest
@@ -2262,17 +2260,15 @@ static void wpt_agent_init(JSContext *ctx, const char *doc_name, const char *ori
        it is an area this gate publishes a number for without having run it. */
     timer_set_script_sink(engine_queue_script);
 
-    agent.origin = origin;
-    agent.top_level_url = top_level_url;
-    /* §7.5.1's requestsOAC, from the response the caller fetched — a WPT test document IS fetched from the
-       corpus's own wptserver, so it has a response, and `html/browsers/origin/origin-keyed-agent-clusters/`
-       delivers this header through `?pipe=header(...)` and `.headers` sidecars and nothing else. This host
-       reads no header itself: the list goes through §7.4.6's navigation params like the product host's. */
-    agent.requests_oac = requests_oac;
-    /* §7.1.3's OPENER POLICY of the response that created this document — §7.3.2.3's group is created with it,
-       and it comes through §7.4.6's navigation params like every other fact this host reads off a response. */
-    agent.opener_policy = opener_policy;
-    platform_agent_init(ctx, &agent);
+    /* AND THEN THE FACTS, STATED AND NOT ASSIGNED. `requests_oac` is §7.5.1's, from the response the caller
+       fetched — a WPT test document IS fetched from the corpus's own wptserver, so it has a response, and
+       `html/browsers/origin/origin-keyed-agent-clusters/` delivers this header through `?pipe=header(...)` and
+       `.headers` sidecars and nothing else. `opener_policy` is §7.1.3's, which §7.3.2.3's group is created
+       with. This host reads neither header itself: the list goes through §7.4.6's navigation params like the
+       product host's. They used to be assignments into a struct this function DECLARED UNINITIALIZED and
+       filled field by field, as did the two other hosts — see core/platform.h for why there is no such struct
+       outside that file now. */
+    platform_agent_init(ctx, origin, top_level_url, requests_oac, opener_policy);
 }
 
 /* ONE DOCUMENT. Runs once per document INCLUDING the first, which is what makes it the one description of what
@@ -2281,7 +2277,6 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
                               SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
                               uint32_t doc_id, JSValueConst nav_proxy)
 {
-    PlatformDocument doc;
     JSValue global = JS_GetGlobalObject(ctx);
 
     /* `self` IS NOT SET HERE. It is §7.2.2's [Replaceable] Window member and the platform's window_install
@@ -2305,15 +2300,8 @@ static void wpt_realm_install(JSContext *ctx, lxb_html_document_t *dom, const ch
        needs the WindowProxy class and §7.4's create-a-navigable to exist first. This runner had it backwards
        and the assert in window_proxy_new_remote said so the moment a parsed iframe reached it.
        THE ADDRESS, NOT THE ORIGIN, is what a Window is installed at — this host passed `origin` where the
-       other two passed the address, which is the substitution a two-field record makes unspellable. */
-    doc.dom = dom;
-    doc.url = url;
-    doc.origin = origin;
-    doc.policy = policy;
-    doc.sandbox_flags = sandbox_flags;
-    doc.doc_id = doc_id;
-    doc.nav_proxy = nav_proxy;
-    platform_document_install(ctx, global, &doc);
+       other two passed the address, which is the substitution two separate facts make unspellable. */
+    platform_document_install(ctx, global, dom, url, origin, policy, sandbox_flags, doc_id, nav_proxy);
 
     JS_FreeValue(ctx, global);
 }

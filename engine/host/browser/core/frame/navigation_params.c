@@ -71,10 +71,27 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
      * read defect with a policy decision inside it.
      *
      * IT IS READ HERE BECAUSE THIS IS WHERE A RESPONSE IS READ — the same seam §7.1.3's opener policy and
-     * §7.1.4's embedder policy are obtained at, and the only place in the engine that holds a header list for a
-     * navigation. A ROOT document's headers never reach this function at all: the trusted zone reads them and
-     * hands the engine PARSED FACTS (core/platform.h's PlatformAgent/PlatformDocument), so a top-level response
-     * carrying either header is not covered by this crash and needs a field on that record. */
+     * §7.1.4's embedder policy are obtained at. A ROOT document's headers DO reach it: an entry that roots an
+     * agent at a response is handed the response's header block, parses it into a Fetch header list and calls
+     * this function over that list, so a top-level `Permissions-Policy` reaches this crash. The sentence that
+     * stood here said the exact opposite — that a root document's headers never reach this function and that
+     * carrying one therefore needed a new field on core/platform.h's host record — and it was believed and
+     * acted on, which is what a stale claim about the tree costs when it is written beside a `DFAIL`. The tree
+     * settles it in one grep: every `navigation_params_from_response` call site has a
+     * `header_list_parse_field_lines` above it.
+     *
+     * WHAT THIS CRASH DOES NOT COVER IS THE RESPONSE THAT DOES NOT COME THROUGH THIS FUNCTION — a CHILD
+     * NAVIGABLE's. Its loader parses its own header list and then performs §7.4.6 PIECEWISE off it, calling
+     * §7.1.4's and §7.1.3's obtains directly and asking `header_list_get` for the CSP list and the computed
+     * type; the piece it does not perform is this one, so a framed document's `Permissions-Policy` is dropped
+     * in silence while the identical header on the framing document aborts. §7.5.1's `requestsOAC` is NOT the
+     * same omission and must not be read as one: §8.1.2.2 allocates a cluster once per agent and §7.1.2's note
+     * says a later same-origin Document inherits that allocation, so a child navigable of this agent has no
+     * such question to ask.
+     * ONE ALGORITHM ASKED AT ONE ENTRY AND NOT AT ANOTHER IS THE DEFECT, AND THE FIX IS AT THE ENTRY THAT DOES
+     * NOT ASK — the child loader builds its navigation params through this function like every other entry.
+     * It is not a second reader here, and it is not a field on the host record: a fact this engine already
+     * decides from a response it already holds does not need a second door in from the trusted zone. */
     {
         const char *pp = header_list_get_last(headers, "permissions-policy");
         const char *ppro = header_list_get_last(headers, "permissions-policy-report-only");

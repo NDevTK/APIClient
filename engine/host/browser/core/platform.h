@@ -40,84 +40,107 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_PLATFORM_H
 #define ENGINE_HOST_BROWSER_CORE_PLATFORM_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
 #include "core/frame/opener_policy.h"
-/* §7.1.7's POLICY CONTAINER, in the form it crosses this seam — a Document is created with one, so the struct
-   below holds one and this unit is a direct user of the type. */
+/* §7.1.7's POLICY CONTAINER, in the form it crosses this seam — a Document is created with one, so the call
+   below takes one and this unit is a direct user of the type. */
 #include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
 
-/* THE AGENT'S FACTS — what a declaration needs that is true of the whole similar-origin window agent. */
-typedef struct {
-    /* The agent's PRINCIPAL. §9.5's named bus is keyed by it and §7.2.1's proxy decides remoteness by it. */
-    const char *origin;
-    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL, which §8.1.3.5 reads to decide whether the first realm is a
-       SECURE CONTEXT — and Web IDL §3.3.13's members exist or do not by that answer. It is the environment's,
-       not the document's: an `https` iframe of an `http` page holds the `http` address here. */
-    const char *top_level_url;
-    /* §7.5.1's `requestsOAC`, which §8.1.2.2's obtain-a-similar-origin-window-agent allocates this agent's
-       CLUSTER with — the `Origin-Agent-Cluster` response header, parsed as a structured-field boolean and
-       cleared for a non-secure context (core/frame/navigation_params.h).
-       IT IS AN AGENT FACT AND NOT A DOCUMENT ONE, which is why it is on this struct rather than beside the
-       policy on the document below: §8.1.2.2 allocates a cluster ONCE per agent, and §7.1.2's own note says a
-       later same-origin Document in the same group inherits that allocation through the historical agent
-       cluster key map even when it sends a different header. The document that roots the agent is the one
-       whose header decides it. */
-    bool requests_oac;
-    /* §7.1.3's OPENER POLICY VALUE of the response that created the document this agent is rooted at, which
-       §7.3.2.3's create-a-new-browsing-context-group takes because §7.1.3.2's swap is the only step that ever
-       gives a group a cross-origin isolation mode other than `none` (core/frame/browsing_context_group.h).
-       IT IS AN AGENT FACT FOR THE SAME REASON `requests_oac` above is, and a STRONGER one: SECURITY.md keys an
-       instance on `(browsing context group, origin)`, so the group is half the key that decided there is one
-       instance here — a navigable whose navigation swaps groups leaves this instance rather than changing this
-       value. It is the VALUE and not the whole policy because a group reads only that: the reporting endpoints
-       and the report-only half belong to the DOCUMENT, which carries them on its navigable
-       (core/frame/window_proxy.h). */
-    OpenerPolicyValue opener_policy;
-} PlatformAgent;
-
-/* ONE DOCUMENT'S FACTS. `url` and `origin` ARE TWO DIFFERENT FACTS and this struct is why they can no longer
-   be confused: the ADDRESS is what §4.4's API base URL resolves `fetch("api/users")` against, the PRINCIPAL is
-   what a same-origin check compares. A host that had one field passed whichever it had. */
-typedef struct {
-    lxb_html_document_t *dom;    /* the parsed tree this realm's `document` is a wrapper over */
-    const char          *url;    /* the document's ADDRESS */
-    const char          *origin; /* the document's PRINCIPAL */
-    /* HTML §7.1.7's POLICY CONTAINER this Document is created with — §7.5.1's own creation table row
-       ("policy container … navigationParams's policy container"), decided by §7.1.7's determine step and never
-       re-derived here.
-       IT IS ONE VALUE AND NOT ONE FIELD PER ITEM, which is what makes the container's next item impossible to
-       drop on the way in: it is built through the one constructor that names every item, so a host that stops
-       stating one stops compiling. Its CSP list's SELF-ORIGIN is a THIRD fact beside `url` and `origin` and
-       not a spelling of either — §2.2.2 sets it from the RESPONSE's URL, §7.3.2.1's clone carries the
-       CREATOR's into a document that came from no response, and §2.2's own note says why the distinction is
-       the point: a document with an OPAQUE origin which inherited its policy still resolves `'self'` against
-       the origin that policy came from. A host that passed `origin` for it would be right for every
-       unsandboxed top-level document and silently wrong for exactly those two cases.
-       IT ALWAYS EXISTS: every Document has a container, including the initial about:blank. */
-    SerializedPolicyContainer policy;
-    /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is created with. A SEPARATE fact from `csp` for
-       the same reason `url` and `origin` are separate from each other: §7.1.7's policy container holds no
-       flag set, so a host that derived one from the policy would answer a question the container was never
-       asked. §7.5.1 lists them as two rows of one creation, and this struct is where the pair travels. */
-    SandboxFlags         sandbox_flags;
-    uint32_t             doc_id; /* the world registry's name for this document */
-    JSValueConst         nav_proxy;   /* §7.2.3's ONE WindowProxy for the navigable this is active in */
-} PlatformDocument;
+/* WHAT A HOST STATES, AND WHY IT IS A PARAMETER LIST AND NOT A STRUCT THE HOST FILLS IN.
+ *
+ * These two calls used to take a `PlatformAgent` and a `PlatformDocument` that the host DECLARED AS A LOCAL and
+ * then filled field by field. All three hosts wrote out the same assignments — and an uninitialized local
+ * filled by hand has a failure mode with no diagnostic anywhere in the program: a field added to the struct is
+ * stated by whichever host the adder happened to be editing and is WHATEVER WAS ON THE STACK in the other two.
+ * That is core/frame/policy_container.h's item-added-to-a-seam defect one level up, in its worst form. A `|| 0`
+ * at least gives the same wrong answer every time; a stack read is PLAUSIBLE, NON-DETERMINISTIC and different
+ * per build, per host and per call, and the field it lands in decides an observable — `originAgentCluster`, a
+ * sandboxing flag set, which browsing context group this agent's cross-origin isolation mode came from.
+ *
+ * SO THERE IS NO TYPE FOR A HOST TO DECLARE. The facts are ARGUMENTS, so the only way to reach the platform is
+ * to state every one of them, and THE DAY A FACT IS ADDED EVERY HOST STOPS COMPILING until it says where its
+ * answer comes from — `too few arguments to function`, at the call, in each host, before anything runs. The
+ * structs still exist, because ninety-odd component rows take one value rather than nine arguments; they are
+ * platform.c's, built in exactly one place, on the lines below the parameter list they copy.
+ *
+ * ZERO-INITIALIZING THE LOCAL WOULD HAVE BEEN THE SMALLEST FIX AND IS THE WRONG ONE. `= {0}` removes the
+ * garbage and puts a PLAUSIBLE DEFAULT where it was, which is the concealment and not the fix: an unwritten
+ * `requests_oac` reads `false`, an unwritten `sandbox_flags` reads "no flags", an unwritten `opener_policy`
+ * reads `unsafe-none`. Every one of those is a value a real response really states, so nothing downstream can
+ * tell the host's silence from the host's answer — and unlike garbage it never crashes, so nothing ever will.
+ *
+ * AND A COMPLETENESS ASSERT AT THIS SEAM CANNOT BE THE MECHANISM EITHER, FOR EXACTLY THAT REASON. The fields
+ * whose absence is most dangerous are the ones whose legitimate value is bit-identical to an unwritten one, so
+ * an assert over them can only fire by luck; and it would fire HERE, in the consumer, rather than at the host
+ * that failed to answer. The asserts inside these two calls are kept for the facts that DO have an impossible
+ * value — a NULL tree, an empty address, an empty principal — and they are a second line, never the first.
+ *
+ * WHAT IS *NOT* A PARAMETER IS THE HOST'S EDGES; see the head of this file. */
 
 /* THE AGENT HALF — every component's declaration, once per JSRuntime, in dependency order, ending in the one
-   call every realm goes through (realm_install_intrinsics), so the agent's FIRST realm is built by exactly the
-   mechanism a child navigable's realm is. */
-void platform_agent_init(JSContext *ctx, const PlatformAgent *agent);
+ * call every realm goes through (realm_install_intrinsics), so the agent's FIRST realm is built by exactly the
+ * mechanism a child navigable's realm is.
+ *
+ * `origin` is the agent's PRINCIPAL. §9.5's named bus is keyed by it and §7.2.1's proxy decides remoteness by
+ * it.
+ * `top_level_url` is HTML §8.1.3.1's TOP-LEVEL CREATION URL, which §8.1.3.5 reads to decide whether the first
+ * realm is a SECURE CONTEXT — and Web IDL §3.3.13's members exist or do not by that answer. It is the
+ * ENVIRONMENT's, not the document's: an `https` iframe of an `http` page states the `http` address here.
+ * `requests_oac` is §7.5.1's `requestsOAC`, which §8.1.2.2's obtain-a-similar-origin-window-agent allocates
+ * this agent's CLUSTER with — the `Origin-Agent-Cluster` response header, parsed as a structured-field boolean
+ * and cleared for a non-secure context (core/frame/navigation_params.h).
+ * IT IS AN AGENT FACT AND NOT A DOCUMENT ONE, which is why it is stated here rather than beside the policy on
+ * the document call below: §8.1.2.2 allocates a cluster ONCE per agent, and §7.1.2's own note says a later
+ * same-origin Document in the same group inherits that allocation through the historical agent cluster key map
+ * even when it sends a different header. The document that roots the agent is the one whose header decides it.
+ * `opener_policy` is §7.1.3's OPENER POLICY VALUE of the response that created the document this agent is
+ * rooted at, which §7.3.2.3's create-a-new-browsing-context-group takes because §7.1.3.2's swap is the only
+ * step that ever gives a group a cross-origin isolation mode other than `none`
+ * (core/frame/browsing_context_group.h). IT IS AN AGENT FACT FOR THE SAME REASON `requests_oac` is, and a
+ * STRONGER one: SECURITY.md keys an instance on `(browsing context group, origin)`, so the group is half the
+ * key that decided there is one instance here — a navigable whose navigation swaps groups leaves this instance
+ * rather than changing this value. It is the VALUE and not the whole policy because a group reads only that:
+ * the reporting endpoints and the report-only half belong to the DOCUMENT, which carries them on its navigable
+ * (core/frame/window_proxy.h). */
+void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
+                         OpenerPolicyValue opener_policy);
 
 /* THE DOCUMENT HALF — every component's per-realm install, run once per document INCLUDING the first, so a
-   same-origin child navigable's window is the same window the top-level document got. A child whose `window`
-   is smaller is a different browser. */
-void platform_document_install(JSContext *ctx, JSValueConst global, const PlatformDocument *doc);
+ * same-origin child navigable's window is the same window the top-level document got. A child whose `window`
+ * is smaller is a different browser.
+ *
+ * `dom` is the parsed tree this realm's `document` is a wrapper over.
+ * `url` IS THE DOCUMENT'S ADDRESS AND `origin` IS ITS PRINCIPAL, and they are two different facts: the address
+ * is what §4.4's API base URL resolves `fetch("api/users")` against, the principal is what a same-origin check
+ * compares. A host that had one of them passed whichever it had, and every document's base URL was the origin
+ * root — so the tool's own headline output named `https://site/api/users` for a request the page makes to
+ * `https://site/app/api/users`.
+ * `policy` is HTML §7.1.7's POLICY CONTAINER this Document is created with — §7.5.1's own creation table row
+ * ("policy container … navigationParams's policy container"), decided by §7.1.7's determine step and never
+ * re-derived here. IT IS ONE VALUE AND NOT ONE ARGUMENT PER ITEM, which is what makes the container's next
+ * item impossible to drop on the way in: it is built through the one constructor that names every item, so a
+ * host that stops stating one stops compiling. Its CSP list's SELF-ORIGIN is a THIRD fact beside `url` and
+ * `origin` and not a spelling of either — §2.2.2 sets it from the RESPONSE's URL, §7.3.2.1's clone carries the
+ * CREATOR's into a document that came from no response, and §2.2's own note says why the distinction is the
+ * point: a document with an OPAQUE origin which inherited its policy still resolves `'self'` against the origin
+ * that policy came from. A host that passed `origin` for it would be right for every unsandboxed top-level
+ * document and silently wrong for exactly those two cases. IT ALWAYS EXISTS: every Document has a container,
+ * including the initial about:blank.
+ * `sandbox_flags` is HTML §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is created with. A SEPARATE fact
+ * from the policy for the same reason `url` and `origin` are separate from each other: §7.1.7's policy
+ * container holds no flag set, so a host that derived one from the policy would answer a question the
+ * container was never asked. §7.5.1 lists them as two rows of one creation.
+ * `doc_id` is the world registry's name for this document.
+ * `nav_proxy` is §7.2.3's ONE WindowProxy for the navigable this document is active in. */
+void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
+                               const char *origin, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                               uint32_t doc_id, JSValueConst nav_proxy);
 
 /* THE AGENT HALF, UNDONE — every component's agent-lifetime release, in the reverse of the declaration order,
  * before the runtime is freed.

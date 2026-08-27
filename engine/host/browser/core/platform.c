@@ -93,6 +93,30 @@
 #include "core/url/url_search_params.h"
 #include "core/xhr/xml_http_request.h"
 
+/* THE FACTS, BUNDLED — AND THIS FILE IS THE ONLY PLACE THAT CAN SPELL THEM. platform.h takes them as arguments
+   so that no host can hand over an incomplete value (see the paragraph there for why a hand-filled local was
+   the defect and why `= {0}` is not the fix). They are one value HERE because the ninety-odd component rows
+   below take one, and a row taking nine arguments would put a copy of the fact list on every one of them.
+   THERE IS EXACTLY ONE CONSTRUCTION OF EACH, in the entry whose parameter list it copies, six lines below that
+   parameter list — so a fact added to platform.h and not carried here is one function's diff and not three
+   files'. */
+typedef struct {
+    const char       *origin;          /* the agent's PRINCIPAL */
+    const char       *top_level_url;   /* HTML §8.1.3.1's TOP-LEVEL CREATION URL of the first realm */
+    bool              requests_oac;    /* §7.5.1's `requestsOAC` */
+    OpenerPolicyValue opener_policy;   /* §7.1.3's OPENER POLICY VALUE of the rooting response */
+} PlatformAgent;
+
+typedef struct {
+    lxb_html_document_t      *dom;             /* the parsed tree this realm's `document` wraps */
+    const char               *url;             /* the document's ADDRESS */
+    const char               *origin;          /* the document's PRINCIPAL */
+    SerializedPolicyContainer policy;          /* HTML §7.1.7's POLICY CONTAINER it is created with */
+    SandboxFlags              sandbox_flags;   /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET */
+    uint32_t                  doc_id;          /* the world registry's name for this document */
+    JSValueConst              nav_proxy;       /* §7.2.3's ONE WindowProxy for its navigable */
+} PlatformDocument;
+
 /* ONE COMPONENT, BOTH HALVES. The thunks below exist because a component's declaration takes exactly the facts
    that component needs and no more — which is right, and is why they cannot share one signature. A thunk is
    the whole of the adaptation, so the table stays a list of components rather than a list of argument
@@ -828,12 +852,23 @@ static void platform_check_agent_state(void)
 #endif
 }
 
-void platform_agent_init(JSContext *ctx, const PlatformAgent *agent)
+void platform_agent_init(JSContext *ctx, const char *origin, const char *top_level_url, bool requests_oac,
+                         OpenerPolicyValue opener_policy)
 {
+    /* THE ONE CONSTRUCTION OF THIS VALUE IN THE PROGRAM — every fact this call was handed, and nothing that was
+       not handed to it. A fact added to platform.h's parameter list and forgotten here is an unused-parameter
+       in a nine-line function whose argument list is on the line above; a fact added to the STRUCT without a
+       parameter to fill it cannot be reached from any host at all. */
+    const PlatformAgent a = {
+        .origin        = origin,
+        .top_level_url = top_level_url,
+        .requests_oac  = requests_oac,
+        .opener_policy = opener_policy,
+    };
+    const PlatformAgent *agent = &a;
     int i;
 
     DCHECK(ctx != NULL, "the platform was declared into no realm");
-    DCHECK(agent != NULL, "the platform was declared with no agent facts");
     /* THE DECLARATION PASS BUILDS THE BROWSER'S BASELINE, so it runs at the BASELINE STAMP — and that is a
        precondition of THIS call rather than of any one component, which is the whole reason it is asserted
        here. Everything below allocates: every interface prototype, every interface object, every component's
@@ -928,20 +963,33 @@ void platform_agent_free(void)
     g_declared_in = NULL;
 }
 
-void platform_document_install(JSContext *ctx, JSValueConst global, const PlatformDocument *doc)
+void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
+                               const char *origin, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                               uint32_t doc_id, JSValueConst nav_proxy)
 {
+    /* THE ONE CONSTRUCTION OF THIS VALUE IN THE PROGRAM — see platform_agent_init above for why it is here and
+       not in the three hosts that used to write these seven assignments out by hand. */
+    const PlatformDocument d = {
+        .dom           = dom,
+        .url           = url,
+        .origin        = origin,
+        .policy        = policy,
+        .sandbox_flags = sandbox_flags,
+        .doc_id        = doc_id,
+        .nav_proxy     = nav_proxy,
+    };
+    const PlatformDocument *doc = &d;
     int i;
 
     DCHECK(ctx != NULL, "a document was installed into no realm");
     DCHECK(JS_IsObject(global), "a document was installed on something that is not the global object");
-    DCHECK(doc != NULL, "a document was installed with no document facts");
     DCHECK(doc->dom != NULL, "a document was installed with no parsed tree — `document` is a wrapper over one");
     DCHECK(doc->url != NULL && *doc->url,
            "a document was installed with no ADDRESS — a document is loaded FROM somewhere, and §4.4's API "
            "base URL is what every relative URL the page builds resolves against");
     DCHECK(doc->origin != NULL && *doc->origin,
            "a document was installed with no PRINCIPAL — every same-origin check compares it");
-    /* THE TWO FACTS ARE TWO FIELDS, which is the whole of the fix for them: a host with one field passed
+    /* THE TWO FACTS ARE TWO ARGUMENTS, which is the whole of the fix for them: a host with one of them passed
        whichever it had, and the address is the one that decides where `fetch("api/users")` goes. There is no
        assertion comparing them, because a document AT the origin root legitimately has both the same. */
     DCHECK(g_declared_in == JS_GetRuntime(ctx),
