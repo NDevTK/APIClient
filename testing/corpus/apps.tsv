@@ -26,7 +26,42 @@
 ## records the status it actually returns, and a replacement is APPENDED beside it.
 ##
 ## Lines beginning `#` are comments. Columns: id, url, observed stack.
-squoosh	https://squoosh.app/	no <script src> in the 75KiB document — bootstrap is inline
+##
+## ─── WHAT PUTS A SITE ON THIS LIST ────────────────────────────────────────────────────────────────────────
+##
+## THE FIRST TWELVE ROWS WERE SELECTED ON BUNDLER DIVERSITY, AND THAT AXIS CANNOT MEASURE THE @H HALF. A
+## census of them reported 67 endpoints across the corpus and every one of them was an IMAGE: squoosh's nine
+## were the document's nine `<img src>` values one-to-one in markup order, and figma's fifty-four were 21
+## `data:` URLs and 33 files from a CMS image CDN. Not one API endpoint has ever been learned from this list.
+## That is not the engine failing the corpus; it is the corpus never having asked the engine the question,
+## because a page with no backend has no API surface to find and three of these pages are in-browser editors.
+##
+## So a row is selected on FIVE tests, and the third column records the bytes each one was decided on:
+##
+##   1. A REACHABLE SAME-ORIGIN BACKEND SERVING JSON, proven by an anonymous request that returned one — never
+##      by a path found in a bundle, which proves only that somebody wrote the string.
+##   2. SURFACE BEHIND STATE THE BUNDLE SHIPS AND DOES NOT RUN. This is the project's actual proposition
+##      (§What-the-tool-produces: "learn the LOGGED-IN API surface WHILE LOGGED OUT"), so it is the one test a
+##      corpus cannot omit and still be measuring this tool. It is proven the same way: a route the shipped
+##      bundle names, requested anonymously, answering 401/403/303 beside a sibling that answers 200.
+##   3. SURVIVES A HEADLESS LOAD WITHOUT AUTH — a real app document, not an SSO wall and not a 403 shell.
+##   4. MIRRORABLE, so a before/after is on FROZEN BYTES (§Testing). The test is mechanical: does `mirror.mjs`
+##      reach the app's JavaScript, which it does through `<script src>` and `<link rel=preload/modulepreload
+##      as=script>`? A page whose bundle is reached only by RUNNING its inline bootstrap fails this — the
+##      engine can drive it live, and a number from it may never be quoted as a frozen-bytes comparison.
+##   5. THE BUNDLER STACK IS AN OBSERVATION RECORDED AFTERWARDS, NEVER A SELECTION CRITERION.
+##
+## A VERDICT IN THE THIRD COLUMN IS A MEASUREMENT AND ITS ABSENCE IS "NOT ASSESSED", NEVER "PASSES". Most of
+## the first twelve rows carry no verdict because nobody has fetched the bytes to give them one, and writing
+## one from the shape of the site is the recollection-instead-of-citation defect this file's own header names.
+## The rows that do carry one were probed: the status codes and byte counts in them are responses that
+## actually came back. Sites change, so an observation is of the bytes served when it was written —
+## `mirror.mjs`'s provenance.json holds the (url, date, sha256) triple that makes any of them re-checkable.
+##
+## A ROW IS NEVER DELETED, ONLY CORRECTED. `report.mjs` is fatal on a census row its list does not name, so a
+## deleted id makes every historical census unreadable; a row that fails re-selection says so and stays.
+##
+squoosh	https://squoosh.app/	NOT AN @H SUBJECT — fails 1 and 2: a client-side image compressor with no backend; its whole network surface is its own chunks, four demo images and analytics.js. Measured over 4 census passes plus one live drive, spread zero: 9 endpoints emitted and all 9 are this document's 9 `<img src>` values, one-to-one in markup order. STACK: no <script src> in the 75KiB document — bootstrap is inline
 excalidraw	https://excalidraw.com/	Vite (<script type=module crossorigin src=/assets/index-<hash>.js>)
 astexplorer	https://astexplorer.net/	webpack (vendors~app-<hash>.js, parsers~app-<hash>.js, app-<hash>.js)
 vscodedev	https://vscode.dev/	hand-rolled loader (342KiB document, <script src=""> + type=module)
@@ -38,5 +73,8 @@ figma	https://www.figma.com/	Next.js app router behind Netlify (/_netlify/_next/
 mdn	https://developer.mozilla.org/en-US/docs/Web/JavaScript	webpack (/static/client/runtime.<hash>.js + numbered chunks)
 telegram	https://web.telegram.org/k/	Vite (<script type=module crossorigin src=./index-<hash>.js>)
 tldraw	https://www.tldraw.com/	Vite (/assets/index-<hash>.js) + an inline /theme-init.js
-jsoncrack	https://jsoncrack.com/editor	Next.js pages router (/_next/static/chunks/webpack-<hash>.js, framework-<hash>.js, polyfills-<hash>.js noModule) — replaces the blocked replit row's stack
-regex101	https://regex101.com/	webpack (/static/vendors-bundle.<hash>.js + /static/bundle.<hash>.js, both defer) — replaces the blocked npmjs row's stack
+jsoncrack	https://jsoncrack.com/editor	NOT AN @H SUBJECT — fails 1 and 2: all 27 chunks the document names were fetched (1.05MB) and the only `/api/` string in any of them is Next's own internal route test `function r(e){return"/api"===e||e.startsWith("/api/")}` — no application endpoint exists. Added on bundler diversity to replace the blocked replit row; re-selected against the five tests and it is the squoosh shape a second time. STACK: Next.js pages router (/_next/static/chunks/webpack-<hash>.js, framework-<hash>.js, polyfills-<hash>.js noModule)
+regex101	https://regex101.com/	PASSES 1-4 — /api/library returns 200 application/json 26592B anonymously (1); the shipped 724KB bundle names /api/user, /api/user/settings, /api/user/tags, /api/user/pro/checkout, /api/user/pro/manage, /api/workspace and /api/quiz/tasks, and /api/user answers 404 JSON to an anonymous client (2). Added for bundler diversity; it survives re-selection on the right axis. STACK: webpack (/static/vendors-bundle.<hash>.js + /static/bundle.<hash>.js, both defer)
+gitlab	https://gitlab.com/explore	PASSES 1-4 AND IS THE FLAGSHIP FOR 2 — the logged-out document names four chunks whose FILENAMES are the admin console's (commons-pages.admin.deploy_keys.index-pages.admin.groups.index-pages.admin.projects.index-<hash>.chunk.js and three more), so the anonymous visitor is served the admin code literally. /api/v4/projects?per_page=2 returns 200 application/json 2027B anonymously while /api/v4/user and /api/v4/admin/ci/variables both return 401 application/json — 1 and 2 inside one API. A real app document (<title>Explore projects · GitLab</title>, data-page="explore:projects:index") carrying server-injected gon.saas_features / gon.dedicated_features, which is §Attacker-sources' absent-state fork by name. STACK: webpack (/assets/webpack/runtime.<hash>.bundle.js + main.<hash>.chunk.js, 3.3MB, text/javascript)
+openlibrary	https://openlibrary.org/	PASSES 1-4 — /search.json?q=dune&limit=2 returns 200 application/json 3058B anonymously (1) while /account/loans.json answers 303 to the login flow and the logged-out document names /account/books, /account/create and /account/login (2). STACK: same-origin <script src> (/static/build/js/all.js?v=<hash>, 505138B application/javascript) + /static/build/lit-components/production/ol-components.js + two /cdn/archive.org scripts
+grafana	https://play.grafana.org/	PASSES 1-3, FAILS 4 — DRIVE LIVE, NEVER QUOTE AS A FROZEN-BYTES BEFORE/AFTER. /api/search?limit=2 returns 200 application/json 872B anonymously while /api/user returns 401 application/json (1 and 2, proven live), and the document carries a large inline window.grafanaBootData — server-injected absent state, which §Attacker-sources requires to stay symbolic and fork to the logged-in arm. It fails the mirror test because mirror.mjs reaches app JavaScript through <script src> and preload links and this document has neither, so it cannot be frozen until the mirror can follow a bootstrap that builds its own script tags. STACK: NO <script src> and NO preload link in the 16.8KiB document — four inline <script nonce> blocks build the app's script elements at runtime from grafana-assets.grafana.net

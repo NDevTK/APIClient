@@ -13,10 +13,21 @@ itself is NOT checked in (102 MiB) and is rebuilt from a site list.
 
 ## Two lists, and a census is a measurement OF one
 
-`sites.tsv` is thirty LOGIN pages. `apps.tsv` is twelve JS-heavy APP pages — the list that produced this
-project's standing headline (ten of twelve ENGINE-ABORT, `fin/n` 0 everywhere, `sinks: 0` on every
-measurable site). That list and its driver existed only under `/tmp`, so the one artifact needed to
-re-measure the headline was the one artifact the checkout did not have; both are now here.
+`sites.tsv` is thirty LOGIN pages. `apps.tsv` is the APP pages — the list that produced this project's
+standing headline (ten of twelve ENGINE-ABORT, `fin/n` 0 everywhere, `sinks: 0` on every measurable site).
+That list and its driver existed only under `/tmp`, so the one artifact needed to re-measure the headline
+was the one artifact the checkout did not have; both are now here.
+
+**`apps.tsv` is selected on five tests and they are stated in its own header — read them before adding a
+row.** Its first twelve were chosen for BUNDLER DIVERSITY, and that axis cannot measure the @H half: a
+census of them reported 67 endpoints and every one was an IMAGE (squoosh's nine were its nine `<img src>`
+values one-to-one; figma's fifty-four were 21 `data:` URLs and 33 CMS-CDN files), so the corpus had never
+once asked the engine for an API. The tests that replaced that axis are a reachable same-origin backend
+proven by an anonymous JSON response, surface the bundle ships and does not run (§What-the-tool-produces'
+actual proposition), a headless load that survives without auth, and mirrorability — with the bundler stack
+demoted to an observation recorded afterwards. A verdict in the third column is a MEASUREMENT and its
+absence is "not assessed", never "passes"; a row that fails is corrected and kept, never deleted, because
+`report.mjs` is fatal on a census row its list does not name and the list can therefore only grow.
 
 `SITES` names the list and every instrument takes it — `run.sh` always did, `mirror.mjs` and `report.mjs`
 each hard-coded `sites.tsv`. That was not untidiness. `report.mjs` looked all twelve app ids up in
