@@ -82,11 +82,14 @@ bool block_flow_display_is_block_container(const char *display)
    THE MAXIMA ARE `CssPx` AND NOT `double` because a margin may be a PERCENTAGE, which §8.3 resolves against
    the containing block's WIDTH — the viewport's, at the base of §10.1's chain — so which of two margins is
    larger is a question the environment could answer either way, and css_px_max carries BOTH operands' facts
-   for exactly that reason. Deciding it on the modelled number is css_length.h's stated layering. */
+   for exactly that reason. Deciding it on the modelled number is css_length.h's stated layering.
+   A RUN IS EXACTLY THOSE TWO MAXIMA AND CARRIES NO "has any margin joined" FLAG, because §8.3.1 never asks:
+   an empty run and a run of zero margins both reduce to zero and both merge identically, so the two are the
+   same fact and a field distinguishing them is written everywhere and read nowhere. What DOES depend on
+   whether anything was placed is the walk's own `placed`, which is about BOXES and not about margins. */
 typedef struct {
     CssPx pos;    /* the largest positive margin in the run */
     CssPx neg;    /* the largest ABSOLUTE value among the negative margins */
-    bool  any;    /* whether any margin has joined it at all */
 } BfRun;
 
 static BfRun bf_run_empty(void)
@@ -95,7 +98,6 @@ static BfRun bf_run_empty(void)
 
     r.pos = css_px(0.0);
     r.neg = css_px(0.0);
-    r.any = false;
     return r;
 }
 
@@ -103,7 +105,6 @@ static BfRun bf_run_add(BfRun r, CssPx m)
 {
     if (m.px < 0.0) r.neg = css_px_max(r.neg, css_px_scale(m, -1.0));
     else            r.pos = css_px_max(r.pos, m);
-    r.any = true;
     return r;
 }
 
@@ -118,7 +119,6 @@ static BfRun bf_run_merge(BfRun a, BfRun b)
 
     r.pos = css_px_max(a.pos, b.pos);
     r.neg = css_px_max(a.neg, b.neg);
-    r.any = a.any || b.any;
     return r;
 }
 
@@ -371,7 +371,12 @@ static BfBox bf_box(lxb_dom_element_t *el);
    "either contains only block-level boxes or establishes an inline formatting context", and §9.4.2's own first
    sentence is that an inline formatting context "is established by a block container box THAT CONTAINS NO
    BLOCK-LEVEL BOXES". So the question is answered over the WHOLE child list, ONCE, before either algorithm
-   runs — never per child, which is what a walk that classified as it stacked would be doing. */
+   runs — never per child, which is what a walk that classified as it stacked would be doing.
+   A MIXED CONTAINER IS NOT A THIRD ANSWER, and that is the whole content of §9.2.1.1 "Anonymous block boxes":
+   "if a block container box (such as that generated for the DIV above) has a block-level box inside it (such
+   as the P above), then we FORCE IT TO HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT". So the presence of one
+   block-level child settles it for the container — §9.4.1's stack, below — and what the inline-level children
+   get is not a formatting context for the CONTAINER but a box of their own inside it. */
 typedef enum {
     BF_CONTENT_NONE = 0,   /* no in-flow children: §10.6.3's fourth bullet, and §9.4.2 creates no line box */
     BF_CONTENT_BLOCK,      /* §9.4.1's block formatting context: the walk below */
@@ -390,26 +395,133 @@ static BfContent bf_content_kind(lxb_dom_element_t *el)
         case BF_CHILD_INLINE: inl = true; break;
         }
     }
-    if (block && inl)
-        DFAIL("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\" applies to this block container: it holds BOTH "
-              "inline-level content and a block-level box, and \"if a block container box (such as that "
-              "generated for the DIV above) has a block-level box inside it (such as the P above), then we "
-              "FORCE IT TO HAVE ONLY BLOCK-LEVEL BOXES INSIDE IT\" — an anonymous block box around each run of "
-              "inline-level content, which §9.4.1's stack below then places like any other child. The box this "
-              "walk would place therefore DOES NOT EXIST IN THE ELEMENT TREE, which is why this is a crash and "
-              "not a skipped child: the anonymous box's own height is §10.6.3's over the line boxes inside it "
-              "and its margins are zero (\"the properties of anonymous boxes are inherited from the enclosing "
-              "non-anonymous box … non-inherited properties have their initial value\"). "
-              "BUILD §9.2.1.1's GENERATION as a box-tree step this walk iterates, not as a special case here — "
-              "the same list core/layout/used_value.c's containing-block walk and css-display §3's `contents` "
-              "flattening both need, and the same place §9.2.1.1's last paragraph is enforced (\"anonymous "
-              "block boxes are ignored when resolving percentage values that would refer to it: the closest "
-              "non-anonymous ancestor box is used instead\"). The RUN this container establishes for the "
-              "anonymous box is then core/layout/line_box.h's, which already measures a line box that needs no "
-              "glyph advance and crashes naming one where it does");
     if (block) return BF_CONTENT_BLOCK;
     if (inl) return BF_CONTENT_INLINE;
     return BF_CONTENT_NONE;
+}
+
+/* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes" -------------------------------------------------------------
+   THE BOX THIS WALK ITERATES IS NOT THE ELEMENT LIST. "In a document like this: <DIV> Some text <P>More text
+   </DIV> … we assume that there is an ANONYMOUS BLOCK BOX around 'Some text'", and generally "if a block
+   container box … has a block-level box inside it …, then we force it to have only block-level boxes inside
+   it." So each maximal run of inline-level children is ONE box, a sibling of the block-level boxes on either
+   side, and §9.4.1's stack below places it exactly like any other child — which is why this is a box-tree step
+   and not a case inside the placement.
+   WHERE THE WHITE SPACE GOES IS DECIDED BEFORE THIS FUNCTION AND BY §9.2.2.1 "Anonymous inline boxes": "white
+   space content that would subsequently be collapsed away according to the 'white-space' property does not
+   generate any anonymous inline boxes." The space in `<div><p>x</p>  <p>y</p></div>` is therefore not
+   inline-level content at all — there is nothing between the two block boxes to wrap, and no anonymous block
+   box is generated there. §9.2.1.1's own splitting paragraph leans on the same fact when it treats block-level
+   siblings "separated only by collapsible whitespace and/or out-of-flow elements" as consecutive. `bf_child_kind`
+   has already applied §9.2.2.1 (such a run is BF_CHILD_NO_BOX), so a run here is delimited by the first and the
+   last child that generate an inline-level BOX, and a boxless child inside one is carried along with it because
+   there is nothing of it to carry.
+   THE BOX HAS NO STYLE OF ITS OWN, which is what makes it a `BfBox` with no element rather than a synthesised
+   one: "the properties of anonymous boxes are inherited from the enclosing non-anonymous box …. Non-inherited
+   properties have their initial value. For example, the font of the anonymous box is inherited from the DIV,
+   but the margins will be 0." Every property §9.4.1's placement would read of this box is therefore either the
+   PARENT's — the font and `line-height` its line boxes are measured with, which core/layout/line_box.h takes
+   the parent element for — or a constant: zero margins, zero padding, no border, `min-height: auto`,
+   `height: auto`, static position, `float: none`, `overflow: visible`. Those constants are what let the
+   §8.3.1 answers below be written out rather than derived: an anonymous block box never establishes a new
+   block formatting context and has nothing at either edge to separate a margin, so §8.3.1's fourth adjoining
+   pair holds of it whenever "it does not contain a line box" does, and its own contribution to a margin run is
+   a zero.
+   §9.2.1.1's LAST PARAGRAPH NEEDS NO CODE AND IS RECORDED HERE SO THE NEXT READER DOES NOT GO LOOKING:
+   "anonymous block boxes are ignored when resolving percentage values that would refer to it: the closest
+   non-anonymous ancestor box is used instead." core/layout/used_value.c's containing-block walk steps over
+   ELEMENTS, and an anonymous block box is not one, so the closest non-anonymous ancestor is the only box it
+   can reach. The day that walk iterates boxes instead, the rule becomes a step in it. */
+
+/* One past the LAST child of the run starting at `first` that generates an inline-level box — the exclusive
+   end of §9.2.1.1's anonymous block box. `first` must itself generate one. */
+static lxb_dom_node_t *bf_anon_run_end(lxb_dom_element_t *el, lxb_dom_node_t *first, lxb_dom_element_t *want)
+{
+    lxb_dom_node_t *c, *end = first->next;
+    BfChildKind first_kind = bf_child_kind(el, first);
+
+    DCHECK(first_kind == BF_CHILD_INLINE,
+           "CSS 2.2 §9.2.1.1's anonymous block box was started at a child that generates no inline-level box. "
+           "The section generates one only to wrap inline-level content — \"we assume that there is an "
+           "anonymous block box around 'Some text'\" — so this box would be EMPTY, and §9.4.1's stack below "
+           "would place a box the element tree never asked for and take a height from it");
+    for (c = first; c != NULL; c = c->next) {
+        BfChildKind kind = bf_child_kind(el, c);
+
+        /* The run ends at the block-level box §9.2.1.1 makes the anonymous box's SIBLING rather than its
+           content. Everything after the last inline-level child and before it generates no box at all, so it
+           is left outside: the boundary is drawn where a box is, which is the only place it is observable. */
+        if (kind == BF_CHILD_BLOCK) break;
+        if (kind != BF_CHILD_INLINE) continue;
+        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_dom_interface_element(c) == want)
+            DFAIL("CSS 2 §9.4.1's vertical placement was asked for a box CSS 2.2 §9.2.1.1 puts INSIDE an "
+                  "anonymous block box: it is an inline-level child of a block container that also holds a "
+                  "block-level box, so its position is a position ALONG a line box in that anonymous box's "
+                  "inline formatting context and not a distance down §9.4.1's stack. core/layout/"
+                  "flow_position.c takes an inline-level box out through its own section before asking — the "
+                  "same discrepancy the all-inline container asserts one branch up — so the two "
+                  "classifications have come apart. It is decided HERE rather than left to the walk's "
+                  "never-reached-this-box crash, because this box IS in the container's box tree and merely "
+                  "not on its stack, which is a different fact and a different fix");
+        end = c->next;
+    }
+    return end;
+}
+
+/* ONE ANONYMOUS BLOCK BOX over the run `[first, end)` of `parent`'s children, as §9.4.1's stack sees it.
+   §10.6.3's FIRST BULLET is its height — it establishes an inline formatting context, by construction the only
+   thing it can contain — and §8.3.1's fourth adjoining pair is the rest of its contribution. */
+static BfBox bf_anon_box(lxb_dom_element_t *parent, lxb_dom_node_t *first, lxb_dom_node_t *end)
+{
+    bool any_line_box = false;
+    char *d = bf_computed(parent, "display");
+    bool container = block_flow_display_is_block_container(d);
+    BfBox out;
+    CssPx h;
+
+    free(d);
+    DCHECK(container,
+           "CSS 2.2 §9.2.1.1 generates an anonymous block box inside a BLOCK CONTAINER BOX — its whole "
+           "sentence is \"if a BLOCK CONTAINER BOX … has a block-level box inside it\" — and this box's parent "
+           "is not one. There is then no §9.4.1 stack for the anonymous box to be a sibling on, and no "
+           "enclosing non-anonymous box for it to inherit the font and `line-height` its line boxes are "
+           "measured with");
+    DCHECK(first != NULL && first != end,
+           "CSS 2.2 §9.2.1.1's anonymous block box was generated around NOTHING. The section generates one "
+           "only to wrap inline-level content, so an empty one is a box with no reason to exist whose height "
+           "§9.4.1's stack would nevertheless add to its container's");
+    /* "Non-inherited properties have their initial value … the margins will be 0", so both of §8.3.1's runs at
+       this box's edges are a zero margin. A zero is not the same as no margin at all: it still joins the run
+       and it still collapses with its neighbours, and `bf_run_value` of a zero-margin run is zero either way. */
+    out.top = bf_run_of(css_px(0.0));
+    out.bottom = bf_run_of(css_px(0.0));
+    out.collapse_through = false;
+    h = line_box_content_height(parent, first, end, &any_line_box);
+    if (!any_line_box) {
+        /* §8.3.1's own note, every conjunct of which is a constant for this box except the last two: "a box's
+           own margins collapse if the 'min-height' property is zero, and it has neither top or bottom borders
+           nor top or bottom padding, and it has a 'height' of either 0 or 'auto', and IT DOES NOT CONTAIN A
+           LINE BOX, and all of its in-flow children's margins (if any) collapse." §9.4.2 is what makes the
+           fourth true here — a line box holding nothing but empty inline boxes "must be treated as NOT
+           EXISTING for any other purpose" — and it is also what makes the fifth vacuous, since an inline box
+           with a non-zero margin is one of the things that would have made the line box exist. */
+        out.collapse_through = true;
+        out.top = bf_run_merge(out.top, out.bottom);
+        out.bottom = out.top;
+        out.content_h = css_px(0.0);
+        out.border_h = css_px(0.0);
+        return out;
+    }
+    DCHECK(h.px >= 0.0,
+           "CSS 2.2 §10.8's step 3 produced a NEGATIVE height for the line boxes inside an anonymous block "
+           "box. It is \"the distance between the uppermost box top and the lowermost box bottom\", and every "
+           "box on the line contributes its own `line-height`, which css-inline-3 §5.1 makes `<number [0,∞]>` "
+           "/ `<length-percentage [0,∞]>` and says outright that \"negative values are illegal\"");
+    out.content_h = h;
+    /* §8.1's box model with all four surrounding terms at their initial value: no padding and no border, so
+       the anonymous box's BORDER box — what the stack below advances by — is exactly its content box. */
+    out.border_h = h;
+    return out;
 }
 
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container. It answers this
@@ -466,7 +578,10 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                "takes an inline-level box out through its own section before asking, so the two "
                "classifications have come apart — and answering a vertical offset here would be a coordinate "
                "in the right units measured against the wrong axis");
-        h = line_box_content_height(el, &any_line_box);
+        /* This container holds no block-level box, so §9.2.1.1 generates nothing and the one inline formatting
+           context here is over the WHOLE child list — the same run form the anonymous box is measured through,
+           with the container's own element supplying the style it already owns. */
+        h = line_box_content_height(el, n->first_child, NULL, &any_line_box);
         if (any_line_box) {
             DCHECK(h.px >= 0.0,
                    "CSS 2.2 §10.8's step 3 produced a NEGATIVE line box height. It is \"the distance between "
@@ -493,16 +608,31 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         return out;
     }
 
-    for (c = n->first_child; c != NULL; c = c->next) {
+    /* §9.4.1's stack is over the BOX list CSS 2.2 §9.2.1.1 forces this container to have, not over its child
+       nodes: a block-level child is one box and a maximal run of inline-level children is one ANONYMOUS BLOCK
+       BOX. `ce` is the element the box belongs to and is NULL for the anonymous one, which is the whole of the
+       difference the placement below has to know about — everything else it reads is on `BfBox`. */
+    c = n->first_child;
+    while (c != NULL) {
         BfChildKind kind = bf_child_kind(el, c);
+        lxb_dom_element_t *ce = NULL;
         BfBox b;
 
-        if (kind == BF_CHILD_NO_BOX) continue;
-        DCHECK(kind == BF_CHILD_BLOCK,
-               "§9.4.1's stack reached an INLINE-LEVEL child, which bf_content_kind above has already "
-               "established this block container has none of — the two walks read the same child list through "
-               "the same classifier, so they can only disagree if the tree changed between them");
-        b = bf_box(lxb_dom_interface_element(c));
+        if (kind == BF_CHILD_NO_BOX) { c = c->next; continue; }
+        if (kind == BF_CHILD_INLINE) {
+            lxb_dom_node_t *end = bf_anon_run_end(el, c, want);
+
+            DCHECK(end != c,
+                   "CSS 2.2 §9.2.1.1's run ended where it began, so this walk would generate the same "
+                   "anonymous block box for ever. The run starts at a child that generates an inline-level "
+                   "box and therefore always contains at least that one");
+            b = bf_anon_box(el, c, end);
+            c = end;
+        } else {
+            ce = lxb_dom_interface_element(c);
+            b = bf_box(ce);
+            c = c->next;
+        }
         /* §8.3.1's second adjoining pair — "bottom margin of box and top margin of its next in-flow following
            sibling" — and its first, "top margin of a box and top margin of its first in-flow child": both are
            the run already open meeting this child's top run, and they are the same merge. */
@@ -518,7 +648,7 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                exists at all: "the top border edge position is only required for laying out DESCENDANTS of these
                elements" — and CSSOM VIEW §7's `offsetTop` on an empty `div` is a page asking for exactly
                that. */
-            if (lxb_dom_interface_element(c) == want) {
+            if (ce != NULL && ce == want) {
                 *want_top = escaping ? pos : css_px_add(pos, bf_run_value(run));
                 *found = true;
             }
@@ -535,7 +665,9 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         } else {
             pos = css_px_add(pos, bf_run_value(run));
         }
-        if (lxb_dom_interface_element(c) == want) {
+        /* §9.2.1.1's anonymous block box is never the box asked for — it has no element, so no caller can name
+           it — and `bf_anon_run_end` has already crashed for a `want` that is INSIDE one. */
+        if (ce != NULL && ce == want) {
             *want_top = pos;
             *found = true;
         }

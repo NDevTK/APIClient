@@ -368,13 +368,45 @@ static void lb_child(LbCtx *cx, lxb_dom_element_t *parent, lxb_dom_node_t *n)
               "is the height of their margin box\"). BUILD the inline-level used width in "
               "core/layout/used_value.c and the break search over it; the height this file computes is correct "
               "only while the line has nowhere to break");
+    /* CSS 2.2 §9.2.1.1's SECOND PARAGRAPH, which is a DIFFERENT box structure from its first and is reached
+       from here rather than from block_flow.c — the block-level box is not a child of the block container at
+       all, so the classification that delimits the anonymous runs never sees it. It is named apart from the
+       came-apart crash below because the two ask for opposite work: that one says a classifier is wrong, this
+       one says a construction is missing, and a reader who took this for that would go looking in a list that
+       is right. */
+    if (!inline_box && !atomic && lb_computed_is(parent, "display", "inline"))
+        DFAIL("CSS 2.2 §9.2.1.1 \"Anonymous block boxes\": an INLINE BOX contains an in-flow BLOCK-LEVEL box. "
+              "\"When an inline box contains an in-flow block-level box, the inline box (and its inline "
+              "ancestors within the same line box) is BROKEN AROUND the block-level box (and any block-level "
+              "siblings that are consecutive or separated only by collapsible whitespace and/or out-of-flow "
+              "elements), SPLITTING THE INLINE BOX INTO TWO BOXES (even if either side is empty), one on each "
+              "side of the block-level box(es). The line boxes before the break and after the break are "
+              "enclosed in anonymous block boxes, and the block-level box becomes a SIBLING of those anonymous "
+              "boxes.\" So this is not the container's child list needing anonymous boxes — that generation "
+              "runs in core/layout/block_flow.c and produced the box this walk is measuring — it is the "
+              "INLINE box needing to be cut in two, which moves a block-level box UP the tree past every "
+              "inline ancestor it has inside this line box and re-splits the runs around it. Two further "
+              "sentences of the same paragraph are part of the same build: \"properties set on elements that "
+              "cause anonymous block boxes to be generated still apply to the boxes and content of that "
+              "element\" (so the split halves keep the inline box's own border, \"open at the end of the line\" "
+              "and \"open at the start\"), and \"when such an inline box is affected by relative positioning, "
+              "any resulting translation ALSO AFFECTS the block-level box contained in the inline box\". BUILD "
+              "the split where the runs are delimited (block_flow.c's `bf_anon_run_end`), so the box list a "
+              "container has is computed over its inline DESCENDANTS' block-level boxes and not only over its "
+              "own children — this walk is then unreachable for a block-level box for the reason below, which "
+              "is the state that crash already describes");
     if (!inline_box)
         DFAIL("a computed `display` inside an INLINE formatting context that is neither `inline`, nor an "
               "atomic inline-level box, nor `none`, nor `contents`, nor out of flow. §9.4.2's own condition is "
               "that the establishing block container \"contains no block-level boxes\", and "
               "core/layout/block_flow.c decides that over the SAME child list before calling this component — "
               "so a block-level or table box reaching this walk is those two classifications having come "
-              "apart, and the one to fix is whichever list this `display` is missing from");
+              "apart, and the one to fix is whichever list this `display` is missing from. THIS IS ALSO WHERE "
+              "§9.2.1.1's OWN INVARIANT IS CLOSED for an anonymous block box, and it is the same sentence: "
+              "\"then we force it to have only block-level boxes inside it\" puts the block-level box OUTSIDE "
+              "the anonymous box as its SIBLING, so a run block_flow.c delimited for one must contain none — "
+              "and the run is delimited by the very classifier this crash contradicts, which is why one assert "
+              "at this consumer covers both callers and a second copy inside the generation would not");
     if (replaced_element_of(el).replaced)
         DFAIL("HTML §15.4 makes this a REPLACED ELEMENT, so §10.8's step 1 takes \"the height of their margin "
               "box\" rather than its `line-height`, and css-text-3 §5.5 puts a soft wrap opportunity before "
@@ -405,22 +437,39 @@ static void lb_walk(LbCtx *cx, lxb_dom_element_t *el)
     for (c = n->first_child; c != NULL; c = c->next) lb_child(cx, el, c);
 }
 
-CssPx line_box_content_height(lxb_dom_element_t *el, bool *any_line_box)
+CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
+                              bool *any_line_box)
 {
     LbCtx cx;
+    lxb_dom_node_t *c;
 
-    DCHECK(el != NULL && any_line_box != NULL,
+    DCHECK(style != NULL && any_line_box != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked for with no element or nowhere to report whether any of "
            "them exists — the second is not an optional out-parameter, it is §8.3.1's own question");
+    DCHECK(first == NULL || first->parent == lxb_dom_interface_node(style),
+           "the run handed to CSS 2.2 §9.4.2's inline formatting context does not start at a CHILD of the "
+           "element whose properties the box has. Those two arguments are the two halves of §9.2.1.1's "
+           "anonymous block box — the content is one run of the container's children and the style is the "
+           "enclosing non-anonymous box's — so a run from somewhere else would measure one document's line "
+           "boxes against another element's font and `line-height`");
     /* §10.8's STRUT, which is the line box's floor and belongs to the BLOCK CONTAINER rather than to anything
        on the line: "the minimum height consists of a minimum height above the baseline and a minimum depth
        below it, exactly as if each line box starts with a ZERO-WIDTH INLINE BOX with THE ELEMENT'S font and
        line height properties. We call that imaginary box a 'strut'." It is seeded before the walk because
        §10.8's step 3 includes it ("this includes the strut, as explained under 'line-height' below") and
-       because a line with nothing else on it is still exactly as tall as the strut. */
-    cx.line = lb_strut_extent(el);
+       because a line with nothing else on it is still exactly as tall as the strut.
+       FOR AN ANONYMOUS BLOCK BOX THE STRUT IS STILL THE ENCLOSING ELEMENT'S, and that is §9.2.1.1's own
+       sentence rather than an approximation of one: "the font of the anonymous box is inherited from the DIV",
+       and `line-height` is inherited too — so the imaginary zero-width box §10.8 starts the line with has
+       exactly the properties `style` computes, whether or not the box wrapping the run has an element. */
+    cx.line = lb_strut_extent(style);
     cx.exists = false;
-    lb_walk(&cx, el);
+    for (c = first; c != NULL && c != end; c = c->next) lb_child(&cx, style, c);
+    DCHECK(c == end,
+           "the half-open run handed to CSS 2.2 §9.4.2's inline formatting context ran off the end of the "
+           "child list without ever meeting its exclusive end, so the two came from different lists or the "
+           "tree changed under the walk — and the boxes just measured are some prefix of a formatting context "
+           "no box has");
     *any_line_box = cx.exists;
     if (!cx.exists) {
         /* §9.4.2: such a line box "must be treated as ZERO-HEIGHT … for the purposes of determining the

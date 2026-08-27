@@ -5,7 +5,14 @@
  * WHY THIS IS A SEPARATE COMPONENT FROM block_flow.h AND NOT ANOTHER ARM OF ITS WALK. §9.4.2 opens by saying
  * which box establishes this formatting context — "an inline formatting context is established by a block
  * container box that CONTAINS NO BLOCK-LEVEL BOXES" — and §9.4.1 says the same of the other one. They are
- * ALTERNATIVES over one box, decided by its content and by nothing else, and the two algorithms share no step:
+ * ALTERNATIVES over one BOX, decided by its content and by nothing else — and CSS 2.2 §9.2.1.1 "Anonymous
+ * block boxes" is what makes that sentence true of a container holding both, by putting a box there that the
+ * element tree does not: "if a block container box (such as that generated for the DIV above) has a
+ * block-level box inside it (such as the P above), then we force it to have only block-level boxes inside it",
+ * each run of inline-level content wrapped in an anonymous block box. So this component is asked about a RUN
+ * of a block container's children rather than about an element, and the ELEMENT it is handed alongside is the
+ * one whose style the box has — §9.2.1.1: "the properties of anonymous boxes are inherited from the enclosing
+ * non-anonymous box … non-inherited properties have their initial value." The two algorithms share no step:
  * §9.4.1 stacks border boxes down a column and reduces §8.3.1's adjoining margin runs, while §9.4.2 flows
  * boxes ALONG a line and then §10.8 takes two maxima across it. A single walk carrying both would be two
  * algorithms behind one `if`, and the `if` would be re-asked per child instead of once per box.
@@ -62,16 +69,23 @@
 
 #include "core/css/css_length.h"
 
-/* CSS 2.2 §10.6.3's FIRST BULLET for a block container that establishes an inline formatting context — "the
-   distance from its top content edge to the bottom edge of the last line box" — in CSS pixels.
+/* CSS 2.2 §10.6.3's FIRST BULLET for the block container box that establishes ONE inline formatting context —
+   "the distance from its top content edge to the bottom edge of the last line box" — in CSS pixels.
+   THE FORMATTING CONTEXT IS THE HALF-OPEN RUN `[first, end)` OF `style`'s CHILDREN, AND `style` IS WHOSE
+   PROPERTIES THE BOX HAS. Those are two arguments and not one because §9.2.1.1's anonymous block box has no
+   element: a mixed container generates one box per run of inline-level children, and each of them "inherit[s]
+   from the enclosing non-anonymous box" — the DIV, not itself — while the content it holds is only its own
+   run. For a container with no block-level box at all the run IS the whole child list, so `first` is its first
+   child and `end` is NULL; `end` is exclusive and NULL means "to the end of the list".
    `*any_line_box` RECEIVES §9.4.2's OTHER ANSWER: false when every line box in this formatting context is one
    the section says "must be treated as NOT EXISTING for any other purpose", which is a different fact from a
    height of zero and is what §8.3.1's collapse-through note asks for. It is written on every path, so a caller
    reading it after a crash-free return is reading a measurement rather than whatever it initialised.
-   THE CALLER HAS ALREADY ESTABLISHED §9.4.2's OWN CONDITION — that this block container contains no
+   THE CALLER HAS ALREADY ESTABLISHED §9.4.2's OWN CONDITION over the run it passes — that this box contains no
    block-level boxes — because deciding it requires classifying every child, which core/layout/block_flow.c
-   does once for both formatting contexts. A container that also holds a block-level box is §9.2.1.1's
-   anonymous-block case and crashes there, before this component is reached. */
-CssPx line_box_content_height(lxb_dom_element_t *el, bool *any_line_box);
+   does once, both to choose between the two formatting contexts and to delimit §9.2.1.1's runs. A block-level
+   box reaching this walk is those two classifications having come apart, and it crashes here saying so. */
+CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
+                              bool *any_line_box);
 
 #endif

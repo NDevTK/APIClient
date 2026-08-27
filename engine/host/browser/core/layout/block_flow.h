@@ -17,7 +17,7 @@
  * box, clearance, padding or border between them, whose collapsed width is "the maximum of the collapsing
  * margins' widths" with, "in the case of negative margins, the maximum of the absolute values of the negative
  * adjoining margins deducted from the maximum of the positive adjoining margins". That reduction is two
- * running maxima, so a run is two lengths and a flag and it merges associatively — which is what lets the
+ * running maxima, so a run is two lengths and nothing else and it merges associatively — which is what lets the
  * SAME structure carry a run upward out of a child, downward out of a child, and through a child that
  * collapses through entirely.
  *
@@ -43,9 +43,13 @@
  *   - INLINE-LEVEL CONTENT is §9.4.2's inline formatting context and core/layout/line_box.h's, which this
  *     walk ROUTES TO rather than measures: §9.2.1 makes the two exclusive ("either contains only block-level
  *     boxes or establishes an inline formatting context"), so the choice is made once over the whole child
- *     list and each algorithm then sees only its own boxes. What is still absent is the MIXTURE — a container
- *     holding both — which is §9.2.1.1's anonymous block generation and a box-tree step rather than a case
- *     for either walk, and which crashes here naming it.
+ *     list and each algorithm then sees only its own boxes. A container holding BOTH is not a third case and
+ *     not an absence: §9.2.1.1 "Anonymous block boxes" says "if a block container box … has a block-level box
+ *     inside it …, then we force it to have only block-level boxes inside it", so this walk iterates the BOX
+ *     list that forcing produces — each maximal run of inline-level children wrapped in one anonymous block
+ *     box whose height is §10.6.3's over line_box.h's line boxes and whose every other property is a constant
+ *     the section fixes ("the margins will be 0"). That generation is a box-tree step and lives at the top of
+ *     this walk, where the same list css-display §3's `contents` flattening will one day be spliced into.
  *   - A FLOAT in the formatting context is §9.5's own placement, and it is not enough to note that §10.6.3
  *     ignores floats: §9.5.2's `clear` on a LATER sibling introduces CLEARANCE, which §8.3.1 makes
  *     non-adjoining, so one float invalidates every collapse below it.
