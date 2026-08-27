@@ -783,6 +783,22 @@ void engine_routed_census(long *delivered, long *refused);
  * On a RESUMED session a take can ROUTE to a flow already waiting for that body without raising `driven`, so
  * the middle row is ambiguous there and the pair must be read on a fresh one.
  *
+ * AND THERE IS A FOURTH STATE THIS PAIR CANNOT REACH, WHICH IS SAID HERE BECAUSE THE OBVIOUS WAYS TO REACH IT
+ * ARE ALL WRONG. The third row above — seeded, finding absent — is one word for two different defects, and
+ * they take opposite fixes: a drive NEVER GIVEN THE THREAD is a pick-order problem (a weight), and one PICKED
+ * AND CUT SHORT before it reached its call is a dwell or preemption-granularity problem. Separating them wants
+ * "was this seeded drive ever switched in", and every field that looks like it answers that is INHERITED BY
+ * FORKS and therefore describes the drive's whole FAMILY rather than the seeded root: `orphan` is copied at
+ * the fork (engine_sibling_assemble), `fn` is passed to the child, and `visits` is a WFQ term that §scheduler
+ * REQUIRES a fork to carry, since a term a fork does not carry is a way for a flow to change its own rank by
+ * branching. So a "was it picked" bit hung on `orphan` flows counts descendants, and a frontier walk over them
+ * counts a family that grew. What the fourth state needs is a marker the seed sets and a fork does NOT copy,
+ * raised once at the scheduler's switch-in, with `picked <= driven` asserted at this accessor — and it needs
+ * the park's half too, or a resumed drive re-counts. That is a real diff on the hottest struct and the pick
+ * path, and its failure mode is a WRONG NUMBER rather than a crash, which is the one outcome this census
+ * exists to prevent. Until it is built, `driven > 0` with the finding absent says DISPLACEMENT and does not
+ * say which kind.
+ *
  * `driven` ALREADY EXISTED AND WAS UNREADABLE. It reached the heap/progress line and nothing else, and
  * §Testing says the renderer deliberately does not tee its stdout, so the number that says whether the
  * headline surface of this tool did anything at all could not be read off a run. Both cross in the result
