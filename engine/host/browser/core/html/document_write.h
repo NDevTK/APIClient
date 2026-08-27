@@ -29,13 +29,26 @@
  *           browser an inline script runs with the insertion point DEFINED (§13.2.6.4.8 'The "text" insertion
  *           mode' sets it around `prepare the script element` and restores it after), which is why a real
  *           `document.write` appends to the document instead of replacing it.
- *       (2) LEXBOR'S TREE CONSTRUCTION BYPASSES THE PER-FLOW DOM DELTA. solver/dom_cow.h is a convention over
- *           the BROWSER components; a live parser inserts through Lexbor's own mutators, which nothing
- *           captures. Every other parse in this engine is out-of-tree and its RESULT is placed through the
- *           chokepoint — a live document parser has no placement step, so its nodes would be shared-baseline
- *           writes belonging to no flow.
- *     (2) is the deeper of the two: (1) is a lifecycle change, (2) is a missing capture primitive, and the
- *     first without the second would make one flow's `document.write` visible to every sibling.
+ *       (2) THE LIVE PARSER'S NODES BELONG TO NO FLOW — which is an OWNERSHIP gap and no longer a CAPTURE one.
+ *           This entry used to read "lexbor's tree construction BYPASSES the per-flow DOM delta … a live
+ *           parser inserts through Lexbor's own mutators, which nothing captures", and called that the deeper
+ *           of the two because "the first without the second would make one flow's `document.write` visible to
+ *           every sibling". That is no longer true and has not been for some time: html_parse_new_parser calls
+ *           dom_cow_install_tree_construction and ASSERTS dom_cow_owns_tree_construction, a document parse
+ *           declares DOM_PARSE_ROOT_SHARED, and §13.2.6's inserts and removals each push the delta entry that
+ *           reverts them. The writes ARE captured and a sibling would see nothing.
+ *           What is still owed is who FREES them. Every other parse here is out-of-tree and its result is
+ *           PLACED through the chokepoint, where dom_cow_take_private makes the flow the owner of what it
+ *           placed; a parser feeding the document's own tree has no placement step, so a discarded flow
+ *           detaches its written nodes and nothing frees them. core/html/html_parse.c states this at the site
+ *           that owes it, together with the other hazard of (1) — lexbor emits the EOF token in `chunk_end`
+ *           and §13.2.6 builds `html`/`head`/`body` from it, so a document left open has a NULL
+ *           `documentElement` until the close, which is what a browser does too and which each reader that
+ *           assumes otherwise has to be changed for.
+ *     THE TWO SITES ARE CROSS-REFERENCED ON PURPOSE. They describe one mechanism from two ends, html_parse.c
+ *     was kept current and this was not, and a reader who arrived here first would have gone off to build a
+ *     capture primitive that already exists — which is the stale-`DFAIL` failure mode in prose, and cost
+ *     nothing only because nobody had taken it yet.
  *
  * WHAT IT DOES HAVE IS THE WHOLE SINK. §8.4.3 steps 1-9 run, and the value that reaches step 9 is announced to
  * the @S detector on the way — so `document.write(location.hash)` opens a search, and a candidate re-run

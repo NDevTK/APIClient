@@ -241,20 +241,38 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            "of value means one of those steps produced something §8.4.3 cannot insert into an input stream");
     if (!html_parse_insertion_point_defined(dom)) {                               /* STEP 9 */
         /* §8.4.3 step 9.1 is the pair of counters that make an undefined insertion point a silent return, and
-           step 9.2 is "run the document open steps with document". NEITHER EXISTS HERE YET, and the reason is
+           step 9.2 is "run the document open steps with document". Neither exists here yet, and the reason is
            ONE mechanism rather than three unrelated gaps — see document_write.h: this engine finishes a
            document's parse before running any of its scripts, so §13.2.7 "The end" has already set the
-           insertion point to undefined for EVERY document by the time a page can call this, and the fix is a
-           live document parser whose tree construction routes through the per-flow DOM delta. Until that
-           exists there is nothing for step 9.2 to open onto: a script-created parser feeding the shared tree
-           would be writes belonging to no flow. */
+           insertion point to undefined for EVERY document by the time a page can call this.
+           WHAT THAT MECHANISM STILL NEEDS IS NOT WHAT THIS BLOCK USED TO SAY. It said the fix was "a live
+           document parser whose tree construction routes through the per-flow DOM delta", and that routing
+           EXISTS: html_parse_new_parser calls dom_cow_install_tree_construction and asserts
+           dom_cow_owns_tree_construction, a document parse declares DOM_PARSE_ROOT_SHARED, and §13.2.6's
+           inserts and removals each push the delta entry that reverts them — so a `document.write` run inside a
+           slice is already isolated per flow exactly like an `appendChild` from script. core/html/html_parse.c
+           states the real remainder at the site that owes it, and it is OWNERSHIP rather than capture: every
+           other parse in this engine is out-of-tree and its result is PLACED through the chokepoint, where
+           dom_cow_take_private makes the flow the owner of what it placed, and a live parser feeding the
+           document's own tree has no placement step — so a discarded flow detaches its written nodes and
+           nothing frees them. The two sites are cross-referenced deliberately: they were describing one
+           mechanism from two ends and only one of them had been kept up to date. */
         DFAIL("§8.4.3 \"document.write()\" step 9 was reached with a CONCRETE string and §13.2.3.5's insertion "
               "point undefined — this document's parse ran to §13.2.7 \"The end\" before its scripts were "
-              "seeded, so there is no input stream to insert into. Build it in this order: (1) route lexbor's "
-              "§13.2.6 tree construction through solver/dom_cow.h's chokepoint, because a live parser's "
-              "inserts are shared-baseline writes no flow's delta captures; (2) open the ACTIVE document's "
-              "parse with html_parse_document_open and close it at §13.2.7's own moment, the lifecycle stage "
-              "that moves the readiness to \"interactive\"; (3) build §8.4.1's document open steps here — they "
+              "seeded, so there is no input stream to insert into. THE §13.2.6 TREE-CONSTRUCTION ROUTING THIS "
+              "CRASH USED TO ASK FOR FIRST ALREADY EXISTS — html_parse_new_parser installs it and asserts "
+              "dom_cow_owns_tree_construction, and a document parse declares DOM_PARSE_ROOT_SHARED, so a live "
+              "parser's inserts ARE captured per flow; core/html/html_parse.c says so at the site that owns "
+              "it. Build it in this order instead: (1) give the live parser's nodes an OWNER — every other "
+              "parse here is out-of-tree and PLACED through the chokepoint, where dom_cow_take_private makes "
+              "the flow the owner, and a parser feeding the document's own tree has no placement step, so a "
+              "discarded flow detaches what it wrote and nothing frees it; (2) open the ACTIVE document's "
+              "parse with html_parse_document_open (it exists, and core/loader/text_document.c already uses "
+              "it) and close it at §13.2.7's own moment, the lifecycle stage that moves the readiness to "
+              "\"interactive\" — whose own hazard html_parse.c names, that lexbor emits the EOF token in "
+              "chunk_end and builds html/head/body from it, so a zero-length response left open has a NULL "
+              "documentElement until the close and each reader assuming otherwise is what must change; "
+              "(3) build §8.4.1's document open steps here — they "
               "need \"erase all event listeners and handlers\", an exported \"replace all\", and the ENTRY "
               "global object's Document for step 4's same-origin check — and with them §8.4.3 step 9.1's "
               "unload and ignore-destructive-writes counters, the second of which §4.12.1 \"execute the "
