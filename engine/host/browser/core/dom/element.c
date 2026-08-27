@@ -2182,6 +2182,18 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                 if (iframe_element_is(n)) {
                     JSValue w = node_wrap(ctx, n);
                     iframe_create_navigable(ctx, w);
+                    /* …AND §4.8.5's NEXT STEP, which is where a srcless frame's `load` comes from. The post-
+                       connection steps are three — parse the sandboxing directive, create a new child
+                       navigable, process the iframe attributes with initialInsertion true — and the third has
+                       a branch no other algorithm reaches: a url that matches about:blank fires the iframe
+                       load event steps HERE and does not navigate. §7.5.8's own note says why it has to be
+                       here rather than at the load's end ("we do not fire an asynchronous load event on the
+                       container element for such cases"), and without it
+                       `document.body.appendChild(document.createElement("iframe"))` never fires `onload` at
+                       all — which is a deadlock and not a delay, because the handler is where a test first
+                       touches `contentWindow` and touching it is what would have materialized the document
+                       the lifecycle walk was waiting to see. */
+                    iframe_process_attributes(ctx, w, /*initialInsertion*/ true);
                     JS_FreeValue(ctx, w);
                 }
                 /* HTML §4.12.1: an inserted `<script>` is PREPARED — and its step 1 is what makes a script the

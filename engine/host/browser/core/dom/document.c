@@ -1697,18 +1697,16 @@ bool document_render_blocked(JSContext *ctx)
  * consults is the mirror of a defaulted read: a field with a producer and no consumer, indistinguishable at a
  * glance from a measurement.
  *
- * §4.8.5's OTHER CALLER OF THE LOAD EVENT STEPS IS DELIBERATELY NOT BUILT, AND THE REASON IS THIS ENGINE'S
- * ORDER RATHER THAN A GAP. "Process the iframe attributes" step 3 fires a SYNCHRONOUS load event when the
- * resolved url matches about:blank and initialInsertion is true, and the standard says in its own note why
- * that special case exists: at the point create-a-new-child-navigable calls completely-finish-loading on the
- * initial about:blank Document, "the container relationship has not yet been established", so step 3 above
- * binds null and steps 4-5 do nothing. In THIS engine §7.3.1.3's create is handed the container element and
- * writes the link as one of its own steps, and the initial about:blank child does not finish loading inside
- * that create at all — it reaches this algorithm later, through document_lifecycle_step, by which time the
- * container is there to be found. So the general path already covers the case the special path was written to
- * rescue, and building both would fire `load` TWICE at one `<iframe>` — the same double-load shape §7.3.1.3's
- * own create carries a paragraph about. What is lost is the TIMING: the standard's fire is synchronous inside
- * the append and this one is a task after the child's own lifecycle completes.
+ * THIS IS THE LOAD EVENT STEPS' CALLER FOR A DOCUMENT A NAVIGATION PRODUCED, AND ONLY FOR ONE. §4.8.5's other
+ * caller — "process the iframe attributes" with initialInsertion true, over a url that matches about:blank —
+ * is built, in core/html/html_iframe.c, and the two do not overlap: the arm inside this function reads the
+ * navigable's §7.4.4 "is initial about:blank" and returns, so a frame gets its `load` from exactly one of
+ * them. A note here used to argue the opposite, that this path COVERED the initial-insertion case and building
+ * that one would fire `load` twice. The premise was that the initial about:blank "reaches this algorithm
+ * later, through document_lifecycle_step" — and it does not, because that walk lists only MATERIALIZED
+ * navigables and nothing materializes a srcless frame until a read reaches through it, which is what the
+ * missing `load` was carrying. The argument was self-sealing rather than wrong-in-detail: the case it claimed
+ * to cover was the one case it could never see.
  *
  * `ctx` IS THE CHILD'S REALM — the document whose loading finished — and the fire must be enqueued in the
  * CONTAINER'S. §7.5.8's "element task" has the element's node document's relevant global for its global, which
@@ -1730,6 +1728,26 @@ static void completely_finish_loading(JSContext *ctx)
     container = window_proxy_container(ctx, proxy);                                          /* step 3 */
     cn = node_of(container);
     if (!cn) { JS_FreeValue(ctx, container); return; }   /* a top-level traversable: step 5's "non-null" fails */
+    /* STEP 3's OTHER ANSWER, WHICH THIS ENGINE HAS TO STATE BECAUSE ITS CONTAINER LINK IS NEVER NULL. §7.5.8
+       "Finishing the loading process" reads the container at step 3 and notes that it "will be null in the case
+       where document is the initial about:blank Document in a frame or iframe, since at the point of browsing
+       context creation which calls this algorithm, the container relationship has not yet been established …
+       The consequence of this is that the following steps do nothing, i.e., we do not fire an asynchronous
+       load event on the container element for such cases. Instead, a synchronous load event is fired in a
+       special initial-insertion case when processing the iframe attributes."
+       §7.3.1.3's create is handed the container element in this engine and writes the link as one of its own
+       steps, so the null the standard relies on never arrives and the SAME FACT has to be asked directly:
+       window_proxy_ever_navigated is §7.4.4's "document's IS INITIAL about:blank" read off the navigable, and
+       false here is exactly the case the note is about. The comment that stood in this block claimed the
+       opposite — that because the container is found early, this general path COVERS the initial-insertion
+       case and building it would fire `load` twice. It does not cover it and could not: navigable_tree_order
+       lists only MATERIALIZED navigables, and a navigable holding its initial about:blank is materialized by
+       the first read that reaches THROUGH it — which for a srcless `<iframe>` is the `contentWindow` a page
+       touches inside the very `onload` this walk was supposed to deliver. That is a DEADLOCK and not a delay,
+       and it is why the claim could stand: the walk's silence and a frame that is merely slow look the same.
+       §4.8.5's branch is built (core/html/html_iframe.c) and this is its other half: it fires
+       once, at the insertion, and this arm is what keeps a later materialization from firing a second one. */
+    if (!window_proxy_ever_navigated(proxy)) { JS_FreeValue(ctx, container); return; }
     /* STEP 4's BRANCH IS THE ONLY ONE THIS ENGINE CAN REACH, and step 5's is an ASSERT rather than three
        written-but-unreachable lines. A content navigable is created for `<iframe>` and for nothing else here
        (html_iframe.c is the only component that creates one from an element), so a container that is not an

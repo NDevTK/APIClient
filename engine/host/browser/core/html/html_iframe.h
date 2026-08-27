@@ -34,12 +34,32 @@ JSValue iframe_navigable(JSContext *ctx, JSValueConst wrapper);
    nothing to wait for — which is what makes `frame.contentWindow` answer on the line after the append. Calling
    it for an element that already has one in this flow is a no-op. */
 void iframe_create_navigable(JSContext *ctx, JSValueConst wrapper);
+/* HTML §4.8.5 "The iframe element" — "PROCESS THE IFRAME ATTRIBUTES for an element element, with an optional
+   boolean initialInsertion (default false)". §4.8.5's HTML ELEMENT POST-CONNECTION STEPS are three, and the
+   third is this one: parse the sandboxing directive, CREATE A NEW CHILD NAVIGABLE (iframe_create_navigable
+   above), then process the iframe attributes with initialInsertion true. The two are one algorithm's adjacent
+   steps and every caller of the first calls this second.
+   WHAT IT IS FOR is the branch no other algorithm can reach: "If url matches about:blank and initialInsertion
+   is true, then run the iframe load event steps given element, and return." §7.5.8 "Finishing the loading
+   process" says in its own note why that branch has to exist — for the INITIAL about:blank Document its
+   container is null at the moment completely-finish-loading runs, "so we do not fire an asynchronous load
+   event on the container element for such cases. Instead, a synchronous load event is fired in a special
+   initial-insertion case when processing the iframe attributes." A srcless `<iframe>` therefore has exactly
+   one `load`, it comes from here, and without this call it has none at all.
+   `initial_insertion` IS ASSERTED TRUE rather than branched on, and the assert names the caller that does not
+   exist: §4.8.5's other caller is the `src` attribute change steps, and core/dom/element.c's
+   element_attr_changed has no `<iframe>` entry — so an `iframe.src` write does not re-navigate in this engine
+   and nothing can reach this with false. */
+void iframe_process_attributes(JSContext *ctx, JSValueConst wrapper, bool initial_insertion);
 /* §4.8.5's removing steps: DESTROY the child navigable. The element loses it (contentWindow goes null) and the
    proxy a page is still holding reports `closed`. A no-op for an element this flow never gave one. */
 void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrapper);
 /* HTML §4.8.5's "RUN THE IFRAME LOAD EVENT STEPS, given an iframe element element" — the algorithm that makes
-   `frame.onload` a thing that happens. Its one caller is §7.5.8's completely-finish-loading, which is §13.2.7
-   "The end" step 9.12 of the CHILD's own document (core/dom/document.c).
+   `frame.onload` a thing that happens. TWO callers, and they are the standard's two, split by which Document
+   the frame is showing: §7.5.8's completely-finish-loading — §13.2.7 "The end" step 9.12 of the CHILD's own
+   document (core/dom/document.c) — for a Document a navigation produced, and iframe_process_attributes above
+   for the INITIAL about:blank, whose container is null when §7.5.8 runs for it. A frame reaches exactly one of
+   them; §7.5.8's arm asks the navigable's §7.4.4 "is initial about:blank" so that it is never both.
    `ctx` IS THE CONTAINER'S REALM AND NOT THE CHILD'S. §7.5.8 queues an ELEMENT task, whose global is the
    element's node document's relevant global — the parent's — and the child's document is the one whose loading
    just finished. Handing the child's realm here would enqueue the parent's listeners onto the child's queue. */

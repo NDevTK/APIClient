@@ -36,6 +36,7 @@
 #include "core/frame/navigable.h"
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_proxy.h"
+#include "core/url/url.h"   /* §4.8.5's shared attribute processing steps ask whether a url MATCHES about:blank */
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"
@@ -123,6 +124,85 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_navigable, proxy, JS_PROP_WRITABLE);
 }
 
+/* HTML §4.8.5 "The iframe element" — the SHARED ATTRIBUTE PROCESSING STEPS FOR IFRAME AND FRAME ELEMENTS,
+ * asked for the ONE thing the branch below needs of their result: does the url they produce MATCH about:blank.
+ *
+ *   1. Let url be the URL record about:blank.
+ *   2. If element has a src attribute specified, and its value is not the empty string: let maybeURL be the
+ *      result of encoding-parsing a URL given that attribute's value, relative to element's node document. If
+ *      maybeURL is not failure, then set url to maybeURL.
+ *
+ * BOTH SPELLINGS OF "NO ADDRESS" ANSWER TRUE AND THEY ARE DIFFERENT FACTS THE READ TELLS APART: an ABSENT
+ * attribute and `src=""` are step 2's two disqualifiers, and element_attr_get answers NULL for the first and
+ * "" for the second. A PARSE FAILURE also answers true, and that is step 2's own wording rather than a
+ * fallback — "if maybeURL is not failure, then set url" leaves url at step 1's about:blank, which is why
+ * `<iframe src="::">` has a navigable holding the initial about:blank and gets this load event.
+ * THE QUERY IS NOT PART OF THE RELATION. URL's "matches about:blank" tests the scheme, the opaque path, the
+ * username, the password and a null host and says nothing about the query — which is precisely why the shared
+ * steps carry a further step for `about:blank?foo` (perform the URL and history update steps), and that step
+ * belongs to the SRC path this engine does not have yet; see the assert in iframe_process_attributes.
+ *
+ * THE BASE IS "element's NODE DOCUMENT"'s, which is the realm the caller is standing in: core/dom/element.c's
+ * tree-steps drain re-points `ctx` at document_realm_of(n) before running §4.2.3's steps, exactly so that a
+ * `frame.contentDocument.body.appendChild(subframe)` resolves the subframe's `src` against the document it was
+ * inserted into and not the one that performed the write.
+ *
+ * STEP 3, THE SELF-NESTING GUARD, IS NOT HERE AND ITS ABSENCE IS NOT A HOLE IN THIS BRANCH: it returns null so
+ * that the OTHERWISE branch does not navigate, and a url that matches about:blank is never the url of an
+ * ancestor navigable's active document in the first place. It belongs with the navigate it guards, which
+ * §7.3.1.3's create already performed by the time this runs (see iframe_process_attributes). */
+static bool iframe_src_matches_about_blank(JSContext *ctx, JSValueConst wrap)
+{
+    char *src = element_attr_get(ctx, wrap, "src");
+    UrlRecord base, rec;
+    const char *base_url;
+    bool have_base, matches;
+
+    if (!src || !*src) { free(src); return true; }                                            /* STEP 1 */
+    base_url = document_base_url(ctx);
+    url_record_init(&base);
+    have_base = base_url && *base_url && url_parse(&base, base_url, strlen(base_url), NULL);
+    url_record_init(&rec);
+    matches = url_parse(&rec, src, strlen(src), have_base ? &base : NULL)                     /* STEP 2 */
+              ? url_matches_about(&rec, "blank", /*query_must_be_null*/ false)
+              : true;
+    url_record_free(&rec);
+    url_record_free(&base);
+    free(src);
+    return matches;
+}
+
+/* HTML §4.8.5's PROCESS THE IFRAME ATTRIBUTES — see html_iframe.h for why this exists and what depends on it.
+ *
+ * THE OTHERWISE BRANCH'S NAVIGATE ALREADY RAN, AND THAT IS A FACT ABOUT THIS ENGINE'S STRUCTURE RATHER THAN A
+ * STEP SKIPPED HERE. The standard splits §4.8.5's post-connection steps in two — step 2 CREATES the navigable
+ * holding the initial about:blank and step 3 NAVIGATES it — while navigable_create does both at once (its own
+ * `if (strncmp(addr, "about:", 6) != 0)` is where §4.8.5's navigate is enqueued from). So the only branch of
+ * this algorithm left to run at this seam is the about:blank one, and calling the navigate here as well would
+ * be the DOUBLE LOAD navigable_create carries a paragraph about. Undoing the fold is what gives the shared
+ * steps' step 3 and an `iframe.src` write somewhere to act; until then it is one algorithm reached through
+ * two functions, and this is the half the other one cannot reach. */
+void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_insertion)
+{
+    DCHECK(initial_insertion,
+           "§4.8.5's process the iframe attributes was asked with initialInsertion FALSE, and the only caller "
+           "that passes false is the `src` ATTRIBUTE CHANGE STEPS — core/dom/element.c's element_attr_changed "
+           "has no `<iframe>` entry, so writing `frame.src` on a connected frame re-navigates nothing in this "
+           "engine. Build that entry (it runs these steps with initialInsertion false, which reaches §4.8.5's "
+           "navigate an iframe or frame), and this assert is what tells you this branch is then reachable");
+    /* §4.8.5's own step 1 for the load event steps below is "Assert: element's content navigable is not null",
+       and this algorithm is reached only from the post-connection steps that created it one line earlier — so
+       an element without one here means those two steps have come apart. */
+    DCHECK(iframe_has_navigable(ctx, wrap),
+           "§4.8.5's process the iframe attributes ran for an `<iframe>` with no content navigable in this "
+           "flow — the post-connection steps create it in the step directly before this one, so the two halves "
+           "of that pair are being called separately");
+    /* "If url matches about:blank and initialInsertion is true: Run the iframe load event steps given
+       element. Return." The RETURN is the rest of this function. */
+    if (!iframe_src_matches_about_blank(ctx, wrap)) return;
+    iframe_run_load_event_steps(ctx, wrap);
+}
+
 /* §4.8.5's REMOVING STEPS: an <iframe> that leaves a document runs §7.3.1's DESTROY A CHILD NAVIGABLE over the
    navigable it contained. The container's half is SYNCHRONOUS and the document's half is a JOB, which is the
    spec's own split and is why this used to be wrong: the element loses its navigable on this line (step 3, so
@@ -169,19 +249,30 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
  * the same diff or neither. Until then step 3 cannot be reached with a set flag by any program, so its absence
  * changes no answer; what would change an answer is a `false` invented for it here.
  *
- * IT IS A QUEUED FIRE, WHICH IS §7.5.8's OWN WORD. Its caller queues an ELEMENT TASK on the DOM manipulation
- * task source, so the dispatch belongs to the event loop and not to the line that finished the load —
- * event_target_fire is that enqueue, and the listener body is then an ordinary call-root flow, preemptible and
- * parkable like every other program, which a C activation could not host.
+ * IT IS A QUEUED FIRE, WHICH IS §7.5.8's OWN WORD AND IS NOT §4.8.5's. §7.5.8 queues an ELEMENT TASK on the
+ * DOM manipulation task source, so for a Document a navigation produced the dispatch belongs to the event loop
+ * and not to the line that finished the load — event_target_fire is that enqueue, and the listener body is
+ * then an ordinary call-root flow, preemptible and parkable like every other program, which a C activation
+ * could not host. §4.8.5's initial-insertion caller reaches the same enqueue, and WHETHER THAT IS RIGHT IS A
+ * QUESTION THE STANDARD AND THE CORPUS ANSWER DIFFERENTLY, so it is recorded rather than decided here: §7.5.8's
+ * note calls this fire "a SYNCHRONOUS load event", while html/browsers/the-window-object/
+ * window-reuse-in-nested-browsing-contexts.tentative.html asserts in its own comment that "the task to perform
+ * the iframe load event steps should still be QUEUED" and FAILS a browser that has already fired by the next
+ * line — and that file says of itself that it is outdated. The two differ in exactly one program, a listener
+ * registered on the line AFTER the append, and the way to settle it is to run that file rather than to pick a
+ * sentence. If it turns out to be the note, the cost is the flow base: a synchronous dispatch from inside the
+ * tree-steps drain would run a page's listener under a C activation, which is the one thing this seam may not
+ * do, so the drain itself would have to deliver it at the node before it yields.
  *
  * `load` AT AN ELEMENT DOES NOT BUBBLE. DOM's "fire an event named e at target" with no initialisation is
  * bubbles false and cancelable false, and this is the one `load` in the engine that is not the Window's — the
  * Window's is §13.2.7 step 9.5 and carries a legacy target override this one has no business with. */
 void iframe_run_load_event_steps(JSContext *ctx, JSValueConst wrap)
 {
-    /* STEP 1, and it is an assert in the standard's own word. The caller is §7.5.8, which reached this element
-       by asking a NAVIGABLE for its container — so an element that answers as a container while holding no
-       content navigable means the two halves of §7.3.1.3's relation disagree, which is the one state
+    /* STEP 1, and it is an assert in the standard's own word. Either caller reached this element through a
+       relation that names the navigable: §7.5.8 asked a NAVIGABLE for its container, and §4.8.5's process the
+       iframe attributes ran one step after the create. So an element that answers as a container while holding
+       no content navigable means the two halves of §7.3.1.3's relation disagree, which is the one state
        window_proxy_container's read-the-forward-slot-back construction exists to make impossible. */
     DCHECK(iframe_has_navigable(ctx, wrap),
            "§4.8.5's iframe load event steps step 1 asserts the element's content navigable is not null, and "
@@ -205,6 +296,13 @@ void iframe_document_parsed(JSContext *ctx)
         if (iframe_element_is(n)) {
             JSValue w = node_wrap(ctx, n);
             iframe_create_navigable(ctx, w);
+            /* §4.8.5's POST-CONNECTION STEP 3, which belongs to every entry that runs step 2 and not only to
+               the chokepoint's. A `<iframe>` the PARSER inserted is one a browser ran the whole of these steps
+               for during tree construction, so a page whose markup carries a srcless frame has already had its
+               `load` by the time its first script runs — asking this question at one of the two entries and
+               not the other is one capability wearing two names, and the entry that skipped it would report a
+               frame that never loads while the other reports one that does. */
+            iframe_process_attributes(ctx, w, /*initialInsertion*/ true);
             JS_FreeValue(ctx, w);
         }
         if (n->first_child) { n = n->first_child; continue; }
