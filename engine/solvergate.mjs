@@ -741,6 +741,15 @@ function runChild(doc, sched) {
 
 console.log("\n==================== solver gate (schedule invariance) ====================");
 let bad = 0;
+/* WHAT THE RUN-TO-RUN CHECK ACTUALLY ANSWERED, PER DOCUMENT — and it is a tally rather than a total because a
+   total is the one thing it must not be. `7 documents x 5 schedules + 1 repeat` is a statement about what this
+   driver INTENDED, and on the first corpus run of this check it was false of the run that printed it: one
+   document's reference aborted, so its repeat never happened, and the tail still read as though seven had been
+   asked. That is this file's own three-states-behind-one-answer defect committed by its own reporter — an
+   absent verdict is invisible next to a column of `held`, which is precisely the shape "a rung whose ABSENCE
+   and whose ZERO read alike" names. The four states are counted where each is decided and printed by name. */
+const detTally = { "held": 0, "NONDETERMINISTIC": 0, "NOT-MEASURED": 0,
+                   "not reached (the reference itself produced no result)": 0 };
 for (const doc of docs) {
   const runs = new Map();
   let broke = false;
@@ -775,6 +784,12 @@ for (const doc of docs) {
   const ref = runs.get(REFERENCE);
   if (!ref) {
     if (!broke) { bad++; console.log(`  FAILED ${doc} — the reference schedule \`${REFERENCE}\` produced no result`); }
+    /* AND THE REPEAT BELOW IS NOT REACHED, WHICH IS A FOURTH STATE AND HAS TO BE COUNTED AS ONE. A document
+       whose reference aborted has no run for a second one to be compared against, so it gets no `det` column
+       at all — and an absent column is exactly as invisible as the zero this file argues about everywhere
+       else. Counted here so the tail can say `6 held, 1 not reached` instead of a total that implies seven
+       documents were asked a question only six of them were. */
+    detTally["not reached (the reference itself produced no result)"]++;
     continue;
   }
   /* ─── THE REFERENCE, ASKED A SECOND TIME ──────────────────────────────────────────────────────────────────
@@ -830,6 +845,7 @@ for (const doc of docs) {
                     "still emitted the same set, which is the invariant tested against the thing that moves it.");
     }
   }
+  detTally[det]++;
   let doc_bad = 0;
   for (const [sched, result] of runs) {
     if (sched === REFERENCE) continue;
@@ -882,8 +898,12 @@ for (const doc of docs) {
      different questions), always visible. */
   for (const e of ref.pageErrors) console.log(`         page error: ${e.slice(0, 160)}`);
 }
-console.log(`  ---- ${docs.length} document(s) x ${SCHEDULES.length} schedules + 1 repeat of \`${REFERENCE}\` ` +
-            "(the run-to-run check: SAME document, SAME schedule, twice — see the block beside REFERENCE)");
+console.log(`  ---- ${docs.length} document(s) x ${SCHEDULES.length} schedules`);
+/* THE RUN-TO-RUN LINE IS THE TALLY AND NOT THE INTENTION — see detTally. A `held` here is the invariant not
+   falsified by a second sample; it is never the invariant established, because no number of samples does that.
+   The switch counts on each row are what say whether a sample discriminated at all. */
+console.log("  ---- run-to-run repeat of `" + REFERENCE + "` (SAME document, SAME schedule, twice): " +
+            Object.entries(detTally).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`).join(", "));
 /* THE REVISION IN THE TAIL, because the tail is what gets pasted — see engine/gate_revision.mjs. */
 for (const l of revisionLines(REV_AT_START)) console.log(l);
 {
