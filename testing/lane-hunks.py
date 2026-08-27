@@ -17,6 +17,19 @@ hunks you recognise, and the ones you do not recognise are exactly the ones that
         sibling lane's in-flight ABI change was found before it could be swept into someone else's commit.
         Exit 0 = the tree is consistent for this TU.  Exit 3 = it is not, and the error names the symbol.
 
+    atrev <file>:<line> [rev ...]
+        Print that source line at each revision named (default `origin/main`), because A CRASH'S file:line
+        ONLY MEANS SOMETHING AT THE REVISION THAT COMPILED.  `JS_ToCString` and its siblings are macros that
+        capture __FILE__/__LINE__ at the call site, so a `@WHY` naming `url.c:1878` is naming one exact line
+        -- and if the artifact was built from a tree that was dirty, or from an older checkout than its head
+        claim suggests, that line is a DIFFERENT statement than the one at head.  Measured: a rung reported
+        "the coercion is back" against an artifact whose head claim contained the fix, and `url.c:1878` was
+        `bs = JS_ToCStringLen(ctx, &bs_len, argv[1])` at the revision BEFORE the fix and an ordinary function
+        call at every revision after it.  The crash was real and it was the OLD code; the artifact did not
+        contain what its head claim said it did.  Reading a crash against head instead of against the built
+        revision is the stale-DFAIL failure mode with the roles reversed -- the text is accurate about a tree,
+        just not the one that ran.
+
     split <file> --mine <marker> [--mine ...] --theirs <marker> [--theirs ...]
         Write, to stdout, a patch of only the hunks of `git diff origin/main -- <file>` that carry one of
         your markers.  A marker is any substring that appears in your hunks and cannot appear in theirs -- a
@@ -82,6 +95,33 @@ def cmd_stale(args):
     return 0
 
 
+def cmd_atrev(args):
+    """One source line, at each revision named -- see the module docstring for why this is the question."""
+    where = args.target.rsplit(":", 1)
+    if len(where) != 2 or not where[1].isdigit():
+        print("lane-hunks: atrev wants <file>:<line>, not " + args.target, file=sys.stderr)
+        return 2
+    path, line = where[0], int(where[1])
+    revs = args.revs or [BASE]
+    seen = {}
+    for rev in revs:
+        r = run(["git", "show", f"{rev}:{path}"])
+        if r.returncode:
+            print(f"  {rev:<14} (not in this revision)")
+            continue
+        lines = r.stdout.split("\n")
+        text = lines[line - 1].rstrip() if 0 < line <= len(lines) else "(past end of file)"
+        seen.setdefault(text, []).append(rev)
+        print(f"  {rev:<14} {text[:120]}")
+    # THE COMPARISON IS THE POINT, so it is stated rather than left for the reader to eyeball two long lines.
+    if len(revs) > 1:
+        print(("lane-hunks: the line is THE SAME at every revision named"
+               if len(seen) == 1 else
+               f"lane-hunks: the line DIFFERS across the revisions named ({len(seen)} distinct) -- a crash at "
+               "this address means a different statement depending on which one compiled"), file=sys.stderr)
+    return 0
+
+
 def hunks_of(file):
     """The diff's header lines, then one list per hunk."""
     d = run(["git", "diff", BASE, "--", file]).stdout.split("\n")
@@ -137,6 +177,11 @@ def main():
     # REMAINDER, so a caller's own `-I` reaches gcc instead of being read as one of this tool's options.
     s.add_argument("ccflags", nargs=argparse.REMAINDER, default=[])
     s.set_defaults(fn=cmd_stale)
+
+    s = sub.add_parser("atrev", help="print one source line at each revision named")
+    s.add_argument("target", help="<file>:<line>, as a @WHY spells it")
+    s.add_argument("revs", nargs="*", help="revisions to resolve it at (default origin/main)")
+    s.set_defaults(fn=cmd_atrev)
 
     s = sub.add_parser("split", help="emit only your hunks; refuse rather than guess")
     s.add_argument("file")

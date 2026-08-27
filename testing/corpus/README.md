@@ -48,9 +48,16 @@ provably load an artifact no other lane can rebuild under you mid-pass.
 `control/` is the INSTRUMENT CONTROL and is not a corpus site. It is THREE documents, one question each, and
 a census wants all three rows:
 
-    node site.mjs control     http://127.0.0.1:8899/                  <pass>   # the endpoint column
-    node site.mjs control-sec http://127.0.0.1:8899/security.html     <pass>   # the @S column
-    node site.mjs control-url http://127.0.0.1:8899/url-operands.html <pass>   # rungs that fail by aborting
+    node site.mjs control     http://127.0.0.1:8899/ <pass>   # the endpoint column
+    node site.mjs control-sec http://127.0.0.1:8900/ <pass>   # the @S column
+    node site.mjs control-url http://127.0.0.1:8901/ <pass>   # rungs that fail by aborting
+
+THREE PORTS AND NOT THREE PATHS, because `site.mjs` isolates a row by ORIGIN: it selects the row's runs and
+documents with `d.url.startsWith(origin)`, so three documents on one origin make every row the UNION of
+whatever the engine reached there during the dwell. Measured: all three rows came back with an IDENTICAL
+six-endpoint list and `docsSeenMine 5`, and only the one whose own rungs produce those six was measuring
+itself. `PORT` sets the base and the other two follow it, so a lane takes a private set the same way it takes
+a private `LANE` and `HARNESS_PORT`.
 
 `index.html` holds `fetch` calls the engine certainly sees — one inline, one in a subresource, one behind an
 absent-state flag, one in a function nobody calls, one built from a config value. `security.html` holds

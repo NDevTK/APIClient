@@ -9,7 +9,7 @@
 // sites, so that zero had no control behind it; each document below says what its rungs prove and which
 // counter carries each one.
 //
-// THREE DOCUMENTS, ONE QUESTION EACH, AND BOTH SPLITS ARE MEASURED RATHER THAN TIDY:
+// THREE DOCUMENTS, ONE QUESTION EACH, AND EVERY SPLIT HERE IS MEASURED RATHER THAN TIDY:
 //
 //   - AN ABORT BLINDS EVERY COLUMN OF THE DOCUMENT IT HAPPENS IN. site.mjs reads the engine's result
 //     document, so a run that produced none reports `endpoints: null, sinks: null, sinkReached: null`. A
@@ -26,21 +26,58 @@
 //     security rungs alone report 0 endpoints and sinks 2 / sinkReached 5 / sinkTainted 2. So the split costs
 //     the security column nothing and is the whole of the endpoint column's stability.
 //
-// Three rows, and a census wants all three:
-//     node site.mjs control     http://127.0.0.1:8899/                  <pass>
-//     node site.mjs control-sec http://127.0.0.1:8899/security.html     <pass>
-//     node site.mjs control-url http://127.0.0.1:8899/url-operands.html <pass>
+//   - AND A ROW IS ISOLATED BY ORIGIN, NOT BY PATH, WHICH IS WHY THIS BINDS THREE PORTS AND NOT ONE. That was
+//     the half the document split did not fix and it was measured the same way: `site.mjs` selects the runs
+//     and documents that are the row's by `d.url.startsWith(origin)`, so three documents on ONE origin make
+//     every row the UNION of whatever the engine reached on that origin during the dwell. All three rows came
+//     back with an IDENTICAL six-endpoint list and `docsSeenMine 5`, and only the one whose own rungs produce
+//     those six was measuring itself; the other two were reporting their neighbour's endpoints as their own.
+//     A split into paths looks like isolation and is not, because nothing downstream is keyed by path.
+//     Three ports, three origins, three rows — and the base port is a PARAMETER so a lane can take a private
+//     one, which the shared 8899 already needed: two lanes ran the control at once and one lost its pass to
+//     EADDRINUSE.
+//
+// Three rows, and a census wants all three (PORT sets the base; the other two follow it):
+//     node site.mjs control     http://127.0.0.1:8899/ <pass>
+//     node site.mjs control-sec http://127.0.0.1:8900/ <pass>
+//     node site.mjs control-url http://127.0.0.1:8901/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
 const D = dirname(fileURLToPath(import.meta.url));
-createServer((req, res) => {
-  const p = new URL(req.url, 'http://x').pathname;
-  if (p.startsWith('/api/')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"ok":true}'); }
-  const f = p === '/' ? join(D, 'index.html') : join(D, p.replace(/^\//, ''));
-  if (!existsSync(f)) { res.writeHead(404); return res.end('no'); }
-  res.writeHead(200, { 'content-type': f.endsWith('.js') ? 'application/javascript' : 'text/html; charset=utf-8' });
-  res.end(readFileSync(f));
-}).listen(8899, '127.0.0.1');
-console.log('control on 8899');
+const BASE = Number(process.env.PORT || 8899);
+
+/* ONE DOCUMENT PER ORIGIN, and `/` is the only path that serves it. A document reachable at a SECOND origin's
+   root would put it back in that row's union, which is the whole defect this replaces — so each server
+   answers its own document and 404s every other one. `/ext.js` and `/api/*` are per-origin too: a
+   subresource fetched cross-origin is a different request with a different principal, and the endpoint half
+   is measuring what the engine learns from a SAME-origin subresource. */
+const DOCS = [
+  ['index.html', 'control'],
+  ['security.html', 'control-sec'],
+  ['url-operands.html', 'control-url'],
+];
+
+let bound = 0;
+DOCS.forEach(([doc, name], i) => {
+  const port = BASE + i;
+  createServer((req, res) => {
+    const p = new URL(req.url, 'http://x').pathname;
+    if (p.startsWith('/api/')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end('{"ok":true}');
+    }
+    const f = p === '/' ? join(D, doc) : p === '/ext.js' ? join(D, 'ext.js') : null;
+    if (!f || !existsSync(f)) { res.writeHead(404); return res.end(''); }
+    res.writeHead(200, { 'content-type': f.endsWith('.js') ? 'application/javascript' : 'text/html; charset=utf-8' });
+    res.end(readFileSync(f));
+  }).listen(port, '127.0.0.1', () => {
+    /* PRINTED PER ORIGIN AND ONLY AFTER A SUCCESSFUL LISTEN, because run.sh's own rule is that this line is
+       the proof the server is THIS run's — and with three of them, a driver that checked only the first
+       would drive two rows against ports it never confirmed. The last line is the one to wait for. */
+    console.log(`${name} on ${port}  (${doc})`);
+    if (++bound === DOCS.length) console.log(`control ready on ${BASE}-${BASE + DOCS.length - 1}`);
+  });
+});

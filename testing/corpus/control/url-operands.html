@@ -21,6 +21,18 @@
   //   no number for that state — the row is `crashed` — so the READING is the endpoint below existing at
   //   all, and its path carries whatever `u.pathname` answered.
   //
+  // AND THERE IS A FOURTH POSSIBILITY UNDER ALL THREE STATES, WHICH THIS RUNG DID NOT CARRY AND SHOULD HAVE:
+  // THE ARTIFACT MAY NOT CONTAIN THE CHANGE UNDER TEST. The three readings below are readings of an ENGINE,
+  // and a rung cannot tell an engine that regressed from one that never had the fix. Measured the first time
+  // this rung ran: it reported state one — crashed, with a `@WHY` naming a byte consumer at an exact
+  // `url.c:<line>` — against an artifact whose head claim contained the fix, and the crash was the OLD code.
+  // A `JS_ToCString` is a macro capturing __FILE__/__LINE__ at the call site, so that address names one exact
+  // statement AT THE REVISION THAT COMPILED, and it was a different statement at head. Resolve it there
+  // before reading a state: `python3 testing/lane-hunks.py atrev <file>:<line> <built-rev> origin/main` prints
+  // the line at each and says whether they differ. A crash read against head instead of against the built
+  // revision is the stale-DFAIL failure mode with the roles reversed — the text is accurate about a tree,
+  // just not the one that ran.
+  //
   //   RUNG 2 — `URL.canParse(rel, unknownBase)`, which is how a bundle spells a validity gate. Two failures
   //   sat behind it and only the first was loud. The coercion aborted; and with the abort gone, the example
   //   parse still DROPPED an unknown base, so 4.4 failed on a relative input with a null base and the answer
