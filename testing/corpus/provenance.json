@@ -1,0 +1,169 @@
+[
+ {
+  "id": "gitlab",
+  "stack": "PASSES 1-4 AND IS THE FLAGSHIP FOR 2 — the logged-out document names four chunks whose FILENAMES are the admin console's (commons-pages.admin.deploy_keys.index-pages.admin.groups.index-pages.admin.projects.index-<hash>.chunk.js and three more), so the anonymous visitor is served the admin code literally. /api/v4/projects?per_page=2 returns 200 application/json 2027B anonymously while /api/v4/user and /api/v4/admin/ci/variables both return 401 application/json — 1 and 2 inside one API. A real app document (<title>Explore projects · GitLab</title>, data-page=\"explore:projects:index\") carrying server-injected gon.saas_features / gon.dedicated_features, which is §Attacker-sources' absent-state fork by name. STACK: webpack (/assets/webpack/runtime.<hash>.bundle.js + main.<hash>.chunk.js, 3.3MB, text/javascript)",
+  "requestedUrl": "https://gitlab.com/explore",
+  "finalUrl": "https://gitlab.com/explore",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "bytes": 25028,
+  "sha256": "bc283a32bf239e1c7f341619c5bbb4a5b8d17469e7050ca270f44a8db8b39d23",
+  "fetchedAt": "2026-08-27T11:05:00.394Z",
+  "resources": [
+   {
+    "url": "https://gitlab.com/assets/webpack/runtime.9e32ec91.bundle.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 36166,
+    "sha256": "9c28e069a80a5ba56719879c47ca5f4427a637aeba9fbdf8cada23288fecfdbe",
+    "fetchedAt": "2026-08-27T11:05:00.773Z",
+    "path": "gitlab.com/assets/webpack/runtime.9e32ec91.bundle.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/main.767e02c2.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3349034,
+    "sha256": "b33156b1d3710ee6c3266ec6436a581cddfad687e3c8c29db880e13b0d8548eb",
+    "fetchedAt": "2026-08-27T11:05:01.059Z",
+    "path": "gitlab.com/assets/webpack/main.767e02c2.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/tracker.eea7cc16.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 72671,
+    "sha256": "9f24cca40146b052ab0c7aadd88be7f21898934299d5229001444602c07c9831",
+    "fetchedAt": "2026-08-27T11:05:01.234Z",
+    "path": "gitlab.com/assets/webpack/tracker.eea7cc16.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/sentry.9170b563.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 730479,
+    "sha256": "be76af70c8aa1910041788129130f34943ba314927638938678cb8e8232b916b",
+    "fetchedAt": "2026-08-27T11:05:01.485Z",
+    "path": "gitlab.com/assets/webpack/sentry.9170b563.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/commons-pages.admin.deploy_keys.index-pages.admin.groups.index-pages.admin.projects.index-pages.admi-81888dbb.a15b3e72.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2091,
+    "sha256": "d320cdcf38496a371b867b117f269ef7e8a448fcbe9e08baa0b4a265cdf7fdcf",
+    "fetchedAt": "2026-08-27T11:05:01.638Z",
+    "path": "gitlab.com/assets/webpack/commons-pages.admin.deploy_keys.index-pages.admin.groups.index-pages.admin.projects.index-pages.admi-81888dbb.a15b3e72.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/commons-pages.dashboard.home-pages.organizations.artifact_registry.index-pages.organizations.artifac-0ec6a7be.60fec4aa.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2790,
+    "sha256": "b51979d74443072bf33aa49fd1e01d52c24e90806852cc673ad7419cf0650215",
+    "fetchedAt": "2026-08-27T11:05:01.807Z",
+    "path": "gitlab.com/assets/webpack/commons-pages.dashboard.home-pages.organizations.artifact_registry.index-pages.organizations.artifac-0ec6a7be.60fec4aa.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/0dcf7166.63feabc4.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 676,
+    "sha256": "3f7f697bfeec3707754c12c19915e39eaf409569307faa030fa39690e83073db",
+    "fetchedAt": "2026-08-27T11:05:01.998Z",
+    "path": "gitlab.com/assets/webpack/0dcf7166.63feabc4.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/commons-pages.dashboard.home-super_sidebar.8bfd0fec.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5239,
+    "sha256": "c8eabbabd66003529353e57394c491ae2ad93aa10826d964820981e080aead3c",
+    "fetchedAt": "2026-08-27T11:05:02.159Z",
+    "path": "gitlab.com/assets/webpack/commons-pages.dashboard.home-super_sidebar.8bfd0fec.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/super_sidebar.fe7acb92.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 245722,
+    "sha256": "d54b5fbc5c84d55666292bff4df3ea7be62aad730105a62752fb2309372c006f",
+    "fetchedAt": "2026-08-27T11:05:02.358Z",
+    "path": "gitlab.com/assets/webpack/super_sidebar.fe7acb92.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/8632254b.a6157aae.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 10172,
+    "sha256": "15b81a5e878a2d7806d4b8e94962e1e7828603ef2dafe1371e626d0b1dc23cb6",
+    "fetchedAt": "2026-08-27T11:05:02.641Z",
+    "path": "gitlab.com/assets/webpack/8632254b.a6157aae.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/97619091.08b9f708.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2523,
+    "sha256": "7c59df6f5b2cee93be1a9368c1c17332c0c4908d4fb9e6fa37ee1f5b7e2c9dc4",
+    "fetchedAt": "2026-08-27T11:05:02.804Z",
+    "path": "gitlab.com/assets/webpack/97619091.08b9f708.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/ed0254de.46796d56.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 20326,
+    "sha256": "313d54ebe0aba5f567f82cfaa686ca17879b69830280222705120e0341356cc1",
+    "fetchedAt": "2026-08-27T11:05:02.959Z",
+    "path": "gitlab.com/assets/webpack/ed0254de.46796d56.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/commons-pages.admin.groups.index-pages.admin.projects.index-pages.dashboard.groups.index-pages.dashb-5d8e349a.2f5e48bb.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 48538,
+    "sha256": "1a662db8676c39b7875793a15ab69116a04889db6d257da09adab4f222c102b9",
+    "fetchedAt": "2026-08-27T11:05:03.116Z",
+    "path": "gitlab.com/assets/webpack/commons-pages.admin.groups.index-pages.admin.projects.index-pages.dashboard.groups.index-pages.dashb-5d8e349a.2f5e48bb.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/a34be58c.15456d43.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 6937,
+    "sha256": "a147ec06f7ae04f7158c96b080905342191fd63d839f526f9cb38c3c461dbe4e",
+    "fetchedAt": "2026-08-27T11:05:03.603Z",
+    "path": "gitlab.com/assets/webpack/a34be58c.15456d43.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/commons-pages.admin.projects.index-pages.dashboard.projects-pages.explore.projects-pages.groups.show-a1c4592e.96cdd140.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 19492,
+    "sha256": "2ad849fcb74f4e6fa3e726a14e69c11992e347044c807c9801150f16a5b6ac5f",
+    "fetchedAt": "2026-08-27T11:05:03.757Z",
+    "path": "gitlab.com/assets/webpack/commons-pages.admin.projects.index-pages.dashboard.projects-pages.explore.projects-pages.groups.show-a1c4592e.96cdd140.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/commons-pages.admin.projects.index-pages.dashboard.projects-pages.explore.projects-pages.groups.show-b40b422c.711618ed.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 34297,
+    "sha256": "560cce7c753efa79452a2adc20e1e4a2fc0e77f07a8f3b8dcad4ae686addf50a",
+    "fetchedAt": "2026-08-27T11:05:03.940Z",
+    "path": "gitlab.com/assets/webpack/commons-pages.admin.projects.index-pages.dashboard.projects-pages.explore.projects-pages.groups.show-b40b422c.711618ed.chunk.js"
+   },
+   {
+    "url": "https://gitlab.com/assets/webpack/pages.explore.projects.3a906a51.chunk.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 9506,
+    "sha256": "ebf5a0222c697b9f2aa4b9504c8bcc42ff2fd3d3c7e11bcda9af2e1306287dae",
+    "fetchedAt": "2026-08-27T11:05:04.088Z",
+    "path": "gitlab.com/assets/webpack/pages.explore.projects.3a906a51.chunk.js"
+   }
+  ],
+  "baseUrl": "https://gitlab.com/explore"
+ }
+]
