@@ -33,58 +33,53 @@ static bool is_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* css-sizing-3 §2.2 "Intrinsic Contributions"' OUTER SIZE, for the one box type this walk descends into. The
+/* css-sizing-3 §2.2 "Intrinsic Contributions"' OUTER SIZE at ONE SIDE of an inline box, in CSS pixels. The
    section states both contributions as "based on the OUTER SIZE of the box; for this purpose auto margins are
    treated as zero" — so an inline box's own horizontal margins, borders and padding are part of what it
    contributes, and css-text-3 §5.5 "Line Breaking Details" is what says WHERE: "inline box boundaries do not
    introduce a forced line break or soft wrap opportunity in the flow", so those edges sit at the box's two
-   boundaries and NOT at every break inside it. A box whose text spans three lines puts its left edge on the
-   first and its right edge on the third, and adding either to the whole sum would report a min-content size no
-   line of the run ever has.
-   THAT PLACEMENT IS THE CAPABILITY THIS FILE DOES NOT HAVE, so a non-zero edge CRASHES here rather than being
-   summed anywhere. The accumulator holds CHARACTERS — core/layout/text_run.h's `TextRunChar` is a code point,
-   its inline box, and two booleans — and [UAX14] runs over exactly those code points, so there is no way to
-   put a WIDTH into the run at a position without either inventing a character (which changes the breaking, and
-   §5.5 says a box boundary must not) or letting the character indices and the break-action indices come apart.
+   boundaries and NOT at every break inside it. A box whose text spans three lines puts its opening edge on the
+   first line and its closing edge on the third, which is why this is summed per SIDE and handed to the run as
+   an item at a position rather than added to any total.
    `auto` IS ZERO BY THE SPEC'S OWN SENTENCE and not by this file's convenience — §2.2's "for this purpose auto
    margins are treated as zero", which CSS 2.2 §10.3.1 "Inline, non-replaced elements" states again for the used
    value ("a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'").
-   A PERCENTAGE IS NOT RESOLVED HERE, DELIBERATELY, and that is a cycle rather than a gap in the model: an
+   A PERCENTAGE IS NOT RESOLVED HERE AND CRASHES, and that is a CYCLE rather than a gap in the model: an
    intrinsic size is what CSS 2.2 §10.3.5's shrink-to-fit consumes to DECIDE the containing block width, and a
-   percentage margin resolves against that same width — so resolving one here would ask for the answer this
-   walk is being run to produce. It leaves through the same crash. */
-static void is_require_zero_inline_edges(lxb_dom_element_t *el)
+   percentage margin or padding resolves against that same width — so resolving one here would ask for the
+   answer this walk is being run to produce. css-sizing-3 has its own resolution for that cycle and this engine
+   has not built it, so the crash names it rather than substituting a zero, which would silently under-report
+   the contribution of every percentage-padded inline box. */
+static CssPx is_inline_edge_px(lxb_dom_element_t *el, bool trailing)
 {
-    static const char *const EDGE[] = {
-        "margin-left", "margin-right", "padding-left", "padding-right",
-        "border-left-width", "border-right-width",
+    const char *const NAME[2][3] = {
+        { "margin-left",  "padding-left",  "border-left-width"  },
+        { "margin-right", "padding-right", "border-right-width" },
     };
+    CssPx sum = css_px(0.0);
     unsigned i;
 
-    for (i = 0; i < sizeof(EDGE) / sizeof(EDGE[0]); i++) {
-        CssLength len = css_computed_length(el, EDGE[i]);
+    for (i = 0; i < 3; i++) {
+        CssLength len = css_computed_length(el, NAME[trailing ? 1 : 0][i]);
 
+        /* §2.2's auto-margin sentence. `auto` is the only keyword any of the six can compute to: a padding and
+           a border width have no keyword in their `Value:` lines at all, so a keyword that is not `auto` is a
+           cascade that produced a value the property does not have and leaves through the crash below. */
         if (len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0) continue;
-        if (len.kind == CSS_LENGTH_ABSOLUTE && len.px.px == 0.0) continue;
-        DFAIL("css-sizing-3 §2.2 \"Intrinsic Contributions\" puts this INLINE BOX's own horizontal margin, "
-              "border or padding into what it contributes to its container's intrinsic inline sizes — the "
-              "contributions \"are based on the OUTER SIZE of the box\" — and css-text-3 §5.5 \"Line Breaking "
-              "Details\" places those edges at the box's TWO BOUNDARIES rather than at every break inside it, "
-              "because \"inline box boundaries do not introduce a forced line break or soft wrap opportunity in "
-              "the flow\". So the edge is a WIDTH AT A POSITION IN THE RUN, and core/layout/text_run.h's "
-              "accumulator has no such thing: it holds code points, and [UAX14] runs over exactly the code "
-              "points it holds, so an edge added as a character would change the breaking §5.5 forbids it from "
-              "changing, and an edge added beside the collection would put the character indices and the "
-              "break-action indices into two different coordinate systems. BUILD the run out of ITEMS rather "
-              "than characters — a text item and a box-edge item, the second carrying an inline size and "
-              "invisible to `line_break_actions` while visible to the per-line sum — which is the same "
-              "structure CSS 2.2 §9.4.2's line boxes need in order to say which line an EMPTY inline box is "
-              "on. A PERCENTAGE leaves through this crash too and is not a second gap: it resolves against the "
-              "containing block width, which for a shrink-to-fit box IS what these sizes are being measured to "
-              "decide, so it is a cycle that §5.2's own definition breaks and not an arithmetic this file is "
-              "missing");
-        return;
+        if (len.kind == CSS_LENGTH_ABSOLUTE) { sum = css_px_add(sum, len.px); continue; }
+        DFAIL("css-sizing-3 §2.2 \"Intrinsic Contributions\" needs this INLINE BOX's own horizontal margin, "
+              "border or padding — the contributions \"are based on the OUTER SIZE of the box\" — and the "
+              "cascade answered with a PERCENTAGE or a calculation rather than an absolute length. A "
+              "percentage on any of the six resolves against the CONTAINING BLOCK WIDTH, and for the "
+              "shrink-to-fit box these sizes are being measured for, that width is CSS 2.2 §10.3.5's own "
+              "output — so resolving it here would ask for the answer this walk exists to produce. That cycle "
+              "is css-sizing-3's to break and this engine has not built its resolution; a zero substituted "
+              "here would under-report every percentage-padded inline box's contribution with nothing "
+              "downstream able to contradict it. BUILD css-sizing-3's percentage resolution against an "
+              "indefinite containing block, then this arm is a read of it");
+        return sum;
     }
+    return sum;
 }
 
 /* ONE CHILD NODE of the box whose intrinsic sizes are being measured. The shape mirrors core/layout/
@@ -177,8 +172,14 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            descent adds it in document order exactly as a text child of `parent` would be. Each character
            carries its OWN element as its style, which is what makes css-text-3 §5.5's per-element questions
            (the advance measure, and the `white-space` at a boundary) answerable per character afterwards. */
-        is_require_zero_inline_edges(el);
+        /* THE TWO EDGES BRACKET THE DESCENT, which is the whole of §2.2's placement: emitted in call order, so
+           the opening edge precedes the box's content in the run and the closing edge follows it, and the
+           run's own break-position mapping is what then puts each on the line its fragment is on. They are
+           emitted even when both are ZERO, because an edge occupies a POSITION and that position is what says
+           which line an otherwise-empty inline box sits on. */
+        text_run_measure_add_box_edge(m, el, is_inline_edge_px(el, false));
         is_walk(m, el);
+        text_run_measure_add_box_edge(m, el, is_inline_edge_px(el, true));
         return;
     }
     DFAIL("css-sizing-3 §5.2 \"Intrinsic Contributions\" is what an ELEMENT CHILD adds to this box's intrinsic "

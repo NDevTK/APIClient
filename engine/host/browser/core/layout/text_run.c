@@ -162,7 +162,7 @@ static bool tr_is_collapsible_white_space(uint32_t cp)
 void text_run_measure_init(TextRunMeasure *m)
 {
     DCHECK(m != NULL, "a text run measurement was begun with nowhere to keep it");
-    m->chars = NULL;
+    m->items = NULL;
     m->count = 0;
     m->capacity = 0;
     m->in_white_space_run = false;
@@ -171,25 +171,87 @@ void text_run_measure_init(TextRunMeasure *m)
     m->finished = false;
 }
 
-static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, bool wraps, bool space)
+/* ONE ITEM'S STORAGE, with every field of BOTH kinds written. A partially-initialised item is the defect this
+   component is least able to notice — an edge whose `cp` held a stale code point would be measured as text by
+   any walk that forgot to ask the kind — so the append writes the whole record and the accessors below refuse
+   the fields of the other kind. */
+static TextRunItem *tr_append_item(TextRunMeasure *m, TextRunItemKind kind, lxb_dom_element_t *style)
 {
-    TextRunChar *c;
+    TextRunItem *it;
 
     if (m->count == m->capacity) {
         size_t capacity = m->capacity != 0 ? m->capacity * 2 : 32;
-        TextRunChar *grown = realloc(m->chars, capacity * sizeof *grown);
+        TextRunItem *grown = realloc(m->items, capacity * sizeof *grown);
 
-        CHECK(grown != NULL, "out of memory collecting one inline formatting context's characters for "
-                             "css-sizing-3 §5.1's intrinsic inline sizes. The collection is the run's own text "
-                             "and nothing more, so a failure here is the physical floor");
-        m->chars = grown;
+        CHECK(grown != NULL, "out of memory collecting one inline formatting context's items for css-sizing-3 "
+                             "§5.1's intrinsic inline sizes. The collection is the run's own text and its "
+                             "boxes' edges and nothing more, so a failure here is the physical floor");
+        m->items = grown;
         m->capacity = capacity;
     }
-    c = &m->chars[m->count++];
+    it = &m->items[m->count++];
+    it->kind = kind;
+    it->style = style;
+    it->cp = 0;
+    it->wraps = false;
+    it->collapsible_space = false;
+    it->size = css_px(0.0);
+    return it;
+}
+
+static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, bool wraps, bool space)
+{
+    TextRunItem *c = tr_append_item(m, TEXT_RUN_ITEM_CHAR, style);
+
     c->cp = cp;
-    c->style = style;
     c->wraps = wraps;
     c->collapsible_space = space;
+}
+
+/* THE FIELDS OF ONE KIND, REACHED ONLY THROUGH A CHECK OF THAT KIND. Every read of `cp`, `wraps`,
+   `collapsible_space` or `size` in this file goes through one of these, so a walk that lost track of which
+   kind it is standing on aborts at the read rather than measuring an edge as a U+0000 or summing a
+   character's uninitialised `size` into a line. */
+static const TextRunItem *tr_char_at(const TextRunMeasure *m, size_t i)
+{
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    DCHECK(m->items[i].kind == TEXT_RUN_ITEM_CHAR,
+           "a TEXT item's fields were read from an item that is an inline box EDGE. css-text-3 §5.5 \"Line "
+           "Breaking Details\" makes the two different things at the same kind of position — an edge is a width "
+           "and carries no code point — so this is a walk that stopped distinguishing them, and the value it "
+           "would have read is a zero this component wrote rather than anything the document contains");
+    return &m->items[i];
+}
+
+static const TextRunItem *tr_edge_at(const TextRunMeasure *m, size_t i)
+{
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    DCHECK(m->items[i].kind == TEXT_RUN_ITEM_EDGE,
+           "an EDGE item's inline size was read from an item that is a CHARACTER — a character's contribution "
+           "is css-values-4 §6.1.1's advance measure of its own code point, which is a different quantity read "
+           "a different way");
+    return &m->items[i];
+}
+
+void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size)
+{
+    DCHECK(m != NULL && style != NULL,
+           "an inline box edge was added with no accumulator or no element — css-sizing-3 §2.2's outer size is "
+           "a fact about one box, so there is no edge without the box it belongs to");
+    DCHECK(!m->finished,
+           "an inline box edge was added to a measurement that has already produced its answers. "
+           "text_run_measure_finish releases the collection those answers were derived from, so this is one "
+           "accumulator being used for two runs");
+    DCHECK(size.px >= 0.0,
+           "css-sizing-3 §2.2's outer-size contribution for one side of an inline box is NEGATIVE. A padding "
+           "and a border width are non-negative by their own properties' `Value:` lines, and §2.2's \"for this "
+           "purpose auto margins are treated as zero\" leaves only a declared negative margin — which is real "
+           "CSS, and is a case this sum has not been derived for rather than one to let through");
+    tr_append_item(m, TEXT_RUN_ITEM_EDGE, style)->size = size;
+    /* AN EDGE DOES NOT CLOSE A COLLAPSIBLE WHITE-SPACE RUN, which is css-text-3 §4.1.1's own scope rather than
+       a convenience: the collapsing is stated over the inline formatting CONTEXT and applies "even one outside
+       the boundary of the inline containing that space", so a space either side of a box boundary is one run
+       and collapses to one U+0020. Leaving `in_white_space_run` alone is what makes that true. */
 }
 
 void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text)
@@ -271,14 +333,29 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
 static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
 {
     CssPx sum = css_px(0.0);
-    size_t i;
+    size_t i, keep_lo = hi, keep_hi = lo;
 
     DCHECK(lo <= hi && hi <= m->count, "a line was measured over a range that is not inside the collected run");
-    while (lo < hi && m->chars[lo].collapsible_space) lo++;
-    while (hi > lo && m->chars[hi - 1].collapsible_space) hi--;
+    /* §4.1.2's TWO EDGES ARE FOUND OVER THE CHARACTERS AND AN EDGE ITEM DOES NOT STOP THE SCAN. The section
+       removes "a sequence of collapsible spaces at the BEGINNING of a line" and again at the end, and a box
+       boundary is not a space — an inline box opened before a line's leading space leaves that space at the
+       beginning of the line, so a scan that halted on the boundary would keep a space every user agent drops.
+       The two ends are found first and nothing is moved, because `lo` and `hi` still delimit the ITEMS whose
+       edges are summed: trimming by advancing the range would drop an edge that sits outside the surviving
+       text, which is precisely the case an empty inline box at a line's start is. */
+    for (i = lo; i < hi; i++)
+        if (m->items[i].kind == TEXT_RUN_ITEM_CHAR && !m->items[i].collapsible_space) { keep_lo = i; break; }
+    for (i = hi; i > lo; i--)
+        if (m->items[i - 1].kind == TEXT_RUN_ITEM_CHAR && !m->items[i - 1].collapsible_space) { keep_hi = i; break; }
     for (i = lo; i < hi; i++) {
-        CssPx advance = css_font_advance_measure_px(m->chars[i].style, m->chars[i].cp);
+        CssPx advance;
 
+        if (m->items[i].kind == TEXT_RUN_ITEM_EDGE) {
+            sum = css_px_add(sum, tr_edge_at(m, i)->size);
+            continue;
+        }
+        if (i < keep_lo || i >= keep_hi) continue;   /* §4.1.2 removed it from this line */
+        advance = css_font_advance_measure_px(tr_char_at(m, i)->style, tr_char_at(m, i)->cp);
         DCHECK(advance.px >= 0.0,
                "the first available font reported a NEGATIVE advance measure for a character on a line. "
                "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and "
@@ -339,9 +416,9 @@ static lxb_dom_element_t *tr_nearest_common_ancestor(lxb_dom_element_t *a, lxb_d
     return a;
 }
 
-static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t i)
+static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t left_item, size_t right_item)
 {
-    const TextRunChar *left = &m->chars[i - 1], *right = &m->chars[i];
+    const TextRunItem *left = tr_char_at(m, left_item), *right = tr_char_at(m, right_item);
     lxb_dom_element_t *nca;
     bool wraps;
 
@@ -368,41 +445,101 @@ static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t i)
     return wraps;
 }
 
+/* THE ONE PLACE THE TWO INDEX SPACES MEET — a break position expressed over CHARACTERS, turned into the ITEM
+   boundary that break puts a line's end at. [UAX14] is handed code points alone (css-text-3 §5.5: an inline box
+   boundary must not create or forbid a break), so `actions[k]` is the boundary before the k-th CHARACTER, while
+   a line is a contiguous run of ITEMS whose edges are summed into it.
+   THE MAPPING IS "IMMEDIATELY AFTER THE ITEM HOLDING CHARACTER k-1", AND THE ALTERNATIVE IS WRONG BY EXAMPLE
+   rather than by taste. Taking instead the item holding character k puts every edge between the two characters
+   on the EARLIER line, and `<div>aaa <span>bbb</span></div>` breaking at its space then places the span's
+   OPENING edge on the first line while all of its text is on the second — a fragment's border rendered on a
+   line the fragment is not on. Mapping after character k-1 puts that opening edge on the second line with the
+   content it opens, and it is equally right at the other end: in `<div>aaa<span></span> bbb</div>` the empty
+   span precedes the space, so it stays on the first line where its position in the run puts it. The rule is
+   one sentence, total over every position, and derived from the ORDER the caller emitted the items in — which
+   is why `text_run_measure_add_box_edge` takes no side argument.
+   `k == 0` IS THE START OF TEXT and maps to item boundary 0 — LB2 never breaks there, so this is the seed of
+   the first line rather than a break, and there are no items before it to place. */
+static size_t tr_item_boundary_of_char(const size_t *item_of_char, size_t k)
+{
+    return k == 0 ? 0 : item_of_char[k - 1] + 1;
+}
+
 void text_run_measure_finish(TextRunMeasure *m)
 {
     uint32_t *cps;
     LineBreakAction *actions;
-    size_t i, max_line = 0, min_line = 0;
+    size_t *item_of_char;
+    size_t i, nchars = 0, max_line = 0, min_line = 0;
 
     DCHECK(m != NULL, "a text run measurement was finished with nothing to finish");
     DCHECK(!m->finished, "a text run measurement was finished twice — the second call would run [UAX14] over a "
                          "collection the first one released");
     m->finished = true;
     if (m->count == 0) {
-        /* An inline formatting context with no characters in it. css-sizing-3 §2.1's two sizes are both the
-           size that "fits around its contents", and there are none — zero, and not a case this skipped. */
-        DCHECK(m->chars == NULL, "an empty run holds a collection it never appended to");
+        /* An inline formatting context with no items in it. css-sizing-3 §2.1's two sizes are both the size
+           that "fits around its contents", and there are none — zero, and not a case this skipped. */
+        DCHECK(m->items == NULL, "an empty run holds a collection it never appended to");
         return;
     }
-    cps = malloc(m->count * sizeof *cps);
-    actions = malloc((m->count + 1) * sizeof *actions);
-    CHECK(cps != NULL && actions != NULL,
-          "out of memory running [UAX14]'s line breaking over one inline formatting context. Both allocations "
-          "are one entry per character of the run's own text, so a failure here is the physical floor");
-    for (i = 0; i < m->count; i++) cps[i] = m->chars[i].cp;
-    line_break_actions(cps, m->count, actions);
+    for (i = 0; i < m->count; i++)
+        if (m->items[i].kind == TEXT_RUN_ITEM_CHAR) nchars++;
+    if (nchars == 0) {
+        /* A run of BOX EDGES AND NOTHING ELSE — an inline formatting context whose only content is empty inline
+           boxes. [UAX14] is not run at all: css-text-3 §5.5's "inline box boundaries do not introduce a forced
+           line break or soft wrap opportunity in the flow" means there is nowhere to break, so there is exactly
+           ONE line and both of css-sizing-3 §2.1's answers are that line's size. This is core/layout/
+           line_box.h's own one-line-box theorem reached from the inline-size side, and it is a THEOREM here for
+           the same reason it is one there — independent of every width in the document. */
+        m->max_content = tr_line_size(m, 0, m->count);
+        m->min_content = m->max_content;
+        free(m->items);
+        m->items = NULL;
+        m->count = 0;
+        m->capacity = 0;
+        return;
+    }
+    cps = malloc(nchars * sizeof *cps);
+    actions = malloc((nchars + 1) * sizeof *actions);
+    item_of_char = malloc(nchars * sizeof *item_of_char);
+    CHECK(cps != NULL && actions != NULL && item_of_char != NULL,
+          "out of memory running [UAX14]'s line breaking over one inline formatting context. Every allocation "
+          "is one entry per character of the run's own text, so a failure here is the physical floor");
+    nchars = 0;
+    for (i = 0; i < m->count; i++) {
+        if (m->items[i].kind != TEXT_RUN_ITEM_CHAR) continue;
+        cps[nchars] = m->items[i].cp;
+        item_of_char[nchars] = i;
+        nchars++;
+    }
+    line_break_actions(cps, nchars, actions);
     /* THE TWO ANSWERS ARE THE SAME WALK OVER DIFFERENT LINES, which is css-sizing-3 §2.1's own construction:
        the sizes differ by "if NONE of the soft wrap opportunities were taken" against "if ALL" were. So the
        max-content lines are cut by FORCED breaks alone — CSS 2.2 §10.3.5's "without breaking lines other than
        where explicit line breaks occur" — and the min-content lines by every break there is. `actions[count]`
        is LB3's mandatory break at eot, so the last line of each answer is closed by the loop rather than after
        it, and there is no tail case to get wrong. */
-    for (i = 1; i <= m->count; i++) {
+    for (i = 1; i <= nchars; i++) {
+        /* §4.1.2's line ends where this break puts it, in ITEM coordinates — see tr_item_boundary_of_char for
+           why the boundary is taken after character `i-1` and not before character `i`. At `i == nchars` the
+           line runs to the END OF THE COLLECTION rather than to that boundary, because every trailing box edge
+           after the last character is still on the last line: LB3 closes the text, not the items. */
+        size_t at = i == nchars ? m->count : tr_item_boundary_of_char(item_of_char, i);
         bool forced = actions[i] == LINE_BREAK_MANDATORY;
-        bool soft = actions[i] == LINE_BREAK_OPPORTUNITY && tr_opportunity_enabled(m, i);
+        bool soft = false;
 
-        if (forced && i < m->count) {
-            LineBreakClass cls = line_break_class_of(m->chars[i - 1].cp);
+        /* AT eot THERE IS NO RIGHT-HAND CHARACTER TO ASK ABOUT, and there is no question either: LB3 makes
+           `actions[nchars]` MANDATORY, so the opportunity arm is unreachable there. Written as a guard rather
+           than left to `&&`'s short-circuit because the index it protects is `item_of_char[i]`, which is one
+           past the end at that position — a reader must be able to see that it is never taken. */
+        if (i < nchars && actions[i] == LINE_BREAK_OPPORTUNITY)
+            soft = tr_opportunity_enabled(m, item_of_char[i - 1], item_of_char[i]);
+        DCHECK(i < nchars || forced,
+               "[UAX14] LB3 \"Always break at the end of text\" did not make the action at eot MANDATORY. "
+               "core/layout/line_break.h states that the action at position `count` always is, and the walk "
+               "below has no tail case precisely because of it");
+        if (forced && i < nchars) {
+            LineBreakClass cls = line_break_class_of(cps[i - 1]);
 
             DCHECK(cls == LB_CLASS_BK || cls == LB_CLASS_NL,
                    "a FORCED line break inside a collapsed run came from a character whose [UAX14] class is "
@@ -414,23 +551,24 @@ void text_run_measure_finish(TextRunMeasure *m)
                    "[UAX14]'s classes having come apart");
         }
         if (forced) {
-            m->max_content = css_px_max(m->max_content, tr_line_size(m, max_line, i));
-            max_line = i;
+            m->max_content = css_px_max(m->max_content, tr_line_size(m, max_line, at));
+            max_line = at;
         }
         if (forced || soft) {
-            m->min_content = css_px_max(m->min_content, tr_line_size(m, min_line, i));
-            min_line = i;
+            m->min_content = css_px_max(m->min_content, tr_line_size(m, min_line, at));
+            min_line = at;
         }
     }
     DCHECK(max_line == m->count && min_line == m->count,
            "[UAX14] LB3 \"Always break at the end of text\" did not close the last line of one of the two "
-           "answers, so a run's tail was collected and never measured. core/layout/line_break.h states that the "
-           "action at position `count` is always MANDATORY, which is the whole reason this walk has no tail "
-           "case");
+           "answers over the whole ITEM collection, so a run's tail was collected and never measured. The last "
+           "line runs to `count` rather than to a break position exactly so that a box edge after the final "
+           "character is still on a line; a short answer here is that mapping and this walk disagreeing");
     free(cps);
     free(actions);
-    free(m->chars);
-    m->chars = NULL;
+    free(item_of_char);
+    free(m->items);
+    m->items = NULL;
     m->count = 0;
     m->capacity = 0;
 }

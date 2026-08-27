@@ -98,16 +98,42 @@
 
 #include "core/css/css_length.h"
 
-/* ONE CHARACTER OF THE COLLECTED RUN, after css-text-3 §4.1.1's Phase I. The inline it belongs to travels with
-   it because both of the properties this measurement reads are per-element and the run crosses elements:
-   css-values-4 §6.1.1's advance measure is stated over "the element on which it is used", and css-text-3 §5.5
-   "Line Breaking Details" says which element's `white-space` governs a break — "for soft wrap opportunities
-   created by characters that disappear at the line break (e.g. U+0020 SPACE), properties on the box DIRECTLY
-   CONTAINING THAT CHARACTER control the line breaking at that opportunity", and otherwise "the white-space
-   property on the NEAREST COMMON ANCESTOR of the two characters controls breaking". */
+/* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because two different things occupy positions in it and
+ * only one of them is text. css-sizing-3 §2.2 "Intrinsic Contributions" puts an inline box's own horizontal
+ * margins, borders and padding into what it contributes ("based on the OUTER SIZE of the box"), and css-text-3
+ * §5.5 "Line Breaking Details" places them at the box's TWO BOUNDARIES rather than at every break inside it —
+ * "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the flow". So an
+ * edge is A WIDTH AT A POSITION, and there is no code point to hang it on.
+ * IT CANNOT BE A CHARACTER, and that is §5.5's sentence rather than a preference: [UAX14] decides breaks from
+ * the code points it is given, so an edge smuggled in as one would create or forbid a break at the boundary
+ * §5.5 says a box boundary must leave alone. It cannot be a total carried beside the collection either — an
+ * inline box whose text spans three lines puts its left edge on the first and its right edge on the third, so
+ * a sum added to the whole run would report a min-content size no line of that run ever has.
+ * THE EDGE IS THEREFORE INVISIBLE TO THE BREAK PASS AND VISIBLE TO THE PER-LINE SUM, which is exactly the split
+ * this type encodes: `line_break_actions` is handed the CHAR items' code points alone, and the per-line
+ * measurement walks ITEMS. The two index spaces that creates are reconciled at ONE place (`text_run.c`'s
+ * `tr_item_boundary_of_char`), because a break position expressed in the wrong one is a fragment of an inline
+ * box placed on the wrong line and nothing downstream can contradict it. */
+typedef enum {
+    TEXT_RUN_ITEM_CHAR = 0,   /* one code point surviving css-text-3 §4.1.1's Phase I */
+    TEXT_RUN_ITEM_EDGE,       /* an inline box boundary: an inline size, and no code point at all */
+} TextRunItemKind;
+
+/* ONE ITEM OF THE COLLECTED RUN. The inline it belongs to travels with it because both of the properties this
+   measurement reads are per-element and the run crosses elements: css-values-4 §6.1.1's advance measure is
+   stated over "the element on which it is used", and css-text-3 §5.5 "Line Breaking Details" says which
+   element's `white-space` governs a break — "for soft wrap opportunities created by characters that disappear
+   at the line break (e.g. U+0020 SPACE), properties on the box DIRECTLY CONTAINING THAT CHARACTER control the
+   line breaking at that opportunity", and otherwise "the white-space property on the NEAREST COMMON ANCESTOR
+   of the two characters controls breaking".
+   THE FIELDS OF THE OTHER KIND ARE NEVER READ, AND THAT IS ASSERTED RATHER THAN ARRANGED: text_run.c reaches
+   `cp`, `wraps` and `collapsible_space` only through accessors that DCHECK the kind, so a walk that forgot an
+   item is an edge crashes at the read instead of measuring a zero-width U+0000 that no document contains. */
 typedef struct {
-    uint32_t cp;
+    TextRunItemKind kind;
     lxb_dom_element_t *style;
+    /* TEXT_RUN_ITEM_CHAR only. */
+    uint32_t cp;
     /* css-text-3 §3's `nowrap` "suppresses line breaks (text wrapping) within the source" while leaving white
        space collapsible, so whether an opportunity EXISTS is a second fact about the inline and not derivable
        from the first. Recorded per character because §5.5 makes it a per-element question. */
@@ -117,13 +143,16 @@ typedef struct {
        other `white-space` value would not be trimmable, so the flag is carried rather than re-derived from the
        code point. */
     bool collapsible_space;
-} TextRunChar;
+    /* TEXT_RUN_ITEM_EDGE only: css-sizing-3 §2.2's outer-size contribution at this one boundary of the box. */
+    CssPx size;
+} TextRunItem;
 
 /* THE RUNNING STATE OF ONE INLINE FORMATTING CONTEXT'S MEASUREMENT. The fields are written ONLY by the entries
    below and read only through them, which is what their asserts are for. */
 typedef struct {
-    /* css-text-3 §4.1.1's Phase I output, in document order. Owned; released by `finish`. */
-    TextRunChar *chars;
+    /* css-text-3 §4.1.1's Phase I output interleaved with the box edges §5.5 places between its characters, in
+       document order. Owned; released by `finish`. */
+    TextRunItem *items;
     size_t count, capacity;
     /* Whether the last character added was inside a run of collapsible white space, so the next one does not
        open a second surviving space for the same run — §4.1.1 step 4's "any collapsible space immediately
@@ -149,6 +178,19 @@ void text_run_measure_init(TextRunMeasure *m);
    core/layout/block_flow.h answers that question once for every walk. A run this component is handed is
    measured as it stands. */
 void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text);
+
+/* ADD ONE INLINE BOX BOUNDARY at the current position of the run — css-sizing-3 §2.2's outer-size contribution
+   for one side of `style`'s box, in CSS pixels. Called at the two boundaries and nowhere between them, which is
+   css-text-3 §5.5's placement: the edges are at the box's boundaries and not at every break inside it, so a box
+   whose text spans three lines puts its opening edge on the first line and its closing edge on the third.
+   IT DOES NOT SAY WHICH SIDE IT IS, AND THAT IS THE POINT: what an edge does to the measurement is add its size
+   to whichever line the item lands on, and which line that is falls out of the run's ORDER — the caller emits
+   the opening edge before the box's content and the closing edge after it, and text_run.c's break-position
+   mapping does the rest. A `side` argument would be a second statement of the same fact with its own way of
+   disagreeing with the call order.
+   `size` MAY BE ZERO and that is not a call to skip: a zero-width edge still occupies a POSITION, which is what
+   decides the line an otherwise-empty inline box is on. */
+void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
 
 /* RUN [UAX14] OVER EVERYTHING COLLECTED and produce the two answers, then release the collection. Every caller
    must reach this: the measurement does not exist until it runs, and the memory the walk collected is this
