@@ -222,7 +222,7 @@ static bool loc_document_is_null(JSContext *ctx)
 {
     JSValueConst proxy = document_window_proxy(ctx);
 
-    return !window_proxy_is(proxy) || window_proxy_browsing_context_null(proxy);
+    return !window_proxy_is(proxy) || window_proxy_browsing_context_null(ctx, proxy);
 }
 
 /* §7.2.4's SECURITY CHECK, which every member but `href`'s setter and `replace` performs: "if this's relevant

@@ -259,7 +259,22 @@ typedef struct {
    "BROWSING CONTEXT IS NULL" HAS TWO WRITERS AND THIS IS WHERE THEY MEET — §7.5.10 step 8's destruction and
    §7.1.3.2 step 10's swap, which discards a browsing context without destroying anything. Reading either alone
    is the same class of half-answer as the two above: after a COOP group swap the opener's handle would report
-   the window it can no longer reach as open, and the engine would model a page real Chrome has cut off. */
+   the window it can no longer reach as open, and the engine would model a page real Chrome has cut off.
+ *
+ * AND THE TWO BELOW ARE THE RECORDED FLAGS, WHICH IS NO LONGER THE WHOLE OF EITHER QUESTION. There is a THIRD
+ * moment at which a navigable's browsing context is null and it is the one pages actually read — §7.3.1.6's
+ * destroy-a-child-navigable step 3, which severs the container relation SYNCHRONOUSLY while both flags above
+ * are written by the queued destruction. `window_proxy_browsing_context_null` is that whole fact, and
+ * §7.2.2.1's `closed`, §7.2.2.4's `opener` and §7.2.4's relevant Document each read it there.
+ *
+ * SO WHAT IS LEFT HERE IS A DIFFERENT QUESTION AND THE SPLIT IS DELIBERATE: `wp_closed` now means "this heap
+ * holds no ACTIVE DOCUMENT for this navigable", which is what its remaining readers are actually asking —
+ * §7.2.3's forward to W, `document`, `location`, `name`, and §7.2.3.5 step 2's indexed access. Those must NOT
+ * take the sever, because §7.2.3's internal methods are performed on W, the [[Window]] internal slot, and a
+ * Window OUTLIVES its browsing context: `document-domain-removed-iframe.html` reads `contentWindow.status` on
+ * the line after `iframe.remove()` and expects the value, not `undefined` (its own comment cites the Chromium
+ * bug where those properties went undefined). Folding the sever into this predicate is how that regresses, and
+ * it would be silent — the wrong answer is a plausible one. Three questions, three readers. */
 static bool wp_bc_null(const ProxyData *p) { return p->destroyed != 0 || p->bc_discarded != 0; }
 static bool wp_closed(const ProxyData *p) { return p->closing != 0 || wp_bc_null(p); }
 
@@ -952,9 +967,12 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
 bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);
-    (void)ctx;
+
     DCHECK(p != NULL, "the closed state of something that is not a WindowProxy was read");
-    return wp_closed(p);
+    /* §7.2.2.1's OR, over the FACT rather than over the two recorded flags — a frame removed from the tree has
+       a null browsing context from that line onward, which is the disjunct wp_bc_null cannot see (see its
+       definition). `closing` stays a flag: it is written by close() in whichever agent ran it. */
+    return p->closing != 0 || window_proxy_browsing_context_null(ctx, proxy);
 }
 
 /* §7.5.10 STEPS 8 AND 9 — the completion of a destruction, written only by the destroy job. See window_proxy.h
@@ -1024,9 +1042,10 @@ void window_proxy_discard_browsing_context(JSContext *ctx, JSValueConst proxy)
        between the swap and the page. A `closed` that did not include this disjunct would leave the opener's own
        handle reporting a window real Chrome has already cut off as one it can still reach, and §@S would emit a
        breakout the browser forbids: a byte written where nothing reads it, which is silent everywhere else. */
-    DCHECK(wp_closed(p),
+    DCHECK(window_proxy_closed(ctx, proxy),
            "a browsing context §7.1.3.2's swap has just discarded still answers §7.2.2.1's `closed` as false — "
-           "the getter's \"this's browsing context is null\" has two writers and is reading only one of them");
+           "the getter's \"this's browsing context is null\" has THREE writers (this swap, §7.5.10's destroy "
+           "and §7.3.1.6's synchronous sever) and is reading fewer than all of them");
 }
 
 /* THE WAIT'S STEP 3 — the number of child navigables this one is waiting on for this operation, recorded
@@ -1159,12 +1178,17 @@ bool window_proxy_destroyed(JSValueConst proxy)
     return p->destroyed != 0;
 }
 
-bool window_proxy_browsing_context_null(JSValueConst proxy)
+bool window_proxy_browsing_context_null(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);   /* through the accessor, for window_proxy_destroyed's reason */
 
     DCHECK(p != NULL, "the browsing context of something that is not a WindowProxy was asked about");
-    return wp_bc_null(p);
+    /* THE THIRD WRITER, AND THE ONLY ONE THAT IS SYNCHRONOUS. Both flags are set by §7.5.10's queued
+       destruction, and every page that observes this observes it on the line after `iframe.remove()` —
+       §7.3.1.6 step 3's sever is what has happened by then. `embedded-opener-remove-frame.html` states the
+       difference in its own structure: it checks a removed FRAME's `opener` immediately and a closed POPUP's
+       behind a `step_timeout`, because the first is discarded synchronously and the second from a task. */
+    return window_proxy_navigable_null(ctx, proxy) || wp_bc_null(p);
 }
 
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
@@ -2383,10 +2407,11 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
         /* §7.2.2.4's opener getter steps: "Let current be this's browsing context. If current is null, then
            return null. If current's opener browsing context is null, then return null. Return current's opener
            browsing context's WindowProxy object." STEPS 1-2 ARE THE BROWSING CONTEXT and not the navigable —
-           the one getter of the four that asks the other question — so this is `wp_bc_null`'s fact and it has
-           the two writers window_proxy.h names: §7.5.10's destroy and §7.1.3.2's group swap. A window the swap
-           cut off reports `closed` and has no opener, while its `top` and `parent` above still answer. */
-        if (wp_bc_null(p)) return JS_NULL;
+           the one getter of the four that asks the other question, and window_proxy_browsing_context_null is
+           where that one lives. `embedded-opener-remove-frame.html` is the corpus's own statement of the
+           difference in TIME: it reads a removed FRAME's `opener` on the next line and a closed POPUP's behind
+           a `step_timeout`, because §7.3.1.6's sever is synchronous and §7.2.2.1's close is a task. */
+        if (window_proxy_browsing_context_null(ctx, nav)) return JS_NULL;
         return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
     case WP_NAME:
         return window_proxy_name_value(ctx, nav);
@@ -2873,7 +2898,9 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
             *presult = JS_NewInt32(ctx, p->realm ? iframe_child_navigable_count(p->realm) : 0);
             break;
         case WP_CLOSED:
-            *presult = JS_NewBool(ctx, wp_closed(p));
+            /* §7.2.2.1's whole OR, which is window_proxy_closed's — never the recorded flags, for the reason
+               written at wp_bc_null: a frame removed from the tree is closed on that line. */
+            *presult = JS_NewBool(ctx, window_proxy_closed(ctx, nav));
             break;
         default:
             DFAIL("a navigable-own member reached the step machine — it is answered by proxy_member_get, in "
@@ -2889,8 +2916,11 @@ static int proxy_get_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
        host has torn that instance down. A local FALSE says nothing about the peer, which is the whole reason
        the branch below exists.
        AND FOR `length` THE SAME STATE IS A DIFFERENT ANSWER: a destroyed navigable has no active document to
-       count, so §7.2.3 answers 0 here rather than parking a flow on an instance that is gone. */
-    if (wp_closed(p)) {
+       count, so §7.2.3 answers 0 here rather than parking a flow on an instance that is gone.
+       THE WHOLE OR, INCLUDING §7.3.1.6's SEVER — a cross-origin child removed from THIS document's tree is
+       detached here on that line, and parking a flow on the peer to be told about a navigable this agent
+       created and has just detached is a round trip whose answer this side already holds. */
+    if (window_proxy_closed(ctx, nav)) {
         *presult = magic == WP_CLOSED ? JS_TRUE : JS_NewInt32(ctx, 0);
         return JS_STEP_DONE;
     }

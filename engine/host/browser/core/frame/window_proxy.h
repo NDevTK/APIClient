@@ -240,8 +240,17 @@ bool window_proxy_navigable_null(JSContext *ctx, JSValueConst proxy);
  *
  * IT IS NOT `window_proxy_closed`, which is a THIRD question: §7.2.2.1's `closed` is also true while a
  * traversable is CLOSING, and a closing traversable still has its browsing context and its documents. Three
- * facts, three readers; the one that folds two of them is the one that answers a member wrongly. */
-bool window_proxy_browsing_context_null(JSValueConst proxy);
+ * facts, three readers; the one that folds two of them is the one that answers a member wrongly.
+ *
+ * IT HAS A THIRD WRITER, AND IT IS THE ONLY ONE PAGES CAN SEE. Both writers named above are the QUEUED
+ * destruction and a navigation's swap; §7.3.1.6's destroy-a-child-navigable step 3 severs the container
+ * relation SYNCHRONOUSLY, inside the tree mutation, and every observation of this fact in the corpus is made
+ * on the line after `iframe.remove()`. `embedded-opener-remove-frame.html` states the difference in its own
+ * structure — a removed FRAME's `opener` is checked immediately and a closed POPUP's behind a `step_timeout`.
+ * So this takes `ctx` and asks window_proxy_navigable_null for that third disjunct rather than testing a byte,
+ * and §7.2.2.1's `closed`, §7.2.2.4's `opener` and §7.2.4's relevant Document all reach it through here.
+ * IT IS STILL NOT `window_proxy_destroyed`, which reports one writer of three. */
+bool window_proxy_browsing_context_null(JSContext *ctx, JSValueConst proxy);
 
 /* HTML §7.1.3.2 "Browsing context group switches due to opener policy", step 10 — THE OTHER WRITER of
  * §7.2.2.1's "this's browsing context is null", and the one that is not a destruction.
