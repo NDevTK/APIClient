@@ -218,8 +218,11 @@
      the creating renderer's tree and a member whose value is an object does not cross an instance boundary.
      SO WHAT CROSSES IS WHAT IT ANSWERED. Permissions Policy §9.5 is "given null or an element (container) and
      an origin (origin)", and both of those belong to the creator — it holds the `<iframe>` and it computed the
-     child's origin — so §9.5 runs ONCE there and this parameter is its RESULT: §4.2's inherited policy, one
-     `<token>=<Enabled|Disabled>` pair per §4.1 supported feature. `null` is that grammar's own word for "there
+     child's origin — so §9.5 runs ONCE there and this parameter is its RESULT: §4.3 "Inherited policies"'s
+     inherited policy, one `<token>=<Enabled|Disabled>` pair per §4.1 "Policy-controlled Features" feature.
+     (§4.2 IS "Policies" AND STOOD HERE, WHICH IS THE FAILURE MODE OF A NUMBER WITHOUT ITS TITLE: it reads as
+     authoritative and sends the next reader one section short of the term the sentence is about.)
+     `null` is that grammar's own word for "there
      is no container", which is what an AUXILIARY navigable (§7.3.1.7 step 8 creates one out of a target name,
      with no element anywhere in the algorithm) and a root document with no embedder both state.
      WITHOUT IT the renderer took §9.7 step 1 — "if container is null, return `Enabled`" — for a navigable that
