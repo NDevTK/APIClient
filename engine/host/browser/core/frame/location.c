@@ -327,18 +327,30 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
                                         "index — the magic IS the index into the one member X-list");
     loc_url(ctx, &rec);
     switch ((int)magic) {
-    /* §7.2.4's href getter steps are "return this's url, serialized", and this answers the address WITHOUT its
-       query and fragment: those two are the attacker's and are read through their own getters, which is what
-       keeps their source identities separate. Splicing them in here is what href becomes once assignment to a
-       Location is modelled, and the two concolic halves then propagate through the interpreter's own `+` with
-       no special case in this file. */
-    case LOC_HREF: {
-        char *origin = url_serialize_origin(&rec), *path = url_serialize_path(&rec);
-        v = loc_string(ctx, loc_concat(origin, path));
-        free(origin);
-        free(path);
+    /* HTML §7.2.4 "The Location interface"'s href getter step 2: "Return this's url, SERIALIZED" — URL §4.5
+       "URL serializing", whose step 6 appends U+003F (?) and the query when the query is non-null and whose
+       step 7 appends U+0023 (#) and the fragment when the fragment is non-null and the exclude-fragment
+       boolean is false. That is url_serialize, which this component already owns and which §7.4.2.2's
+       navigate below calls for exactly the same string.
+       IT USED TO BE ORIGIN+PATH, on the stated grounds that the query and the fragment "are the attacker's
+       and are read through their own getters, which is what keeps their source identities separate". Separate
+       identities are a real requirement and this was the wrong way to meet it: the getter is defined by §7.2.4
+       to serialize the URL, so answering with a different string is a fidelity bug in EVERY host — a
+       conformance run included, where no source is minted at all and the only thing this decided was that
+       `location.href` on `http://x/p?q#f` came back `http://x/p`. It is also not the corner it looks:
+       §7.2.4's stringifier IS this getter, so `String(location)`, `location + ""` and `new URL(rel, location)`
+       all read it, and URL §4.4's basic parser keeps the BASE's query for a fragment-only relative — so
+       `new URL("#b", location)` resolved against an address this file had already deleted the query from.
+       WHAT IT DOES NOT YET DO IS CARRY THE TWO SOURCES, and that is a different, larger subproblem than this
+       one rather than a piece of it: a string whose bytes come from two sources with two DIFFERENT
+       percent-encode sets and two different delivery prefixes (see the declarations in location_init) cannot
+       be named by the single identity concolic_add_hook's concatenation keeps, and every byte consumer of a
+       Location — url.c's base argument first — has to answer over unknown input before the composed value can
+       exist at all. Nothing here pretends otherwise: this answers what the SPEC says the member is, which is
+       what §CLAUDE assigns the browser half, and it is the step the solver half's version is built ON. */
+    case LOC_HREF:
+        v = loc_string(ctx, url_serialize(&rec, /*exclude_fragment*/ false));
         break;
-    }
     case LOC_ORIGIN:   v = loc_string(ctx, url_serialize_origin(&rec)); break;
     case LOC_PROTOCOL: v = loc_string(ctx, loc_concat(rec.scheme, ":")); break;
     case LOC_HOST:     v = loc_string(ctx, url_serialize_host_port(&rec)); break;

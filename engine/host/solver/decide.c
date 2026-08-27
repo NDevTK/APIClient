@@ -393,9 +393,20 @@ void decide_free(void) {
     g_dec_cap = 0;   /* ONE capacity for both head buffers — dec_ensure grows them together or not at all */
     for (i = 0; i < DECIDE_FORK_KEYS; i++) { free(g_fork_keys[i].key); g_fork_keys[i].key = NULL; g_fork_keys[i].n = 0; }
     g_fork_other = g_fork_total = 0;
+    /* THE CHAIN HAS TWO KINDS OF HOLDER AND THIS USED TO NAME ONE. A frozen segment is referenced by the flows
+       forked below it — released by flow_registry_free's loop above — AND by every open @S SEARCH, which takes
+       one at the moment its sink is detected (solve.c's add_pending freezes the path a candidate is re-injected
+       at) and gives it back at solve_free. Naming only the flows made this assert read as "the frontier leaked"
+       for a state that was really "the searches have not been released yet", and it was the second reading that
+       kept happening: solver_agent_free called solve_free AFTER this, so any session whose sink was detected
+       while standing on a non-empty decision path aborted here with a message pointing at the wrong owner. The
+       order is fixed there; what belongs here is the list of who must have finished, because an assert that
+       names one holder cannot be read by whoever forgets to be the other. */
     DCHECK(g_dec_seg_live == 0,
            "the decision chain outlived the session — a frozen segment is referenced by the flows forked below "
-           "it and by nothing else, so one still live here is a blob the frontier's teardown did not release");
+           "it and by the @S searches that froze a re-injection path at it, and both are released before this "
+           "line (flow_registry_free's loop, and solve_free from solver_agent_free), so one still live here is "
+           "a blob one of those two did not give back");
 }
 
 int decide_cursor(void) { return g_c; }

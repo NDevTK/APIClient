@@ -1,6 +1,13 @@
-// INSTRUMENT CONTROL ONLY — not a corpus site. It answers one question the live corpus cannot: does a
-// fetchCallSite the engine certainly sees reach `_engineLog[].endpoints` and `doc._astResults[].fetchCallSites`
-// through THIS probe. A corpus-wide zero is a finding only once this control is non-zero.
+// INSTRUMENT CONTROL ONLY — not a corpus site. It answers the questions the live corpus cannot, and there
+// are TWO of them because the census has two columns that can each read zero for opposite reasons:
+//   - does a fetchCallSite the engine certainly sees reach `_engineLog[].endpoints` and
+//     `doc._astResults[].fetchCallSites` through THIS probe;
+//   - does an attacker source the engine certainly reads reach a code-execution sink and open a search —
+//     `_sourceReads`, `_sinkReached`, `_sinkTainted`, `securitySinks`.
+// A corpus-wide zero in EITHER column is a finding only once this control's own value in that column is
+// non-zero. The @S half did not exist for the whole of the census that published `sinks: 0` on twelve
+// sites, so that zero had no control behind it; index.html says what each rung proves and which counter
+// carries it.
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';

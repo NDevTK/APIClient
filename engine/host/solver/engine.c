@@ -7746,6 +7746,21 @@ void solver_agent_free(JSContext *ctx)
            "§13.2.7's document-load lifecycle step was still registered when the solver's agent state was "
            "released — core/dom/document.c claimed it at document_init and gives it back at "
            "document_agent_free, which is a row on core/platform.h's release column and therefore runs first");
+    /* THE @S SEARCHES GO BACK BEFORE THE FRONTIER, AND THE ORDER IS THE WHOLE OF WHY. A search takes a
+       reference on the DECISION CHAIN at the moment its sink is detected — add_pending's decide_freeze_path,
+       the re-injection point every later candidate is seeded from — and that reference is neither a flow's nor
+       the running flow's globals'. flow_registry_free ends in decide_free, whose `g_dec_seg_live == 0` is a
+       statement that every such reference has already been given back, and solve_free is the give-back: with
+       it AFTER, any session that detected a sink while standing on a non-empty decision path aborted the
+       renderer at teardown. That is every real page, because a page that has taken one branch before its first
+       tainted sink is the ordinary case rather than the corner — measured on testing/corpus/control, which
+       forks on `window.__FLAGS.admin` before its first markup sink and hit that assert on every run, while the
+       same sink with no branch in front of it froze an EMPTY path, held no segment, and completed.
+       IT IS THE SHAPE core/platform.h STATES AND THE ONE concolic_free's OWN ASSERT RELIES ON: the claimant
+       releases at its own release, and the holder asserts that it did — so the fix is the position of the
+       give-back, never a softer assert. Nothing in the frontier's teardown reads this file's store (flow_release
+       does not call solve_flow_end; the scheduler does), so the claim can be given back before it. */
+    solve_free();
     flow_registry_free(ctx);
     /* THE ORPHAN COUNTER AND THE GENERATION IT LAST WALKED AT, given back with the frontier they describe. The
        ordinal names an argument's source identity ({orphan7.arg0}) and the generation is a fact about ONE
@@ -7760,7 +7775,6 @@ void solver_agent_free(JSContext *ctx)
        skip the routing walk on a frontier that has just been rebuilt with claims in it. */
     g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
     attr_shadow_free(ctx);
-    solve_free();
     endpoint_free();
     /* THE CONCOLIC VALUE COMPONENT IS LAST, and the position is the argument. Its SOURCE REGISTRY is what a
        report asks for a source's browser delivery — the encode set, the address component, the reproduction

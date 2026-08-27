@@ -711,10 +711,16 @@ void flow_registry_free(JSContext *ctx) {
     }
     /* AND THE DECISION STATE THE FRONTIER STANDS ON, released HERE and not by each host. Every flow's parked
        vector is a reference on a shared frozen chain, and the running flow holds one more in decide.c's
-       globals; the blobs went with the flows in the loop above, so this is the last of them. Putting it in the
-       three hosts' teardowns instead would be the hand-copied list build.mjs warns about — a host that forgot
+       globals; the blobs went with the flows in the loop above. Putting it in the three hosts' teardowns
+       instead would be the hand-copied list build.mjs warns about — a host that forgot
        the line would leak the whole chain with nothing to say so, which is exactly how the world registry's
-       own release came to be missing from one of them. It belongs to the frontier, so it goes down with it. */
+       own release came to be missing from one of them. It belongs to the frontier, so it goes down with it.
+       THE FLOWS ARE NOT THE ONLY HOLDER, WHICH THIS USED TO SAY THEY WERE ("so this is the last of them"). An
+       open @S search holds one too — solve.c's add_pending freezes the path its candidates are re-injected at,
+       and that blob belongs to the SEARCH rather than to any flow, because a search outlives the flow that
+       detected it and is still seedable at the next drain. Its give-back is solve_free, which solver_agent_free
+       therefore calls BEFORE this function; the sentence that claimed otherwise is why that call sat after it
+       and why decide_free's assert fired on every page that forked before its first tainted sink. */
     decide_free();
     /* AND THE PATH CONSTRAINT THE SAME DECISIONS WERE MADE UNDER, which is the FOURTH chain built on the same
        refcounted immutable segment and the only one with no teardown at all. Its blobs went with the flows; the

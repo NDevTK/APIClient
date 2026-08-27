@@ -36,8 +36,17 @@ provably load an artifact no other lane can rebuild under you mid-pass.
 
 `control/` is the INSTRUMENT CONTROL and is not a corpus site. It is a page whose `fetch` calls the engine
 certainly sees — one inline, one in a subresource, one behind an absent-state flag, one in a function nobody
-calls, one built from a config value. A corpus-wide zero is a finding only once this is non-zero; run it in
-the same lane, on the same artifact, beside every census.
+calls, one built from a config value — AND whose attacker sources reach a code-execution sink: an untainted
+markup write, `location.search` into `innerHTML`, `location.hash` into `eval`, and a branch over a source
+whose two arms both arrive. A corpus-wide zero is a finding only once this is non-zero **in the column being
+read**; run it in the same lane, on the same artifact, beside every census.
+
+THE @S HALF WAS ABSENT WHILE THE CENSUS PUBLISHED `sinks: 0` FOR TWELVE SITES, and the two halves are not
+interchangeable: the control scored 6/6 on endpoints with `secSinks 0`, so a reader who took that as the
+control passing had a control for the endpoint column standing behind a claim about the security column.
+That is this directory's own rule read one column too wide, and it is exactly the reading a control exists
+to make impossible — an instrument that answers one question is silence about the other, not evidence for
+it. Every column a census prints needs a rung here that moves it, or that column's zero is unreadable.
 
 ## What each instrument refuses to do, and why
 
