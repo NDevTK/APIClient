@@ -201,15 +201,19 @@ static void loc_assert_this_realm(JSContext *ctx, JSValueConst this_val)
  * throw and before the parse that would throw. A Location whose browsing context is gone is therefore INERT,
  * not broken — a whole WPT file (no-browsing-context.window.js, 46 subtests) is nothing but that distinction.
  *
- * WHAT ANSWERS IT IS §7.5.10 "DESTROYING DOCUMENTS" STEP 8, "set document's browsing context to null" —
- * core/frame/window_proxy.h names that write as the one it performs, so this is that fact asked rather than a
- * second flag beside it. A realm with no navigable at all (nothing this file can build a Location for today,
- * but the same sentence covers it) has a null browsing context by the same clause. */
+ * WHAT ANSWERS IT IS THE FACT AND NOT ONE OF ITS WRITERS. "Its browsing context is null" is written by
+ * §7.5.10 "Destroying documents" step 8 ("set document's browsing context to null") AND by §7.1.3.2's
+ * opener-policy browsing context group swap, and core/frame/window_proxy.h names both in as many words. Asking
+ * `window_proxy_destroyed` would report the first and answer NO for the second, so a swapped-out window would
+ * fall through step 1 and NAVIGATE where the spec returns — which is why the reader for the combined fact was
+ * added to that component rather than half of it read from here. A realm with no navigable at all (nothing
+ * this file can build a Location for today, but the same sentence covers it) has a null browsing context by
+ * the same clause. */
 static bool loc_document_is_null(JSContext *ctx)
 {
     JSValueConst proxy = document_window_proxy(ctx);
 
-    return !window_proxy_is(proxy) || window_proxy_destroyed(proxy);
+    return !window_proxy_is(proxy) || window_proxy_browsing_context_null(proxy);
 }
 
 /* §7.2.4's SECURITY CHECK, which every member but `href`'s setter and `replace` performs: "if this's relevant

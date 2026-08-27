@@ -1143,6 +1143,14 @@ bool window_proxy_destroyed(JSValueConst proxy)
     return p->destroyed != 0;
 }
 
+bool window_proxy_browsing_context_null(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);   /* through the accessor, for window_proxy_destroyed's reason */
+
+    DCHECK(p != NULL, "the browsing context of something that is not a WindowProxy was asked about");
+    return wp_bc_null(p);
+}
+
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
 {
     ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — this write rides the flow's delta */

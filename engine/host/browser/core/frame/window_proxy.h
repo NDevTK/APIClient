@@ -210,6 +210,23 @@ bool window_proxy_is_top_level(JSValueConst proxy);
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
 
+/* "THIS NAVIGABLE'S BROWSING CONTEXT IS NULL" — the fact itself, rather than either of the two writes that
+ * make it true, and the reader this record was missing.
+ *
+ * IT HAS TWO WRITERS AND THIS HEADER ALREADY SAYS SO: §7.5.10's destroy above ("set document's browsing
+ * context to null") and §7.1.3.2's opener-policy group swap below, whose own paragraph opens by calling itself
+ * "THE OTHER WRITER of §7.2.2.1's this's browsing context is null". What did not exist was one place to ASK,
+ * so a caller that needed the fact reached for `window_proxy_destroyed` — which reports one writer — and was
+ * silently wrong for the other. That is not hypothetical arithmetic: HTML §7.2.4 opens EVERY Location setter
+ * and every Location method with "if this's relevant Document is null, then return", and a Location object's
+ * relevant Document is null exactly when this is true, so a swapped-out window would have gone on to NAVIGATE
+ * where the spec returns.
+ *
+ * IT IS NOT `window_proxy_closed`, which is a THIRD question: §7.2.2.1's `closed` is also true while a
+ * traversable is CLOSING, and a closing traversable still has its browsing context and its documents. Three
+ * facts, three readers; the one that folds two of them is the one that answers a member wrongly. */
+bool window_proxy_browsing_context_null(JSValueConst proxy);
+
 /* HTML §7.1.3.2 "Browsing context group switches due to opener policy", step 10 — THE OTHER WRITER of
  * §7.2.2.1's "this's browsing context is null", and the one that is not a destruction.
  *
