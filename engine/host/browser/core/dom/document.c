@@ -1572,8 +1572,8 @@ static int document_readiness(JSContext *ctx);
    §Navigation-Timing's `PerformanceNavigationTiming`, which this build does not have, so there is nothing here
    to write them onto and no member that could read them back.
    STEP 4 IS A BARE FIRE — "fire an event named readystatechange at document", with no queue around it — and
-   the queue is at the CALLER: §13.2.7 "The end" step 7 runs "update the current document readiness to
-   'complete'" and the `load` fire inside ONE queued global task. That fire is event_target_fire_run's shape
+   the queue is at the CALLER: §13.2.7 "The end" step 9 runs "update the current document readiness to
+   'complete'" (step 9.1) and the `load` fire (step 9.5) inside ONE queued global task. That fire is event_target_fire_run's shape
    and not this one, and it stays this one only because document_done_stage below is a plain C body the
    scheduler drives rather than a step machine — which is the same statement as "the readiness transition
    cannot suspend on a `readystatechange` listener", and it is what has to change. */
@@ -1685,9 +1685,16 @@ static int document_done_stage(JSContext *ctx, int stage)
         return 1;
     }
     DCHECK(stage == 1, "the document lifecycle was asked for a stage it does not have");
-    /* §13.2.7's "THE END", step 7. Its sub-steps are in this order and each of them is observable. */
-    document_set_ready(ctx, 2);                                                  /* step 7.1 */
-    /* STEP 7.2: "If the Document object's browsing context is null, then abort these steps." A document whose
+    /* §13.2.7 "The end", STEP 9 — the second of its two queued global tasks. Its sub-steps are in this order
+       and each of them is observable.
+       THE NUMBER WAS 7 HERE AND IN THREE OTHER PLACES, AND 7 IS A DIFFERENT STEP: step 7 is "Spin the event
+       loop until the set of scripts that will execute as soon as possible and the list of scripts that will
+       execute in order as soon as possible are empty", which is a GATE on this task and not this task. Step 8
+       is the other gate ("Spin the event loop until there is nothing that delays the load event in the
+       Document") — so a reader sent to "step 7" to find the `load` fire arrived at the ASAP-script wait, which
+       core/loader/script_type.h already cites correctly, and the two halves of §13.2.7 read as one. */
+    document_set_ready(ctx, 2);                                                  /* step 9.1 */
+    /* STEP 9.2: "If the Document object's browsing context is null, then abort these steps." A document whose
        navigable was destroyed under it — a frame removed, a traversable closed — must not fire `load` or
        `pageshow` at a Window whose browsing context is gone, and §7.5.9 destroys documents while this walk is
        still running. It is the destruction that is asked for and not `closed`: a traversable that is merely
@@ -1697,16 +1704,16 @@ static int document_done_stage(JSContext *ctx, int stage)
         if (window_proxy_is(proxy) && window_proxy_destroyed(proxy))
             return 1;
     }
-    /* STEP 7.5: `load` at the WINDOW — it does not bubble (there is nothing above it to bubble to) and it is
+    /* STEP 9.5: `load` at the WINDOW — it does not bubble (there is nothing above it to bubble to) and it is
        fired WITH THE LEGACY TARGET OVERRIDE FLAG SET, so a listener's `e.target` is the DOCUMENT. */
     event_target_fire(ctx, doc_here(ctx)->win_obj,
                       event_new(ctx, "load", /*bubbles*/ false, /*cancelable*/ false),
                       doc_here(ctx)->doc_obj);
-    /* STEPS 7.8-7.10: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
+    /* STEPS 9.9-9.11: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
        document was loaded rather than restored from a session history entry. §7.5.9's `pagehide` is the other
        end of that pair and fires only because this ran. */
     DCHECK(!document_page_showing(ctx),
-           "§13.2.7 \"the end\" step 7.8 asserts a document's page showing is false when its load completes — "
+           "§13.2.7 \"The end\" step 9.9 asserts a document's page showing is false when its load completes — "
            "a document that reached the end twice would fire two pageshows with no pagehide between them, "
            "which is the exact inconsistency the flag exists to prevent");
     document_page_showing_set(ctx, true);
@@ -1714,6 +1721,80 @@ static int document_done_stage(JSContext *ctx, int stage)
                       page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
                       doc_here(ctx)->doc_obj);
     return 1;
+}
+
+/* HTML §13.2.7 "The end" STEP 8 — "Spin the event loop until there is nothing that DELAYS THE LOAD EVENT in
+ * the Document" — as a PREDICATE over this agent's navigable tree, asked of one document.
+ *
+ * IT IS A GATE THE ENGINE DID NOT HAVE, AND ITS ABSENCE WAS BEING COVERED BY THE SCHEDULER'S QUIESCENCE. The
+ * `load` stage below used to run whenever the walk found a document at "interactive", and the only thing that
+ * had ever kept it in order was that solver/engine.c would not ask for a lifecycle stage until the running
+ * flow had NOTHING left — no program, no job, no reply the host still owed. That is not step 8: quiescence is
+ * both too strong and too weak, and it is wrong in the two directions separately.
+ *   TOO STRONG, which is the defect a page feels: HTML makes NOTHING about a `fetch()` or a dynamic `import()`
+ *     delay the load event, and a flow parked on one is not quiescent — so a bundle with one request still in
+ *     the air at the end of its parse never reached `load` at all, and every listener behind it (an SPA
+ *     bootstrap, a router, a lazy-loader, an analytics beacon) never ran.
+ *   TOO WEAK, which is what this predicate is for: quiescence is a fact about ONE FLOW and the load event is a
+ *     fact about ONE DOCUMENT, so nothing in it says a parent may not finish ahead of its own frames.
+ *
+ * THE SOURCE BUILT HERE IS THE NAVIGABLE CONTAINER'S, which §"the iframe element" states for every element
+ * type that POTENTIALLY DELAYS THE LOAD EVENT (`iframe`, `embed`, `object`): "the user agent must delay the
+ * load event of element's node document if element's content navigable is non-null and any of the following
+ * are true: element's content navigable's active document is not ready for post-load tasks; element's content
+ * navigable's is delaying load events is true; or anything is delaying the load event of element's content
+ * navigable's active document."
+ * ALL THREE BULLETS ARE ONE QUESTION HERE, and that is the tree's doing rather than a simplification. "Ready
+ * for post-load tasks" is §13.2.7's own step 11, which follows step 9.1's readiness "complete" with nothing
+ * observable between them — so readiness < 2 IS the first bullet. And the walk below is over the WHOLE
+ * subtree, not over one generation, so a grandchild that is still loading answers the third bullet by being in
+ * the same list. Asked of the CONTAINER relation (window_proxy_parent_navigable) rather than of the element,
+ * because that relation is what §7.3.1.3 writes and what §7.3.1.6 severs — an `<iframe>` the running flow has
+ * detached is not this document's delay any more, and the navigable's own parent link is where that shows.
+ *
+ * WHAT IT DOES NOT ANSWER, AND WHERE THAT IS ANSWERED INSTEAD. navigable_tree_order lists only the navigables
+ * this instance has MATERIALIZED and only the LOCAL ones, so two kinds of child are invisible to this walk:
+ *   - A CHILD WHOSE DOCUMENT IS STILL BEING FETCHED has no realm yet. It is covered, but by the SCHEDULER and
+ *     not here: §7.4 step 14's load is a job whose fetch parks as a synchronous host request
+ *     (solver/engine.c's engine_host_request pushes FLOW_PENDING_HOSTREQ), which makes flow_blocked true, and
+ *     the arm that asks for a lifecycle stage will not ask while the flow is blocked. So the interlock exists
+ *     — it is just one layer up, and it is stated in both places rather than assumed in either.
+ *   - A CROSS-ORIGIN CHILD IS IN ANOTHER WASM INSTANCE and is filtered out as REMOTE. Its delay is a fact this
+ *     instance cannot compute alone: §"the iframe element"'s three bullets are all questions about the child's
+ *     ACTIVE DOCUMENT, which lives in the peer. It is the cross-instance read §Security describes, and until
+ *     that read exists a parent whose only unfinished frame is cross-origin fires `load` EARLY. That is a hole
+ *     with a name and an owner, not a defaulted answer.
+ * The remaining sources of step 8 are per-ELEMENT flags this engine keeps no record of — see the call site. */
+static bool document_load_event_delayed(JSContext *ctx, JSValueConst docs, uint32_t n, JSValueConst self)
+{
+    uint32_t j;
+
+    for (j = 0; j < n; j++) {
+        JSValue other = JS_GetPropertyUint32(ctx, docs, j);
+        JSValue up;
+        bool below = false;
+
+        if (JS_IsSameValue(ctx, other, self)) { JS_FreeValue(ctx, other); continue; }
+        /* Is `self` an ANCESTOR of `other`? Walk the navigable's containing-navigable chain, which ends at
+           JS_UNDEFINED for a top-level traversable — so a document in another tree of this agent (an auxiliary
+           navigable a `window.open()` created) terminates without ever matching, which is right: a popup is
+           nobody's navigable container and delays nobody's load event. */
+        up = window_proxy_parent_navigable(ctx, other);
+        while (!JS_IsUndefined(up) && !JS_IsNull(up)) {
+            JSValue next;
+            if (JS_IsSameValue(ctx, up, self)) { below = true; break; }
+            next = window_proxy_parent_navigable(ctx, up);
+            JS_FreeValue(ctx, up);
+            up = next;
+        }
+        JS_FreeValue(ctx, up);
+        if (below && document_readiness(window_proxy_realm(ctx, other)) < 2) {
+            JS_FreeValue(ctx, other);
+            return true;
+        }
+        JS_FreeValue(ctx, other);
+    }
+    return false;
 }
 
 /* THE LOAD LIFECYCLE IS PER DOCUMENT, and it was per FLOW — one counter, for one document, driven with the
@@ -1732,6 +1813,10 @@ static int document_done_stage(JSContext *ctx, int stage)
  * before any document's `load` — a parent's parse finishes while its frames are still loading — and a CHILD's
  * `load` fires before its PARENT's, because a parent's load waits for its subframes. Tree order gives the
  * first; the REVERSE of tree order gives the second, since a container precedes what it contains.
+ * THE REVERSE ORDER IS ONLY THE ORDER, NOT THE WAIT, and reading it as both was the gap document_load_event_
+ * delayed above now fills: reversing the walk decides which of two documents that are BOTH ready goes first,
+ * and says nothing whatever about a parent that is ready while its child is not. §13.2.7 step 8 is the wait,
+ * and it is asked per document in pass two.
  *
  * ONE DOCUMENT PER CALL, then return, because this is a work item on the one frontier like everything else the
  * scheduler asks for — each fire queues listener tasks the loop picks up before the next document's stage.
@@ -1761,7 +1846,19 @@ int document_lifecycle_step(JSContext *ctx)
     for (i = n; i > 0 && !did; i--) {          /* pass two: `load`, innermost first */
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i - 1);
         JSContext *realm = window_proxy_realm(ctx, proxy);
-        if (document_readiness(realm) == 1) {
+        /* §13.2.7 STEP 8 — the spin. The reverse walk is what puts a CHILD's `load` before its parent's when
+           both are ready at once; this is what holds the parent when the child is not ready YET, which the
+           order alone cannot express and which quiescence used to hide.
+           THE SOURCES THIS PREDICATE DOES NOT YET CARRY are `img` (§"Images"' update-the-image-data: "When
+           delay load event is true, fetching the image must delay the load event of the element's node
+           document"), the media elements' §"Loading the media resource" delaying-the-load-event flag, and
+           §"Script processing model"'s per-`script` delaying the load event. Each is a per-ELEMENT flag with
+           no record in this engine, so each is a document that may reach `load` EARLY — the same shape this
+           whole gate exists to end, one element type down. They are not defaulted-to-false here and then
+           forgotten: the flag belongs to the element's own component, and the honest place for its absence to
+           crash is where that component would raise it, not in a `||` chain here that would have to guess at
+           the state of an element it does not own. */
+        if (document_readiness(realm) == 1 && !document_load_event_delayed(ctx, docs, n, proxy)) {
             document_done_stage(realm, 1);
             DCHECK(document_readiness(realm) == 2,
                    "a document's `load` stage ran and left its readiness where it was — as above, the walk "

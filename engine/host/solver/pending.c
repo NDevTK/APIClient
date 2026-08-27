@@ -186,6 +186,18 @@ int pending_outstanding(JSValueConst reg)
     return 0;
 }
 
+int pending_outstanding_kind(JSValueConst reg, int kind)
+{
+    int n = pend_len(reg), i;
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        int hit = pending_get_int(e, PEND_KIND) == kind && pend_owed(e);
+        JS_FreeValue(pend_ctx(), e);
+        if (hit) return 1;
+    }
+    return 0;
+}
+
 int pending_owed_replies(JSValueConst reg)
 {
     int n = pend_len(reg), i, c = 0;

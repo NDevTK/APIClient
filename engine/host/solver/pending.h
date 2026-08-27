@@ -256,6 +256,19 @@ int  pending_ready(JSValueConst reg);
    leaves the pick and never comes back. */
 int  pending_outstanding(JSValueConst reg);
 
+/* IS ANY ENTRY OF ONE KIND STILL OWED — the missing ARITY of the two questions above, and the one a caller
+   that cares WHICH debt it is holding has to be able to ask. `pending_count_kind` asks the kind and counts
+   ANSWERED entries too (which is right for the request door); `pending_outstanding` asks "owed" and not the
+   kind. A caller that needs both was left to re-derive "owed" for itself, and pend_owed's own comment above it
+   says why that must not happen: what differs between callers is which KINDS they ask about, never what
+   "owed" means, and a second spelling of it is the drift that comment exists to prevent.
+   THE CALLER THIS EXISTS FOR IS HTML §13.2.7 "The end" step 8 — "nothing that delays the load event" — which
+   is a question about WHICH replies are outstanding and not how many: a `<script src>` still in the air delays
+   a document's `load` (§"Script processing model": "Whenever a script element el's delaying the load event is
+   true, the user agent must delay the load event of el's preparation-time document") and a `fetch()` or a
+   dynamic `import()` does not, so one number over the whole register cannot answer it. */
+int  pending_outstanding_kind(JSValueConst reg, int kind);
+
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptI -1, req 0).
    Creates the register if this is the flow's first. Returns the new entry, OWNED by the caller. */
 JSValue pending_push(JSValue *reg, int kind);

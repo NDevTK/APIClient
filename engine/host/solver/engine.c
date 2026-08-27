@@ -5150,8 +5150,6 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
             }
-            else if (pending_count(f->pending) > 0 && !flow_pending_ready(f))
-                return FLOW_STEP_OWED;   /* only host-owed replies remain: no progress, and NOT finished */
             else if (flow_pending_ready(f)) {
                 /* FETCH-AWAIT: this flow's programs are done and its microtasks are run, and a suspended async
                    body is awaiting a LIVE fetch (a pending promise). The network has completed, so ONE answered
@@ -5163,11 +5161,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                 flow_deliver_one_reply(ctx, f);
                 return 0;
             }
-            /* NOTHING QUEUED, NOTHING OWED. What follows is what becomes due when the flow has nothing else,
-               in the order it becomes due: first the load lifecycle, which is already due (a parser finishing
-               waits on no clock), and only then the two CLOCK-DRIVEN sources — and by the time control reaches
-               here everything that was already due (this flow's jobs above, a reply the host owes) has been
-               offered a turn. */
+            /* NOTHING QUEUED AND NOTHING DELIVERABLE. What follows is what becomes due when the flow has
+               nothing else, in the order it becomes due: first the load lifecycle, which is already due (a
+               parser finishing waits on no clock), and only then the two CLOCK-DRIVEN sources — and by the
+               time control reaches here everything that was already due (this flow's jobs above, a reply that
+               has arrived) has been offered a turn. */
             /* A DOCUMENT FINISHED LOADING, in this flow's world — DOMContentLoaded across the agent's
                documents in tree order, then `load` innermost-first, one per turn. It comes BEFORE the two
                clock-driven sources and that is the spec's order rather than a preference: the parser
@@ -5175,9 +5173,42 @@ static int flow_step(JSContext *ctx, Flow *f) {
                before the clock may move. It used to sit AFTER them, so a `setTimeout(f, 0)` a parse-time
                script set ran before DOMContentLoaded — which no browser does — and a rendering opportunity
                would have preceded it too. A page's real work is behind these events: the half of a bundle
-               that touches the DOM and calls the API runs here. */
-            else if (g_docdone_hook && g_docdone_hook(ctx)) {
+               that touches the DOM and calls the API runs here.
+             *
+             * AND IT NOW COMES BEFORE THE FLOW PARKS ON WHAT THE HOST STILL OWES, which is the half that was
+             * wrong. The OWED return used to sit ABOVE this arm, so the lifecycle was reachable only by a flow
+             * with NOTHING outstanding — quiescence standing in for HTML §13.2.7 "The end" step 8, "spin the
+             * event loop until there is nothing that DELAYS THE LOAD EVENT in the Document". Those are not the
+             * same condition and the difference is not academic: nothing in HTML makes a `fetch()` or a
+             * dynamic `import()` delay the load event, so a bundle with ONE request still in the air when its
+             * parse ended never reached `load` — nor even DOMContentLoaded, since the same return gated stage 0
+             * too — and every listener behind those events never ran. That is the majority of a real
+             * application page (an SPA bootstrap, a router, a lazy-loader, an analytics beacon all hang off
+             * `load`), and it is measurable as a page that parses, learns some endpoints and then finishes
+             * having run none of the code that was waiting to be told the document was ready.
+             * WHAT STILL HOLDS THE FLOW HERE IS STATED POSITIVELY, per kind, from the spec:
+             *   - A `<script src>` DOES delay it, both the document's own (DOCSCRIPT, which the sequence arm
+             *     far above already holds the flow at) and one a script INJECTED (SCRIPT) — §"Script processing
+             *     model": "Whenever a script element el's delaying the load event is true, the user agent must
+             *     delay the load event of el's preparation-time document."
+             *   - A HOSTREQ is not a delay source at all and is a stronger thing: the flow is SUSPENDED
+             *     mid-expression on a synchronous cross-instance read, so running a `load` listener here would
+             *     interleave two program points of one flow. flow_blocked is that question and it is asked
+             *     first.
+             *   - A `fetch()` (RESOLVE) and a dynamic `import()` (MODULE) delay nothing, and are exactly what
+             *     this arm now runs in front of.
+             * The remaining sources of step 8 are per-ELEMENT flags — `img`, the media elements, `script` — and
+             * they belong to those components rather than to this register; core/dom/document.c's
+             * document_load_event_delayed names them at the gate they are missing from. */
+            else if (!flow_blocked(f) &&
+                     !pending_outstanding_kind(f->pending, FLOW_PENDING_SCRIPT) &&
+                     !pending_outstanding_kind(f->pending, FLOW_PENDING_DOCSCRIPT) &&
+                     g_docdone_hook && g_docdone_hook(ctx)) {
                 g_step_unit = "document-lifecycle-stage"; return 0; }
+            /* ONLY HOST-OWED REPLIES REMAIN: no progress, and NOT finished. Below the lifecycle for the reason
+               above — a debt the load event does not wait on must not decide when the load event fires. */
+            else if (pending_count(f->pending) > 0)
+                return FLOW_STEP_OWED;
             /* §8.1.7.3's IN-PARALLEL HALF, asked first of the two clock-driven sources because it is the one
                that can defer: it compares the next rendering opportunity with the earliest timer expiry and
                yields when the timer is earlier. Without a rendering opportunity there is no
