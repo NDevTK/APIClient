@@ -56,12 +56,55 @@
 #define APICLIENT_DEV 1   /* development is the default; a release build compiles with -DAPICLIENT_DEV=0 */
 #endif
 
-/* Emit the machine-readable assertion line the JS bridge (linesToAnalysis) surfaces (@E / @WHY), then abort.
-   Keep `msg` a plain literal/simple string — it is embedded in JSON unescaped. */
+/* THE ASSERTION LINE IS JSON, SO IT IS ESCAPED HERE AND NOT ASKED FOR BY A COMMENT. This emitter used to
+ * interpolate `condstr` and `msg` with a bare `%s` under an instruction to "keep msg a plain literal" — a
+ * comment standing where a mechanism belongs, and one that the two fields BOTH break in their ordinary use.
+ * `condstr` is `#cond`, so a `DCHECK(strcmp(d, "none") != 0, …)` stringizes its own operand's quotes into the
+ * field; and a `reason` earns its place by CITING the clause it implements, which means quoting the spec's
+ * words. The result was a record announcing itself as machine-readable that `JSON.parse` rejects at the first
+ * quotation mark — and every consumer had a default waiting: the shipped bridge caught the throw and pushed
+ * the raw line under a generic context, and the corpus report read the fixed `cond` instead. So the ONE field
+ * that names what to build was unreadable in exactly the asserts that named it best, and nothing anywhere
+ * reported a parse failure. Escaping at the ONE emitter is the root fix; every author's message is then
+ * ordinary prose and no caller has a rule to remember.
+ * JSON (RFC 8259 §7 "Strings") requires escapes for `"`, `\` and every code point below U+0020, and permits
+ * any other Unicode character unescaped — so UTF-8 bytes (the `§` in every citation) pass straight through.
+ *
+ * ONE LOCK, BECAUSE THE RECORD IS MANY WRITES AND stderr IS UNBUFFERED. The old form was a single `fprintf`
+ * and the escaping makes it a sequence; run-test262 drives the corpus on SEVERAL THREADS, so an unlocked
+ * sequence lets a second thread's record interleave into the middle of this one and produce a line that
+ * decomposes into a location from one assert and a reason from another — a plausible datum assembled out of
+ * two true ones, which is the failure this file exists to make impossible. `flockfile` (POSIX.1-2001, and the
+ * mechanism stdio defines for exactly this) holds the stream across the whole record. */
+static inline void apiclient_assert_emit_json(FILE *f, const char *s)
+{
+  for (; *s != '\0'; s++) {
+    unsigned char c = (unsigned char) *s;
+    switch (c) {
+    case '"':  fputs("\\\"", f); break;
+    case '\\': fputs("\\\\", f); break;
+    case '\n': fputs("\\n", f);  break;
+    case '\r': fputs("\\r", f);  break;
+    case '\t': fputs("\\t", f);  break;
+    default:
+      if (c < 0x20) fprintf(f, "\\u%04x", (unsigned) c);
+      else          fputc((int) c, f);
+    }
+  }
+}
+
+/* Emit the machine-readable assertion line the JS bridge (linesToAnalysis) surfaces (@E / @WHY), then abort. */
 #define APICLIENT_ASSERT_EMIT(tag, condstr, msg) do { \
     fflush(stdout); \
-    fprintf(stderr, tag " {\"phase\":\"assert\",\"cond\":\"%s\",\"at\":\"%s:%d\",\"reason\":\"%s\"}\n", \
-            (condstr), __FILE__, __LINE__, (msg)); \
+    flockfile(stderr); \
+    fputs(tag " {\"phase\":\"assert\",\"cond\":\"", stderr); \
+    apiclient_assert_emit_json(stderr, (condstr)); \
+    fputs("\",\"at\":\"", stderr); \
+    apiclient_assert_emit_json(stderr, __FILE__); \
+    fprintf(stderr, ":%d\",\"reason\":\"", __LINE__); \
+    apiclient_assert_emit_json(stderr, (msg)); \
+    fputs("\"}\n", stderr); \
+    funlockfile(stderr); \
     fflush(stderr); \
   } while (0)
 

@@ -101,13 +101,42 @@ function srcref(raw) {
      extension/check.js         `@WHY DCHECK failed:`/`@WHY DFAIL:`/`@E CHECK failed:`/`@E CHECK_FAIL:` -- a
                                 thrown Error, so it carries a message and NO file:line; the file is the key.
    Each emitter gets ONE pattern covering BOTH its tags, so a CHECK (always fatal, dev AND release) can never
-   be the shape nobody reads while its DCHECK sibling is read. */
+   be the shape nobody reads while its DCHECK sibling is read.
+
+   THE FIELD THAT NAMES WHAT TO BUILD IS `reason`, AND THIS FILE READ `cond` INSTEAD. check.h writes FOUR
+   fields and this parser took two of them, so every check.h assert in the ranked queue below printed its
+   `cond` -- which for `DFAIL` is the fixed string check.h's own `#define` interpolates ("unreachable", the
+   macro's way of saying there was no boolean to test) and therefore says NOTHING WHATEVER about the site. The
+   queue's entire purpose is to name the next capability to build; five of ten entries named it `unreachable`
+   while the producer had written a spec-cited paragraph into `reason` on the same line. That is the
+   defaulted-field defect performed by a MEASUREMENT: nothing was absent, nothing crashed, and the constant
+   read exactly like a finding. It cost a lane, dispatched to write three DFAIL messages that already existed
+   in full with their section numbers and titles.
+   SO THE PAYLOAD IS `reason`, AND A RECORD THIS CANNOT DECOMPOSE IS FATAL rather than degraded to the part
+   that did parse -- the same rule `srcref` above enforces for a location. `cond` is printed BESIDE the reason
+   only where it carries the failing C EXPRESSION (a `DCHECK`), because that expression is the operand that
+   reached the gap; where it is the unconditional constant it is the macro's spelling and not an observation,
+   and printing it is what made the queue unreadable. */
+const CHECK_H_UNCONDITIONAL = 'unreachable';   // check.h's `DFAIL`/`CHECK_FAIL` condstr; see engine/host/check.h
+const CHECK_H_RECORD = /"phase":"assert","cond":"([\s\S]*?)","at":"([^"]*)","reason":"([\s\S]*?)"\}(?=$|[\s,"\]])/;
 const JS_MIRROR_TAGS = 'DCHECK failed|DFAIL|CHECK failed|CHECK_FAIL';
 function signatures(text) {
   const t = unesc(unesc(text));
   const out = new Set();
-  for (const m of t.matchAll(/"cond":"((?:[^"\\]|\\.)*)","at":"([^"]+)"/g))
-    out.add(srcref(m[2]) + ' :: ' + degensym(m[1]));
+  /* Anchored on each record's OWN opening rather than swept with a global regex, so a record that fails to
+     decompose is a named throw at a known offset instead of one fewer entry in a ranking that still prints as
+     complete. */
+  for (let i = t.indexOf('"phase":"assert"'); i !== -1; i = t.indexOf('"phase":"assert"', i + 1)) {
+    const m = CHECK_H_RECORD.exec(t.slice(i));
+    if (!m || m.index !== 0 || !m[3] || m[3].includes('"phase":"assert"'))
+      throw new Error(`report.mjs: a check.h assertion record could not be decomposed into cond/at/reason:\n` +
+        `  ${t.slice(i, i + 300)}\n` +
+        `  check.h's APICLIENT_ASSERT_EMIT writes all four fields on one line, so this is that emitter and\n` +
+        `  this parser having come apart -- teach this pattern the shape rather than letting the record\n` +
+        `  through, because the ONE field it carries that a work queue can act on is \`reason\`.`);
+    out.add(srcref(m[2]) + ' :: ' +
+            (m[1] === CHECK_H_UNCONDITIONAL ? '' : degensym(m[1]) + ' -- ') + degensym(m[3]));
+  }
   for (const m of t.matchAll(new RegExp(
         '@(?:WHY|E) (?!\\{)(?!(?:' + JS_MIRROR_TAGS + '):)([^\\n]*?) \\(([^()\\s]+:\\d+)\\)', 'g')))
     out.add(srcref(m[2]) + ' :: ' + degensym(m[1].trim()));
@@ -177,8 +206,9 @@ for (const p of passes) for (const r of p.rows) {
        and the artifact line printed a bare `@` -- a reader-with-no-writer, defaulted to empty by `|| ''`. */
     load: Array.isArray(r.loadAfter) ? r.loadAfter[0] : null,
   });
-  /* KEYED ON THE SOURCE LOCATION, NOT ON THE LOCATION PLUS ITS REASON TEXT. A `check.h` assert's reason is
-     the fixed `cond` ("unreachable"), so those merged; a `quickjs-check.h` assert's whole MESSAGE is the
+  /* KEYED ON THE SOURCE LOCATION, NOT ON THE LOCATION PLUS ITS REASON TEXT. A `check.h` assert states ONE
+     capability per line and every site that reaches it carries the same words, so those merge on their own; a
+     `quickjs-check.h` assert's whole MESSAGE is the
      cond, and it quotes the OPERAND — so `quickjs.c:6462` reached over `navigator.language.toLowerCase()` on
      one site and over a different expression on another, and ONE unbuilt capability at ONE line ranked as two
      one-site entries. That is precisely the split `degensym` above exists to prevent, one level up: it folds

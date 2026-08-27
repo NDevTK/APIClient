@@ -195,10 +195,28 @@ function linesToAnalysis(lines, msg, outcome, eng) {
         if (o && o.phase === "engine-crash" && typeof o.err === "string") crashErr = o.err;
       } catch (_) { /* not the crash line; it is already recorded as an engine error above */ }
     } else if (ln.startsWith("@WHY ")) {
-      // engine diagnostic for a zero-result/resource path (e.g. reg_oom) — surface it so an OOM or
-      // aborted flow never fails SILENTLY (CLAUDE.md: every zero-result path emits @WHY).
-      try { const o = JSON.parse(ln.slice(5)); extraErrors.push({ context: o.phase || "why", message: o.reason || ln.slice(5) }); }
-      catch (_) { extraErrors.push({ context: "why", message: ln.slice(5) }); }
+      /* An engine diagnostic for a zero-result/resource path — surfaced so an OOM or aborted flow never fails
+         SILENTLY (CLAUDE.md: every zero-result path emits @WHY). TWO PRODUCERS WRITE THIS TAG AND THE PARSE
+         IS THE ROUTING BETWEEN THEM, not a swallow: `engine/host/check.h` emits a JSON record carrying
+         phase/cond/at/reason, and `engine/qjs/quickjs-check.h` cannot include the host header, so the
+         submodule — the interpreter, the trampoline, every step machine and libregexp — emits a PLAIN line
+         whose whole text is the message. A shape that is not JSON is therefore the second producer, and the
+         line itself is the message it wrote.
+         NEITHER FIELD IS DEFAULTED ON THE JSON ARM. `o.phase || "why"` and `o.reason || ln.slice(5)` stood
+         here, and `reason` is the ONE field a @WHY carries that names what to build — so a record that
+         stopped carrying it would have rendered as the raw line and read exactly like the plain-line
+         producer, which is the two shapes becoming indistinguishable in the act of hiding the defect. The
+         same defaults were how nobody noticed that check.h's emitter interpolated its message into JSON
+         UNESCAPED, so every reason quoting the spec it cites — which is every good one — failed to parse
+         here and left through the catch. check.h escapes at the emitter now; this asserts what it writes. */
+      let o = null;
+      try { o = JSON.parse(ln.slice(5)); } catch (_) { o = null; }
+      if (o === null) { extraErrors.push({ context: "why", message: ln.slice(5) }); continue; }
+      DCHECK(typeof o.phase === "string" && typeof o.reason === "string",
+        "a check.h @WHY record parsed as JSON but is missing `phase` or `reason`. APICLIENT_ASSERT_EMIT " +
+        "writes all four fields on every line, so this is that emitter and this reader having come apart — " +
+        "and `reason` is the only field of the four that names the capability to build: " + ln.slice(5, 400));
+      extraErrors.push({ context: o.phase, message: o.reason });
     }
   }
   /* THE DOCUMENT IS EITHER THERE OR THIS CALLER SAID IT WOULD NOT BE. `result || {}` on its own is the exact

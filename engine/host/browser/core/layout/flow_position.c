@@ -179,12 +179,23 @@ static void fp_require_placeable(lxb_dom_element_t *el)
               "beside `inline` — they are ATOMIC inline-level boxes, which 'participate in their inline "
               "formatting context as a single opaque box', so their CONTENTS are laid out differently and "
               "their POSITION is a position on a line box exactly as an inline box's is. css-display §2's "
-              "`inline flex` and `inline grid` are the same case one level up. So this needs LINE BREAKING, "
-              "which is the half of the measurement core/css/font_metrics.h does not answer — it holds CSS 2 "
-              "§10.8.1 'Leading and half-leading''s `A` and `D`, which say how TALL a line box is, and no "
-              "advance for an arbitrary glyph, which is what says where the run breaks. The same fact is why "
-              "an inline element can be SEVERAL fragments and therefore several rectangles. BUILD the per-"
-              "glyph advance beside `A` and `D`, then §9.4.2's line boxes over it");
+              "`inline flex` and `inline grid` are the same case one level up. The same fact is why an inline "
+              "element can be SEVERAL fragments and therefore several rectangles. THE MEASUREMENT IS NO "
+              "LONGER WHAT IS MISSING, AND THIS LINE SAID IT WAS: it named core/css/font_metrics.h as holding "
+              "CSS 2 §10.8.1 'Leading and half-leading''s `A` and `D` and no advance for an arbitrary glyph, "
+              "and instructed the reader to build that advance — which `font_metrics_advance_measure_em` now "
+              "answers for every Unicode scalar value off the first available face's own 'cmap' and 'hmtx', "
+              "and which core/layout/text_run.h already sums per run beside its widest unbreakable segment. "
+              "Following this line as it stood would have built a capability twice. WHAT IS LEFT IS ONE "
+              "OPERAND: §9.4.2 stacks boxes when 'several inline-level boxes cannot fit horizontally within a "
+              "single line box', which is a comparison against a line's AVAILABLE WIDTH, and a min-content "
+              "measurement is defined without one. So BUILD THE GREEDY FILL in core/layout/line_box.c — its "
+              "own crash names it in full, over core/layout/used_value.h's used width of the establishing "
+              "block container — and then this box's origin is the line box the fill put it on plus the "
+              "offset along that line the fill assigned it. THAT IS THE SAME ABSENT CAPABILITY "
+              "core/layout/scrolling_area.c crashes for, which asks the fill for a TEXT FRAGMENT's margin "
+              "edge where this asks it for an INLINE BOX's origin: one fill, reached from two members, so "
+              "building it once closes both crashes");
     /* What is left is a box CSS 2.1 §9.2.1 'Block-level elements and block boxes' makes block-level, which is
        what the two rules below are written about. A `table` is one of them and stays on this path: §17.4
        'Tables in the visual formatting model' says the table wrapper box is block-level for `display: table`
