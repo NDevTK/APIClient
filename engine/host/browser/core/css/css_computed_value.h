@@ -58,6 +58,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_COMPUTED_VALUE_H
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -175,5 +176,18 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el);
 CssPx css_used_line_height_px(lxb_dom_element_t *el);
 CssPx css_font_ascent_px(lxb_dom_element_t *el);
 CssPx css_font_descent_px(lxb_dom_element_t *el);
+
+/* css-values-4 §6.1.1 "Font-relative Lengths…"'s ADVANCE MEASURE of one Unicode scalar value on `el` — "its
+   advance width or height, whichever is in the inline axis of the element" — at that element's own computed
+   `font-size`, in CSS pixels. It is the third product formed out of the same two operands as the two entries
+   above, and it exists here for the same reason: the FACE's ratio is core/css/font_metrics.h's and the ELEMENT
+   is this file's, so a layout component that took them apart would have to remember to multiply and could take
+   the size from one element and the orientation from another.
+   IT MEASURES THE GLYPH THAT GETS DRAWN, .notdef included — `font_metrics_advance_measure_em`, NOT
+   `font_metrics_typical_advance_measure_em`, which is §6.1.1's `ch`/`ic` answer and a different question. See
+   the definition, and font_metrics.h, for what answering either with the other reports.
+   A VERTICAL WRITING MODE CRASHES in the direction resolution this shares with `ch` and `ic`, which is where
+   css-writing-modes-4 §5.1's `text-orientation` is named as the row to add. */
+CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint);
 
 #endif

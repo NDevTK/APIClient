@@ -216,10 +216,10 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     if (!fp_computed_is(el, "float", "none"))
         DFAIL("CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "
               "the left or right edge of its containing block and then down past any earlier float it would "
-              "overlap, under §9.5.1's nine constraints. Its own used width is a SHRINK-TO-FIT (§10.3.5), which "
-              "core/layout/used_value.c crashes on for want of an intrinsic size, so the extent and the "
-              "position are blocked on two different components. BUILD §9.5.1's float placement over the line "
-              "boxes it interacts with");
+              "overlap, under §9.5.1's nine constraints. Its own used width is a SHRINK-TO-FIT (§10.3.5) and "
+              "core/layout/used_value.c COMPUTES ONE NOW, over core/layout/intrinsic_size.h's measurement of "
+              "the box's content — so the extent is no longer the blocker and the POSITION is the whole of what "
+              "is left. BUILD §9.5.1's nine constraints over the line boxes the float interacts with");
     fp_require_horizontal_tb(el);
     fp_require_placeable(el);
 

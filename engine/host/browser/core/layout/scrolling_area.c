@@ -154,14 +154,17 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool e
                       "descendants' boxes\", and one of them is the ANONYMOUS INLINE BOX (CSS 2.2 §9.2.2.1) "
                       "holding this text run — so this walk needs the run's own INLINE-AXIS EXTENT, which is "
                       "the sum of its glyphs' advances, and its position on the line box §9.4.2 flowed it "
-                      "into. core/layout/line_box.h computes a line box's HEIGHT without any advance and says "
-                      "why; nothing computes an advance, and a zero here would report "
-                      "`<div style=\"width:50px\">verylongword</div>` as having no overflow at all — which is "
-                      "the exact comparison `scrollWidth > clientWidth` is asked to decide. BUILD the "
-                      "per-glyph advance in core/css/font_metrics.h and the inline-axis placement over it "
-                      "(css-text-3 §5 \"Line Breaking and Word Boundaries\" for where the run breaks, CSS 2.2 "
-                      "§9.4.2 for which line box each fragment lands on), then fold each fragment's margin "
-                      "edge into `best` here");
+                      "into. THE SUM IS BUILT and so is the break search over it — core/layout/text_run.h "
+                      "reports a run's whole advance and its widest unbreakable segment, over the per-glyph "
+                      "advances core/css/font_metrics.h measures — so a zero here is no longer the only "
+                      "available answer, and reporting one would still say that "
+                      "`<div style=\"width:50px\">verylongword</div>` has no overflow at all, which is the "
+                      "exact comparison `scrollWidth > clientWidth` is asked to decide. WHAT IS MISSING IS THE "
+                      "PLACEMENT and not the measurement: this member needs the fragment's own MARGIN EDGE — a "
+                      "coordinate — which is a function of which line box §9.4.2 flowed each fragment onto and "
+                      "of where along that line it starts, and neither is a size. BUILD the greedy line fill "
+                      "in core/layout/line_box.c (its own crash names it, and it is the same loop this member "
+                      "needs), then fold each fragment's margin edge into `best` here");
         }
         if (n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;

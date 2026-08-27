@@ -940,10 +940,12 @@ static JSValue js_img_dimension(JSContext *ctx, JSValueConst this_val, int magic
                   "§15.4.2 \"Images\"' third rule makes a NON-REPLACED phrasing element — an image that "
                   "represents the text of its `alt` attribute because its request broke. It is being rendered, "
                   "so step 1 applies and there is a real answer; that answer is the extent of the LINE BOXES "
-                  "the alt text lays out into, which CSS 2.1 §9.4.2 \"Inline formatting contexts\" defines and "
-                  "which needs a real font to measure — the same operand §10.3.5's shrink-to-fit width is "
-                  "waiting on. BUILD the inline formatting context; every text-sized replaced element in "
-                  "core/layout/replaced_element.c is waiting on the same one");
+                  "the alt text lays out into, which CSS 2.1 §9.4.2 \"Inline formatting contexts\" defines. THE "
+                  "FONT IS NO LONGER THE MISSING OPERAND — core/layout/text_run.h measures a run's advance and "
+                  "its break opportunities, and §10.3.5's shrink-to-fit is computed over them — what is missing "
+                  "is the EXTENT of the line boxes themselves, which is a greedy fill against each line's "
+                  "available width and is core/layout/line_box.c's own named crash. BUILD that fill; every "
+                  "text-sized replaced element in core/layout/replaced_element.c is waiting on the same one");
         return element_view_length_long(ctx, used_value_content_px(el, vertical));
     }
     st = img_state(ctx, this_val);

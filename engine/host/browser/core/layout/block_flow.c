@@ -206,6 +206,24 @@ typedef enum {
     BF_CHILD_INLINE        /* in-flow inline-level content: §9.4.2's, not this walk's */
 } BfChildKind;
 
+/* THE CHARACTERS §9.2.2.1's SENTENCE IS ABOUT — "white space content that WOULD SUBSEQUENTLY BE COLLAPSED AWAY
+   according to the 'white-space' property" — which makes the set css-text-3 §4.1.1 "Phase I: Collapsing and
+   Transformation"'s COLLAPSIBLE one and NOT HTML's ASCII whitespace. The two differ by exactly one character
+   and the difference is a dropped glyph rather than a nicety:
+     U+0020 SPACE and U+0009 TAB are §4.1.1's "collapsible spaces and tabs";
+     U+000A LINE FEED is the SEGMENT BREAK — css-text-3 §4 "White Space Processing & Control Characters": "when
+       an HTML document is represented as a DOM tree each line feed (U+000A) is treated as a segment break";
+     U+000D CARRIAGE RETURN is NOT a segment break in the DOM ("unlike HTML, the DOM does not give any
+       particular meaning to carriage returns") and §4 says what it is instead: "carriage returns (U+000D) are
+       treated identically to spaces (U+0020) IN ALL RESPECTS";
+     U+000C FORM FEED IS NOT WHITE SPACE HERE AT ALL, and it used to be in this list. §4's control-character
+       rule covers it — "control characters (Unicode category Cc) OTHER THAN tabs (U+0009), line feeds
+       (U+000A), carriage returns (U+000D) and sequences that form a segment break must be rendered as a
+       VISIBLE GLYPH which the UA must synthesize if the glyphs found in the font are not visible" — so it is
+       CONTENT, it generates an anonymous inline box, and [UAX14] additionally gives it line breaking class BK,
+       which css-text-3 §5.5 "Line Breaking Details" makes a FORCED LINE BREAK. Counting it as collapsible
+       removed the box silently: the run was classified as generating none, so neither the line box walk nor the
+       intrinsic size walk was ever handed the character that would have crashed for it. */
 static bool bf_text_is_all_whitespace(const lxb_dom_node_t *n)
 {
     const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
@@ -216,7 +234,7 @@ static bool bf_text_is_all_whitespace(const lxb_dom_node_t *n)
     for (i = 0; i < len; i++) {
         char c = (char)d[i];
 
-        if (c != ' ' && c != '\t' && c != '\n' && c != '\f' && c != '\r') return false;
+        if (c != ' ' && c != '\t' && c != '\n' && c != '\r') return false;
     }
     return true;
 }

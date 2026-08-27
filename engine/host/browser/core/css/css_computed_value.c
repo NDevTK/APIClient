@@ -482,6 +482,32 @@ CssPx css_font_descent_px(lxb_dom_element_t *el)
     return font_metrics_descent_px(css_cv_realm(el), css_cv_font_size_px(el));
 }
 
+/* css-values-4 §6.1.1's ADVANCE MEASURE OF ONE GLYPH ON ONE ELEMENT, in CSS pixels — the third product this
+   file forms out of a face ratio and an element's computed `font-size`, and it is here for the same two reasons
+   the ascent and the descent are: font_metrics.c holds no element and this file already holds the size.
+   IT IS THE DRAWN-GLYPH ENTRY AND NOT §6.1.1's `ch`/`ic` ONE, which core/css/font_metrics.h opens by
+   separating and which the `ch` arm of `css_cv_font_metric_em` above deliberately calls the other of. This one
+   measures the glyph that really gets drawn, .notdef included; that one answers what the `ch` unit is WORTH
+   when the face cannot supply the glyph. A caller measuring text with the second would report a tofu box as the
+   width of a digit and every uncovered character as exactly one em wide — a wrong number in a direction nothing
+   downstream can see, which is why the two entries exist and why this one names which it is.
+   THE DIRECTION IS RESOLVED BY THE SAME FUNCTION `ch` AND `ic` GO THROUGH, on the element the characters are
+   laid out in, so a vertical writing mode crashes there once for all three units rather than in whichever
+   caller reached it first.
+   IT CARRIES NO FACE FACT OF ITS OWN, and that is core/css/font_metrics.h's open decision restated rather than
+   a choice made here: the product carries whatever environment facts the element's computed `font-size` carries
+   (`CSS_ENV_DEFAULT_FONT_SIZE` through the `em` chain), while whether the FACE is itself a picked fact — and
+   how many facts one face is — is a change to css_length.h's vocabulary that font_metrics.h states it owns.
+   Inventing one here would answer that question from the wrong file. */
+CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint)
+{
+    DCHECK(el != NULL, "css-values-4 §6.1.1's advance measure was asked for with no element. The section states "
+                       "it over \"the element on which it is used\" — both the glyph's orientation and the size "
+                       "it is measured at come from one, so there is no elementless form of this question");
+    return css_px_scale(css_cv_font_size_px(el),
+                        font_metrics_advance_measure_em(codepoint, css_cv_advance_direction(el, codepoint)));
+}
+
 /* §6.1.1's "THE COMPUTED METRICS CORRESPONDING TO THE INITIAL VALUES of the font and line-height properties",
    which is the answer for `lh` on an element with no parent and for `rlh` in a document with no root element.
    The initial `line-height` is `normal` (css-inline-3 §5.1) and the initial `font-size` is `medium`

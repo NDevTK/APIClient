@@ -291,15 +291,23 @@ static void lb_text(lxb_dom_element_t *parent, lxb_dom_node_t *n)
           "the face does not cover, which css-fonts-4 §5.2 \"Matching font styles\" renders as \"the missing "
           "character glyph from a default font\" and which therefore has a real advance too. Call it per "
           "typographic character unit of this run with the direction css-writing-modes-4 §5.1 resolves for "
-          "that character. THE FACE IS NO LONGER THE BLOCKER; what is left is this file's own work and nothing "
-          "else's. Everything the surrounding measurement needs is already here: §10.8's steps 1 to 3 and "
-          "§10.8.1's half-leading run over `line-height`, `A` and `D` in this file, and a line box with no "
-          "glyphs on it is measured without asking. So the work is css-text-3 §5's soft-wrap-opportunity "
-          "search over the advances this entry answers, and this DFAIL becomes the loop that fills a line and "
-          "starts the next. TWO THINGS WILL CRASH ON THE WAY AND BOTH ARE THE RIGHT KIND: a VERTICAL advance "
-          "asks a face with no 'vhea'/'vmtx' and names css-writing-modes-4 §5.1.1's synthesis, and this "
-          "engine does not SHAPE — it has no 'GSUB'/'GPOS', so a run's advance is the sum of its glyphs' and a "
-          "ligature or a kern pair is a measurement it does not yet make");
+          "that character, which core/css/css_computed_value.h's `css_font_advance_measure_px` now does per "
+          "element. AND THE SOFT WRAP OPPORTUNITIES ARE ANSWERED TOO: core/layout/text_run.h walks a run under "
+          "css-text-3 §4.1's white space processing and [UAX14]'s rules and reports its whole advance and its "
+          "widest unbreakable segment. NEITHER OF THOSE IS THE THING THIS FILE STILL LACKS, and the difference "
+          "is one operand: text_run.h measures against NO WIDTH — a min-content size is defined without one — "
+          "while §9.4.2 distributes boxes across line boxes when they \"cannot fit horizontally within a single "
+          "line box\", which is a comparison against the AVAILABLE WIDTH of each line. So the work here is the "
+          "GREEDY FILL that text_run.h's accumulator is deliberately not: take the segments in order, place "
+          "each on the current line while it fits, start a new line box when it does not, and take §10.8's "
+          "steps 1 to 3 over each — which this file already computes for one line box, over `line-height`, `A` "
+          "and `D`. The available width is core/layout/used_value.h's used width of the establishing block "
+          "container, and §9.4.2's own \"line boxes may vary in width if available horizontal space is reduced "
+          "due to floats\" is why a float in this context still crashes above rather than being a term. TWO "
+          "THINGS WILL CRASH ON THE WAY AND BOTH ARE THE RIGHT KIND: a VERTICAL advance asks a face with no "
+          "'vhea'/'vmtx' and names css-writing-modes-4 §5.1.1's synthesis, and this engine does not SHAPE — it "
+          "has no 'GSUB'/'GPOS', so a run's advance is the sum of its glyphs' and a ligature or a kern pair is "
+          "a measurement it does not yet make");
 }
 
 /* ONE CHILD NODE of the inline formatting context. */

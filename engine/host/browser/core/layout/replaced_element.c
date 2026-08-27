@@ -277,8 +277,10 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
               "on one line\"; every other type is §15.5 \"Widgets\", a different mechanism with a different "
               "size. The type-state machine is what is missing — §4.10.5.1's states are not modelled — and it "
               "decides which of the two this is. BUILD the `type` attribute's enumerated states, then §15.4.2 "
-              "over the Image Button one; the text-sized arms additionally need a real font, which is the same "
-              "operand CSS 2.1 §10.3.5's shrink-to-fit is waiting on");
+              "over the Image Button one. The text-sized arms additionally need \"whatever width is necessary "
+              "to render the text on one line\", which is css-sizing-3 §2.1's MAX-CONTENT INLINE SIZE of that "
+              "text — the same quantity §10.3.5's shrink-to-fit takes as its preferred width, and it is BUILT "
+              "(core/layout/intrinsic_size.h), so that half is a read rather than a subproblem");
 
     DCHECK(lxb_html_tree_node_is(n, LXB_TAG_IMG),
            "the element dispatch above admitted an element §15.4's list does not name — the guard and this "

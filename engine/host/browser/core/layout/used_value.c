@@ -13,6 +13,7 @@
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/used_value.h"
 
@@ -643,10 +644,11 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
                   "DEFINED BY THE RELEVANT LAYOUT MODULE, however, it resolves to a used value of 0.\" "
                   "css-flexbox-1 §4.5 \"Automatic Minimum Size of Flex Items\" is that definition and it is a "
                   "CONTENT-BASED minimum — the item's min-content size, clamped by its specified size "
-                  "suggestion and by its natural aspect ratio — so it needs css-sizing-3 §5.1 \"Intrinsic "
-                  "Sizes\", which needs the box's own text measured with a real font. This element never "
-                  "reaches here through `used_value_px`: every arm of §10 crashes for a flex or grid item "
-                  "first, naming the container's algorithm. BUILD the flex layout and its intrinsic sizes");
+                  "suggestion and by its natural aspect ratio. THE MIN-CONTENT SIZE IS BUILT "
+                  "(core/layout/intrinsic_size.h), so what is missing here is §4.5's clamp and the flex layout "
+                  "it is part of, not the measurement. This element never reaches here through "
+                  "`used_value_px`: every arm of §10 crashes for a flex or grid item first, naming the "
+                  "container's algorithm. BUILD the flex layout");
         /* §3.2, for every other box: "it resolves to a used value of 0". Its very next sentence pins that for
            the boxes this component classifies — "for backwards-compatibility, the resolved value of this
            keyword is zero for boxes of all [CSS2] display types: block and inline boxes, inline blocks, and
@@ -655,13 +657,42 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
         *out = css_px(0.0);
         return true;
     }
-    DFAIL("a `min-`/`max-` size is one of css-sizing-3 §3.2's INTRINSIC SIZING KEYWORDS — `min-content`, "
-          "`max-content` or a `fit-content()` — whose used value is the box's own content measured under "
-          "§5.1 \"Intrinsic Sizes\": \"the narrowest inline size a box could take that doesn't lead to inline-"
-          "dimension overflow\" and the size \"assuming no line breaks\". That is the SAME missing mechanism "
-          "§10.3.5's shrink-to-fit is waiting on — an inline formatting context that measures text with a real "
-          "font and finds its break opportunities, over every in-flow descendant's contribution — and not a "
-          "second one. BUILD it once and both arms become reads of it");
+    /* css-sizing-3 §3.2 "Sizing Values: …"'s `min-content` AND `max-content` ON A `min-`/`max-` SIZE — "use the
+       min-content size in the relevant axis; for a box's BLOCK SIZE, unless otherwise specified, this is
+       equivalent to its AUTOMATIC SIZE", and the identical sentence for `max-content`.
+       THE AXIS IS THE WHOLE OF THE DIFFERENCE AND §3.2 IS WHERE IT IS STATED, which is a correction worth
+       carrying: read off css-sizing-3 §2.1 "Auto Box Sizes" alone the block axis looks like a second intrinsic
+       measurement (its max-content block size is "the block size of the content after layout"), but the sizing
+       VALUE does not reach for it — §3.2 sends both keywords to the automatic size in that axis, which is what
+       `auto` would have produced and which §3.2's own `auto` entry names ("for width/height, specifies an
+       automatic size"). So the inline axis reads §5.1's two sizes and the block axis reads CSS 2.2 §10.6.3's
+       content-based height, and neither is the other turned sideways.
+       §3.3's `box-sizing` conversion is applied to both for the reason every other arm applies it: each of the
+       three is a CONTENT size and the used value css-sizing-3 §3.3 exposes is the border box's. */
+    if (strcmp(len.keyword, "min-content") == 0 || strcmp(len.keyword, "max-content") == 0) {
+        CssPx px;
+
+        if (vertical) {
+            px = block_flow_auto_height(el);
+        } else {
+            IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
+
+            px = strcmp(len.keyword, "min-content") == 0 ? in.min_content : in.max_content;
+        }
+        *out = uv_is_border_box(el) ? css_px_add(px, uv_surround_total(uv_surround(el, vertical))) : px;
+        return true;
+    }
+    DFAIL("a `min-`/`max-` size is css-sizing-3 §3.2's `fit-content()` or one of the level-3 sizing values "
+          "beside it, whose used value the section states as a clamp: \"use the fit-content formula with the "
+          "available space replaced by the specified argument, i.e. `min(max-content, max(min-content, "
+          "<length-percentage>))`, where the <length-percentage> argument is resolved exactly as for "
+          "<length-percentage> values standing alone\". THE TWO INTRINSIC SIZES ARE BUILT "
+          "(core/layout/intrinsic_size.h) and that clamp is the same three-term one `uv_shrink_to_fit_width` "
+          "already computes; what this arm lacks is the ARGUMENT, because `fit-content(20px)` is a FUNCTION and "
+          "`css_computed_length` carries a bare keyword with nothing under it. BUILD the argument through the "
+          "computed-value model — css-values-4 §10.11 \"Computed Value\" leaves its percentage unresolved "
+          "exactly as a math function's is, so it is the shape `CSS_LENGTH_CALCULATED` already has — and this "
+          "arm is then the clamp over it. §3.2's `calc-size()` is a separate grammar and a separate build");
     return false;
 }
 
@@ -1013,10 +1044,13 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
 /* CSS 2.1 §8.4: a percentage padding "is calculated with respect to the WIDTH of the generated box's
    containing block, EVEN FOR 'padding-top' and 'padding-bottom'" — so, as for a margin, the axis is not asked.
    §8.4's other sentence is the one this component cannot yet be asked to break: "if the containing block's
-   width depends on this element, then the resulting layout is undefined in CSS 2.1". No containing block this
-   component computes depends on its contents — every one of them is §10.1's second case over a block container
-   whose own width came from a declaration or from §10.3.3's equation, and the shrink-to-fit widths that WOULD
-   depend on the element crash in uv_pass_size below. */
+   width depends on this element, then the resulting layout is undefined in CSS 2.1". A SHRINK-TO-FIT width IS
+   such a containing block — §10.3.5's two intrinsic terms are functions of the box's own content — so the
+   sentence is now live rather than vacuous, and what keeps it unreachable is a property of the walk that
+   produces one: core/layout/intrinsic_size.c crashes for EVERY element child, so a box whose shrink-to-fit
+   width exists at all has no element descendant, and there is therefore no element for it to be the containing
+   block of. The day §5.2's contributions make an element child measurable, this becomes reachable in the same
+   diff, and §8.4's "undefined" is what it has to answer with — a real arm to build, not a case that vanished. */
 static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
 {
     CssPx used;
@@ -1085,6 +1119,80 @@ static CssPx uv_block_auto_width(lxb_dom_element_t *el, CssLength size_len, UvBo
                          uv_margin(el, "margin-right", "margin-left",
                                    css_computed_length(el, "margin-right"), box, &size_len));
     content = css_px_max(css_px_sub(css_px_sub(cb, uv_surround_total(s)), margins), css_px(0.0));
+    if (!uv_is_border_box(el)) return content;
+    return css_px_add(content, uv_surround_total(s));
+}
+
+/* CSS 2.2 §10.3.5 "Floating, non-replaced elements"'s SHRINK-TO-FIT WIDTH — the section's own formula, over its
+ * own three terms:
+ *     "Thirdly, find the AVAILABLE WIDTH: in this case, this is the width of the containing block minus the
+ *      used values of 'margin-left', 'border-left-width', 'padding-left', 'padding-right',
+ *      'border-right-width', 'margin-right', and the widths of any relevant scroll bars. Then the shrink-to-fit
+ *      width is: min(max(preferred minimum width, available width), preferred width)."
+ * §10.3.9 "'Inline-block', non-replaced elements in normal flow" is the same algorithm by reference and not a
+ * second one — "if 'width' is 'auto', the used value is the shrink-to-fit width AS FOR FLOATING ELEMENTS" — so
+ * one function serves both box types and the `auto` margin rule they also share is already `uv_margin`'s.
+ *
+ * TWO OF THE THREE TERMS ARE css-sizing-3's, UNDER ITS NAMES, and §2.1 "Auto Box Sizes" is what pins the
+ * vocabularies together by name rather than by resemblance: the "preferred width" IS the max-content inline
+ * size ("this is called the 'preferred width' in CSS2.1§10.3.5") and the "preferred minimum width" IS the
+ * min-content inline size ("this is called the 'preferred minimum width' in CSS2.1§10.3.5"). The AVAILABLE
+ * WIDTH is §2.1's stretch-fit inline size, and §2.1 says that too — "for the inline axis, this is called the
+ * 'available width' in CSS2.1§10.3.5 and computed by the rules in CSS2.1§10.3.3" — which is why the subtraction
+ * below is the same six-term one `uv_block_auto_width` performs and not a second spelling of it.
+ *
+ * THE SCROLL BAR TERM IS ZERO AND THAT IS A DERIVATION rather than an omitted operand: this user agent renders
+ * no scroll bar, which core/dom/element_view.h states as a UA CHOICE the model makes and which every CSSOM VIEW
+ * member there already answers under. Writing the term as a literal zero here would be one component deciding
+ * that again; it is absent because there is nothing to subtract.
+ *
+ * WHY THE FORMULA IS WRITTEN IN CSS 2.2's ORDER AND NOT css-sizing-3 §2.1's `clamp`. §2.1 states the same
+ * result as `clamp(min-content size, stretch-fit size, max-content size)`, i.e. `max(min-content, min(max-
+ * content, stretch-fit))`, and the two are the SAME FUNCTION only while `min-content <= max-content` — which
+ * core/layout/text_run.c asserts at the read for exactly this reason. Under a violated relation they differ:
+ * CSS 2.2's spelling would return the min-content size and §2.1's the max-content one. Taking the section's own
+ * order keeps the code checkable against the sentence quoted above, and the assert one level down keeps the
+ * other spelling from being a different algorithm behind an equals sign.
+ *
+ * THE ANSWER IS THE CONTENT WIDTH, and css-sizing-3 §3.3's `box-sizing` conversion is applied to the RESULT
+ * exactly as it is to §10.3.3's equation above: every term §10.3.5 names is CSS 2.2's, and CSS 2.2 knows only
+ * the content box. */
+static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, UvBox box)
+{
+    UvSurround s = uv_surround(el, false);
+    IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
+    CssPx margins, available, content;
+
+    DCHECK(box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK,
+           "the shrink-to-fit width was computed for a box neither CSS 2.2 §10.3.5 nor §10.3.9 covers. §10.3.7 "
+           "sends an absolutely positioned box's `auto` width here too, in its rules 1 and 3, but with a "
+           "DIFFERENT available width — the containing block's minus `left` and `right` as well as the six "
+           "terms below — so it is not this function with a different box type");
+    DCHECK(uv_len_is_auto(size_len),
+           "§10.3.5's shrink-to-fit was reached with a `width` that is not `auto`. The section's own condition "
+           "is \"if 'width' is computed as 'auto'\", and after §10.4 substitutes a limit the pass's width is a "
+           "LENGTH and the declared arm is what runs — so a non-auto length here is `uv_pass_size`'s dispatch "
+           "and this formula having come apart");
+    /* §10.3.5's first sentence, resolved in THIS pass for the reason `uv_block_auto_width` gives: reading the
+       margins through `used_value_px` would re-enter §10.4's whole algorithm for a value this pass has already
+       fixed. For these two box types `uv_margin` answers 0 for an `auto` margin outright — §10.3.5's and
+       §10.3.9's own sentence — so it cannot recurse back into this width. */
+    margins = css_px_add(uv_margin(el, "margin-left", "margin-right",
+                                   css_computed_length(el, "margin-left"), box, &size_len),
+                         uv_margin(el, "margin-right", "margin-left",
+                                   css_computed_length(el, "margin-right"), box, &size_len));
+    available = css_px_sub(css_px_sub(used_value_containing_block_width(el), uv_surround_total(s)), margins);
+    content = css_px_min(css_px_max(in.min_content, available), in.max_content);
+    /* THE RESULT NEEDS NO FLOOR, and that is the formula's own arithmetic rather than a clamp left out:
+       `max(min-content, available)` is at least the min-content size, which core/layout/intrinsic_size.c
+       asserts non-negative, and `min` with the max-content size cannot take it below that same non-negative
+       floor. css-sizing-3 §3.3's "the content width and height cannot be negative" is therefore already true
+       here, where §10.3.3's equation genuinely can produce a negative and does need it. */
+    DCHECK(content.px >= 0.0,
+           "CSS 2.2 §10.3.5's shrink-to-fit width came out NEGATIVE, which its own three terms cannot produce: "
+           "`max(preferred minimum width, available width)` is at least the preferred minimum width and both "
+           "intrinsic sizes are non-negative, so this is one of the operands having been derived rather than "
+           "measured");
     if (!uv_is_border_box(el)) return content;
     return css_px_add(content, uv_surround_total(s));
 }
@@ -1369,24 +1477,24 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
             return css_px_add(content, uv_surround_total(uv_surround(el, true)));
         }
     }
-    /* §10.3.5, §10.3.7 and §10.3.9 send an `auto` width to SHRINK-TO-FIT, which is a different algorithm from
-       §10.3.3's equation and is blocked on a different thing — so it gets its own message rather than the
-       block-level one below. It was always reachable through CSSOM §9's resolved value; CSSOM VIEW §6's
+    /* §10.3.5 and §10.3.9 send an `auto` width to SHRINK-TO-FIT, which is a different algorithm from §10.3.3's
+       equation over different terms. It was always reachable through CSSOM §9's resolved value; CSSOM VIEW §6's
        `clientWidth` on a floated or inline-block box is the ordinary way a page arrives here. */
-    if (box == UV_BOX_FLOAT || box == UV_BOX_ABS || box == UV_BOX_INLINE_BLOCK)
-        DFAIL("CSS 2.1 §10.3.5 (floating) and §10.3.9 (inline-block) send an `auto` width to the SHRINK-TO-FIT "
-              "formula — 'min(max(preferred minimum width, available width), preferred width)' — and §10.3.7 "
-              "sends an absolutely positioned box's there too in its rules 1 and 3, which are the ones where "
-              "`left` or `right` is `auto` alongside `width` (its rule 5, with both offsets given, solves the "
-              "equation for `width` instead and is the block-level arm's subproblem rather than this one). TWO "
-              "of the formula's three terms are INTRINSIC SIZES of the box's own content "
-              "— css-sizing §5.1's max-content and min-content, 'the narrowest inline size that would fit' and "
-              "the size 'assuming no line breaks' — so this is not the containing-block subproblem the "
-              "block-level arm below is waiting on, and building that one answers nothing here. BUILD the "
-              "intrinsic size contributions: an inline formatting context that measures the box's text with a "
-              "real font and finds its break opportunities, over every in-flow descendant's own contribution. "
-              "The third term, the available width, is §10.1's containing block, so this arm needs BOTH and the "
-              "other needs one of them");
+    if (box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK) return uv_shrink_to_fit_width(el, len, box);
+    if (box == UV_BOX_ABS)
+        DFAIL("CSS 2.2 §10.3.7 \"Absolutely positioned, non-replaced elements\" sends this box's `auto` width to "
+              "the shrink-to-fit formula in its rules 1 and 3 — the ones where `left` or `right` is `auto` "
+              "alongside `width` — and its rule 5, with both offsets given, solves the constraint equation for "
+              "`width` instead. THE FORMULA ITSELF IS BUILT (uv_shrink_to_fit_width above) and so are the two "
+              "intrinsic terms it needs, so what is missing is neither: it is §10.3.7's OWN AVAILABLE WIDTH, "
+              "which is not §10.3.5's. The section states it as \"the width of the containing block minus the "
+              "used values of 'left', 'right' and the six box-model terms\", and BOTH offsets are what this "
+              "engine cannot supply — CSSOM §9's inset arm crashes on the same equation, and each `auto` offset "
+              "falls back on the STATIC POSITION, 'where the box would have been in normal flow'. §9.4.1's "
+              "normal flow is BUILT for IN-FLOW boxes (core/layout/flow_position.h) and §10.6.3 is exactly what "
+              "keeps an out-of-flow child out of its walk, so EXTEND core/layout/block_flow.c to report a "
+              "skipped child's would-be position, then §10.3.7's available width over it — after which this arm "
+              "is the same three-term `min(max(...))` the function above already computes");
     /* The two box types §10 does not own at all reach the `auto` arm as well as the declared one, and their
        `auto` case is a DIFFERENT algorithm from their declared case, so each says which. */
     if (box == UV_BOX_TABLE)

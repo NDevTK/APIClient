@@ -25,8 +25,12 @@
  * a question about the CONTENT — "wrapping is only performed at an allowed break point, called a soft wrap
  * opportunity", and in most writing systems "a soft wrap opportunity occurs only at word boundaries", found
  * from the characters. So the number of line boxes is a function of the ADVANCE MEASURE of each glyph on the
- * line, which core/css/font_metrics.h answers for exactly the two glyphs css-values-4 §6.1.1 fixes a
- * must-assume value for and CRASHES for the rest rather than inventing one.
+ * line and of where the run may break, and BOTH of those are answered now — core/css/font_metrics.h measures
+ * every Unicode scalar value off the first available font's own 'cmap' and 'hmtx', and core/layout/text_run.h
+ * accumulates a run's inline size and its widest unbreakable segment over [UAX14]'s rules. What this file still
+ * lacks is the loop that spends them: how many line boxes there are is the run's advances measured against the
+ * AVAILABLE WIDTH of each line, which text_run.h does not compute because a min-content size is measured
+ * against no width at all.
  *
  * THE CASE THAT NEEDS NO ADVANCE IS THEREFORE NOT A SPECIAL CASE BUT A THEOREM, and css-text-3 §5.5 "Line
  * Breaking Details" is the sentence it rests on: "OUT-OF-FLOW BOXES AND INLINE BOX BOUNDARIES DO NOT INTRODUCE
