@@ -123,8 +123,12 @@ void event_target_chain(JSContext *ctx, JSValueConst proto);
    gives an ordinary object a listener list. */
 void event_target_install_interface(JSContext *ctx, JSValueConst global);
 
-/* HTML §8.1.7.2 EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a target carries is
-   which MIXIN its IDL includes, so the caller names the mixin rather than the members. */
+/* HTML §8.1.8.1 Event handlers' EVENT HANDLER IDL ATTRIBUTES — `onclick`, `onload`, `onabort`. Which set a
+   target carries is which MIXIN its IDL includes (§8.1.8.2.1 IDL definitions), so the caller names the mixin
+   rather than the members.
+   THE SECTION NUMBER WAS §8.1.7.2 HERE AND ONE LINE BELOW, and §8.1.7.2 is `Queuing tasks` — a real section
+   about the event loop's task queues, which is what makes a wrong number worse than none: it reads as
+   authoritative and sends the next reader to text that says nothing about event handlers. */
 /* EH_XHR is XHR §3.3's set on XMLHttpRequestEventTarget — the seven a page uses to watch a transfer; it is a
    MIXIN's set, so XMLHttpRequestUpload gets exactly the same members by inheritance. EH_XHR_READYSTATE is the
    ONE §3.3 puts "solely" on XMLHttpRequest, which is why it cannot ride the same bit. */
@@ -154,23 +158,34 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
    FileReader as DOM attributes"). All six names already belong to GlobalEventHandlers and/or XHR §3.3's mixin,
    so each entry carries one more bit — which is exactly what a bitmask is for, and which is why a FileReader
    does NOT get them by including some other mixin: it includes none. */
+/* EH_WINDOW_REFLECTING IS NOT A MIXIN AND IS THE ONE BIT NOBODY INSTALLS BY. It is HTML §8.1.8.2 Event handlers
+   on elements, Document objects, and Window objects' WINDOW-REFLECTING BODY ELEMENT EVENT HANDLER SET — "the
+   set of the names of the event handlers listed in the first column of this table", the table of the six that
+   every HTML element OTHER THAN body and frameset supports as its own and that a `body`/`frameset` instead
+   exposes on behalf of its Window. All six are GlobalEventHandlers names too, so they are installed by
+   EH_GLOBAL exactly as before and this bit adds no member anywhere; what it marks is MEMBERSHIP, because
+   §8.1.8.1's determine the target of an event handler step 2 tests the name against this set and against
+   WindowEventHandlers' members (EH_WINDOW) and against nothing else. §4.3.1 The body element says those six,
+   exposed on the body, "replace the generic event handlers with the same names normally supported by HTML
+   elements" — REPLACE, not shadow: one accessor per name, whose target the determination decides. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
        EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256,
        EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024, EH_NAVIGATION = 2048,
        EH_NAVIGATION_HISTORY_ENTRY = 4096, EH_IDB_REQUEST = 8192, EH_IDB_TRANSACTION = 16384,
-       EH_IDB_OPEN_REQUEST = 32768, EH_IDB_DATABASE = 65536, EH_FILE_READER = 131072 };
+       EH_IDB_OPEN_REQUEST = 32768, EH_IDB_DATABASE = 65536, EH_FILE_READER = 131072,
+       EH_WINDOW_REFLECTING = 262144 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
-/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? HTML §8.1.7.2 defines that set as the names of the
+/* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? HTML §8.1.8.1 defines that set as the names of the
    event handler IDL attributes above, so it is answered from the one list rather than from a second copy.
    Trusted Types §3.8 step 2 is the caller: an event handler content attribute maps to TrustedScript. */
 bool event_target_is_handler_attribute(const char *name);
 /* THE SAME SET, ENUMERATED. HTML §8.6.2's remove-unsafe step 4 appends every event handler content attribute
    to a configuration's removeAttributes list, which is a deny-list it must BUILD — a caller that can only ask
    "is this one" can filter an allow-list it already holds but cannot produce that. Both come off the one
-   X-list, so a handler added to §8.1.7.2's set is added to both at once. The names are static. */
+   X-list, so a handler added to §8.1.8.1's set is added to both at once. The names are static. */
 int         event_target_handler_attribute_count(void);
 const char *event_target_handler_attribute_at(int i);
 /* A handler attribute whose SETTER has a side effect. HTML has one: §9.4.2's `onmessage` on a MessagePort also
@@ -179,6 +194,41 @@ const char *event_target_handler_attribute_at(int i);
    target with no listener yet — and it is given the target and the attribute name so the registering component
    decides with its own brand test rather than this file knowing what a MessagePort is. */
 void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueConst target, const char *name));
+
+/* HTML §8.1.8.1 Event handlers' DETERMINE THE TARGET OF AN EVENT HANDLER — the three DEFINED TERMS its four
+ * steps are composed of, registered the way §2.9's propagation path is and for the same reason: the ALGORITHM
+ * stays here where its step numbers are visible, and the questions it asks of the tree are answered by the
+ * component that can answer them. A hook that answered "does this delegate" instead would put HTML's algorithm
+ * in the HTML layer with nothing naming the steps.
+ *
+ * WHAT IT IS FOR. "Most of the time, the object that exposes an event handler is the same as the object on
+ * which the corresponding event listener is added. However, the body and frameset elements expose several
+ * event handlers that ACT UPON THE ELEMENT'S Window OBJECT, if one exists." Without the determination,
+ * `document.body.onload = f` registers a `load` listener ON THE BODY — and §13.2.7 "The end" step 9.5 fires
+ * `load` AT THE WINDOW with the legacy target override flag, a dispatch whose propagation path the body is not
+ * on at all. So the handler is never invoked and the page's entry point never runs; `<body onload="init()">`
+ * and `document.body.onload = init` are two of the commonest ways a bundle starts.
+ *
+ *   `is_body_or_frameset` is step 1's test — "eventTarget is not a body element or a frameset element". It is
+ *     the ELEMENT TYPE and not the document's `body`: §8.1.8.1's own note says a body element created with
+ *     `createElement()` in an active document and never connected still has that document's Window as its
+ *     target, so a `document.body ===` test would answer no for exactly that case.
+ *   `node_document_is_active` is step 3's — HTML §7.3.1 Navigables' ACTIVE DOCUMENT, asked of eventTarget's
+ *     node document. False makes the determination answer NULL, which is a THIRD outcome and not a fallback to
+ *     the element: the getter then returns null and the setter does nothing at all, so a handler assigned to a
+ *     body in a `DOMParser` document is silently dropped exactly as a browser drops it.
+ *   `node_document_global` is step 4's answer — "eventTarget's node document's relevant global object".
+ *     BORROWED; the realm owns its global.
+ *
+ * ALL THREE OR NONE, and a host that registers none has no body elements to ask about, which is the same
+ * answer event_target_is_window takes for a host with no tree. */
+typedef struct EventHandlerTargetTerms {
+    bool         (*is_body_or_frameset)(JSContext *ctx, JSValueConst target);
+    bool         (*node_document_is_active)(JSContext *ctx, JSValueConst target);
+    JSValueConst (*node_document_global)(JSContext *ctx, JSValueConst target);
+} EventHandlerTargetTerms;
+/* ONE CLAIMANT, AND NULL GIVES IT BACK — see event_target_set_tree for why the two are one call. */
+void event_target_set_handler_target_terms(const EventHandlerTargetTerms *terms);
 
 /* §2.7's "add an event listener" AND "remove an event listener", reached from C with the type already a real
    string. The callers are members of OTHER standards that the spec DEFINES as those algorithms rather than as

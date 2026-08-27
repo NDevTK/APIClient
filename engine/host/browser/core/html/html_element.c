@@ -39,6 +39,7 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/node.h"
+#include "core/dom/document.h"   /* §8.1.8.1 step 3's active document and step 4's relevant global object */
 #include "core/dom/element.h"
 #include "core/dom/dom_token_list.h"
 #include "core/html/hyperlink.h"
@@ -244,6 +245,15 @@ static const ElReflect R_CANVAS[] = { { "width", "width", REFLECT_STRING }, { "h
 static const ElReflect R_DIALOG[] = { { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_DETAILS[]= { { "name", "name", REFLECT_STRING }, { "open", "open", REFLECT_BOOL } };
 static const ElReflect R_SLOT[]   = { { "name", "name", REFLECT_STRING } };
+/* HTML §16.3.2 Frames — `interface HTMLFrameSetElement : HTMLElement` declares exactly these two, both
+   `[CEReactions, Reflect] attribute DOMString`. The interface exists here because §8.1.8.1's determine the
+   target of an event handler names the FRAMESET element beside the body element, and §16.3.2 states
+   `HTMLFrameSetElement includes WindowEventHandlers` for it: a `<frameset onload=…>` acts upon the Window
+   exactly as a `<body onload=…>` does. Without the row the tag was HTMLUnknownElement, which has no place to
+   put those eighteen members. */
+static const ElReflect R_FRAMESET[] = {
+    { "cols", "cols", REFLECT_STRING }, { "rows", "rows", REFLECT_STRING },
+};
 /* §4.12.3's THREE PLAIN reflections. The other three shadow-root attributes are not plain mirrors:
    `shadowrootmode` and `shadowrootslotassignment` are enumerated and LIMITED TO ONLY KNOWN VALUES, so they
    live in declarative_shadow.c with the parser step that reads them, and `shadowrootcustomelementregistry`
@@ -330,6 +340,7 @@ static const struct { const char *tag; const char *iface; const ElReflect *refl;
     { "html",       "HTMLHtmlElement",       RNONE },
     { "head",       "HTMLHeadElement",       RNONE },
     { "body",       "HTMLBodyElement",       RNONE },
+    { "frameset",   "HTMLFrameSetElement",   RL(R_FRAMESET) },
     { "title",      "HTMLTitleElement",      RNONE },
     { "div",        "HTMLDivElement",        RNONE },
     { "span",       "HTMLSpanElement",       RNONE },
@@ -454,6 +465,58 @@ static JSValue js_template_content(JSContext *ctx, JSValueConst this_val, int ma
     return node_wrap(ctx, &t->content->node);
 }
 
+/* HTML §8.1.8.1 Event handlers' DETERMINE THE TARGET OF AN EVENT HANDLER — the three DEFINED TERMS its steps
+ * ask of the tree, answered here because they are HTML's and the DOM cannot answer the first of them: which
+ * ELEMENT TYPE a local name is, is exactly what this file's table IS. The algorithm that composes them stays in
+ * core/events/event_target.c, where its step numbers are visible.
+ *
+ * Step 1's test is the ELEMENT TYPE and not `document.body`. §8.1.8.1's own note is explicit that "a body
+ * element created in an active document (perhaps with document.createElement()) but not connected will also
+ * have its corresponding Window object as the target", and that the check "does not necessarily prevent body
+ * and frameset elements that are not the body element of their node document from reaching the next step" — so
+ * a `document.body ===` comparison, or a parent test, answers no for cases HTML answers yes for. The NAMESPACE
+ * is part of it: `<body>` in the SVG namespace is not a body element, which lxb_html_tree_node_is asks. */
+static bool eh_is_body_or_frameset(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    (void)ctx;
+    return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT &&
+           (lxb_html_tree_node_is(n, LXB_TAG_BODY) || lxb_html_tree_node_is(n, LXB_TAG_FRAMESET));
+}
+
+/* Step 3's — HTML §7.3.1 Navigables' ACTIVE DOCUMENT, asked of the element's NODE DOCUMENT. core/dom/document.c
+   owns it: a realm can hold several Documents (`createHTMLDocument`, a DOMParser parse, XHR's `responseXML`)
+   and only one of them is the realm's active document, which is what document_active_realm_of answers. A body
+   element in any of the others has no Window to act upon and §8.1.8.1 says so by answering null. */
+static bool eh_node_document_is_active(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    (void)ctx;
+    DCHECK(n != NULL && n->owner_document != NULL,
+           "§8.1.8.1's determine the target of an event handler reached step 3 for a node with no node "
+           "document — step 1 has already established that this is a body or frameset ELEMENT, and every "
+           "element lexbor builds carries the document that created it");
+    return document_active_realm_of(lxb_dom_interface_node(n->owner_document)) != NULL;
+}
+
+/* Step 4's answer — "eventTarget's node document's relevant global object". BORROWED; the realm owns it. It is
+   a fact about THAT DOCUMENT and not about whoever is running, which is why it is not read off `ctx`: two
+   same-origin documents are one agent, so a body element reached across a frame boundary would otherwise
+   delegate its handler to the RUNNING realm's Window instead of its own. */
+static JSValueConst eh_node_document_global(JSContext *ctx, JSValueConst target)
+{
+    lxb_dom_node_t *n = node_of(target);
+
+    (void)ctx;
+    return document_window_of(n);
+}
+
+static const EventHandlerTargetTerms EH_TARGET_TERMS = {
+    eh_is_body_or_frameset, eh_node_document_is_active, eh_node_document_global,
+};
+
 void html_element_init(JSContext *ctx)
 {
     JSClassDef hd = { "HTMLElement" }, ud = { "HTMLUnknownElement" };
@@ -520,6 +583,10 @@ void html_element_init(JSContext *ctx)
     g_dataset_key = JS_NewAtom(ctx, "__datasetSlot");
     CHECK(g_dataset_key != JS_ATOM_NULL, "the dataset slot key could not be interned");
     g_html_ready = 1;
+    /* HTML §8.1.8.1's determine the target of an event handler, whose step 1 asks which element type this is —
+       this file's table is what knows. Claimed per AGENT beside the element resolver below, and given back at
+       html_element_free, which core/platform.c's reverse-declaration order runs before event_target_free. */
+    event_target_set_handler_target_terms(&EH_TARGET_TERMS);
     realm_declare_intrinsic(html_element_install_protos);
     /* node.c keys its prototype table by node TYPE; an element's interface is keyed by its LOCAL NAME, which is
        HTML's mapping and not the DOM's. So the base ASKS, and stays the one place a wrapper is built. */
@@ -649,6 +716,22 @@ void html_element_install_protos(JSContext *ctx)
             dom_token_list_install_reflection(ctx, p, "sizes");
         if (!strcmp(HTML_IFACE[i].iface, "HTMLIFrameElement"))
             dom_token_list_install_reflection(ctx, p, "sandbox");
+        /* HTML §4.3.1 The body element's `HTMLBodyElement includes WindowEventHandlers` and §16.3.2 Frames'
+           `HTMLFrameSetElement includes WindowEventHandlers` — the eighteen of §8.1.8.2's third table, which
+           "must be supported by Window objects … and with corresponding event handler content attributes and
+           event handler IDL attributes exposed on all body and frameset elements that are owned by that Window
+           object's associated Document". Every one of them ACTS UPON the Window: §8.1.8.1's determine the
+           target of an event handler is what routes `document.body.onunload = f` there, and this install is
+           what gives that determination an accessor to run in — without it the assignment was an ordinary JS
+           property on the element and nothing ever read it.
+           The other six a body delegates — §8.1.8.2's Window-reflecting body element event handler set — are
+           NOT installed here and must not be: §8.1.8.2.1's IDL declares all six in GlobalEventHandlers, so
+           HTMLElement.prototype already carries them, and §4.3.1's "replace the generic event handlers with the
+           same names" is a statement about the TARGET they act upon rather than about where the accessor
+           lives. A second own copy would be a member the IDL does not declare on this interface. */
+        if (!strcmp(HTML_IFACE[i].iface, "HTMLBodyElement") ||
+            !strcmp(HTML_IFACE[i].iface, "HTMLFrameSetElement"))
+            event_target_install_handlers(ctx, p, EH_WINDOW);
         JS_SetClassProto(ctx, g_iface_class[i], p);
     }
     JS_FreeValue(ctx, html_p);
@@ -777,13 +860,15 @@ bool html_element_is(JSValueConst v)
 
 void html_element_free(JSRuntime *rt)
 {
-    /* THE TWO SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK FIRST. §2.9's activation behaviour is
-       core/events/event_target.c's slot pointing at core/html/hyperlink.c, and the element resolver is
-       core/dom/node.c's slot pointing at this file — each is a callback INTO a component the cascade around
-       this line is tearing down, which is the defect core/agent_state.h found in idb_transaction. Both
+    /* THE THREE SLOTS THIS FILE CLAIMED IN OTHER COMPONENTS, GIVEN BACK FIRST. §2.9's activation behaviour is
+       core/events/event_target.c's slot pointing at core/html/hyperlink.c, the element resolver is
+       core/dom/node.c's slot pointing at this file, and §8.1.8.1's determine-the-target terms are a second
+       event_target.c slot pointing at this file — each is a callback INTO a component the cascade around
+       this line is tearing down, which is the defect core/agent_state.h found in idb_transaction. All three
        receivers assert at their own release that the claim is gone. */
     hyperlink_free();
     node_set_element_resolver(NULL);
+    event_target_set_handler_target_terms(NULL);
     dom_string_map_free(rt);
     global_attributes_free();
     declarative_shadow_free();

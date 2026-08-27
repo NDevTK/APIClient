@@ -62,6 +62,9 @@ static JSValue g_handler_marker;
    here, beside the other three slots another component claims, because event_target_init declares all four to
    core/agent_state.h and a declaration needs the address. */
 static void (*g_handler_set_hook)(JSContext *ctx, JSValueConst target, const char *name);
+/* HTML §8.1.8.1's determine the target of an event handler — the three terms the HTML layer answers. Declared
+   here beside the other slots another component claims, for the same reason they are. */
+static const EventHandlerTargetTerms *g_handler_terms;
 /* The DISPATCH_PAIR step declaration — the one door a C caller has into the §2.9 machine. The FUNCTION OBJECT
    is minted per fire, in the FIRING REALM, and is never installed anywhere the page can reach: a C function
    runs in the realm that DEFINED it (js_call_c_function does `ctx = p->u.cfunc.realm`), so one object held in a
@@ -292,6 +295,28 @@ void event_target_set_activation(bool (*has)(JSContext *ctx, JSValueConst el),
     g_run_activation = run;
 }
 
+void event_target_set_handler_target_terms(const EventHandlerTargetTerms *terms)
+{
+    /* NULL IS THE RELEASE — see event_target_set_tree for why the two are one call. */
+    if (terms == NULL) {
+        DCHECK(g_handler_terms != NULL,
+               "HTML §8.1.8.1's determine the target of an event handler terms were released by a component "
+               "that never registered them");
+        g_handler_terms = NULL;
+        return;
+    }
+    DCHECK(g_handler_terms == NULL,
+           "a second component registered HTML §8.1.8.1's determine the target of an event handler terms — "
+           "there is ONE answer to `is this a body element`, and a second registration silently decides which "
+           "object every `body.onload = f` in the agent lands on");
+    DCHECK(terms->is_body_or_frameset != NULL && terms->node_document_is_active != NULL &&
+           terms->node_document_global != NULL,
+           "half of §8.1.8.1's determine the target of an event handler was registered — steps 1, 3 and 4 are "
+           "one algorithm, and a host that can say an element is a body but not whether its node document is "
+           "active would delegate a handler to a Window that its own step 3 forbids reaching");
+    g_handler_terms = terms;
+}
+
 void event_target_free(JSRuntime *rt)
 {
     /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
@@ -313,6 +338,10 @@ void event_target_free(JSRuntime *rt)
     DCHECK(g_handler_set_hook == NULL,
            "HTML §8.1.8.1's handler-set hook was still registered when the event machinery was released — "
            "core/events/message_port.c claimed it and must give it back at message_port_free");
+    DCHECK(g_handler_terms == NULL,
+           "HTML §8.1.8.1's determine the target of an event handler terms were still registered when the "
+           "event machinery was released — core/html/html_element.c claimed them and must give them back at "
+           "html_element_free, which reverse-declaration order runs first");
     JS_FreeValueRT(rt, g_key);
     JS_FreeValueRT(rt, g_handler_key);
     JS_FreeValueRT(rt, g_handler_marker);
@@ -929,7 +958,15 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onbeforeinput", "beforeinput", EH_GLOBAL)                                                                 \
     X("onbeforematch", "beforematch", EH_GLOBAL)                                                                 \
     X("onbeforetoggle", "beforetoggle", EH_GLOBAL)                                                               \
-    X("onblur", "blur", EH_GLOBAL)                                                                               \
+    /* THE SIX OF §8.1.8.2's SECOND TABLE — the Window-reflecting body element event handler set. That table's   \
+       heading is what the second bit says: these are supported "by all HTML elements OTHER THAN body and        \
+       frameset elements", and on a body or frameset the same names are "exposed on behalf of that Window        \
+       object's associated Document". They are GlobalEventHandlers members in §8.1.8.2.1's IDL like every        \
+       other name here, so EH_GLOBAL installs them and EH_WINDOW_REFLECTING adds no member — it is the SET       \
+       MEMBERSHIP §8.1.8.1's determine the target of an event handler step 2 tests against. The six are          \
+       onblur, onerror, onfocus, onload, onresize and onscroll; onscrollend and onbeforetoggle are NOT among     \
+       them, and a prefix or family guess would have taken both. */                                              \
+    X("onblur", "blur", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                        \
     X("oncancel", "cancel", EH_GLOBAL)                                                                           \
     X("oncanplay", "canplay", EH_GLOBAL)                                                                         \
     X("oncanplaythrough", "canplaythrough", EH_GLOBAL)                                                           \
@@ -961,15 +998,16 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("ondurationchange", "durationchange", EH_GLOBAL)                                                           \
     X("onemptied", "emptied", EH_GLOBAL)                                                                         \
     X("onended", "ended", EH_GLOBAL)                                                                             \
-    X("onerror", "error", EH_GLOBAL | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION | EH_FILE_READER)                              \
-    X("onfocus", "focus", EH_GLOBAL)                                                                             \
+    X("onerror", "error", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_XHR | EH_IDB_REQUEST | EH_IDB_TRANSACTION |      \
+                          EH_FILE_READER)                                                                        \
+    X("onfocus", "focus", EH_GLOBAL | EH_WINDOW_REFLECTING)                                                      \
     X("onformdata", "formdata", EH_GLOBAL)                                                                       \
     X("oninput", "input", EH_GLOBAL)                                                                             \
     X("oninvalid", "invalid", EH_GLOBAL)                                                                         \
     X("onkeydown", "keydown", EH_GLOBAL)                                                                         \
     X("onkeypress", "keypress", EH_GLOBAL)                                                                       \
     X("onkeyup", "keyup", EH_GLOBAL)                                                                             \
-    X("onload", "load", EH_GLOBAL | EH_XHR | EH_FILE_READER)                                                                      \
+    X("onload", "load", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_XHR | EH_FILE_READER)                              \
     X("onloadeddata", "loadeddata", EH_GLOBAL)                                                                   \
     X("onloadedmetadata", "loadedmetadata", EH_GLOBAL)                                                           \
     X("onloadstart", "loadstart", EH_GLOBAL | EH_XHR | EH_FILE_READER)                                                            \
@@ -988,8 +1026,8 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onratechange", "ratechange", EH_GLOBAL)                                                                   \
     X("onreset", "reset", EH_GLOBAL)                                                                             \
     /* CSSOM VIEW §12 declares these three on VisualViewport as well, which is what the second bit says. */      \
-    X("onresize", "resize", EH_GLOBAL | EH_VISUAL_VIEWPORT)                                                      \
-    X("onscroll", "scroll", EH_GLOBAL | EH_VISUAL_VIEWPORT)                                                      \
+    X("onresize", "resize", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_VISUAL_VIEWPORT)                               \
+    X("onscroll", "scroll", EH_GLOBAL | EH_WINDOW_REFLECTING | EH_VISUAL_VIEWPORT)                               \
     X("onscrollend", "scrollend", EH_GLOBAL | EH_VISUAL_VIEWPORT)                                                \
     X("onsecuritypolicyviolation", "securitypolicyviolation", EH_GLOBAL)                                         \
     X("onseeked", "seeked", EH_GLOBAL)                                                                           \
@@ -1015,8 +1053,13 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
     X("onwebkitanimationstart", "webkitAnimationStart", EH_GLOBAL)                                               \
     X("onwebkittransitionend", "webkitTransitionEnd", EH_GLOBAL)                                                 \
     X("onwheel", "wheel", EH_GLOBAL)                                                                             \
-    /* WindowEventHandlers — the same section's second table, on Window (and, per the mixin, Document's          \
-       body-delegated set). */                                                                                   \
+    /* WindowEventHandlers — §8.1.8.2's THIRD table, "reified as event handler IDL attributes through the        \
+       WindowEventHandlers interface mixin". It was called the second table here and said the set was            \
+       Document's; §8.1.8.2's second table is the six Window-reflecting names above, and the mixin is included   \
+       by Window, HTMLBodyElement (§4.3.1) and HTMLFrameSetElement (§16.3.2) and by NO Document — a Document     \
+       has only §8.1.8.2's fourth table, `onreadystatechange` and `onvisibilitychange`. These eighteen are       \
+       therefore installed on THREE prototypes, and on a body or a frameset every one of them acts upon the      \
+       Window per §8.1.8.1's determine the target of an event handler. */                                        \
     X("onafterprint", "afterprint", EH_WINDOW)                                                                   \
     X("onbeforeprint", "beforeprint", EH_WINDOW)                                                                 \
     X("onbeforeunload", "beforeunload", EH_WINDOW)                                                               \
@@ -1103,7 +1146,7 @@ static const int EH_MASK[] = {
    written and a typo in either is a handler that never fires with nothing to say so. */
 static void eh_assert_types(void)
 {
-    int i;
+    int i, reflecting = 0, window = 0;
 
     for (i = 0; i < EH_COUNT; i++) {
         const char *n = EH_NAME[i], *t = EH_TYPE[i];
@@ -1112,7 +1155,38 @@ static void eh_assert_types(void)
         DCHECK(strcmp(&n[2], t) == 0 || strncmp(n, "onwebkit", 8) == 0,
                "an event handler's event type is not its name past the `on`, and §8.1.8.2's table names only "
                "the four legacy webkit aliases as exceptions");
+        /* §8.1.8.2's second table is a table of GlobalEventHandlers members — §8.1.8.2.1's IDL declares all six
+           in that mixin — so a name marked as Window-reflecting and not global is a row this list invented. */
+        DCHECK(!(EH_MASK[i] & EH_WINDOW_REFLECTING) || (EH_MASK[i] & EH_GLOBAL),
+               "a name was marked as belonging to §8.1.8.2's Window-reflecting body element event handler set "
+               "without being a GlobalEventHandlers member — §8.1.8.2.1's IDL declares every one of that "
+               "table's six rows in that mixin, so the two bits cannot come apart");
+        /* The two halves of §8.1.8.1's determine the target of an event handler step 2 are DISJOINT, and that
+           is what makes the union a set rather than an overlap nobody counted: §8.1.8.2's second table is
+           supported on Window "as event handler IDL attributes on the Window objects themselves", its third is
+           the one reified as WindowEventHandlers. A name in both would be counted twice below. */
+        DCHECK(!(EH_MASK[i] & EH_WINDOW_REFLECTING) || !(EH_MASK[i] & EH_WINDOW),
+               "a name was marked as both a WindowEventHandlers member and a member of §8.1.8.2's "
+               "Window-reflecting body element event handler set — those are two different tables of that "
+               "section and no name appears in both");
+        if (EH_MASK[i] & EH_WINDOW_REFLECTING) reflecting++;
+        if (EH_MASK[i] & EH_WINDOW) window++;
     }
+    /* THE TWO SETS §8.1.8.1 STEP 2 TESTS AGAINST, COUNTED. Both are closed lists in §8.1.8.2 — its second table
+       has SIX rows (onblur, onerror, onfocus, onload, onresize, onscroll) and §8.1.8.2.1's WindowEventHandlers
+       declares EIGHTEEN attributes — and step 2's test is what decides whether `body.onX = f` lands on the
+       element or on the Window. Getting the set wrong in EITHER direction is a silent wrong answer rather than
+       a gap: one name too few and a bootstrap handler never fires, one too many and a handler a browser puts on
+       the body is moved to the Window where nothing dispatching at the body can reach it. */
+    DCHECK(reflecting == 6,
+           "§8.1.8.2's Window-reflecting body element event handler set is the first column of that section's "
+           "SECOND table and that table has six rows — this list marks a different number, so §8.1.8.1's "
+           "determine the target of an event handler step 2 is testing against a set the standard does not "
+           "define");
+    DCHECK(window == 18,
+           "§8.1.8.2.1's `interface mixin WindowEventHandlers` declares eighteen attribute members and this "
+           "list marks a different number — the mixin is what §8.1.8.1's determine the target of an event "
+           "handler step 2 names, and it is also the set a body and a frameset element expose");
 }
 
 
@@ -1174,10 +1248,70 @@ static JSValue handler_current(JSContext *ctx, JSValueConst target, const char *
     return JS_IsObject(h) ? h : (JS_FreeValue(ctx, h), JS_NULL);
 }
 
+/* HTML §8.1.8.1's DETERMINE THE TARGET OF AN EVENT HANDLER, given `target` and the name at index `magic`.
+ *
+ * "Most of the time, the object that exposes an event handler is the same as the object on which the
+ * corresponding event listener is added. However, the body and frameset elements expose several event handlers
+ * that act upon the element's Window object, if one exists." That sentence is the whole of this function and it
+ * is not a conformance detail: §13.2.7 "The end" step 9.5 fires `load` AT THE WINDOW, so a `load` handler left
+ * on the body is a handler on an object that dispatch never visits. `document.body.onload = init` and
+ * `<body onload="init()">` are two of the commonest ways a bundle starts, and both of them were dead.
+ *
+ * THE ANSWER IS OWNED and has three shapes, because the algorithm has three outcomes: the eventTarget itself
+ * (steps 1 and 2), JS_NULL (step 3 — the caller must not fall back to the element, which is why this returns
+ * null rather than the target), and the node document's relevant global object (step 4).
+ *
+ * A HOST THAT REGISTERED NO TERMS HAS NO BODY ELEMENTS, so step 1 answers "not a body element" and the whole
+ * algorithm is the identity — the same answer event_target_is_window takes for a host with no tree, and exactly
+ * right for a host that installs handlers on ports and signals with no document anywhere. */
+static JSValue handler_determine_target(JSContext *ctx, JSValueConst target, int magic)
+{
+    JSValueConst global;
+
+    DCHECK(magic >= 0 && magic < EH_COUNT, "an event handler was declared with a magic the list does not name");
+
+    /* STEP 1: "If eventTarget is not a body element or a frameset element, then return eventTarget." */
+    if (g_handler_terms == NULL || !g_handler_terms->is_body_or_frameset(ctx, target))
+        return JS_DupValue(ctx, target);
+
+    /* STEP 2: "If name is not the name of an attribute member of the WindowEventHandlers interface mixin AND
+       the Window-reflecting body element event handler set does not contain name, then return eventTarget."
+       Both sets, tested against the ONE X-list's mask — a body's `onclick` is neither, and stays on the body
+       exactly as §4.3.1's own example ("an alert saying [object HTMLBodyElement] whenever the user clicks")
+       requires. A prefix test over `on*` would have moved every one of the other seventy-odd. */
+    if (!(EH_MASK[magic] & (EH_WINDOW | EH_WINDOW_REFLECTING)))
+        return JS_DupValue(ctx, target);
+
+    /* STEP 3: "If eventTarget's node document is not an active document, then return null." NULL is a real
+       outcome and not an error: a body element in a `DOMParser` document, an XHR `responseXML` or a
+       `createHTMLDocument` has no Window to act upon, so the getter answers null and the setter does nothing. */
+    if (!g_handler_terms->node_document_is_active(ctx, target))
+        return JS_NULL;
+
+    /* STEP 4: "Return eventTarget's node document's relevant global object." */
+    global = g_handler_terms->node_document_global(ctx, target);
+    DCHECK(JS_IsObject(global),
+           "§8.1.8.1's determine the target of an event handler reached step 4 with no relevant global object "
+           "— step 3 has already established that the node document is an ACTIVE document, and an active "
+           "document is the active document OF A NAVIGABLE, which has a Window");
+    DCHECK(event_target_is_window(ctx, global),
+           "§8.1.8.1's determine the target of an event handler answered with something that is not a Window "
+           "— step 4's answer is a Document's relevant global object, and a handler registered anywhere else "
+           "would be waiting on a dispatch that never visits it");
+    return JS_DupValue(ctx, global);
+}
+
+/* §8.1.8.1's GETTER OF AN EVENT HANDLER IDL ATTRIBUTE — determine the target, answer null if it is null, and
+   otherwise get the current value there. */
 static JSValue js_handler_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    DCHECK(magic >= 0 && magic < EH_COUNT, "an event handler was declared with a magic the list does not name");
-    return handler_current(ctx, this_val, EH_TYPE[magic]);
+    JSValue target = handler_determine_target(ctx, this_val, magic), h;
+
+    if (JS_IsNull(target))
+        return JS_NULL;
+    h = handler_current(ctx, target, EH_TYPE[magic]);
+    JS_FreeValue(ctx, target);
+    return h;
 }
 
 /* HTML §8.1.8.1's handler attributes are ordinarily pure state — assign a function, it is called when the event
@@ -1197,16 +1331,26 @@ void event_target_set_handler_hook(void (*after_set)(JSContext *ctx, JSValueCons
     g_handler_set_hook = after_set;
 }
 
+/* §8.1.8.1's SETTER OF AN EVENT HANDLER IDL ATTRIBUTE. Its step 1 is determine the target of an event handler
+   and every step after it names THAT object — "Let handlerMap be eventTarget's event handler map", "activate an
+   event handler given eventTarget and name" — so the map, the listener and the §9.4.2 hook all take it. Reading
+   `this_val` for any one of them is what put a `load` handler on the body: the map would live on the element
+   while the listener lived on the Window, or the reverse, and either half alone never fires. */
 static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     const char *type;
-    JSValue map;
+    JSValue map, target;
 
     DCHECK(magic >= 0 && magic < EH_COUNT, "an event handler was declared with a magic the list does not name");
     type = EH_TYPE[magic];
 
-    map = handler_map(ctx, this_val, 1);
-    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); return JS_UNDEFINED; }
+    /* STEPS 1-2: "Let eventTarget be the result of determining the target … If eventTarget is null, return." */
+    target = handler_determine_target(ctx, this_val, magic);
+    if (JS_IsNull(target))
+        return JS_UNDEFINED;
+
+    map = handler_map(ctx, target, 1);
+    if (!JS_IsObject(map)) { JS_FreeValue(ctx, map); JS_FreeValue(ctx, target); return JS_UNDEFINED; }
     /* THE TEST IS "IS IT AN OBJECT", AND WEB IDL IS WHY. The attribute's type is `EventHandler`, a NULLABLE
        callback function annotated `[LegacyTreatNonObjectAsNull]`, and §3.2.20 Nullable types converts a
        NON-OBJECT to null under exactly that annotation — which is what makes `el.onclick = "alert(1)"` and
@@ -1218,17 +1362,21 @@ static JSValue js_handler_set(JSContext *ctx, JSValueConst this_val, JSValueCons
     if (JS_IsObject(val)) {
         JS_SetPropertyStr(ctx, map, type, JS_DupValue(ctx, val));
         /* §8.1.8.1 "activate an event handler": the listener is registered ONCE, the first time a handler is set for this type. */
-        add_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false, /*once*/ false,
+        add_listener_with_type(ctx, target, g_handler_marker, type, /*capture*/ false, /*once*/ false,
                                /*passive*/ -1, /*signal*/ JS_UNDEFINED);
     } else {
         JS_SetPropertyStr(ctx, map, type, JS_NULL);
-        remove_listener_with_type(ctx, this_val, g_handler_marker, type, /*capture*/ false);   /* §8.1.8.1 "deactivate an event handler" */
+        remove_listener_with_type(ctx, target, g_handler_marker, type, /*capture*/ false);   /* §8.1.8.1 "deactivate an event handler" */
     }
     /* AFTER the handler is registered, for the reason event_target.h gives: §9.4.2's start() delivers what is
-       already queued, and running it first would fire those events at a target with no listener yet. */
+       already queued, and running it first would fire those events at a target with no listener yet.
+       IT TAKES THE DETERMINED TARGET, because §9.4.2's requirement is stated over the object whose event
+       handler this is. For a MessagePort the two are the same object — step 1 returns a port unchanged — but
+       reading `this_val` here would be a second answer to a question step 1 has already settled. */
     if (g_handler_set_hook)
-        g_handler_set_hook(ctx, this_val, EH_NAME[magic]);
+        g_handler_set_hook(ctx, target, EH_NAME[magic]);
     JS_FreeValue(ctx, map);
+    JS_FreeValue(ctx, target);
     return JS_UNDEFINED;
 }
 
