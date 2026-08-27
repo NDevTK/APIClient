@@ -2232,12 +2232,47 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            false for the one realm that can ask it. */
         return win_or_proxy(ctx, JS_DupValue(ctx, nav));
     case WP_PARENT:
-        /* §7.2.2.4: the parent navigable's proxy, or THIS one when there is no parent. */
+        /* HTML §7.2.2.4 "Accessing related windows"' parent getter steps: "Let navigable be this's navigable.
+           If navigable is null, then return null. If navigable's parent is not null, then set navigable to
+           navigable's parent. Return navigable's active WindowProxy." STEP 2 IS THE ONE THAT WAS MISSING —
+           see the paragraph on WP_TOP below, which is the same sentence and the same omission. */
+        if (p->destroyed) return JS_NULL;
         return win_or_proxy(ctx, JS_IsUndefined(p->parent) ? JS_DupValue(ctx, nav)
                                                            : JS_DupValue(ctx, p->parent));
     case WP_TOP:
+        /* §7.2.2.4's top getter steps: "If this's navigable is null, then return null. Return this's
+         * navigable's top-level traversable's active WindowProxy." BOTH STEPS, and the first is not a corner
+         * case the section mentions in passing — §7.2.2.4 closes with a worked example whose three asserts are
+         * `iframeWindow.top === null`, `iframeWindow.parent === null` and `iframeWindow.frameElement === null`
+         * after the container element is removed, and the corpus has that example twice over
+         * (window-top-null.html, window-parent-null.html).
+         *
+         * "THIS'S NAVIGABLE IS NULL" IS NOT "THIS IS CLOSED", AND IT IS NOT "THIS'S BROWSING CONTEXT IS NULL"
+         * EITHER — §7.2.2.4 spells three of its four getters' step 1 three different ways on purpose, and this
+         * record keeps the three facts apart for exactly that reason (see window_proxy.h). §7.2.2 defines "a
+         * Window's navigable" as "the navigable whose active document is the Window's associated Document's, or
+         * null if there is no such navigable", so the writer is §7.5.10's destroy, whose step 9 nulls this
+         * navigable's active document — `destroyed`, the same field js_win_frame_element reads for its own
+         * step 1, which is the same sentence written about the node navigable. `closing` is not it (a
+         * traversable that is closing still has its documents), and neither is §7.1.3.2's group swap
+         * (`bc_discarded`): that discards the BROWSING CONTEXT, which is what the `opener` getter below asks
+         * about and what `closed` reports, while the Document stays active in the navigable this record names —
+         * which is the whole reason a read through the opener's handle still answers about THAT document.
+         *
+         * IT IS ASKED BEFORE THE WALK RATHER THAN INSIDE IT. window_proxy_top_navigable climbs `parent` links,
+         * which §7.5.10 does not sever, so a destroyed navigable walks to a live traversable and answers with a
+         * window that is no longer above it — a real object in place of the null, which is the one shape that
+         * cannot be told from an answer. */
+        if (p->destroyed) return JS_NULL;
         return win_or_proxy(ctx, window_proxy_top_navigable(ctx, nav));
     case WP_OPENER:
+        /* §7.2.2.4's opener getter steps: "Let current be this's browsing context. If current is null, then
+           return null. If current's opener browsing context is null, then return null. Return current's opener
+           browsing context's WindowProxy object." STEPS 1-2 ARE THE BROWSING CONTEXT and not the navigable —
+           the one getter of the four that asks the other question — so this is `wp_bc_null`'s fact and it has
+           the two writers window_proxy.h names: §7.5.10's destroy and §7.1.3.2's group swap. A window the swap
+           cut off reports `closed` and has no opener, while its `top` and `parent` above still answer. */
+        if (wp_bc_null(p)) return JS_NULL;
         return win_or_proxy(ctx, JS_DupValue(ctx, p->opener));
     case WP_NAME:
         return window_proxy_name_value(ctx, nav);

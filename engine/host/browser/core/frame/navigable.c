@@ -1622,7 +1622,15 @@ static bool target_name_is(const char *name, const char *keyword)
 static JSValue navigable_choose_name(JSContext *ctx, const char *name)
 {
     JSValueConst self = document_window_proxy(ctx);
-    JSValue top = window_proxy_top_of(ctx, self);
+    /* §7.3.1.7's steps 3 and 9 name "currentNavigable's TRAVERSABLE NAVIGABLE", which is the tree relation and
+       NOT §7.2.2.4's `top` getter — window_proxy.h keeps the two spellings apart and this file already asks
+       for the walk's one everywhere else it walks. The getter answers a Window for a top-level document (a
+       navigable's own proxy is spelled as its global) and null for a destroyed one, and nav_preorder skips
+       anything that is not a WindowProxy — so BOTH of this function's uses of the answer were dead: the
+       second-subtree search walked an empty list, and step 9's "if currentTopLevelBrowsingContext is
+       topLevelBrowsingContext, then continue" never matched, so the traversable's whole tree was searched a
+       second time inside the group loop. */
+    JSValue top = window_proxy_top_navigable(ctx, self);
     JSValue hit;
     uint32_t i, n = 0;
     JSValue len;
@@ -1698,12 +1706,20 @@ static JSValue navigable_choose_keyword(JSContext *ctx, const char *target)
     if (target_name_is(target, "_parent")) {
         /* §7.3.1.7 step 5: "currentNavigable's parent, if any, and currentNavigable otherwise" — a navigable
            with no parent is its own parent, so the keyword never reaches past the top. */
-        JSValue p = window_proxy_parent(ctx, self);
+        /* THE TREE RELATION, NOT §7.2.2.4's GETTER — the same distinction navigable_choose_name draws above.
+           §7.3.1.7 step 5 has no null arm, while the getter's own step 2 answers null for a navigable §7.5.10
+           destroyed; reading the getter here would make `open(url, "_parent")` from a removed frame answer the
+           frame itself where the section names its parent. window_proxy_parent_navigable is JS_UNDEFINED at the
+           top of the tree, which is step 5's "and currentNavigable otherwise". */
+        JSValue p = window_proxy_parent_navigable(ctx, self);
         if (window_proxy_is(p)) return p;
         JS_FreeValue(ctx, p);
         return JS_DupValue(ctx, self);
     }
-    if (target_name_is(target, "_top")) return window_proxy_top_of(ctx, self);
+    /* Step 6's "currentNavigable's traversable navigable" — the walk's spelling for the same reason, and here
+       the getter's null would fall past `window_proxy_is(chosen)` in the caller and MINT A NEW WINDOW where
+       the section names one that already exists. */
+    if (target_name_is(target, "_top")) return window_proxy_top_navigable(ctx, self);
     return JS_UNDEFINED;
 }
 
