@@ -2278,7 +2278,7 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
        this register and the host performs a GET through safeFetch. A reader on this side would file whatever
        rejection a GET happened to provoke under the identity of an endpoint nobody probed. It is
        extension/lib/req2proto.js, which issues the probe as the page. */
-    if (n) reply_decode_learn(ctx, url, value);
+    if (n) reply_decode_learn(ctx, method, url, value);
     /* A REQUEST ANSWERED TWICE, TOLD APART FROM ONE ANSWERED FOR NOBODY. Every entry naming this request already
        carries a reply, so this call wrote none — and the two numbers are what make that a different failure
        from `n == 0` with nothing matched at all, which is the host's pairing being off and is the CALLER's

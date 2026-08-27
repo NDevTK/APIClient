@@ -37,8 +37,15 @@ typedef struct { int has_lo, has_hi; double lo, hi; int lo_incl, hi_incl; char *
 typedef struct { char *name; EpLoc loc; char **vals; int nvals, vcap;
                  char **excl; int nexcl; ParamBound bnd; } Param;
 typedef struct { char *name; char *value; } EpHeader;   /* the transport half: what the request must carry */
+/* `is_asset` IS WHAT THE RESOURCE AT THIS ADDRESS TURNED OUT TO BE, and it can only be written after the
+   record exists. §Attacker sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL
+   suffix) but still drive the code path" — the parenthetical is a rule about BYTES, and bytes arrive on a
+   reply, while a request is recorded before its policy check for the reason endpoint_record's own call sites
+   state (a request a policy refuses is still a request the bundle can make). So the two facts are learned at
+   two times and the flag is the join between them; there is no request-time test that could stand in for it
+   without either guessing from a suffix or losing every blocked request. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
-                 EpHeader *hdrs; int nh, hcap; } Endpoint;
+                 EpHeader *hdrs; int nh, hcap; int is_asset; } Endpoint;
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
    real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
@@ -592,15 +599,60 @@ done:
     kv_free(&kvb);
 }
 
+/* THE READER THE ASSET DECISION DID NOT HAVE. solver/reply_decode.c has always ASKED what a reply is — of
+   `computedType`, the one type decision, taken by the zone that read the bytes — and its only consumer was its
+   own early return, so a body it declined to learn FROM stayed an endpoint on this surface. That is the
+   mirror of the defect §Architecture counts seven of: not a field read with nothing writing it, but one
+   written, asserted, and consumed by nothing on the surface the rule governs — "an observation with a computed
+   writer and no reader is not a mechanism", and it is harder to see because the value is real. Measured: an
+   image compressor whose document ships nine `<img>` elements and no API reported NINE endpoints, every one of
+   them a file, and a reader of that popup is told the tool learned nine things about an API.
+   THE KEY IS COMPUTED BY THE SAME TWO STEPS `endpoint_record` KEYS BY, called here rather than restated —
+   a second normalisation would be two answers to one question, which is how a retraction silently matches
+   nothing. `url_display` is not among them because it is the identity on a concrete string and this address is
+   one: a concolic's request carries its SHAPE to the host (core/fetch/fetch.c), so the string that comes back
+   with the reply is already the display form this surface filed it under.
+   IT MARKS RATHER THAN DELETES. The address may be recorded again by another call site in the same run, and
+   what was learned is a fact about the RESOURCE, so a later sighting must stay suppressed — and the params of
+   a record dropped mid-array would take their neighbours' indices with them.
+   EVERY same-(method, path) RECORD IS MARKED and the param set is not part of this identity: `same_identity`
+   separates two REQUESTS to one address by what they carry, and what the bytes turned out to be is a fact
+   about the address alone. */
+void endpoint_mark_asset(const char *method, const char *url) {
+    KvBuf kvb = { 0 };
+    char *upath, *path;
+
+    DCHECK(method && *method && url && *url,
+           "an asset verdict arrived naming no request — the reply register is keyed on the (method, url) pair "
+           "the request was owed under, so a verdict missing either half names no record and would silently "
+           "retract nothing while reading as a retraction");
+    upath = url_path_of(url);
+    path = path_scan(&kvb, upath, NULL);
+    for (int i = 0; i < g_eps_n; i++)
+        if (!strcmp(g_eps[i].method, method) && !strcmp(g_eps[i].path, path))
+            g_eps[i].is_asset = 1;
+    free(upath);
+    free(path);
+    kv_free(&kvb);
+}
+
 /* Serialize the @H surface DIRECTLY to a JSON string in C (caller frees) — no JS-object round-trip. The
    writer is core/json_buf.h's: this file and solve.c each carried a private copy of it, which is one copy too
    many of a thing that has exactly one correct behaviour. */
 char *endpoint_json_array(void) {
     JsonBuf b = { 0 };
+    int wrote_one = 0;
     json_buf_puts(&b, "[");
     for (int i = 0; i < g_eps_n; i++) {
         Endpoint *e = &g_eps[i];
-        if (i) json_buf_puts(&b, ",");
+        /* A RESOURCE THAT TURNED OUT TO BE A STATIC ASSET IS NOT AN ENDPOINT — §Attacker sources says so in
+           those words, and this is the only place that can act on it, because the verdict arrives after the
+           record. The separator is a `wrote_one` latch and not the loop index for exactly this reason: an
+           index-keyed comma emits a leading one the moment record 0 is the skipped kind, and that is invalid
+           JSON on a document whose whole delivery is one parse. */
+        if (e->is_asset) continue;
+        if (wrote_one) json_buf_puts(&b, ",");
+        wrote_one = 1;
         json_buf_puts(&b, "{\"method\":"); json_buf_str(&b, e->method);
         json_buf_puts(&b, ",\"url\":"); json_buf_str(&b, e->path);
         json_buf_puts(&b, ",\"params\":[");
@@ -676,8 +728,6 @@ char *endpoint_json_array(void) {
     json_buf_puts(&b, "]");
     return json_buf_take(&b);
 }
-
-int endpoint_count(void) { return g_eps_n; }
 
 void endpoint_free(void) {
     for (int i = 0; i < g_eps_n; i++) {

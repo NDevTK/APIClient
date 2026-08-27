@@ -81,6 +81,17 @@ void    endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
    be composed with the others without a host-side splice, which is the host owning structure again. */
 char   *endpoint_json_array(void);
 
-int     endpoint_count(void);
+/* WHAT THE RESOURCE AT AN ADDRESS TURNED OUT TO BE, told to the surface that filed the request for it. §Attacker
+   sources: "Static assets are NEVER endpoints (magic-byte + content-type, not URL suffix) but still drive the
+   code path" — a rule whose test is over BYTES, so it is answerable only on the reply, and whose subject is
+   THIS surface, so the answer has to arrive here or it is a computation nothing reads. solver/reply_decode.c
+   asks it of `computedType` (the trusted zone's one type decision, CLAUDE.md §Architecture) and calls this with
+   the (method, url) pair the reply register was keyed on. The record is kept and OMITTED from the emit rather
+   than deleted — the same address may be recorded again by a later call site and the verdict is about the
+   resource, not about the sighting.
+   `endpoint_count` STOOD HERE AND HAD NO CALLER ANYWHERE IN THE TREE. It returned the raw record count, which
+   after the flag above is a different number from the one the surface emits, so what was merely dead became a
+   second answer waiting for its first reader to trust it. */
+void    endpoint_mark_asset(const char *method, const char *url);
 
 #endif

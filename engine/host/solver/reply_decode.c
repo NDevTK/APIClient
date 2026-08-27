@@ -148,7 +148,7 @@ static void learn_flight(JSContext *ctx, const UrlRecord *base, const char *body
 
 /* ── the entry ───────────────────────────────────────────────────────────────────────────────────────────── */
 
-void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply)
+void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply)
 {
     MimeType computed;
     UrlRecord base;
@@ -157,6 +157,10 @@ void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply)
     const uint8_t *body;
     size_t body_n = 0;
 
+    DCHECK(method != NULL && *method,
+           "a reply was read for its content while naming no method — the request it answers was owed under a "
+           "(method, url) pair, and the asset verdict below is filed under that same pair, so a reply that has "
+           "lost half of its name can only retract the wrong record or none");
     DCHECK(url != NULL && *url,
            "a reply was read for its content while naming no address — every relative address inside a body "
            "resolves against the URL that was fetched, and a reply with none would resolve them against "
@@ -186,7 +190,17 @@ void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply)
     }
     free(ct);
 
-    if (is_asset(&computed)) { mime_type_free(&computed); JS_FreeValue(ctx, bodyv); return; }
+    /* AND THE SURFACE THE RULE IS ABOUT IS TOLD. The `return` alone is what stood here, and it is only half of
+       "Static assets are NEVER endpoints … but still drive the code path": declining to LEARN FROM a body says
+       nothing about the @H record the request already minted, so a document of nine `<img>` elements published
+       nine endpoints that were files. The verdict goes to the surface that holds the record before this
+       returns, keyed on the pair the request was owed under. */
+    if (is_asset(&computed)) {
+        endpoint_mark_asset(method, url);
+        mime_type_free(&computed);
+        JS_FreeValue(ctx, bodyv);
+        return;
+    }
 
     essence = mime_type_essence(&computed);
     CHECK(essence, "reply_decode: OOM reading a reply's computed essence");

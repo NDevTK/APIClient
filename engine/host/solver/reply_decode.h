@@ -47,9 +47,16 @@
    `reply` is the host's reply record (`{status, statusText, headers:[[name,value]…], body, urlList,
    computedType}`) or JS_NULL for a network error, handed over exactly as it arrived: "this address answered
    nothing" is a positive answer and not an engine invariant.
+   `method` IS THE OTHER HALF OF THE REQUEST'S NAME, and it is a parameter because the asset verdict below is
+   REPORTED and not merely acted on: the reply register is keyed on the (method, url) pair, so a verdict that
+   named only the address would mark a POST to it on the strength of what a GET returned.
    A reply whose computed MIME type is an image, a media stream, a font or an archive teaches nothing here and
    is not an error — CLAUDE.md §Attacker sources: "Static assets are NEVER endpoints (magic-byte + content-type,
-   not URL suffix) but still drive the code path", and the driving is the flow's, not this file's. */
-void reply_decode_learn(JSContext *ctx, const char *url, JSValueConst reply);
+   not URL suffix) but still drive the code path", and the driving is the flow's, not this file's. THAT
+   SENTENCE HAS TWO CLAUSES AND THIS FILE USED TO ACT ON THE SECOND ONLY: it returned without learning, which
+   is right, and told nobody, so the address stayed on the @H surface that the first clause is a rule about.
+   It calls solver/endpoint.c's `endpoint_mark_asset` now, which is what makes the classification a mechanism
+   rather than a computation with no reader. */
+void reply_decode_learn(JSContext *ctx, const char *method, const char *url, JSValueConst reply);
 
 #endif
