@@ -990,8 +990,64 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
     DCHECK(doc->origin != NULL && *doc->origin,
            "a document was installed with no PRINCIPAL — every same-origin check compares it");
     /* THE TWO FACTS ARE TWO ARGUMENTS, which is the whole of the fix for them: a host with one of them passed
-       whichever it had, and the address is the one that decides where `fetch("api/users")` goes. There is no
-       assertion comparing them, because a document AT the origin root legitimately has both the same. */
+       whichever it had, and the address is the one that decides where `fetch("api/users")` goes.
+       AND THEY ARE NOW COMPARED, BY §7.3.1's OWN STEP 5, WHICH IS NOT THE COMPARISON THIS SITE USED TO SAY
+       COULD NOT BE MADE. The reason recorded here was that "a document AT the origin root legitimately has
+       both the same" — which argues against comparing the ADDRESS to the PRINCIPAL as strings, a comparison
+       nobody would write. The one §7.3.1 defines is between the principal and the address's ORIGIN ("return
+       url's origin"), it is well defined for every Document, and it was the assertion the prose stood in for.
+       THREE STEPS LEGITIMATELY BREAK IT AND EACH IS EXCLUDED BY ITS OWN FACT RATHER THAN BY A TOLERANCE.
+       Steps 3 and 4 INHERIT (`about:srcdoc` always, `about:blank` when there is a source origin), so a
+       document whose address is one of those two carries its SOURCE's principal and the address says nothing
+       about it. Step 1 mints a fresh OPAQUE origin for a sandboxed document, and step 2 does the same for a
+       null URL; both serialize to `null`, which is §7.1.1's "no serialization it can be recreated from" and is
+       therefore unconstrained by any address. Everything else is step 5, where the principal IS the address's
+       origin — including `data:` and `file:`, whose origins are opaque on BOTH sides of this comparison and so
+       agree as `null`.
+       WHAT IT CATCHES IS A PRINCIPAL STATED BEFORE THE BYTES WERE FETCHED. A peer instance is provisioned from
+       the origin a `navigable.create` notice carried, which core/frame/navigable.c derives from the REQUEST
+       url; that instance runs platform_agent_init and adopts it BEFORE anything is fetched, and its root
+       Document then arrives as bytes the host fetched. If that fetch REDIRECTED off-origin, the peer holds a
+       principal its own response contradicts — and it is wrong ONCE and CONSISTENTLY, so origin_agent_adopt's
+       one-adopt-per-agent assert cannot see it and neither can any same-origin check inside that heap. §7.4.5
+       determines a navigation's origin from the RESPONSE's URL for exactly this reason; this is that sentence
+       asked of the one value every Document in this engine is installed with. */
+    /* GUARDED BECAUSE THE WORK IS THE CHECK. A DCHECK's condition is compiled out in release, and this one's
+       inputs are a URL PARSE and an origin SERIALIZATION — real allocation, per document — so leaving them
+       outside the guard would make a release build pay for an assertion it does not make. That is the reason
+       for the block rather than a side-effect-free condition: §7.3.1 step 5 cannot be asked without running
+       §4.4's parser, and a parse is not something a DCHECK may contain. */
+#if APICLIENT_DEV
+    {
+        UrlRecord u;
+        bool parsed;
+
+        url_record_init(&u);
+        parsed = url_parse(&u, doc->url, strlen(doc->url), NULL);
+        DCHECK(parsed,
+               "a document was installed with an ADDRESS §4.4's parser refuses — every caller states an "
+               "absolute serialization, so a record that cannot be recovered from it is a serializer and a "
+               "parser disagreeing about one string rather than anything a page can cause");
+        if (parsed && strcmp(doc->origin, "null") != 0 &&
+            !url_matches_about(&u, "srcdoc", true) && !url_matches_about(&u, "blank", false)) {
+            char *addr_origin = origin_serialize_of_url(&u);
+
+            CHECK(addr_origin != NULL, "platform: OOM stating §7.3.1 step 5's origin for a document's address");
+            DCHECK(strcmp(addr_origin, doc->origin) == 0,
+                   "a document's PRINCIPAL is not its ADDRESS's origin, and §7.3.1 step 5 says it must be — "
+                   "the three steps that inherit or mint one instead are excluded above, so this is a "
+                   "principal decided somewhere other than from these bytes. The shape that produces it is a "
+                   "principal stated BEFORE the fetch: a peer instance provisioned from a `navigable.create` "
+                   "notice adopts the origin of the REQUEST url, and a response that REDIRECTED off-origin "
+                   "then gives that agent a principal its own document contradicts — consistently, so no "
+                   "same-origin check inside it can notice. Determine the origin where §7.4.5 does, from the "
+                   "RESPONSE's URL (core/frame/navigable.c's load job does this for every navigation), and "
+                   "state THAT to the instance the host provisions");
+            free(addr_origin);
+        }
+        url_record_free(&u);
+    }
+#endif
     DCHECK(g_declared_in == JS_GetRuntime(ctx),
            "a document was installed in an agent whose platform was never declared — a per-realm install "
            "builds this realm's copy of a class the declaration mints, so there is nothing here to copy");
