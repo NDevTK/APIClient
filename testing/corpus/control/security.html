@@ -1,0 +1,56 @@
+<!doctype html><html><head><title>security control</title></head><body>
+<div id="s-arrival"></div><div id="s-taint"></div>
+<script>
+  // INSTRUMENT CONTROL, @S HALF. It did not exist while the census published `sinks: 0` for twelve sites:
+  // README.md's rule ("a corpus-wide zero is a finding only once this control is non-zero") was stated for
+  // the endpoint column and the security column had no rung at all, so "the pipeline finds nothing" and
+  // "the pipeline is not wired" were the same evidence.
+  //
+  // WHY IT IS ITS OWN DOCUMENT AND NOT FOUR MORE RUNGS IN index.html — MEASURED, not reasoned. These rungs
+  // put four to six @S CANDIDATE flows on the frontier and each one RE-RUNS the whole page. index.html's
+  // orphan rung (`neverCalled`) needs the opposite thing: solver/engine.c seeds an orphan drive only from
+  // the branch a flow reaches when it has run out of every other kind of work — "the first instant at which
+  // 'nothing called this function' is a fact about this timeline rather than a guess about a run that has
+  // not finished" — and it takes ONE orphan per call, which then has to be picked and run before the dwell
+  // ends. So the two halves in one document are a RACE, and the endpoint column loses it: with these rungs
+  // present the control reported 5 endpoints and no `/api/orphan-only`; with the same endpoint rungs alone
+  // it reports 6, at flows=10 instead of ~30. Two questions, two documents, each with a stable answer.
+  //
+  // WHAT EACH RUNG PROVES, AND WHICH COUNTER CARRIES IT (solver/solve.h, solver/concolic.h):
+  //   1. an UNTAINTED markup sink       -> _sinkReached moves, _sinkTainted does NOT. detect_sink counts the
+  //      arrival before it asks whether the value is concolic, so this separates "no sink ever ran" from
+  //      "sinks ran and only the page's own strings arrived" -- two of the four readings an empty
+  //      securitySinks array has.
+  //   2. a declared attacker source at a markup sink -> _sinkTainted moves and securitySinks gets an entry.
+  //   3. the same source at the JS-context sink, reached through the ECMAScript intrinsic seam
+  //      (JS_SetEvalSinkHook) rather than through a browser component, so rung 2 passing says nothing
+  //      about it.
+  //   4. a branch over a source, so _flows > 1 and BOTH arms arrive: a document whose sinks are reached but
+  //      whose sources never fork is a solver that is not exploring, and the arrival counters alone cannot
+  //      say so.
+  //
+  // THEY ARE WRITTEN AT A BARE URL ON PURPOSE. The harness drives this page with no query and no fragment,
+  // and both components are still attacker-controlled -- the attacker chooses the address the victim loads,
+  // which is why location.search mints a source whose EXAMPLE is the empty string rather than a concrete
+  // "". A control that needed a crafted URL would be testing the harness's URL, not the engine.
+  //
+  // THE GATE BELOW COMES FIRST AND THAT ORDERING IS LOAD-BEARING. `window.__FLAGS` is absent, which is
+  // unknown server-injected input, so this forks -- and by the time rung 2's sink is detected the flow
+  // stands on a NON-EMPTY decision path, which is what makes the search's frozen re-injection point hold a
+  // real chain SEGMENT instead of an empty one. That segment's give-back ran after the assert requiring it
+  // gone, so the renderer aborted at teardown on `g_dec_seg_live == 0` (solver/decide.c) on every run, while
+  // the same sink with no branch in front of it completed. Two statements, swapped, one aborts. Keep the
+  // gate first: this document is the standing reproduction of that ordering, and a version without it would
+  // pass without exercising the thing it was written for.
+  if (window.__FLAGS && window.__FLAGS.admin) { var gated = 1; }
+
+  document.getElementById('s-arrival').innerHTML = '<b>untainted</b>';          // rung 1
+  document.getElementById('s-taint').innerHTML = location.search;               // rung 2
+  eval('var controlEvalRung = "' + location.hash + '";');                       // rung 3
+  if (location.search.indexOf('mode=admin') === 0) {                            // rung 4
+    document.getElementById('s-arrival').innerHTML = '<i>gated</i>';
+  } else {
+    document.getElementById('s-arrival').innerHTML = '<i>ungated</i>';
+  }
+</script>
+</body></html>

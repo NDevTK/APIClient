@@ -34,12 +34,19 @@ noise on any site that aborted.
 harness.js derives its extension directory from its own location. That copy is what makes the browser
 provably load an artifact no other lane can rebuild under you mid-pass.
 
-`control/` is the INSTRUMENT CONTROL and is not a corpus site. It is a page whose `fetch` calls the engine
-certainly sees — one inline, one in a subresource, one behind an absent-state flag, one in a function nobody
-calls, one built from a config value — AND whose attacker sources reach a code-execution sink: an untainted
-markup write, `location.search` into `innerHTML`, `location.hash` into `eval`, and a branch over a source
-whose two arms both arrive. A corpus-wide zero is a finding only once this is non-zero **in the column being
-read**; run it in the same lane, on the same artifact, beside every census.
+`control/` is the INSTRUMENT CONTROL and is not a corpus site. It is THREE documents, one question each, and
+a census wants all three rows:
+
+    node site.mjs control     http://127.0.0.1:8899/                  <pass>   # the endpoint column
+    node site.mjs control-sec http://127.0.0.1:8899/security.html     <pass>   # the @S column
+    node site.mjs control-url http://127.0.0.1:8899/url-operands.html <pass>   # rungs that fail by aborting
+
+`index.html` holds `fetch` calls the engine certainly sees — one inline, one in a subresource, one behind an
+absent-state flag, one in a function nobody calls, one built from a config value. `security.html` holds
+attacker sources reaching a code-execution sink — an untainted markup write, `location.search` into
+`innerHTML`, `location.hash` into `eval`, and a branch over a source whose two arms both arrive. A
+corpus-wide zero is a finding only once this is non-zero **in the column being read**; run them in the same
+lane, on the same artifact, beside every census.
 
 THE @S HALF WAS ABSENT WHILE THE CENSUS PUBLISHED `sinks: 0` FOR TWELVE SITES, and the two halves are not
 interchangeable: the control scored 6/6 on endpoints with `secSinks 0`, so a reader who took that as the
@@ -48,8 +55,8 @@ That is this directory's own rule read one column too wide, and it is exactly th
 to make impossible — an instrument that answers one question is silence about the other, not evidence for
 it. Every column a census prints needs a rung here that moves it, or that column's zero is unreadable.
 
-IT IS TWO DOCUMENTS, AND A RUNG GOES IN THE SECOND ONE WHEN ITS REGRESSION MODE IS AN ABORT. `site.mjs`
-reads the engine's result document, so a run that produced none reports `endpoints: null, sinks: null,
+A RUNG GOES IN ITS OWN DOCUMENT WHEN ITS REGRESSION MODE IS AN ABORT. `site.mjs` reads the engine's result
+document, so a run that produced none reports `endpoints: null, sinks: null,
 sinkReached: null` — every column at once. A rung that fails by taking the renderer down therefore cannot
 share a document with the columns a census reads, or one defect is published as "we measured nothing".
 `index.html`'s rungs all answer with a number when they fail; `url-operands.html`'s two — an unknown BASE at
@@ -57,6 +64,30 @@ share a document with the columns a census reads, or one defect is published as 
 is three-valued and the middle state is the interesting one: neither endpoint means the coercion is back,
 `/api/canparse-false` ALONE means the verdict is fabricated (one arm, decided by a parse that never had the
 base), and BOTH in one run is the only state that is a measurement.
+
+AND THE TWO COLUMNS COMPETE FOR ONE DWELL, WHICH IS THE SECOND REASON FOR A SPLIT AND THE MEASURED ONE.
+`security.html`'s rungs put four to six @S CANDIDATE flows on the frontier and each re-runs the whole page.
+`index.html`'s orphan rung needs the opposite: `solver/engine.c` seeds an orphan drive only from the branch
+a flow reaches when it has run out of every other kind of work — "the first instant at which 'nothing called
+this function' is a fact about this timeline rather than a guess about a run that has not finished" — and it
+takes ONE orphan per call, which then has to be picked and run before the dwell ends. Measured, one artifact,
+one dwell, two passes per document:
+
+| document              | endpoints | sinks | sinkReached | sinkTainted | flows | candidates |
+|-----------------------|-----------|-------|-------------|-------------|-------|------------|
+| endpoint rungs alone  | 6, 6      | 0     | 0           | 0           | 10    | 0          |
+| both halves together  | 6, 5      | —     | —           | —           | —     | —          |
+| security rungs alone  | 0, 0      | 2, 2  | 5, 5        | 2, 2        | 9     | 5          |
+
+Both isolated halves have ZERO spread; only the mixed document moves, and `/api/orphan-only` is the endpoint
+that comes and goes. The split costs the security column nothing (the @S rungs record no endpoints at all)
+and is the whole of the endpoint column's stability. A control whose number moves for a reason that is not
+the thing it measures is not a control.
+
+That contention is a fact about the ENGINE and not only about this fixture, and it is worth a real-site
+measurement rather than an assumption: a page with a live @S search reaches its orphan surface later, and
+§Attacker-sources calls the drive of never-called code the flow a decision vector cannot reproduce. Whether
+a real site with many candidates reaches it at all within a session is open.
 
 ## What each instrument refuses to do, and why
 

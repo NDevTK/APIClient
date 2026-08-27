@@ -1,61 +1,21 @@
 <!doctype html><html><head><title>instrument control</title></head><body>
 <script>
-  // INLINE, top level: the simplest thing that must produce a fetchCallSite.
+  // INSTRUMENT CONTROL, ENDPOINT HALF. The simplest things that must produce a fetchCallSite: one inline at
+  // top level, one in a function nobody calls, one behind an absent-state flag, and two more in a
+  // subresource (see ext.js).
+  //
+  // NOTHING THAT OPENS AN @S SEARCH BELONGS IN THIS DOCUMENT, and that is measured rather than tidy. The
+  // security rungs live in security.html because they put four to six CANDIDATE flows on the frontier, each
+  // of which re-runs the whole page, and `neverCalled` below needs the opposite: solver/engine.c seeds an
+  // orphan drive only from the branch a flow reaches when it has run out of every other kind of work, and
+  // takes ONE orphan per call, which then has to be picked and run before the dwell ends. The two halves in
+  // one document are a RACE and this half loses it -- measured on one artifact, one dwell, two passes each:
+  // these rungs alone report 6 endpoints twice with zero spread at flows=10, and with the security rungs
+  // added the same document reported 6 then 5, with `/api/orphan-only` the one that comes and goes. A
+  // control whose number moves for a reason that is not the thing it measures is not a control.
   fetch('/api/inline-top?k=1');
   function neverCalled(){ fetch('/api/orphan-only'); }
   if (window.__FLAGS && window.__FLAGS.admin) fetch('/api/admin-gated');
 </script>
 <script src="/ext.js"></script>
-
-<div id="s-arrival"></div><div id="s-taint"></div>
-<script>
-  // ---- THE @S HALF OF THE CONTROL -------------------------------------------------------------------
-  // This half did not exist, and its absence is why a corpus-wide `sinks: 0` was unreadable. README.md
-  // states the rule for the endpoint half ("a corpus-wide zero is a finding only once this control is
-  // non-zero") and the @S column had no control at all: twelve sites reported `sinks: 0`, `sinkReached: 0`
-  // with nothing in the tree that had ever made either number move, so "the pipeline finds nothing" and
-  // "the pipeline is not wired" were the same evidence. These four rungs are the difference, and each is
-  // separately readable in the row's own counters rather than being one pass/fail.
-  //
-  // WHAT EACH RUNG PROVES, AND WHICH COUNTER CARRIES IT (solver/solve.h, solver/concolic.h):
-  //   1. an UNTAINTED markup sink       -> _sinkReached moves, _sinkTainted does NOT. detect_sink counts the
-  //      arrival before it asks whether the value is concolic, so this separates "no sink ever ran" from
-  //      "sinks ran and only the page's own strings arrived" -- two of the four readings an empty
-  //      securitySinks array has.
-  //   2. a declared attacker source at a markup sink -> _sinkTainted moves and securitySinks gets an entry.
-  //   3. the same source at the JS-context sink, which is reached through the ECMAScript intrinsic seam
-  //      (JS_SetEvalSinkHook) rather than through a browser component, so rung 2 passing says nothing
-  //      about it.
-  //   4. a branch over a source, so _flows > 1 and BOTH arms arrive: a document whose sinks are reached but
-  //      whose sources never fork is a solver that is not exploring, and the arrival counters alone cannot
-  //      say so. It writes markup rather than fetching, so this half of the control cannot move the endpoint
-  //      column that is the other half's whole subject.
-  //
-  // THEY ARE WRITTEN AT A BARE URL ON PURPOSE. The harness drives this page with no query and no fragment,
-  // and both components are still attacker-controlled -- the attacker chooses the address the victim loads,
-  // which is why location.search mints a source whose EXAMPLE is the empty string rather than a concrete
-  // "". A control that needed a crafted URL would be testing the harness's URL, not the engine.
-  //
-  // NOTHING HERE IS ALLOWED TO WIPE THE DOCUMENT: the endpoint rungs above are the other half of this
-  // control and `<script src="/ext.js">` is still outstanding when this runs, so each rung writes into its
-  // own div and never into document.body.
-  //
-  // THE FIRST THING THESE RUNGS FOUND, on the run that added them, is the reason they sit AFTER the endpoint
-  // block rather than before it — and that position is now load-bearing. The `window.__FLAGS.admin` gate
-  // above forks, so by the time rung 2's sink is detected the flow stands on a NON-EMPTY decision path, and
-  // the search's frozen re-injection point then holds a real chain SEGMENT instead of an empty one. That
-  // segment's give-back (solve_free) ran after the assert that requires it gone, so the renderer aborted at
-  // teardown on `g_dec_seg_live == 0` (solver/decide.c) on every run — while the same sink with no branch in
-  // front of it completed. Two statements, swapped, one aborts. Keep the gate before the sinks: this control
-  // is the standing reproduction of that ordering, and a version that put the @S rungs first would pass
-  // without exercising it.
-  document.getElementById('s-arrival').innerHTML = '<b>untainted</b>';          // rung 1
-  document.getElementById('s-taint').innerHTML = location.search;               // rung 2
-  eval('var controlEvalRung = "' + location.hash + '";');                       // rung 3
-  if (location.search.indexOf('mode=admin') === 0) {                            // rung 4
-    document.getElementById('s-arrival').innerHTML = '<i>gated</i>';
-  } else {
-    document.getElementById('s-arrival').innerHTML = '<i>ungated</i>';
-  }
-</script>
 </body></html>
