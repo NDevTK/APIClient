@@ -773,6 +773,29 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        initial load is still pending); §7.4's create skips the job entirely for such an address, which is a
        different decision — deferring materialization — made for a different reason. */
     fetches = strncmp(addr, "about:", 6) != 0;
+    /* AND `about:` IS NOT THE ONLY NON-FETCHING SCHEME, WHICH IS WHY THE QUESTION ABOVE IS ASSERTED AND NOT
+       JUST ANSWERED. §7.4.2.2 "Beginning navigation" branches on the scheme BEFORE anything this job does —
+       "if url's scheme is `javascript`: queue a global task on the navigation and traversal task source …
+       to navigate to a javascript: URL … " and RETURN — and §7.4.2.3.2 "The javascript: URL special case"
+       says of the only request it ever builds: "This is a synthetic request solely for plumbing into the next
+       step. It will never hit the network."
+       SO A `javascript:` URL ARRIVING HERE IS A NAVIGATION THAT SKIPPED THAT BRANCH, and what this job would
+       do with it is put the PROGRAM ITSELF on the wire: a `javascript:` URL has an opaque path and no host, so
+       the request target is the script source — spaces, quotes and all — and the authority falls back to a
+       default. The reply cannot be a document, and the popup that was supposed to run the program instead
+       reports a load that failed, which is a symptom with no `javascript:` anywhere in it.
+       THE EVALUATION IS BUILT AND THE ROUTING IS NOT — navigable_evaluate_javascript_url is §7.4.2.3.2 and it
+       is reached from ONE entry, so every OTHER navigation (§7.2.2.1 "Opening and closing windows" step 16.1's
+       navigate, location's setters, a hyperlink's activation) walks past it into this fetch. What to build is
+       the branch in navigate, once, where every entry already converges — not a second `if` at whichever
+       caller the next failure happens to name. That is a claim about another site: read it before building
+       for it. */
+    DCHECK(strncmp(addr, "javascript:", sizeof "javascript:" - 1) != 0,
+           "§7.4 step 14's document-load job reached its FETCH with a `javascript:` URL — §7.4.2.2 "
+           "\"Beginning navigation\" routes that scheme to §7.4.2.3.2 \"The javascript: URL special case\" and "
+           "returns, and that section's own request never hits the network. This job would send the script "
+           "source as the request target. Build the scheme branch in navigate so it reaches "
+           "navigable_evaluate_javascript_url, which already implements §7.4.2.3.2");
     if (fetches && !s->req) {
         char *op = malloc(strlen(addr) + 20);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
