@@ -484,6 +484,27 @@ JSValue window_proxy_opener(JSContext *ctx, JSValueConst proxy);
    than a value assignment, which is why it lives on the navigable. Per-flow: captured into the running flow's
    delta, so a sibling arm that did not disown still has its opener. */
 void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy);
+/* HTML §7.2.2.1 "Opening and closing windows", the window open steps, step 16.2 — "if noopener is false, then
+ * set targetNavigable's active browsing context's OPENER BROWSING CONTEXT to sourceDocument's browsing
+ * context". THE OTHER WRITER of the same link `window_proxy_new` sets at creation, and the one an EXISTING
+ * navigable needs.
+ *
+ * WHY IT DID NOT EXIST AND WHAT ITS ABSENCE LOOKED LIKE. Every opener this engine had was set at CREATION, by
+ * the create that mints an auxiliary navigable — which is right for `open(url)` and answers nothing at all for
+ * `open(url, name)` that finds a navigable ALREADY THERE. §7.3.1.7's rules answer that call with an existing
+ * navigable and windowType "existing or none", and step 16.2 is the only step that links it back; with no
+ * setter there was no step, so `window.open("/x", "<an existing iframe's name>")` navigated the frame and left
+ * its `opener` null for ever. `embedded-opener-remove-frame.html` fails on that line — its FIRST assert,
+ * before any of the removal behaviour it is named for — which is why the file reads as a detach test and is
+ * really an opener test that never gets past its own setup.
+ *
+ * IT IS A STATE CHANGE ON THE NAVIGABLE, not a value assignment, which is the same statement `disown` above
+ * makes and the reason the pair lives here rather than in §7.2.2.4's Web IDL setter: that setter's non-null
+ * branch is [Replaceable]'s DEFINE (it shadows the accessor with an own data property on the receiver and
+ * changes no browsing context at all), while this one is what a page then READS through it.
+ * `opener` is BORROWED — this dups it. Per-flow: captured into the running flow's delta through the accessor,
+ * so an arm that opened a named window links an opener its sibling does not have. */
+void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst opener);
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN WITH THIS ONE? §7.2.1's check — §7.1.1's SAME ORIGIN over
    two origin RECORDS (core/url/origin.h), so its step 1 is a nonce comparison and an OPAQUE origin is same

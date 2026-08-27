@@ -250,10 +250,47 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
  * `url` is the SERIALIZED URL, whose scheme must be `javascript`; the caller has already parsed it. */
 void navigable_evaluate_javascript_url(JSContext *ctx, const char *url);
 
-/* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, then the navigation both callers
-   want: choose a navigable for `target` and navigate it to `url`, creating one and giving it the name when
-   nothing answers to it. TWO callers, and they are not variants of each other: §7.2.2.1's window open steps
-   reach it after parsing a features string, and §4.6.3's FOLLOWING A HYPERLINK reaches it from an `<a>`'s
+/* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE'S **SECOND** RETURN VALUE.
+ *
+ * "Let targetNavigable and windowType be the result of applying the rules for choosing a navigable" is
+ * §7.2.2.1's step 12, and §4.6.5 step 6 says the other half out loud — "let targetNavigable be THE FIRST
+ * RETURN VALUE of applying the rules". Two values, and which of the two callers reads the second is the whole
+ * shape of what happens next, so it is not an implementation detail this file may drop.
+ *
+ * WHAT DROPPING IT COST, because it was dropped and the price was three defects wearing three names.
+ * §7.2.2.1 splits on this value: step 15 is the "new*" arm and step 16 the "existing or none" arm, and step 16
+ * is where BOTH of the things an existing navigable needs live — 16.1's navigate, which happens only "if
+ * urlRecord is not null", and 16.2's opener link, which has no counterpart in step 15 at all because a created
+ * navigable got its opener from its create. With one unconditional navigate standing in for both arms:
+ * `open("", name)` navigated where 16.1 does not; `open(url, "<existing name>")` never linked the opener; and
+ * step 17's return, which asks this value FIRST ("if windowType is 'new with no opener', then return null")
+ * before its noopener clause — a clause that EXCLUDES `_self`, `_parent` and `_top` — returned null for
+ * `open(url, "_self", "noopener")`, a call that must answer with the WindowProxy of the navigable it just
+ * navigated. One missing return value, three wrong answers, none of which looks like the others.
+ *
+ * THIS BUILD'S RULES PRODUCE TWO OF THE THREE. `new with no opener` is set by §7.3.1.7's opener-policy clause
+ * — "if currentDocument's opener policy's value is 'same-origin' or 'same-origin-plus-COEP', and
+ * currentDocument's origin is not same origin with its relevant settings object's top-level origin" — which
+ * this build does not evaluate. That is a NAMED subproblem and not a silent omission: navigable_open crashes
+ * where the clause belongs rather than quietly answering `new and unrestricted` for a COOP document, so the
+ * value cannot be wrong without saying so. Step 17 handles all three regardless, because the arm is the
+ * spec's and reading it off a value that cannot yet arrive costs nothing. */
+typedef enum {
+    /* §7.3.1.7 step 2's INITIAL VALUE — the rules answered with a navigable that ALREADY EXISTED (steps 4-7:
+       the empty name, `_self`, `_parent`, `_top`, or a find-by-target-name hit). §7.2.2.1 step 16 is its arm. */
+    WINDOW_TYPE_EXISTING_OR_NONE = 0,
+    /* §7.3.1.7 step 8's third option — a new top-level traversable was created. §7.2.2.1 step 15 is its arm,
+       and in this engine step 15's navigate is already done by the create (see navigable_open). */
+    WINDOW_TYPE_NEW_AND_UNRESTRICTED,
+    /* §7.3.1.7 step 8's opener-policy clause. NOT PRODUCED BY THIS BUILD — see above. */
+    WINDOW_TYPE_NEW_WITH_NO_OPENER,
+} WindowType;
+
+/* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, and NOTHING AFTER THEM.
+   It used to be the rules PLUS an unconditional navigate, which is §4.6.5 step 9's tail and is the WRONG tail
+   for §7.2.2.1 — see WindowType above for what that cost. Each caller now runs its own steps over the two
+   values this answers with. TWO callers, and they are not variants of each other: §7.2.2.1's window open steps
+   reach it after parsing a features string, and §4.6.5's FOLLOWING A HYPERLINK reaches it from an `<a>`'s
    activation behaviour with `noopener` read off `rel`. The rules for choosing a navigable are ONE algorithm; a
    second copy in the hyperlink path would be the second answer that is always subtly wrong.
    `target` IS THE TARGET ITS OWN ALGORITHM PRODUCED — the string the page passed to `window.open`, or the
@@ -268,10 +305,20 @@ void navigable_evaluate_javascript_url(JSContext *ctx, const char *url);
    (`dangling-markup-window-name.html` asserts both halves). Without the element there is nothing here to assert
    against, and a call site that reads a `target` attribute raw joins the algorithm silently — which is how a
    window came to be named after smuggled markup. With it, that call site CRASHES.
+   `out_window_type` receives §7.3.1.7's SECOND return value and is NOT optional — a caller that does not read
+   it is a caller running one arm of a two-arm algorithm, which is the state this parameter exists to end.
+   AND THE CONTRACT ON `url` IS ASYMMETRIC, WHICH THE CALLER MUST KNOW RATHER THAN GUESS. An EXISTING navigable
+   is chosen and NOT navigated: §7.2.2.1 step 16.1 and §4.6.5 step 9 are the caller's own steps and they do not
+   agree (16.1 skips an empty url; step 9 does not), so doing it here would be one of them imposed on both — the
+   defect this split repaired. A NEW navigable HAS already been navigated to `url`, by §7.4 step 14 inside
+   navigable_create, which is where this engine's create puts it; a caller that navigates it again loads the
+   address twice into two documents of one navigable. The asymmetry is stated because it is real, and it is the
+   next thing to remove: §7.3.1.7 step 8's create takes no url at all, and step 15's navigate belongs to
+   §7.2.2.1 exactly as 16.1's does.
    Answers the chosen navigable's WindowProxy (owned), or JS_UNDEFINED when the url does not parse — which
-   §7.2.2.1 turns into a SyntaxError and §4.6.3 discards, because a click is not a place a page can catch one. */
+   §7.2.2.1 turns into a SyntaxError and §4.6.5 discards, because a click is not a place a page can catch one. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
-                       lxb_dom_node_t *source_element);
+                       lxb_dom_node_t *source_element, WindowType *out_window_type);
 void navigable_free(JSContext *ctx);
 
 /* HOW MANY CHILD REALMS ARE LIVE — the working set child_document's OOM `CHECK` names, asked of the only

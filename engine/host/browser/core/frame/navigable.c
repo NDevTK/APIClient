@@ -2455,17 +2455,41 @@ void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const c
  * instead, silently turning a same-window navigation into a popup. The same inversion swallowed `_parent` and
  * `_top`.
  *
- * AN EMPTY TARGET IS `_self` HERE, WHICH IS STEP 4 AND NOT A CALLER'S BUSINESS. §4.6.3 passed the literal
+ * AN EMPTY TARGET IS `_self` HERE, WHICH IS STEP 4 AND NOT A CALLER'S BUSINESS. §4.6.5 passed the literal
  * "_self" for a missing `target` attribute — a second copy of step 4 living in the caller — while this function
  * read an empty target as "create", which is neither caller's rule. §7.2.2.1's window open steps map "" to
  * "_blank" in their own step 5 BEFORE applying these rules, so `window.open(url, "")` still opens a window:
- * that mapping belongs to §7.2.2.1 and now lives there. */
+ * that mapping belongs to §7.2.2.1 and now lives there.
+ *
+ * AND WHAT FOLLOWED THE RULES HERE IS GONE, WHICH IS THE OTHER HALF OF THAT SAME SENTENCE. This function used
+ * to END with `navigable_navigate(ctx, chosen, url ? url : "")` on the existing-navigable arm, under a comment
+ * asserting the opposite of what the standard says — "an absent url is the empty string, which resolves
+ * against the document's own address — so `open(\"\", \"_self\")` reloads". §7.2.2.1 step 16.1 navigates an
+ * existing navigable ONLY "if urlRecord is not null", and its step 3 leaves urlRecord null exactly when url is
+ * the empty string, so that call must NOT reload. §4.6.5 step 9 navigates unconditionally, so the same line
+ * WAS right for the hyperlink caller — one tail serving two algorithms that disagree, which is why it could
+ * not be right for both and why the fix is a split rather than a condition. See navigable.h's WindowType.
+ *
+ * §4.6.5 IS "FOLLOWING HYPERLINKS" AND THIS FILE CALLED IT §4.6.3 IN EVERY LINE OF THIS BLOCK. §4.6.3 is "API
+ * for hyperlink elements" — a real section, about `href`/`protocol`/`host`, which is the citation failure
+ * CLAUDE.md rates worse than none: it reads as authoritative and sends the reader to a clause that does not
+ * say this. Only this block and the header's are corrected; a sweep of the file's other citations would be a
+ * diff nobody can check. */
 JSValue navigable_open(JSContext *ctx, const char *url, const char *target, const WindowFeatures *feat,
-                       lxb_dom_node_t *source_element)
+                       lxb_dom_node_t *source_element, WindowType *out_window_type)
 {
     const char *name = target ? target : "";
     const bool noopener = feat && feat->noopener;
     JSValue chosen;
+
+    DCHECK(out_window_type != NULL,
+           "§7.3.1.7's rules for choosing a navigable were applied by a caller that does not read their SECOND "
+           "return value. §7.2.2.1 step 12 takes both and branches its steps 15-17 on windowType; §4.6.5 step "
+           "6 takes only the first and says so. A caller that reads neither is running one arm of a two-arm "
+           "algorithm, which is what left `open(url, \"<existing name>\")` with no opener");
+    /* §7.3.1.7 step 2: "Let windowType be `existing or none`." Written before anything can answer, so every
+       path out of this function has stated it. */
+    *out_window_type = WINDOW_TYPE_EXISTING_OR_NONE;
 
     /* THE ASSERT AT THE CONSUMER, and the question it closes is the one this algorithm structurally cannot ask:
        §7.3.1.7 takes ANY string, so a name carrying smuggled markup is legal here — for `window.open`, which is
@@ -2495,19 +2519,45 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
        chosen to the result of finding a navigable by target name". Both halves are conditions on the SEARCH. */
     if (JS_IsUndefined(chosen) && !target_name_is(name, "_blank") && !noopener)
         chosen = navigable_choose_name(ctx, name);
-    if (window_proxy_is(chosen)) {
-        /* §7.2.2.1's window open steps 15-16 over the chosen navigable — the two arms that navigate, split by
-           windowType, which this engine has one loader for. An absent url is the empty string, which resolves
-           against the document's own address — so `open("", "_self")` reloads. */
-        JSValue r = navigable_navigate(ctx, chosen, url ? url : "");
-        JS_FreeValue(ctx, chosen);
-        return r;
-    }
+    /* STEPS 4-7 ANSWERED, so windowType stays step 2's `existing or none` and the navigable is handed back
+       UNNAVIGATED — §7.2.2.1 step 16.1 and §4.6.5 step 9 are the callers' own steps and they disagree about
+       the empty url, so neither may be performed here on the other's behalf. */
+    if (window_proxy_is(chosen)) return chosen;
     JS_FreeValue(ctx, chosen);
     /* Step 8: nothing answered, so a new top-level traversable is created. "Let targetName be the empty
        string. If name is not an ASCII case-insensitive match for `_blank`, then set targetName to name." —
        so every name that reached step 7 and found nothing NAMES the navigable it creates, `_foo` included,
        and only `_blank` creates an unnamed one. */
+    /* §7.3.1.7 step 8's THIRD OPTION: "Set windowType to `new and unrestricted`." */
+    *out_window_type = WINDOW_TYPE_NEW_AND_UNRESTRICTED;
+    /* §7.3.1.7 step 8's OPENER-POLICY CLAUSE, WHICH IS NOT BUILT — and crashes here rather than answering
+       `new and unrestricted` for a document it does not apply to. "Let currentDocument be currentNavigable's
+       active document. If currentDocument's opener policy's value is `same-origin` or `same-origin-plus-COEP`,
+       and currentDocument's origin is not same origin with currentDocument's relevant settings object's
+       TOP-LEVEL ORIGIN: set noopener to true, set name to `_blank`, and set windowType to `new with no
+       opener`." Three assignments, and every one of them changes what the caller does next — step 17's FIRST
+       clause returns null on that windowType, so a page whose popup handle this engine hands back would be
+       holding one real Chrome denies it.
+       THE CONDITION IS ASKED, NOT ASSUMED. Only the policy half is testable from here — this agent is
+       origin-keyed, so `currentDocument`'s origin IS the agent's and "not same origin with the top-level
+       origin" is the same cross-origin-nested-document shape §7.3.2.1's inherited-opener-policy arm already
+       resolves through window_proxy_opener_policy. Guarding on the policy alone makes the crash fire for a
+       COOP document opening any window, which OVER-reports by exactly the same-origin-top case — and an
+       over-reporting crash on a page nobody can serve yet is the right side to be wrong on, because the other
+       side is a silent wrong windowType. */
+    {
+        OpenerPolicyValue coop = window_proxy_opener_policy(document_window_proxy(ctx));
+
+        DCHECK(coop != OPENER_POLICY_SAME_ORIGIN && coop != OPENER_POLICY_SAME_ORIGIN_PLUS_COEP,
+               "§7.3.1.7 step 8's OPENER-POLICY CLAUSE is reached and not built: this document's opener policy "
+               "is `same-origin` or `same-origin-plus-COEP`, so the clause must compare its origin against "
+               "§8.1.3.1's TOP-LEVEL ORIGIN and, when they differ, set noopener true, the name to `_blank` and "
+               "windowType to `new with no opener` — on which §7.2.2.1 step 17's first clause returns null. "
+               "Without it this call answers `new and unrestricted` and hands the page a handle to a popup it "
+               "must not be able to script. BUILD the comparison (realm_top_level_creation_url gives the "
+               "top-level origin; origin_same compares the records) and return WINDOW_TYPE_NEW_WITH_NO_OPENER "
+               "— step 17 already reads it");
+    }
     /* §7.1.5: an AUXILIARY navigable has NO EMBEDDER ELEMENT, so there is no iframe sandboxing flag set for
        it to inherit — its creation flags come from the popup sandboxing flag set, which navigable_create
        derives from this document's own active set through §7.3.1.7's propagate rule. */
@@ -2539,7 +2589,8 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
 #define OPEN_STAGES(X) \
     X(OPEN_CHOOSE = IDL_STEP_FIRST, \
       "HTML §7.2.2.1 Opening and closing windows — the window open steps (the features, §7.3.1.7's rules for " \
-      "choosing a navigable, navigating it, and the null a `noopener` request answers with)")
+      "choosing a navigable and their windowType, step 16's navigate-and-link-the-opener arm for an existing " \
+      "navigable, and step 17's two returns)")
 enum { OPEN_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const OPEN_STEPS[] = { OPEN_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -2559,6 +2610,11 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     OpenState *s = st;
     const char *url, *target, *features;
     WindowFeatures feat;
+    /* §7.3.1.7's SECOND return value, which steps 15, 16 and 17 all branch on — see navigable.h's WindowType
+       for what reading only the first cost. */
+    WindowType window_type;
+    /* §7.2.2.1 step 3's urlRecord, as the only thing steps 15 and 16.1 ask about it. */
+    bool url_is_null;
 
     (void)out_cb; (void)out_argc;
     JS_FreeValue(ctx, cb_result);
@@ -2587,20 +2643,76 @@ static int js_win_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        reached from script, never from an element, so §4.2.3's get an element's target does not run and the
        target is NOT reset. `dangling-markup-window-name.html`'s first subtest is named for exactly that —
        "Dangling Markup in target is not reset when set by window.open". */
-    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL);
-    if (url) JS_FreeCString(ctx, url);
-    if (target) JS_FreeCString(ctx, target);
+    /* §7.2.2.1 STEP 3: "Let urlRecord be null. If url is not the empty string: set urlRecord to the result of
+       encoding-parsing a URL given url…". THE EMPTY STRING LEAVES IT NULL, and that is not bookkeeping — step
+       16.1 navigates an existing navigable only "if urlRecord is not null", so `open("", "_self")` chooses this
+       navigable and does NOTHING to it. The IDL default for an omitted `url` IS the empty string, so an absent
+       argument takes the same branch. */
+    url_is_null = (url == NULL || *url == '\0');
+    s->result = navigable_open(ctx, url, (target && *target) ? target : "_blank", &feat, NULL, &window_type);
     if (features) JS_FreeCString(ctx, features);
     /* §7.2.2.1 step 4: "If urlRecord is failure, then throw a \"SyntaxError\" DOMException" — the PAGE's
        mistake, and the one this algorithm hands back rather than swallowing. */
     if (JS_IsUndefined(s->result)) {
+        if (url) JS_FreeCString(ctx, url);
+        if (target) JS_FreeCString(ctx, target);
         JS_ThrowDOMException(ctx, "SyntaxError", "the URL to open is not a URL");
         return JS_STEP_ABRUPT;
     }
-    /* §7.2.2.1 step 17: "If noopener is true or windowType is \"new with no opener\", then return null." The
-       navigable is created and navigated all the same — a page that opens a window it cannot script still
-       opened one — and what the caller loses is the handle, which is the whole point of the feature. */
-    if (s->noopener) { JS_FreeValue(ctx, s->result); s->result = JS_NULL; }
+    /* §7.2.2.1 STEPS 15 AND 16 — the two arms, split by windowType, which is the split this member did not
+       have. Step 15's arm ("new and unrestricted" / "new with no opener") is performed by the create inside
+       navigable_open: it sets is-popup from the tokenized features, and §7.4 step 14 enqueues the load that is
+       step 15's navigate. Step 16's arm is HERE because it is the one an EXISTING navigable takes, and it has
+       two steps that step 15 has no counterpart for. */
+    if (window_type == WINDOW_TYPE_EXISTING_OR_NONE) {
+        /* STEP 16.1: "If urlRecord is not null, then navigate targetNavigable to urlRecord using
+           sourceDocument…". The condition is step 3's, read off `url_is_null` above. */
+        if (!url_is_null) {
+            JSValue r = navigable_navigate(ctx, s->result, url);
+            JS_FreeValue(ctx, s->result);
+            s->result = r;
+        }
+        /* STEP 16.2: "If noopener is false, then set targetNavigable's active browsing context's OPENER
+           BROWSING CONTEXT to sourceDocument's browsing context." NOTHING PERFORMED THIS STEP, and nothing
+           could: every opener this engine set was set at a create, so a navigable that already existed when
+           `open()` named it was linked by no one. That is the whole of
+           `embedded-opener-remove-frame.html :: opener of discarded nested browsing context` failing on its
+           FIRST assert — `opener before removal expected object "[object Window]" but got null` — before the
+           removal the file is named for ever happens.
+           IT IS `sourceDocument`'s BROWSING CONTEXT, which is the navigable of the realm this member is running
+           in, and that is document_window_proxy's answer rather than the chosen navigable's parent or top: a
+           page can name a frame of any document it is familiar with, and what links back is always the one that
+           CALLED open. */
+        if (!s->noopener && !JS_IsNull(s->result) && !JS_IsUndefined(s->result))
+            window_proxy_set_opener(ctx, s->result, document_window_proxy(ctx));
+    }
+    if (url) JS_FreeCString(ctx, url);
+    /* §7.2.2.1 STEP 17, BOTH OF ITS SENTENCES — and the second one has a clause this member did not read.
+       IT READS `target` AS THE PAGE WROTE IT, which is why the argument is still alive here: step 5's map of
+       "" to "_blank" is applied at the CALL to the rules above and not to this variable, so an empty target is
+       correctly not one of the three keywords.
+       "If windowType is `new with no opener`, then return null. If noopener is true AND target is not an ASCII
+       case-insensitive match for `_self`, `_parent`, or `_top`, then return null."
+       THE EXCLUSION IS THE POINT. `open(url, "_self", "noopener")` navigates THIS navigable — navigable_open's
+       own comment argues that at length — and a page cannot be denied a handle it already holds, so there is
+       nothing for the flag to withhold and the step says so by listing the three keywords. This member nulled
+       the result whenever `noopener` was set, so exactly those three calls answered null while doing the
+       navigation, which is the same inversion the rules for choosing a navigable had already been repaired of
+       one level down: the flag guards ONE thing, and it is not this one.
+       `target` HERE IS THE ARGUMENT AS THE PAGE WROTE IT, before step 5's map of "" to "_blank" — an empty
+       target is not one of the three keywords, so `open(url, "", "noopener")` returns null, and it is a new
+       window rather than this one. */
+    {
+        const char *t = target ? target : "";
+
+        if (window_type == WINDOW_TYPE_NEW_WITH_NO_OPENER ||
+            (s->noopener && !target_name_is(t, "_self") && !target_name_is(t, "_parent")
+                         && !target_name_is(t, "_top"))) {
+            JS_FreeValue(ctx, s->result);
+            s->result = JS_NULL;
+        }
+    }
+    if (target) JS_FreeCString(ctx, target);
     *presult = s->result;
     s->result = JS_UNDEFINED;
     return JS_STEP_DONE;

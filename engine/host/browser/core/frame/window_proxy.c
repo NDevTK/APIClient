@@ -1217,6 +1217,27 @@ void window_proxy_disown_opener(JSContext *ctx, JSValueConst proxy)
     p->opener = JS_NULL;
 }
 
+void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst opener)
+{
+    ProxyData *p = proxy_of(proxy);   /* the capture is in the accessor — this write rides the flow's delta */
+
+    DCHECK(p != NULL, "something that is not a WindowProxy was given an opener");
+    /* §7.2.2.4's `opener` IS A NAVIGABLE'S, so what is stored is the opener's PROXY and never its Window. The
+       two are not interchangeable here and the difference is exactly the bug window_proxy_new's own comment
+       records: a Window in this slot makes the `top` walk stop at the proxies and read a scriptable property
+       to continue, and makes a popup's `opener` a Window rather than the navigable it belongs to. */
+    DCHECK(window_proxy_is(opener),
+           "§7.2.2.1 step 16.2 was given something that is not a WindowProxy as the opener browsing context — "
+           "the step says \"sourceDocument's browsing context\", which is a NAVIGABLE, and every other reader "
+           "of this slot (§7.2.2.4's `opener`, window_proxy_opener_navigable, the familiarity walk) is written "
+           "against a proxy");
+    /* NULL IS NOT THIS FUNCTION'S TO SAY. §7.2.2.4's null branch DISOWNS, which is a different state change
+       with a different observable (no own property is defined), and it has its own entry point above. Reaching
+       this one with null would make the two spellings of "no opener" two, able to disagree. */
+    JS_FreeValue(ctx, p->opener);
+    p->opener = JS_DupValue(ctx, opener);
+}
+
 bool window_proxy_materialized(JSValueConst proxy)
 {
     ProxyData *p = JS_GetOpaque(proxy, g_proxy_class);

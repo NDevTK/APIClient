@@ -37,6 +37,7 @@
 #include "core/dom/node.h"
 #include "core/events/event_target.h"
 #include "core/frame/navigable.h"
+#include "core/frame/window_proxy.h"   /* the brand on what §7.3.1.7's rules answer with — see §4.6.5 step 9 */
 #include "core/frame/window_features.h"
 #include "quickjs-step.h"
 
@@ -215,7 +216,17 @@ static JSValue js_link_tostring(JSContext *ctx, JSValueConst this_val, int argc,
     return js_link_get(ctx, this_val, URL_HREF);
 }
 
-/* §4.6.3 FOLLOWING A HYPERLINK, and DOM §2.9's activation behaviour is how it is reached.
+/* §4.6.5 "Following hyperlinks" — FOLLOW THE HYPERLINK CREATED BY AN ELEMENT, and DOM §2.9's activation
+ * behaviour is how it is reached.
+ *
+ * THE NUMBER WAS §4.6.3 IN EVERY LINE OF THIS HALF OF THE FILE AND §4.6.3 IS A DIFFERENT SECTION. It is "API
+ * for hyperlink elements" — `href`, `protocol`, `host`, `hash` — which the TOP half of this file cites
+ * correctly, so the file was right about its own members and wrong about its own algorithm, in the failure mode
+ * CLAUDE.md rates worse than no citation at all: a number that reads as authoritative and sends the reader to
+ * a clause that does not mention the thing. Two sections are meant here and they are not the same one:
+ * §4.6.5 "Following hyperlinks" owns follow-the-hyperlink and get-an-element's-noopener; §4.6.2 "Links created
+ * by a and area elements" owns the ACTIVATION BEHAVIOUR that reaches them. Only this half is corrected — the
+ * §4.6.3 citations above are about the URL members and are right.
  *
  * WHAT WAS MISSING. This component was the URL members and nothing else, so `<a href>` was a rich set of
  * accessors over a link that could not be followed: clicking one dispatched a real §2.9 click, ran every
@@ -238,8 +249,9 @@ static bool link_has_activation(JSContext *ctx, JSValueConst el)
     bool has;
 
     if (!n || n->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    /* §4.6.3 gives `a` and `area` an activation behaviour, and only WITH an href: `<a>` with none is not a
-       hyperlink at all — it is a placeholder the spec says nothing happens for. */
+    /* §4.6.2 "Links created by a and area elements" gives `a` and `area` an activation behaviour, and its
+       STEP 1 is this test: "If element has no href attribute, then return." `<a>` with none is not a hyperlink
+       at all — it is a placeholder the spec says nothing happens for. */
     q = lxb_dom_element_qualified_name((lxb_dom_element_t *)n, &qn);
     if (!q || !((qn == 1 && q[0] == 'a') || (qn == 4 && !memcmp(q, "area", 4)))) return false;
     /* PRESENCE, so it asks for the VALUE and not for bytes — a link whose href a flow tainted is still a link,
@@ -259,6 +271,9 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     char *target;
     WindowFeatures feat = { false, false, false };
     JSValue r;
+    /* §4.6.5 step 6 takes only the FIRST return value of §7.3.1.7's rules, so this exists to be READ ONCE —
+       by the navigate below, and only for the reason stated there. */
+    WindowType window_type;
 
     (void)ev;
     /* FOLLOWING A TAINTED LINK IS A SINK, AND IT IS NOT BUILT. `a.href = location.hash.slice(1)` then a click
@@ -268,14 +283,14 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
        element_attr_get, because the mechanism to build is this site's and not that accessor's: navigable_open
        over a concolic destination, forking the feasible arm and carrying the source into the navigation. */
     DCHECK(!concolic_is(hrefv),
-           "a hyperlink whose href holds unknown external input was followed — §4.6.3's navigation takes the "
+           "a hyperlink whose href holds unknown external input was followed — §4.6.5's navigation takes the "
            "destination as bytes, so the attacker-controlled URL reaches §7.4 untainted and the sink is never "
            "recognised. Build navigable_open over a concolic destination");
     DCHECK(JS_IsString(hrefv), "a hyperlink with no href was picked as an activation target — "
                                "link_has_activation is what decides that, and it reads the same attribute");
     /* Borrowed from `hrefv`, which outlives the navigation below — one read of the attribute, not two. */
     href = JS_ToCString(ctx, hrefv);
-    /* §4.6.3's "get an element's noopener". A relation LIST is space-separated and ASCII case-insensitive;
+    /* §4.6.5's "get an element's noopener". A relation LIST is space-separated and ASCII case-insensitive;
        `noreferrer` implies `noopener` for the same reason §7.4's feature does — a window with no referrer has
        no opener, because the opener is how it would have one. */
     if (rel) {
@@ -312,14 +327,33 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     /* §4.6.5 step 11 navigates "with … sourceElement set to subject" — the element is what makes this an
        ELEMENT-initiated navigation, which is the one thing §7.3.1.7's rules cannot ask of the name alone and
        the fact the assert at their entry is about. */
-    r = navigable_open(ctx, href, target, &feat, node_of(el));
+    r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type);
+    /* §4.6.5 STEP 9: "Navigate targetNavigable to urlString using subject's node document, with referrerPolicy
+       set to subject's hyperlink referrer policy, userInvolvement set to userInvolvement, and sourceElement set
+       to subject." IT IS THIS CALLER'S STEP AND IT IS UNCONDITIONAL — there is no urlRecord-is-null test here,
+       because §4.6.5 step 4 RETURNS when the parse fails rather than carrying a null forward, and no windowType
+       branch, because step 6 takes only the FIRST return value of the rules. That is precisely where this
+       algorithm and §7.2.2.1's part company: an empty `href` resolves against the document's own address and
+       so a click on `<a href="">` reloads, while `window.open("")` on an existing navigable does nothing at
+       all. The one navigate that used to live inside navigable_open was THIS one, imposed on both callers.
+       ONLY THE EXISTING-NAVIGABLE ARM IS NAVIGATED HERE, and that is an artefact of this engine rather than of
+       §4.6.5: a navigable the rules CREATED has already been navigated to `href` by §7.4 step 14 inside the
+       create (navigable.h states that contract), so navigating again would load one address into two documents
+       of one navigable. When step 8's create stops taking a url — which is what §7.3.1.7 actually says — this
+       test goes and the step becomes unconditional, as it reads. */
+    if (window_type == WINDOW_TYPE_EXISTING_OR_NONE && window_proxy_is(r)) {
+        JSValue nav = navigable_navigate(ctx, r, href);
+        JS_FreeValue(ctx, r);
+        r = nav;
+    }
     JS_FreeCString(ctx, href);
     JS_FreeValue(ctx, hrefv);
     free(target);
     free(rel);
     (void)phase; (void)req;
-    /* A URL THAT DOES NOT PARSE IS NOT AN ERROR HERE. §4.6.3 says to return if the url is failure, and a click
-       is not a place a page can catch anything — unlike `window.open()`, whose caller gets the SyntaxError. */
+    /* A URL THAT DOES NOT PARSE IS NOT AN ERROR HERE. §4.6.5 step 4 says to return if the url is failure, and a
+       click is not a place a page can catch anything — unlike `window.open()`, whose caller gets the
+       SyntaxError. */
     JS_FreeValue(ctx, r);
     return JS_STEP_DONE;
 }
