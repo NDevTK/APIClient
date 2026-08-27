@@ -46,11 +46,16 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrapper);
    event on the container element for such cases. Instead, a synchronous load event is fired in a special
    initial-insertion case when processing the iframe attributes." A srcless `<iframe>` therefore has exactly
    one `load`, it comes from here, and without this call it has none at all.
-   `initial_insertion` IS ASSERTED TRUE rather than branched on, and the assert names the caller that does not
-   exist: §4.8.5's other caller is the `src` attribute change steps, and core/dom/element.c's
-   element_attr_changed has no `<iframe>` entry — so an `iframe.src` write does not re-navigate in this engine
-   and nothing can reach this with false. */
+   `initial_insertion` DECIDES WHICH OF THE TWO BRANCHES IS REACHABLE, which is the standard's own use of it:
+   true comes from the post-connection steps and can reach the load event steps; false comes from the `src`
+   attribute change steps below and reaches §4.8.5's navigate an iframe or frame. */
 void iframe_process_attributes(JSContext *ctx, JSValueConst wrapper, bool initial_insertion);
+/* HTML §4.8.5: "whenever an `iframe` element with a non-null content navigable but with no `srcdoc` attribute
+   specified has its `src` attribute set, changed, or removed, the user agent must process the iframe
+   attributes" — one of §4.9's attribute change steps, registered on core/dom/element.c's element_attr_changed
+   beside media_element_attr_changed and its three neighbours. A no-op for every element and attribute the
+   sentence above does not name. */
+void iframe_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local);
 /* §4.8.5's removing steps: DESTROY the child navigable. The element loses it (contentWindow goes null) and the
    proxy a page is still holding reports `closed`. A no-op for an element this flow never gave one. */
 void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrapper);

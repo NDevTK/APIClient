@@ -2421,6 +2421,12 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        agent must set el's force async to false". Here for the reason `src` above is: a content attribute has
        more than one spelling, and the IDL setter answers for one of them. */
     html_script_attr_changed(rctx, el, ns, local, val);
+    /* HTML §4.8.5: an `<iframe>` with a content navigable and no `srcdoc` NAVIGATES when its `src` is set,
+       changed or removed. It is here beside the other four for that family's own reason — `frame.src = u`,
+       `setAttribute`, `removeAttribute` and an `innerHTML` reparse are one write through one chokepoint — and
+       it needs this seam's realm (the element's node document, not the mutating one) because §4.8.5's navigate
+       resolves the address against that document and takes its policy container. */
+    iframe_attr_changed(rctx, el, ns, local);
     /* HTML §2.6.1's attribute change steps for an ELEMENT-REFLECTING member: writing `aria-labelledby` by any
        spelling drops what `el.ariaLabelledByElements = [x]` recorded, so the next read resolves the ids the
        attribute now names. Here for the reason `src` and `async` above are: a content attribute has more than
