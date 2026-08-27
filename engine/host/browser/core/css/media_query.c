@@ -877,10 +877,12 @@ MediaQuerySet *media_query_parse_one(const char *text)
    literal halves with §6.1.1's two sentences quoted beside them, which is the same fact answered from two
    places that css_length.h opens by naming and that core/css/font_size_functions.h was created to end for the
    default font size — and it is the shape this file's own next paragraph complains about one level up ("the
-   copy is what would go on being wrong"). The initial `writing-mode` is `horizontal-tb`, so §6.1.1's advance
-   measure is the assumed "0" glyph's WIDTH and never its height; the `r`-prefixed twins are the same numbers
-   because a document with no element has no root element either, which is the case §6.1.1 gives the initial
-   values to.
+   copy is what would go on being wrong"). The initial `writing-mode` is `horizontal-tb`, which css-writing-
+   modes-4 §5.1 "Orienting Text: the text-orientation property" makes a horizontal typographic mode — the
+   property "has no effect in horizontal typographic modes" — so both advance measures below are taken in the
+   HORIZONTAL direction and no orientation has to be resolved to know it; the `r`-prefixed twins are the same
+   numbers because a document with no element has no root element either, which is the case §6.1.1 gives the
+   initial values to.
    A §6 LENGTH UNIT WITH NO ROW HERE MAKES THE FEATURE EVALUATE FALSE rather than crashing, and that is a
    DIVERGENCE from core/css/css_length.c, which crashes for the same units. The set is exactly the same one:
    `vi`/`vb` (an inline axis) and the `sv*`/`lv*`/`dv*` families (three viewport sizes that are three separate
@@ -900,11 +902,11 @@ static double mq_unit_px(const char *u, double n, const MqEnv *e, bool *ok)
     if (!strcmp(u, "px")) return n;
     if (!strcmp(u, "em") || !strcmp(u, "rem")) return n * e->font_size;
     if (!strcmp(u, "ex") || !strcmp(u, "rex"))
-        return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_X_HEIGHT);
+        return n * e->font_size * font_metrics_x_height_em();
     if (!strcmp(u, "ch") || !strcmp(u, "rch"))
-        return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_ZERO_ADVANCE_WIDTH);
+        return n * e->font_size * font_metrics_advance_measure_em(0x0030, FONT_METRICS_ADVANCE_HORIZONTAL);
     if (!strcmp(u, "ic") || !strcmp(u, "ric"))
-        return n * e->font_size * font_metrics_em_ratio(FONT_METRICS_WATER_ADVANCE);
+        return n * e->font_size * font_metrics_advance_measure_em(0x6C34, FONT_METRICS_ADVANCE_HORIZONTAL);
     if (!strcmp(u, "cap") || !strcmp(u, "rcap")) return n * e->ascent;
     if (!strcmp(u, "cm")) return n * 96.0 / 2.54;
     if (!strcmp(u, "mm")) return n * 96.0 / 25.4;

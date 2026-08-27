@@ -278,9 +278,15 @@ typedef struct {
    than a second seam. Each of `ex`, `ch` and `ic` is core/css/font_metrics.h's assumed ratio times one of the
    two font sizes above — the LOCAL units against the element's, the `r`-prefixed twins against the root's,
    because §6.1.1 defines each twin as "the value of the <unit> unit ON THE ROOT ELEMENT" and so carries the
-   whole computation there, including the axis question. So the caller answering this callback answers one
-   question it already answers (which element's computed `font-size`) and one it alone can (which axis is the
-   element's inline axis), and this file's unit table stays a table.
+   whole computation there, including the orientation question. So the caller answering this callback answers
+   one question it already answers (which element's computed `font-size`) and one it alone can — WHICH OF THE
+   GLYPH'S TWO ADVANCES is its advance measure on that element, which `ch` and `ic` both ask because §6.1.1
+   defines both of them over the advance measure and defines that as "its advance width or height, whichever
+   is in the inline axis of the element". It is not the inline axis alone that decides: css-writing-modes-4
+   §5.1.1 "Vertical Typesetting and Font Features" typesets a sideways character "using HORIZONTAL METRICS"
+   even though its inline axis is vertical, so the answer is the resolved ORIENTATION and only the layer
+   holding the element's computed `writing-mode` and `text-orientation` has it. This file's unit table stays a
+   table.
    `cap` IS HERE ON THE SAME ARITHMETIC BUT NOT ON THE SAME FOOTING: §6.1.1 states no must-assume value for a
    cap-height, only that an undeterminable one takes "the font's ascent", and that ascent is a PICKED metric of
    the modelled face rather than a spec constant — so it carries CSS_ENV_FONT_ASCENT while the three above

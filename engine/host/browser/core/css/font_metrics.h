@@ -35,6 +35,26 @@
  * core/frame/viewport.c's seam — the ascent crash in core/css/css_length.c is where that decision is made,
  * because a face with an ascent is a face with an x-height.
  *
+ * WHERE A REAL FACE'S BYTES WOULD COME FROM, decided here because a component that cannot say is a component
+ * whose absence has no shape. The face is THIS USER AGENT'S OWN — css-fonts-4 §5.2's "or a USER AGENT'S
+ * DEFAULT FONT if none are available" — so it is bytes the engine ships, compiled in, and NOT read from any of
+ * the three places that are nearer to hand:
+ *   THE HOST'S FILESYSTEM does not exist in a wasm instance, and where it does exist (the native host) it is
+ *     the machine's font directory — so the two hosts would answer one question two ways and every layout
+ *     number would be a property of the box the gate ran on.
+ *   THE HOST REALM'S OWN TEXT MEASUREMENT (`canvas.measureText`, `document.fonts`) is reachable from the
+ *     renderer and is still wrong twice over: it answers from the READER'S INSTALLED FONTS, which makes a
+ *     finding a function of the environment rather than of the document — the one thing the solver
+ *     differential requires it not to be — and it does not exist at all in the host every gate links, so the
+ *     capability would be untestable by construction. It is also the wrong SIDE of CLAUDE.md §Architecture's
+ *     line only in its second half: the metric of a (face, size, codepoint) triple is a pure function and
+ *     could be computed once by a trusted zone, which is why "it is read mid-flow" is NOT the argument. What
+ *     differs per forked arm is the STRING, never the metric. The argument is determinism and host parity.
+ *   THE NETWORK is where a page's OWN `@font-face` bytes come from, and those arrive later through the fetch
+ *     chokepoint and are parsed by the SAME parser — attacker-supplied, which is why that parser must be
+ *     offensive from its first line rather than hardened afterwards. It is not where the FIRST AVAILABLE FONT
+ *     of a document that declares no font comes from, and that is the face this file is about.
+ *
  * WHY IT IS A COMPONENT AND NOT THREE CONSTANTS IN WHOEVER NEEDED THEM FIRST. Two callers already need this
  * table and one of them held its own copy — the defect css_length.h opens by naming, in the same form
  * core/css/font_size_functions.h was created to fix for `medium`. core/css/css_length.c absolutizes §6.1.1's
@@ -82,26 +102,49 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_FONT_METRICS_H
 
+#include <stdint.h>
+
 #include "core/css/css_length.h"
 #include "quickjs.h"
 
-/* ONE METRIC OF THE FIRST AVAILABLE FONT, as a MULTIPLE OF THE EM — which is the form §6.1.1 states all three
-   in, and the form that makes them independent of any element's computed `font-size`. The caller multiplies.
-   THE `ch` PAIR IS ONE ASSUMED GLYPH AND TWO DIMENSIONS, because §6.1.1 states it that way ("0.5em wide by 1em
-   tall") and because which of them the unit takes is not a fact about the font: §6.1.1 defines the advance
-   measure of a glyph as "its advance width or height, WHICHEVER IS IN THE INLINE AXIS of the element", so the
-   axis is the element's writing mode and belongs to the caller that holds the element. Folding the two into
-   one number here would put a layout question in the font record and would answer `ch` the same in every
-   writing mode. */
-typedef enum {
-    FONT_METRICS_X_HEIGHT = 0,        /* §6.1.1's `ex`: the assumed x-height */
-    FONT_METRICS_ZERO_ADVANCE_WIDTH,  /* §6.1.1's `ch`: the assumed "0" glyph's width */
-    FONT_METRICS_ZERO_ADVANCE_HEIGHT, /* §6.1.1's `ch`: the same glyph's height */
-    FONT_METRICS_WATER_ADVANCE,       /* §6.1.1's `ic`: the assumed "水" glyph's advance measure */
-    FONT_METRICS_EM_RATIO_COUNT
-} FontMetricsEmRatio;
+/* §6.1.1's ASSUMED X-HEIGHT, as a MULTIPLE OF THE EM — the form the section states it in, and the form that
+   makes it independent of any element's computed `font-size`. The caller multiplies. It is a HEIGHT of the
+   face and not an advance measure, so it has no direction to select and does not go through the entry below:
+   §6.1.1's `ex` is "the used x-height of the first available font", one number in every writing mode. */
+double font_metrics_x_height_em(void);
 
-double font_metrics_em_ratio(FontMetricsEmRatio which);
+/* WHICH OF A GLYPH'S OWN TWO ADVANCES THE CALLER RESOLVED THE ADVANCE MEASURE TO — OpenType's 'hmtx'
+   advanceWidth or its 'vmtx' advanceHeight, which are the two numbers a face carries for one glyph.
+   IT IS NOT THE INLINE AXIS, AND CONFLATING THE TWO IS THE MISTAKE THIS ENUM EXISTS TO PREVENT. css-values-4
+   §6.1.1 "Font-relative Lengths: the em, rem, ex, rex, cap, rcap, ch, rch, ic, ric, lh, rlh units" defines the
+   ADVANCE MEASURE OF A GLYPH as "its advance width or height, whichever is in the inline axis of the element",
+   and then notes that it "depends on writing-mode AND TEXT-ORIENTATION as well as font settings,
+   text-transform, and any other properties that affect glyph selection or orientation". A glyph set SIDEWAYS
+   in a vertical writing mode is rotated a quarter turn, so the distance it advances along the VERTICAL inline
+   axis is its HORIZONTAL advance — the inline axis alone therefore does not select the number, and only the
+   caller that holds the element's computed `writing-mode` and `text-orientation` can. What crosses this
+   interface is the resolved answer. */
+typedef enum {
+    FONT_METRICS_ADVANCE_HORIZONTAL = 0, /* OpenType 'hmtx' — Horizontal Metrics Table: LongHorMetric.advanceWidth */
+    FONT_METRICS_ADVANCE_VERTICAL        /* OpenType 'vmtx' — Vertical Metrics Table: advanceHeight */
+} FontMetricsAdvanceDirection;
+
+/* THE ADVANCE MEASURE OF ONE GLYPH of the first available font, as a MULTIPLE OF THE EM. The caller
+   multiplies, exactly as it does for the x-height above — and that form survives a real face rather than
+   being a stand-in for one, because a face states its advances in FONT DESIGN UNITS and the em is what
+   OpenType 'head' — Font Header Table's `unitsPerEm` divides them by.
+   THIS IS ONE QUESTION WITH N CALLERS, AND IT WAS TWO NAMES BEFORE IT WAS AN ENTRY. §6.1.1's `ch` is "the used
+   advance measure of the '0' (ZERO, U+0030) glyph" and its `ic` is "the used advance measure of the '水' (CJK
+   water ideograph, U+6C34) glyph": one capability, two units, and the tell that they had come apart was that
+   the `ch` caller resolved the glyph's orientation and the `ic` caller did not — so one of the two answered a
+   question it had never asked, and was right only because the value §6.1.1 assumes for `水` happens to be the
+   same in both directions. The third caller is core/layout/line_box.h's line breaking, which needs the same
+   number for an ARBITRARY codepoint, and that is the one this entry cannot yet answer.
+   ONLY TWO GLYPHS ARE ANSWERABLE WITHOUT A FACE, and §6.1.1 says which two and with what value. For every
+   other codepoint this crashes rather than returning a number: the section's must-assume sentences are about
+   those two glyphs and about no other, so a third row here would be invented and would make every string's
+   width a function of its LENGTH alone. The crash names the face to build. */
+double font_metrics_advance_measure_em(uint32_t codepoint, FontMetricsAdvanceDirection direction);
 
 /* CSS 2.1 §10.8.1's `A` — the first available font's "characteristic height above the baseline" — for a face
    rendered at `font_size`, in CSS pixels. It is the used value css-values-4 §6.1.1's `cap` unit falls back to.

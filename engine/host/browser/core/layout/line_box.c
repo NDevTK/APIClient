@@ -283,16 +283,18 @@ static void lb_text(lxb_dom_element_t *parent, lxb_dom_node_t *n)
           "Word Boundaries\" makes that a measurement: \"wrapping is only performed at an allowed break point, "
           "called a soft wrap opportunity\", the UA \"must minimize the amount of content overflowing a line by "
           "wrapping the line at a soft wrap opportunity\", and which opportunity that is depends on how wide "
-          "the glyphs before it are. THE MISSING INPUT IS ONE NAMEABLE THING AND NOT A CHAPTER: the ADVANCE of "
-          "an arbitrary glyph. core/css/font_metrics.h holds the advance of exactly two — css-values-4 §6.1.1's "
-          "assumed \"0\" for `ch` and \"水\" for `ic` — and both are MUST-ASSUME values that section fixes for a "
-          "user agent that cannot measure, which is a sentence about those two glyphs and about no other. "
+          "the glyphs before it are. THE MISSING INPUT IS ONE NAMEABLE THING AND NOT A CHAPTER: the ADVANCE "
+          "MEASURE of an arbitrary glyph — css-values-4 §6.1.1's own defined term, \"its advance width or "
+          "height, whichever is in the inline axis of the element\". THE ENTRY THAT ANSWERS IT EXISTS AND IS "
+          "`font_metrics_advance_measure_em` (core/css/font_metrics.h); call it per typographic character unit "
+          "of this run with the direction css-writing-modes-4 §5.1 resolves for that character. It answers for "
+          "exactly the two glyphs §6.1.1 states a MUST-ASSUME value for — the \"0\" of `ch` and the \"水\" of "
+          "`ic` — and CRASHES for every other codepoint, naming the FACE to build and the OpenType tables that "
+          "turn a codepoint into an advance. That crash is this line's real blocker and it is one file over. "
           "Everything ELSE this line needs is already here: §10.8's steps 1 to 3 and §10.8.1's half-leading run "
           "over `line-height`, `A` and `D` in this file, and a line box with no glyphs on it is measured "
-          "without asking. BUILD a per-glyph advance in core/css/font_metrics.h — a real face's `hmtx` "
-          "advances, not a constant, because a constant would make every string's width a function of its "
-          "LENGTH alone and every break position wrong in a way no assert could see — then css-text-3 §5's "
-          "break search over it, and this DFAIL becomes the loop that fills a line and starts the next");
+          "without asking. So the work is the face, then css-text-3 §5's break search over the advances it "
+          "answers, and this DFAIL becomes the loop that fills a line and starts the next");
 }
 
 /* ONE CHILD NODE of the inline formatting context. */

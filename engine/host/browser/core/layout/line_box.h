@@ -17,8 +17,9 @@
  * fit horizontally within a single line box", and css-text-3 §5 "Line Breaking and Word Boundaries" makes that
  * a question about the CONTENT — "wrapping is only performed at an allowed break point, called a soft wrap
  * opportunity", and in most writing systems "a soft wrap opportunity occurs only at word boundaries", found
- * from the characters. So the number of line boxes is a function of the ADVANCE of each glyph on the line,
- * which core/css/font_metrics.h does not hold for an arbitrary glyph and must not invent.
+ * from the characters. So the number of line boxes is a function of the ADVANCE MEASURE of each glyph on the
+ * line, which core/css/font_metrics.h answers for exactly the two glyphs css-values-4 §6.1.1 fixes a
+ * must-assume value for and CRASHES for the rest rather than inventing one.
  *
  * THE CASE THAT NEEDS NO ADVANCE IS THEREFORE NOT A SPECIAL CASE BUT A THEOREM, and css-text-3 §5.5 "Line
  * Breaking Details" is the sentence it rests on: "OUT-OF-FLOW BOXES AND INLINE BOX BOUNDARIES DO NOT INTRODUCE

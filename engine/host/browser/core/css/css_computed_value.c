@@ -350,27 +350,48 @@ static lxb_dom_node_t *css_cv_root_element(lxb_dom_element_t *el)
     return document_document_element_of(lxb_dom_interface_node(n->owner_document));
 }
 
-/* css-values-4 §6.1.1's ASSUMED "0" GLYPH IS "0.5em WIDE BY 1em TALL", and which of its two dimensions the
-   `ch` unit takes is not a fact about the font: §6.1.1 defines the advance measure of a glyph as "its advance
-   width or height, WHICHEVER IS IN THE INLINE AXIS of the element", and states the consequence itself — the
-   unit "falls back to 0.5em in the general case, and to 1em when it would be typeset upright (i.e.
-   writing-mode is vertical-rl or vertical-lr AND text-orientation is upright)".
-   THE PARENTHETICAL IS THE TEST AND IT NAMES TWO OF THE FIVE WRITING MODES. `horizontal-tb` puts the inline
-   axis on the horizontal, so the advance is the WIDTH; `sideways-rl` and `sideways-lr` are vertical modes in
-   which text is never typeset upright, so §6.1.1's general case covers them too and the answer is the same
-   width. Only `vertical-rl` and `vertical-lr` can reach the other branch, and which one they take is
-   `text-orientation` — a property core/css/css_computed_value.c models no entry for, so that arm crashes.
+/* WHICH OF A GLYPH'S TWO ADVANCES IS ITS ADVANCE MEASURE ON THIS ELEMENT — the one question css-values-4
+   §6.1.1 "Font-relative Lengths: the em, rem, ex, rex, cap, rcap, ch, rch, ic, ric, lh, rlh units" makes BOTH
+   `ch` and `ic` ask, and it is asked here because this is the layer that holds the element. §6.1.1 defines the
+   advance measure of a glyph as "its advance width or height, WHICHEVER IS IN THE INLINE AXIS of the element"
+   and notes that it "depends on writing-mode AND TEXT-ORIENTATION as well as font settings, text-transform,
+   and any other properties that affect glyph selection or orientation".
+   BOTH UNITS ASK IT, AND THAT IS A CHANGE FROM ANSWERING `ic` WITHOUT ASKING. `ic` is "the used advance
+   measure of the '水' … glyph" — the same direction-selected quantity — so a resolution that skipped the
+   question for one unit and made it for the other was one capability wearing two names. It was not visible as
+   a wrong number because §6.1.1's assumed ideographic advance measure is 1em in EITHER direction; the day a
+   real face lands, a `vmtx` advanceHeight and an `hmtx` advanceWidth for U+6C34 differ and the silence becomes
+   a wrong answer with nothing to say so. So the crash below is now reached by `ic` too, which is the point.
+   THE ANSWER IS NOT THE INLINE AXIS. `horizontal-tb` puts the inline axis on the horizontal, so the advance is
+   the glyph's HORIZONTAL one; `sideways-rl` and `sideways-lr` are vertical modes in which text is never
+   typeset upright, so the glyph is rotated a quarter turn and the distance it advances DOWN the line is still
+   its horizontal advance — §6.1.1's general case, the same answer for a different reason. Only `vertical-rl`
+   and `vertical-lr` can be set upright, where the vertical advance is the one, and which of the two they take
+   is `text-orientation` — a property this component models no entry for, so that arm crashes.
+   IT TAKES THE CODEPOINT BECAUSE THE ANSWER IS PER CHARACTER AND NOT PER ELEMENT, which is not a
+   generalisation made in advance: css-writing-modes-4 §5.1 "Orienting Text: the text-orientation property"
+   gives the property an `Initial:` line of `mixed`, and §5.1.2 "Mixed Vertical Orientations" says that under
+   it "the UA must determine the orientation of EACH TYPOGRAPHIC CHARACTER UNIT by its Vertical_Orientation
+   property: typesetting it upright if its orientation property is U, Tu, or Tr; or typesetting it sideways
+   (90° clockwise from horizontal) if its orientation property is R" [UAX50]. So the initial value alone makes
+   one element hold both answers at once, and a per-element signature could not carry that.
    THE ELEMENT IS THE ONE THE UNIT IS USED ON and not the one whose METRICS are borrowed. §6.1.1's
    font-affecting clause redirects a unit inside a font-affecting property to "the computed METRICS of the
-   parent element", and an inline axis is not a metric — it is the axis of the box the advance is measured
-   along, which the section names as the element's own. `el` is NULL for §6.1.1's no-root-element case, where
-   the initial values apply and `writing-mode`'s initial value is `horizontal-tb`. */
-static FontMetricsEmRatio css_cv_zero_advance(lxb_dom_element_t *el)
+   parent element", and an orientation is not a metric — it is how the box the advance is measured along is
+   laid out, which the section names as the element's own. `el` is NULL for §6.1.1's no-root-element case,
+   where the initial values apply and `writing-mode`'s initial value is `horizontal-tb`. */
+static FontMetricsAdvanceDirection css_cv_advance_direction(lxb_dom_element_t *el, uint32_t codepoint)
 {
     char *wm;
     bool upright_possible;
 
-    if (el == NULL) return FONT_METRICS_ZERO_ADVANCE_WIDTH;
+    DCHECK(codepoint <= 0x10FFFF && !(codepoint >= 0xD800 && codepoint <= 0xDFFF),
+           "css-values-4 §6.1.1's advance measure was resolved for something that is not a Unicode scalar "
+           "value — a surrogate code point or one past U+10FFFF. css-writing-modes-4 §5.1.2 \"Mixed Vertical "
+           "Orientations\" keys the orientation on [UAX50]'s Vertical_Orientation property, which is defined "
+           "over scalar values, so a lone surrogate here is a caller that split a string between its halves "
+           "rather than a character whose orientation is merely unknown");
+    if (el == NULL) return FONT_METRICS_ADVANCE_HORIZONTAL;
     wm = css_computed_value(el, "writing-mode");
     DCHECK(wm != NULL, "the cascade produced no computed `writing-mode` — css-writing-modes-4 §3.2 gives the "
                        "property an `Initial:` line of `horizontal-tb` and lexbor's registry carries it, so "
@@ -378,24 +399,35 @@ static FontMetricsEmRatio css_cv_zero_advance(lxb_dom_element_t *el)
     upright_possible = strcmp(wm, "vertical-rl") == 0 || strcmp(wm, "vertical-lr") == 0;
     free(wm);
     if (upright_possible)
-        DFAIL("css-values-4 §6.1.1's `ch` unit was resolved on an element whose computed `writing-mode` is "
-              "`vertical-rl` or `vertical-lr`, which are the two modes in which text CAN be typeset upright — "
-              "and whether it IS decides which dimension of the assumed \"0\" glyph is the advance measure, "
-              "0.5em wide or 1em tall. §6.1.1 names the deciding property outright: the unit falls back \"to "
-              "1em when it would be typeset upright (i.e. writing-mode is vertical-rl or vertical-lr and "
-              "TEXT-ORIENTATION IS UPRIGHT)\". css-writing-modes-4 §5.1 \"Orienting Text: the text-orientation "
-              "property\" gives it `Value: mixed | upright | sideways`, `Initial: mixed`, `Inherited: yes` and "
-              "`Computed value: specified value`, and lexbor's property registry carries it — so this is ONE "
-              "ROW of css_computed_models' as-specified arm plus one of css_shorthand_complete_for, exactly as "
-              "`writing-mode` and `direction` were, and this crash then becomes the branch between the two "
-              "ratios core/css/font_metrics.h already holds");
-    return FONT_METRICS_ZERO_ADVANCE_WIDTH;
+        DFAIL("css-values-4 §6.1.1's advance measure — the `ch` or `ic` unit — was resolved on an element "
+              "whose computed `writing-mode` is `vertical-rl` or `vertical-lr`, which are the two modes in "
+              "which text CAN be typeset upright, and whether it IS decides WHICH of the glyph's two advances "
+              "is the advance measure. §6.1.1 names the deciding property outright: the `ch` unit falls back "
+              "\"to 1em when it would be typeset upright (i.e. writing-mode is vertical-rl or vertical-lr and "
+              "TEXT-ORIENTATION IS UPRIGHT)\", against 0.5em otherwise — the assumed \"0\" glyph being \"0.5em "
+              "wide by 1em tall\". css-writing-modes-4 §5.1 \"Orienting Text: the text-orientation property\" "
+              "gives it `Value: mixed | upright | sideways`, `Initial: mixed`, `Inherited: yes` and `Computed "
+              "value: specified value`, and lexbor's property registry carries it — so this is ONE ROW of "
+              "css_computed_models' as-specified arm plus one of css_shorthand_complete_for, exactly as "
+              "`writing-mode` and `direction` were. `sideways` and `mixed`-when-sideways then take the "
+              "HORIZONTAL advance and not a rotated vertical one — css-writing-modes-4 §5.1.1 \"Vertical "
+              "Typesetting and Font Features\" defines sideways typesetting as character units \"typeset as a "
+              "run rotated 90° clockwise from their upright orientation, USING HORIZONTAL METRICS and "
+              "composition\" — so two of the three values resolve to a row this file's callee already holds. "
+              "`upright` is the third and needs the vertical one. `mixed` is the INITIAL value and is the "
+              "reason this function takes a codepoint: §5.1.2 \"Mixed Vertical Orientations\" makes it a "
+              "per-character answer off [UAX50]'s Vertical_Orientation property — upright for U, Tu and Tr, "
+              "sideways for R — so building this arm is that property's data table as well as the row above, "
+              "and the crash is here rather than at the callee because the callee is handed the RESOLVED "
+              "direction and has no element to resolve one from");
+    return FONT_METRICS_ADVANCE_HORIZONTAL;
 }
 
 /* IS THIS UNIT MEASURED ON THE ROOT ELEMENT — one of the two questions §6.1.1 splits its twelve units by, and
    the only one that is a property of the unit's NAME rather than of the element. §6.1.1 defines each
    `r`-prefixed unit as "the value of the <unit> unit on the root element", so the answer selects which font
-   size the ratio below is a multiple of and, for `ch`, which element's inline axis decides the ratio. */
+   size the ratio below is a multiple of and, for `ch` and `ic`, which element's writing mode decides the
+   orientation the advance measure is taken in. */
 static bool css_cv_metric_is_root(CssFontMetric which)
 {
     return which == CSS_FONT_METRIC_REM || which == CSS_FONT_METRIC_REX ||
@@ -498,12 +530,14 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
        answered by recursing into this same callback for its base — which is what makes `ex` and `rex` one
        derivation with one difference (`rem` rather than `em`) rather than two that can drift apart. Six of
        them scale by a ratio §6.1.1 fixes; `cap` and `rcap` take core/css/font_metrics.h's picked ascent
-       instead, and the difference in signature is the difference in kind (font_metrics.h). For `ch` the ratio
-       is the axis question above. */
+       instead, and the difference in signature is the difference in kind (font_metrics.h). `ch` and `ic` are
+       ONE question — the advance measure of a glyph — asked for two codepoints, so both go through the
+       orientation resolution above and then through the one entry. */
     if (which != CSS_FONT_METRIC_EM && which != CSS_FONT_METRIC_REM) {
         bool root_relative = css_cv_metric_is_root(which);
         CssPx base = css_cv_font_metric(p, root_relative ? CSS_FONT_METRIC_REM : CSS_FONT_METRIC_EM);
-        FontMetricsEmRatio ratio;
+        lxb_dom_element_t *on;
+        uint32_t codepoint;
 
         /* §6.1.1's `cap` IS THE ONE THAT IS NOT A SPEC RATIO, so it leaves through its own component entry
            rather than through the table below: "in the cases where it is impossible or impractical to
@@ -512,23 +546,29 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
            reader's font size and this user agent's face are unioned there and not here. */
         if (which == CSS_FONT_METRIC_CAP || which == CSS_FONT_METRIC_RCAP)
             return font_metrics_ascent_px(css_cv_realm(f->el), base);
+        /* §6.1.1's `ex` IS NOT AN ADVANCE MEASURE and leaves before the pair below: "the used x-height of the
+           first available font" is a HEIGHT of the face, so no orientation selects between two numbers for it
+           and there is no element to ask. */
+        if (which == CSS_FONT_METRIC_EX || which == CSS_FONT_METRIC_REX)
+            return css_px_scale(base, font_metrics_x_height_em());
         switch (which) {
-        case CSS_FONT_METRIC_EX:
-        case CSS_FONT_METRIC_REX: ratio = FONT_METRICS_X_HEIGHT; break;
         case CSS_FONT_METRIC_IC:
-        case CSS_FONT_METRIC_RIC: ratio = FONT_METRICS_WATER_ADVANCE; break;
+        case CSS_FONT_METRIC_RIC: codepoint = 0x6C34; break;  /* §6.1.1's "水" (CJK water ideograph, U+6C34) */
         default:
             DCHECK(which == CSS_FONT_METRIC_CH || which == CSS_FONT_METRIC_RCH,
                    "css_length.h's font-metric enumeration named a unit this component answers no arm for — "
                    "the two are one list and have come apart");
-            /* §6.1.1's `rch` is "the value of the ch unit ON THE ROOT ELEMENT", so the whole computation moves
-               there, the inline axis included. A document with no root element takes §6.1.1's own clause for
-               that case and the initial values with it, which `css_cv_zero_advance` reads as its NULL. */
-            root = root_relative ? css_cv_root_element(f->el) : lxb_dom_interface_node(f->el);
-            ratio = css_cv_zero_advance(root == NULL ? NULL : lxb_dom_interface_element(root));
+            codepoint = 0x0030;                               /* §6.1.1's "0" (ZERO, U+0030) */
             break;
         }
-        return css_px_scale(base, font_metrics_em_ratio(ratio));
+        /* §6.1.1's `rch` is "the value of the ch unit ON THE ROOT ELEMENT" and its `ric` is the same sentence
+           for `ic`, so for both the whole computation moves there — the orientation included. A document with
+           no root element takes §6.1.1's own clause for that case and the initial values with it, which
+           `css_cv_advance_direction` reads as its NULL. */
+        root = root_relative ? css_cv_root_element(f->el) : lxb_dom_interface_node(f->el);
+        on = root == NULL ? NULL : lxb_dom_interface_element(root);
+        return css_px_scale(base, font_metrics_advance_measure_em(codepoint,
+                                                                 css_cv_advance_direction(on, codepoint)));
     }
     /* §6.1.1: `em` is "equal to the computed value of the font-size property of the element on which it is
        used" — EXCEPT that "when used in the value of any font-affecting property on the element they refer to,
