@@ -306,6 +306,22 @@ JSValueConst window_proxy_this_navigable(JSContext *ctx, JSValueConst this_val);
    OWNED. Both are derived from ONE test of "null or undefined", stated in window_proxy.c. */
 JSValue window_proxy_this_object(JSContext *ctx, JSValueConst this_val);
 
+/* §3.7.6's OTHER SENTENCE — "If jsValue does not implement target, then ... throw a TypeError" — for
+   target = Window, and answered WITHOUT a navigable lookup. window_proxy_this_navigable is the wrong function
+   to reach for when all a member needs is the OBJECT: it DCHECKs on a foreign realm's Window because it cannot
+   name that window's navigable, and [Replaceable]'s CreateDataPropertyOrThrow never asks which window it is.
+   The two objects that implement Window are a Window (any realm's — the global carries the class) and a
+   WindowProxy, which §7.2.3.5 step 3 hands the accessor as its receiver. Side-effect-free. */
+bool window_proxy_implements_window(JSValueConst js_value);
+
+/* AND WHETHER THAT RECEIVER IS THE ONE THE MEMBER'S OWN REALM ANSWERS FOR. An attribute whose value the realm
+   ALREADY HOLDS is correct exactly while §3.7.6's idlObject is this realm's Window — normally true, because
+   each realm installs its own getter over its own value and js_call_c_function sets ctx to the member's realm.
+   A receiver lifted from another navigable onto this realm's accessor by hand is where the held value becomes
+   this realm's answer to a question about a different window, and that is a DCHECK rather than a return.
+   Side-effect-free. */
+bool window_proxy_receiver_is_own_realm(JSContext *ctx, JSValueConst js_value);
+
 /* §7.2.2.1's `closed` — a fact about the NAVIGABLE, so the Window's getter and the proxy's read the same answer.
    It is the spec's OR: true if the browsing context is null (the destruction ran) or is closing is true.
    Per-flow: captured into the running flow's delta, so a sibling arm that never closed it still sees it open. */

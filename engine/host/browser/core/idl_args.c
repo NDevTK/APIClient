@@ -28,6 +28,7 @@
 #include "solver/concolic.h"
 #include "core/idl_args.h"
 #include "core/frame/secure_context.h"   /* §3.9's exposure conditions: HTML §8.1.3.5's answer for this realm */
+#include "core/frame/window_proxy.h"     /* §3.7.6's `jsValue`: the receiver resolution and its Window brand */
 #include "core/streams/readable_stream.h"
 #include "core/idl_iter.h"
 #include "core/file/blob.h"
@@ -3230,34 +3231,128 @@ int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, J
     return r;
 }
 
+/* WEB IDL §3.7.6's `jsValue`, FOR THE TWO ACCESSORS THIS FILE MINTS ITSELF — resolved and brand-checked.
+ *
+ * §3.7.6 puts BOTH of these steps in "create an attribute getter" and "create an attribute setter", ahead of
+ * the member's own getter/setter steps: "Let jsValue be the this value, if it is not null or undefined, or
+ * realm's global object otherwise", and then "If jsValue does not implement target ... throw a TypeError".
+ * They are the ACCESSOR MACHINERY'S work, not the member's — which is why they belong here, and why every
+ * member minted here had them missing TOGETHER: the [Replaceable] setter handed its raw `this` straight to the
+ * define, and the held-value getter opened with `(void)this_val`. A MISSING receiver and a FOREIGN one reached
+ * the same answer, which is the two facts a default confuses, written out in the loudest possible form.
+ * The setter's own §7.2.2.4 spelling of this — `opener`'s, in window.c — already resolved its receiver by
+ * hand through these same two window_proxy.c halves; the shared mechanism underneath it did not.
+ *
+ * THE INTERFACE IS Window FOR EVERY MEMBER THAT REACHES HERE, and that is ASSERTED AT THE INSTALL rather than
+ * assumed at the read: every idl_install_replaceable / _replaceable_value / _value_attribute call site targets
+ * the realm's global, so `target` is Window and window_proxy.c owns the test. A brand parameter every existing
+ * caller would pass identically is a field nobody would notice going wrong; IDL_CHECK_GLOBAL_TARGET below is
+ * what names the brand this file has to be TOLD the day a component declares one of these attributes on some
+ * other interface.
+ *
+ * Returns the resolved jsValue OWNED, or JS_EXCEPTION with §3.7.6's TypeError pending. */
+static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const char *name)
+{
+    JSValue js = window_proxy_this_object(ctx, this_val);   /* §3.7.6's first clause, written once */
+
+    if (window_proxy_implements_window(js)) return js;
+    JS_FreeValue(ctx, js);
+    return JS_ThrowTypeError(ctx, "'%s' called on an object that does not implement interface Window", name);
+}
+
 static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic, JSValue *data)
 {
     const char *name;
+    JSValue js;
     int r;
 
-    (void)magic;
-    DCHECK(argc >= 1, "a setter was called with no value — the interpreter passes undefined for a bare `x.y = `");
+    (void)magic; (void)argc;
+    /* §3.7.6 steps 1-2: "Let V be undefined. If any arguments were passed, then set V to the value of the
+       first argument passed." A ZERO-ARGUMENT CALL IS SPEC-LEGAL — `desc.set.call(null)` writes it — and
+       reading argv[0] is still right, because js_call_c_function_data pads arg_buf to the mint's `length` of
+       1 with JS_UNDEFINED while passing the caller's own argc through. An assert stood here demanding argc>=1
+       on the strength of "the interpreter passes undefined for a bare `x.y = `", which is true of that one
+       spelling and of no other: it aborted the engine on a call the spec defines. */
     name = JS_ToCString(ctx, data[0]);   /* the function's own data: a string this file put there */
     if (!name) return JS_EXCEPTION;
-    r = idl_replace_with_value(ctx, this_val, name, argv[0]);
+    js = idl_attribute_this(ctx, this_val, name);
+    if (JS_IsException(js)) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
+    r = idl_replace_with_value(ctx, js, name, argv[0]);
+    JS_FreeValue(ctx, js);
     JS_FreeCString(ctx, name);
     return r < 0 ? JS_EXCEPTION : JS_UNDEFINED;
 }
 
-/* The getter for the FIXED-VALUE form: the value is the function's data, so the realm owns it for as long as
-   the getter does and there is no slot on the target to keep in step with it. */
 /* THE GETTER FOR AN ATTRIBUTE WHOSE VALUE THE ENGINE ALREADY HOLDS — the realm's own Document, its global,
    its one custom element registry. It reads no state and runs none of the page's code; the value rides on the
    function as its data, which is what makes it per-REALM rather than a module static answering every realm out
    of whichever built it first. Shared by §3.7.6's [Replaceable] form and the readonly one below, because it is
-   the same getter and there is no second thing for it to be. */
+   the same getter and there is no second thing for it to be.
+   THE RECEIVER IS RESOLVED HERE EVEN THOUGH THE ANSWER DOES NOT DEPEND ON IT, and that is not a computed value
+   with no reader: §3.7.6's brand check IS its reader. A held value answers a question about `jsValue`, so a
+   receiver that does not implement Window must throw rather than be handed this realm's Document — the two are
+   different facts and `(void)this_val` made them one.
+   data[0] is the VALUE and data[1] is the member's NAME, which the throw needs to name the member. */
 static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                   int magic, JSValue *data)
 {
-    (void)this_val; (void)argc; (void)argv; (void)magic;
+    const char *name;
+    JSValue js;
+
+    (void)argc; (void)argv; (void)magic;
+    name = JS_ToCString(ctx, data[1]);
+    if (!name) return JS_EXCEPTION;
+    js = idl_attribute_this(ctx, this_val, name);
+    JS_FreeCString(ctx, name);
+    if (JS_IsException(js)) return JS_EXCEPTION;
+    DCHECK(window_proxy_receiver_is_own_realm(ctx, js),
+           "a held-value Window attribute was read with a receiver belonging to ANOTHER navigable — the value "
+           "on this getter is THIS realm's, so answering it is this realm's answer to a question about a "
+           "window that is not it. §3.7.6 runs the getter steps with idlObject as this; give this member "
+           "getter STEPS that read the receiver's realm rather than a value fixed at install time");
+    JS_FreeValue(ctx, js);
     return JS_DupValue(ctx, data[0]);
 }
+
+/* THE STATEMENT THAT MAKES idl_attribute_this's Window BRAND THE RIGHT ONE, asserted where the interface is
+ * DECIDED rather than where the receiver arrives. §3.7.6's TypeError is about `target`, and this file mints
+ * the accessor without being told which interface that is — so what it relies on is that every member reaching
+ * it belongs to the one [Global] interface this engine has. `target` being the realm's global object IS that
+ * fact (idl_args.h's §3.9 note states the same thing from the other side: there is no WorkerGlobalScope here,
+ * so one global kind means one [Global] interface), and the day a component declares a [Replaceable] or a
+ * held-value attribute on an ordinary interface this fires and names the brand that must then become data the
+ * component states — the way IdlExposure and IdlAttrForge already are.
+ *
+ * IT IS NOT window_proxy_implements_window(target), and the reason is an ORDERING that would have made the
+ * stricter-looking assert simply wrong: realm_install_intrinsics runs BEFORE the per-document install column,
+ * so viewport's thirteen members are installed while the global is still a plain object and only i_window's
+ * JS_SetGlobalClass gives it the Window class afterwards. The global's IDENTITY is settled at both moments;
+ * its class is not.
+ *
+ * IT NAMES THE MEMBER, because the caller's file:line is the one coordinate a shared install helper destroys.
+ * Every component that installs one of these attributes arrives at this same line, so an assert reporting only
+ * "a replaceable attribute" would name the helper and none of the components that could have been wrong. */
+#if APICLIENT_DEV
+static void idl_check_global_target(JSContext *ctx, JSValueConst target, const char *name, const char *form)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(target);
+    char why[400];
+
+    JS_FreeValue(ctx, g);   /* balanced, so the check observes nothing */
+    if (same) return;
+    snprintf(why, sizeof why,
+             "the %s attribute `%s` was installed on something that is not the realm's global object — its "
+             "accessor applies Web IDL §3.7.6's TypeError against the Window brand, which is right only "
+             "because Window is the only [Global] interface in this engine. Give the install the interface's "
+             "own brand as data, the way IdlExposure and IdlAttrForge are stated", form, name);
+    DFAIL(why);
+}
+#define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) idl_check_global_target((c), (t), (n), (f))
+#else
+#define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) ((void)0)
+#endif
 
 /* Both forms end here: an accessor with §3.7.6's shared setter, at an IDL attribute's flags. */
 static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const char *name, JSValue getter)
@@ -3265,6 +3360,7 @@ static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const ch
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue nm, setter;
 
+    IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "[Replaceable]");
     DCHECK(a != JS_ATOM_NULL, "a replaceable attribute name could not be interned");
     nm = JS_NewString(ctx, name);
     CHECK(!JS_IsException(nm), "a replaceable attribute's name could not be allocated");
@@ -3287,13 +3383,26 @@ void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *na
     idl_define_replaceable(ctx, target, name, g);
 }
 
+/* THE HELD-VALUE GETTER'S DATA IS TWO VALUES, and the second is the member's own NAME. §3.7.6's TypeError
+   names the member a page mis-invoked, and a getter that carries only its value has nothing to name it with —
+   the same argument the [Replaceable] setter above already makes for carrying its name as data. */
+static JSValue idl_held_value_getter(JSContext *ctx, const char *name, JSValue value)
+{
+    JSValue d[2], g;
+
+    d[0] = value;
+    d[1] = JS_NewString(ctx, name);
+    CHECK(!JS_IsException(d[1]), "a held-value attribute's name could not be allocated");
+    g = JS_NewCFunctionData2(ctx, idl_held_value_get, name, 0, 0, 2, (JSValueConst *)d);
+    CHECK(!JS_IsException(g), "a held-value attribute's getter could not be allocated");
+    JS_FreeValue(ctx, d[0]);   /* the getter holds its own reference to both */
+    JS_FreeValue(ctx, d[1]);
+    return g;
+}
+
 void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const char *name, JSValue value)
 {
-    JSValue g = JS_NewCFunctionData2(ctx, idl_held_value_get, name, 0, 0, 1, (JSValueConst *)&value);
-
-    CHECK(!JS_IsException(g), "a replaceable attribute's getter could not be allocated");
-    JS_FreeValue(ctx, value);   /* the getter holds its own reference */
-    idl_define_replaceable(ctx, target, name, g);
+    idl_define_replaceable(ctx, target, name, idl_held_value_getter(ctx, name, value));
 }
 
 /* §3.7.6's READONLY ATTRIBUTE OVER A VALUE THE REALM ALREADY HOLDS — the primitive four members needed and
@@ -3305,16 +3414,16 @@ void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const ch
    here, each writing a data property that answers getOwnPropertyDescriptor wrongly and, where it came from
    JS_SetPropertyStr, is writable enough for a page to replace the member outright.
    THE [Replaceable] FORM ABOVE IS THE WRONG NEIGHBOUR TO REACH FOR: it installs §3.7.6's replaceable setter,
-   and `window`, `document` and a MessageChannel's ports are not [Replaceable] — a page assigning to one must
-   not replace it. This form has NO setter, which is what readonly means. */
+   and `window`, `document` and `customElements` are not [Replaceable] — HTML §7.2.2's IDL marks the first two
+   [LegacyUnforgeable] and the third plain readonly — so a page assigning to one must not replace it. This form
+   has NO setter, which is what readonly means. */
 void idl_install_value_attribute(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
                                  IdlAttrForge forge)
 {
-    JSValue g = JS_NewCFunctionData2(ctx, idl_held_value_get, name, 0, 0, 1, (JSValueConst *)&value);
+    JSValue g = idl_held_value_getter(ctx, name, value);
     JSAtom a;
 
-    CHECK(!JS_IsException(g), "an attribute's held-value getter could not be allocated");
-    JS_FreeValue(ctx, value);   /* the getter holds its own reference */
+    IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "held-value readonly");
     a = JS_NewAtom(ctx, name);
     DCHECK(a != JS_ATOM_NULL, "an IDL attribute name could not be interned");
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, JS_UNDEFINED,

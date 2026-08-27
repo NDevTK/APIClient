@@ -2435,6 +2435,47 @@ JSValue window_proxy_this_object(JSContext *ctx, JSValueConst this_val)
     return JS_DupValue(ctx, this_val);
 }
 
+/* §3.7.6's SECOND SENTENCE — "If jsValue does not implement target, then ... throw a TypeError" — asked for
+ * target = Window, and asked WITHOUT looking up a navigable. That distinction is the whole reason this is its
+ * own statement rather than a use of window_proxy_this_navigable: a member that needs the navigable and a
+ * member that needs only the OBJECT are two different questions, and the four-arm function answers the first
+ * by DCHECKing on a receiver the second can serve perfectly well. [Replaceable]'s CreateDataPropertyOrThrow
+ * lands the page's value on `jsValue` itself; it never asks which window that is, so a foreign realm's Window
+ * is a receiver it can answer and not a capability gap.
+ *
+ * THE TWO OBJECTS THAT IMPLEMENT Window HERE, and there is no third. The realm's global carries the Window
+ * class (window_install hands it one through JS_SetGlobalClass), so window_is answers for this realm's global
+ * and for every other realm's alike — which is exactly the spec's test, since implementing an interface is a
+ * property of the OBJECT and not of who is asking. A WindowProxy is the second, because §7.2.3.5 step 3
+ * performs the same-origin case's OrdinaryGetOwnProperty on W and the accessor it hands back is then invoked
+ * with the PROXY as its receiver: rejecting one would make `frames[0].length` a TypeError.
+ * Side-effect-free — it reads two class ids and allocates nothing. */
+bool window_proxy_implements_window(JSValueConst js_value)
+{
+    return window_is(js_value) || window_proxy_is(js_value);
+}
+
+/* DOES THIS RECEIVER NAME THE REALM THE MEMBER WAS INSTALLED IN? Not a Web IDL step — a question §3.7.6 makes
+ * askable and this engine has to ask, because a member whose ANSWER is a value the realm already holds cannot
+ * tell a receiver apart from its realm on its own.
+ *
+ * §3.7.6 runs the getter steps "with idlObject as this", so an attribute answering out of realm-held data is
+ * correct exactly while idlObject IS this realm's Window. It normally is, and for a reason worth stating: each
+ * realm installs its OWN getter carrying its OWN value, and js_call_c_function sets ctx to the member's realm,
+ * so `frames[0].document` reaches the CHILD's getter with the child's proxy and both halves agree. What does
+ * not agree is a receiver taken from one navigable and applied to another realm's accessor by hand —
+ * `Object.getOwnPropertyDescriptor(window, "screen").get.call(frames[0])` — where the held value answers the
+ * READING realm's question about a window that is not it. That is a wrong answer with a plausible shape, which
+ * is the one thing worth a crash rather than a return.
+ * Side-effect-free: window_proxy_navigable_of and document_window_proxy both borrow. */
+bool window_proxy_receiver_is_own_realm(JSContext *ctx, JSValueConst js_value)
+{
+    JSValueConst nav = window_proxy_navigable_of(ctx, js_value);
+
+    return !JS_IsUndefined(nav) &&
+           JS_VALUE_GET_PTR(nav) == JS_VALUE_GET_PTR(document_window_proxy(ctx));
+}
+
 /* WEB IDL §3.7.6 "Attributes"' `jsValue`, RESOLVED TO THE NAVIGABLE THE MEMBER IS ABOUT — and it is a
  * MECHANISM rather than a convenience, because the thing it replaces is a whole class of wrong answer.
  *

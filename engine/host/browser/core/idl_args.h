@@ -847,8 +847,11 @@ typedef enum {
     IDL_ATTR_UNFORGEABLE,   /* §3.4.10 [LegacyUnforgeable]: [[Configurable]] false */
 } IdlAttrForge;
 
-/* A READONLY ATTRIBUTE WHOSE VALUE THE REALM ALREADY HOLDS: `window`, `document`, `customElements`, a
-   MessageChannel's ports. §3.7.6 makes every attribute an ACCESSOR, and a value that never changes is still
+/* A READONLY ATTRIBUTE WHOSE VALUE THE REALM ALREADY HOLDS: `window`, `document`, `customElements`. (A
+   MessageChannel's `port1`/`port2` stood in that list and are NOT this form — §9.4.2's two getters read the
+   channel's own record off the receiver and brand-check it, which is what an attribute of an ordinary
+   interface does; this form is for a member of the [Global] one, and the brand it applies says so.)
+   §3.7.6 makes every attribute an ACCESSOR, and a value that never changes is still
    one — the alternative that reads plausible (a data property, since the getter would compute the same answer
    forever) answers getOwnPropertyDescriptor wrongly and, from JS_SetPropertyStr, is WRITABLE, so a page can
    replace a member the spec does not let it touch. Not idl_install_replaceable_value: that installs §3.7.6's
@@ -973,7 +976,18 @@ void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const
    silently drops the write. Every replaceable member shares one setter; the property NAME rides on the
    function as its data, so there is one implementation and no per-member setter to forget.
    `idl_install_replaceable_value` is the form for an attribute whose value is FIXED for the realm (§7.2.2.5's
-   BarProps, `frames`, `origin`): the getter answers the value it was given. `value` is CONSUMED. */
+   BarProps, `frames`, `origin`): the getter answers the value it was given. `value` is CONSUMED.
+
+   THE RECEIVER IS §3.7.6's, RESOLVED BY THE MINT AND NOT BY THE MEMBER — "the this value, if it is not null or
+   undefined, or realm's global object otherwise", then a TypeError when it does not implement the interface.
+   So `desc.set.call(null, v)` replaces the member on the GLOBAL rather than defining a property on `null`, and
+   `Object.create(globalThis).origin = x` throws instead of quietly shadowing the accessor on an unrelated
+   object. The interface branded against is Window, and that is ASSERTED at the install rather than assumed at
+   the read: `target` must be the realm's global object.
+   THE `IdlGetter` FORM'S GETTER STEPS STILL SEE AN UNRESOLVED RECEIVER, because §3.7.6's check belongs to the
+   mint and a raw C getter cannot be wrapped without carrying a function pointer through the closure's data —
+   which JSCFunctionType must never hold. Those getters answer per-realm and so answer correctly; what they do
+   not do is THROW for a receiver that implements nothing. See the note on the resolution in idl_args.c. */
 void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *name,
                              IdlGetter getter, int getter_magic);
 /* The half of that setter a member with its OWN setter steps still needs: Web IDL's
