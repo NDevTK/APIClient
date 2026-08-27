@@ -47,15 +47,45 @@
  * WHAT IT DOES NOT COMPARE, and each name is here because it is a COST rather than a finding: `_switches`,
  * `_flows`, `_candidates`, `_jobsQueued`, `_jobsRun`, `_unitsDone`, `_worldSegmentsHeld`, `_worldSegmentsMade`,
  * `_worldSegmentsForked`, `_park`, the four numbers of the @S arrival census (`_sourceReads`, `_sinkReached`,
- * `_sinkTainted`, `_sinkSuppressed`), and a
- * parked search's `tried`. `_switches` exists precisely BECAUSE it differs between an interleaving scheduler
- * and a FIFO one (result.c says so), so comparing it would fail every schedule by construction. THE ARRIVAL
+ * `_sinkTainted`, `_sinkSuppressed`), the routed-delivery pair and the four ends of the task it queues
+ * (`_routedDelivered`, `_routedRefused`, `_routedTasksFired`, `_routedTasksTargetOrigin`,
+ * `_routedTasksTargetGone`, `_routedTasksThrew`), and a
+ * parked search's `tried` and `turns`. `_switches` exists precisely BECAUSE it differs between an
+ * interleaving scheduler and a FIFO one (result.c says so), so comparing it would fail every schedule by
+ * construction. THE ARRIVAL
  * CENSUS IS ARGUED IN ON THAT SAME GROUND AND NOT WAIVED: each of its four is a count of EVENTS, and the
  * number of events scales with how many flows and how many candidate re-runs happened — quantities this list
  * already accepts differ between schedules (`_flows`, `_candidates`). A sink executed by six flows and by
  * seven is the same DOCUMENT, and the census is about coverage rather than about what was found. What it
  * costs to drop them is stated plainly: this gate cannot then catch the census itself regressing, which is
- * correct for a cost surface and would not be for a finding. Everything
+ * correct for a cost surface and would not be for a finding.
+ * THE SIX CROSS-INSTANCE COUNTERS ARE ARGUED IN ONE AT A TIME, because they are two different kinds of number
+ * and no single sentence covers both. `_routedDelivered` and `_routedRefused` are counted once per (routed
+ * record, TIMELINE it was offered to) — solver/engine.h: a routed record is attached to EVERY LIVE FLOW of the
+ * receiving document, each of which either admits it or consumes it as belonging to the other side of a sender
+ * branch. So their SUM is the number of flows standing when the host routed the record, which is a fact about
+ * how far exploration had got and not about the document; and that header names the schedule-dependence in
+ * this gate's own words, saying of a host that compares its routed count against a page's handler invocations
+ * that "it passes while they are starved and fails the moment they run, which is the schedule-dependent answer
+ * §Testing's differential exists to catch". Holding the SUM invariant instead is not a way out: the sum is
+ * that same flow count. The four ends of HTML §9.3.3 "Posting messages" step 8's task inherit it, because each
+ * is counted once per queued task per arm that reaches it — and engine.h states the conservation law as
+ * SUM >= `delivered` rather than `==` precisely because a fork landing BETWEEN the enqueue and the run makes
+ * two ends out of one queued task, and whether a fork lands in that window is the schedule's choice and
+ * nothing else's. TWO OF THE FOUR DIFFER FOR A SECOND REASON OF THEIR OWN, worth stating because it is not the
+ * first: `_routedTasksTargetOrigin` is step 8.1 checked INSIDE the task, so the origin it compares is the one
+ * the target has THEN and a navigation may land between the post and the delivery; and `_routedTasksTargetGone`
+ * is §7.5.10 "Destroying documents"'s destroy-a-document step 7 ("remove any tasks whose document is document
+ * from any task queue (without running those tasks)") reaching a task before it runs. Both are outcomes of an
+ * ORDER between two work items, which is the one thing a schedule is free to choose. None of the six is a
+ * finding: what a routed message CAUSES in this document arrives in fetchCallSites / securitySinks /
+ * pageErrors by executing like anything else, and these six count the transport that carried it.
+ * AND THEY ARE STRUCTURALLY ZERO IN THIS GATE, said out loud rather than left looking like coverage. A routed
+ * record reaches an engine only through main.c's `qjs_route`; this driver never calls it, and window_message.c
+ * and flow.c both gate the four ends on the record being ROUTED, so a local post reaches the same ends and is
+ * not counted. A corpus document that would need a peer is refused above by name. So this row is a
+ * classification made for the driver that DOES route — engine/route.mjs, which reads all six and asserts each
+ * rather than defaulting it — and not an exclusion this gate is exercising. Everything
  * else is compared BY DEFAULT — a field added to the result document is a field this gate holds invariant
  * until someone argues it into the list above, which is the direction that fails loud rather than quietly.
  *
@@ -327,8 +357,29 @@ async function child(docPath, schedName) {
 const DROP = new Map([
   ["", new Set(["_switches", "_flows", "_candidates", "_jobsQueued", "_jobsRun", "_unitsDone",
                 "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked", "_park",
-                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"])],
-  [".securitySinks[]", new Set(["tried"])],
+                "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
+                /* Counted once per (routed record, timeline offered it), so their sum is the number of flows
+                   standing when the host routed — see the header. Zero in this gate by construction: nothing
+                   here calls qjs_route. */
+                "_routedDelivered", "_routedRefused",
+                /* §9.3.3 step 8's four task ends, each counted per queued task PER ARM — engine.h's
+                   conservation law is an inequality for exactly that reason. */
+                "_routedTasksFired", "_routedTasksTargetOrigin", "_routedTasksTargetGone",
+                "_routedTasksThrew"])],
+  /* `turns` IS A SWITCH-IN COUNT, WHICH IS `_switches` ONE LEVEL DOWN. solve.c counts it in solve_flow_begin —
+     the scheduler's every switch-in of a candidate flow — and says so where it counts it: "IT IS SWITCH-INS AND
+     NOT DISTINCT FLOWS, which is what makes it a scheduling fact rather than a second copy of `tried`: a
+     candidate preempted and resumed twenty times has been given twenty turns". The `preempt` schedule above is
+     DEFINED as outranking the running flow after every flow step, so it maximises exactly this number by
+     construction; holding it invariant would fail `direct` vs `preempt` on healthy code, which is the one
+     ground `_switches` is dropped on and the same ground here. Its NEIGHBOURS stay compared and that is the
+     line: `reached`, `survived`/`survivedOf`, `escaped` and `fires` are observations of what a re-execution got
+     through the page's own transforms, and on a frontier that DRAINS every seeded candidate runs, so each of
+     them converges to a fact about the document. A count of how many times work was switched in never
+     converges, because the schedule chooses it. THE ARGUMENT IS BY CONSTRUCTION AND NOT FROM A MEASUREMENT,
+     which is stated rather than implied: this is a classification made before the false red rather than after
+     one, so nobody should read the row as evidence that a `turns` mismatch was ever observed here. */
+  [".securitySinks[]", new Set(["tried", "turns"])],
 ]);
 function canonStr(v, path) {
   if (Array.isArray(v)) {
