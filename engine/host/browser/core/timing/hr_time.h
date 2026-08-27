@@ -62,19 +62,17 @@
  * pure function of this environment's cross-origin isolated capability, which nothing in a run can change.
  *
  * WHICH RESOLUTION IS THE ENVIRONMENT'S ANSWER, NOT A CONSTANT. §4 makes it 100 microseconds, or 5 for an
- * environment with the CROSS-ORIGIN ISOLATED CAPABILITY — HTML §7.2.2's environment settings object field,
- * which core/frame/agent_cluster.h computes from this agent cluster's §7.1.4 isolation mode. `hr_time_coarsen`
- * asks that component. It used to assert the capability's ABSENCE instead (`realm_awaits(ctx,
- * "crossOriginIsolated", ...)`), which was correct for exactly as long as no realm could answer the question
- * and became a crash on the first coarsen of every run the moment `window.crossOriginIsolated` landed. The
- * capability EXISTS now and answers false for every environment this build makes. THE REASON IS NO LONGER THAT
- * THE HEADERS DO NOT ARRIVE — a navigation response's whole header list reaches the engine and §7.1.3's opener
- * policy and §7.1.4's embedder policy are both obtained from it (core/frame/navigation_params.c). What is
- * unbuilt is §7.1.3.2's BROWSING CONTEXT GROUP SWITCH, the one step that ever sets a group's isolation mode to
- * `concrete`, so the 5µs arm is unreachable and a response that would need it CRASHES BY NAME rather than being
- * silently coarsened on the 100µs grid. The rest of what is missing is named where it is missing, by the DFAIL
- * on §7.2.2's permissions-policy conjunct in agent_cluster.c. THE ASSERTION MOVED TO THE REAL ABSENCE; it was
- * not deleted. */
+ * environment with the CROSS-ORIGIN ISOLATED CAPABILITY — HTML §7.2.2.6 "Script settings for Window objects"'
+ * environment settings object field, which core/frame/agent_cluster.h computes from BOTH of its conjuncts: the
+ * browsing context group's §7.3.2.3 cross-origin isolation mode, and HTML §4.8.5's allowed-to-use over the
+ * Document's Permissions Policy §9.5 policy. `hr_time_coarsen` asks that component and nothing else.
+ * IT USED TO ASSERT THE CAPABILITY'S ABSENCE instead (`realm_awaits(ctx, "crossOriginIsolated", ...)`), which
+ * was correct for exactly as long as no realm could answer the question and became a crash on the first coarsen
+ * of every run the moment `window.crossOriginIsolated` landed. BOTH CONJUNCTS ARE BUILT NOW AND THE 5µs ARM IS
+ * REACHABLE: a page served `Cross-Origin-Opener-Policy: same-origin` beside a `Cross-Origin-Embedder-Policy`
+ * compatible with cross-origin isolation gets `concrete` from §7.3.2.3's create, and a top-level Document in it
+ * is allowed to use the `cross-origin-isolated` feature — so this file's grid is 5µs for such a page and 100µs
+ * for its cross-origin frames, which is the whole reason the resolution is asked per environment. */
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_HR_TIME_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_HR_TIME_H
 
@@ -85,8 +83,13 @@
 void hr_time_init(JSContext *ctx);
 void hr_time_free(void);
 
-/* §4's TIME ORIGIN of THIS realm's environment settings object, as a moment on the one virtual clock. Exported
-   because the day this engine has a `performance` object, `get time origin timestamp` is its second reader. */
+/* §4's TIME ORIGIN of THIS realm's environment settings object, as a moment on the one virtual clock, COARSENED
+   at the read. §4 stores the raw moment ("that moment is stored in that settings object's time origin") and
+   `coarsen time` picks its resolution from the environment's cross-origin isolated capability — a field HTML
+   §7.2.2.6 defines over "window's associated DOCUMENT", which does not exist when the realm's install stamps
+   the slot. So the write is the moment and the read is the coarsening; hr_time.c's install says what asking it
+   the other way round cost. Exported because the day this engine has a `performance` object, `get time origin
+   timestamp` is its second reader. */
 JSValue hr_time_origin(JSContext *ctx);   /* OWNED */
 
 /* §4's COARSEN TIME, given an unsafe moment on the monotonic clock. §4's second argument is the environment's

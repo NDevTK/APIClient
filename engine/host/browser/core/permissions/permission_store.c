@@ -430,12 +430,19 @@ JSValue permission_unknown(JSContext *ctx, int feature)
 /* §5.1 STEP 4, and the whole of what this engine can say about it. "If there exists a policy-controlled
  * feature for feature and settings' relevant global object has an associated Document ... If document is not
  * allowed to use feature, return denied."
- *   Every registered policy-controlled feature above has a DEFAULT ALLOWLIST of 'self', and this engine
- * narrows none of them: it parses no `Permissions-Policy` header and no `allow` attribute, so the default IS
- * the answer, exactly as core/html/focus.c computes the identical question for `focus-without-user-activation`.
- * A default allowlist of 'self' means a document is allowed to use the feature exactly while it is same origin
- * with the top-level traversable's active document — which is why an `<iframe src="https://other.example">`
- * without an `allow` attribute gets "denied" for geolocation and a same-origin one does not.
+ *   THE FEATURES ABOVE ARE NOT IN THIS BUILD'S PERMISSIONS POLICY §4.1 SUPPORTED-FEATURE SET, which is why
+ * this file still computes step 4 for itself rather than asking core/permissions_policy/permissions_policy.h.
+ * That set is HTML §2.2 "Policy-controlled features"' three names and nothing else; `geolocation`, `camera`,
+ * `midi` and the rest are policy-controlled features defined by their OWN specifications, and §4.8 makes a
+ * feature's default allowlist normative — so a row cannot be added to that set until its allowlist is read
+ * from the specification that defines it. The component's question is an enum, so this file cannot spell one
+ * of them by accident.
+ *   WHAT THIS COMPUTES IS NARROWER THAN §9.7 AND IS SAID SO PLAINLY: "same origin with the top-level
+ * traversable's active document". Permissions Policy §9.7 step 7 compares against "container's node document's
+ * origin" and its steps 2-3 chain that comparison through EVERY container, which is a strictly stronger
+ * condition — a document nested top → cross-origin → same-origin-as-top satisfies this file's test and is
+ * `Disabled` under §9.7. The two agree for every document whose whole container chain is same origin, which is
+ * every frame on a single-origin page and is why an `<iframe src="https://other.example">` gets "denied" here.
  *   'self' IS §7.1.1's SAME ORIGIN AND NOTHING MORE, so a top-level document is always allowed: it is its own
  * top, and an origin is same origin with itself whether it is a tuple or opaque (step 1 compares identity).
  * That answer changed when an origin became a record — a top-level document with an opaque origin used to be

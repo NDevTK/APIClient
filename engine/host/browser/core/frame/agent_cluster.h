@@ -30,9 +30,11 @@
  * BROWSING CONTEXT GROUP and §7.1.3.2 is the one algorithm that ever assigns it, from §7.1.3's opener policy
  * obtained off the navigation response — so the fact lives in core/frame/browsing_context_group.h, created
  * once per agent beside this cluster and read here. A page served `Cross-Origin-Opener-Policy: same-origin`
- * beside a `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation now reaches `concrete`, which
- * is what makes `crossOriginIsolated`'s second conjunct — §7.2.2's permissions-policy question — the next
- * thing to build; the DFAIL in the definition names it.
+ * beside a `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation reaches `concrete`, and the
+ * SECOND conjunct — HTML §4.8.5's allowed-to-use over Permissions Policy §9.10 — is asked of the Document
+ * (core/permissions_policy/permissions_policy.h). The two do not agree on an ordinary page and that is the
+ * point of asking both: the mode is the whole GROUP's, so a cross-origin `<iframe>` of an isolated page has
+ * `concrete` and is still not allowed a 'self' feature.
  * §7.1.5's SANDBOXING FLAG SET IS NOT THE MISSING PIECE, and it is named because the two used to be described
  * as one absence. That set is carried now (core/frame/sandboxing.h) and it is a field of the DOCUMENT rather
  * than of the policy container, which is where §7.5.1's creation table puts it — and it says nothing about
@@ -67,19 +69,23 @@ void agent_cluster_obtain_window_agent(const Origin *origin, bool requests_oac);
    Asked of a cluster that was never allocated, this CRASHES rather than answering false. */
 bool agent_cluster_is_origin_keyed(void);
 
-/* HTML §7.2.2's environment settings object field CROSS-ORIGIN ISOLATED CAPABILITY, for the environment `ctx`
- * IS: "true if both of the following hold — realm's agent cluster's cross-origin-isolation mode is `concrete`,
- * and window's associated Document is allowed to use the `cross-origin-isolated` feature". §8.1.7.1's
+/* HTML §7.2.2.6 "Script settings for Window objects"' environment settings object field CROSS-ORIGIN ISOLATED
+ * CAPABILITY, for the environment `ctx` IS: "Return true if both of the following hold, and false otherwise:
+ * realm's agent cluster's cross-origin-isolation mode is `concrete`, and window's associated Document is
+ * allowed to use the "cross-origin-isolated" feature". §8.1.7.1's
  * `crossOriginIsolated` getter returns exactly this field, and HR-TIME §4's coarsen time decides its resolution
  * from it (core/timing/hr_time.h).
  *
  * IT TAKES THE REALM because the capability is a fact about an ENVIRONMENT and not about the cluster alone: the
- * mode half is the browsing context group's, and the second half is the DOCUMENT's permissions policy. Asking
- * the cluster without a realm would be the module-static answer CLAUDE.md's per-realm rule names — one answer
- * for every document — the moment either half stops being uniform across this agent.
+ * mode half is the browsing context group's, and the second half is the DOCUMENT's permissions policy — which
+ * is per-document state and DIFFERS across the realms of one agent, so the realm is what decides the answer
+ * rather than decorating it. A cluster asked without a realm would be the module-static answer CLAUDE.md's
+ * per-realm rule names: one document's capability reported as every document's.
  *
- * IT HAS NO WRITER, which is what lets hr_time.c stamp a time origin on the resolution grid this decides and
- * trust that every later moment in that realm is coarsened on the same grid. */
+ * IT HAS NO WRITER, and that is what lets HR-TIME §4's grid be a pure function of the realm: every moment
+ * core/timing/hr_time.c coarsens — including the realm's own time origin, which it coarsens at the READ
+ * precisely because this question cannot be asked before the Document exists — lands on one resolution for the
+ * life of the realm, so no two timestamps of one environment can disagree about which grid they are on. */
 bool agent_cluster_cross_origin_isolated(JSContext *ctx);
 
 /* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — the two Window members stated over this

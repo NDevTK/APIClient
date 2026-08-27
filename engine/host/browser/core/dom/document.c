@@ -135,6 +135,14 @@ typedef struct Document {
     lxb_html_document_t *dom;
     int                  owned;    /* this record destroys `dom` — true for a document the page CREATED */
     PolicyContainer     *policy;    /* owned; NULL for a document with no browsing context */
+    /* Permissions Policy §9.5's PERMISSIONS POLICY for the navigable this Document was created in — owned,
+       and NULL for a document with no browsing context, which is HTML §4.8.5's step 1.
+       A SEPARATE FIELD FROM THE CONTAINER BESIDE IT, because it is not one of §7.1.7's items: a policy
+       container holds a CSP list, an embedder policy, a referrer policy and integrity policies, and Permissions
+       Policy §10.1 puts the permissions policy on the DOCUMENT instead. The two are also created by different
+       operations from different inputs — §7.1.7's determine step picks a container, §9.5 walks the navigable's
+       container element — so a record that folded one into the other would have to invent the walk. */
+    PermissionsPolicy   *permissions_policy;
     /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET — a field of the DOCUMENT and not of the policy container
        beside it, which §7.1.7 gives a CSP list, an embedder policy, a referrer policy and two integrity
        policies and no flag set at all. §7.5.1's creation table lists the two on separate rows for that
@@ -2503,6 +2511,106 @@ const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom)
 
 SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx)->sandbox_flags; }
 
+const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return doc_here(ctx)->permissions_policy; }
+
+/* WHAT PERMISSIONS POLICY §9.7 READS OFF A NAVIGABLE CONTAINER, gathered for the navigable this Document is
+ * being created in. §9.5 takes "null or an element (container)" and §9.7 reads three things off it: "container's
+ * node document"'s permissions policy (its steps 2 and 3), that document's ORIGIN (its step 7), and the `allow`
+ * attribute §9.4 "Process permissions policy attributes" turns into a container policy (its steps 4-5).
+ *
+ * THE CONTAINER IS HTML §7.3.1.3 "Child navigables"' CONTAINER OF A NAVIGABLE — "the navigable container whose
+ * content navigable is navigable, or null if there is no such element" — asked of the navigable rather than
+ * derived from the parent, because that definition is what §9.5's argument IS and because the two differ in
+ * cases the standard has answers for. Everything §9.7 needs then comes from the ELEMENT's node document, which
+ * is the document that holds the `<iframe>`, and never from a separate walk that could disagree with it.
+ *
+ * A NULL CONTAINER HAS THREE CAUSES AND ONLY TWO OF THEM ARE §9.7 STEP 1. A top-level traversable (and every
+ * auxiliary browsing context `window.open` creates) has no container at all, and §7.3.1.6's
+ * destroy-a-child-navigable severs the relation so §7.3.1.3 answers null for a detached frame — for both of
+ * those "container is null, return `Enabled`" is literally the standard's answer. The third is a container that
+ * exists in ANOTHER WASM INSTANCE, which is not a null container and must not be read as one: taking step 1 for
+ * it would grant a cross-origin child every feature its embedder holds. It is told apart by the PARENT being a
+ * remote WindowProxy, and it crashes. */
+static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSValueConst nav_proxy)
+{
+    JSValue container = window_proxy_container(ctx, nav_proxy);
+    const PermissionsPolicy *container_doc_policy = NULL;
+    const Origin *container_doc_origin = NULL;
+    const lxb_char_t *allow = NULL;
+    size_t allow_len = 0;
+    PermissionsPolicy *policy;
+
+    if (JS_IsObject(container)) {
+        lxb_dom_node_t *el = node_of(container);
+        Document *cd;
+
+        DCHECK(el != NULL && el->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "§7.3.1.3's container of this navigable is not an ELEMENT — §9.4's process-permissions-policy-"
+               "attributes reads an `allow` attribute off it and §9.7 reads its node document, and a container "
+               "that is not an element is a navigable whose creating operation recorded something else");
+        cd = doc_rec(el->owner_document);
+        DCHECK(cd != NULL && !JS_IsUndefined(cd->proxy),
+               "§9.7's \"container's node document\" has no record with a navigable — the container element is "
+               "in this heap, so the document holding it is a Document of this agent and every such Document is "
+               "installed with its §7.2.3 WindowProxy; without one there is no origin for step 7 to compare");
+        container_doc_policy = cd->permissions_policy;
+        container_doc_origin = window_proxy_origin(cd->proxy);
+        DCHECK(container_doc_policy != NULL,
+               "§9.7's \"container's node document\" holds no permissions policy while holding a navigable — "
+               "§9.5 runs for every Document a navigable is given, so a container document without one was "
+               "installed past it and its own inheritance is unknown rather than empty");
+        /* §9.4 step 2 reads "the value of element's allow attribute". An element carrying none yields NULL,
+           which §9.4 turns into an empty policy directive — a positive statement that this container declared
+           nothing, and not an input the walk failed to find. */
+        allow = lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"allow", 5,
+                                              &allow_len);
+    } else {
+        JSValue parent = window_proxy_parent_navigable(ctx, nav_proxy);
+
+        if (window_proxy_is(parent) && window_proxy_is_remote(parent))
+            DFAIL("Permissions Policy §9.5 is creating a policy for a navigable whose §7.3.1.3 CONTAINER is in "
+                  "another WASM instance — this navigable has a parent and the element that holds it is not in "
+                  "this heap, so §9.7 can read neither the container document's permissions policy (its steps 2 "
+                  "and 3) nor its origin (step 7) nor the `allow` attribute (steps 4-5). Reading it as a NULL "
+                  "container takes step 1 and returns `Enabled` for every supported feature, which hands a "
+                  "cross-origin child the `cross-origin-isolated` capability its embedder was never asked "
+                  "about. The record that provisions this navigable has to carry the container document's "
+                  "inherited-policy value per supported feature, its origin, and the `allow` attribute's value "
+                  "— as text, the way core/frame/policy_container.h carries §7.1.7's container");
+        JS_FreeValue(ctx, parent);
+    }
+    policy = permissions_policy_create(container_doc_policy, container_doc_origin, (const char *)allow,
+                                       allow_len, window_proxy_origin(nav_proxy));
+    JS_FreeValue(ctx, container);
+    return policy;
+}
+
+/* HTML §4.8.5 "The `iframe` element"'s ALLOWED TO USE — see document.h for the steps and for why they are here
+   rather than in the policy component. */
+bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
+{
+    Document *d = doc_here(ctx);
+
+    /* Step 1: "If document's browsing context is null, then return false." A Document with no browsing context
+       is one §9.5 never ran for, which is exactly the absence of a policy on this record. */
+    if (d->permissions_policy == NULL)
+        return false;
+    /* Step 2: "If document is not fully active, then return false." §7.3.1's walk, asked and not remembered —
+       removing an ancestor `<iframe>` stops this document being fully active with nothing done to its own
+       navigable. */
+    if (!document_fully_active(ctx))
+        return false;
+    /* Step 3: §9.10 "on feature, document, and document's origin" — so §9.10's `origin` argument IS this
+       document's own origin, and its `report` takes the default True. Step 4 is the other answer. */
+    {
+        const Origin *origin = window_proxy_origin(d->proxy);
+
+        return permissions_policy_is_feature_enabled_in_document(d->permissions_policy,
+                                                                 permissions_policy_empty(), feature,
+                                                                 origin, origin, true) == PP_ENABLED;
+    }
+}
+
 JSValueConst document_window_proxy(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
@@ -2807,6 +2915,9 @@ static void doc_rec_release(Document *d)
     doc_rec_refs(d, doc_ref_release, NULL);   /* the ONE list — see doc_rec_refs */
     doc_addrs_free(d);   /* every address this record ever held — see doc_addr_intern */
     policy_container_free(d->policy);   /* malloc'd, so the GC walk would never have named it */
+    /* Permissions Policy §9.5's policy, malloc'd for the same reason and released beside the container it sits
+       beside on the record. NULL for a Document with no browsing context, which never had one. */
+    permissions_policy_free(d->permissions_policy);
     if (d->dom)
         lxb_dom_interface_document(d->dom)->user = NULL;
     free(d);
@@ -3024,6 +3135,14 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "a Document was installed for a realm with no navigable — §7.2.3's proxy belongs to the navigable "
            "and the navigable exists before its realm, so the caller that owns it passes it in");
     d->proxy = JS_DupValue(ctx, nav_proxy);
+    /* PERMISSIONS POLICY §9.5's CREATE A PERMISSIONS POLICY FOR A NAVIGABLE, here because §9.5 is invoked
+       exactly once per Document a navigable is given and the navigable is the argument beside it. Before the
+       no-address return below for the same reason the policy container is: a Document with no address still has
+       a navigable, still has a container, and a script in it still asks whether it is allowed to use a feature.
+       ITS INPUTS ARE THE CONTAINER'S, so they are read here rather than derived later — §7.3.1.3 severs a
+       navigable's container when the element is removed, and a policy re-derived after that would silently
+       become a top-level document's. */
+    d->permissions_policy = document_create_permissions_policy(ctx, nav_proxy);
     if (!url || !*url)
         return;   /* no address, no Document — the page's own throw is the honest answer */
 

@@ -1,0 +1,167 @@
+/* PERMISSIONS POLICY — the W3C Permissions Policy framework (§4 "Framework") and the algorithms that answer
+ * it (§9 "Algorithms"). See permissions_policy.c.
+ *
+ * WHAT THIS ANSWERS AND WHY IT IS ONE COMPONENT. HTML asks "is this Document ALLOWED TO USE feature X" in
+ * several unrelated places — §7.2.2.6 "Script settings for Window objects" makes it the second conjunct of an
+ * environment's CROSS-ORIGIN ISOLATED CAPABILITY, §6.6.6's allow focus steps make it the first clause of
+ * whether a script may move focus — and each of those sites had WRITTEN THE ANSWER OUT FOR ITSELF as "is this
+ * document same origin with the top-level traversable's active document". That approximation is not merely
+ * duplicated, it is WRONG, and the shape it is wrong on is ordinary: A(top) → B(cross-origin) → C(same origin
+ * as A). C is same origin with the top and its permissions policy is DISABLED, because §9.7's inheritance is a
+ * CHAIN — every link must permit the feature, and B's link does not. One question asked in one place is what
+ * makes that answerable at all; N copies of a shortcut is N chances to be wrong the same way.
+ *
+ * A POLICY IS PER-DOCUMENT STATE AND NEVER A MODULE STATIC. §9.5 creates one FOR A NAVIGABLE from the
+ * navigable's container and the Document's origin, so two Documents of one agent legitimately hold different
+ * answers — an `<iframe>` whose document is cross-origin with its parent is disallowed a 'self' feature its
+ * parent is allowed. A static would answer the FIRST document's question for every later one, which is the
+ * defect class CLAUDE.md names for per-realm facts. The one thing that IS static here is §4.1's set of
+ * SUPPORTED FEATURES and their §4.8 default allowlists, which are constants of this user agent rather than
+ * facts about a document.
+ *
+ * §4.1: "A user agent has a set of supported features, which is the set of features which it allows to be
+ * controlled through policies. User agents are not required to support every feature." THAT SET IS THE X-LIST
+ * BELOW, and it is the whole of what HTML §2.2 "Policy-controlled features" defines: `autoplay`,
+ * `cross-origin-isolated` and `focus-without-user-activation`, each "which has a default allowlist of 'self'".
+ * A feature defined by some OTHER specification (Geolocation's `geolocation`, Fullscreen's `fullscreen`) is
+ * not in this build's supported set, and §9.2 and §9.3 both say what that means for parsing — "if feature-name
+ * does not identify any recognized policy-controlled feature, then continue" — so an unsupported token is
+ * SKIPPED rather than guessed at. On the ASKING side there is no such softness and no runtime check either:
+ * the question is an ENUM, so a component that needs to ask about a feature this build does not support does
+ * not compile. That is the forcing function, and it is stronger than a crash because it fires before the
+ * program runs. Adding a row here means stating the feature's default allowlist FROM ITS OWN SPECIFICATION —
+ * §4.8's value is normative and inventing one is a security answer nobody measured.
+ *
+ * THE DECLARED POLICY IS «[], []» FOR EVERY POLICY THIS BUILD CREATES, AND THAT IS §9.5'S OWN VALUE rather
+ * than an omission: "let policy be a new permissions policy, with inherited policy inheritedPolicy and
+ * declared policy «[], []»". The only algorithm that ever fills it is §9.6 "Create a Permissions Policy for a
+ * navigable from response", whose §9.1 "Process response policy" reads the `Permissions-Policy` header — and
+ * that parse (a structured-field dictionary, §9.2's allowlist construction, §4.7's allowlist matching) is not
+ * built. It is not left as a silence either: core/frame/navigation_params.c CRASHES on a navigation response
+ * that carries the header, so a document whose declared policy would differ from «[], []» never reaches this
+ * component with the wrong answer. Which is why the §9.8 and §9.9 steps that read the declared policy are not
+ * written here as branches nothing can take — the crash is upstream, at the bytes.
+ */
+#ifndef ENGINE_HOST_BROWSER_CORE_PERMISSIONS_POLICY_PERMISSIONS_POLICY_H
+#define ENGINE_HOST_BROWSER_CORE_PERMISSIONS_POLICY_PERMISSIONS_POLICY_H
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#include "core/url/origin.h"
+
+/* §4.1's SUPPORTED FEATURES, with §4.8's DEFAULT ALLOWLIST of each — HTML §2.2 "Policy-controlled features",
+   which defines exactly these three and gives all three a default allowlist of 'self'. The allowlist is a
+   column of the row rather than a fact the code assumes, because §4.8 admits two values and a `*` feature
+   inherits by a different rule: it is "allowed in Documents in top-level traversables by default, as well as
+   those in all child navigables", where 'self' stops at the first cross-origin link. */
+#define PERMISSIONS_POLICY_FEATURES(X)                                                        \
+    X(AUTOPLAY,                      "autoplay",                      PP_ALLOWLIST_SELF)      \
+    X(CROSS_ORIGIN_ISOLATED,         "cross-origin-isolated",         PP_ALLOWLIST_SELF)      \
+    X(FOCUS_WITHOUT_USER_ACTIVATION, "focus-without-user-activation", PP_ALLOWLIST_SELF)
+
+typedef enum {
+#define PP_ENUM_ROW(name, token, allowlist) PP_FEATURE_##name,
+    PERMISSIONS_POLICY_FEATURES(PP_ENUM_ROW)
+#undef PP_ENUM_ROW
+    PP_FEATURE_N            /* also §9.2/§9.3's "does not identify any recognized policy-controlled feature" */
+} PermissionsPolicyFeature;
+
+/* §4.8 "Default Allowlists": "The default allowlist for a feature is one of these values: * … 'self' …".
+   TWO VALUES AND NOT THREE — 'none' is a keyword an allowlist may be WRITTEN with (§4.7) and is not a default
+   allowlist, so a row spelling one would be spelling a value §4.8 does not define. */
+typedef enum { PP_ALLOWLIST_STAR, PP_ALLOWLIST_SELF } PermissionsPolicyDefaultAllowlist;
+
+/* §4.2 "Policies": an inherited policy is "an ordered map from features to `Enabled` or `Disabled`", and every
+   §9 algorithm returns one of the same two words. They are the SAME type because the algorithms compose —
+   §9.10's result IS §9.9's return value — and a `bool` at any joint would let "Disabled" and "false" be read
+   for each other by a caller that meant one of them. */
+typedef enum { PP_DISABLED = 0, PP_ENABLED = 1 } PermissionsPolicyValue;
+
+/* §4.2's PERMISSIONS POLICY — "a struct with the following items: inherited policy …, declared policy …".
+   OPAQUE AND HEAP-ALLOCATED, owned by the Document §9.5 created it for, exactly like §7.1.7's policy container
+   beside it on that record. A `PermissionsPolicy *` that is NULL is a Document that HAS no permissions policy
+   — a Document with no browsing context, which HTML §4.8.5's "allowed to use" step 1 refuses outright — and
+   is never a policy whose contents are unknown. */
+typedef struct PermissionsPolicy PermissionsPolicy;
+
+/* §4.1's token for a feature, and §4.8's default allowlist of it. The token is what §9.2 and §9.3 match a
+   header or an `allow` attribute against, and what a report's `featureId` would name. */
+const char *permissions_policy_feature_token(PermissionsPolicyFeature feature);
+PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(PermissionsPolicyFeature feature);
+
+/* §9.5 "Create a Permissions Policy for a navigable" — "given null or an element (container) and an origin
+ * (origin) this algorithm returns a new Permissions Policy": one §9.7 inherited-policy value per supported
+ * feature, and §9.5's own «[], []» declared policy.
+ *
+ * §9.7 IS THE WHOLE OF WHAT THE ARGUMENTS ARE FOR, and they are the three things it reads off the container:
+ * `container_document_policy` is "container's node document's" permissions policy (its §9.7 steps 2 and 3),
+ * `container_document_origin` is "container's node document's origin" (its step 7), and `container_allow`/
+ * `container_allow_len` are the value of the `allow` attribute that §9.4 "Process permissions policy
+ * attributes" turns into a container policy (its steps 4-5). A TOP-LEVEL DOCUMENT passes NULL for all of them,
+ * which is §9.7 step 1's "if container is null, return `Enabled`" — the absence of a container is a POSITIVE
+ * statement about this navigable and never a missing argument, which is why they are absent TOGETHER and
+ * asserted to be. The attribute arrives as BYTES AND A LENGTH because that is how the DOM holds an attribute
+ * value; a container element that carries no `allow` attribute at all passes NULL, which §9.4 step 2 reads as
+ * the empty directive rather than as a missing input.
+ *
+ * THE CONTAINER DOCUMENT'S POLICY AND ORIGIN ARRIVE TOGETHER OR NOT AT ALL, and that is asserted. They are two
+ * facts about one element, so half of them is not a partial container — it is a container in ANOTHER WASM
+ * INSTANCE (SECURITY.md keys an instance on `(browsing context group, origin)`, so a cross-origin container
+ * document's policy is not a pointer this heap holds), and reading that as "no container" takes §9.7 step 1 and
+ * enables every feature for the one child that must not have them. That case crashes where the navigable is —
+ * core/dom/document.c, which is what holds the container relation — rather than here, so there is exactly one
+ * statement of it and this function has no branch that could quietly take the other road.
+ *
+ * `origin` is the origin of the Document being created in the navigable. OWNED by the caller: free with
+ * permissions_policy_free. */
+PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_document_policy,
+                                             const Origin *container_document_origin,
+                                             const char *container_allow, size_t container_allow_len,
+                                             const Origin *origin);
+void permissions_policy_free(PermissionsPolicy *policy);
+
+/* §4.2's EMPTY PERMISSIONS POLICY — "a permissions policy that has an inherited policy which contains
+   `Enabled` for every supported feature, a declared policy whose declarations and reporting configuration are
+   both empty ordered maps". It is what §10.1 "Changes to the HTML specification" gives every Document as its
+   REPORT-ONLY permissions policy ("which is a permissions policy, which is initially empty"), and §9.10 checks
+   against it to decide whether a report-only violation happened. ONE CONSTANT, borrowed and never freed: an
+   empty policy is a value of this user agent's supported-feature set and holds nothing about any document, so
+   it is not the per-realm fact the module-static rule is written against. */
+const PermissionsPolicy *permissions_policy_empty(void);
+
+/* §9.9 "Check permissions policy" — "given permissions policy (policy), a feature (feature), an origin
+   (origin) and another origin (document origin), this algorithm returns `Disabled` if feature should be
+   considered disabled, and `Enabled` otherwise".
+   IT IS NOT §9.8, and the two differ in the step that matters: §9.8 "Get feature value for origin" ends at
+   `Enabled` when the feature is absent from the declared policy, while §9.9 goes on to consult the feature's
+   DEFAULT ALLOWLIST. §9.8 is the question the INHERITANCE asks of a parent, §9.9 is the question a USE asks of
+   its own document, and swapping them silently widens or narrows every cross-origin frame. */
+PermissionsPolicyValue permissions_policy_check(const PermissionsPolicy *policy,
+                                                PermissionsPolicyFeature feature,
+                                                const Origin *origin, const Origin *document_origin);
+
+/* §9.10 "Is feature enabled in document for origin?" — "given a feature (feature), a Document object
+ * (document), an origin (origin), and an optional boolean (report), with a default value of True".
+ *
+ * IT TAKES THE DOCUMENT'S TWO POLICIES RATHER THAN THE DOCUMENT, because the algorithm's own first two steps
+ * are "let policy be document's permissions policy" and "let report-only policy be document's report-only
+ * permissions policy" and nothing after them reads the Document again except to generate a report. A component
+ * that reached for a Document would be a permissions-policy file that knows what a Document is; the caller
+ * that HAS one (core/dom/document.c, which owns HTML §4.8.5's "allowed to use") passes the two.
+ *
+ * `report` IS THE SPEC'S PARAMETER AND IS REAL. Its True arm reaches §9.13/§9.14's generate-and-queue-a-report,
+ * which this build cannot perform — Reporting §3.4.1 "Generate report of type with data" notifies
+ * ReportingObservers BEFORE any endpoint is consulted, so a violation is observable whether or not a policy
+ * named an endpoint, and neither the observer nor the queue exists here. That arm therefore CRASHES by name.
+ * §9.10's own note is what a caller uses to stay off it honestly: "if a call to this algorithm is performed
+ * just to query the state of a feature, and does not represent an actual attempted use of the feature, then
+ * report should be set to False." HTML §4.8.5's "allowed to use" is not such a call and passes True. */
+PermissionsPolicyValue permissions_policy_is_feature_enabled_in_document(const PermissionsPolicy *policy,
+                                                                        const PermissionsPolicy *report_only,
+                                                                        PermissionsPolicyFeature feature,
+                                                                        const Origin *origin,
+                                                                        const Origin *document_origin,
+                                                                        bool report);
+
+#endif

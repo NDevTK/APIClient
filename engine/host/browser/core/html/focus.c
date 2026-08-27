@@ -894,11 +894,14 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
 }
 
 /* §6.6.6's ALLOW FOCUS STEPS, given a Document target.
-     "If target is allowed to use the `focus-without-user-activation` feature, return true."  That feature's
-   DEFAULT ALLOWLIST is 'self' (HTML §2.2's "Policy-controlled features" list), so a document is allowed to use
-   it exactly while it is same-origin with the top-level traversable's active document — this engine parses no
-   `Permissions-Policy` header and no `allow` attribute, so nothing narrows or widens the default and the
-   default IS the answer.
+     "If target is allowed to use the `focus-without-user-activation` feature, return true."  HTML §4.8.5 "The
+   `iframe` element" defines that phrase and core/permissions_policy/permissions_policy.h answers it, over the
+   Document's own Permissions Policy §9.5 policy — HTML §2.2 "Policy-controlled features" gives the feature a
+   default allowlist of 'self'.
+     THIS FILE USED TO COMPUTE THE ANSWER ITSELF as "same origin with the top-level traversable's active
+   document", and that sentence appears in no step of §9.7: inheritance is a CHAIN through every container, so a
+   document nested A(top) → B(cross-origin) → C(same origin as A) is same origin with the top and is DISABLED.
+   It was also the second copy of one question, which is why it is now a call.
      "If target's relevant global object has TRANSIENT ACTIVATION, return true."  Asked of §6.4.1's real state
    (core/html/user_activation.c), never assumed — and asked THROUGH THE FORK SEAM, which is why this is a
    request and not a `bool` function. Whether a user has interacted with the page is unknown external state
@@ -906,19 +909,16 @@ static bool focus_state_init(JSContext *ctx, FocusState *s)
    answers and both reach code worth running: `el.focus()` refused, and `el.focus()` running the whole of
    §6.6.4 with its four events. A C `if` here would pick one of those and delete the other, which is the one
    thing a solver exists to prevent.
-     THE FIRST CLAUSE STILL SHORT-CIRCUITS, and it does the work: a same-origin-with-top document is allowed to
-   use the feature outright, so nothing is asked and nothing forks — which is every document in an ordinary
-   page. The question is reached only where the feature's default allowlist does not already answer it.
+     THE FIRST CLAUSE STILL SHORT-CIRCUITS, and it does the work: a document whose whole container chain is
+   same-origin is allowed to use the feature outright, so nothing is asked and nothing forks — which is every
+   document in an ordinary page. The question is reached only where the inherited policy does not already
+   answer it.
      IT IS NOT EXPORTED. It was, so that §6.6.7's insertion steps could answer this clause from inside DOM
    §4.2.3's plain-C walk and crash on the other; that walk now carries the driving machine's header and forks
    like anything else, so the whole algorithm has one door and this clause has no caller of its own. */
 static bool focus_allow_without_user_activation(JSContext *target)
 {
-    JSValue top = window_proxy_top_navigable(target, document_window_proxy(target));
-    bool same = JS_IsObject(top) && window_proxy_same_origin_of(top);
-
-    JS_FreeValue(target, top);
-    return same;
+    return document_allowed_to_use(target, PP_FEATURE_FOCUS_WITHOUT_USER_ACTIVATION);
 }
 
 int focus_allow_focus_steps_run(JSContext *target, JSStepHdr *h, uint8_t *phase, bool *out)

@@ -22,33 +22,50 @@
 
 static int g_origin_slot = -1;
 
-/* §4: "a moment early in the initialization of a relevant environment settings object". This runs from the one
-   call every realm goes through (core/realm.h), which is where this engine creates that environment — so the
-   moment the standard describes and the moment this reads are the same one.
+/* §4: "Performance measurements report a duration from a moment early in the initialization of a relevant
+ * environment settings object. That moment is stored in that settings object's time origin." This runs from
+ * the one call every realm goes through (core/realm.h), which is where this engine creates that environment —
+ * so the moment the standard describes and the moment this reads are the same one.
  *
- * THE ORIGIN IS ITSELF COARSENED, and that is not tidiness. `relative high resolution coarse time` is "the
- * duration from the time origin to coarseTime", so an origin off the resolution grid would make that duration
- * carry a sub-resolution remainder — and would make it NEGATIVE for a moment equal to the origin, which is the
- * one comparison hr_time_relative asserts. Coarsening both ends puts every page-visible timestamp on the grid
- * and keeps the duration a multiple of the resolution, which is what a browser reports. */
+ * WHAT IS STORED IS THE RAW MOMENT, AND THE COARSENING HAPPENS AT THE READ. §4 stores a MOMENT here and names
+ * `coarsen time` nowhere in this sentence; the algorithm that coarsens is `relative high resolution time`,
+ * which runs when a timestamp is asked for. That is also the only ORDER in which the coarsening can be
+ * correct, and the reason this is not a stylistic move: `coarsen time`'s resolution is decided by THE
+ * ENVIRONMENT'S CROSS-ORIGIN ISOLATED CAPABILITY, and HTML §7.2.2.6 "Script settings for Window objects"
+ * defines that capability over "window's associated DOCUMENT" — which does not exist yet at this point in the
+ * realm's construction (core/platform.c installs `document` last, because §4.8.5's insertion steps create
+ * child navigables and need every other component already standing). Coarsening here therefore asked an
+ * environment field before the environment was set up, and it went unnoticed only for as long as the second
+ * conjunct of that capability was a crash nobody reached: the first cross-origin-isolated page to load —
+ * `Cross-Origin-Opener-Policy: same-origin` beside `Cross-Origin-Embedder-Policy: require-corp`, which is
+ * every wasm application on the web — takes the `concrete` arm and asks the Document.
+ *
+ * THE ORIGIN IS STILL COARSENED BEFORE ANYTHING COMPARES IT, which is what hr_time_relative needs and why
+ * hr_time_origin below does it rather than this. `relative high resolution coarse time` is "the duration from
+ * the time origin to coarseTime", so an origin off the resolution grid would make that duration carry a
+ * sub-resolution remainder — and would make it NEGATIVE for a moment equal to the origin, which is the one
+ * comparison hr_time_relative asserts. Coarsening both ends at the read puts every page-visible timestamp on
+ * the grid and keeps the duration a multiple of the resolution, which is what a browser reports, and the floor
+ * is a pure function of the stored moment so no read can disagree with another. */
 static void hr_time_install(JSContext *ctx)
 {
-    JSValue now = event_loop_now(ctx);
-
     /* Running twice in one realm is asserted by realm_value_set, which is where the first moment is standing. */
-    realm_value_set(ctx, g_origin_slot, hr_time_coarsen(ctx, now));
-    JS_FreeValue(ctx, now);
+    realm_value_set(ctx, g_origin_slot, event_loop_now(ctx));
 }
 
 JSValue hr_time_origin(JSContext *ctx)
 {
-    JSValue v = realm_value_get(ctx, g_origin_slot);
+    JSValue v = realm_value_get(ctx, g_origin_slot), coarse;
 
     DCHECK(JS_IsNumber(v) || concolic_is(v),
            "an environment's TIME ORIGIN is neither a moment on the monotonic clock nor a derivation of one — "
-           "HR-TIME §4 makes it the coarsening of the clock at this realm's creation, and the install that "
-           "stamps it is the only thing that ever writes this slot");
-    return v;
+           "HR-TIME §4 stores the clock's moment at this realm's creation, and the install that stamps it is "
+           "the only thing that ever writes this slot");
+    /* §4's coarsen time, at the read — see hr_time_install for why it cannot be at the write. The stored
+       moment is BORROWED back from the slot by this call and released here; what leaves is the coarsening. */
+    coarse = hr_time_coarsen(ctx, v);
+    JS_FreeValue(ctx, v);
+    return coarse;
 }
 
 /* §4 STEP 3's FLOOR, run on a number. The one arithmetic in this file, so that the known path and the example

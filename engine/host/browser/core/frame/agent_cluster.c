@@ -3,12 +3,13 @@
 #include "check.h"
 #include "core/frame/agent_cluster.h"
 #include "core/frame/browsing_context_group.h"
+#include "core/dom/document.h"   /* HTML §4.8.5's allowed-to-use, this capability's second conjunct */
 #include "core/idl_args.h"
 #include "core/url/origin.h"
 
 /* §7.3.2.3's CROSS-ORIGIN ISOLATION MODE for this browsing context group, and it is THREE-VALUED because its
    two readers read it differently. §7.3.2.3 gives `none`, `logical` and `concrete`; §8.1.2.2's key allocation asks
-   whether it is NOT `none`, while §7.2.2's cross-origin isolated capability asks whether it IS `concrete`. A
+   whether it is NOT `none`, while §7.2.2.6's cross-origin isolated capability asks whether it IS `concrete`. A
    single boolean answered both, which is one fact collapsed into the WRONG shape rather than into one place:
    under `logical` a Document is origin-keyed and `crossOriginIsolated` is FALSE, and a boolean cannot say that.
 
@@ -84,30 +85,29 @@ bool agent_cluster_is_origin_keyed(void)
 
 bool agent_cluster_cross_origin_isolated(JSContext *ctx)
 {
-    /* HTML §7.2.2's set up a window environment settings object defines this environment field: "The
-       cross-origin isolated capability — return true if both of the following hold, and false otherwise:
-       realm's agent cluster's cross-origin-isolation mode is `concrete`, and window's associated Document is
-       allowed to use the `cross-origin-isolated` feature." FIRST CONJUNCT, and note it is `concrete` alone —
-       §7.3.2.3's `logical` mode is the one where a page IS origin-keyed and this capability is still false. */
-    (void)ctx;   /* the SECOND conjunct is the Document's, and reads this environment — see the DFAIL below */
+    /* HTML §7.2.2.6 "Script settings for Window objects"' set up a window environment settings object defines
+       this environment field: "The cross-origin isolated capability — Return true if both of the following
+       hold, and false otherwise: realm's agent cluster's cross-origin-isolation mode is `concrete`, and
+       window's associated Document is allowed to use the "cross-origin-isolated" feature."
+       FIRST CONJUNCT, and note it is `concrete` alone — §7.3.2.3's `logical` mode is the one where a page IS
+       origin-keyed and this capability is still false. */
     if (browsing_context_group_isolation_mode() != BROWSING_CONTEXT_GROUP_ISOLATION_CONCRETE)
         return false;
-    /* SECOND CONJUNCT, AND IT IS REACHABLE NOW — a response carrying `Cross-Origin-Opener-Policy: same-origin`
-       beside a `Cross-Origin-Embedder-Policy` compatible with cross-origin isolation gives this instance's
-       group the `concrete` mode (core/frame/browsing_context_group.h), which is the line above. It is a crash
-       rather than a `true` because assuming it would hand every cross-origin-isolated environment a capability
-       the Document's permissions policy may deny — and the first thing that reads the answer is HR-TIME §4's
-       clock resolution, which a page measures directly. */
-    DFAIL("HTML §7.2.2's CROSS-ORIGIN ISOLATED CAPABILITY has its first conjunct — this agent cluster's "
-          "cross-origin isolation mode is now `concrete` — and its second conjunct is the PERMISSIONS POLICY "
-          "question: is the Document allowed to use the `cross-origin-isolated` feature. This build has no "
-          "permissions-policy component to ask, so build one and read it here");
-    return false;
+    /* SECOND CONJUNCT — HTML §4.8.5 "The `iframe` element"'s ALLOWED TO USE, over Permissions Policy §9.10, for
+       the `cross-origin-isolated` feature that HTML §2.2 "Policy-controlled features" defines with a default
+       allowlist of 'self'.
+       IT IS A REAL QUESTION AND NOT A FORMALITY, and the answer differs from the first conjunct's on an
+       ordinary page: the mode is the BROWSING CONTEXT GROUP's, so every Document in a cross-origin-isolated
+       group has `concrete`, while a cross-origin `<iframe>` inside such a page is NOT allowed to use a 'self'
+       feature and must read `crossOriginIsolated === false`. A `true` here would hand that frame the 5µs
+       HR-TIME §4 clock and `SharedArrayBuffer`'s constructor — a capability the standard withholds from it —
+       and the page can measure both directly. */
+    return document_allowed_to_use(ctx, PP_FEATURE_CROSS_ORIGIN_ISOLATED);
 }
 
 /* §7.1.2: "The originAgentCluster getter steps are to return the surrounding agent's agent cluster's is
    origin-keyed." §8.1.7.1: "The crossOriginIsolated getter steps are to return this's relevant settings
-   object's cross-origin isolated capability" — the §7.2.2 field above, which is stated OVER this cluster's
+   object's cross-origin isolated capability" — the §7.2.2.6 field above, which is stated OVER this cluster's
    mode and is why the two members are one component and not two booleans that could disagree. */
 enum { AC_ORIGIN_KEYED, AC_CROSS_ORIGIN_ISOLATED };
 

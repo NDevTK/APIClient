@@ -55,6 +55,43 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
 
     out->requests_oac = np_requests_oac(headers, secure_context);
 
+    /* PERMISSIONS POLICY §9.1 "Process response policy" — "let header name be `Permissions-Policy-Report-Only`
+     * if report-only is True, or `Permissions-Policy` otherwise. Let parsed header be the result of executing
+     * get a structured field value given header name and `dictionary` from response's header list. If parsed
+     * header is null, return an empty ordered map."
+     *
+     * THE ABSENT HEADER IS THE ANSWER, NOT A HOLE, and this is where that is stated. Its step 3 gives an absent
+     * header a MEANING — the empty declared policy — which is exactly what §9.5's create hands every Document
+     * this build makes, so a response with neither header is fully modelled and nothing here fires.
+     *
+     * A PRESENT ONE IS AN UNBUILT CAPABILITY WITH A SECURITY MEANING, which is why it crashes rather than being
+     * dropped. §9.5's «[], []» is the MOST PERMISSIVE declared policy there is: every narrowing a server wrote
+     * would vanish, and §9.9's step 2 would fall through to the feature's default allowlist as though the site
+     * had asked for nothing. Silently answering "allowed" for a feature a response disallowed is the defaulted-
+     * read defect with a policy decision inside it.
+     *
+     * IT IS READ HERE BECAUSE THIS IS WHERE A RESPONSE IS READ — the same seam §7.1.3's opener policy and
+     * §7.1.4's embedder policy are obtained at, and the only place in the engine that holds a header list for a
+     * navigation. A ROOT document's headers never reach this function at all: the trusted zone reads them and
+     * hands the engine PARSED FACTS (core/platform.h's PlatformAgent/PlatformDocument), so a top-level response
+     * carrying either header is not covered by this crash and needs a field on that record. */
+    {
+        const char *pp = header_list_get_last(headers, "permissions-policy");
+        const char *ppro = header_list_get_last(headers, "permissions-policy-report-only");
+
+        if (pp != NULL || ppro != NULL)
+            DFAIL("a navigation response carries a `Permissions-Policy` (or `Permissions-Policy-Report-Only`) "
+                  "header and this build parses neither. Permissions Policy §9.6 \"Create a Permissions Policy "
+                  "for a navigable from response\" is what would apply it, over §9.1 \"Process response "
+                  "policy\" (a structured-field DICTIONARY, not an item or a list), §9.2 \"Construct policy "
+                  "from dictionary and origin\" (the `*` and `self` tokens, `report-to` parameters, and the "
+                  "permissions-source-expression allowlist) and §4.7 \"Allowlists\"' matches-an-origin, which "
+                  "§9.9 step 2 then asks. Until those exist the Document would get §9.5's «[], []» declared "
+                  "policy — the MOST permissive one — so every restriction this server wrote would be read as "
+                  "silence. Build §9.6 and hand its declared policy to permissions_policy_create; the "
+                  "report-only half is §10.1's separate report-only permissions policy on the Document");
+    }
+
     /* §7.1.4's obtain, which §7.1.7's create-a-policy-container-from-a-fetch-response step 4 makes the policy
        container's EMBEDDER POLICY item: "if environment is non-null, then set result's embedder policy to the
        result of obtaining an embedder policy given response and environment".

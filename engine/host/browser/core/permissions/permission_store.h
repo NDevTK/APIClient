@@ -19,8 +19,10 @@
  *   step 2  — a non-secure context is "denied". COMPUTED: core/frame/secure_context.c knows this realm's
  *             environment, so there is nothing unknown and nothing to fork.
  *   step 4  — a document not allowed to use the feature is "denied". COMPUTED from the policy-controlled
- *             feature's DEFAULT ALLOWLIST, which this engine does not narrow (it parses no Permissions-Policy
- *             header and no `allow` attribute), exactly as core/html/focus.c computes the same question.
+ *             feature's DEFAULT ALLOWLIST of 'self', narrowed by nothing. It is computed HERE rather than by
+ *             core/permissions_policy/permissions_policy.h because none of this file's features is in that
+ *             component's Permissions Policy §4.1 supported-feature set — see permission_store.c's step 4,
+ *             which states what that costs and how the two answers differ.
  *   step 7  — a permission STORE ENTRY is returned as it stands. KNOWN: an entry exists only because this
  *             engine WROTE it, and a value the engine wrote is a value it knows — `new AbortController()
  *             .signal.aborted` is false for the identical reason. A concolic store entry would fork a world

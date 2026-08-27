@@ -8,6 +8,7 @@
 #include "quickjs.h"
 #include "core/idl_args.h"
 #include "core/frame/policy_container.h"
+#include "core/permissions_policy/permissions_policy.h"   /* §9.5's policy is a field of this record */
 
 /* Install `document` for `dom`, addressed at `url`. THE REALM IS THE DOCUMENT: `ctx` is what this document's
    state hangs off from here on, so a second same-origin document in the same agent is a second JSContext in the
@@ -264,6 +265,30 @@ const PolicyContainer *document_policy(JSContext *ctx);
    list be DOCUMENT's global object's csp list"). §4.2.3's freeze runs for an element whose node document is
    routinely not the running realm's active one. BORROWED; NULL for a document with no browsing context. */
 const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom);
+
+/* HTML §4.8.5 "The `iframe` element"'s ALLOWED TO USE, which is where the standard defines the phrase every
+ * other section asks with: "To determine whether a Document object document is allowed to use the
+ * policy-controlled-feature feature, run these steps: 1. If document's browsing context is null, then return
+ * false. 2. If document is not fully active, then return false. 3. If the result of running is feature enabled
+ * in document for origin on feature, document, and document's origin is `Enabled`, then return true.
+ * 4. Return false."
+ *
+ * IT LIVES HERE AND NOT IN THE POLICY COMPONENT because steps 1 and 2 are DOCUMENT facts — a browsing context
+ * and §7.3.1's fully active walk — and only step 3 is a question about the policy. The split is the standard's:
+ * Permissions Policy §9 is written over a policy and two origins, and HTML is what turns a Document into them.
+ *
+ * ITS CALLERS ARE UNRELATED AND THAT IS THE POINT. HTML §7.2.2.6 "Script settings for Window objects" makes it
+ * the second conjunct of the CROSS-ORIGIN ISOLATED CAPABILITY; §6.6.6's allow focus steps make it their first
+ * clause. Each had written its own answer as "same origin with the top-level traversable's active document",
+ * which §9.7 says nowhere and which is wrong for a same-origin document nested through a cross-origin frame. */
+bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature);
+
+/* THIS DOCUMENT'S PERMISSIONS POLICY — Permissions Policy §9.5's, created at install from the navigable's
+   container exactly as §9.5 is invoked for a navigable. BORROWED; NULL for a Document with no browsing
+   context, which is §4.8.5 step 1's refusal and is why that step needs no second field to read. It is exposed
+   because §9.7's inheritance reads the CONTAINER DOCUMENT's policy, and the container document is a different
+   realm's — so a child navigable's install asks the parent's Document for this. */
+const PermissionsPolicy *document_permissions_policy(JSContext *ctx);
 
 /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET for this realm's Document — the set §7.2's create or §7.4.5's
  * navigation handed it, unchanged since.
