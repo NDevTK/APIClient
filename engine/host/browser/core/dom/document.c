@@ -35,6 +35,7 @@
 #include "core/html/declarative_shadow.h"
 #include "core/html/media_element.h"
 #include "core/html/html_image.h"
+#include "core/html/html_link.h"
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
 #include "core/html/html_base_element.h"   /* §4.2.3's frozen base URL, whose two facts this record holds */
@@ -3521,6 +3522,12 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        Without this a document's own `<img src=…>` markup issued no request at all — every image address the
        page ships was invisible to the endpoint surface, and every markup `onerror` had nothing to fire it. */
     html_image_parsed(ctx, lxb_dom_interface_node(dom));
+    /* HTML §4.2.4 FOR THE SAME TREE AND FOR THE SAME REASON — §4.6.8.20's appropriate times are stated over an
+       element that "becomes browsing-context connected", and a parser-inserted `<link>` becomes connected
+       through the parser rather than through the mutation chokepoint, so the markup's own
+       `<link rel=preload>` elements are triggered here. AFTER the declarative-shadow conversion, for the
+       reason the media and image walks are. */
+    html_link_parsed(ctx, lxb_dom_interface_node(dom));
     /* HTML §4.2.6 FOR THE TREE THE PARSER BUILT — "the element is popped off the stack of open elements of an
        HTML parser" is update a style block's first trigger, and a Lexbor parse has no per-token seam, so the
        markup's own `<style>` elements get their CSS style sheets here. AFTER the declarative-shadow conversion,

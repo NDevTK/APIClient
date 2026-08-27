@@ -47,6 +47,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/html_script.h"
 #include "core/html/html_image.h"
+#include "core/html/html_link.h"
 #include "core/html/html_base_element.h"
 #include "core/events/event_target.h"
 #include "core/html/custom_elements.h"
@@ -566,6 +567,10 @@ void html_element_init(JSContext *ctx)
        here because HTMLImageElement is a row of the table above and `Image` is a global NAME this file owns
        the list of, exactly as §4.8.11's three interface objects are. */
     html_image_declare(ctx);
+    /* §4.2.4's link processing model — its per-element state key and the task that fires a preload's
+       `load`/`error` — declared here because HTMLLinkElement is a row of the table above, exactly as §4.8.3's
+       image requests are. */
+    html_link_declare(ctx);
     /* §4.13.7 — declared here because `attachInternals` is an HTMLElement member, which is what this file
        owns the table of; the algorithms are element_internals.c's. */
     element_internals_declare(ctx);
@@ -876,6 +881,7 @@ void html_element_free(JSRuntime *rt)
     html_dialog_free(rt);
     media_element_free(rt);
     html_image_free(rt);
+    html_link_free(rt);
     element_internals_free(rt);
     if (g_dataset_key != JS_ATOM_NULL) { JS_FreeAtomRT(rt, g_dataset_key); g_dataset_key = JS_ATOM_NULL; }
     /* the prototypes are the REALMS' — each is released with its context; the AGENT holds only class ids */

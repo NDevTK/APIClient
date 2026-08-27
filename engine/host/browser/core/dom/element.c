@@ -52,6 +52,7 @@
 #include "core/html/html_style_element.h"
 #include "core/html/media_element.h"
 #include "core/html/html_image.h"
+#include "core/html/html_link.h"
 #include "core/html/fragment_serializer.h"
 #include "core/html/sanitizer.h"
 #include "core/dom/dom_token_list.h"
@@ -2215,6 +2216,15 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                    four above it are: an HTML ELEMENT INSERTION STEPS entry needs this seam's realm (the
                    inserted node's document, not the mutating one) and its position. */
                 html_image_inserted(ctx, el);
+                /* HTML §4.6.8.20: "The appropriate times to fetch and process the linked resource … When the
+                   external resource link's link element becomes browsing-context connected." This is the seam
+                   the whole lazy-chunk idiom runs through — a `<link rel=preload as=script>` is configured with
+                   `createElement` and only becomes a request when it is INSERTED, and the `load` its response
+                   fires is what creates the `<script src>` two lines above this one prepares. It is here rather
+                   than on node.c's tree-hook list for the reason the five above it are: an HTML ELEMENT
+                   INSERTION STEPS entry needs this seam's realm (the inserted node's document, not the mutating
+                   one) and its position. */
+                html_link_inserted(ctx, el);
                 /* HTML §4.2.6's SECOND TRIGGER — "the element is not on the stack of open elements ... and it
                    becomes connected". `<style>` is the element whose insertion CREATES a CSS style sheet, and
                    the algorithm decides for itself whether this element is one. It is here rather than on
@@ -2417,6 +2427,11 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        (`img.src = u`, `setAttribute`, `attributes.src.value = u`) and the IDL reflection's setter answers for
        exactly one of them, which is how `<img>` came to reflect its address without ever requesting it. */
     html_image_attr_changed(rctx, el, ns, local);
+    /* HTML §4.6.8.20's other appropriate times — the `rel` that CREATES the external resource link on an
+       already-connected element, and the `href`/`as`/`type`/`media` changes. Here for the reason `img`'s `src`
+       above is: a content attribute has more than one spelling (`l.href = u`, `setAttribute`,
+       `attributes.href.value = u`) and the IDL reflection's setter answers for exactly one of them. */
+    html_link_attr_changed(rctx, el, ns, local);
     /* HTML §4.12.1's `async` change step: "when an async attribute is added to a script element el, the user
        agent must set el's force async to false". Here for the reason `src` above is: a content attribute has
        more than one spelling, and the IDL setter answers for one of them. */
