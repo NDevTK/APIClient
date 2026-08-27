@@ -32,8 +32,9 @@
 #include "browser/core/frame/window_message.h"
 #include "browser/core/frame/remote_object.h"
 #include "browser/core/html/html_iframe.h"
-#include "browser/core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "browser/core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as */
+#include "browser/core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection it runs */
+#include "browser/core/mime/mime_type.h"             /* §7.4.5's computed type is a MIME type RECORD */
 #include "browser/core/frame/navigable.h"
 #include "browser/core/frame/navigation_params.h"
 #include "browser/core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
@@ -281,14 +282,16 @@ static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, co
    synthesised around its root element and nothing to say so. That is not a missing feature, it is a wrong
    answer — and it made this host DISAGREE WITH ITS OWN CHILD LOADER, which has always crashed by name for a
    non-HTML child navigable (core/frame/navigable.c's child_document): one absent capability reporting under
-   two different names depending on which loader the response arrived through. The dispatch is the loader's
-   (core/loader/document_load_type.h) and is shared with that one; only the crash is stated here, where the
-   parse it guards is. */
+   two different names depending on which loader the response arrived through. Both halves are the loader's now —
+   the classification (core/loader/document_load_type.h) and the §7.5 subsection that runs
+   (core/loader/document_load.h) — and this host names neither: it computes the type where the response is and
+   hands the type and the bytes over together. */
 static lxb_html_document_t *engine_parse_document(const char *html, size_t html_n,
                                                   const HeaderList *response_headers)
 {
     lxb_html_document_t *dom;
-    DocumentLoadType load;
+    MimeType computed;
+    lxb_status_t st;
 
     /* NO `html ? html : ""` ANYWHERE HERE. That ternary turned "the caller handed over no document" into a
        document that parses to nothing — a successful analysis of an empty page, which reads exactly like a
@@ -299,37 +302,27 @@ static lxb_html_document_t *engine_parse_document(const char *html, size_t html_
     DCHECK(html != NULL,
            "a document was parsed from no bytes at all — both entries CHECK the pointer before reaching here, "
            "so a null one is a third caller that does not");
-    /* §7.4.5's TYPE DISPATCH, ASKED BEFORE ANYTHING IS ALLOCATED: an arm this build has no loader for must
-       crash naming the §7.5 subsection to build, and doing that after a Document exists would leak it. */
+    /* §7.4.5's FIRST STEP — "Let type be the computed type of navigationParams's response" — asked where the
+       response is, and carried to the parse below with the bytes it is a fact about. */
     DCHECK(response_headers != NULL,
            "a Document was built out of a response with no header list — MIME Sniffing §7's computed type is "
            "what HTML §7.4.5 dispatches on, and a caller with bytes and no headers is one that never asked "
            "which kind of document it fetched");
-    {
-        MimeType computed;
-
-        document_load_computed_type(&computed, response_headers, html, html_n);
-        load = document_load_type_of(&computed);
-        mime_type_free(&computed);
-        /* THE ARM THIS BUILD HAS NO LOADER FOR CRASHES BY NAME — the statement child_document makes at its own
-           site, where §7.5.3's already-present dependencies and the grammar still owed for it are enumerated.
-           Every one of those sites is deleted together when that loader lands. */
-        if (load != DOC_LOAD_HTML) DFAIL(document_load_type_section(load));
-    }
+    document_load_computed_type(&computed, response_headers, html, html_n);
     dom = dom_document_create();
 
     CHECK(dom != NULL, "the document allocation failed");
-    /* THE HTML PARSER IS UNREACHABLE FOR A DOCUMENT §7.4.5 DOES NOT LOAD AS HTML, and this is what keeps it so.
-       The dispatch above crashes by name for every other arm, so this can only fire for a route added later
-       that reaches this parse without going through it — which is exactly the state this function was in. */
-    DCHECK(load == DOC_LOAD_HTML,
-           "this host reached HTML §13.2's parser with a response HTML §7.4.5 loads as some other kind of "
-           "document — the type dispatch is above and every arm but the HTML one crashes there, so this is a "
-           "second route into the parse that never asked what it fetched");
     /* SHARED: this is the ACTIVE document. Its tree is the baseline every flow of this instance reads, so
        §13.2.6's writes are the ones a live parse would have to capture — which is what makes §8.4.3
-       `document.write()` a lifecycle change here and not a new mechanism (solver/dom_cow.h). */
-    if (html_parse_document(dom, DOM_PARSE_ROOT_SHARED, (const lxb_char_t *)html, html_n) != LXB_STATUS_OK)
+       `document.write()` a lifecycle change here and not a new mechanism (solver/dom_cow.h).
+       WHICH PARSER THIS REACHES IS §7.4.5's ARM AND NOT THIS FUNCTION'S — core/loader/document_load.h routes
+       the computed type onto its §7.5 subsection, and the assert that keeps the HTML parser unreachable for a
+       type it does not serve is at that loader, where the parse is. The CHECK_FAIL below is also this host's
+       RELEASE half of an unbuilt arm: `DFAIL` is compiled out at APICLIENT_DEV=0 and the router then answers
+       with a status, so the response stops here rather than reaching a parser that does not serve it. */
+    st = document_load(dom, DOM_PARSE_ROOT_SHARED, &computed, (const lxb_char_t *)html, html_n);
+    mime_type_free(&computed);
+    if (st != LXB_STATUS_OK)
         CHECK_FAIL("the document parse failed — the DOM is the ground truth every flow reads");
     return dom;
 }

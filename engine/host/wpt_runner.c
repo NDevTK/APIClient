@@ -47,6 +47,7 @@
 #include "core/url/url.h"
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — that header owns the token bytes */
 #include "core/loader/document_load_type.h"  /* §7.4.5: WHICH document a response loads as, and its computed type */
+#include "core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection that arm runs */
 #include "core/frame/navigation_params.h"
 #include "core/frame/policy_container.h"   /* §7.1.7's determine-navigation-params-policy-container */
 #include "core/frame/secure_context.h"
@@ -2436,11 +2437,14 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        it fetched the test file itself, and NULL when there is no response. It is one name rather than two
        branches because §7.4.5 reads a response and does not care which zone obtained it. */
     const HeaderList *response = NULL;
-    /* §7.4.5's ARM for the document about to be built. DOC_LOAD_HTML with NO RESPONSE is not a default and not
-       a guess: §7.4's initial about:blank — and an address whose fetch failed, for which a browser still shows
-       a document — has no response to compute a type from and IS an HTML document by that section. Every case
-       that HAS a response overwrites this from the response, below. */
-    DocumentLoadType load = DOC_LOAD_HTML;
+    /* §7.4.5's COMPUTED TYPE for the document about to be built, and whether there is one at all. NO RESPONSE
+       is not a default and not a guess: §7.4's initial about:blank — and an address whose fetch failed, for
+       which a browser still shows a document — has no response to compute a type from and IS an HTML document
+       by that section, so the parse below runs §7.4 rather than §7.4.5's dispatch for it. It lives across the
+       whole function because the type and the bytes travel TOGETHER to the loader; a record computed and freed
+       before the parse is a type this document was never loaded under. */
+    MimeType computed;
+    bool computed_defined = false;
     NavigationParams np;
     const char *src = html;
     JSRuntime *rt;
@@ -2488,9 +2492,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        policy of its own and inherits its creator's, which is the clone applied below. */
     navigation_params_from_response(&np, response ? response : &response_headers, 0,
                                     secure_context_url_potentially_trustworthy(top_level_url));
-    /* HTML §7.4.5's LOAD A DOCUMENT, ASKED BEFORE ANYTHING IS ALLOCATED — the same dispatch, from the same
-       component, that core/frame/navigable.c's child_document runs for a child navigable, and this runner did
-       not ask it at all: every top-level test document went to the HTML parser whatever the server served.
+    /* HTML §7.4.5's FIRST STEP — "Let type be the computed type of navigationParams's response" — asked HERE,
+       where the response is, and carried to the parse below with the bytes it is a fact about. The same
+       component answers it for core/frame/navigable.c's child_document, and this runner did not ask it at all:
+       every top-level test document went to the HTML parser whatever the server served.
        THE COST WAS NOT AN ABSENT FEATURE, IT WAS A MISNAMED ONE. An `.xhtml`/`.xht`/`.xml` file is served by
        wptserve as `application/xhtml+xml` or `application/xml`, so MIME Sniffing §7 step 1 keeps that supplied
        type and §7.4.5 sends it to §7.5.3; under the HTML parser instead, a `<script>` is raw text (HTML
@@ -2501,16 +2506,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
        SAME files reached through an iframe already crashed by name, because that path goes through
        child_document: one absent capability reporting under two names depending on which loader arrived. */
     if (response) {
-        MimeType computed;
-
         document_load_computed_type(&computed, response, src, html_n);
-        load = document_load_type_of(&computed);
-        mime_type_free(&computed);
-        /* THE ARM THIS BUILD HAS NO LOADER FOR CRASHES BY NAME, one §7.5 subsection each — the statement
-           child_document makes at its own site, and both are deleted together when that loader lands.
-           §7.5.3's dependencies and the grammar still owed for it are enumerated there. */
-        if (load != DOC_LOAD_HTML) DFAIL(document_load_type_section(load));
+        computed_defined = true;
     }
+    /* THE RECORD OUTLIVES THE HEADER LIST IT WAS COMPUTED FROM — mime_sniff_computed's answer owns its own
+       strings — so the list is released here, at the last read of it, and the type travels on alone. */
     header_list_free(&response_headers);
 
     rt = JS_NewRuntime();
@@ -2524,18 +2524,18 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
 
     g_wpt_dom = dom_document_create();
     CHECK(g_wpt_dom != NULL, "the runner's document allocation failed");
-    /* THE HTML PARSER IS UNREACHABLE FOR A DOCUMENT §7.4.5 DOES NOT LOAD AS HTML, and this is the assertion
-       that keeps it so. The dispatch above already crashes by name for every other arm, so this can only fire
-       for a path added later that reaches this parse without going through it — which is exactly how this
-       function came to hand XML to the HTML tokenizer in the first place. */
-    DCHECK(load == DOC_LOAD_HTML,
-           "the runner reached HTML §13.2's parser with a response HTML §7.4.5 loads as some other kind of "
-           "document — the type dispatch is above and every arm but the HTML one crashes there, so this is a "
-           "second route into the parse that never asked what it fetched");
-    /* SHARED, for main.c's reason: this is the runner's ACTIVE document and every flow reads its tree. */
-    CHECK(html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED,
-                              (const lxb_char_t *)src, html_n) == LXB_STATUS_OK,
+    /* SHARED, for main.c's reason: this is the runner's ACTIVE document and every flow reads its tree.
+       THE TWO CALLS ARE §7.4.5's LOAD-A-DOCUMENT AND §7.4's INITIAL about:blank — see child_document, which
+       makes the same split for the same reason. The parser this runner reaches for a response is now whichever
+       one §7.4.5's arm names, and the assert that keeps the HTML parser unreachable for a type it does not
+       serve is at that loader (core/loader/html_document.c), where the parse is. */
+    CHECK((computed_defined
+             ? document_load(g_wpt_dom, DOM_PARSE_ROOT_SHARED, &computed, (const lxb_char_t *)src, html_n)
+             : html_parse_document(g_wpt_dom, DOM_PARSE_ROOT_SHARED,
+                                   (const lxb_char_t *)src, html_n)) == LXB_STATUS_OK,
           "the runner's document did not parse");
+    if (computed_defined)
+        mime_type_free(&computed);
     free(fetched);
 
     /* THE ROOT NAVIGABLE IS THE HOST'S, so its §7.2.3 proxy is minted here — the same rule as every child,

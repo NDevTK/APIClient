@@ -434,9 +434,10 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
                  node, never at the insert, because §13.2.6.4.7's adoption agency re-inserts nodes it removed),
                  and that is the mechanism this entry is waiting on. */
     DCHECK(html_parse_insertion_point_defined(lxb_dom_interface_document(document)),
-           "§8.4.3 \"document.write()\" step 10 was reached on a document whose §13.2.3.5 insertion point is "
-           "undefined — see the paragraph above this assert for the two ways that happens and for what the "
-           "host has to do about the second one");
+           "bytes were inserted into the input stream of a document whose §13.2.3.5 insertion point is "
+           "undefined — for §8.4.3 \"document.write()\" step 10 see the paragraph above this assert for the "
+           "two ways that happens and for what the host has to do about the second one; for HTML §7.5.4 "
+           "\"Loading text documents\" step 4 it means the open that precedes it did not report its failure");
     st = lxb_html_document_parse_chunk(document, text, size);
     /* A `CHECK` AND NOT A `DCHECK`, for html_fire's reason one layer up: §13.2 tokenization and tree
        construction are error-RECOVERING and define no input they reject, so a non-OK status here is the

@@ -28,6 +28,7 @@
 #include "core/html/html_encoding_sniff.h"  /* §13.2.3.2: WHICH ENCODING a navigated response's bytes are in */
 #include "core/loader/document_scripts.h"  /* §4.12.1's script inventory: what a parsed Document's programs ARE */
 #include "core/loader/document_load_type.h"  /* §7.4.5: a response's COMPUTED TYPE, and which document it loads as */
+#include "core/loader/document_load.h"       /* §7.4.5's load-a-document: the §7.5 subsection that arm runs */
 #include "quickjs-step.h"            /* §7.4 step 14's load is a step machine on the one frontier */
 #include "core/url/url.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode, which §7.4.2.3.2 step 3 runs on a percent-decoding */
@@ -223,7 +224,6 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom;
-    DocumentLoadType load;
 
     /* THE TWO TRAVEL TOGETHER OR NEITHER DOES. A response is bytes AND a computed type; one without the other
        is a caller that computed the type from something that is not this response, or that has a response it
@@ -233,50 +233,11 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
            "a child navigable's Document was built from a response with only one of its two halves — MIME "
            "Sniffing §7's computed type is a fact about the same bytes, so bytes with no type is a load that "
            "skipped the sniff and a type with no bytes is one computed for another response");
-    /* §7.4.5's dispatch, asked BEFORE anything is allocated: a type this engine has no loader for must crash
-       naming the loader to build, and doing that after a document exists would leak it. */
-    if (body) {
-        load = document_load_type_of(computed_type);
-        /* THE ARMS THIS ENGINE HAS NOT BUILT CRASH BY NAME, one §7.5 subsection each. CLAUDE.md §Offensive
-           programming: a capability that does not exist is honestly ABSENT and the crash is what names it —
-           and the alternative here is not "no XML support", it is the silent wrong tree described above.
-           §7.5.3 IS THE ONE WITH ITS DEPENDENCIES ALREADY IN THE TREE: core/xml/xml_char.c owns XML §2.2 [2]
-           `Char`, §2.3 [3] `S` and §2.11's end-of-line normalization as the reader every production reads its
-           input through, core/xml/xml_name.c owns §2.3 [5] `Name` and Namespaces in XML §3 [4] `NCName` / §4
-           [7] `QName`, core/xml/xml_ref.c owns §4.1 [66] `CharRef` / [68] `EntityRef` with §4.6's five
-           predefined entities — the layer §3.3.3's normalization is written over — core/xml/xml_markup.c owns
-           §2.5 [15] `Comment`, §2.6 [16] `PI` with [17] `PITarget` and §2.7 [18] `CDSect`, the three
-           constructs §2.4 names as the places a literal `<` or `&` may stand, core/xml/xml_decl.c owns
-           §2.8 [23] `XMLDecl` with §2.9 [32] `SDDecl` and §4.3.1 [77] `TextDecl`, core/xml/xml_literal.c
-           owns §2.3 [11] `SystemLiteral`, [12] `PubidLiteral` and [13] `PubidChar`, and core/xml/xml_ns.c owns
-           §6's scope stack, declaration and expansion (xml_ns_push /
-           xml_ns_declare / xml_ns_expand) with every §3 and §5 namespace constraint as a returned error — a
-           scope stack is a thing only a parser drives, which is what those were built for. What is missing is
-           the GRAMMAR between them: XML §2.8 [22] `prolog` around the declaration and around
-           [28] `doctypedecl` with [28b] `intSubset`, §4.2 [70] `EntityDecl` with §4.5's replacement text,
-           [39] `element` with
-           [40] `STag` / [42] `ETag` / [44] `EmptyElemTag`, [43] `content`,
-           and §3.3.3 attribute-value normalization over [10] `AttValue` — producing a
-           Lexbor tree through
-           element_create_ns (core/dom/element.h, which does NOT case-fold, unlike lexbor's own entry) and
-           dom_attr_write (core/dom/attr_list.h), and reporting well-formedness errors for §8.5.1's
-           `parsererror`. Lexbor ships no `xml` module, so CLAUDE.md's bind-before-build order has nothing at
-           the "existing Lexbor module" rung and this is a faithful spec port; the release this tree pins is
-           `engine/build.mjs`'s to state and `ls source/lexbor` in the vendored checkout is the whole of the
-           check, which is why no version number is written here — one was, it named a release this build no
-           longer uses, and a sentence that stays true about the standard while going wrong about this tree is
-           the stale citation CLAUDE.md warns about.
-           AND THE SCRIPTS IN THAT DOCUMENT ARE NOT HTML'S: HTML §14.2 "Parsing XML documents" runs an XML
-           parser with XML scripting support enabled, which sets a `script` element's parser document and
-           clears its force async, and then — at the element's END TAG, after a microtask checkpoint — prepares
-           it. There is no raw-text tokenizer state, so a `<script>` body is ordinary [43] `content` and a
-           `<![CDATA[` inside one is §2.7's CDSect rather than program text.
-           core/html/domparser.c's XML arm of HTML §8.5.1 `parseFromString`, and core/xhr/xml_http_request.c's
-           XML arm of XHR's "set a document response", stand at this same wall and say so at their own sites —
-           checked before this comment claimed it. ONE component serves all three; when it lands, every one of
-           those sites is deleted along with the prose that agreed with them. */
-        if (load != DOC_LOAD_HTML) DFAIL(document_load_type_section(load));
-    }
+    /* §7.4.5's LOAD A DOCUMENT — the dispatch AND the §7.5 subsection it routes to, both from
+       core/loader/document_load.h, run at the parse below. This site used to hold its own copy of the arm
+       test and its own crash, as the other two entries that build a Document out of a response did; one
+       component owns both now, the arm this build has no loader for crashes by name THERE, and each §7.5
+       loader re-asks the dispatch at its own parse so a route that skips the router still crashes. */
     dom = dom_document_create();
 
     /* WHAT ACTUALLY FILLED THE HEAP WHEN THIS FIRES IS NOT DOCUMENTS — see the realm list in navigable_realm.
@@ -296,10 +257,16 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
           "and the teardown that follows is split by phase in quickjs.c so the reference releases run inside "
           "the collection and the tables in the sweep after it");
     /* FLOW-PRIVATE: `dom_document_create` above and this parse are one uninterrupted operation, so the child
-       navigable's Document is a tree no other flow can reach while §13.2.6 builds it (solver/dom_cow.h). */
-    CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE,
-                              body ? (const lxb_char_t *)body : (const lxb_char_t *)EMPTY,
-                              body ? body_len : sizeof EMPTY - 1) == LXB_STATUS_OK,
+       navigable's Document is a tree no other flow can reach while §13.2.6 builds it (solver/dom_cow.h).
+       THE TWO CALLS ARE §7.4.5's LOAD-A-DOCUMENT AND §7.4's INITIAL about:blank, and they are different
+       algorithms rather than one with a null argument: a RESPONSE is dispatched on its computed type, and a
+       child with no response is an HTML document by §7.4 with no type to compute and nothing to dispatch on.
+       The status is CHECKed on both, which is what makes the router's release behaviour real — a `DFAIL` is
+       compiled out at APICLIENT_DEV=0 and this CHECK is not. */
+    CHECK((body ? document_load(dom, DOM_PARSE_ROOT_PRIVATE, computed_type,
+                                (const lxb_char_t *)body, body_len)
+                : html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE,
+                                      (const lxb_char_t *)EMPTY, sizeof EMPTY - 1)) == LXB_STATUS_OK,
           "a child navigable's Document did not parse");
     return dom;
 }

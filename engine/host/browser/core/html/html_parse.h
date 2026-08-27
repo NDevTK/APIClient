@@ -151,21 +151,32 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRoo
    "undefined", not a hole. */
 bool html_parse_insertion_point_defined(const lxb_dom_document_t *doc);
 
-/* §8.4.3 "document.write()" steps 10 AND 11 — insert `text` into the input stream just before the insertion
-   point, and have the HTML parser process it. They are ONE entry because in lexbor they are one call: the
-   input stream is not a buffer this engine holds, it is the tokenizer's own cursor, so "insert just before the
-   insertion point" of a parser standing at the end of its stream IS handing the bytes to `chunk_process`.
-   CRASHES on a document whose insertion point is undefined: step 9 is what answers that case (§8.4.1's
-   document open steps), so reaching here without a live stream means the caller skipped it.
+/* MORE BYTES INTO AN OPEN INPUT STREAM — insert `text` just before the insertion point, and have the HTML
+   parser process it. They are ONE entry because in lexbor they are one call: the input stream is not a buffer
+   this engine holds, it is the tokenizer's own cursor, so "insert just before the insertion point" of a parser
+   standing at the end of its stream IS handing the bytes to `chunk_process`.
+   CRASHES on a document whose insertion point is undefined, because a stream that is not open has no position
+   to insert at.
  *
- * AND IT WRITES INTO THE SHARED TREE WITH NO COW CAPTURE, WHICH IS WHY IT HAS NO CALLER YET. §13.2.6 tree
- * construction inserts through lexbor's own mutators, and solver/dom_cow.h is a CONVENTION over the browser
- * components rather than a hook inside Lexbor — every other parse in this engine is out-of-tree (a fragment,
- * a scratch document) and its RESULT is then placed through the chokepoint, which is what keeps the delta
- * honest. A live parser feeding the document's own tree has no such placement step, so the nodes it builds
- * would be shared-baseline writes no flow's delta captured: one flow's `document.write` visible to every
- * sibling and unapplied by none. That is the mechanism `document.write` is waiting on, and it is named at the
- * assert below rather than here alone. */
+ * TWO ALGORITHMS SAY THIS, WHICH IS WHY THE ENTRY IS NOT NAMED AFTER EITHER. §8.4.3 "document.write()" steps 10
+ * AND 11 — "insert string into the input stream just before the insertion point", then "have the HTML parser
+ * process string, one code point at a time" — where step 9 is what answers an undefined insertion point, so
+ * reaching here without a live stream means that caller skipped it. And HTML §7.5.4 "Loading text documents"
+ * step 4 — "each task that the networking task source places on the task queue while fetching runs must then
+ * fill the parser's input byte stream with the fetched bytes and cause the HTML parser to perform the
+ * appropriate processing of the input stream" — which is core/loader/text_document.c, whose open, writes and
+ * close are one uninterrupted operation and which needs a second chunk only because it switches the tokenizer
+ * to §13.2.5.5 "PLAINTEXT state" between them.
+ *
+ * THE OWNERSHIP QUESTION IS THE `document.write` CALLER'S, NOT THIS ENTRY'S. §13.2.6 tree construction inserts
+ * through lexbor's own mutators, and solver/dom_cow.h is a CONVENTION over the browser components rather than a
+ * hook inside Lexbor — every other parse in this engine is out-of-tree (a fragment, a scratch document) and its
+ * RESULT is then placed through the chokepoint, which is what keeps the delta honest. A parse that stays OPEN
+ * ACROSS SCRIPT EXECUTION has no such placement step, so the nodes it builds would be shared-baseline writes no
+ * flow's delta captured: one flow's `document.write` visible to every sibling and unapplied by none. That is
+ * the mechanism `document.write` is waiting on, and it is named at the assert below rather than here alone. A
+ * §7.5.4 load never enters that state — nothing runs between its open and its close, exactly as nothing runs
+ * inside `html_parse_document`. */
 lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_char_t *text, size_t size);
 
 /* §13.2.7 "The end" — the EOF token, and the insertion point becomes undefined. Crashes on a document whose
