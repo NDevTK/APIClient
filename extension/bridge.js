@@ -122,7 +122,8 @@ function assertResultDocument(r) {
                    "_worldSegmentsHeld", "_worldSegmentsMade", "_worldSegmentsForked",
                    "_routedDelivered", "_routedRefused", "_routedTasksFired",
                    "_routedTasksTargetOrigin", "_routedTasksTargetGone", "_routedTasksThrew",
-                   "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed"]) {
+                   "_sourceReads", "_sinkReached", "_sinkTainted", "_sinkSuppressed",
+                   "_orphansDriven", "_orphansAsked"]) {
     DCHECK(typeof r[k] === "number",
            "the engine's result document carries no " + k + " count — solver/result.c emits every cost " +
            "counter and the whole @S arrival census in one snprintf, so a missing one is that composition " +
@@ -259,6 +260,12 @@ function linesToAnalysis(lines, msg, outcome, eng) {
            is the one answer it must never take at face value. */
         sourceReads: result._sourceReads, sinkReached: result._sinkReached,
         sinkTainted: result._sinkTainted, sinkSuppressed: result._sinkSuppressed,
+        /* THE HEADLINE SURFACE'S OWN PAIR — §What-the-tool-produces is "what the bundle CAN do but didn't",
+           and until these crossed, whether this engine ever drove a function the page never called could only
+           be read off a stdout the renderer does not tee. `driven` alone cannot say whether the frontier
+           reached the question; `asked` is what separates a page that ships no uncalled code from a scheduler
+           that never got to it. */
+        orphansDriven: result._orphansDriven, orphansAsked: result._orphansAsked,
         /* WHAT THE RUN ACTUALLY LEARNED, beside what it cost. The counters above say the BFS switched, forked
            and pumped jobs; these two say it produced something, which is the only question a probe watching an
            engine that now lives behind a frame boundary can ask without reaching into the moat. Both arrays are

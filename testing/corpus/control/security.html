@@ -42,6 +42,16 @@
   // the same sink with no branch in front of it completed. Two statements, swapped, one aborts. Keep the
   // gate first: this document is the standing reproduction of that ordering, and a version without it would
   // pass without exercising the thing it was written for.
+  //
+  // WHAT THIS DOCUMENT MUST PRODUCE, stated here rather than in a message, and as FLOORS so a solver that
+  // learns more never fails its own control:
+  //     sinkReached  >= 3   — rungs 1, 2 and 4 are markup arrivals and rung 3 is the JS-context one
+  //     sinkTainted  >= 2   — rungs 2 and 3 carry a declared attacker source
+  //     sinks        >= 2   — one search opened per tainted arrival
+  //     flows        >  1   — rung 4's gate forks
+  //     runOutcomesMine {complete:1}, why []
+  //     distinctEndpoints 0 — this document records no endpoints AT ALL, which is what makes splitting it off
+  //         free for the other column rather than a trade.
   if (window.__FLAGS && window.__FLAGS.admin) { var gated = 1; }
 
   document.getElementById('s-arrival').innerHTML = '<b>untainted</b>';          // rung 1

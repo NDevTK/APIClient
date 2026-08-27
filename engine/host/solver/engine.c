@@ -3487,6 +3487,34 @@ static void engine_orphan_record(JSContext *ctx, JSValueConst fn, int arg_count,
    correct rather than the aliasing the ordinal was avoiding: they are the same call of the same function with
    the same unknowns, and a fork already shares its parent's argument objects. */
 static long g_orphans_driven;
+/* AND HOW MANY TIMES A FLOW GOT AS FAR AS ASKING — see the raise site for why the pair is read together and
+   never one of them. It is the ORPHAN surface's half of what solver/solve.h's arrival census is for the @S
+   surface: a zero that cannot say whether the engine looked and found nothing or never looked. */
+static long g_orphan_asks;
+
+/* THE ORPHAN SURFACE'S OWN CENSUS — see engine.h, and see the raise sites for what each number is counted at.
+   IT LIVES BESIDE THE COUNTERS AND NOT BESIDE engine_routed_census, which is the other census this file
+   exports: an accessor placed with its siblings instead of with its data reads statics declared two
+   thousand lines below it, which does not compile — and the version of this that tried is why the note is
+   here rather than being rediscovered.
+   `driven` EXISTED AND REACHED NOTHING A CENSUS CAN READ. It was written into the heap/progress line only, and
+   §Testing is explicit that the renderer does not tee its stdout — "a console scrape is the wrong surface by
+   construction" — so the ONE number that says whether this engine ever drove code the page shipped and never
+   ran was, for every session there has been, computed and thrown away. §What-the-tool-produces makes that
+   surface the headline ("Surface INTERESTING UNUSED endpoints ... A sniffer shows what FIRED; this shows what
+   the bundle CAN do but didn't"), so the product's own proposition had no measurement on the shipped path.
+   BOTH OR NEITHER, for solve_arrival_census's reason exactly: `driven == 0` alone is three different findings
+   — the bundle ships no uncalled code, no flow ever reached the end of its own work, or the walk ran and the
+   heap had none — and only the pair tells the middle one (a scheduling result to act on) from the outer two
+   (facts about the page). */
+void engine_orphan_census(long *driven, long *asked) {
+    DCHECK(driven != NULL && asked != NULL,
+           "the orphan census was asked for one of its two numbers — a drive count with no ask count beside it "
+           "cannot say whether the frontier ever reached the question, which is the difference between a page "
+           "that ships no uncalled code and a scheduler that never got to it");
+    *driven = g_orphans_driven; *asked = g_orphan_asks;
+}
+
 /* AND THE GENERATION AT WHICH THIS DOCUMENT LAST WALKED THE HEAP. Creating a function object is the only event
    that can add to the orphan set (JS_OrphanGen), so a walk at an unchanged generation can only find what the
    previous one already took — and the walk is O(live objects) while a frontier has one finishing flow after
@@ -3662,6 +3690,18 @@ static int engine_orphan_fork(JSContext *ctx, Flow *f) {
         return ORPHAN_STEP_RESUMED;
     }
 
+    /* A FLOW RAN OUT OF WORK AND ASKED WHETHER THE PAGE SHIPPED CODE IT NEVER RAN — counted HERE, which is
+       the one point that event happens, and counted BEFORE the memo below rather than after it. §scheduler
+       makes the drive of an uncalled function an ordinary BFS flow, and `driven` alone cannot say whether the
+       frontier ever GOT to the question: `driven == 0` is "this bundle ships no uncalled code", "no flow ever
+       reached the end of its own work", and "the walk happened and the heap had none" at once, and the three
+       take opposite actions. The first is a fact about the page, the second is a scheduling result worth
+       acting on, and only the pair separates them.
+       BEFORE THE MEMO ON PURPOSE. The memo answers the question from a previous walk's result; a flow that
+       reaches it HAS asked, and counting past it would make this number a fact about the memo instead of
+       about the frontier — the same one-number-two-mechanisms defect solver/solve.h's arrival census exists
+       to end, in the surface §What-the-tool-produces calls the headline. */
+    g_orphan_asks++;
     if (g_orphan_gen_valid && gen == g_orphan_gen_seen) return 0;
     /* THE MEMO IS RECORDED ONLY BY AN EMPTY WALK, and that is what the take taking ONE changes about it. It
        used to be written before the walk, which was right for a call that drained the set: after it, the answer

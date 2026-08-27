@@ -218,6 +218,12 @@ char *result_json(JSContext *ctx) {
            rides the result document for the reason the four above it do: a zone reading this from a log would
            be reading a stream the renderer deliberately does not tee. */
         long routedDelivered = 0, routedRefused = 0;
+        /* AND WHETHER THE HEADLINE SURFACE RAN AT ALL — solver/engine.h's orphan census, which is the ORPHAN
+           side of the four numbers above it. `_orphansDriven` existed and reached only the heap/progress line,
+           which §Testing says nobody can read; `_orphansAsked` is what tells "this bundle ships no uncalled
+           code" from "no flow ever reached the end of its own work". They ride the result document for the
+           same reason every count here does. */
+        long orphansDriven = 0, orphansAsked = 0;
         /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
            forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
            the engine delivered has ONE number covering "the spec declined it" (§9.3.3 step 8.1), "there was no
@@ -227,6 +233,7 @@ char *result_json(JSContext *ctx) {
         world_segment_stats(&made, &segf);
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         engine_routed_census(&routedDelivered, &routedRefused);
+        engine_orphan_census(&orphansDriven, &orphansAsked);
         engine_routed_task_census(routedEnds);
         m = snprintf(out, n, "{\"fetchCallSites\":%s,\"securitySinks\":%s,\"pageErrors\":%s,"
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
@@ -237,15 +244,17 @@ char *result_json(JSContext *ctx) {
                              "\"_routedTasksFired\":%ld,\"_routedTasksTargetOrigin\":%ld,"
                              "\"_routedTasksTargetGone\":%ld,\"_routedTasksThrew\":%ld,"
                              "\"_sourceReads\":%ld,\"_sinkReached\":%ld,\"_sinkTainted\":%ld,"
-                             "\"_sinkSuppressed\":%ld,\"_park\":%s}",
+                             "\"_sinkSuppressed\":%ld,"
+                             "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_park\":%s}",
                      eps, sinks, errs, engine_switch_count(), flow_created_count(), solve_candidate_count(),
                      engine_jobs_queued(), engine_jobs_run(), engine_units_done(), held, made, segf,
                      routedDelivered, routedRefused,
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
-                     srcReads, sinkReached, sinkTainted, sinkSuppressed, cold_park_json());
+                     srcReads, sinkReached, sinkTainted, sinkSuppressed,
+                     orphansDriven, orphansAsked, cold_park_json());
         /* THE SLACK IS ASSERTED RATHER THAN EYEBALLED. It was 192 bytes for three counters and is now carrying
-           nineteen, whose widest form is 335 digits beside 407 bytes of literal — inside the slack only because
+           twenty-one, whose widest form is 375 digits beside 441 bytes of literal — inside the slack only because
            the real numbers are small. A truncation here does not lose a digit, it loses the closing brace: the host
            gets a document that will not parse and reports NOTHING for the page, which is the loudest possible
            consequence arriving as the quietest possible bug. snprintf already told us; nothing was asking. */

@@ -761,6 +761,21 @@ long engine_units_done(void);
    missing and which a host had no choice but to guess at. */
 void engine_routed_census(long *delivered, long *refused);
 
+/* THE ORPHAN SURFACE'S CENSUS — how many functions the page shipped and never called this session actually
+ * DROVE, and how many times a flow got as far as asking for one.
+ *
+ * IT IS TWO NUMBERS FOR THE REASON engine_routed_census IS. `driven` on its own has three readings that take
+ * opposite actions: the bundle ships no uncalled code (a fact about the page, and the correct answer); no flow
+ * ever ran out of its own work, so the question was never reached (a scheduling result, and the one worth
+ * acting on); or the walk ran and the heap had none. `asked == 0` picks out the middle one and nothing else
+ * can, because a drive that is never seeded leaves no trace anywhere else in the document.
+ *
+ * `driven` ALREADY EXISTED AND WAS UNREADABLE. It reached the heap/progress line and nothing else, and
+ * §Testing says the renderer deliberately does not tee its stdout, so the number that says whether the
+ * headline surface of this tool did anything at all could not be read off a run. Both cross in the result
+ * document now, beside the @S arrival census they are the orphan-side twin of. */
+void engine_orphan_census(long *driven, long *asked);
+
 /* ---- THE FOUR ENDS OF §9.3.3 STEP 8'S TASK, AND WHY ONE NUMBER COULD NOT SAY WHICH ---------------------
  *
  * `engine_routed_census`'s `delivered` counts tasks QUEUED. Nothing counted what became of them, so a host

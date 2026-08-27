@@ -13,6 +13,22 @@
   // these rungs alone report 6 endpoints twice with zero spread at flows=10, and with the security rungs
   // added the same document reported 6 then 5, with `/api/orphan-only` the one that comes and goes. A
   // control whose number moves for a reason that is not the thing it measures is not a control.
+  //
+  // WHAT THIS DOCUMENT MUST PRODUCE, stated here so a run can be scored without anyone remembering a number
+  // from a message. FLOORS, never equalities: a solver that learns MORE must not fail its own control, and
+  // the rungs are named so a miss is attributable to one of them rather than to "the count moved".
+  //     distinctEndpoints >= 6   — one per rung below, and the last two are ONE call site emitted twice:
+  //         /api/inline-top             inline, top level
+  //         /api/orphan-only            a function nobody calls (needs an orphan drive)
+  //         /api/admin-gated            behind an absent-state flag (needs the gate to fork)
+  //         /api/external-top           in a subresource (needs ext.js sourced and run)
+  //         /api/{__CFG.region}/things  the domain-annotated SHAPE carrying its provenance
+  //         /api/us-east-1/things       the concrete EXAMPLE the run computed
+  //     orphansDriven >= 1, orphansAsked >= 1   — the pair, read together. `driven 0 / asked 0` means no flow
+  //         ever reached the end of its own work and `/api/orphan-only` was never even a candidate;
+  //         `driven 0 / asked > 0` means the walk ran and found nothing, which for THIS document is a defect
+  //         because `neverCalled` is right there.
+  //     runOutcomesMine {complete:1}
   fetch('/api/inline-top?k=1');
   function neverCalled(){ fetch('/api/orphan-only'); }
   if (window.__FLAGS && window.__FLAGS.admin) fetch('/api/admin-gated');

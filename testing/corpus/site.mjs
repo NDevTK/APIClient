@@ -245,6 +245,14 @@ const row = {
   sinkReached: counted.length ? counted[counted.length - 1].sinkReached : null,
   sinkTainted: counted.length ? counted[counted.length - 1].sinkTainted : null,
   sinkSuppressed: counted.length ? counted[counted.length - 1].sinkSuppressed : null,
+  /* THE ORPHAN SURFACE, WHICH IS THE HEADLINE ONE AND HAD NO COLUMN. §What-the-tool-produces is "what the
+     bundle CAN do but didn't", and until the engine's own pair crossed the result document, whether a session
+     ever drove a function the page never called could only be read off a stdout the renderer does not tee.
+     BOTH OR NEITHER: `orphansDriven: 0` alone is three findings — the bundle ships no uncalled code, the walk
+     ran and the heap had none, or no flow ever reached the end of its own work — and only `orphansAsked`
+     picks out the middle one, which is the only one of the three that is a scheduling result to act on. */
+  orphansDriven: counted.length ? counted[counted.length - 1].orphansDriven : null,
+  orphansAsked: counted.length ? counted[counted.length - 1].orphansAsked : null,
   flows: counted.length ? counted[counted.length - 1].flows : null,
   switches: counted.length ? counted[counted.length - 1].switches : null,
   /* QUEUED BESIDE RUN, for the same reason held is emitted beside made: `jobsRun: 0` alone cannot say whether
