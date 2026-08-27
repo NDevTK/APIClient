@@ -1032,6 +1032,56 @@ let pass = 0, fail = 0, notrun = 0, aborted = 0, unread = 0, errored = 0;
    accounts for is an excluded test, and an excluded test is a failure — not a row a reader may skip. */
 let g_undecided = 0;
 
+/* WHY THE HARNESS ENDED THE WAY IT DID, OUT OF WHAT THE RUN ALREADY STREAMED.
+ *
+ * `status.message` is EMPTY for the status this gate meets most, and `(h.message || "")` turned that into a
+ * plausible datum — the defaulted-field defect performed in a report. `html/browsers` printed
+ * `testharness status TIMEOUT:` and then nothing, NINETY times, which was the single largest cause in the whole
+ * area and named no component at all. Behind that one string were three different pieces of work, asking for
+ * three different fixes in three different places: a file whose subtest was still AWAITING something (the
+ * subtest's name is the name of what did not arrive), a file that registered NO subtest because the code that
+ * creates them never ran, and a file whose subtests had ALL reported and whose COMPLETION never came — which is
+ * not a missing answer at all. Three states behind one number is the shape §@S names for a search that cannot
+ * be directed, and this is that shape in the instrument: every one of those rows read as "some browser feature
+ * is missing" and the gate was holding the fact that separates them the whole time.
+ *
+ * IT STATES WHAT WAS OBSERVED, NEVER WHAT IS MISSING. The subtest statuses are testharness's own, streamed by
+ * this run; the NAME is the one carried by a subtest that never settled, which is what points at the capability
+ * without this file guessing at one. And where a subtest's own status IS the answer, the third arm names the
+ * remaining conjuncts of `Tests.all_done()` rather than a cause: that predicate is `tests.length > 0 ||
+ * remotes.length > 0`, `test_environment.all_loaded`, `num_pending === 0`, `!wait_for_finish`,
+ * `!processing_callbacks` and no remote still `running` — so with every subtest resolved, `num_pending` was
+ * zero and what was still false is one of the others. Naming the predicate is checkable; naming a component
+ * would be a guess. */
+function harnessCause(h, started, settled) {
+  const of = (s) => [...settled.values()].filter((t) => t.status === s);
+  const hung = of(2), notrunHere = of(3);
+  const unsettled = [...started.keys()].filter((k) => !settled.has(k)).map((k) => started.get(k));
+  const census = `[${settled.size} subtest(s) reported` +
+                 (hung.length ? `, ${hung.length} TIMEOUT` : "") +
+                 (notrunHere.length ? `, ${notrunHere.length} NOTRUN` : "") +
+                 (unsettled.length ? `, ${unsettled.length} announced and never reported` : "") + "]";
+  if (h.status === 2) {
+    if (hung.length)
+      return `: the file's own harness timeout fired while ${hung.length} subtest(s) were still awaiting — ` +
+             `the first is ${JSON.stringify(hung[0].name)}, and what IT awaits is what did not arrive ${census}`;
+    if (unsettled.length)
+      return `: the harness timeout fired with ${unsettled.length} announced subtest(s) that never reached ` +
+             `this driver — the first is ${JSON.stringify(unsettled[0])} ${census}`;
+    if (settled.size === 0)
+      return ": the harness timeout fired with NO subtest ever registered, so this file creates its tests out " +
+             "of work that never ran — the missing capability is upstream of the first assertion";
+    return `: every one of its ${settled.size} subtest(s) already carried a result and the harness still never ` +
+           `completed — so \`num_pending\` was 0 and what \`Tests.all_done()\` was still missing is one of its ` +
+           `other conjuncts: \`all_loaded\` (the window's \`load\` event), \`wait_for_finish\` (an ` +
+           `\`explicit_done\` page's own \`done()\`), or a \`fetch_tests_from_window\` remote still \`running\` ` +
+           `${census}`;
+  }
+  /* A MESSAGE THIS STATUS CARRIES IS THE REPORT; ITS ABSENCE IS A POSITIVE STATEMENT AND NOT A HOLE. */
+  return (h.message ? `: ${String(h.message).slice(0, 200)}`
+                    : ": testharness set this status and no message with it") + ` ${census}`;
+}
+
 console.log("\n==================== web-platform-tests ====================");
 for (const { file: f, kind, variant } of runs) {
   /* THE RUN'S NAME CARRIES ITS VARIANT, because that is what distinguishes it from its siblings — four lines
@@ -1318,7 +1368,7 @@ for (const { file: f, kind, variant } of runs) {
       if (h && h.status !== 0) {
         fileFail++;
         failures.push(`  FAIL    ${rel} :: <harness>\n         testharness status ` +
-                      `${NAME[h.status] || h.status}: ${(h.message || "").slice(0, 200)}`);
+                      `${NAME[h.status] || h.status}${harnessCause(h, started, settled)}`);
       }
       /* `count` IS HOW MANY SUBTESTS THE HARNESS HOLDS, cross-checked because losing a line is the one failure
          mode a streamed report adds and it would make every number above wrong. Not asked of a file that

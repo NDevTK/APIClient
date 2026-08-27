@@ -291,9 +291,36 @@ static const char WPT_REPORT[] =
     "  });\n"
     "})();\n";
 
-/* THE EPILOGUE. Outside a browser testharness has to be TOLD the page is done — one line of the harness's own
-   public API. It is all that is left here: the REPORT moved to where WPT's own vendor hook goes, because being
-   the last thing registered is what let a corpus helper delete it. */
+/* THE EPILOGUE — AND IT BELONGS TO THE SCRIPT ARM ALONE, because it is a line WPT'S OWN WRAPPER writes and
+ * WPT writes it around exactly one of the two shapes this runner runs.
+ *
+ * The corpus's own wrappers are in `tools/serve/serve.py` and they disagree on exactly this line.
+ * `ClassicWorkerHandler` — the `.any.worker.js` wrapper — is the GLOBAL shim above, then
+ * `importScripts("/resources/testharness.js")`, then the test, then `done();`: a worker has no load event, so
+ * the harness has to be TOLD. `AnyHtmlHandler` and `WindowHandler`, which wrap the same `.js` files in a
+ * DOCUMENT, carry no such line and neither does a hand-written `.html` test — the window's `load` event fires,
+ * testharness's WindowTestEnvironment sets `all_loaded` from inside a `setTimeout(…, 0)` on it, and
+ * `Tests.all_done()` completes the file. This runner's script arm declares `GLOBAL.isWorker` (WPT_PROLOGUE), so
+ * it IS `ClassicWorkerHandler`'s shape and this is its own last line.
+ *
+ * GIVEN TO A DOCUMENT IT DESTROYS THE FILE, and it destroyed it three different ways — none of which is a
+ * missing capability, and all of which read as one. `done()` runs as the LAST PROGRAM, which is before the
+ * load event and before any timer, so:
+ *
+ *   - A document whose tests are created ASYNCHRONOUSLY holds none of them yet, and `done()`'s first branch is
+ *     `if (tests.tests.length === 0)` — it stamps the harness ERROR "done() was called without first defining
+ *     any tests" and calls `tests.complete()`. The phase is COMPLETE from then on, so every result the file
+ *     went on to produce was refused. `open-features-non-integer-height.html` creates all fourteen of its
+ *     `promise_test`s from a message the window it opened sends back; measured, it reported zero subtests and
+ *     one generic error row, and no engine capability decided any part of that.
+ *   - A document that opted into `explicit_done` had `wait_for_finish` cleared under it, so the harness
+ *     completed at load rather than at the page's own `done()` — every later subtest NOTRUN.
+ *   - A `single_test` document is `file_is_test`, and `done()`'s second branch calls `tests.tests[0].done()`:
+ *     the file's one test was stamped with whatever status it held at epilogue time, BEFORE its asynchronous
+ *     work ran. That is a fabricated verdict, and it can only ever have been fabricated in the PASS direction.
+ *
+ * So the epilogue is the script arm's, the document arm has none, and a document that never completes is now
+ * a fact about the engine rather than about this runner. */
 static const char WPT_EPILOGUE[] =
     "done();\n";
 
@@ -3077,10 +3104,14 @@ int main(int argc, char **argv)
         /* THE REPORT AND THE EPILOGUE ARE PROGRAMS OF THIS DOCUMENT LIKE THE REST, and they are two rather than
            one: the report registers where WPT's own vendor hook goes (immediately after testharness.js, so no
            helper the test loads can be ahead of it), and the epilogue tells the harness the page is done, which
-           can only be the last thing that runs. */
+           can only be the last thing that runs.
+           AND THE EPILOGUE IS THE SCRIPT ARM'S ALONE — see WPT_EPILOGUE for the three ways it destroys a
+           document. It is not a shape this runner decides: `.any.worker.js` carries `done()` and `.any.html`
+           does not, and the arm above already declared which of those two this run is. */
         if (!failed) {
             wpt_insert_report();
-            wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", /*address*/NULL, SCRIPT_TYPE_CLASSIC);
+            if (!g_html_mode)
+                wpt_program(strdup(WPT_EPILOGUE), "<wpt-epilogue>", /*address*/NULL, SCRIPT_TYPE_CLASSIC);
         }
     }
 
