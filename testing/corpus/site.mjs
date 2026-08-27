@@ -81,6 +81,35 @@ const PROBE = `(() => ({
     errs:  (d._astResults || []).flatMap(a => (a.resolverErrors || []).map(e => e.context + ': ' + e.message)),
   })),
   global: [...globalStore.endpoints.keys()],
+  /* THE DOMAIN COLUMNS, AND WHY THEY ARE NOT READ OFF \`endpoints\`. That map is endpointKey → the record
+     lib/merge.js builds, which is {method, service, key, headers, firstSeen} and carries NO parameters at
+     all — so a probe pointed there reports "no parameter carries a domain" for every run of every site,
+     forever, and the reading is a property of the container rather than of the engine. The exclusions and
+     bounds a branch narrowed live one map over, under the learned discovery doc, per parameter.
+     ABSENT AND ZERO ARE KEPT APART, which is the whole point of the column: \`null\` means the probe could
+     not reach a \`parameters\` object at all, and {params:N, withExcl:0, withBnd:0} means it reached them
+     and none carried a domain. Collapsing those two is the defect this column exists to detect, performed
+     inside the instrument built to detect it. Every level of the walk is optional in the producer, so each
+     is tested rather than chained — a naive \`?.\` chain yields null for a shape that is present-but-empty
+     and cannot tell the two readings apart either. */
+  domains: (() => {
+    let params = 0, withExcl = 0, withBnd = 0, reached = false;
+    for (const svc of globalStore.discoveryDocs.values()) {
+      const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
+                   && svc.doc.resources.learned.methods;
+      if (!methods) continue;
+      for (const m of Object.values(methods)) {
+        if (!m || !m.parameters) continue;
+        reached = true;
+        for (const p of Object.values(m.parameters)) {
+          params++;
+          if (p && Array.isArray(p._excludedValues) && p._excludedValues.length) withExcl++;
+          if (p && p._bounds && Object.keys(p._bounds).length) withBnd++;
+        }
+      }
+    }
+    return reached ? { params, withExcl, withBnd } : null;
+  })(),
 }))()`;
 
 const pg = await b.newPage();
@@ -232,6 +261,9 @@ const row = {
   distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
   globalEndpoints: (cur.global || []).length,
+  /* `null` = the probe reached no `parameters` object; {params,withExcl,withBnd} = it did. NOT defaulted to
+     an empty object: absence and zero are different facts here and the column exists to keep them apart. */
+  domains: cur.domains === undefined ? null : cur.domains,
   /* THE ENGINE'S OWN RECORD FIRST, THE CONSOLE ONLY AS A SUPPLEMENT. A console scrape is the wrong surface by
      construction -- the renderer does not tee its stdout -- so a run whose abort reached the result document
      and not the console read `why: []`, and this harness reported a site that ABORTED as one that ran clean
