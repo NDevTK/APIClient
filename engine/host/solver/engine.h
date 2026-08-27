@@ -761,14 +761,27 @@ long engine_units_done(void);
    missing and which a host had no choice but to guess at. */
 void engine_routed_census(long *delivered, long *refused);
 
-/* THE ORPHAN SURFACE'S CENSUS — how many functions the page shipped and never called this session actually
- * DROVE, and how many times a flow got as far as asking for one.
+/* THE ORPHAN SURFACE'S CENSUS — how many drives of a function the page shipped and never called this session
+ * SEEDED, and how many times a flow got as far as asking for one.
  *
- * IT IS TWO NUMBERS FOR THE REASON engine_routed_census IS. `driven` on its own has three readings that take
- * opposite actions: the bundle ships no uncalled code (a fact about the page, and the correct answer); no flow
- * ever ran out of its own work, so the question was never reached (a scheduling result, and the one worth
- * acting on); or the walk ran and the heap had none. `asked == 0` picks out the middle one and nothing else
- * can, because a drive that is never seeded leaves no trace anywhere else in the document.
+ * `driven` COUNTS SEEDS AND NOT RUNS, WHICH IS WHERE ITS FIRST READER WENT WRONG. The count is raised the
+ * instant a take succeeds, immediately before engine_sibling_assemble puts the drive on the frontier — so it
+ * says a flow was CREATED for that body, never that the flow was picked, ran, or reached the call. Whether it
+ * ran is answered by the drive's own FINDING (the endpoint it records), not by this number, and a reader who
+ * takes `driven > 0` for "the uncalled code executed" is reading a seed as a result.
+ *
+ * IT IS TWO NUMBERS FOR THE REASON engine_routed_census IS, AND THE PAIR SEPARATES TWO STATES OF THREE — the
+ * third needs the finding beside it, and saying so here is the whole of what stops the pair being over-read.
+ * On a FRESH session (no residue, so the routing arm that consumes a take without seeding cannot fire):
+ *     asked == 0                      no flow ever ran out of its own work, so the question was never
+ *                                     reached — a scheduling result, and the one worth acting on.
+ *     asked > 0, driven == 0          the walk ran and the heap held no uncalled function — a fact about the
+ *                                     PAGE. It is NOT evidence about pick order, and reading it as such is
+ *                                     reading "there was nothing to drive" as "something was starved".
+ *     driven > 0, finding ABSENT      the drive was seeded and did not get far enough to record what it
+ *                                     would have — THIS is the pick-order reading, and it needs the finding.
+ * On a RESUMED session a take can ROUTE to a flow already waiting for that body without raising `driven`, so
+ * the middle row is ambiguous there and the pair must be read on a fresh one.
  *
  * `driven` ALREADY EXISTED AND WAS UNREADABLE. It reached the heap/progress line and nothing else, and
  * §Testing says the renderer deliberately does not tee its stdout, so the number that says whether the

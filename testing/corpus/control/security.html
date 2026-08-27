@@ -50,9 +50,27 @@
   //     sinks        >= 2   — one search opened per tainted arrival
   //     flows        >  1   — rung 4's gate forks
   //     runOutcomesMine {complete:1}, why []
-  //     distinctEndpoints 0 — this document records no endpoints AT ALL, which is what makes splitting it off
-  //         free for the other column rather than a trade.
+  //     orphansAsked > 0, and `orphansDriven` / `/api/sec-orphan-only` READ TOGETHER — see the rung below.
+  //
+  // AND THIS DOCUMENT IS THE CONTENTION INSTRUMENT, WHICH IS WHY IT HAS AN UNCALLED FUNCTION AT ALL. Splitting
+  // the control fixed the endpoint column's stability and removed the only document that could measure the
+  // thing the split was about: index.html has an orphan and no candidates, this one had candidates and no
+  // orphan, and neither can say whether a live @S search displaces the orphan surface. It is measured HERE
+  // because this origin's endpoint column is nobody else's -- the row is isolated by origin, so a race on it
+  // costs index.html nothing.
+  //     orphansDriven 1 AND /api/sec-orphan-only present  -> seeded AND ran: no displacement.
+  //     orphansDriven 1 AND that endpoint ABSENT          -> seeded and never got far enough to record it.
+  //         THIS is the pick-order reading and it is the only one that is, because `driven` counts SEEDS and
+  //         not runs (solver/engine.h): it is raised the instant a take succeeds, before the flow is even on
+  //         the frontier.
+  //     orphansDriven 0 with orphansAsked > 0             -> the walk found nothing, which for THIS document
+  //         is now a defect, because `secNeverCalled` is right there.
+  // A reading of `driven 0` as "starved" is reading "there was nothing to drive" as "something was starved",
+  // and until this rung existed that is the only reading this row could have produced.
   if (window.__FLAGS && window.__FLAGS.admin) { var gated = 1; }
+
+  // THE ORPHAN RUNG, on a document that also opens @S searches -- the pair above is what it is read with.
+  function secNeverCalled(){ fetch('/api/sec-orphan-only'); }
 
   document.getElementById('s-arrival').innerHTML = '<b>untainted</b>';          // rung 1
   document.getElementById('s-taint').innerHTML = location.search;               // rung 2

@@ -107,6 +107,22 @@ measurement rather than an assumption: a page with a live @S search reaches its 
 §Attacker-sources calls the drive of never-called code the flow a decision vector cannot reproduce. Whether
 a real site with many candidates reaches it at all within a session is open.
 
+HOW TO READ THE ORPHAN PAIR, because the obvious reading of it is wrong. `orphansDriven` counts drives
+SEEDED, not drives that RAN — solver/engine.c raises it the instant a take succeeds, before the flow is on the
+frontier — so the pair separates two states and the third needs the drive's own FINDING beside it. On a FRESH
+session (`restart` wipes IDB; on a resumed one a take can route to a waiting flow without raising the count):
+
+| reading | means |
+|---|---|
+| `asked 0` | no flow ever ran out of its own work — the question was never reached |
+| `asked > 0`, `driven 0` | the walk ran and the heap held no uncalled function — a fact about the PAGE |
+| `driven > 0`, the drive's endpoint ABSENT | seeded and never got far enough to record it — the pick-order reading |
+
+The middle row is NOT evidence about pick order, and reading it as such is reading "there was nothing to
+drive" as "something was starved". `security.html` carries `secNeverCalled` precisely so its row can reach the
+third: it is the only document with both live @S candidates and an uncalled function, which is what the
+contention question needs and what splitting the control had removed.
+
 ## What each instrument refuses to do, and why
 
 `mirror.mjs` saves every resource at its ORIGINAL path and keeps its query. An
