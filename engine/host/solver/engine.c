@@ -7802,12 +7802,19 @@ void solver_agent_free(JSContext *ctx)
        does not call solve_flow_end; the scheduler does), so the claim can be given back before it. */
     solve_free();
     flow_registry_free(ctx);
-    /* THE ORPHAN COUNTER AND THE GENERATION IT LAST WALKED AT, given back with the frontier they describe. The
-       ordinal names an argument's source identity ({orphan7.arg0}) and the generation is a fact about ONE
+    /* THE ORPHAN COUNTERS AND THE GENERATION THEY LAST WALKED AT, given back with the frontier they describe.
+       The ordinal names an argument's source identity ({orphan7.arg0}) and the generation is a fact about ONE
        runtime's heap, so an agent that started a second session on top of the first would mint identities that
        collide with the previous session's constraints and would skip a walk over a heap that is not the one it
-       walked. Both are single words: the release is what makes them a session's rather than a process's. */
-    g_orphans_driven = 0;
+       walked. All are single words: the release is what makes them a session's rather than a process's.
+       `g_orphan_asks` IS ON THIS LINE AND WAS NOT, which was a defect in the commit that introduced it rather
+       than an omission with no consequence. The hosts that take a runtime down and bring another up per file
+       run many sessions in one process, so a counter left standing reports the PROCESS's total under a name
+       the result document spells per document — and this one in particular: the whole of what `asked` is for
+       is that `asked == 0` means NO FLOW IN THIS SESSION ever reached the end of its own work. A carried-over
+       count makes that read `asked > 0` for a session that never asked at all, which is the exact reading the
+       pair exists to distinguish, inverted, in the direction that looks healthy. */
+    g_orphans_driven = 0; g_orphan_asks = 0;
     g_orphan_gen_seen = 0; g_orphan_gen_valid = 0;
     /* …AND THE ROUND TRIP'S THREE NUMBERS BESIDE THEM, for the same sentence: what an inherited drive did with
        its recipe is a fact about ONE session's residue, and the latch is a fact about ONE frontier's members.
