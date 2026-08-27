@@ -1657,43 +1657,200 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
     return build_push(b, rule);
 }
 
+/* WHAT §6.4 DECLARES FOR AN AT-RULE THIS BUILD HAS NO ARM FOR — one row per at-keyword in `at_rule_defined`'s
+ * registry that `rule_from_parse` does not mint, and the reason the crash below is a LOOKUP rather than a
+ * paragraph.
+ *
+ * THE PARAGRAPH WAS A CLAIM AND IT HAD ALREADY BEEN WRONG IN THE DIRECTION THAT COSTS MOST — TWICE. It once
+ * named four interfaces and omitted the one that fires: a single `@property --x { … }` in a shipping site's
+ * stylesheet aborted that instance at stage `create` with ZERO flows run, and the reader standing at that abort
+ * was told to build one of four things, none of them the one in front of them. It was then rewritten to name
+ * three that remain — CSSScopeRule, CSSCounterStyleRule, CSSFontFeatureValuesRule — while the registry beside
+ * it recognises TWENTY-EIGHT at-keywords this builder has no arm for. Every one of the other twenty-five was a
+ * page whose `@WHY` would have said "what remains is" and then listed three things that were not it. That is
+ * the stale-`DFAIL` failure mode with a spec behind it: authoritative, wrong, and followed.
+ *
+ * A PROSE LIST CANNOT BE CHECKED AGAINST THE REGISTRY AND A TABLE CAN, WHICH IS THE WHOLE CHANGE. The two
+ * assertions below are what make this a mechanism instead of a better-maintained sentence: every row here names
+ * an at-keyword `at_rule_defined` recognises (so a row cannot be invented), and every at-keyword that REACHES
+ * the crash has a row (so the list cannot silently under-report — the miss fires at the exact page that
+ * exposed it). A name comes off this table in the same diff that builds its interface, and the second assert
+ * is what makes forgetting that impossible rather than merely discouraged.
+ *
+ * THE THIRD STATE IS THE ONE A LIST OF INTERFACES CANNOT EXPRESS, AND IT IS NOT RARE. `@when`, `@else`,
+ * `@private`, `@navigation`, `@location` and `@custom-selector` are at-rules a CSS specification DEFINES — so
+ * CSS Syntax §8 forbids discarding them and `at_rule_defined` correctly answers yes — for which NO
+ * specification declares a CSSOM interface at all. CSS Extensions 1 §3.2 "CSSOM" is, in its entirety, the words
+ * "Fill in." Telling that reader to "build the interface" sends them looking for one that does not exist, which
+ * is the same wrong-and-authoritative failure one level down; so those rows carry a NULL interface and the
+ * crash says what is actually true — there is nothing to build until the standard says what.
+ *
+ * EVERY SECTION NUMBER HERE CARRIES ITS SECTION TITLE AND WAS READ OFF THE SPECIFICATION, never recalled.
+ * Numbers renumber and titles survive, so a row whose two halves stop agreeing is visible instead of silent.
+ * The registry deliberately carries a spec SHORTNAME and no number, because the CSSWG index it is transcribed
+ * from publishes the first and not the second; a number belongs to the row that arrives WITH the interface,
+ * which is this one. */
+static const struct {
+    const char *at;          /* the at-keyword, spelled as `at_rule_defined`'s registry spells it */
+    const char *interface;   /* the CSSOM interface a standard declares for it, or NULL when none does */
+    const char *where;       /* that declaration's spec, section NUMBER and section TITLE */
+} RULE_UNBUILT[] = {
+    /* SORTED BY at-keyword (ASCII), which the DCHECK below re-establishes on every crash. */
+    { "annotation",         "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — `@annotation` is NOT a rule of its own: "
+      "it is one of that interface's seven CSSFontFeatureValuesMap attributes, so building §12.2 builds this" },
+    { "apply",              "CSSApplyBlockRule / CSSApplyStatementRule",
+      "CSS Mixins 1 §7.4 \"The CSSApplyBlockRule Interface\" and §7.5 \"The CSSApplyStatementRule Interface\" — "
+      "TWO interfaces, chosen by whether the `@apply` the page wrote has a block" },
+    { "character-variant",  "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `characterVariant` map attribute" },
+    { "color-profile",      "CSSColorProfileRule",
+      "CSS Color 5 §12.1 \"The CSSColorProfileRule interface\"" },
+    { "contents",           "CSSContentsBlockRule / CSSContentsStatementRule",
+      "CSS Mixins 1 §7.6 \"The CSSContentsBlockRule Interface\" and §7.7 \"The CSSContentsStatementRule "
+      "Interface\" — two, split by the block exactly as `@apply`'s pair is" },
+    { "counter-style",      "CSSCounterStyleRule",
+      "CSS Counter Styles 3 §9.2 \"The CSSCounterStyleRule interface\" — and it is one of only TWO rows here "
+      "whose §6.4.2 TYPE NUMBER is already declared (COUNTER_STYLE_RULE = 11) with no interface behind it" },
+    { "custom-media",       "CSSCustomMediaRule",
+      "Media Queries 5 §11 \"CSSOM\"" },
+    { "custom-selector",    NULL,
+      "CSS Extensions 1 §3 \"Custom Selectors\" defines `@custom-selector`, and its §3.2 \"CSSOM\" is the two "
+      "words \"Fill in.\" — there is no interface to build and none to wait for but the standard's" },
+    { "else",               NULL,
+      "CSS Conditional 5 §4 \"Chained Conditionals: the @else rule\" defines the rule; that specification's §9 "
+      "\"APIs\" declares CSSContainerRule and CSSSupportsConditionRule and NOTHING for `@else`" },
+    { "font-feature-values","CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — the other row whose §6.4.2 type number is "
+      "declared ahead of it (FONT_FEATURE_VALUES_RULE = 14). Its seven inner at-rules are its map attributes, "
+      "so this one interface answers all eight registry rows" },
+    { "font-palette-values","CSSFontPaletteValuesRule",
+      "CSS Fonts 4 §12.3 \"The CSSFontPaletteValuesRule interface\"" },
+    { "function",           "CSSFunctionRule",
+      "CSS Mixins 1 §7.1 \"The CSSFunctionRule Interface\" — and its body's declarations are §7.2 \"The "
+      "CSSFunctionDeclarations Interface\", which is a second object this one has to mint" },
+    { "historical-forms",   "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `historicalForms` map attribute" },
+    { "location",           NULL,
+      "CSS Navigation 1 §1.2 \"Declaring named URL patterns: the @location rule\" defines the rule; that "
+      "specification declares no IDL whatever" },
+    { "mixin",              "CSSMixinRule",
+      "CSS Mixins 1 §7.3 \"The CSSMixinRule Interface\"" },
+    { "navigation",         NULL,
+      "CSS Navigation 1 §3.1 \"Navigation queries: the @navigation rule\" defines the rule; that specification "
+      "declares no IDL whatever" },
+    { "ornaments",          "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `ornaments` map attribute" },
+    { "position-try",       "CSSPositionTryRule",
+      "CSS Anchor Positioning 1 §8.1 \"The CSSPositionTryRule interface\" — whose descriptors are that same "
+      "section's CSSPositionTryDescriptors" },
+    { "private",            NULL,
+      "CSS Mixins 1 §6 \"Private Custom Properties: the @private rule\" defines the rule; that specification's "
+      "§7 \"CSSOM\" declares seven interfaces and none of them is for `@private`" },
+    { "scope",              "CSSScopeRule",
+      "CSS Cascade 6 §4.1 \"The CSSScopeRule interface\" — no §6.4.2 type number at all (that table is frozen, "
+      "so its `type` is 0, like the CSSLayer*, CSSProperty and CSSContainer rules already built)" },
+    { "starting-style",     "CSSStartingStyleRule",
+      "CSS Transitions 2 §3.3.1 \"The CSSStartingStyleRule interface\"" },
+    { "styleset",           "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `styleset` map attribute" },
+    { "stylistic",          "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `stylistic` map attribute" },
+    { "supports-condition", "CSSSupportsConditionRule",
+      "CSS Conditional 5 §9.2 \"The CSSSupportsConditionRule interface\"" },
+    { "swash",              "CSSFontFeatureValuesRule",
+      "CSS Fonts 4 §12.2 \"The CSSFontFeatureValuesRule interface\" — its `swash` map attribute" },
+    { "view-transition",    "CSSViewTransitionRule",
+      "CSS View Transitions 2 §8.3.3 \"Accessing the @view-transition rule using CSSOM\"" },
+    { "when",               NULL,
+      "CSS Conditional 5 §3 \"Generalized Conditional Rules: the @when rule\" defines the rule; that "
+      "specification's §9 \"APIs\" declares CSSContainerRule and CSSSupportsConditionRule and nothing for it" },
+};
+
 /* THE CRASH THAT NAMES WHAT TO BUILD. It is a function so that the at-rule's own name is in the message: the
    reader of a `@WHY` is standing at the rule the page shipped, and "an at-rule" tells them nothing about which
-   interface to write.
-   ITS BUFFER IS SIZED FROM THE FORMAT STRING, so the message cannot be truncated. A fixed 600 could, and did:
-   the text had grown to 839 bytes, so every reader of this `@WHY` got it cut off partway through the list of
-   what is already built and never saw the list of what is not — the one sentence the crash exists to deliver,
-   silently deleted by the one call that was supposed to deliver it. `sizeof` the literal is what it will
-   actually be, and `unbuilt` bounds the name at 64, so the sum is a size that cannot go stale when the next
-   interface is struck off the list.
-   AND A LIST OF WHAT REMAINS IS A CLAIM, WHICH THIS ONE HAS ALREADY GOT WRONG IN THE DIRECTION THAT COSTS
-   MOST. It once named four interfaces and omitted the one that fires: a single `@property --x { … }` in a
-   shipping site's stylesheet aborted that instance at stage `create` with ZERO flows run, so the whole document
-   was lost before any of it executed, and the reader standing at that abort was told to go and build one of
-   four things, none of them the one in front of them. That is the stale-`DFAIL` failure mode with a spec behind
-   it — authoritative, wrong, and followed. A name goes on this list because a standard defines an interface for
-   it, never because somebody remembered it; each one carries the section number AND TITLE it was read from; and
-   a name comes OFF it in the same diff that builds the interface, which is the half that keeps it honest. */
+   interface to write. It now names THAT rule's interface and the clause it is declared in, rather than reciting
+   a list the reader has to find their own rule in — which is what let the list be wrong twice without anybody
+   noticing, because a reader who cannot find their rule reads the omission as "not covered yet" either way.
+   TRUNCATION IS ASSERTED RATHER THAN ARITHMETIC. The buffer used to be sized as `sizeof` the format literal
+   plus the name bound, which was right until a substitution stopped being the name: these rows are prose and
+   `sizeof` a `%s` is two. A fixed 600 had already truncated the 839-byte text once, silently deleting the one
+   sentence the crash exists to deliver, at the one moment somebody was reading it. `snprintf` returns the
+   length it WANTED, so the check is exact and cannot go stale when the next row is longer than this one. */
 static void rule_unbuilt_fail(const char *name)
 {
+/* TWO SHAPES, ONE FORMAT, AND THE CITATION IS THE SAME FIELD IN BOTH — which is what stops the no-interface
+   arm from being the arm that quietly loses its section number. The four substitutions after the name are the
+   lead-in, the interface (empty in the second shape), the `where` citation both shapes end on, and the ACTION.
+   THE ACTION IS PER SHAPE AND THAT IS THE POINT OF SPLITTING IT OUT. A single trailing "mint it in
+   rule_from_parse" told the reader of a `@when` — for which no standard declares an interface — to go and
+   build one, which is the wrong-and-authoritative failure this whole table exists to end, reproduced at the
+   last sentence of the very crash that ends it. */
 #define RULE_UNBUILT_FMT                                                                                       \
     "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
     "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
-    "CSSMarginRule, §6.4.9's CSSNamespaceRule, CSS Conditional §7.2's CSSConditionRule, §7.3's "                \
-    "CSSMediaRule, §7.4's CSSSupportsRule, CSS Conditional 5 §9.1's CSSContainerRule, CSS Fonts 5 §9.1's "     \
-    "CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and CSSKeyframesRule, CSS Cascade §8.1/§8.2's "\
-    "CSSLayerBlockRule and CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's CSSPropertyRule "  \
-    "are built; what remains is CSS Cascade 6 §4.1's CSSScopeRule, CSS Counter Styles 3 §9.2's "                \
-    "CSSCounterStyleRule and CSS Fonts 4 §12.2's CSSFontFeatureValuesRule — the last two have their §6.4.2 "    \
-    "TYPE NUMBER declared (11 and 14) and no interface behind it, which is what puts them on this list rather " \
-    "than off it, while CSSScopeRule has no number at all (§6.4.2's table is frozen, so its `type` is 0, like " \
-    "the CSSLayer*, CSSProperty and CSSContainer rules above it). Build the one this names and mint it in "     \
-    "rule_from_parse — do NOT skip the rule, because every index after it would then name a different rule "    \
-    "than the page's"
+    "CSSMarginRule and §6.4.9's CSSNamespaceRule, CSS Conditional 3 §7.2's CSSConditionRule, §7.3's "           \
+    "CSSMediaRule and §7.4's CSSSupportsRule, CSS Conditional 5 §9.1's CSSContainerRule, CSS Fonts 5 §9.1's "   \
+    "CSSFontFaceRule, CSS Animations 1 §6.2's CSSKeyframeRule and §6.3's CSSKeyframesRule, CSS Cascade 5 "      \
+    "§8.1's CSSLayerBlockRule and §8.2's CSSLayerStatementRule, and CSS Properties and Values API 1 §6.1's "    \
+    "CSSPropertyRule are built. %s%s — %s. %s"
 
-    char msg[sizeof RULE_UNBUILT_FMT + sizeof ((RuleBuild *)0)->unbuilt];
+    static const char ACT_BUILD[] =
+        "Mint it in rule_from_parse and strike its row off RULE_UNBUILT in the SAME diff — the second of this "
+        "function's two asserts is what makes forgetting that half impossible. Do NOT skip the rule, because "
+        "every index after it would then name a different rule than the page's";
+    static const char ACT_NONE[] =
+        "This is a STANDARDS gap and not a gap here, so there is no arm to write in rule_from_parse: the rule "
+        "is recognised (CSS Syntax §8 forbids discarding it) and has no object it can become. Do NOT invent an "
+        "interface, and do NOT skip the rule — skipping renumbers every rule after it. What this needs is the "
+        "standard, so take it there";
+    char msg[sizeof RULE_UNBUILT_FMT + sizeof ACT_BUILD + sizeof ACT_NONE + 512];
+    const unsigned n = (unsigned)(sizeof RULE_UNBUILT / sizeof RULE_UNBUILT[0]);
+    unsigned i, hit = n;
+    int wrote;
 
-    snprintf(msg, sizeof msg, RULE_UNBUILT_FMT, name);
+    for (i = 0; i < n; i++) {
+        DCHECK(i == 0 || strcmp(RULE_UNBUILT[i - 1].at, RULE_UNBUILT[i].at) < 0,
+               "the §6.4 unbuilt-interface table is not sorted by at-keyword, or holds one twice. A duplicate "
+               "row is two answers to one question — able to name two different interfaces for the rule in "
+               "front of the reader — and a row inserted out of order is a row inserted without reading its "
+               "neighbours, which is how the duplicate gets in");
+        DCHECK(at_rule_defined(RULE_UNBUILT[i].at),
+               "the §6.4 unbuilt-interface table names an at-keyword `at_rule_defined`'s registry does NOT "
+               "recognise. The registry decides what CSS Syntax §8 discards, so a row here for a name it does "
+               "not hold describes an interface for a rule that never reaches this crash — the row is a "
+               "recollection rather than a reading, which is exactly what this table replaced");
+        if (strcmp(RULE_UNBUILT[i].at, name) == 0) hit = i;
+    }
+    if (hit == n) {
+/* SIZED FROM ITS OWN LITERAL, for the reason the message below is: written as a round 256 this truncated at
+   320 bytes against a 526-byte text, and the engine's build passes `-Wno-format-truncation`, so the one
+   diagnostic that names it is off. A `sizeof` of the format is what it will actually be. */
+#define RULE_UNBUILT_MISS_FMT                                                                                  \
+    "`@%s` is in CSS Syntax §8's recognized-at-rule registry, has no arm in rule_from_parse, and has NO ROW "   \
+    "in the §6.4 unbuilt-interface table — so this crash cannot say what to build. Add the row (interface, "    \
+    "spec, section NUMBER and section TITLE, read off the specification and never recalled; a NULL interface "  \
+    "where no standard declares one) in the same diff that finds this. THIS assert is the half that stops the " \
+    "list under-reporting, which it has done twice: it fires at the exact page that exposed the gap, which is " \
+    "the only moment anybody is looking"
+
+        char miss[sizeof RULE_UNBUILT_MISS_FMT + sizeof ((RuleBuild *)0)->unbuilt];
+
+        wrote = snprintf(miss, sizeof miss, RULE_UNBUILT_MISS_FMT, name);
+        DCHECK(wrote >= 0 && (size_t)wrote < sizeof miss, "the missing-row `@WHY` was itself truncated");
+        DFAIL(miss);
+        return;
+#undef RULE_UNBUILT_MISS_FMT
+    }
+    wrote = snprintf(msg, sizeof msg, RULE_UNBUILT_FMT, name,
+                     RULE_UNBUILT[hit].interface ? "The interface to build is "
+                                                 : "NO specification declares a CSSOM interface for it",
+                     RULE_UNBUILT[hit].interface ? RULE_UNBUILT[hit].interface : "",
+                     RULE_UNBUILT[hit].where,
+                     RULE_UNBUILT[hit].interface ? ACT_BUILD : ACT_NONE);
+    DCHECK(wrote >= 0 && (size_t)wrote < sizeof msg,
+           "this `@WHY` was TRUNCATED, which silently deletes the sentence the crash exists to deliver at the "
+           "one moment somebody is reading it — grow the buffer, never the other way round");
     DFAIL(msg);
 #undef RULE_UNBUILT_FMT
 }
