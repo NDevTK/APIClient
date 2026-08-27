@@ -20,11 +20,12 @@
  * operands exist, plus the box edge stated over them and the containing block they are all stated against.
  * INTRINSIC SIZES ARE NO LONGER OUTSIDE IT — §10.3.5's shrink-to-fit reads core/layout/intrinsic_size.h, which
  * measures the box's own text with the first available font (core/css/font_metrics.h) and finds its soft wrap
- * opportunities (core/layout/text_run.h) — so what bounds the set now is which BOXES that walk can measure
- * rather than whether any measurement exists at all: it crashes for a child that is an element, naming
- * css-sizing-3 §5.2's contributions, and for a character whose [UAX14] Line_Break property this engine ships no
- * table for. A CONTENT-BASED HEIGHT used to be outside the set too: §10.6.3's own bullets say the font is needed only
- * for the LINE-BOX arm, and its block-level-children arm is a walk over used heights and collapsing margins
+ * opportunities (core/layout/text_run.h, over core/layout/line_break.h's [UAX14] rules, which answer for every
+ * Unicode code point) — so what bounds the set now is which BOXES that walk can measure rather than which
+ * CHARACTERS: it crashes for a child that is an element, naming css-sizing-3 §5.2's contributions, and for a
+ * `white-space` value whose white space css-text-3 §4.1.1 preserves. A CONTENT-BASED HEIGHT used to be outside
+ * the set too: §10.6.3's own bullets say the font is needed only for the LINE-BOX arm, and its
+ * block-level-children arm is a walk over used heights and collapsing margins
  * that core/layout/block_flow.h now runs — so a `height: auto` box whose children are block-level answers
  * here, and one with inline content crashes inside that walk naming §9.4.2:
  *   - A MARGIN OR PADDING whose computed value is an absolute length. Nothing in CSS 2.1 alters it. §10.3.3's

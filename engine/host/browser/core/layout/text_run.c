@@ -1,6 +1,7 @@
-/* css-text-3 §4.1's white space processing and §5's line breaking, over the advance measures core/css/
-   font_metrics.h reads off the first available font. See text_run.h for the two answers this produces, for why
-   it is an accumulator, for the alphabet it admits and for what UAX14's ordered rules decide over it. */
+/* css-text-3 §4.1's white space processing and §5's line breaking, over core/layout/line_break.h's [UAX14]
+   rules and the advance measures core/css/font_metrics.h reads off the first available font. See text_run.h for
+   the two answers this produces, for why it is an accumulator, for why it collects before it measures, and for
+   the one rule §4.1.2's trimming becomes once the lines are known. */
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/layout/line_break.h"
 #include "core/layout/text_run.h"
 
 /* ---- the `white-space` group this component measures --------------------------------------------------------
@@ -31,10 +33,13 @@ static char *tr_computed(lxb_dom_element_t *el, const char *name)
 
 /* DOES A SOFT WRAP OPPORTUNITY EXIST IN THIS INLINE — css-text-3 §5's "when wrapping is enabled (see
    white-space), the UA must minimize the amount of content overflowing a line by wrapping the line at a soft
-   wrap opportunity". Under `nowrap` it is not enabled, so the run has no break in it and its min-content size
-   IS its max-content size; under `normal` it is. The value is read here rather than derived from the collapsing
-   arm because §3 makes them independent — `pre-wrap` collapses nothing and wraps, `nowrap` collapses and does
-   not — so one boolean standing for both would be right for two values and wrong for the other four.
+   wrap opportunity". Under `nowrap` it is not enabled, so the run has no SOFT break in it and its min-content
+   size is its max-content size; under `normal` it is. Neither value suppresses a FORCED break — §5.5 "Line
+   Breaking Details" says BK and NL are forced line breaks "regardless of the white-space value" — which is why
+   this boolean gates only the opportunity and not the mandatory action.
+   The value is read here rather than derived from the collapsing arm because §3 makes them independent —
+   `pre-wrap` collapses nothing and wraps, `nowrap` collapses and does not — so one boolean standing for both
+   would be right for two values and wrong for the other four.
    EVERY OTHER VALUE CRASHES, and the crash is in this one predicate rather than at each use, because what those
    values change is not this component's arithmetic but the SET OF CHARACTERS §4.1.1 leaves it to measure. */
 static bool tr_wraps(lxb_dom_element_t *el)
@@ -53,23 +58,24 @@ static bool tr_wraps(lxb_dom_element_t *el)
               "treated as a sequence of NON-BREAKING SPACES. However, for pre-wrap, a soft wrap opportunity "
               "exists at the END of a sequence of spaces and/or tabs, while for break-spaces, a soft wrap "
               "opportunity exists AFTER EVERY SPACE and every tab.\" So every one of the four is a different "
-              "answer to both of this component's questions, and none of them is the collapsed one. THREE "
-              "THINGS ARE NEEDED and the first is the largest: §4.1.3 \"Segment Break Transformation Rules\" "
-              "makes a preserved segment break a FORCED LINE BREAK (css-text-3 §5.5 \"Line Breaking Details\": "
-              "\"preserved segment breaks … must be treated as forced line breaks\"), so the max-content size "
-              "stops being one line and becomes the MAXIMUM over the pieces the forced breaks cut it into — "
-              "CSS 2.2 §10.3.5's own \"formatting the content without breaking lines OTHER THAN WHERE EXPLICIT "
-              "LINE BREAKS OCCUR\". The second is §4.1.2 \"Phase II: Trimming and Positioning\"'s preserved TAB, "
-              "which is not an advance at all but \"a horizontal shift that lines up the start edge of the next "
-              "glyph with the next TAB STOP\" at multiples of `tab-size` from the nearest block container "
-              "ancestor's starting content edge — a position, so it cannot be summed and needs the run's origin. "
-              "The third is `tab-size` itself, which core/css/css_computed_value.c derives no computed value "
-              "for. BUILD the forced-break split first: it is the one that changes what MAX-CONTENT MEANS, and "
-              "the other two are terms inside a piece of it");
+              "answer to both of this component's questions, and none of them is the collapsed one. TWO THINGS "
+              "ARE NEEDED, and the FORCED-BREAK SPLIT IS NO LONGER ONE OF THEM: §4.1.3 \"Segment Break "
+              "Transformation Rules\" makes a preserved segment break a forced line break, and this file "
+              "already measures a run that a forced break cuts into pieces (CSS 2.2 §10.3.5's \"formatting the "
+              "content without breaking lines OTHER THAN WHERE EXPLICIT LINE BREAKS OCCUR\"), because [UAX14] "
+              "LB4's BK reaches it under `normal` through U+000C FORM FEED. What is missing is (1) the "
+              "PRESERVED SPACE — a sequence of spaces that is a sequence of NON-BREAKING spaces rather than "
+              "§4.1.1's one collapsed U+0020, with the per-value soft wrap opportunity above — and (2) §4.1.2's "
+              "preserved TAB, which is not an advance at all but \"a horizontal shift that lines up the start "
+              "edge of the next glyph with the next TAB STOP\" at multiples of `tab-size` from the nearest "
+              "block container ancestor's starting content edge — a position, so it cannot be summed and needs "
+              "the run's origin. `tab-size` itself is a third thing: core/css/css_computed_value.c derives no "
+              "computed value for it. BUILD the preserved space first; the tab needs an origin this component "
+              "is not given and that is a change to its interface");
     return normal;
 }
 
-/* THE THREE PROPERTIES THAT WOULD CHANGE THIS MEASUREMENT AND THAT THIS ENGINE HAS NO COMPUTED VALUE FOR.
+/* THE THREE PROPERTIES THAT WOULD CHANGE THIS MEASUREMENT'S SUM AND THAT THIS ENGINE HAS NO COMPUTED VALUE FOR.
    css-text-3 §7.2 "Tracking: the letter-spacing property" adds its length "between each typographic character
    unit", §7.1 "Word Spacing: the word-spacing property" adds its length "at each word separator character", and
    §2.1 "Case Transforms: the text-transform property" changes which characters there are to measure at all.
@@ -87,8 +93,36 @@ static void tr_require_no_spacing_model(void)
            "\"between each typographic character unit\" — including, by its own note, after the last one — §7.1 "
            "makes word spacing an addition \"at each word separator character\", and §2.1's case transform "
            "changes the codepoint whose advance is measured. ADD each to the per-character sum below (and, for "
-           "letter-spacing, to the segment as well as to the whole, since it survives at a break the same way "
-           "the trailing space does not) rather than deleting this assert");
+           "letter-spacing, to the line as well as to the whole, since it survives at a break the same way the "
+           "trailing space does not) rather than deleting this assert");
+}
+
+/* THE FOUR PROPERTIES THAT WOULD CHANGE WHERE IT BREAKS. css-text-3 §5's own list of the controls CSS provides
+   over [UAX14]'s baseline is exactly these: "the line-break property allows choosing various levels of
+   'strictness'", "the word-break property controls what types of letters are glommed together to form
+   unbreakable 'words'", "the overflow-wrap property allows the UA to take a break anywhere in
+   otherwise-unbreakable strings", "the hyphens property controls whether automatic hyphenation is allowed".
+   UAX14 §8 "Customization" is the other side of the same statement, and §5's own note says the annex "defines a
+   baseline behavior … which is expected to be further tailored".
+   THIS IS NOT THE SAME ASSERT AS THE ONE ABOVE and folding them together would hide what the failure means.
+   `line-break` in particular is what would falsify a decision made in engine/gen_line_break.mjs rather than
+   here: that generator applies [UAX14] LB1's DEFAULT resolution of CJ to NS at generation time, which is sound
+   only "in the absence of such criteria" — and `line-break: loose` is precisely such a criterion, resolving CJ
+   to ID instead. So the day this fires, the fix is upstream of this file. */
+static void tr_require_no_line_break_tailoring(void)
+{
+    DCHECK(!css_computed_models("line-break") && !css_computed_models("word-break") &&
+               !css_computed_models("overflow-wrap") && !css_computed_models("hyphens"),
+           "core/css/css_computed_value.c now derives a computed value for `line-break`, `word-break`, "
+           "`overflow-wrap` or `hyphens`, and this measurement runs [UAX14]'s UNTAILORED default. css-text-3 §5 "
+           "names these four as the controls CSS provides over the annex's baseline and UAX14 §8 "
+           "\"Customization\" is how they are expressed. `line-break` is the one that reaches OUTSIDE this "
+           "file: engine/gen_line_break.mjs pre-applies LB1's default resolution of CJ to NS, which UAX14 "
+           "permits only \"in the absence of\" out-of-band criteria, and `line-break: loose` resolves CJ to ID "
+           "— so that generator has to emit the ORIGINAL class beside the resolved one before this property can "
+           "be honoured. `word-break: break-all` and `overflow-wrap: anywhere` add opportunities inside words "
+           "and `hyphens` adds them at hyphenation points; each is a tailoring of core/layout/line_break.c's "
+           "rule chain and not a term in the sum here");
 }
 
 /* ---- css-text-3 §4.1.1's COLLAPSIBLE CHARACTERS ------------------------------------------------------------- */
@@ -109,130 +143,53 @@ static void tr_require_no_spacing_model(void)
                     below" — and below is "carriage returns (U+000D) are TREATED IDENTICALLY TO SPACES (U+0020)
                     IN ALL RESPECTS". So a CR is a collapsible space and is reachable only through the DOM API,
                     because HTML §13.2.3.5 "Preprocessing the input stream" normalises it away in a parse.
-   U+000C FORM FEED IS DELIBERATELY NOT HERE. §4's control-character rule covers it — "control characters
-   (Unicode category Cc) OTHER THAN tabs (U+0009), line feeds (U+000A), carriage returns (U+000D) and sequences
-   that form a segment break must be rendered as a VISIBLE GLYPH which the UA must synthesize" — so it is
-   content and not white space, and [UAX14] additionally gives it line breaking class BK, which css-text-3 §5.5
-   makes a FORCED LINE BREAK. It therefore crashes below as a character this component's alphabet does not
-   admit, which is the right answer twice over. */
+   U+000C FORM FEED IS DELIBERATELY NOT HERE, and it is now MEASURED rather than refused. §4's control-character
+   rule covers it — "control characters (Unicode category Cc) OTHER THAN tabs (U+0009), line feeds (U+000A),
+   carriage returns (U+000D) and sequences that form a segment break must be rendered as a VISIBLE GLYPH which
+   the UA must synthesize" — so it is content; and [UAX14] gives it Line_Break class BK, which css-text-3 §5.5
+   makes a FORCED LINE BREAK "regardless of the white-space value". Both facts are honoured below: it is
+   collected like any other character and the break after it cuts the max-content answer.
+   THAT IS ALSO WHY THIS PREDICATE IS NOT A LINE_BREAK CLASS TEST. The two questions have different answers for
+   the same character: U+0009 TAB is collapsible here and [UAX14] class BA, U+000D CR is collapsible here and
+   class CR, and U+000C is content here and class BK. §4.1.1's set is css-text-3's and it is enumerated. */
 static bool tr_is_collapsible_white_space(uint32_t cp)
 {
     return cp == 0x0020 || cp == 0x0009 || cp == 0x000A || cp == 0x000D;
 }
 
-/* ---- [UAX14]'s Line_Break PROPERTY, FOR THE ALPHABET THIS COMPONENT ADMITS ---------------------------------
-   The values are LineBreak.txt's own, for the ASCII range, and nothing here derives them: AL is the letters
-   plus the eleven ASCII symbols that file assigns AL, and NU is the digits. Every character outside the union
-   crashes at the one place that asks, so a wrong break position cannot be produced by a character this file has
-   never considered. */
-static bool tr_is_uax14_al(uint32_t cp)
-{
-    return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') ||
-           cp == '#' || cp == '&' || cp == '*' || cp == '<' || cp == '=' || cp == '>' || cp == '@' ||
-           cp == '^' || cp == '_' || cp == '`' || cp == '~';
-}
-
-static bool tr_is_uax14_nu(uint32_t cp)
-{
-    return cp >= '0' && cp <= '9';
-}
-
-static void tr_require_known_break_class(uint32_t cp)
-{
-    if (tr_is_uax14_al(cp) || tr_is_uax14_nu(cp)) return;
-    DFAIL("a character whose [UAX14] Line_Break property this engine does not know reached a line-breaking "
-          "measurement, and css-text-3 §5.5 \"Line Breaking Details\" is what makes that a crash rather than a "
-          "sum: it hands the rules to [UAX14] outright, and the Line_Break property is a table over EVERY "
-          "Unicode scalar value that this engine ships no copy of. THE FAILURE MODE OF GUESSING IS INVISIBLE, "
-          "which is why nothing here falls back: a break this component does not know about makes the "
-          "min-content size TOO LARGE, makes CSS 2.2 §10.3.5's shrink-to-fit width too wide, and produces a "
-          "used value nothing in the engine disagrees with. What this file admits is [UAX14] classes AL and NU "
-          "over ASCII, plus SP, because over that alphabet UAX14's ordered rules decide EVERY adjacent pair "
-          "(LB7, LB18, LB23, LB25's `NU ( SY | IS )* × NU`, LB28) and its LB31 \"break everywhere else\" is "
-          "unreachable. Nearly every other character reaches it: `,` `.` `:` `;` are class IS, `-` is HY, `/` "
-          "is SY, `!` `?` are EX, `(` `[` `{` are OP, `)` `]` are CP, `}` is CL, `\"` `'` are QU, `$` `+` `\\` "
-          "are PR, `%` is PO, `|` is BA, and every non-ASCII letter is AL, HL, ID, CJ, SA or one of the Brahmic "
-          "classes. BUILD the Line_Break property table — a generated file from "
-          "https://www.unicode.org/Public/UCD/latest/ucd/LineBreak.txt, in the shape core/fonts/"
-          "default_font_data.c has for the other generated table in this engine — and then UAX14 §6.1's pair "
-          "table over it. THE TWO ARE ONE UNIT and the table alone answers nothing: the classes are only "
-          "meaningful through the rules, and a table with a rule set that stops at AL and NU would be this same "
-          "alphabet with more code in front of it");
-}
-
-/* ---- the measurement ---------------------------------------------------------------------------------------- */
+/* ---- the collection ----------------------------------------------------------------------------------------- */
 
 void text_run_measure_init(TextRunMeasure *m)
 {
     DCHECK(m != NULL, "a text run measurement was begun with nowhere to keep it");
+    m->chars = NULL;
+    m->count = 0;
+    m->capacity = 0;
+    m->in_white_space_run = false;
     m->max_content = css_px(0.0);
     m->min_content = css_px(0.0);
-    m->segment = css_px(0.0);
-    m->pending_space = css_px(0.0);
-    m->has_pending_space = false;
-    m->pending_space_wraps = false;
-    m->any_glyph = false;
+    m->finished = false;
 }
 
-/* §4.1.1's ONE SURVIVING SPACE of a run, opened at the run's FIRST collapsible character and not re-opened by
-   the ones after it — which is step 4's own sentence ("any collapsible space immediately following another
-   collapsible space … is collapsed to have zero advance width"), taken as a property of the run rather than as
-   a per-character subtraction. The advance recorded is U+0020's in THIS inline, which is what every path
-   through §4.1.1 leaves: step 3 turns a tab into one, §4.1.3 turns the surviving segment break into one, and a
-   CR is one "in all respects" (§4). */
-static void tr_open_space(TextRunMeasure *m, lxb_dom_element_t *style, bool wraps)
+static void tr_append(TextRunMeasure *m, uint32_t cp, lxb_dom_element_t *style, bool wraps, bool space)
 {
-    if (m->has_pending_space) return;
-    m->pending_space = css_font_advance_measure_px(style, 0x0020);
-    DCHECK(m->pending_space.px >= 0.0,
-           "the first available font reported a NEGATIVE advance for U+0020 SPACE. OpenType 'hmtx' — Horizontal "
-           "Metrics Table's advanceWidth is a UFWORD and this element's computed `font-size` is non-negative by "
-           "css-fonts-4 §2.5's grammar, so a negative product is one of the two operands having been derived "
-           "rather than read");
-    m->pending_space_wraps = wraps;
-    m->has_pending_space = true;
-}
+    TextRunChar *c;
 
-/* ONE TYPOGRAPHIC CHARACTER UNIT placed on the line — the point at which §4.1.2's trimming is DECIDED for the
-   white-space run before it, because "at the beginning of a line" and "at the end of a line" are both facts
-   about whether anything follows. */
-static void tr_place(TextRunMeasure *m, lxb_dom_element_t *style, uint32_t cp)
-{
-    CssPx advance = css_font_advance_measure_px(style, cp);
+    if (m->count == m->capacity) {
+        size_t capacity = m->capacity != 0 ? m->capacity * 2 : 32;
+        TextRunChar *grown = realloc(m->chars, capacity * sizeof *grown);
 
-    DCHECK(advance.px >= 0.0,
-           "the first available font reported a NEGATIVE advance measure for a character on a line. OpenType "
-           "'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and a computed "
-           "`font-size` is non-negative — so this is a derivation that lost a sign and not a face");
-    if (m->has_pending_space) {
-        /* §4.1.2 removes a collapsible run at the BEGINNING of a line, and this run is at one exactly when
-           nothing has been placed yet — the same sentence therefore drops a leading run from both answers and
-           keeps an interior one in the max-content answer. */
-        if (m->any_glyph) {
-            m->max_content = css_px_add(m->max_content, m->pending_space);
-            /* [UAX14] LB18 "break after spaces": the opportunity is AFTER the run, so the segment that was open
-               ends here and the space belongs to it — and §4.1.2's "a sequence of collapsible spaces at the END
-               of a line is removed" is what keeps it out of the closed segment's width. LB7 "do not break
-               before spaces" is why there is no opportunity on the other side of it and no second segment
-               boundary to consider. */
-            if (m->pending_space_wraps) {
-                m->min_content = css_px_max(m->min_content, m->segment);
-                m->segment = css_px(0.0);
-            } else {
-                /* css-text-3 §5: wrapping is not enabled in this inline, so there is no opportunity here and
-                   the segment continues THROUGH the space, which is then part of it. */
-                m->segment = css_px_add(m->segment, m->pending_space);
-            }
-        }
-        m->has_pending_space = false;
+        CHECK(grown != NULL, "out of memory collecting one inline formatting context's characters for "
+                             "css-sizing-3 §5.1's intrinsic inline sizes. The collection is the run's own text "
+                             "and nothing more, so a failure here is the physical floor");
+        m->chars = grown;
+        m->capacity = capacity;
     }
-    m->max_content = css_px_add(m->max_content, advance);
-    m->segment = css_px_add(m->segment, advance);
-    /* The open segment is folded in at every character rather than at a close, so the two answers are readable
-       after any number of additions — including a run with no soft wrap opportunity in it at all, where the
-       segment is never closed and a fold-at-close would report zero. */
-    m->min_content = css_px_max(m->min_content, m->segment);
-    m->any_glyph = true;
+    c = &m->chars[m->count++];
+    c->cp = cp;
+    c->style = style;
+    c->wraps = wraps;
+    c->collapsible_space = space;
 }
 
 void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, const lxb_dom_node_t *text)
@@ -243,6 +200,9 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
 
     DCHECK(m != NULL && style != NULL && text != NULL,
            "a text run was measured with no accumulator, no style element or no node");
+    DCHECK(!m->finished, "a text node was added to a measurement that has already produced its two answers. "
+                         "text_run_measure_finish releases the collection those answers were derived from, so "
+                         "this is one accumulator being used for two runs");
     DCHECK(text->type == LXB_DOM_NODE_TYPE_TEXT,
            "something that is not a TEXT node was handed to css-text-3 §4.1's white space processing. The rules "
            "are stated over character data, and CSS 2.2 §9.2's box generation makes an element a BOX rather "
@@ -254,6 +214,7 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
            "measured against another element's `font-size` and `white-space` is one document's text under "
            "another one's typography");
     tr_require_no_spacing_model();
+    tr_require_no_line_break_tailoring();
     /* THE `white-space` GROUP IS ASKED ONCE PER NODE AND NOT ONCE PER WHITE-SPACE CHARACTER, which is the
        difference between a contract and an accident. Asking it only where a space appears would answer
        correctly for a `white-space: pre` run that happens to contain none — the four Phase I steps and every
@@ -263,7 +224,7 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
     wraps = tr_wraps(style);
     /* An empty text node — DOM §4.10's `data` may be the empty string — has no character to process, and
        §4.1.1's steps are all stated over characters. It is not a case to skip past: it genuinely contributes
-       nothing and leaves the pending state exactly as it was, which is what keeps a collapsible run split
+       nothing and leaves the collapsing state exactly as it was, which is what keeps a collapsible run split
        across it collapsing as ONE run. */
     if (cd->data.data == NULL || cd->data.length == 0) return;
     p = cd->data.data;
@@ -280,37 +241,186 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
                "a DOM string held bytes that are not well-formed UTF-8. Lexbor's parser replaces malformed "
                "input and every other writer of character data in this engine goes through quickjs's own "
                "encoder, so a tree containing one was built by something that did neither");
-        if (tr_is_collapsible_white_space(cp)) { tr_open_space(m, style, wraps); continue; }
-        tr_require_known_break_class(cp);
-        tr_place(m, style, cp);
+        if (tr_is_collapsible_white_space(cp)) {
+            /* §4.1.1's ONE SURVIVING SPACE of a run, opened at the run's FIRST collapsible character and not
+               re-opened by the ones after it — step 4's own sentence ("any collapsible space immediately
+               following another collapsible space … is collapsed to have zero advance width"), taken as a
+               property of the run rather than as a per-character subtraction. The character recorded is
+               U+0020, which is what every path through §4.1.1 leaves: step 3 turns a tab into one, §4.1.3 turns
+               the surviving segment break into one, and a CR is one "in all respects" (§4). It carries the
+               inline of the FIRST white-space character, which is the box css-text-3 §5.5 says controls the
+               break at the opportunity this space creates. */
+            if (!m->in_white_space_run) {
+                tr_append(m, 0x0020, style, wraps, true);
+                m->in_white_space_run = true;
+            }
+            continue;
+        }
+        m->in_white_space_run = false;
+        tr_append(m, cp, style, wraps, false);
     }
 }
 
-CssPx text_run_measure_max_content(const TextRunMeasure *m)
+/* ---- the measurement ---------------------------------------------------------------------------------------- */
+
+/* ONE LINE'S INLINE SIZE — the sum of `[lo, hi)`'s advance measures, less css-text-3 §4.1.2 "Phase II: Trimming
+   and Positioning"'s edges: "a sequence of collapsible spaces at the beginning of a line is removed", "a
+   sequence of collapsible spaces at the end of a line is removed". The trimming is a SEQUENCE in the spec and a
+   loop here even though §4.1.1 leaves at most one such space per run, because the two statements are
+   independent: the day preserved white space is built, a line can begin with several. */
+static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
 {
-    DCHECK(m != NULL, "css-sizing-3 §2.1's max-content inline size was read from no measurement");
-    /* THE ONE RELATION BETWEEN THE TWO ANSWERS, asserted where they are read rather than where they are
-       written, because it is a statement about the PAIR. css-sizing-3 §2.1 defines the min-content inline size
-       over the same content with MORE soft wrap opportunities taken, and every advance summed below is
-       non-negative — so the widest segment is a sub-run of the whole line and cannot exceed it. A violation is
-       this file's own arithmetic having gone wrong, which is exactly what a dev-only abort is for; CSS 2.2
-       §10.3.5's `min(max(preferred minimum width, available width), preferred width)` and css-sizing-3 §2.1's
-       `clamp(min-content, stretch-fit, max-content)` are the SAME function only while it holds, so a caller
-       that took either spelling on trust would silently be running the other one's algorithm. */
+    CssPx sum = css_px(0.0);
+    size_t i;
+
+    DCHECK(lo <= hi && hi <= m->count, "a line was measured over a range that is not inside the collected run");
+    while (lo < hi && m->chars[lo].collapsible_space) lo++;
+    while (hi > lo && m->chars[hi - 1].collapsible_space) hi--;
+    for (i = lo; i < hi; i++) {
+        CssPx advance = css_font_advance_measure_px(m->chars[i].style, m->chars[i].cp);
+
+        DCHECK(advance.px >= 0.0,
+               "the first available font reported a NEGATIVE advance measure for a character on a line. "
+               "OpenType 'hmtx' — Horizontal Metrics Table's advanceWidth is a UFWORD, .notdef's included, and "
+               "a computed `font-size` is non-negative — so this is a derivation that lost a sign and not a "
+               "face");
+        sum = css_px_add(sum, advance);
+    }
+    return sum;
+}
+
+/* IS THE SOFT WRAP OPPORTUNITY AT THIS BOUNDARY ENABLED — css-text-3 §5.5 "Line Breaking Details" states the
+   question as two cases and this answers both:
+     "For soft wrap opportunities created by characters that DISAPPEAR AT THE LINE BREAK (e.g. U+0020 SPACE),
+      properties on the box directly containing that character control the line breaking at that opportunity."
+      [UAX14] LB18 `SP ÷` puts the opportunity after the space and §4.1.2 is what makes it disappear, so the
+      space to the LEFT is that character.
+     "For soft wrap opportunities defined by the boundary between two characters …, the white-space property on
+      the NEAREST COMMON ANCESTOR of the two characters controls breaking."
+   The second is a capability this engine does not have and does not need yet, because the only walk that fills
+   this accumulator (core/layout/intrinsic_size.c) crashes on an ELEMENT child — so every character in a
+   measurement is a child of one element and that element IS the nearest common ancestor. That is asserted
+   rather than assumed: an inline box's own text joining the run is exactly the case css-sizing-3 §5.2's
+   contribution walk will add, and it is the case that makes the two sides differ. */
+static bool tr_opportunity_enabled(const TextRunMeasure *m, size_t i)
+{
+    const TextRunChar *left = &m->chars[i - 1], *right = &m->chars[i];
+
+    DCHECK(!right->collapsible_space,
+           "[UAX14] LB7 \"do not break before spaces or zero width space\" was asked to allow a break before a "
+           "collapsible space. core/layout/line_break.c returns PROHIBITED there unconditionally, so this is "
+           "the rule chain and this file disagreeing about which side of a space the opportunity is on");
+    if (left->collapsible_space) return left->wraps;
+    DCHECK(left->style == right->style,
+           "a soft wrap opportunity fell between two characters in DIFFERENT inline boxes, and css-text-3 §5.5 "
+           "\"Line Breaking Details\" gives it to \"the white-space property on the NEAREST COMMON ANCESTOR of "
+           "the two characters\" — which this component is not given and cannot derive from two elements alone. "
+           "BUILD it where the run is assembled: core/layout/intrinsic_size.c walks one box's children and "
+           "crashes on an element child today, so the ancestor is that box; when css-sizing-3 §5.2's "
+           "contribution walk descends into an inline box, the accumulator has to carry the box each character "
+           "came from and the common ancestor is a walk up two of them");
+    return left->wraps;
+}
+
+void text_run_measure_finish(TextRunMeasure *m)
+{
+    uint32_t *cps;
+    LineBreakAction *actions;
+    size_t i, max_line = 0, min_line = 0;
+
+    DCHECK(m != NULL, "a text run measurement was finished with nothing to finish");
+    DCHECK(!m->finished, "a text run measurement was finished twice — the second call would run [UAX14] over a "
+                         "collection the first one released");
+    m->finished = true;
+    if (m->count == 0) {
+        /* An inline formatting context with no characters in it. css-sizing-3 §2.1's two sizes are both the
+           size that "fits around its contents", and there are none — zero, and not a case this skipped. */
+        DCHECK(m->chars == NULL, "an empty run holds a collection it never appended to");
+        return;
+    }
+    cps = malloc(m->count * sizeof *cps);
+    actions = malloc((m->count + 1) * sizeof *actions);
+    CHECK(cps != NULL && actions != NULL,
+          "out of memory running [UAX14]'s line breaking over one inline formatting context. Both allocations "
+          "are one entry per character of the run's own text, so a failure here is the physical floor");
+    for (i = 0; i < m->count; i++) cps[i] = m->chars[i].cp;
+    line_break_actions(cps, m->count, actions);
+    /* THE TWO ANSWERS ARE THE SAME WALK OVER DIFFERENT LINES, which is css-sizing-3 §2.1's own construction:
+       the sizes differ by "if NONE of the soft wrap opportunities were taken" against "if ALL" were. So the
+       max-content lines are cut by FORCED breaks alone — CSS 2.2 §10.3.5's "without breaking lines other than
+       where explicit line breaks occur" — and the min-content lines by every break there is. `actions[count]`
+       is LB3's mandatory break at eot, so the last line of each answer is closed by the loop rather than after
+       it, and there is no tail case to get wrong. */
+    for (i = 1; i <= m->count; i++) {
+        bool forced = actions[i] == LINE_BREAK_MANDATORY;
+        bool soft = actions[i] == LINE_BREAK_OPPORTUNITY && tr_opportunity_enabled(m, i);
+
+        if (forced && i < m->count) {
+            LineBreakClass cls = line_break_class_of(m->chars[i - 1].cp);
+
+            DCHECK(cls == LB_CLASS_BK || cls == LB_CLASS_NL,
+                   "a FORCED line break inside a collapsed run came from a character whose [UAX14] class is "
+                   "neither BK nor NL. css-text-3 §5.5 \"Line Breaking Details\" makes exactly those two forced "
+                   "\"regardless of the white-space value\"; the other two mandatory classes are CR and LF, and "
+                   "§4.1.1 collapses both of those away before this measurement sees them — a CR because §4 "
+                   "makes it \"treated identically to spaces (U+0020) in all respects\", an LF because it is "
+                   "the segment break §4.1.3 transforms into one. So this is Phase I's collapsible set and "
+                   "[UAX14]'s classes having come apart");
+        }
+        if (forced) {
+            m->max_content = css_px_max(m->max_content, tr_line_size(m, max_line, i));
+            max_line = i;
+        }
+        if (forced || soft) {
+            m->min_content = css_px_max(m->min_content, tr_line_size(m, min_line, i));
+            min_line = i;
+        }
+    }
+    DCHECK(max_line == m->count && min_line == m->count,
+           "[UAX14] LB3 \"Always break at the end of text\" did not close the last line of one of the two "
+           "answers, so a run's tail was collected and never measured. core/layout/line_break.h states that the "
+           "action at position `count` is always MANDATORY, which is the whole reason this walk has no tail "
+           "case");
+    free(cps);
+    free(actions);
+    free(m->chars);
+    m->chars = NULL;
+    m->count = 0;
+    m->capacity = 0;
+}
+
+/* THE ONE RELATION BETWEEN THE TWO ANSWERS, asserted where they are read rather than where they are written,
+   because it is a statement about the PAIR. css-sizing-3 §2.1 defines the min-content inline size over the same
+   content with MORE soft wrap opportunities taken, and every advance summed is non-negative — so each
+   min-content line is a sub-run of some max-content line and cannot exceed the widest of them. A violation is
+   this file's own arithmetic having gone wrong, which is exactly what a dev-only abort is for; CSS 2.2
+   §10.3.5's `min(max(preferred minimum width, available width), preferred width)` and css-sizing-3 §2.1's
+   `clamp(min-content, stretch-fit, max-content)` are the SAME function only while it holds, so a caller that
+   took either spelling on trust would silently be running the other one's algorithm. */
+static void tr_require_answers(const TextRunMeasure *m)
+{
+    DCHECK(m != NULL, "css-sizing-3 §2.1's intrinsic inline sizes were read from no measurement");
+    DCHECK(m->finished,
+           "css-sizing-3 §2.1's intrinsic inline sizes were read from a measurement that has not run [UAX14] "
+           "over its characters yet. text_run_measure_finish is what produces them, and the fields before it "
+           "hold the zero text_run_measure_init wrote — which is a plausible answer for a run with text in it "
+           "and is why this is a crash rather than a default");
     DCHECK(m->min_content.px <= m->max_content.px,
            "a text run's MIN-CONTENT inline size came out WIDER than its max-content inline size. css-sizing-3 "
            "§2.1 states the first as the size \"if ALL soft wrap opportunities within the box were taken\" and "
            "the second as the size \"if NONE\" were, over the same characters — so with every advance "
            "non-negative the first is a sub-run of the second. The two spellings of the shrink-to-fit formula "
            "agree only under this relation, so its failure would silently switch which algorithm runs");
+}
+
+CssPx text_run_measure_max_content(const TextRunMeasure *m)
+{
+    tr_require_answers(m);
     return m->max_content;
 }
 
 CssPx text_run_measure_min_content(const TextRunMeasure *m)
 {
-    DCHECK(m != NULL, "css-sizing-3 §2.1's min-content inline size was read from no measurement");
-    DCHECK(m->min_content.px <= m->max_content.px,
-           "a text run's MIN-CONTENT inline size came out WIDER than its max-content inline size — see "
-           "text_run_measure_max_content, which asserts the same relation for the same reason");
+    tr_require_answers(m);
     return m->min_content;
 }

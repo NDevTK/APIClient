@@ -137,6 +137,12 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
     text_run_measure_init(&m);
     n = lxb_dom_interface_node(el);
     for (c = n->first_child; c != NULL; c = c->next) is_child(&m, el, c);
+    /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
+       anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
+       characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state
+       can settle a break as the character arrives. core/layout/text_run.h states it in full. This call also
+       releases the characters the walk collected, so the walk above and this line are one operation. */
+    text_run_measure_finish(&m);
     out.min_content = text_run_measure_min_content(&m);
     out.max_content = text_run_measure_max_content(&m);
     /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
