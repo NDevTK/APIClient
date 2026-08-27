@@ -1738,7 +1738,7 @@ static int document_done_stage(JSContext *ctx, int stage)
  *   TOO WEAK, which is what this predicate is for: quiescence is a fact about ONE FLOW and the load event is a
  *     fact about ONE DOCUMENT, so nothing in it says a parent may not finish ahead of its own frames.
  *
- * THE SOURCE BUILT HERE IS THE NAVIGABLE CONTAINER'S, which §"the iframe element" states for every element
+ * THE SOURCE BUILT HERE IS THE NAVIGABLE CONTAINER'S, which §4.8.5 "The iframe element" states for every element
  * type that POTENTIALLY DELAYS THE LOAD EVENT (`iframe`, `embed`, `object`): "the user agent must delay the
  * load event of element's node document if element's content navigable is non-null and any of the following
  * are true: element's content navigable's active document is not ready for post-load tasks; element's content
@@ -1760,7 +1760,7 @@ static int document_done_stage(JSContext *ctx, int stage)
  *     the arm that asks for a lifecycle stage will not ask while the flow is blocked. So the interlock exists
  *     — it is just one layer up, and it is stated in both places rather than assumed in either.
  *   - A CROSS-ORIGIN CHILD IS IN ANOTHER WASM INSTANCE and is filtered out as REMOTE. Its delay is a fact this
- *     instance cannot compute alone: §"the iframe element"'s three bullets are all questions about the child's
+ *     instance cannot compute alone: §4.8.5 "The iframe element"'s three bullets are all questions about the child's
  *     ACTIVE DOCUMENT, which lives in the peer. It is the cross-instance read §Security describes, and until
  *     that read exists a parent whose only unfinished frame is cross-origin fires `load` EARLY. That is a hole
  *     with a name and an owner, not a defaulted answer.
@@ -1849,10 +1849,10 @@ int document_lifecycle_step(JSContext *ctx)
         /* §13.2.7 STEP 8 — the spin. The reverse walk is what puts a CHILD's `load` before its parent's when
            both are ready at once; this is what holds the parent when the child is not ready YET, which the
            order alone cannot express and which quiescence used to hide.
-           THE SOURCES THIS PREDICATE DOES NOT YET CARRY are `img` (§"Images"' update-the-image-data: "When
+           THE SOURCES THIS PREDICATE DOES NOT YET CARRY are `img` (§4.8.4.3.5 "Updating the image data": "When
            delay load event is true, fetching the image must delay the load event of the element's node
-           document"), the media elements' §"Loading the media resource" delaying-the-load-event flag, and
-           §"Script processing model"'s per-`script` delaying the load event. Each is a per-ELEMENT flag with
+           document"), the media elements' §4.8.11.5 "Loading the media resource" delaying-the-load-event flag, and
+           §4.12.1.1 "Processing model"'s per-`script` delaying the load event. Each is a per-ELEMENT flag with
            no record in this engine, so each is a document that may reach `load` EARLY — the same shape this
            whole gate exists to end, one element type down. They are not defaulted-to-false here and then
            forgotten: the flag belongs to the element's own component, and the honest place for its absence to

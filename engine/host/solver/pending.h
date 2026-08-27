@@ -264,7 +264,7 @@ int  pending_outstanding(JSValueConst reg);
    "owed" means, and a second spelling of it is the drift that comment exists to prevent.
    THE CALLER THIS EXISTS FOR IS HTML §13.2.7 "The end" step 8 — "nothing that delays the load event" — which
    is a question about WHICH replies are outstanding and not how many: a `<script src>` still in the air delays
-   a document's `load` (§"Script processing model": "Whenever a script element el's delaying the load event is
+   a document's `load` (§4.12.1.1 "Processing model": "Whenever a script element el's delaying the load event is
    true, the user agent must delay the load event of el's preparation-time document") and a `fetch()` or a
    dynamic `import()` does not, so one number over the whole register cannot answer it. */
 int  pending_outstanding_kind(JSValueConst reg, int kind);

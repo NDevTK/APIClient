@@ -5188,9 +5188,9 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * having run none of the code that was waiting to be told the document was ready.
              * WHAT STILL HOLDS THE FLOW HERE IS STATED POSITIVELY, per kind, from the spec:
              *   - A `<script src>` DOES delay it, both the document's own (DOCSCRIPT, which the sequence arm
-             *     far above already holds the flow at) and one a script INJECTED (SCRIPT) — §"Script processing
-             *     model": "Whenever a script element el's delaying the load event is true, the user agent must
-             *     delay the load event of el's preparation-time document."
+             *     far above already holds the flow at) and one a script INJECTED (SCRIPT) — §4.12.1.1
+             *     "Processing model": "Whenever a script element el's delaying the load event is true, the
+             *     user agent must delay the load event of el's preparation-time document."
              *   - A HOSTREQ is not a delay source at all and is a stronger thing: the flow is SUSPENDED
              *     mid-expression on a synchronous cross-instance read, so running a `load` listener here would
              *     interleave two program points of one flow. flow_blocked is that question and it is asked
