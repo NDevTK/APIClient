@@ -199,6 +199,23 @@ const row = {
      across eight live app pages, every one read `sinks: 0`, and without this there was no way to say whether
      that was a page with no sinks or a search that never got to one. */
   candidates: counted.length ? counted[counted.length - 1].candidates : null,
+  /* AND THE FOUR RUNGS BELOW `candidates`, BECAUSE `candidates: 0` HAS THE SAME TWO READINGS ONE STEP DOWN.
+     The comment above bought one rung and stopped: measured over three passes of twelve live app pages,
+     EVERY measurable site read `sinks: 0` AND `candidates: 0`, and the row could not say whether the search
+     had nothing to search (no attacker source was ever read) or never got there (sources read, no sink
+     reached) or was declined (taint reached a sink and the check was unforgeable, so §Attacker-sources
+     SUPPRESSES it — correctly, and it must never look like a page with no sinks). Those are three opposite
+     findings behind one zero, which is exactly what §@S forbids: "a candidate killed by a gate must be
+     distinguishable from one a filter ate and from one that was never scheduled".
+     `bridge.js` has been forwarding all four onto every run record with a comment naming them "the only
+     thing that distinguishes an analysed page with nothing to find from a page nobody got to"; this row —
+     the one that ranks the corpus — was the consumer that never asked. A written field with no reader is
+     the same broken contract as a read field with no writer, and it is harder to see because the value is
+     real and asserted and consumed by nothing. */
+  sourceReads: counted.length ? counted[counted.length - 1].sourceReads : null,
+  sinkReached: counted.length ? counted[counted.length - 1].sinkReached : null,
+  sinkTainted: counted.length ? counted[counted.length - 1].sinkTainted : null,
+  sinkSuppressed: counted.length ? counted[counted.length - 1].sinkSuppressed : null,
   flows: counted.length ? counted[counted.length - 1].flows : null,
   switches: counted.length ? counted[counted.length - 1].switches : null,
   /* QUEUED BESIDE RUN, for the same reason held is emitted beside made: `jobsRun: 0` alone cannot say whether

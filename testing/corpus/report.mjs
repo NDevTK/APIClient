@@ -140,6 +140,11 @@ for (const p of passes) for (const r of p.rows) {
        read the counter, so a page that learned one address could print a two-digit `ep`. */
     endpoints: r.distinctEndpoints, counter: r.endpoints,
     sinks: r.sinks, flows: r.flows, switches: r.switches,
+    /* THE @S ARRIVAL CENSUS, WHICH IS WHAT MAKES `sinks: 0` A FINDING RATHER THAN A SHRUG. Read in the order
+       a search travels -- a source is read, a sink is reached, taint arrives at one, the search is declined
+       as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being
+       one number with three opposite meanings. site.mjs carries these off the run record bridge.js writes. */
+    src: r.sourceReads, reach: r.sinkReached, taint: r.sinkTainted, sup: r.sinkSuppressed,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
        renamed to `builtFromHeadClaim` when it stopped being trustworthy, so it resolved to '' for every row
@@ -173,6 +178,9 @@ const table = [...seen.entries()].map(([id, ms]) => ({
   n: ms.length,
   ep: spread(ms, 'endpoints'), fl: spread(ms, 'flows'), sw: spread(ms, 'switches'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
+  /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. All `-` means the runs that
+     carried counters carried none of these, which is an OLDER census, not a page with no sources. */
+  arrival: ['src', 'reach', 'taint', 'sup'].map((k) => spread(ms, k)).join('>'),
   epMax: Math.max(-1, ...ms.map((m) => m.endpoints).filter((x) => typeof x === 'number')),
   epAnswered: ms.filter((m) => typeof m.endpoints === 'number').length,
   sigs: [...new Set(ms.flatMap((m) => m.sigs))],
@@ -184,11 +192,12 @@ const table = [...seen.entries()].map(([id, ms]) => ({
 const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 console.log(`${passes.length} pass(es): ${passes.map((p) => p.label + '(' + p.rows.length + ')').join(' ')}`);
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
-  pad('ep', 8) + pad('sinks', 7) + pad('flows', 12) + pad('switches', 12) + pad('load', 10) + 'signature');
+  pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('flows', 12) + pad('switches', 12) +
+  pad('load', 10) + 'signature');
 for (const t of table)
   console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
-    pad(t.finishedPasses + '/' + t.n, 7) + pad(t.ep, 8) + pad(t.sk, 7) + pad(t.fl, 12) + pad(t.sw, 12) +
-    pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
+    pad(t.finishedPasses + '/' + t.n, 7) + pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
+    pad(t.fl, 12) + pad(t.sw, 12) + pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
 /* THE WORK QUEUE. A DFAIL's reason names what to build, so it is printed rather than summarised -- but only
    the head of it, because one 1169-character reason per row buries the RANKING, which is the thing this
