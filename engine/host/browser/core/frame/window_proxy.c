@@ -1723,15 +1723,23 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * the other direction too: they are on §7.2.1.3.1's list and this component installs NEITHER, so they forward
  * and `otherW.focus()` reaches the Window's own method.
  *
- * WHAT IS STILL MISSING, NAMED: §7.2.3.1's [[GetPrototypeOf]], which for a same-origin W is
- * `W.[[GetPrototypeOf]]()`. There is no exotic prototype hook, so the chain past this object is still the
- * READING realm's WindowProxy prototype and then ITS Object.prototype — the other document's members that are
- * reached only up a chain are not reached at all. Which members those are is window.c's answer and not this
- * one's: Web IDL §3.7.3 makes every member of a [Global] object an OWN property of it (which is why
- * `window.hasOwnProperty("addEventListener")` is true in every browser, and why event_target.c places its
- * three there), and window.c still declares part of Window's surface on Window.prototype instead. So the
- * forward below answers every member that is where the standard puts it, and the two gaps close in either
- * order: a class-level [[GetPrototypeOf]] here, or the [Global] placement there. */
+ * §7.2.3.1's [[GetPrototypeOf]] IS BUILT (proxy_get_prototype), AND IT IS NOT YET THE WHOLE OF THE CHAIN.
+ * REFLECTION asks it — `Object.getPrototypeOf(otherW)`, `Reflect.getPrototypeOf`, `otherW.__proto__`,
+ * 7.3.21 OrdinaryHasInstance's walk behind `instanceof`, and 20.1.3.3's `isPrototypeOf` — so those answer
+ * W's own prototype for a W the reader may see and null for one it may not, which is the standard's answer and
+ * was the READING realm's surface object before.
+ * THE ORDINARY LOOKUP WALKS STILL FOLLOW THE SHAPE LINK, which is this object's class prototype: 10.1.8.1
+ * OrdinaryGet step 3, 10.1.9.2 step 2.a and 10.1.7 step 3 each say `O.[[GetPrototypeOf]]()` and quickjs's
+ * walks read the stored link instead (JS_GetPrototype's own comment states it from that side). That is why a
+ * member of the other document reached ONLY up a chain is still not reached, and why the link must keep
+ * pointing where it does for now: §7.2.3.5 steps 4-6 let a CROSS-ORIGIN read walk to this same surface for
+ * §7.2.1.3.1's names, so routing those walks through §7.2.3.1 — which answers null there — would take
+ * `otherW.postMessage` away from every page. Which members are affected is window.c's answer and not this
+ * one's: Web IDL §3.7.3 Interface prototype object makes every member of a [Global] object an OWN property of
+ * it (which is why `window.hasOwnProperty("addEventListener")` is true in every browser, and why
+ * event_target.c places its three there), and window.c still declares part of Window's surface on
+ * Window.prototype instead. That placement is what closes this: with every member own, the cross-origin
+ * surface no longer needs to be reachable up a chain, and the walks can ask §7.2.3.1 like everything else. */
 
 /* §7.2.3's OWN SURFACE FOR ONE NAME, AND IT IS AN OWN PROPERTY OF THIS OBJECT — not a prototype hit.
  *
@@ -1832,6 +1840,40 @@ static JSValueConst proxy_forwarded_object(JSContext *ctx, JSValueConst obj, JSA
 
     DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
     return proxy_forward_window(ctx, obj, p, prop);
+}
+
+/* HTML §7.2.3.1 [[GetPrototypeOf]] ( ) — three lines, and every one of them is above: "Let W be the value of
+   the [[Window]] internal slot of this. If IsPlatformObjectSameOrigin(W) is true, then return !
+   OrdinaryGetPrototypeOf(W). Return null."
+   W IS proxy_target_window's, WHICH IS THE POINT. §7.2.1.3.3 IsPlatformObjectSameOrigin(O) is "the current
+   settings object's origin is same origin-domain with O's relevant settings object's origin", and every one of
+   §7.2.3's internal methods here asks it through the one proxy_same_origin. A sixth spelling written out in
+   this function would be a second opinion about one fact — and the one thing it could not do is disagree
+   usefully: if that answer is ever wrong it is wrong for [[GetOwnProperty]], [[Delete]], [[DefineOwnProperty]]
+   and [[OwnPropertyKeys]] in the same breath, and it is fixed once.
+   THAT ALSO SETTLES A NAVIGABLE WITH NO ACTIVE DOCUMENT (destroyed, or discarded by a close): there is no W to
+   perform OrdinaryGetPrototypeOf on, so the answer is step 3's null, which is the same statement [[Delete]]
+   reads as "nothing here to remove" and [[GetOwnProperty]] reads as "the surface answers".
+   NO PAGE CODE: OrdinaryGetPrototypeOf is 10.1.1, a slot read, and the materialization proxy_target_window may
+   do builds the initial about:blank Document, which has no script in it. That is the contract
+   JSClassExoticMethods.get_prototype is declared under and the same one this class's [[GetOwnProperty]] already
+   declares. */
+static JSValue proxy_get_prototype(JSContext *ctx, JSValueConst obj)
+{
+    ProxyData *p = proxy_of(obj);
+    JSValueConst w;
+
+    DCHECK(p != NULL, "a WindowProxy class hook ran on an object carrying no navigable record");
+    w = proxy_target_window(ctx, obj, p);                       /* step 1 */
+    if (JS_IsUninitialized(w))
+        return JS_NULL;                                         /* step 3 */
+    /* step 2. W is a Window — an ORDINARY object, so this is 10.1.1 OrdinaryGetPrototypeOf and not a second
+       trip through an exotic hook. Asserted rather than assumed: a W whose own [[GetPrototypeOf]] were exotic
+       would make this recursive, and the one class in this engine that computes a prototype is this one. */
+    DCHECK(!window_proxy_is(w),
+           "§7.2.3.1's W is a WindowProxy — [[Window]] holds the Window a navigable's active document IS, and a "
+           "proxy there would make OrdinaryGetPrototypeOf recurse through this hook");
+    return JS_GetPrototype(ctx, w);
 }
 
 /* HTML §7.2.3.6 [[DefineOwnProperty]] — the write half of the branch above, and the reason a page can write to
@@ -2120,16 +2162,20 @@ static int proxy_own_keys(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
     return 0;
 }
 
-/* THE FIVE OF §7.2.3's INTERNAL METHODS THIS OBJECT ANSWERS, and one declaration about all of them: no page
-   code, so the engine's own accessor walks may run them from C with no flow base under them. That claim now
-   covers the FORWARD as well as the filter, and it still holds — the Window it forwards to declares the same
-   thing of its own hook (window.c's WINDOW_EXOTIC, whose named access is a walk of the document tree), and
-   materializing an initial about:blank Document runs no script because there is none to run. */
+/* THE FIVE OF §7.2.3's INTERNAL METHODS THIS OBJECT ANSWERS ITSELF — §7.2.3.1 [[GetPrototypeOf]], §7.2.3.5
+   [[GetOwnProperty]], §7.2.3.6 [[DefineOwnProperty]], §7.2.3.9 [[Delete]] and §7.2.3.10 [[OwnPropertyKeys]],
+   with §7.2.3.7's and §7.2.3.8's same-origin `W.[[X]]` reached through the forward — and one declaration about
+   all of them: no page code, so the engine's own accessor walks may run them from C with no flow base under
+   them. That claim covers the FORWARD as well as the filter, and it still holds — the Window it forwards to
+   declares the same thing of its own hook (window.c's WINDOW_EXOTIC, whose named access is a walk of the
+   document tree), and materializing an initial about:blank Document runs no script because there is none to
+   run. §7.2.3.1 declares it for the plainest reason of the set: 10.1.1 OrdinaryGetPrototypeOf is a slot read. */
 static const JSClassExoticMethods PROXY_EXOTIC = {
     .get_own_property = proxy_get_own,
     .get_own_property_names = proxy_own_keys,
     .delete_property = proxy_delete,
     .define_own_property = proxy_define_own,
+    .get_prototype = proxy_get_prototype,
     .get_own_property_no_user_code = true,
     .forwarded_object = proxy_forwarded_object,
 };
