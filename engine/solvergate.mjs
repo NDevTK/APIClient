@@ -747,8 +747,12 @@ let bad = 0;
    document's reference aborted, so its repeat never happened, and the tail still read as though seven had been
    asked. That is this file's own three-states-behind-one-answer defect committed by its own reporter — an
    absent verdict is invisible next to a column of `held`, which is precisely the shape "a rung whose ABSENCE
-   and whose ZERO read alike" names. The four states are counted where each is decided and printed by name. */
-const detTally = { "held": 0, "NONDETERMINISTIC": 0, "NOT-MEASURED": 0,
+   and whose ZERO read alike" names. Each state is counted where it is decided and printed by name.
+   AND `held` IS TWO STATES, for the same reason and found the same way — by running this. A `held` across two
+   runs that took the SAME interleaving is a weaker sample than one across two that diverged, and the reading
+   that said so was a NOTE printed only in the strong case, so the weak case was silent and the two read alike
+   in the column. See the verdict site for what each means and why neither is asserted. */
+const detTally = { "held/diverged": 0, "held/undiscriminated": 0, "NONDETERMINISTIC": 0, "NOT-MEASURED": 0,
                    "not reached (the reference itself produced no result)": 0 };
 for (const doc of docs) {
   const runs = new Map();
@@ -834,12 +838,29 @@ for (const doc of docs) {
         for (const x of only1) console.log(`             only in run 1: ${x.slice(0, 300)}`);
         for (const x of only2) console.log(`             only in run 2: ${x.slice(0, 300)}`);
       }
-      /* THE POSITIVE EVIDENCE THAT THE SAMPLE DISCRIMINATED, and it is a reading rather than a verdict. Two
-         runs of one pair that also differ in switch count executed DIFFERENT interleavings and agreed on the
-         findings anyway, which is the invariant surviving the thing it is about; two runs at the same count may
-         simply have executed the same way. Never a failure either way — an agreement in cost is not a defect,
-         it is a weaker sample, and saying which is what stops a column of `held` reading as more than it is. */
-      if (det === "held" && again.result._switches !== ref._switches)
+      /* WHETHER THE SAMPLE DISCRIMINATED IS PART OF THE VERDICT, NOT A NOTE BESIDE IT — and this was a NOTE
+         when it first landed, which made it the same defect as the one directly above it in this file's own
+         history. A `held` whose two runs took the same interleaving and a `held` whose two runs took different
+         ones are different amounts of evidence, and the note fired only on the second: SILENCE on the weak case
+         is exactly what makes the two read alike in the column a reader scans. Measured on the first corpus run
+         of this check, on an idle box: every repeat reproduced the reference's switch count exactly, so all six
+         `held`s were the weak kind and nothing said so. A verdict that cannot distinguish its own strength is
+         the ritual §Testing warns a green becomes.
+         WHAT THE TWO MEAN, precisely, because the weaker one is easy to overclaim in the other direction too.
+         `held/diverged` — the two runs differ in switch count, so they demonstrably executed different
+         interleavings and emitted the same set: the invariant tested against the thing that moves it.
+         `held/undiscriminated` — the counts agree, so this sample offers NO EVIDENCE the two runs interleaved
+         differently. It is not a failure and not a defect in the document: on an idle box the reference simply
+         reproduces itself, which is a property of the BOX (quantum_thread_us is a wall clock on this host, so
+         the schedule only moves when something else is competing for it). It is a weaker sample, and the honest
+         thing is to say which was taken rather than to report both as one word.
+         AND IT IS NOT ASSERTED IN EITHER DIRECTION. Equal counts do not prove equal orders (two orders can
+         coincide in count), and unequal counts are not a demand — requiring divergence would make a quiet box a
+         gate failure, which is a verdict a loaded machine could falsify, the one shape §Testing forbids
+         outright. Both are readings. */
+      if (det === "held")
+        det = again.result._switches !== ref._switches ? "held/diverged" : "held/undiscriminated";
+      if (det === "held/diverged")
         console.log(`         determinism held ACROSS A DIFFERENT INTERLEAVING: ${ref._switches}sw then ` +
                     `${again.result._switches}sw over the same pair — the two runs diverged in execution and ` +
                     "still emitted the same set, which is the invariant tested against the thing that moves it.");
@@ -890,7 +911,7 @@ for (const doc of docs) {
   console.log(`  ${doc_bad ? "FAIL" : "ok  "} ${doc.padEnd(24)} ` +
               `@H ${String(ref.fetchCallSites.length).padStart(3)}  ` +
               `@S ${String(ref.securitySinks.length).padStart(3)}  ` +
-              `err ${String(ref.pageErrors.length).padStart(2)}  det ${det.padEnd(16)} ` +
+              `err ${String(ref.pageErrors.length).padStart(2)}  det ${det.padEnd(20)} ` +
               `${cost}${repeatCost ? "  " + repeatCost : ""}`);
   /* THE PAGE'S OWN ERRORS, PRINTED. A page error is the forcing function naming an unbuilt capability
      (result.h), and a corpus document that throws is exploring less than it looks like it is — the gate would
