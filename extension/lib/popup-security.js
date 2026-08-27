@@ -198,12 +198,44 @@ function _parkedProgress(item) {
   // working, not failing, and the one reading that tells the user this page needs a DECODE in it before any
   // markup breakout is possible at all. `probes` is the producer's own count (solve.h); it is never derived
   // here from position, because the marker vocabulary that tells a probe apart is the engine's.
-  if (item.payloads.length && item.payloads.length === item.probes)
-    return held + ' and every one of them was an inert PROBE — this search has not constructed a breakout at '
-         + 'all, so there is nothing yet that could arrive. The probes measure the context and which of the '
+  //
+  // …AND THAT BRANCH WAS ITSELF TWO OPPOSITE STATES UNDER ONE SENTENCE, WHICH IS THE DEFECT IT WAS ADDED TO
+  // END, COMMITTED ONE LEVEL DOWN. `payloads == probes` says a derivation built nothing; it does NOT say the
+  // derivation ever RAN. A derived class reads its breakout off the string a REAL run handed the sink, so
+  // with no such string there is nothing to read — solve.c's derive_from_witness asserts exactly that
+  // (`nwit > 0`) and is the only route to queue_derived, so `witnessed:0` means NO DERIVATION HAS HAPPENED
+  // and `witnessed:N` means N contexts were read and none of them could be left. Those take opposite work:
+  // the first is the same distance-through-the-document question `turns` and `survived` are asked for, the
+  // second is the joint solve's CORRECT and final answer for a percent-encoded source. The sentence below
+  // stated the SECOND for both, so a search whose probe had simply not got there yet was told the page
+  // "needs a decode, or another source" — a confident wrong instruction, and the exact tell §@S names: a rung
+  // whose ABSENCE and whose ZERO read alike.
+  // `witnessed` IS THE ENGINE'S OWN OBSERVATION AND IT HAD NO READER. solve.c counts it (`nwit`, deduped by
+  // the witness text so two writes of one template are one context), emits it on every parked entry of a
+  // deriving class, and nothing in the shipped path read it — §@S: an observation with a computed writer and
+  // no reader is not a mechanism. It is read here, never re-derived: a view cannot tell from `payloads`
+  // whether a probe arrived, because arrival is measured on a string the popup never sees.
+  // ABSENT IS NOT ZERO AND IS NOT A CASE HERE. solve.c emits `witnessed` only for a class that DERIVES, and
+  // only such a class has probes at all (its `nprobe` counts the leading probe entries; a single-context
+  // class states its vectors at detection and has `probes:0`), so this branch — which requires `probes > 0` —
+  // is reached only where the field is present. The parked block asserts that biconditional rather than
+  // letting a `=== 0` here silently answer for a missing field.
+  if (item.payloads.length && item.payloads.length === item.probes) {
+    if (item.witnessed === 0)
+      return held + ' and every one of them was an inert PROBE whose bytes have NOT yet been seen at this '
+           + 'sink — a breakout for this class is READ off the string a real run hands the sink, so with no '
+           + 'context read there has been nothing to derive one from and the derivation has never run. That '
+           + 'is a distance question, the same one `turns` and `survived` are asked for: the probes have not '
+           + 'got this far through the document yet, and nothing here says anything about whether this '
+           + 'source can carry an escape';
+    return held + ' and every one of them was an inert PROBE — ' + item.witnessed + ' sink context'
+         + (item.witnessed === 1 ? ' was' : 's were') + ' READ and the derivation built no escape from '
+         + (item.witnessed === 1 ? 'it' : 'any of them') + ', so this search has not constructed a breakout '
+         + 'at all and there is nothing that could arrive. The probes measure the context and which of the '
          + 'source\'s declared bytes survive delivery, and a derivation that builds nothing from them is the '
          + 'search reporting that the bytes an escape needs cannot reach this sink through this source. That '
          + 'is neither a scheduling nor a filter question: it is answered by a decode, or by another source';
+  }
   if (item.reached === 0 && item.survived === 0)
     return held + ' and NONE of their bytes has been seen at any sink — the flows run and do not get this far '
          + 'through the document, so this is still a distance question and not one about the payload';
@@ -333,10 +365,20 @@ function renderSecurityPanel() {
       // does not change (a withdrawn candidate is never seeded), and the card's own sentence about them flips
       // from "never been seen at a sink" to "withdrawn before running". A key without it is the cache in front
       // of exactly the correction this column was added to make.
+      // `witnessed` RIDES ALONG AND IS THE SECOND THAT CAN MOVE ALONE — and unlike `withdrawn` it flips the
+      // card's FIRST sentence between two opposite instructions. A deriving class whose context probe finally
+      // reaches the sink and whose derivation builds nothing moves this field and NOTHING else: `payloads`
+      // does not grow (nothing was built), `tried` does not (no candidate was seeded), `reached` stays 0 (a
+      // probe carries no marker), and `turns` need not, since the arrival happens inside a turn a previous
+      // partial already counted. That is precisely the moment "the probes have not got this far yet" becomes
+      // "the bytes an escape needs cannot reach this sink through this source", and a key without it is the
+      // cache in front of that correction — the same defect the comment above records three times. Carried as
+      // itself for the reason `fires` is: absent (a single-context class) and 0 (a deriving class whose probe
+      // has not arrived) are two statements this card renders differently.
       fpParts.push([findings[i].sourceUrl, s.sink, s.source, s.search, s.tried, s.poc,
                     !!s.cspBlocks, !!s.trustedTypes,
                     s.reached, s.turns, s.fires === undefined ? null : s.fires, s.probes, s.payloads,
-                    s.withdrawn]);
+                    s.withdrawn, s.witnessed === undefined ? null : s.witnessed]);
     }
   }
   const fp = JSON.stringify(fpParts);
@@ -640,6 +682,33 @@ function renderSecurityPanel() {
         + "probe — a probe carries no marker by construction, so nothing this search ran could have raised "
         + "`reached` (sink=" + pit.sink + " reached=" + pit.reached + " probes=" + pit.probes
         + " payloads=" + pit.payloads.length + ")");
+      // `witnessed` IS ASSERTED AS A BICONDITIONAL WITH `probes`, BECAUSE ITS ABSENCE AND ITS ZERO ARE THE TWO
+      // FACTS THE CARD NOW SPLITS ON AND A `=== 0` CANNOT TELL THEM APART. solve_json_array emits the field
+      // only for a class whose `derive` column is set, and solve_init asserts the exclusive-or that makes that
+      // the same classes as the ones with probes (a class either states written-down vectors or derives, never
+      // both), while add_pending always pushes the context probe for a deriving class — so `probes > 0` and
+      // `witnessed` present are one fact stated twice, and a record where they disagree is a report about two
+      // different sink classes. WITHOUT THIS the `item.witnessed === 0` branch would be FALSE for a dropped
+      // field and the card would fall through to "answered by a decode, or by another source" about a search
+      // whose probe has not arrived — the confident wrong instruction, reached through a missing field
+      // instead of through a `||`.
+      DCHECK((pit.probes > 0) === (typeof pit.witnessed === "number") && !(pit.witnessed < 0),
+        "a parked @S record's probe count and its context-witness count disagree about whether this sink class "
+        + "DERIVES its breakouts — solve.c emits `witnessed` for exactly the classes that have probes, so one "
+        + "without the other is the relay dropping a field or two classes' records crossed, and the card is "
+        + "about to state whether a derivation ever RAN out of a number it does not have (sink=" + pit.sink
+        + " probes=" + pit.probes + " witnessed=" + JSON.stringify(pit.witnessed) + ")");
+      // AND THE IMPLICATION THAT MAKES THE SPLIT SOUND. queue_derived is reached only from derive_from_witness,
+      // which asserts it holds a witness — so a search with no witness cannot have constructed an escape, and
+      // `witnessed:0` beside a payload list LONGER than its probes means an escape was built from a context
+      // nothing recorded reading. One direction only: a witness that yielded no escape is the search's correct
+      // final answer and is exactly what the branch below reports.
+      DCHECK(pit.witnessed === undefined || pit.witnessed > 0 || pit.payloads.length === pit.probes,
+        "a parked @S record holds a constructed escape for a search that has read no sink context — a derived "
+        + "breakout is read off a witness (solve.c: derive_from_witness is the only route to queue_derived and "
+        + "asserts `nwit > 0`), so these bytes were built by something that is not this search (sink="
+        + pit.sink + " witnessed=" + pit.witnessed + " probes=" + pit.probes + " payloads="
+        + pit.payloads.length + ")");
       DCHECK(pit.fires === undefined || typeof pit.fires === "number",
         "a parked @S record carries a `fires` that is not a count — the field is emitted only for a sink class "
         + "whose breakout becomes a QUEUED program, and its absence is the statement that this class evaluates "
