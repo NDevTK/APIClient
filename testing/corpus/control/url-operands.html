@@ -1,0 +1,49 @@
+<!doctype html><html><head><title>URL operand control</title></head><body>
+<div id="out"></div>
+<script>
+  // INSTRUMENT CONTROL, SECOND DOCUMENT — and the reason it is a second one rather than four more rungs in
+  // index.html is the only structural fact worth stating here: AN ABORT BLINDS EVERY COLUMN OF THE DOCUMENT
+  // IT HAPPENS IN. site.mjs reads the engine's result document, and a run that produced none reports
+  // `endpoints: null, sinks: null, sinkReached: null` — so a rung whose REGRESSION MODE IS AN ABORT, sharing
+  // a document with the columns a census reads, converts one defect into "we measured nothing". index.html's
+  // rungs all answer with a number when they fail; these two answer by taking the renderer down. They are
+  // therefore their own row.
+  //
+  //     node site.mjs control-url http://127.0.0.1:8899/url-operands.html <pass>
+  //
+  // WHAT THEY MEASURE, both through the ENDPOINT column, because a URL the page composes is carried into the
+  // result document verbatim and needs no counter of its own:
+  //
+  //   RUNG 1 — an unknown BASE at URL 6.1's constructor. `window.__CFG` is absent, which CLAUDE.md
+  //   §Attacker-sources makes unknown server-injected input rather than a ReferenceError, so `__CFG.base` is
+  //   a value the page did not determine. The constructor tested only its FIRST argument for that, so the
+  //   base fell through to a coercion that owes C real bytes: the document ended at the ToString. There is
+  //   no number for that state — the row is `crashed` — so the READING is the endpoint below existing at
+  //   all, and its path carries whatever `u.pathname` answered.
+  //
+  //   RUNG 2 — `URL.canParse(rel, unknownBase)`, which is how a bundle spells a validity gate. Two failures
+  //   sat behind it and only the first was loud. The coercion aborted; and with the abort gone, the example
+  //   parse still DROPPED an unknown base, so 4.4 failed on a relative input with a null base and the answer
+  //   came back a confident `false` for a call that had a base all along. A fabricated verdict is worse than
+  //   the crash, because the flow takes the false arm and nothing records that it was invented.
+  //   THE READING IS WHICH ENDPOINTS APPEAR, and it is three-valued rather than pass/fail:
+  //     - neither, row `crashed`        -> the coercion is back
+  //     - `/api/canparse-false` alone   -> the verdict is fabricated: one arm, decided by a parse that never
+  //                                        had the base
+  //     - BOTH, in one run              -> correct. The engine knows nothing about this call, the answer is
+  //                                        absent rather than false, and forced multi-path runs both arms.
+  //   Both arms appearing is not the solver being generous; it is §Solver-half's rule that an unconstrained
+  //   domain permits both outcomes, and it is the only one of the three states that is a measurement.
+  var out = document.getElementById('out');
+
+  var u = new URL('/x', window.__CFG.base);                                      // rung 1
+  fetch('/api/ctor/' + encodeURIComponent(String(u.pathname)));
+  out.textContent = 'ctor ok';
+
+  if (URL.canParse('rel/path', window.__CFG.base)) {                             // rung 2
+    fetch('/api/canparse-true');
+  } else {
+    fetch('/api/canparse-false');
+  }
+</script>
+</body></html>

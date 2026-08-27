@@ -48,6 +48,16 @@ That is this directory's own rule read one column too wide, and it is exactly th
 to make impossible — an instrument that answers one question is silence about the other, not evidence for
 it. Every column a census prints needs a rung here that moves it, or that column's zero is unreadable.
 
+IT IS TWO DOCUMENTS, AND A RUNG GOES IN THE SECOND ONE WHEN ITS REGRESSION MODE IS AN ABORT. `site.mjs`
+reads the engine's result document, so a run that produced none reports `endpoints: null, sinks: null,
+sinkReached: null` — every column at once. A rung that fails by taking the renderer down therefore cannot
+share a document with the columns a census reads, or one defect is published as "we measured nothing".
+`index.html`'s rungs all answer with a number when they fail; `url-operands.html`'s two — an unknown BASE at
+`new URL(rel, base)` and at `URL.canParse` — answer by aborting, so they are their own row. Its second rung
+is three-valued and the middle state is the interesting one: neither endpoint means the coercion is back,
+`/api/canparse-false` ALONE means the verdict is fabricated (one arm, decided by a parse that never had the
+base), and BOTH in one run is the only state that is a measurement.
+
 ## What each instrument refuses to do, and why
 
 `mirror.mjs` saves every resource at its ORIGINAL path and keeps its query. An

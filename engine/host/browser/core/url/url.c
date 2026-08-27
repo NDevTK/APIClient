@@ -1788,7 +1788,20 @@ static int url_example_parse(JSContext *ctx, JSValueConst v, int argc, JSValueCo
     a = url_operand_bytes(ctx, v);
     if (!a) return -1;
     url_record_init(&b2);
-    if (argc > 1 && (bs2 = url_operand_bytes(ctx, argv[1])) != NULL) {
+    if (argc > 1 && !JS_IsUndefined(argv[1])) {
+        /* A BASE THE CALL HAS AND THIS ENGINE HAS NO BYTES FOR IS THE -1 ARM, NOT A PARSE WITHOUT ONE, and
+           getting that wrong is the same fabricated verdict this helper's own three outcomes exist to prevent
+           — reached one operand further in. §4.4 FAILS on a relative input with a null base, so parsing
+           `rel/path` with the base dropped answers a confident `did not parse` for a call that had a base all
+           along: `URL.canParse(rel, unknownBase)` renders that as `false` and the flow takes the arm nothing
+           computed. An operand present with no example is this engine knowing NOTHING about the call, which is
+           exactly what -1 means and what @H reports as absent. Only an operand the call does not HAVE
+           (`argc < 2`, or an explicit undefined) is a genuine null base and parses as one. */
+        if (!(bs2 = url_operand_bytes(ctx, argv[1]))) {
+            url_record_free(&b2);
+            JS_FreeCString(ctx, a);
+            return -1;
+        }
         have_base = url_parse(&b2, bs2, strlen(bs2), NULL);
         JS_FreeCString(ctx, bs2);
     }
