@@ -22,7 +22,31 @@
  *    proceeding past a violated CHECK is worse than crashing. Emitted as @E.
  *
  * Rule of thumb: DCHECK asserts "the engine's OWN logic is correct" (dev-only, the moat's development); CHECK
- * asserts "we must NOT proceed even in production" (safety/security). When unsure, it is a DCHECK. */
+ * asserts "we must NOT proceed even in production" (safety/security). When unsure, it is a DCHECK.
+ *
+ * A POINTER INVARIANT IS NOT ASSERTED BY THE HARDWARE ON THE TARGET THIS ENGINE SHIPS ON, so it is asserted
+ * HERE OR NOWHERE. This engine is built for two targets and they do not agree about what a bad pointer does.
+ * A native binary meets an unmapped page and the process dies at the instruction that dereferenced it, which
+ * is why a whole class of should-never-happen has never needed a macro: the fault WAS the assert. A
+ * WebAssembly module has no such page. A memory access there has exactly ONE trap condition — WebAssembly
+ * Core §4.6.8 Memory Instructions, the `t.load` rule's step 10: the effective address plus the access width
+ * running PAST THE CURRENT MEMORY SIZE. There is no guard region and no reserved block beneath it, so
+ * address 0 is ordinary readable and writable linear memory and a load through a null pointer RETURNS A
+ * VALUE.
+ * WHICH VALUE IS NOT A FACT TO LEAN ON EITHER, AND THAT IS THE POINT RATHER THAN A CAVEAT. It is whatever the
+ * link's memory layout leaves down there, so it changes with a flag nobody was thinking about the pointer
+ * when they set — and a layout that puts the machine stack lowest makes address 0 a slot a trampolining
+ * engine never grows down far enough to reach, so a null WRITE lands somewhere permanently unread. Under NAN
+ * boxing the read is worse than merely un-trapped: a JSValue decoded out of low memory carries a tag with no
+ * reference count, so it is invisible to the refcount machinery that is the one thing that might otherwise
+ * have noticed. What the native build reports as a fault at the origin, the shipped build reports as a
+ * plausible datum — the failure this file exists to make impossible, arriving through the pointer.
+ * THE RULE: assert the pointer EXPLICITLY, where it is ESTABLISHED — the site that decided NULL was allowed
+ * is the only one that knows why — and write the condition over the quantity the DEREFERENCE depends on, not
+ * over a neighbouring quantity that happens to imply it today, because the implication is precisely what the
+ * next route through that site changes. A link-time checking mode exists on the wasm side and is a build's
+ * choice, so no assert may assume one is on; and "it did not crash under wasm" is never evidence that a
+ * pointer was good. */
 #ifndef ENGINE_HOST_CHECK_H
 #define ENGINE_HOST_CHECK_H
 #include <stdio.h>
