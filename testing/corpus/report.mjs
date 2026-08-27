@@ -1,9 +1,12 @@
 // THE CENSUS TABLE. One row per site: outcome, the abort's file:line, endpoints learned, flows/switches,
 // whether the analysis finished. Then the distinct crash signatures ranked by how many sites hit each.
 //
-// OUTCOME IS THREE-WAY AND THE THREE ARE NOT MERGED (an earlier pass conflated them and it cost real time):
+// THE OUTCOMES ARE NOT MERGED (an earlier pass conflated them and it cost real time):
 //   ENGINE-ABORT   an @WHY/@E from the engine or the trusted zone — a DCHECK/CHECK naming an unbuilt
 //                  capability or a violated invariant. The renderer dies; the run has no result document.
+//   ABORT(unnamed) the run crashed and this file could not name the assert — the ranked queue below is SHORT
+//                  by that entry, so it is its own outcome and never folded into ENGINE-ABORT. A site that
+//                  is both across passes reads ABORT(part unnamed). See the shouted section under the queue.
 //   PAGE-THROW     the page's own uncaught throw on a capability this engine honestly lacks. It arrives as
 //                  a `pageErrors` row that is NOT an engine assert, or as a @LOG the page itself emitted.
 //   FIXTURE/NET    the site did not deliver a document (HTTP 5xx, proxy refusal, navigation failure). Not a
@@ -36,15 +39,59 @@ const unesc = (s) => s.replace(/\\\\/g, '\\').replace(/\\"/g, '"').replace(/\\n/
    one-site entries instead of one two-site entry. Ranking is what this section is for, so the per-run name is
    folded out: a run of 8+ hex digits is an address or a hash, never part of what to build. */
 const degensym = (s) => s.replace(/[0-9a-f]{12,}/gi, '<id>').replace(/\b0x[0-9a-f]{4,}\b/gi, '<addr>');
+
+/* A SIGNATURE'S SOURCE LOCATION IS REPO-RELATIVE, BECAUSE THE PREFIX IS A FACT ABOUT THE BUILD MACHINE AND
+   THE DEFECT IS NOT. The location arrives as whatever `__FILE__` baked into the object: `engine/build.mjs`
+   passes `-ffile-prefix-map=<root>/=` so a current build already emits `engine/host/.../x.c`, but an artifact
+   built before that flag -- or by any builder that does not pass it -- emits the ABSOLUTE path of the
+   directory the build ran in, and §Testing REQUIRES that directory to be a frozen snapshot worktree that is
+   deleted afterwards. Keying on it is therefore the gensym-splitting defect degensym exists to prevent, one
+   level up: the same DFAIL measured from two builds ranks as two one-site entries, and the ranking is the
+   whole point of this section. So the key is rooted at the last `engine/` or `extension/` path SEGMENT.
+   AN ABSOLUTE PATH THAT CANNOT BE ROOTED IS FATAL, never kept as a key. A key carrying a build directory
+   silently splits a defect and nothing in the output can contradict it -- the same reason harness.js refuses
+   to launch on an ABI table it cannot parse rather than reporting agreement it never established. A path that
+   is ALREADY relative needs no root marker: it is machine-independent as it stands, which is the property
+   this function is protecting, so it is returned untouched. */
+function srcref(raw) {
+  const p = raw.trim();
+  const m = [...p.matchAll(/(?:^|\/)(engine\/|extension\/)/g)].pop();
+  if (m) return p.slice(m.index + (m[0].length - m[1].length));
+  if (!p.startsWith('/')) return p;
+  throw new Error(`report.mjs: an assert emitted the source location \`${p}\`, which is an ABSOLUTE path with\n` +
+    `  no \`engine/\` or \`extension/\` segment to root it at. That location cannot be a ranking key: it names\n` +
+    `  the directory the build ran in, so the same defect from the next build would rank as a second entry.\n` +
+    `  Teach srcref() the source root this producer compiles from rather than letting the path through.`);
+}
+
+/* THE THREE FILES THAT EMIT AN ASSERTION, AND EVERY TAG EACH OF THEM WRITES. This list used to have three
+   patterns too, and they covered ONE of the six shapes plus half of another -- so a whole half of the engine
+   was invisible to the ranked queue while every row still printed as a classified ENGINE-ABORT. Measured on
+   a live pass: astexplorer.net aborted at `engine/qjs/quickjs.c` DCHECK "the arg-list length is coerced once"
+   and produced ZERO signatures, because the pattern for that shape required the location to begin with one
+   particular checkout path -- a literal that the current build.mjs can no longer produce for anybody, so the
+   pattern matched nothing for every legal artifact. That is the read-with-no-writer defect with the arrow
+   reversed: four producers writing, nothing reading, and a default (`sigs.length ? ... : ...`) turning the
+   silence into a plausible row instead of a crash.
+     engine/host/check.h        `@WHY`/`@E {"phase":"assert","cond":…,"at":"file:line","reason":…}` (JSON)
+     engine/qjs/quickjs-check.h `@WHY`/`@E <msg> (file:line)`  -- the submodule cannot include the host header,
+                                so its EMIT is a plain line; this is the interpreter, the trampoline, every
+                                step machine and libregexp, i.e. where forced execution actually runs.
+     extension/check.js         `@WHY DCHECK failed:`/`@WHY DFAIL:`/`@E CHECK failed:`/`@E CHECK_FAIL:` -- a
+                                thrown Error, so it carries a message and NO file:line; the file is the key.
+   Each emitter gets ONE pattern covering BOTH its tags, so a CHECK (always fatal, dev AND release) can never
+   be the shape nobody reads while its DCHECK sibling is read. */
+const JS_MIRROR_TAGS = 'DCHECK failed|DFAIL|CHECK failed|CHECK_FAIL';
 function signatures(text) {
   const t = unesc(unesc(text));
   const out = new Set();
   for (const m of t.matchAll(/"cond":"((?:[^"\\]|\\.)*)","at":"([^"]+)"/g))
-    out.add(m[2].replace('/home/user/APIClient/', '') + ' :: ' + degensym(m[1]));
-  for (const m of t.matchAll(/@WHY ([^{][^\n]*?) \((\/home\/user\/APIClient\/[^):]+:\d+)\)/g))
-    out.add(m[2].replace('/home/user/APIClient/', '') + ' :: ' + degensym(m[1].trim()));
-  for (const m of t.matchAll(/@WHY DCHECK failed: ([^\n"]{10,200})/g))
-    out.add('extension/check.js (js side) :: ' + degensym(m[1].trim()).slice(0, 120));
+    out.add(srcref(m[2]) + ' :: ' + degensym(m[1]));
+  for (const m of t.matchAll(new RegExp(
+        '@(?:WHY|E) (?!\\{)(?!(?:' + JS_MIRROR_TAGS + '):)([^\\n]*?) \\(([^()\\s]+:\\d+)\\)', 'g')))
+    out.add(srcref(m[2]) + ' :: ' + degensym(m[1].trim()));
+  for (const m of t.matchAll(new RegExp('@(?:WHY|E) (' + JS_MIRROR_TAGS + '): ([^\\n"]{4,200})', 'g')))
+    out.add('extension/check.js (js side) :: ' + m[1] + ' ' + degensym(m[2].trim()).slice(0, 120));
   return [...out];
 }
 
@@ -54,6 +101,11 @@ function signatures(text) {
    reading it for an earlier pass's row attributes one run's abort to another's numbers. */
 const bySig = new Map();
 const seen = new Map();      // id -> [per-pass measurement]
+/* AN ABORT THIS FILE CANNOT NAME IS THE ONE THING THE QUEUE MUST SHOUT ABOUT, because it is the state in
+   which the queue is INCOMPLETE and every other column still reads as a finished measurement. Collected per
+   (site, pass) with the first assertion-shaped line found beside it, so a producer the patterns above do not
+   speak announces itself with the text to teach them, instead of subtracting one entry from the ranking. */
+const unnamed = [];
 for (const p of passes) for (const r of p.rows) {
   let log = '';
   for (const n of [p.label + '-' + r.id + '.log', r.id + '.log']) {
@@ -66,6 +118,10 @@ for (const p of passes) for (const r of p.rows) {
     : sigs.length ? 'ENGINE-ABORT'
       : r.crashedMine ? 'ABORT(unclassified)'
         : 'RAN';
+  if (outcome === 'ABORT(unclassified)') {
+    const line = (blob.match(/@(?:WHY|E)[^\n]{0,300}/) || [])[0];
+    unnamed.push({ id: r.id, pass: p.label, line: line || '(no @WHY or @E line anywhere in this row or its log)' });
+  }
   if (!seen.has(r.id)) seen.set(r.id, []);
   seen.get(r.id).push({
     pass: p.label, outcome, finished: r.docsAnswered > 0 && !r.crashedMine,
@@ -96,9 +152,14 @@ const spread = (ms, k) => {
 const table = [...seen.entries()].map(([id, ms]) => ({
   id, stack: stacks.get(id) || '', measurements: ms,
   /* THE OUTCOME IS THE WORST SEEN, and how often, so a site that aborts in two passes of three cannot be
-     reported as one that runs. */
+     reported as one that runs. AND AN ABORT NOBODY COULD NAME KEEPS ITS OWN WORD HERE. `.includes('ABORT')`
+     folded `ABORT(unclassified)` into `ENGINE-ABORT`, so the row that proves the ranked queue is missing an
+     entry printed as the row that proves it is complete -- the three-states-behind-one-answer defect, in the
+     column a reader trusts most. Named and unnamed are different findings and one site can be both. */
   outcome: ms.some((m) => m.outcome === 'NET/FIXTURE') ? 'NET/FIXTURE'
-    : ms.some((m) => m.outcome.includes('ABORT')) ? 'ENGINE-ABORT' : 'RAN',
+    : ms.some((m) => m.outcome === 'ENGINE-ABORT')
+      ? (ms.some((m) => m.outcome === 'ABORT(unclassified)') ? 'ABORT(part unnamed)' : 'ENGINE-ABORT')
+      : ms.some((m) => m.outcome === 'ABORT(unclassified)') ? 'ABORT(unnamed)' : 'RAN',
   abortedPasses: ms.filter((m) => m.outcome.includes('ABORT')).length,
   finishedPasses: ms.filter((m) => m.finished).length,
   n: ms.length,
@@ -114,10 +175,10 @@ const table = [...seen.entries()].map(([id, ms]) => ({
    and found clean, and `String(null)` would have printed "null" into a numeric column. */
 const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 console.log(`${passes.length} pass(es): ${passes.map((p) => p.label + '(' + p.rows.length + ')').join(' ')}`);
-console.log('\n' + pad('site', 20) + pad('outcome', 13) + pad('abort/n', 8) + pad('fin/n', 7) +
+console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
   pad('ep', 8) + pad('sinks', 7) + pad('flows', 12) + pad('switches', 12) + pad('load', 10) + 'signature');
 for (const t of table)
-  console.log(pad(t.id, 20) + pad(t.outcome, 13) + pad(t.abortedPasses + '/' + t.n, 8) +
+  console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
     pad(t.finishedPasses + '/' + t.n, 7) + pad(t.ep, 8) + pad(t.sk, 7) + pad(t.fl, 12) + pad(t.sw, 12) +
     pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
@@ -130,6 +191,15 @@ for (const [s, ids] of [...bySig.entries()].sort((a, b) => b[1].size - a[1].size
   const [at, ...rest] = s.split(' :: ');
   const why = rest.join(' :: ');
   console.log(`${ids.size}  ${at}\n     ${verbose || why.length <= 300 ? why : why.slice(0, 300) + ' …(SIGS=full for the rest)'}\n     sites: ${[...ids].join(', ')}`);
+}
+/* AND WHAT THE QUEUE ABOVE IS MISSING, PRINTED WHERE THE QUEUE IS READ. A ranking is only a work queue if a
+   defect that cannot be named is louder than the ones that can -- otherwise the queue's own gaps are its
+   quietest entries. The line is quoted verbatim so the fix is to teach signatures() that emitter's shape,
+   which is the one repair a reader could not derive from a count. */
+if (unnamed.length) {
+  console.log('\n*** ' + unnamed.length + ' ABORT(S) THIS FILE COULD NOT NAME — the ranking above is SHORT by ' +
+              'that many entries, and no count in this report can say so ***');
+  for (const u of unnamed) console.log(`  ${u.id} [${u.pass}]  ${u.line}`);
 }
 
 /* ONE ARTIFACT PER CENSUS OR THE CENSUS IS NOT ONE MEASUREMENT. More than one hash here means rows either
