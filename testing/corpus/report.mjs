@@ -287,12 +287,17 @@ for (const [at, e] of [...bySig.entries()].sort((a, b) => b[1].sites.size - a[1]
    because a family with one member is exactly as informative as the file ranking and a family with five is
    not something the file ranking can say at all. */
 const byDir = new Map();
-for (const [s, ids] of bySig) {
-  const dir = s.split(' :: ')[0].replace(/\/[^/]*:\d+$/, '') || '(root)';
+for (const [at, sig] of bySig) {
+  /* `at` IS ALREADY `file:line` -- it is the key this map was built under and the string printed verbatim by
+     the ranking above, so a ` :: ` split here parsed a shape that never reaches this line. The value beside
+     it is `{sites, reasons}` and never a bare list; iterating it directly threw on the FIRST entry, which is
+     why nothing below this loop -- the component ranking, the unnamed-abort count, and the one-artifact
+     check that is the whole guarantee a census is ONE measurement -- has ever printed a line. */
+  const dir = at.replace(/\/[^/]*:\d+$/, '') || '(root)';
   if (!byDir.has(dir)) byDir.set(dir, { sites: new Set(), sigs: new Set() });
   const e = byDir.get(dir);
-  for (const i of ids) e.sites.add(i);
-  e.sigs.add(s.split(' :: ')[0]);
+  for (const i of sig.sites) e.sites.add(i);
+  e.sigs.add(at);
 }
 console.log('\n=== the same aborts grouped by COMPONENT, ranked by sites hit ===');
 for (const [dir, e] of [...byDir.entries()].sort((a, b) => b[1].sites.size - a[1].sites.size ||
