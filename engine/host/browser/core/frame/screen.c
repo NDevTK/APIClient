@@ -146,20 +146,25 @@ static JSValue js_screen_get(JSContext *ctx, JSValueConst this_val, int magic)
 /* ---- the per-realm record --------------------------------------------------------------------------------- */
 
 /* An ENVIRONMENT member: opaque for control flow, carrying what a real display reports. One helper, so a member
-   added later cannot quietly arrive as bare-concrete — the shape and the source identity are the same string
-   here because a Screen member IS its own source, and the source is the DISPLAY rather than the document, so
-   it is not keyed per realm the way viewport.c's members are (a UA presents every document of a page on one
-   screen; it presents each in its own viewport). */
+   added later cannot quietly arrive as bare-concrete — a Screen member IS its own source, so both halves are
+   spelled from ONE token, and the source is the DISPLAY rather than the document, so it is not keyed per realm
+   the way viewport.c's members are (a UA presents every document of a page on one screen; it presents each in
+   its own viewport).
+   THE SHAPE IS THAT TOKEN IN BRACES AND THE SOURCE IDENTITY IS IT BARE — concolic_new asserts it, and this
+   file used to pass one string as both. `screen.width < 768` is the responsive gate every bundle writes, and
+   without a brace in the shape concolic_hole_key answered NULL, so the ordering hook filed no bound and the
+   arm's endpoint reported a parameter nothing had narrowed. */
 static void screen_env(JSContext *ctx, JSValueConst rec, int idx, JSValue example)
 {
-    char path[64];
+    char path[64], hole[66];
     JSValue v;
 
     DCHECK(idx >= 0 && idx < SCR_N, "a Screen environment value was minted for a non-member index");
     DCHECK(strlen(SCR_NAME[idx]) + 8 < sizeof(path), "a Screen member name longer than any in the IDL");
     CHECK(!JS_IsException(example), "a Screen member's example could not be allocated");
     snprintf(path, sizeof(path), "screen.%s", SCR_NAME[idx]);
-    v = concolic_new(ctx, path, path, example);
+    snprintf(hole, sizeof(hole), "{%s}", path);
+    v = concolic_new(ctx, hole, path, example);
     CHECK(!JS_IsException(v), "minting a Screen environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }

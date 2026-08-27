@@ -189,6 +189,7 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
     const char *shapes[CSS_ENV_FACT_COUNT];
     const char *srcs[CSS_ENV_FACT_COUNT];
     char key[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
+    char hole[CSS_ENV_FACT_COUNT][VIEWPORT_SRC_MAX];
     int f, n = 0;
 
     if (len.env == CSS_ENV_NONE) {
@@ -218,7 +219,14 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
                "viewport.h makes a document that is not fully active have none — so this length was derived "
                "from a rectangle that does not exist rather than from one whose size is a UA choice");
         viewport_src_key(len.realm, VIEWPORT_FACT[f].member, key[n], sizeof key[n]);
-        shapes[n] = VIEWPORT_FACT[f].member;
+        /* EACH MEMBER'S SHAPE IS ITS OWN HOLE, exactly as it is at the scalar seam above — the joint's display
+           form is these joined, so a member that named no hole would leave the composed shape naming one
+           fewer than the value depends on, and concolic_hole_key would answer for the set under a name
+           missing a member. */
+        DCHECK(strlen(VIEWPORT_FACT[f].member) + 3 <= sizeof hole[n],
+               "a CSSOM VIEW fact's member name is too long to brace");
+        snprintf(hole[n], sizeof hole[n], "{%s}", VIEWPORT_FACT[f].member);
+        shapes[n] = hole[n];
         srcs[n] = key[n];
         n++;
     }
@@ -226,13 +234,20 @@ JSValue viewport_env_derived(CssPx len, JSValue computed)
     return concolic_source_wrap_joint(len.realm, shapes, srcs, n, computed);
 }
 
-/* See viewport.h: the one seam, and the one speller of the key. */
+/* See viewport.h: the one seam, and the one speller of the key.
+   THE SHAPE IS THE MEMBER IN BRACES AND THE SOURCE IDENTITY IS THE PER-REALM KEY — two different questions,
+   and the shape used to be the bare member, which names no hole. concolic_new asserts the brace now, and the
+   reason it matters here is `innerWidth` and `devicePixelRatio`: the breakpoint and the retina gate, branched
+   on by nearly every responsive bundle, whose every recorded bound went to concolic_hole_key and came back
+   NULL. visualViewport reaches this same seam with its member already qualified, so the two never collide. */
 JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
 {
-    char src[VIEWPORT_SRC_MAX];
+    char src[VIEWPORT_SRC_MAX], hole[VIEWPORT_SRC_MAX];
 
     viewport_src_key(ctx, member, src, sizeof src);
-    return concolic_source_wrap(ctx, member, src, computed);
+    DCHECK(strlen(member) + 3 <= sizeof hole, "a CSSOM VIEW member name too long to brace");
+    snprintf(hole, sizeof hole, "{%s}", member);
+    return concolic_source_wrap(ctx, hole, src, computed);
 }
 
 /* CSSOM VIEW §4: "the x-coordinate, RELATIVE TO THE INITIAL CONTAINING BLOCK ORIGIN, of the left of the

@@ -953,7 +953,10 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     }
     DCHECK(s->hdr.stage == TIMEOUT_BUILD, "AbortSignal.timeout resumed into a stage §3.2 does not have");
 
-    flag = concolic_new(ctx, "AbortSignal.timeout().aborted", "AbortSignal.timeout().aborted", JS_FALSE);
+    /* The SHAPE carries its provenance in braces and the source identity is it bare — concolic_new's rule.
+       A timeout signal's flag is the one §3.2 value a page branches on (`if (signal.aborted)` picks the
+       fallback path and its endpoints), so a shape naming no hole meant that gate recorded nothing. */
+    flag = concolic_new(ctx, "{AbortSignal.timeout().aborted}", "AbortSignal.timeout().aborted", JS_FALSE);
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
     s->result = signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
     /* §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the

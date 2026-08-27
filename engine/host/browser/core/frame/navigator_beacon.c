@@ -121,7 +121,7 @@ static void beacon_assert_this_realm(JSContext *ctx, JSValueConst this_val)
    different question at the first branch and discard every arm it had recorded. */
 static JSValue beacon_queue_result(JSContext *ctx, const char *url_text)
 {
-    char *name;
+    char *name, *hole;
     JSValue v;
     int n;
 
@@ -132,10 +132,20 @@ static JSValue beacon_queue_result(JSContext *ctx, const char *url_text)
     name = malloc((size_t)n + 1);
     CHECK(name, "beacon: OOM naming the queue result's source");
     snprintf(name, (size_t)n + 1, "navigator.sendBeacon(%s)", url_text);
+    /* THE SHAPE IS THAT NAME IN BRACES — concolic_new's rule, and it is spelled here rather than folded into
+       the format above because the two halves are different facts. `url_text` may itself be an unknown URL's
+       display shape, so the shape can nest (`{navigator.sendBeacon({location.hash})}`); concolic_hole_key
+       strips every brace, so the nesting composes to one stable name rather than to two. */
+    n = snprintf(NULL, 0, "{%s}", name);
+    CHECK(n > 0, "beacon: measuring the queue result's display shape failed");
+    hole = malloc((size_t)n + 1);
+    CHECK(hole, "beacon: OOM naming the queue result's hole");
+    snprintf(hole, (size_t)n + 1, "{%s}", name);
     /* THE SEAM, not concolic_new: a host that is not exploring (the conformance runner installs the value
        semantics and NOT the source overlay) gets the plain boolean back, which is what a spec test reads. */
-    v = concolic_source_wrap(ctx, name, name, JS_TRUE);
+    v = concolic_source_wrap(ctx, hole, name, JS_TRUE);
     free(name);
+    free(hole);
     return v;
 }
 

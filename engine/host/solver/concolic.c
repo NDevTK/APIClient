@@ -2013,6 +2013,29 @@ static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *s
 JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue example) {
     const char *f[1];
 
+    /* A SOURCE'S SHAPE NAMES A HOLE, AND THE BRACE IS WHAT MAKES IT ONE — asserted at the ONE mint every
+       source goes through, because it was true of most components and silently false for six.
+       concolic_hole_key is the only route there is from a shape to a domain, and its first line is
+       `if (!strchr(shape, '{')) return NULL`. So an unbraced source has no hole key, and BOTH ends of the
+       domain machinery then go quiet without failing: concolic_cmp_subject mints no subject, the ordering
+       hook's `txt = subj ? literal_tok(...) : NULL` means pred_set_bound is never called at all, and
+       endpoint.c looks a domain up under a name nothing was ever filed under. The constraint is OBSERVED and
+       DROPPED — `if (screen.width < 768)` records nothing, `navigator.userAgent === x` records nothing — and
+       the parameter is emitted carrying provenance and no domain, which §@S calls a WRONG report rather than
+       a partial one, because its silence about the gate reads as "anything goes".
+       ENDPOINT.c CANNOT USE A LAXER RULE, which is why the brace belongs here rather than there: kv_pairs
+       hands concolic_hole_key an arbitrary query-value SUBSTRING, so `lang=en-US` would mint a hole named
+       `en-US` and a concrete value would borrow a domain. The brace is what tells a hole from a literal once
+       the concolic that carried it is gone, so it has to be in the shape from the start.
+       AND IT MAKES ABSENCE MEAN ONE THING. pred_new documents a NULL subject as the honest answer for the
+       unnameable `{}` — one fact. It was also the answer for every navigator, screen and viewport member,
+       which is a different fact wearing the same NULL. With this, `{}` is the only one left. */
+    DCHECK(shape != NULL && strchr(shape, '{') != NULL,
+           "a SOURCE was minted with a display shape that names no hole — a shape carries its provenance in "
+           "braces, because concolic_hole_key reads a hole by them and it is the only path from a shape to a "
+           "domain. Without one this value's every gate is observed and discarded, and its parameter reports "
+           "provenance with no constraint. Spell the shape as the src in braces (core/frame/location.h is the "
+           "pattern); a shape that is not simply `{src}` is fine as long as it names its hole");
     f[0] = src;
     /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
        seventeen components that owns a source would have to spell the same way twice. */

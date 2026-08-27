@@ -276,22 +276,29 @@ static void nav_put(JSContext *ctx, JSValueConst rec, int idx, JSValue v)
 }
 
 /* An ENVIRONMENT member: opaque for control flow, carrying what a real browser would answer. One helper so a
-   later member cannot accidentally be added as bare-concrete — the shape and the source identity are the same
-   string here because a Navigator member IS its own source. */
+   later member cannot accidentally be added as bare-concrete — a Navigator member IS its own source, so the
+   two halves are spelled from ONE token here.
+   THE SHAPE IS THAT TOKEN IN BRACES AND THE SOURCE IDENTITY IS IT BARE, which is the rule concolic_new
+   asserts and which this file used to break by passing one string as both. The consequence was not a
+   cosmetic one: `navigator.userAgent`, `navigator.maxTouchPoints` and `navigator.hardwareConcurrency` are
+   three of the most-branched-on values a real bundle has, and with no brace in the shape concolic_hole_key
+   answered NULL for every one of them — so every gate over this interface was observed and then dropped, and
+   the endpoints behind those gates reported their parameters with no domain at all. */
 static void nav_env(JSContext *ctx, JSValueConst rec, int idx, JSValue example)
 {
-    char path[64];
+    char path[64], hole[66];
     JSValue v;
 
     DCHECK(idx >= 0 && idx < NAV_N, "a Navigator environment value was minted for a non-member index");
     DCHECK(strlen(NAV_NAME[idx]) + 11 < sizeof(path), "a Navigator member name longer than any in the IDL");
     snprintf(path, sizeof(path), "navigator.%s", NAV_NAME[idx]);
+    snprintf(hole, sizeof(hole), "{%s}", path);
     /* THE SEAM, and not concolic_new. §CLAUDE splits the halves exactly here: the browser computes what the
        spec says the member is, and the SOLVER decides it is also symbolic — so a host that installs the value
        semantics and NOT the source overlay (the conformance runner does exactly that) gets the plain value
        back. Minting directly made every environment member of this interface answer an OBJECT there, so
        `typeof navigator.userAgent` was "object" in the one host whose whole job is measuring fidelity. */
-    v = concolic_source_wrap(ctx, path, path, example);
+    v = concolic_source_wrap(ctx, hole, path, example);
     CHECK(!JS_IsException(v), "minting a Navigator environment value failed");
     JS_SetPropertyUint32(ctx, rec, (uint32_t)idx, v);
 }

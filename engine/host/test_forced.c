@@ -4163,9 +4163,15 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     /* AN UNKNOWN CARRYING A NUMERIC EXAMPLE, which is what §13.15.3 step 1.c's arm turns on. Its display form
        is a HOLE so endpoint.c mints a path parameter for it and aligns the computed address against the shape,
-       which is how the example is readable at all: a query value is read off the SHAPE. No source this fixture
-       already reaches has both halves — `screen.width` carries a Number and displays unbraced, `{state}`
-       displays as a hole and carries no example. */
+       which is how the example is readable at all: a query value is read off the SHAPE.
+       IT WAS INTRODUCED BECAUSE NO REAL SOURCE HAD BOTH HALVES, AND THAT SENTENCE WAS A BUG REPORT NOBODY
+       READ AS ONE. What it observed — "`screen.width` carries a Number and displays unbraced" — was not a
+       property of Screen members; it was navigator.c, screen.c, viewport.c, navigator_beacon.c and abort.c
+       spelling a source shape with no brace in it, which made concolic_hole_key answer NULL and dropped every
+       domain those sources' gates recorded. concolic_new asserts the brace now and all five are fixed, so
+       `screen.width` HAS both halves and this synthetic source duplicates a real one. Collapsing the rows
+       that use `num` onto `screen.width` is the follow-through, and it is left to whoever next runs this
+       fixture rather than done blind. */
     JS_SetPropertyStr(ctx, g, "num", concolic_new(ctx, "{num}", "{num}", JS_NewInt32(ctx, 1920)));
     /* INDEXED DATABASE §2.7/§2.8's two operations, until §4.6/§4.9/§5.1 exist to state them as members. */
     JS_FreeValue(ctx, g);
