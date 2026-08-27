@@ -212,11 +212,18 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
 /* EVERY NAVIGABLE OF THIS AGENT, IN TREE ORDER — a container before what it contains, siblings in the tree
    order of their navigable containers. As an Array of WindowProxy (owned).
  *
- * IT IS HERE BECAUSE THE TREE IS. Two components need this walk for two different reasons — HTML §8.1.7.3 step
- * 2's document list and the per-document LOAD LIFECYCLE — and a second copy of a tree walk is the second answer
- * that is always subtly wrong: nav_find_in_tree below is a third, breadth-first, because §7.1 wants the NEAREST
- * match rather than the outermost. Each caller applies its OWN filters to this list; what they share is the
- * ORDER, which is the spec's and not theirs.
+ * "OF THIS AGENT" IS THE BROWSING CONTEXT GROUP'S TOP-LEVEL TRAVERSABLES AND THEIR TREES, NOT ONE TREE. HTML
+ * §8.1.1 gives a similar-origin window agent ONE event loop, and all three consumers of this list are facts
+ * about that loop rather than about a document's frames — §8.1.7.3 step 2's document list, §8.7's timer task
+ * source, §13.2.7's per-document load lifecycle. An AUXILIARY navigable (§7.3.1.7 step 8's, what
+ * `window.open()` makes) is its OWN top-level traversable, reachable from the group and from no tree, so a
+ * single-tree answer left every popup out of all three at once: its document stayed at "loading" for ever, with
+ * no DOMContentLoaded, no `load`, no `pageshow`, no timers and no rendering opportunities.
+ *
+ * IT IS HERE BECAUSE THE TREE IS, and a second copy of this walk is the second answer that is always subtly
+ * wrong: nav_find_in_tree below is a third, breadth-first, because §7.1 wants the NEAREST match rather than the
+ * outermost. Each caller applies its OWN filters to this list; what they share is the ORDER, which is the
+ * spec's and not theirs.
  *
  * THE WALK IS ITERATIVE over an explicit worklist, for the reason nav_find_in_tree's is: a self-call would be
  * C-to-C recursion whose depth is the PAGE's iframe nesting, which is the page's to choose.

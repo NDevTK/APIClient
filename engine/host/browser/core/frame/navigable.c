@@ -1528,14 +1528,13 @@ static JSValue nav_find_in_tree(JSContext *ctx, JSValueConst root, const char *n
 /* See navigable.h. The ORDER is nav_preorder's; what is this walk's own is the FILTER — a navigable this
    instance has not materialized has no document to run a lifecycle for, and a peer's is not this agent's to
    answer for at all. */
-JSValue navigable_tree_order(JSContext *ctx)
+/* One tree of `out`, filtered — see navigable_tree_order. `nout` is carried across the trees so the caller
+   still receives ONE list in ONE order. */
+static void nav_append_tree(JSContext *ctx, JSValueConst out, uint32_t *nout, JSValueConst root)
 {
-    JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
-    JSValue all = nav_preorder(ctx, top), out = JS_NewArray(ctx), len;
-    uint32_t i, n = 0, nout = 0;
+    JSValue all = nav_preorder(ctx, root), len;
+    uint32_t i, n = 0;
 
-    JS_FreeValue(ctx, top);
-    CHECK(!JS_IsException(out), "navigable: OOM walking this agent's navigables");
     len = JS_GetPropertyStr(ctx, all, "length");
     JS_ToUint32(ctx, &n, len);
     JS_FreeValue(ctx, len);
@@ -1543,9 +1542,49 @@ JSValue navigable_tree_order(JSContext *ctx)
         JSValue proxy = JS_GetPropertyUint32(ctx, all, i);
 
         if (window_proxy_is_remote(proxy) || !window_proxy_materialized(proxy)) JS_FreeValue(ctx, proxy);
-        else JS_SetPropertyUint32(ctx, out, nout++, proxy);   /* the list takes this reference */
+        else JS_SetPropertyUint32(ctx, (JSValue)out, (*nout)++, proxy);   /* the list takes this reference */
     }
     JS_FreeValue(ctx, all);
+}
+
+/* See navigable.h. The ORDER is nav_preorder's; what is this walk's own is the FILTER and the SET OF ROOTS.
+ *
+ * IT IS EVERY TOP-LEVEL TRAVERSABLE OF THE GROUP AND NOT ONLY THE ASKING DOCUMENT'S, and that is the whole
+ * difference between "this document's frames" and "this agent's documents" — which is what all three of its
+ * consumers are about. §8.1.1 gives a similar-origin window agent ONE event loop, so §8.1.7.3's document list,
+ * §8.7's timer task source and §13.2.7's load lifecycle are agent facts; each of them asked this function and
+ * each of them got one TREE. An AUXILIARY navigable is a top-level traversable of its own (§7.3.1.7 step 8),
+ * reachable from the group and from nothing else, so a `window.open()`ed popup was in NONE of those three
+ * lists: its document never left "loading", so it never fired DOMContentLoaded, never fired `load`, never
+ * fired `pageshow`, and its timers and rendering opportunities did not exist either. A popup that posts back to
+ * its opener from a `load` listener — which is how WPT's own /common/PrefixedPostMessage.js resource documents
+ * are written — therefore posted nothing, ever, and the opener waited.
+ * THE ASKING DOCUMENT'S TREE COMES FIRST and the group's other roots follow it, so the order within the tree
+ * every existing caller was already seeing is unchanged; what is added is appended. The root traversable is
+ * skipped when the group also holds it, exactly as navigable_choose_name's step 9 loop skips it, because a
+ * duplicate here is a document whose lifecycle stage would be asked for twice in one pass.
+ * THE FILTER IS UNCHANGED AND IS WHAT KEEPS THIS FREE: an unmaterialized navigable is still not in the list, so
+ * widening the roots adds the popups a page actually opened and not one entry per navigable a forced-execution
+ * frontier ever created. */
+JSValue navigable_tree_order(JSContext *ctx)
+{
+    JSValue top = window_proxy_top_navigable(ctx, document_window_proxy(ctx));
+    JSValue out = JS_NewArray(ctx), len;
+    uint32_t i, n = 0, nout = 0;
+
+    CHECK(!JS_IsException(out), "navigable: OOM walking this agent's navigables");
+    nav_append_tree(ctx, out, &nout, top);
+    DCHECK(JS_IsArray(g_group), "the browsing context group's list was read before navigable_init built it");
+    len = JS_GetPropertyStr(ctx, g_group, "length");
+    JS_ToUint32(ctx, &n, len);
+    JS_FreeValue(ctx, len);
+    for (i = 0; i < n; i++) {
+        JSValue other = JS_GetPropertyUint32(ctx, g_group, i);
+
+        if (!JS_IsSameValue(ctx, other, top)) nav_append_tree(ctx, out, &nout, other);
+        JS_FreeValue(ctx, other);
+    }
+    JS_FreeValue(ctx, top);
     return out;
 }
 
