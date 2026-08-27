@@ -3093,6 +3093,19 @@ int main(int argc, char **argv)
             break;
         }
 
+        /* THE HOST'S HALF OF EVERY SLICE BOUNDARY, and it is asked at EVERY one rather than only at a stall —
+           the same protocol the extension's bridge speaks (engine.h): paying only at a stall makes one flow's
+           reply conditional on every other flow in the document also becoming blocked. Notices first: a
+           document announced but not yet provisioned is one a read would arrive for before its instance
+           exists. */
+        did = wpt_answer_host_requests(ctx);
+        if (wpt_issue_pending() > 0) did = 1;
+        if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
+        /* AFTER THE HOST'S HALF AND NOT BEFORE IT. The final step emits like any other — a notice naming a
+           document, a reply a flow was owed — and a DONE checked ahead of this line would leave exactly those
+           undrained, which is the emitting-end-invisible drop the router's own DFAIL is about. */
+        if (r == ENGINE_STEP_DONE) break;
+
         /* THE MEASUREMENT ENDED, so the session does — HTML §7.3.1.6 "Navigable destruction". `done()` is
            testharness's own end of the test and the verdict is already printed (js_wpt_test_complete says why
            this is the end of a MEASUREMENT and not a bound on work). What performs the destruction is the
@@ -3115,21 +3128,22 @@ int main(int argc, char **argv)
            gate is one document in one process with no cross-session frontier to store it in. That is a fact
            about this host's storage and not about the scheduler truncating work — the assert below reads the
            engine's own answer to "was this frontier written out rather than drained" rather than taking my
-           word for it. */
+           word for it.
+           AND IT IS ASKED BELOW THE DONE EXIT, WHICH IS THE WHOLE OF WHY THAT EXIT IS ABOVE IT. TWO facts end
+           this loop and they are INDEPENDENT: the MEASUREMENT ended (`done()` ran and the verdict is printed)
+           and the FRONTIER ended (the step drained it, and draining CLOSES the session inside that same step).
+           The park answers the first WHILE the second is false — it writes a LIVE frontier down — and a drained
+           frontier is already the OTHER honest end flow_release names: nothing left to lose, so nothing to
+           write. Asked above the DONE exit the two facts collapse into one, and they collapse for the ORDINARY
+           test rather than an exotic one: the epilogue is the last program this document has, so the step that
+           sets `g_test_complete` is usually the same step that empties the frontier. That step answers DONE
+           with the session already closed, this line then asks the engine to write out a session that no longer
+           exists, and the engine aborts saying exactly that — AFTER every subtest is recorded, so the file
+           reads as a finished measurement and is not one. Below the DONE exit the session is live BY
+           CONSTRUCTION; that is the invariant the ordering carries, and it is the one both park requests in
+           this loop rest on without either of them restating it. */
         if (g_test_complete) { engine_request_park(); g_parking = 1; continue; }
 
-        /* THE HOST'S HALF OF EVERY SLICE BOUNDARY, and it is asked at EVERY one rather than only at a stall —
-           the same protocol the extension's bridge speaks (engine.h): paying only at a stall makes one flow's
-           reply conditional on every other flow in the document also becoming blocked. Notices first: a
-           document announced but not yet provisioned is one a read would arrive for before its instance
-           exists. */
-        did = wpt_answer_host_requests(ctx);
-        if (wpt_issue_pending() > 0) did = 1;
-        if (wpt_net_pump(ctx, /*block*/0) > 0) did = 1;
-        /* AFTER THE HOST'S HALF AND NOT BEFORE IT. The final step emits like any other — a notice naming a
-           document, a reply a flow was owed — and a DONE checked ahead of this line would leave exactly those
-           undrained, which is the emitting-end-invisible drop the router's own DFAIL is about. */
-        if (r == ENGINE_STEP_DONE) break;
         if (r == ENGINE_STEP_STALLED && !did) {
             /* NOTHING RUNNABLE, AND THIS HOST FILLED NOTHING — which is a WAIT if an answer is on its way and
                a DISAGREEMENT if one is not, and those were the same line until the network edge could tell
