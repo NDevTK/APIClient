@@ -387,15 +387,25 @@ static const char *HTML =
        the corresponding unprefixed at-rule", so the fix is a NAME RESOLUTION and the fixture's job is to prove
        it stayed one: the same interface, the same `type`, the same `<keyframes-name>` grammar, the same body,
        and the ONE thing that differs.
-       THE SHEET WRITES FIVE AT-RULES AND EXACTLY TWO OF THEM BECOME CSSOM RULES — that ratio is the design.
+       THE SHEET WRITES SEVEN AT-RULES AND EXACTLY TWO OF THEM BECOME CSSOM RULES — that ratio is the design.
        `spin` is the alias; `spin2` is the unprefixed rule beside it, which is what makes the serialization
-       claim a comparison rather than an assertion about one string. The last three must be OUT of `cssRules`,
+       claim a comparison rather than an assertion about one string. The last five must be OUT of `cssRules`,
        and every one of them used to abort this document instead: `@-moz-keyframes` and `@-ms-viewport` are
        another vendor's extensions, which CSS 2.1 §4.1.2.1 "Vendor-specific extensions" reserves and §4.2
        "Rules for handling parsing errors" ignores, and `@-webkit-keyframes none` is the alias meeting §3's own
        `<keyframes-name>` exclusion — a rule dropped by the grammar it now shares, which is the claim that the
        resolution happens BEFORE the prelude is parsed rather than beside it. A rule that wrongly survives and
        one that wrongly vanishes both move the LENGTH, so the first field of the token carries all three.
+       THE LAST TWO ARE UNPREFIXED AT-KEYWORDS NO SPECIFICATION DEFINES, and they are here because a predicate
+       that dropped an at-rule by the SHAPE OF ITS NAME let exactly this pair through to the unbuilt-interface
+       crash. CSS Syntax Level 3 §8 "CSS stylesheets" is the sentence they are judged by — "any at-rule [that]
+       is NOT RECOGNIZED … DISCARD THAT RULE" — and `@three-dee` is CSS 2.1 §4.2's OWN worked example of it,
+       transcribed with its nested `@background-lighting` so the claim covers the whole at-rule and not just
+       its head ("the whole at-rule … is ignored"). `@medium` is the live shape: a CSS-in-JS runtime emits its
+       breakpoint at-keyword verbatim when a theme token fails to resolve, and a shipping site's inline
+       `<style>` carrying one beside its `@media` rules aborted the instance at sheet-build time with zero
+       flows run. Both bodies hold a rule that WOULD be a CSSRule at top level, so a build that drops the
+       at-rule and keeps its contents lands them in `cssRules` and moves the length just as loudly.
        REAL CHROME 148.0.7778.167 ANSWERS EXACTLY THESE BYTES for this sheet, which is where the expected
        strings come from: CSSOM §6.4's CSSKeyframesRule arm names the literal `"@keyframes "` and predates
        §3.1, so the serialization half is not derivable from the text and is a measurement. */
@@ -405,6 +415,8 @@ static const char *HTML =
     "@-moz-keyframes spin3 { from { opacity: 0 } }"
     "@-webkit-keyframes none { from { opacity: 0 } }"
     "@-ms-viewport { width: device-width }"
+    "@three-dee { @background-lighting { azimuth: 30deg; elevation: 190deg; } h1 { color: red } }"
+    "@medium { .cs-bp { height: auto } }"
     "</style>"
     /* TWO ROWS BECAUSE THESE ARE TWO INDEPENDENT CLAIMS, the same arrangement `/api/cssprop` above takes: what
        the alias PRODUCES (one CSSKeyframesRule, §6.4.2's `type` 7, §6.3.2's `name`, its `<keyframe-block>`s

@@ -72,6 +72,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/css/media_query.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/node.h"
@@ -964,17 +965,43 @@ static int media_process_candidate(JSContext *ctx, MediaSelect *s, JSValueConst 
        step below". */
     src = element_attr_get(ctx, cand, "src");
     usable = src != NULL && src[0] != 0;
-    /* Step 3: "if candidate has a media attribute whose value does not match the environment". */
+    /* Step 3: "If candidate has a media attribute whose value does not MATCH THE ENVIRONMENT, then end the
+       synchronous section, and jump down to the failed with elements step below."
+       "Matches the environment" is HTML's own definition, HTML §2.3.10 "Media queries": a string matches it "if
+       it is the empty string, a string consisting of only ASCII whitespace, or is a media query list that
+       matches the user's environment according to the definitions given in Media Queries". All three arms are
+       core/css/media_query.h's `media_query_parse` — its lexer skips whitespace, so an empty and a
+       whitespace-only attribute both parse to a list of NO queries, which MQ4 §3.1 makes a list that matches
+       everything. There is no arm here for those cases because the grammar already has them.
+       THIS IS THE SAME QUESTION `<source media>` UNDER `<picture>` ASKS, AND IT IS ANSWERED THE SAME WAY.
+       core/html/image_source_set.c runs §4.8.4.3's update-the-source-set step 5.6 — the identical attribute on
+       the identical element — through `media_query_parse` + `media_query_matches_now`, and so does the cascade
+       for an `@media` rule. One environment, one predicate, one answer: a second spelling here could resolve
+       the same query differently from the one the page's own `matchMedia` and stylesheet resolved, which is one
+       fact answered from two places.
+       THE `_now` READ IS THE ENGINE-SIDE POLICY AND NOT A COLLAPSE OF THE CONCOLIC. core/css/media_query.h
+       states the split: `matches` stays concolic where a PAGE reads it, so a page that branches on the viewport
+       still explores both worlds, while C — which cannot fork — takes the arm THIS FLOW has already committed
+       to (solver/decide.h) and falls back to the modelled environment where it has committed to neither. A
+       DFAIL here used to demand a fork at this one site instead; that would make `<video><source media>` the
+       only environment reader in the engine with its own forking policy, disagreeing with the cascade,
+       update-the-rendering and `<picture>` about the same predicate — and it named a file (media_query_list.c,
+       whose problem is the CSSOM object) as exporting no evaluator, when the evaluator is the LANGUAGE's and
+       has been exported by media_query.h next door all along. */
     if (usable) {
         attr = element_attr_get(ctx, cand, "media");
         if (attr) {
+            MediaQuerySet *set = media_query_parse(attr);
+
+            DCHECK(set != NULL,
+                   "media_query_parse answered NULL for a `source` element's `media` attribute. MQ4 §3.1's "
+                   "forward-compatible rule replaces a query that does not match the grammar with `not all`, "
+                   "so a LIST parse has no failure to report and media_query.h states it is never null for "
+                   "non-null input — a null here means that entry started reporting parse errors and every "
+                   "caller of it, this one included, is reading a pointer the grammar says cannot exist");
+            usable = media_query_matches_now(ctx, set);
+            media_query_free(set);
             free(attr);
-            DFAIL("HTML §4.8.11.5 step 14's children mode step 3 must evaluate a `source` element's `media` "
-                  "attribute against the environment, and core/css/media_query_list.c exports no evaluator to "
-                  "ask — export one and ask it here. It is a FORK and not a test: this engine's viewport is a "
-                  "MODELLED default carried as a concolic example, so a candidate gated on `(min-width: …)` "
-                  "is two worlds and both of them ship a resource, exactly as matchMedia's `.matches` is two "
-                  "worlds");
         }
     }
     /* Steps 4-5's urlRecord: the resolution is the reflection's, which is the raw attribute here.

@@ -1174,43 +1174,158 @@ static void rule_alias_unbuilt_fail(const char *written, const char *target)
 #undef RULE_ALIAS_UNBUILT_FMT
 }
 
+/* THE AT-KEYWORDS A CSS SPECIFICATION DEFINES — the registry CSS Syntax Level 3 §8 "CSS stylesheets"'s "not
+ * recognized" is asked against, and the ONE place that question is answered.
+ *
+ * IT IS TRANSCRIBED FROM THE CSS WORKING GROUP's OWN CROSS-SPEC AT-RULES INDEX (drafts.csswg.org/indexes/,
+ * section "At-rules"), which is where every CSSWG specification's at-rule definitions are collected. That is
+ * what makes the table a READING rather than a recollection, and it is what makes each row CHECKABLE: the
+ * index links every name to `<spec>/#at-ruledef-<name>`, so the shortname in the second column plus the name in
+ * the first reconstructs the exact URL the definition lives at, and one fetch settles any row. The spec
+ * SHORTNAME is carried and a section NUMBER deliberately is not — the index publishes the first and not the
+ * second, so a number here would be a number nobody read, which §Browser half rates as WORSE than none because
+ * it reads as authoritative and sends the next reader to the wrong clause. A number belongs on this row only
+ * when it arrives with the interface, which is where `rule_unbuilt_fail`'s list carries them.
+ *
+ * A ROW IS NOT A CLAIM THAT THIS BUILD IMPLEMENTS THE RULE, and that split is the whole reason the table
+ * exists. In the registry with no arm in `rule_from_parse` = a capability this build is missing, and it crashes
+ * by name so the next reader builds it. NOT in the registry = no user agent has anything to build, ever, and
+ * CSS Syntax §8 says DISCARD. `@counter-style` and `@medium` were one set before this table, and they are
+ * opposite facts.
+ *
+ * `@-webkit-keyframes` IS IN THE INDEX AND IS DELIBERATELY NOT A ROW HERE: CSS Compatibility §3.1 aliases it
+ * onto `keyframes` in front of the dispatch, so the resolved name is what reaches this table. `at_rule_dropped`
+ * asserts that from the other side, which is what keeps the omission an invariant instead of a hole. */
+static bool at_rule_defined(const char *name)
+{
+    /* SORTED BY NAME (ASCII), which the lookup below depends on and the DCHECK re-establishes on every call. */
+    static const struct { const char *name; const char *spec; } AT_RULES[] = {
+        { "annotation",          "css-fonts-4" },
+        { "apply",               "css-mixins-1" },
+        { "bottom-center",       "css-page-3" },
+        { "bottom-left",         "css-page-3" },
+        { "bottom-left-corner",  "css-page-3" },
+        { "bottom-right",        "css-page-3" },
+        { "bottom-right-corner", "css-page-3" },
+        { "character-variant",   "css-fonts-4" },
+        { "charset",             "css-syntax-3" },
+        { "color-profile",       "css-color-5" },
+        { "container",           "css-conditional-5" },
+        { "contents",            "css-mixins-1" },
+        { "counter-style",       "css-counter-styles-3" },
+        { "custom-media",        "mediaqueries-5" },
+        { "custom-selector",     "css-extensions-1" },
+        { "else",                "css-conditional-5" },
+        { "font-face",           "css-fonts-5" },
+        { "font-feature-values", "css-fonts-4" },
+        { "font-palette-values", "css-fonts-4" },
+        { "function",            "css-mixins-1" },
+        { "historical-forms",    "css-fonts-4" },
+        { "import",              "css-cascade-6" },
+        { "keyframes",           "css-animations-1" },
+        { "layer",               "css-cascade-5" },
+        { "left-bottom",         "css-page-3" },
+        { "left-middle",         "css-page-3" },
+        { "left-top",            "css-page-3" },
+        { "location",            "css-navigation-1" },
+        { "media",               "css-conditional-3" },
+        { "mixin",               "css-mixins-1" },
+        { "namespace",           "css-namespaces-3" },
+        { "navigation",          "css-navigation-1" },
+        { "ornaments",           "css-fonts-4" },
+        { "page",                "css-page-3" },
+        { "position-try",        "css-anchor-position-1" },
+        { "private",             "css-mixins-1" },
+        { "property",            "css-properties-values-api-1" },
+        { "right-bottom",        "css-page-3" },
+        { "right-middle",        "css-page-3" },
+        { "right-top",           "css-page-3" },
+        { "scope",               "css-cascade-6" },
+        { "starting-style",      "css-transitions-2" },
+        { "styleset",            "css-fonts-4" },
+        { "stylistic",           "css-fonts-4" },
+        { "supports",            "css-conditional-3" },
+        { "supports-condition",  "css-conditional-5" },
+        { "swash",               "css-fonts-4" },
+        { "top-center",          "css-page-3" },
+        { "top-left",            "css-page-3" },
+        { "top-left-corner",     "css-page-3" },
+        { "top-right",           "css-page-3" },
+        { "top-right-corner",    "css-page-3" },
+        { "view-transition",     "css-view-transitions-2" },
+        { "when",                "css-conditional-5" },
+    };
+    const unsigned n = (unsigned)(sizeof AT_RULES / sizeof AT_RULES[0]);
+    unsigned i;
+    bool found = false;
+
+    DCHECK(name != NULL, "CSS Syntax §8's recognized-at-rule registry was asked about no at-keyword");
+    for (i = 0; i < n; i++) {
+        DCHECK(i == 0 || strcmp(AT_RULES[i - 1].name, AT_RULES[i].name) < 0,
+               "the CSS at-rule registry is not sorted by name, or holds one at-keyword twice. It is "
+               "transcribed from the CSS Working Group's cross-spec at-rules index and a row inserted out of "
+               "order is a row inserted without reading its neighbours — which is exactly how a duplicate or a "
+               "misspelling gets in, and a misspelled row silently DISCARDS every rule the standard requires "
+               "to be supported under the name it should have carried");
+        DCHECK(AT_RULES[i].name[0] != '-' && AT_RULES[i].name[0] != '_',
+               "the CSS at-rule registry holds a VENDOR-PREFIXED at-keyword. The only prefixed spelling any "
+               "standard defines is CSS Compatibility §3.1's `-webkit-keyframes`, and that is resolved to its "
+               "unprefixed name in front of the dispatch — so a prefixed row here is a second answer to a "
+               "question §3.1's alias table already answers, able to disagree with it about the interface, the "
+               "prototype and the `type`");
+        if (strcmp(AT_RULES[i].name, name) == 0) found = true;
+    }
+    return found;
+}
+
 /* THE AT-RULES THAT ARE DROPPED RATHER THAN CRASHED ON, AND BOTH ARMS ARE POSITIVE STATEMENTS ABOUT THE
  * PLATFORM rather than gaps. `name` is the at-keyword as the builder resolved it — §3.1's aliases have already
  * been taken out of it, which is why this function never has to ask about one.
  *
  * `@charset`: CSSOM keeps the historical constant `CHARSET_RULE = 2` and declares NO CSSCharsetRule interface
  * at all, so there is no object an `@charset` could become and every user agent leaves it out of `cssRules`.
+ * IT IS ASKED FIRST AND THE ORDER IS LOAD-BEARING: CSS Syntax Level 3 DOES define `@charset`, so it is a row of
+ * the registry below, and an arm that ran after it would report a rule the standard defines and this build has
+ * no interface for — which is true and is the wrong answer, because there is no interface to build.
  *
- * AN AT-KEYWORD BEGINNING WITH `-` OR `_`: CSS 2.1 §4.1.2.1 "Vendor-specific extensions" reserves exactly that
- * shape — "Keywords and property names beginning with '-' or '_' are reserved for vendor-specific extensions"
- * — and states the consequence outright: "An initial dash or underscore is guaranteed never to be used in a
- * property or keyword by any current or future level of CSS. Thus typical CSS implementations may not
- * recognize such properties and may ignore them according to the rules for handling parsing errors." §4.2
- * "Rules for handling parsing errors" is where that lands, under "At-rules with unknown at-keywords": "User
- * agents must ignore an invalid at-keyword together with everything following it, up to the end of the block
- * that contains the invalid at-keyword". So `@-moz-keyframes`, `@-ms-keyframes`, `@-o-keyframes` and
- * `@-ms-viewport` — which autoprefixed bundles still ship beside the row above — name ANOTHER VENDOR'S
- * extension, which this user agent is not and never will be. Confirmed on real Chrome 148.0.7778.167: of
- * `@-webkit-keyframes`, `@-moz-keyframes`, `@-ms-keyframes`, `@-o-keyframes`, `@-ms-viewport`,
- * `@-moz-document` and eleven other `-webkit-`-prefixed spellings of at-rules it implements unprefixed, the
- * ONLY one in `cssRules` is §3.1's row.
+ * AN AT-KEYWORD NO CSS SPECIFICATION DEFINES: CSS Syntax Level 3 §8 "CSS stylesheets" states the outcome in
+ * one sentence — "If any style rule is invalid, or any at-rule is NOT RECOGNIZED or is invalid according to its
+ * grammar or context, it's a parse error. DISCARD THAT RULE." CSS 2.1 §4.2 "Rules for handling parsing errors"
+ * says the same thing under the heading "At-rules with unknown at-keywords" ("User agents must ignore an
+ * invalid at-keyword together with everything following it, up to the end of the block that contains the
+ * invalid at-keyword") — and its WORKED EXAMPLE is `@three-dee`, an at-keyword with no dash and no underscore
+ * which "is not part of CSS 2.1. Therefore, the whole at-rule … is ignored." A vendor-prefixed at-keyword is
+ * one member of that set and not a category of its own: `@-moz-keyframes`, `@-ms-viewport` and
+ * `@-moz-document` are dropped because no specification defines them for THIS user agent, which is the same
+ * reason `@three-dee` is. (`@-webkit-keyframes` is the one exception and it never reaches here: CSS
+ * Compatibility §3.1 aliases it onto `keyframes` in front of the dispatch, which the DCHECK below asserts.)
  *
- * THIS IS NOT AN UNKNOWN-AT-RULE FALLBACK AND MUST NEVER BECOME ONE. The set it drops is closed by the shape
- * of the NAME, and CSS 2.1 §4.2's other half is why that matters: "CSS 2.1 reserves for future updates of CSS
- * all property:value combinations and @-keywords that do not contain an identifier beginning with dash or
- * underscore". An UNPREFIXED at-keyword is therefore reserved to CSS itself, so meeting one this build has no
- * arm for is a specification's interface that is missing here — a capability to build — and it keeps crashing
- * by name below. Widening this predicate to cover those would delete exactly the signal that crash exists to
- * deliver. */
+ * THIS REPLACES A TEST ON THE SHAPE OF THE NAME, WHICH WAS SPEC-WRONG AND KILLED WHOLE DOCUMENTS. The deleted
+ * predicate dropped an at-keyword beginning with `-` or `_` and crashed on every other unknown one, inferring
+ * from CSS 2.1 §4.2's other half ("CSS 2.1 reserves for future updates of CSS all … @-keywords that do not
+ * contain an identifier beginning with dash or underscore") that an unprefixed unknown at-keyword must be a
+ * specification's interface missing here. That inference reads a sentence about WHO MAY DEFINE the keyword as
+ * a sentence about WHAT A UA DOES when it meets one, and §4.2's own `@three-dee` example refutes it directly.
+ * The cost was not theoretical: CSS-in-JS runtimes emit breakpoint at-keywords verbatim when a theme token
+ * fails to resolve, so a live site's inline `<style>` carrying `@medium{…}` beside its `@media` rules aborted
+ * the instance at sheet-build time, with ZERO flows run and therefore zero endpoints and zero sinks — the
+ * whole document lost to a rule real Chrome discards without comment.
+ *
+ * AND IT IS STILL NOT AN UNKNOWN-AT-RULE FALLBACK. The set is closed by a REGISTRY of the at-keywords CSS
+ * specifications define (`at_rule_defined`), not by a fallback: a name IN that registry with no arm in
+ * `rule_from_parse` is a capability this build is missing and goes on crashing by name below, which is the
+ * signal that crash exists to deliver. What changed is only that a name NO standard defines is no longer
+ * mistaken for one — the two were one set wearing one predicate, and separating them is what lets each keep
+ * its own answer. */
 static bool at_rule_dropped(const char *name)
 {
     if (strcmp(name, "charset") == 0) return true;
-    DCHECK(!(name[0] == '-' || name[0] == '_') || at_rule_alias(name) == NULL,
+    DCHECK(at_rule_alias(name) == NULL,
            "a `-webkit-` at-keyword CSS Compatibility §3.1 aliases onto a real at-rule reached the DROP "
            "predicate. The builder resolves §3.1's table before it dispatches, so an aliased name must have "
            "become the unprefixed one long before this line — reaching it means the resolution was moved "
            "after the dispatch, which silently deletes every rule the standard requires to be supported");
-    return name[0] == '-' || name[0] == '_';
+    return !at_rule_defined(name);
 }
 
 /* The TYPE of the rule this one is written inside, or 0 at a sheet's top level. What a rule may BE depends on
