@@ -206,11 +206,35 @@ lxb_dom_attr_set_name_ns(lxb_dom_attr_t *attr, const lxb_char_t *link,
     return LXB_STATUS_OK;
 }
 
+/* THE ATTRIBUTE OWNS ITS VALUE BYTES, AND A WRITE REPLACES THEM — so the old ones die HERE, on every exit.
+ *
+ * `lxb_dom_attr_interface_destroy` frees exactly `attr->value->data` into `doc->text` and `attr->value` into
+ * `doc->mraw`, which is the other half of the same statement: an Attr is the owner of its value's storage. This
+ * function is what makes one set of those bytes replace another, and `*attr->value` is overwritten by the
+ * `lexbor_str_init` below, so the moment the new allocation is stored there is no pointer to the old one left
+ * anywhere. It has to be freed on the way out of this call or it is unreachable for ever.
+ *
+ * IT WAS FREED ON ONE OF THREE EXITS. `return doc->attr_mutation->change(...)` walked past the free, and that
+ * arm is not a corner: an HTML document ALWAYS carries `lxb_html_attribute_steps_*` (installed by
+ * `lxb_html_document_mutation_init` before the first node exists), so the change steps fire for every value
+ * write to an ATTACHED attribute — every `setAttribute` a page makes, and every restore this engine's per-flow
+ * DOM delta performs on a context switch. Measured on `liblexbor_static.a`: ten rewrites of one attached
+ * attribute left `doc->text->ref_count` TEN higher and `doc->mraw->ref_count` unchanged. That is precisely the
+ * "text at +N with nodes unchanged" shape the agent's DOM-heap teardown assertion reports, and it scales with
+ * the SCHEDULE rather than with the page, because the delta's apply/unapply are value writes like any other.
+ * The failure path at `new_value->data == NULL` is the same statement: `lexbor_str_init` has already NULLed the
+ * field the old pointer lived in, so those bytes are orphaned there too.
+ *
+ * THE CHANGE STEPS BORROW, THEY DO NOT TAKE. `old_value.data` is handed to the callback as a `const` pointer for
+ * the length of the call — `lxb_html_attribute_steps_change` dispatches to per-tag steps that read it (only
+ * `<option>`'s exists, and it reads a name id) and no callback in this tree retains one — so the free belongs
+ * AFTER the dispatch, never before it. */
 lxb_status_t
 lxb_dom_attr_set_value(lxb_dom_attr_t *attr,
                        const lxb_char_t *value, size_t value_len)
 {
     lexbor_str_t old_value, *new_value;
+    lxb_status_t status = LXB_STATUS_OK;
     lxb_dom_document_t *doc = lxb_dom_interface_node(attr)->owner_document;
 
     if (attr->value == NULL) {
@@ -225,6 +249,10 @@ lxb_dom_attr_set_value(lxb_dom_attr_t *attr,
 
     lexbor_str_init(new_value, doc->text, value_len);
     if (new_value->data == NULL) {
+        if (old_value.data != NULL) {
+            lexbor_mraw_free(doc->text, old_value.data);
+        }
+
         return LXB_STATUS_ERROR_MEMORY_ALLOCATION;
     }
 
@@ -236,17 +264,17 @@ lxb_dom_attr_set_value(lxb_dom_attr_t *attr,
     if (!(lxb_dom_document_opt(doc) & LXB_DOM_DOCUMENT_OPT_WO_EVENTS)
         && doc->attr_mutation->change != NULL && attr->owner != NULL)
     {
-        return doc->attr_mutation->change(attr->owner, attr->node.local_name,
-                                          old_value.data, old_value.length,
-                                          new_value->data, new_value->length,
-                                          LXB_NS__UNDEF);
+        status = doc->attr_mutation->change(attr->owner, attr->node.local_name,
+                                            old_value.data, old_value.length,
+                                            new_value->data, new_value->length,
+                                            LXB_NS__UNDEF);
     }
 
     if (old_value.data != NULL) {
         lexbor_mraw_free(doc->text, old_value.data);
     }
 
-    return LXB_STATUS_OK;
+    return status;
 }
 
 lxb_status_t

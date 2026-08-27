@@ -351,13 +351,66 @@ lxb_dom_attr_t *dom_attr_clone(lxb_dom_document_t *doc, const lxb_dom_attr_t *sr
     return a;
 }
 
+/* §4.9 "change an attribute" step 2's VALUE WRITE — AND THE ARENA ARITHMETIC THAT SAYS IT REPLACED THE OLD
+ * VALUE RATHER THAN ACCUMULATING BESIDE IT.
+ *
+ * AN ATTRIBUTE'S VALUE IS TWO ALLOCATIONS AND EACH FIRST IS THE ONLY ONE. The `lexbor_str_t` HEADER comes out
+ * of the NODE arena the first time anything writes a value and is never re-made; the BYTES come out of the TEXT
+ * arena on every write, with the bytes they replace freed in the same call. That is not a convention — it is
+ * what `lxb_dom_attr_interface_destroy` frees, exactly that pair, which is the same ownership statement read
+ * from the other end. So a write is arena-NEUTRAL apart from those two firsts, and `lexbor_mraw_t::ref_count`
+ * (incremented per alloc, decremented per free) makes it a NUMBER this accessor can read before and after
+ * instead of a sentence it can only assert about.
+ *
+ * WITHOUT THIS THE FAILURE IS INVISIBLE UNTIL THE LAST DOCUMENT IN THE AGENT DIES. lexbor's setter used to walk
+ * past its own free on the arm where the §4.9 change steps fire — `return doc->attr_mutation->change(...)` —
+ * and that arm is every value write to an ATTACHED attribute: every `setAttribute` a page makes, and every
+ * restore the per-flow DOM delta performs at a context switch. The only site that ever noticed was
+ * core/dom/node_heap.c's teardown assertion, a whole session's worth of documents later, reporting a count that
+ * scaled with the SCHEDULE and led back to no write in particular. This is that assertion moved to its origin,
+ * where the leaked bytes still have a caller standing over them.
+ *
+ * IT IS DELIBERATELY EXACT RATHER THAN AN UPPER BOUND. A change step that starts allocating out of the text
+ * arena FIRES here and has to say so, which is the correct outcome: those bytes would be owned by nobody in
+ * this call's accounting, and an assertion loose enough to tolerate them is one that stops measuring. */
 void dom_attr_set_value(lxb_dom_attr_t *a, const char *val, size_t val_len)
 {
     lxb_status_t st;
+#if APICLIENT_DEV
+    lxb_dom_document_t *doc;
+    size_t want_nodes, want_text;
+#endif
 
     DCHECK(a != NULL, "an attribute value was written to no attribute");
+#if APICLIENT_DEV
+    doc = a->node.owner_document;
+    DCHECK(doc != NULL && doc->mraw != NULL && doc->text != NULL,
+           "an attribute value was written on an attribute whose node document has no arenas — a detached "
+           "document has none (core/dom/node_heap.h's detach NULLs both), so the bytes about to be stored have "
+           "nowhere to live and the free of the ones they replace has no arena to go back to");
+    want_nodes = doc->mraw->ref_count + (a->value == NULL ? 1u : 0u);
+    want_text  = doc->text->ref_count + ((a->value == NULL || a->value->data == NULL) ? 1u : 0u);
+#endif
     st = lxb_dom_attr_set_value(a, (const lxb_char_t *)val, val_len);
     CHECK(st == LXB_STATUS_OK, "dom-attr-oom: an attribute's value could not be stored");
+#if APICLIENT_DEV
+    DCHECK(doc->text->ref_count == want_text,
+           "an attribute value write left the agent's TEXT arena holding a different number of live "
+           "allocations than the one it took: a write allocates the new bytes and frees the ones they replace, "
+           "so the count moves by exactly one on the first write to this attribute and by nothing afterwards. "
+           "HIGHER means the replaced bytes were not freed — nothing names them any more, and the count is the "
+           "one core/dom/node_heap.c's teardown will report as text-at-+N-with-nodes-unchanged once the last "
+           "document is gone; check `lxb_dom_attr_set_value`'s exits, all three of which must reach its "
+           "`lexbor_mraw_free(doc->text, old_value.data)`, and check whether a §4.9 change step has started "
+           "allocating out of this arena. LOWER is the more serious direction: the same bytes were freed twice, "
+           "so the arena's size-keyed cache now holds one address twice and the next two allocations of that "
+           "size are the same memory handed to two owners");
+    DCHECK(doc->mraw->ref_count == want_nodes,
+           "an attribute value write changed the number of live allocations in the agent's NODE arena by "
+           "something other than the one `lexbor_str_t` header a first write makes — the header is made once "
+           "and freed by `lxb_dom_attr_interface_destroy`, and a value write is otherwise a text-arena "
+           "operation entirely, so a second header here is one this attribute's destroy will never free");
+#endif
 }
 
 lxb_dom_attr_t *dom_attr_write(lxb_dom_element_t *el, const char *ns, const char *prefix, const char *local,

@@ -120,7 +120,7 @@ void node_heap_detach(lxb_dom_document_t *doc)
                least 1305 and `snprintf` truncated it mid-word — the ORDER arm, the last third and the one a
                large count needs, never reached the reader, and the build's own `-Wno-format-truncation` is why
                no gate said so. A diagnosis that is cut off is §Testing's report about nothing with the
-               explanation attached. The literal below is a little under 3000 characters and each `%zu` can
+               explanation attached. The literal below is a little over 3500 characters and each `%zu` can
                expand to 20, so this holds it with the two counts at their widest and an arm's worth of room
                for the next cause that has to be named here. */
             char why[4096];
@@ -148,12 +148,19 @@ void node_heap_detach(lxb_dom_document_t *doc)
                      "now ALIAS and the next allocation of that size gets memory the other one still owns. "
                      "core/dom/document_type.h is the worked example: lexbor allocates a doctype's two ids "
                      "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2. "
-                     "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE WHOSE OWNERSHIP NEVER "
-                     "MOVED, and no other arm produces that shape. A token's attribute values come out of "
-                     "this arena and no lexbor destructor frees them; core/html/html_parse.h owns them "
-                     "instead, releasing at token-done whatever the DOM did not take and learning what the "
-                     "DOM took from the document's `attr_mutation->append`, which `lxb_dom_element_attr_append` "
-                     "fires with the adopted pointer already in `attr->value->data`. So this count means one "
+                     "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE NOBODY FREED, and no "
+                     "other arm produces that shape. TWO CAUSES REACH IT AND THE SCALING SEPARATES THEM. If "
+                     "the count moves when only the SCHEDULE moved, it is a value REPLACEMENT: an attribute's "
+                     "bytes are re-allocated on every write with the ones they replace freed in the same call, "
+                     "and the per-flow DOM delta rewrites an attribute at every apply and every unapply, so a "
+                     "missed free is paid per SWAP rather than per parse. That one is asserted at its ORIGIN — "
+                     "core/dom/attr_list.c's dom_attr_set_value reads both arenas across the write — so "
+                     "reaching HERE with it means the write did not go through that accessor at all. If the "
+                     "count moves with the number of PARSES, it is a token's attribute values instead: they "
+                     "come out of this arena and no lexbor destructor frees them; core/html/html_parse.h owns "
+                     "them, releasing at token-done whatever the DOM did not take and learning what the DOM "
+                     "took from the document's `attr_mutation->append`, which `lxb_dom_element_attr_append` "
+                     "fires with the adopted pointer already in `attr->value->data`. So that count means one "
                      "of the two halves did not run for some parse: a document whose `attr_mutation` is not that "
                      "one (the token-done wrapper asserts it per token, so read that @WHY first), or a parse "
                      "whose tokenizer never got the wrapper at all (`html_parse_owns_tokens_of`, asserted at "
