@@ -1453,20 +1453,24 @@ void url_encoded_list_free(UrlEncodedList *l)
 void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, int nhole,
                              const char *value, size_t vn, int vhole)
 {
-    /* A HOLE IS A DISPLAY SHAPE, AND THE SERIALIZER READS IT BY ITS BRACES — so the brace is asserted where the
-       half is BORN rather than where it is written out: a shape that lost its braces would serialize verbatim
-       and be reported as a literal parameter value, which is the one outcome the hole bit exists to prevent.
-       Asserted here and not at the caller because every caller converges on this line. */
-    DCHECK(!nhole || (name && memchr(name, '{', nn) != NULL && memchr(name, 0, nn) == NULL),
-           "an urlencoded pair's NAME was appended as a hole that is not a display shape — a shape carries "
-           "braces (the serializer and the emission both read a hole by them) and contains no U+0000 (§5.2 "
-           "copies a hole half verbatim and measures it with strlen). A half failing either test is a real "
-           "string that has been mislabelled, and it would be written into a query unencoded");
-    DCHECK(!vhole || (value && memchr(value, '{', vn) != NULL && memchr(value, 0, vn) == NULL),
-           "an urlencoded pair's VALUE was appended as a hole that is not a display shape — a shape carries "
-           "braces (the serializer and the emission both read a hole by them) and contains no U+0000 (§5.2 "
-           "copies a hole half verbatim and measures it with strlen). A half failing either test is a real "
-           "string that has been mislabelled, and it would be written into a query unencoded");
+    /* WHAT A HOLE HALF MUST SATISFY IS THAT IT IS MEASURABLE, AND NOT THAT IT IS BRACED. This asserted a brace
+       first, on the reasoning that a display shape carries its provenance in braces — and that is true of a
+       DECLARED source only. `concolic_source_wrap` requires the braced spelling exactly where
+       `concolic_source_encodes(src)` answers, i.e. for a source with a delivery declaration; a modelled
+       environment value is minted with a bare dotted path (`navigator.language`), and a derivation over one
+       composes on that (`navigator.language.toLowerCase()`). So the brace test would have aborted on the very
+       call this whole mechanism was built for, which is what a condition written from a rule rather than from
+       the values that reach it does.
+       WHAT §5.2 ACTUALLY NEEDS HERE is that the half copies verbatim and measures with strlen, so U+0000 is
+       the invariant and it is asserted where the half is BORN rather than where it is written out. */
+    DCHECK(!nhole || (name && memchr(name, 0, nn) == NULL),
+           "an urlencoded pair's NAME was appended as a hole containing U+0000 — a hole is a concolic's "
+           "display shape, and §5.2 copies one verbatim and measures it with strlen, so an embedded NUL would "
+           "truncate the half. A real USVString may contain U+0000 and must not be labelled a hole");
+    DCHECK(!vhole || (value && memchr(value, 0, vn) == NULL),
+           "an urlencoded pair's VALUE was appended as a hole containing U+0000 — a hole is a concolic's "
+           "display shape, and §5.2 copies one verbatim and measures it with strlen, so an embedded NUL would "
+           "truncate the half. A real USVString may contain U+0000 and must not be labelled a hole");
     if (l->n >= l->cap) {
         l->cap = l->cap ? l->cap * 2 : 8;
         l->e = realloc(l->e, (size_t)l->cap * sizeof(UrlEncodedPair));
@@ -1534,9 +1538,10 @@ void url_encoded_parse(UrlEncodedList *out, const char *s, size_t len)
  * A HOLE HALF IS NOT ENCODED, and that is a statement about what a hole IS rather than an exception to §5.2.
  * The steps run over a tuple of USVStrings the page produced; a hole is this engine's display SHAPE for a
  * value the code did not compute, put into the list by §6.2's members because a `const char *` cannot carry a
- * concolic. Percent-encoding it spells its braces `%7B`/`%7D`, and the brace is the only thing an emission has
- * to tell a hole from a literal by — so an encoded shape reaches the @H surface as a parameter value nothing
- * constrained, which §Solver-half calls a wrong report and not a partial one. See UrlEncodedPair. */
+ * concolic. Percent-encoding it spells the shape's own punctuation away — the braces of a declared source, the
+ * call parentheses of a derivation over an undeclared one — and the result reaches the @H surface as a
+ * parameter value nothing constrained, which §Solver-half calls a wrong report and not a partial one. See
+ * UrlEncodedPair for which shape loses what. */
 char *url_encoded_serialize(const UrlEncodedList *l, size_t *out_n)
 {
     char *out = NULL;

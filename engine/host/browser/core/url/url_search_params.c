@@ -199,8 +199,8 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
        of existence.
        THE LENGTH IS strlen FOR A HOLE AND JS_ToCStringLen's FOR DATA, and the difference is not cosmetic: a
        real USVString may contain U+0000 (`?a=b%00c` is one pair whose value is three characters), while a
-       display shape is ASCII with no NUL — which url_encoded_list_append asserts, because §5.2 measures a hole
-       half with strlen. Both spellings return an OWNED string, so there is one free path below. */
+       display shape has none — which url_encoded_list_append asserts, because §5.2 copies a hole half verbatim
+       and measures it with strlen. Both spellings return an OWNED string, so there is one free path below. */
     {
         JSValueConst a0 = argc > 0 ? argv[0] : JS_UNDEFINED;
         nhole = concolic_is(a0);
