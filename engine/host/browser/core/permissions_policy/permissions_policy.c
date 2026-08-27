@@ -196,9 +196,10 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
     /* Step 1: "Assert: If not null, container is a navigable container." The caller states the container by
        stating what §9.7 reads off it, so "there is no container" is the container document's POLICY and ORIGIN
        being absent TOGETHER — they are one navigable container's two facts and neither can arrive without the
-       other. A caller holding a container it cannot read both of has one in ANOTHER WASM INSTANCE, and that is
-       its own crash at the site that holds the navigable (core/dom/document.c): passing half a container here
-       would take §9.7 step 1 and enable every feature for a cross-origin child. */
+       other. A caller holding a container it cannot read both of has one in ANOTHER WASM INSTANCE, which is
+       answered by the instance that DOES hold the element running §9.5 there and sending its result
+       (permissions_policy_serialize): passing half a container here would take §9.7 step 1 and enable every
+       feature for a cross-origin child. */
     DCHECK((container_document_origin != NULL) == (container_document_policy != NULL),
            "§9.5 was given one half of a navigable container — a container document's origin without its "
            "permissions policy or the reverse. §9.7 reads both off ONE element: its steps 2 and 3 ask the "
@@ -223,6 +224,153 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
                                                    container_allow_len, origin);
     /* Step 5: "let policy be a new permissions policy, with inherited policy inherited policy and declared
        policy «[], []»." — the empty declared policy is the absence of the field; see the struct. */
+    return policy;
+}
+
+/* §4.2's TWO WORDS. They are the vocabulary a value CROSSES in, and they are the same two the standard uses
+   everywhere else in §9 — an inherited policy is "an ordered map from features to `Enabled` or `Disabled`". A
+   record spelling this build's enum integers instead would be read by whichever build received it against its
+   own declaration order, which is precisely the substitution the feature TOKEN beside it exists to prevent. */
+static const char *pp_value_token(PermissionsPolicyValue value)
+{
+    DCHECK(value == PP_ENABLED || value == PP_DISABLED,
+           "§4.2's inherited policy holds a value that is neither `Enabled` nor `Disabled` — the section "
+           "defines an inherited policy as a map to exactly those two, so a third is a cast that invented one");
+    return value == PP_ENABLED ? "Enabled" : "Disabled";
+}
+
+/* The reverse. It stands inside a `CHECK` at its one call site rather than beside one, which is sound for the
+   same reason that assert is a CHECK: a CHECK evaluates its condition in EVERY build, so the parse it performs
+   is a parse the shipped build runs. The same expression under a DCHECK would be a parse that vanishes. */
+static bool pp_value_of_token(const char *s, size_t n, PermissionsPolicyValue *out)
+{
+    if (n == 7 && strncmp(s, "Enabled", 7) == 0)  { *out = PP_ENABLED;  return true; }
+    if (n == 8 && strncmp(s, "Disabled", 8) == 0) { *out = PP_DISABLED; return true; }
+    return false;
+}
+
+char *permissions_policy_serialize(const PermissionsPolicy *policy)
+{
+    size_t n = 1;
+    char *out;
+    int f;
+
+    DCHECK(policy != NULL,
+           "§4.2's permissions policy was serialized for a peer instance from NOTHING — a NULL policy is a "
+           "Document §9.5 never ran for, and the record that provisions an instance states what its "
+           "navigable's container DID answer, never that nobody asked");
+    /* THE FORCING ASSERT FOR THE ITEM ADDED NEXT. §4.2 makes a permissions policy a struct of an inherited
+       policy AND a declared policy, and this build's struct holds only the first because §9.5 gives every
+       policy it creates the declared policy «[], []» (see the struct above). The day §9.6's header parse lands
+       and a declared policy becomes a field, this serializer would carry HALF a policy across an instance
+       boundary and the peer would read the half it got as the whole — a cross-origin child silently judged
+       under its container's inheritance and none of its own response's declarations. The size equality is what
+       makes that impossible to add quietly: it fails the moment the struct grows. */
+    DCHECK(sizeof *policy == sizeof policy->inherited,
+           "§4.2's permissions policy has grown an item beside its inherited policy and this serializer still "
+           "carries only the inherited map — a peer instance would then be provisioned with half a policy and "
+           "no way to know it. Carry the new item on this record too (it crosses as TEXT, in the standard's own "
+           "vocabulary, like everything else here) and read it back in permissions_policy_deserialize");
+    for (f = 0; f < PP_FEATURE_N; f++)
+        n += strlen(PP_FEATURES[f].token) + 1 + strlen(pp_value_token(policy->inherited[f])) + 1;
+    out = malloc(n);
+    CHECK(out != NULL, "permissions policy: OOM serializing §4.2's inherited policy for a peer instance");
+    out[0] = '\0';
+    for (f = 0; f < PP_FEATURE_N; f++) {
+        if (f != 0) strcat(out, ";");
+        strcat(out, PP_FEATURES[f].token);
+        strcat(out, "=");
+        strcat(out, pp_value_token(policy->inherited[f]));
+    }
+    return out;
+}
+
+bool permissions_policy_serialized_has_container(const char *text)
+{
+    /* A `CHECK` FOR THE REASON THE DESERIALIZER'S ARE: this is the field's presence, read off a record that
+       crossed an instance boundary, and it decides a security capability. It is also the only guard between a
+       host that stated nothing and a `strcmp` on NULL, which a DCHECK would leave in place for release. */
+    CHECK(text != NULL && *text != '\0',
+          "§9.5's container was read off a record that states NOTHING for it — the algorithm takes \"null or "
+          "an element\" and both are answers, so an absent field is a host that stopped writing one rather "
+          "than a navigable with no container, and reading it as the second grants a cross-origin child every "
+          "feature its embedder holds");
+    return strcmp(text, PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER) != 0;
+}
+
+PermissionsPolicy *permissions_policy_deserialize(const char *text)
+{
+    PermissionsPolicy *policy;
+    bool seen[PP_FEATURE_N];
+    const char *p;
+    int f, missing = PP_FEATURE_N;
+
+    /* EVERY REFUSAL BELOW IS A `CHECK` AND NOT A `DCHECK`, which is the one design decision in this function.
+       This record crosses an INSTANCE boundary, and SECURITY.md makes the WASM instance on the other side of it
+       UNTRUSTED — so a malformed record is not "the engine's own logic being wrong", it is check.h's other
+       case exactly: a SECURITY / AUTHORIZATION boundary, decided from bytes this build did not write. A
+       DCHECK would also be a hole rather than a judgement call, because it is compiled out: the feature-token
+       search below yields an index, and in release an unmatched token would index the arrays past their end.
+       THE FIRST OF THEM IS THE FIELD'S PRESENCE, and it is here rather than at each caller for the reason the
+       rest are here: a host that made no statement at all arrives with nothing, and a consumer that caught it
+       with a DCHECK would have the message in dev and a segfault in release. */
+    CHECK(text != NULL && *text != '\0',
+          "§9.5's answer was read back from a record that carries no field for it — a navigable's container "
+          "either answered something or there is no container, both are facts a provisioning record states, "
+          "and an absent field is the one thing that is neither");
+    DCHECK(permissions_policy_serialized_has_container(text),
+           "§9.5's answer was read back from a record that says there is NO container — \"container is null, "
+           "return `Enabled`\" is step 1 of §9.7 and is a decision the READER of this record takes, not a "
+           "policy to build: a caller that reached here has not asked whether its navigable has a container");
+    policy = calloc(1, sizeof *policy);
+    CHECK(policy != NULL, "permissions policy: OOM rebuilding §9.5's answer for a navigable's Document");
+    for (f = 0; f < PP_FEATURE_N; f++) seen[f] = false;
+    for (p = text; *p != '\0'; ) {
+        const char *end = strchr(p, ';');
+        const char *eq;
+        PermissionsPolicyValue value = PP_DISABLED;
+
+        if (end == NULL) end = p + strlen(p);
+        /* THE SEGMENT IS FOUND BEFORE THE '=' IS, and the order is the whole of why this cannot read across a
+           malformed pair: a `strchr` for '=' over the rest of the record would happily reach into the NEXT
+           pair and mint a feature name spanning a ';'. */
+        eq = memchr(p, '=', (size_t)(end - p));
+        CHECK(eq != NULL,
+              "§4.2's inherited policy arrived with a segment that is not a `<feature>=<value>` pair — this "
+              "record's grammar is ';'-joined pairs and every one of them names a §4.1 supported feature, so "
+              "a segment without an '=' is a producer and a consumer holding two different grammars");
+        for (f = 0; f < PP_FEATURE_N; f++)
+            if (strlen(PP_FEATURES[f].token) == (size_t)(eq - p) &&
+                strncmp(PP_FEATURES[f].token, p, (size_t)(eq - p)) == 0)
+                break;
+        CHECK(f < PP_FEATURE_N,
+              "§4.2's inherited policy names a feature §4.1's supported-feature set has no row for — the two "
+              "instances on either side of this record are the same build, so a token neither of them shares "
+              "is not §9.2's \"does not identify any recognized policy-controlled feature\" (that is a PARSE "
+              "of an author's header) but a record from a build whose X-list has moved, or a peer naming a "
+              "capability this user agent does not have");
+        CHECK(!seen[f],
+              "§4.2's inherited policy states one feature TWICE — the map has one value per feature and the "
+              "second would silently win, so a repeat is a record that does not describe a policy");
+        CHECK(pp_value_of_token(eq + 1, (size_t)(end - (eq + 1)), &value),
+              "§4.2's inherited policy holds a value that is neither `Enabled` nor `Disabled` — those are the "
+              "two words the section defines, and anything else read as one of them would decide a "
+              "cross-origin child's capabilities from a byte nobody wrote");
+        seen[f] = true;
+        policy->inherited[f] = value;
+        p = *end != '\0' ? end + 1 : end;
+    }
+    /* §4.3: "After a permissions policy has been initialized, its inherited policy will contain a value for
+       each supported feature." A feature this record did not state is therefore not a gap to fill with a
+       default — and either spelling of that default is a capability decided by an absence: `calloc` leaves
+       PP_DISABLED, which refuses a feature the container allowed, and the other way round grants one it
+       refused. */
+    for (f = 0; f < PP_FEATURE_N; f++)
+        if (!seen[f]) { missing = f; break; }
+    CHECK(missing == PP_FEATURE_N,
+          "§4.2's inherited policy arrived without a value for a supported feature — §4.3 makes an initialized "
+          "policy hold one for EVERY feature, so a record that omits one does not describe a policy and the "
+          "value this build would otherwise carry for it is whichever way its zero happens to point");
     return policy;
 }
 

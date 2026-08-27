@@ -478,14 +478,27 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
  * about a tree. It is a separate fact stated by the same zone for a related reason: an instance is an
  * ORIGIN-KEYED AGENT CLUSTER, so a cross-origin `<iframe>` is the ROOT of its own instance, and the only party
  * that knows a root is nested is the zone that routed the create. navigable_root (core/frame/navigable.h)
- * states what it is, why it is an identity rather than a name, and what reads it. */
+ * states what it is, why it is an identity rather than a name, and what reads it.
+ *
+ * `container_policy` IS §7.3.1.3's OTHER LINK FOR THAT SAME NAVIGABLE — its CONTAINER — and it carries an
+ * ANSWER rather than an element, because the element is in the creating instance's tree and an OBJECT does not
+ * cross an instance boundary. Permissions Policy §9.5 is "given null or an element (container) and an origin
+ * (origin)", and both of those arguments belong to the creator: it holds the `<iframe>` and it computed the
+ * child's origin. So the creator runs §9.5 once and this field is its RESULT, in the text
+ * core/permissions_policy/permissions_policy.h serializes an inherited policy into; "there is no container" is
+ * that grammar's own word and is what an AUXILIARY navigable and a root document with no embedder both state.
+ * IT IS NOT PART OF THE CONTAINER ABOVE IT EITHER: §7.1.7's policy container is five policies and a
+ * permissions policy is none of them — §7.3.2.1 sets the two in different steps, from different algorithms.
+ * WITHOUT IT §9.7 step 1 answered for a frame that HAS a container ("if container is null, return
+ * `Enabled`"), which grants a cross-origin child every supported feature its embedder was never asked about;
+ * core/dom/document.c crashes on the absence instead of taking that step. */
 QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
-                        const char *parent_navigable)
+                        const char *parent_navigable, const char *container_policy)
 {
     char *origin;
     HeaderList response_headers;
@@ -624,6 +637,11 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
         JSValue root_proxy = navigable_root(g_ctx, world_local_doc(), NULL, np.opener.value,
                                             parent_navigable, inherited, &np.embedder);
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        /* AND §7.3.1.3's OTHER LINK, BEFORE THE DOCUMENT BELOW IS INSTALLED: Permissions Policy §9.5 runs once
+           per Document a navigable is given, and for a navigable rooted in a peer's frame tree it can only be
+           answered from what the creating instance already computed. Stated here rather than folded into the
+           rooting above for §7.3.1.3's own reason — the section creates a navigable and links it afterwards. */
+        navigable_root_container(g_ctx, root_proxy, container_policy);
         /* §7.5.1's Document, from the navigation params decided above and not from anything read back off the
            response — which this host no longer holds. §7.4.5's final sandboxing flag set and §7.1.7 step 3's
            CSP list are both `np`'s, computed where a response is read (core/frame/navigation_params.c); this
@@ -710,14 +728,18 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
  * this agent did not root, and the shape that makes it a CHILD navigable is ordinary: a same-origin document
  * nested through a CROSS-ORIGIN one (a page embedding a third-party frame that embeds the page's own origin
  * back) is a document of THIS cluster whose §7.3.1.3 parent lives in a peer instance. Its navigable is a child
- * navigable, and this entry is where that is stated or lost. */
+ * navigable, and this entry is where that is stated or lost.
+ *
+ * `container_policy` IS qjs_init's, and it is here for the sentence directly above: a navigable whose parent
+ * is in a peer instance has its CONTAINER element there too, so Permissions Policy §9.5's answer for this
+ * document's navigable is a fact only the creating instance could compute. */
 QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, const char *doc_id,
                         const char *headers, const char *top_level_url,
                         const char *inherited_csp, const char *inherited_csp_self_origin,
                         const char *inherited_coep, const char *inherited_coep_endpoint,
                         const char *inherited_coep_report_only,
                         const char *inherited_coep_report_only_endpoint,
-                        const char *parent_navigable)
+                        const char *parent_navigable, const char *container_policy)
 {
     HeaderList response_headers;
     NavigationParams np;
@@ -827,6 +849,10 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
                                        &np.embedder);
 
         CHECK(!JS_IsException(proxy), "the joined navigable's WindowProxy could not be allocated");
+        /* §7.3.1.3's CONTAINER, for qjs_init's reason and with the same force its parent has here: a
+           same-origin document nested through a cross-origin one has both of its §7.3.1.3 links in a peer
+           instance, so this is where the container's answer is stated or lost. */
+        navigable_root_container(cctx, proxy, container_policy);
         SerializedPolicyContainer response =
             serialized_policy_container(np.csp, origin_serialized(origin_agent()),
                                         serialized_embedder_policy_of(&np.embedder));

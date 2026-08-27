@@ -340,4 +340,25 @@ JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPol
                        const char *parent_navigable, SerializedPolicyContainer inherited,
                        const EmbedderPolicy *response_embedder);
 
+/* AND HTML §7.3.1.3 "Child navigables"' OTHER LINK FOR THAT NAVIGABLE — its CONTAINER, which is the element
+ * whose content navigable it is. For the navigable an instance is ROOTED in, that element is in the CREATING
+ * instance's tree, so what crosses is not the element but what it ANSWERED: Permissions Policy §9.5's result,
+ * as core/permissions_policy/permissions_policy.h serializes an inherited policy, or that grammar's
+ * PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER for a navigable that has no container at all.
+ *
+ * IT IS A SECOND STATEMENT AND NOT AN ARGUMENT TO THE ROOTING ABOVE, WHICH IS §7.3.1.3'S OWN ORDER. The
+ * section creates a navigable and links it afterwards — "Let navigable be a new navigable … Set element's
+ * content navigable to navigable" — which is exactly the order core/frame/navigable.c's create performs for a
+ * navigable of THIS agent (window_proxy_set_container runs after the mint). A host rooting an instance stands
+ * at the same point, one boundary away, and states the same link. Both statements come from the zone that
+ * ROUTED the create, because it is the only party that can see above this instance at all.
+ *
+ * IT MUST BE MADE BEFORE THE FIRST DOCUMENT OF THAT NAVIGABLE IS INSTALLED, because §9.5 runs once per
+ * Document a navigable is given (core/dom/document.c) and reads it there. A host that skips it does not get a
+ * permissive default: that install CRASHES, naming this call.
+ *
+ * WHY THE ANSWER RATHER THAN §9.7's INPUTS, why a live read is not the alternative, and what the two links
+ * assert about each other: core/frame/window_proxy.h's window_proxy_set_remote_container and the definition. */
+void navigable_root_container(JSContext *ctx, JSValueConst proxy, const char *container_policy);
+
 #endif

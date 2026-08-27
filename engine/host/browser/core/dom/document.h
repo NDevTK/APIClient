@@ -290,6 +290,28 @@ bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature);
    realm's — so a child navigable's install asks the parent's Document for this. */
 const PermissionsPolicy *document_permissions_policy(JSContext *ctx);
 
+/* Permissions Policy §9.5 "Create a Permissions Policy for a navigable" — "given null or an element
+ * (container) and an origin (origin) this algorithm returns a new Permissions Policy" — over exactly those two
+ * arguments, which is the form its OTHER caller needs.
+ *
+ * IT IS PUBLIC BECAUSE §9.5 HAS TWO CALLERS AND ONE IMPLEMENTATION. The first is this file's own install, for
+ * every Document a navigable of THIS agent is given. The second is HTML §7.3.1.3's create-a-new-child-navigable
+ * when the child is CROSS-ORIGIN (core/frame/navigable.c): SECURITY.md makes that child the root of a PEER
+ * instance, the peer holds no element and cannot run §9.5 at all, and both of §9.5's arguments are right here —
+ * the container element is in this tree and `origin` is the child's, which that same create computed. So the
+ * creator runs the algorithm and its ANSWER crosses on the provisioning record. A second evaluation in the
+ * peer would be the one-question-two-places defect, and it would need §9.7's inputs rather than its result.
+ *
+ * ITS ARGUMENTS ARE §9.5'S OWN TWO AND THERE IS NO `ctx`, which is not a saving: the algorithm reads an
+ * ELEMENT and an origin, and the element carries its own node document. A realm handed in beside it would be a
+ * third thing the answer could be taken from, and §9.7's every step names the CONTAINER's document rather than
+ * the asking one.
+ *
+ * `container` is §7.3.1.3's NAVIGABLE CONTAINER — the element wrapper, or JS_NULL/JS_UNDEFINED for §9.7 step
+ * 1's "container is null" (a top-level traversable, an auxiliary navigable, a detached frame). `origin` is the
+ * origin of the Document being created in the navigable. OWNED by the caller: permissions_policy_free. */
+PermissionsPolicy *document_permissions_policy_for_container(JSValueConst container, const Origin *origin);
+
 /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET for this realm's Document — the set §7.2's create or §7.4.5's
  * navigation handed it, unchanged since.
  *

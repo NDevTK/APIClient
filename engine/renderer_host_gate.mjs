@@ -603,10 +603,13 @@ try {
      document has no creator and an empty pair is the positive statement of that — §7.1.4's EMBEDDER POLICY
      item of that same container, which has no empty spelling: §7.1.7 gives every container one, so a document
      with no creator states the section's own "a new embedder policy" in as many words — and HTML §7.3.1.3's
-     PARENT NAVIGABLE, `u`, because this gate loaded the opener itself and nothing embeds it. That last one is
-     not part of the container: a policy container is five policies and says nothing about a frame tree. */
+     PARENT NAVIGABLE, `u`, and its CONTAINER, `null`, because this gate loaded the opener itself and nothing
+     embeds it — no parent and no element presenting it are one document's two facts, stated one link each.
+     Neither is part of the container: a policy container is five policies and says nothing about a frame tree,
+     and Permissions Policy §9.5's answer is a sixth thing again, set by a different step of §7.3.2.1. */
   const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
-                                               OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '', 'u');
+                                               OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '', 'u',
+                                               'null');
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
@@ -652,15 +655,16 @@ try {
          `would have been visible to anything (drained=${drained})`);
   /* THE RECORD'S OWN GRAMMAR, ASSERTED FIELD BY FIELD — `navigable.create<TAB>child<TAB>creator<TAB>addr<TAB>
      origin<TAB>topLevelCreationURL<TAB>cspSelfOrigin<TAB>coep<TAB>coepEndpoint<TAB>coepReportOnly<TAB>
-     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>policy`, built by core/frame/navigable.c. The policy is LAST
+     coepReportOnlyEndpoint<TAB>parentNavigable<TAB>containerPolicy<TAB>policy`, built by core/frame/navigable.c. The policy is LAST
      because it is the record's remainder: a raw CSP header may itself contain HTAB, so it cannot be a middle
      field. Everything that is not the policy sits before it — an origin's serialization cannot contain a tab,
      HTML §7.1.4's three values are fixed tokens, RFC 8941 §3.3.3 "Strings" excludes a tab from the `report-to`
-     endpoint those two fields carry, and a navigable identity is a one-letter tag over '.'-terminated base64.
+     endpoint those two fields carry, a navigable identity is a one-letter tag over '.'-terminated base64, and
+     Permissions Policy §4.1's feature tokens and §4.2's `Enabled`/`Disabled` hold none either.
      THE FIELD COUNT IS CHECKED FIRST because every read below it would otherwise be `undefined` compared
      against a string, which is a false PASS shaped exactly like a real one. */
-  if (create.length < 13)
-    fail(`the create notice carries ${create.length} field(s) where the record has thirteen — ` +
+  if (create.length < 14)
+    fail(`the create notice carries ${create.length} field(s) where the record has fourteen — ` +
          `\`${create.join(' | ')}\``);
   if (create[3] !== CHILD_ADDR)
     fail(`the child navigable was announced at \`${create[3]}\` and this document opened \`${CHILD_ADDR}\` — ` +
@@ -728,8 +732,20 @@ try {
          'traversable that is its own top and links back through `opener`. `u` is core/frame/remote_object.h\'s ' +
          'undefined and is the positive statement that there is no parent; anything else here would give the ' +
          'peer instance a frame tree the creator never built');
-  if (create.slice(12).join('\t') !== '')
-    fail(`the create notice carries an inherited policy (\`${create.slice(12).join('\t')}\`) and this ` +
+  /* AND §7.3.1.3's OTHER LINK, ASSERTED ON THE SAME ARM AND FOR THE SAME REASON. An auxiliary navigable has no
+     element presenting it either — §7.3.1.7 step 8 creates one out of a target name — so Permissions Policy
+     §9.5's "container is null" is the CORRECT answer here, and the record must state it in that grammar's own
+     word rather than by leaving the field empty. Checking it beside the parent is what makes the pair
+     meaningful: the two links are true or false together, so a build that computed §9.5 over some element it
+     found anyway would send a feature map here and fail this line. */
+  if (create[12] !== 'null')
+    fail(`the create notice's §7.3.1.3 container statement is \`${create[12]}\` and this document created the ` +
+         'child with `window.open` — HTML §7.3.1.7 step 8 makes that an AUXILIARY navigable, which no element ' +
+         'presents, so Permissions Policy §9.5\'s "container is null" is what the record must say. A feature ' +
+         'map here would be §9.5 run over an element that presents some other navigable, and the peer would ' +
+         'inherit a policy from a frame it is not in');
+  if (create.slice(13).join('\t') !== '')
+    fail(`the create notice carries an inherited policy (\`${create.slice(13).join('\t')}\`) and this ` +
          'document was init\'d with no response headers at all — so the creator\'s container holds a policy ' +
          'that came from nowhere this gate can name');
   console.log(`${TAG}   a flow RAN behind the frame boundary: ${steps} step(s), child \`${create[1]}\` ` +

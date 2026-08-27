@@ -370,6 +370,28 @@ JSValue window_proxy_container(JSContext *ctx, JSValueConst proxy);
    the pairing between having one and being a child navigable so a child cannot be created without it. */
 void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst element);
 
+/* THE SAME LINK WHEN THE ELEMENT IS IN ANOTHER WASM INSTANCE, and it carries an ANSWER rather than an object.
+ * SECURITY.md keys an instance on `(browsing context group, origin)`, so the navigable an instance is ROOTED
+ * in is routinely a cross-origin `<iframe>` whose element belongs to the CREATING instance's tree — a member
+ * whose value is an OBJECT does not cross an instance boundary at all until the remote-object handle exists,
+ * and answering one by serializing it is how a cross-document read starts returning something that is not the
+ * thing. What crosses instead is what that container ANSWERED: Permissions Policy §9.5's result for this
+ * navigable, in the text core/permissions_policy/permissions_policy.h serializes an inherited policy into, or
+ * that grammar's PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER.
+ *
+ * WHY THE ANSWER AND NOT THE ELEMENT'S FACTS: §9.5's two arguments are the container element and the origin of
+ * the Document being created, and both of them belong to the creator — so §9.5 runs ONCE, where they are. A
+ * peer re-running §9.7 would be a second site evaluating one algorithm, and it would need the container
+ * document's whole permissions policy (its §9.8 steps read the DECLARED allowlists, at two origins), its
+ * origin, and the `allow` attribute's bytes. A LIVE read is not the alternative either: §Security makes a
+ * cross-instance read a suspend point, and a Document's install has no flow under it to suspend.
+ *
+ * STATED THROUGH core/frame/navigable.h's navigable_root_container, which is where the pairing with §7.3.1.3's
+ * PARENT is asserted. NULL from the reader is "nobody stated it", which is not an answer: core/dom/document.c
+ * crashes on it rather than reading it as §9.7 step 1's null container. BORROWED. */
+void window_proxy_set_remote_container(JSValueConst proxy, const char *serialized_policy);
+const char *window_proxy_remote_container(JSValueConst proxy);
+
 /* AND §7.2.2.4's `opener` AS THE NAVIGABLE IT IS, for the same reason: `opener` maps this document's own
    navigable onto the GLOBAL, which is the right answer for a page reading the member and the wrong one for an
    engine walk — a Window is not a WindowProxy, so a walk handed it asks "is this a proxy", is told no, and

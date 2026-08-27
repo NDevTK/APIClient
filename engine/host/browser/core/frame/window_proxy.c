@@ -96,6 +96,22 @@ typedef struct {
        relation by clearing the ELEMENT's content navigable, and that clear is an ordinary property write the
        DOM COW delta already isolates. */
     JSValue container;
+    /* WHAT THAT CONTAINER ANSWERED, FOR THE ONE NAVIGABLE WHOSE CONTAINER IS IN ANOTHER HEAP — Permissions
+       Policy §9.5's result for this navigable, as the text core/permissions_policy/permissions_policy.h
+       serializes an inherited policy into, or that grammar's "there is no container".
+       IT IS NOT THE SLOT ABOVE SAID TWICE. That one is an ELEMENT, and an element is exactly what this
+       instance does not have: SECURITY.md keys an instance on `(browsing context group, origin)`, so the
+       navigable an instance is ROOTED in may be a cross-origin `<iframe>` whose element lives in the creating
+       instance's tree. §9.5's two arguments are that element and this Document's origin, both of them the
+       CREATOR's, so the creator runs §9.5 and its ANSWER travels; nothing here could compute it, and a
+       cross-instance read is a SUSPEND POINT that a Document's install has no flow under it to take.
+       NULL IS "NOBODY STATED IT" AND IS NOT AN ANSWER. A navigable whose parent is a remote proxy is a child
+       navigable by §7.3.1.3 and therefore HAS a container, so the absence is a host that owes a statement —
+       core/dom/document.c crashes on it rather than reading it as §9.7 step 1's null container, which would
+       return `Enabled` for every supported feature.
+       POD AND OWNED BY THE COMPONENT, exactly like `top_level_url`: proxy_strdup'd, inside the bytes proxy_of
+       captures, never freed on a navigation because a parked flow's saved bytes still name it. */
+    char   *remote_container;
     char   *name;      /* §7.2.2.1's name: the BROWSING CONTEXT's, not the element's (owned; see proxy_of) */
     /* WHETHER ANYONE STATED THIS NAVIGABLE'S NAME, which is what decides whether `name` is a computed value or
        unknown external input. §7.4 STATES it — `open(url, "chan42")` names the navigable it creates, and the
@@ -2264,6 +2280,39 @@ void window_proxy_set_container(JSContext *ctx, JSValueConst proxy, JSValueConst
            "destroy-a-child-navigable severs it by clearing the ELEMENT's content navigable rather than by "
            "moving this one, so a navigable never changes which element presents it");
     p->container = JS_DupValue(ctx, element);
+}
+
+/* THE SAME LINK FOR THE NAVIGABLE WHOSE CONTAINER ELEMENT IS IN ANOTHER WASM INSTANCE — see the field.
+   IT IS STATED AFTER THE MINT FOR §7.3.1.3'S OWN REASON, not for a host's convenience: the section creates a
+   navigable and then links it ("Let navigable be a new navigable … Set element's content navigable to
+   navigable"), which is exactly the order window_proxy_set_container above is called in. A host that roots an
+   instance is standing at the same point, one boundary away.
+   WRITTEN ONCE, like the element it stands for: a navigable never changes which element presents it. */
+void window_proxy_set_remote_container(JSValueConst proxy, const char *serialized_policy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§7.3.1.3's remote container was stated for something that is not a WindowProxy");
+    DCHECK(serialized_policy != NULL && *serialized_policy != '\0',
+           "§7.3.1.3's container of a navigable in another instance was stated as NOTHING — §9.5's answer or "
+           "that grammar's \"there is no container\" are the two things a provisioning record can say, and an "
+           "empty field is neither");
+    DCHECK(JS_IsNull(p->container),
+           "a navigable that is presented by an element IN THIS HEAP was also given a container in another "
+           "instance — the element itself answers §9.5's every argument, so the second statement is about a "
+           "different navigable and one of the two is wrong about which");
+    DCHECK(p->remote_container == NULL,
+           "a navigable was given a SECOND cross-instance §7.3.1.3 container — the relation is created once, "
+           "and a navigable never changes which element presents it");
+    p->remote_container = proxy_strdup(serialized_policy);
+}
+
+const char *window_proxy_remote_container(JSValueConst proxy)
+{
+    ProxyData *p = proxy_of(proxy);
+
+    DCHECK(p != NULL, "§7.3.1.3's remote container of something that is not a WindowProxy was asked for");
+    return p->remote_container;
 }
 
 /* §7.3.1.3's CONTAINER OF A NAVIGABLE, as the standard defines it: "the navigable container whose content

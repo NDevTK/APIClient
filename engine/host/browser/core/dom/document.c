@@ -2530,15 +2530,13 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * those "container is null, return `Enabled`" is literally the standard's answer. The third is a container that
  * exists in ANOTHER WASM INSTANCE, which is not a null container and must not be read as one: taking step 1 for
  * it would grant a cross-origin child every feature its embedder holds. It is told apart by the PARENT being a
- * remote WindowProxy, and it crashes. */
-static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSValueConst nav_proxy)
+ * remote WindowProxy, and it is answered from the record that provisioned this instance — see below. */
+PermissionsPolicy *document_permissions_policy_for_container(JSValueConst container, const Origin *origin)
 {
-    JSValue container = window_proxy_container(ctx, nav_proxy);
     const PermissionsPolicy *container_doc_policy = NULL;
     const Origin *container_doc_origin = NULL;
     const lxb_char_t *allow = NULL;
     size_t allow_len = 0;
-    PermissionsPolicy *policy;
 
     if (JS_IsObject(container)) {
         lxb_dom_node_t *el = node_of(container);
@@ -2564,23 +2562,59 @@ static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSV
            nothing, and not an input the walk failed to find. */
         allow = lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"allow", 5,
                                               &allow_len);
-    } else {
-        JSValue parent = window_proxy_parent_navigable(ctx, nav_proxy);
-
-        if (window_proxy_is(parent) && window_proxy_is_remote(parent))
-            DFAIL("Permissions Policy §9.5 is creating a policy for a navigable whose §7.3.1.3 CONTAINER is in "
-                  "another WASM instance — this navigable has a parent and the element that holds it is not in "
-                  "this heap, so §9.7 can read neither the container document's permissions policy (its steps 2 "
-                  "and 3) nor its origin (step 7) nor the `allow` attribute (steps 4-5). Reading it as a NULL "
-                  "container takes step 1 and returns `Enabled` for every supported feature, which hands a "
-                  "cross-origin child the `cross-origin-isolated` capability its embedder was never asked "
-                  "about. The record that provisions this navigable has to carry the container document's "
-                  "inherited-policy value per supported feature, its origin, and the `allow` attribute's value "
-                  "— as text, the way core/frame/policy_container.h carries §7.1.7's container");
-        JS_FreeValue(ctx, parent);
     }
-    policy = permissions_policy_create(container_doc_policy, container_doc_origin, (const char *)allow,
-                                       allow_len, window_proxy_origin(nav_proxy));
+    return permissions_policy_create(container_doc_policy, container_doc_origin, (const char *)allow,
+                                     allow_len, origin);
+}
+
+/* §9.5 FOR THE NAVIGABLE A DOCUMENT IS BEING CREATED IN — the same algorithm above, asked of the navigable
+ * rather than of an element, which is what routes its three container cases.
+ *
+ * THE CROSS-INSTANCE ARM IS ANSWERED FROM A CARRIED RESULT, NOT FROM CARRIED INPUTS, and the two are not
+ * interchangeable. §9.5's arguments are the container ELEMENT and the origin of the Document being created,
+ * and BOTH of them belong to the instance that created this navigable: the element is in its tree and the
+ * child's origin is what its create computed. So the creator runs §9.5 — the function directly above, its one
+ * implementation — and its ANSWER crosses on the `navigable.create` notice; this side reads it back.
+ * The alternative, shipping §9.7's inputs and re-running it here, is a SECOND site evaluating one algorithm,
+ * and it would have to ship the container document's whole permissions policy (its §9.8 steps read the
+ * DECLARED allowlists too, at two different origins), its origin and the `allow` attribute's bytes.
+ *
+ * IT IS ASKED OF THE PARENT, AND THAT IS THE ASSERT. A navigable whose parent is a REMOTE WindowProxy is a
+ * child navigable by §7.3.1.3's own definition, so it HAS a container; the record that provisioned this
+ * instance either stated what that container answered or it did not, and the second is a host that owes a
+ * call rather than a navigable with no container. */
+static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSValueConst nav_proxy)
+{
+    JSValue container = window_proxy_container(ctx, nav_proxy);
+    PermissionsPolicy *policy;
+
+    if (!JS_IsObject(container)) {
+        JSValue parent = window_proxy_parent_navigable(ctx, nav_proxy);
+        bool remote_parent = window_proxy_is(parent) && window_proxy_is_remote(parent);
+
+        JS_FreeValue(ctx, parent);
+        if (remote_parent) {
+            const char *carried = window_proxy_remote_container(nav_proxy);
+
+            DCHECK(carried != NULL,
+                   "Permissions Policy §9.5 is creating a policy for a navigable whose §7.3.1.3 CONTAINER is "
+                   "in another WASM instance, and the record that provisioned this instance stated NOTHING "
+                   "about it — this navigable has a parent, so §7.3.1.3 makes it a CHILD NAVIGABLE and a child "
+                   "navigable has a container. Reading that silence as a null container takes §9.7 step 1 and "
+                   "returns `Enabled` for every supported feature, which hands a cross-origin child the "
+                   "`cross-origin-isolated` capability its embedder was never asked about. The statement "
+                   "exists (core/frame/navigable.h's navigable_root_container, beside navigable_root) and this "
+                   "host did not make it: carry the notice's container field to it");
+            DCHECK(permissions_policy_serialized_has_container(carried),
+                   "a navigable whose §7.3.1.3 PARENT is in another WASM instance was provisioned with §9.5's "
+                   "\"container is null\" — the section defines a CHILD NAVIGABLE as one whose parent is "
+                   "non-null and gives it a container element, so the two statements on that record "
+                   "contradict each other and one of them is about a different navigable");
+            JS_FreeValue(ctx, container);
+            return permissions_policy_deserialize(carried);
+        }
+    }
+    policy = document_permissions_policy_for_container(container, window_proxy_origin(nav_proxy));
     JS_FreeValue(ctx, container);
     return policy;
 }

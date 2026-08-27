@@ -211,6 +211,25 @@
          "record, or `u` for a top-level traversable. There is no empty spelling: a navigable either has a " +
          "parent or is a top-level traversable, and both are facts a host states" };
 
+  /* HTML §7.3.1.3's OTHER LINK FOR THAT SAME NAVIGABLE — its CONTAINER, which is the element whose content
+     navigable it is. It is its own parameter for the parent's reason and not as a second spelling of it: a
+     navigable has BOTH links or neither, and what each carries is different in kind. A parent crosses as an
+     IDENTITY the receiver can mint a proxy from; a container CANNOT cross at all, because it is an ELEMENT in
+     the creating renderer's tree and a member whose value is an object does not cross an instance boundary.
+     SO WHAT CROSSES IS WHAT IT ANSWERED. Permissions Policy §9.5 is "given null or an element (container) and
+     an origin (origin)", and both of those belong to the creator — it holds the `<iframe>` and it computed the
+     child's origin — so §9.5 runs ONCE there and this parameter is its RESULT: §4.2's inherited policy, one
+     `<token>=<Enabled|Disabled>` pair per §4.1 supported feature. `null` is that grammar's own word for "there
+     is no container", which is what an AUXILIARY navigable (§7.3.1.7 step 8 creates one out of a target name,
+     with no element anywhere in the algorithm) and a root document with no embedder both state.
+     WITHOUT IT the renderer took §9.7 step 1 — "if container is null, return `Enabled`" — for a navigable that
+     HAS a container, which grants a cross-origin child every supported feature its embedder was never asked
+     about, `cross-origin-isolated` among them. This zone RELAYS the bytes and reads none of them. */
+  var CONTAINER_POLICY = { name: "containerPolicy", type: "string",
+    why: "Permissions Policy §9.5's result for this document's navigable, computed by the instance that holds " +
+         "its §7.3.1.3 container element, or `null` for a navigable nothing presents. There is no empty " +
+         "spelling: a navigable either has a container or does not, and both are facts a host states" };
+
   var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string",
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
@@ -231,7 +250,8 @@
       { ordinal: 0, name: "Init",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE],
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
+                 CONTAINER_POLICY],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_init's own return. Its C body is a wall of CHECKs whose failures abort the instance, so " +
@@ -242,7 +262,8 @@
       { ordinal: 1, name: "Join",
         params: [DOCUMENT, DOCUMENT_URL, DOCUMENT_ID, DOCUMENT_HEADERS, TOP_LEVEL_URL,
                  INHERITED_CSP, INHERITED_CSP_SELF_ORIGIN, INHERITED_COEP, INHERITED_COEP_ENDPOINT,
-                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE],
+                 INHERITED_COEP_REPORT_ONLY, INHERITED_COEP_REPORT_ONLY_ENDPOINT, PARENT_NAVIGABLE,
+                 CONTAINER_POLICY],
         reply: [
           { name: "rc", type: "int32",
             why: "qjs_join's own return, on Init's rule — the entry CHECKs every precondition and aborts, so a " +

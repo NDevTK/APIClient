@@ -109,9 +109,10 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
  * facts about one element, so half of them is not a partial container — it is a container in ANOTHER WASM
  * INSTANCE (SECURITY.md keys an instance on `(browsing context group, origin)`, so a cross-origin container
  * document's policy is not a pointer this heap holds), and reading that as "no container" takes §9.7 step 1 and
- * enables every feature for the one child that must not have them. That case crashes where the navigable is —
- * core/dom/document.c, which is what holds the container relation — rather than here, so there is exactly one
- * statement of it and this function has no branch that could quietly take the other road.
+ * enables every feature for the one child that must not have them. THIS FUNCTION IS NOT WHERE THAT CASE IS
+ * ANSWERED and it has no branch that could quietly take the other road: the instance whose heap holds the
+ * element runs §9.5 there and its ANSWER crosses (the serialization below), so the instance that holds the
+ * navigable never calls this function for such a container at all — it reads the answer back.
  *
  * `origin` is the origin of the Document being created in the navigable. OWNED by the caller: free with
  * permissions_policy_free. */
@@ -120,6 +121,53 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
                                              const char *container_allow, size_t container_allow_len,
                                              const Origin *origin);
 void permissions_policy_free(PermissionsPolicy *policy);
+
+/* ---- §4.2's PERMISSIONS POLICY IN THE FORM IT CROSSES AN INSTANCE BOUNDARY --------------------------------
+ *
+ * WHY A POLICY CROSSES AT ALL, WHEN §9.5 TAKES AN ELEMENT. SECURITY.md keys a WASM instance on
+ * `(browsing context group, origin)`, so a cross-origin `<iframe>` is the ROOT of a PEER instance and the
+ * HTML §7.3.1.3 "Child navigables" CONTAINER of that peer's navigable is an element in ANOTHER HEAP. §9.5's
+ * two arguments are that element and the origin of the Document being created in the navigable, and BOTH of
+ * them belong to the CREATOR: the element is in its tree, and the child's origin is what its own create
+ * computed and already puts on the record that provisions the peer. So §9.5 runs ONCE, in the heap where its
+ * arguments are, and what crosses is its RESULT.
+ *
+ * IT IS THE RESULT AND NOT THE INPUTS, and that is not a preference between two carriers. §9.7's steps 2 and
+ * 3 run §9.8 over the CONTAINER DOCUMENT's own permissions policy at TWO different origins, its step 5 matches
+ * §9.4's container policy against the child's origin, and its step 7 compares the two origins — so "the
+ * inputs" is that document's WHOLE policy (its inherited map AND its declared policy's allowlists), its
+ * origin, and the `allow` attribute's bytes, and a peer handed them would be a SECOND site evaluating §9.7.
+ * One question answered in two places is the defect the top of this file is written against. Carrying HALF the
+ * inputs — the inherited map with the declared allowlists left behind — is not a smaller carrier but a WRONG
+ * one: it agrees with §9.8 only while every declared policy in this build is §9.5's «[], []», and stops
+ * agreeing, silently, on the day §9.6's `Permissions-Policy` header parse lands.
+ *
+ * THE GRAMMAR IS §4.1's TOKENS AND §4.2's TWO WORDS — `<token>=<Enabled|Disabled>`, ';'-joined. The standard's
+ * own vocabulary rather than this build's declaration order, for the reason HTML §7.1.4's values cross their
+ * own record as tokens: a record written by a build whose X-list has since moved would otherwise resolve to a
+ * DIFFERENT feature with nothing anywhere to say so. EVERY supported feature appears EXACTLY ONCE and the
+ * reader REFUSES a record that omits one — §4.3 makes an initialized policy hold "a value for each supported
+ * feature", so a missing feature is not a permissive default to fill in, it is a record that does not describe
+ * a policy. Neither ';' nor '=' nor a TAB can occur in a §4.1 token (they are the `allow`-attribute and
+ * header vocabulary) or in `Enabled`/`Disabled`, which is what makes this safe as ONE field of the
+ * tab-delimited notice that provisions a peer instance.
+ *
+ * `permissions_policy_serialize` returns a malloc'd record the caller frees. */
+char *permissions_policy_serialize(const PermissionsPolicy *policy);
+
+/* §9.5's "null or an element (container)", spelled in that same record — the POSITIVE statement that the
+   navigable this record provisions has NO §7.3.1.3 container, which is exactly what an AUXILIARY navigable is
+   (§7.3.1.7 step 8 creates one out of a target name, with no element anywhere in the algorithm). It holds no
+   '=', so no reader can mistake it for a pair, and it is not the empty string, which a reader could default.
+   Asked through this predicate rather than compared inline, so that every seam answers §9.5's "container is
+   null" from one place — the same rule core/frame/policy_container.h states for §7.1.7's `is not null`. */
+#define PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER "null"
+bool permissions_policy_serialized_has_container(const char *text);
+
+/* The policy such a record describes, minted for the Document being created in that navigable. OWNED by the
+   caller: free with permissions_policy_free. The text must describe a container (the predicate above), because
+   the absence is §9.7 step 1's answer and is a decision its READER takes rather than a policy to build. */
+PermissionsPolicy *permissions_policy_deserialize(const char *text);
 
 /* §4.2's EMPTY PERMISSIONS POLICY — "a permissions policy that has an inherited policy which contains
    `Enabled` for every supported feature, a declared policy whose declarations and reporting configuration are

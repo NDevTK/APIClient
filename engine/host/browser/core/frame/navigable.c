@@ -1699,6 +1699,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
        emits the notice, because that is the only arm where a navigable's tree has to be described to someone
        who cannot see it. */
     char *parent_id = NULL;
+    /* AND WHAT §7.3.1.3's CONTAINER ANSWERED, on the same arm and for the mirror reason: the peer holds the
+       navigable and this instance holds the ELEMENT that presents it. Permissions Policy §9.5's result, as
+       text; see the notice below. */
+    char *container_policy = NULL;
     size_t n;
     /* HTML §7.2's CREATE A NEW BROWSING CONTEXT AND DOCUMENT, verbatim: "Let topLevelCreationURL be
        about:blank if embedder is null; otherwise embedder's relevant settings object's top-level creation
@@ -1910,7 +1914,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            instance under; the CREATOR names who made it, which is what the host routes replies through and what
            a browser would decide policy from; the URL is the child's initial address; the ORIGIN is the
            child's; the PARENT is §7.3.1.3's link, without which the peer's own navigable is a top-level
-           traversable by that section's definition; the SELF-ORIGIN and the POLICY are the two halves of
+           traversable by that section's definition; the CONTAINER POLICY is what that section's OTHER link
+           answered — Permissions Policy §9.5 run over the element this document presents the child with, whose
+           result the peer cannot compute and must not guess; the SELF-ORIGIN and the POLICY are the two halves of
            HTML §7.3.2.1's CLONE OF THE CREATOR'S policy container ("Creating browsing contexts": "Set
            document's policy container to a clone of creator's policy container"), serialized — which the
            container can do precisely because it is a flat parse over one owned string plus the origin beside
@@ -2018,6 +2024,44 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            THE PARENT IS THIS DOCUMENT because §7.3.1.3's create-a-new-child-navigable runs in the embedder's
            realm — "let parentNavigable be element's node navigable" — which is the same proxy this call hands
            the child two lines below as its parent on the same-agent arm. */
+        /* AND PERMISSIONS POLICY §9.5's ANSWER FOR THIS NAVIGABLE, WHICH IS THE OTHER FACT §7.3.1.3's CONTAINER
+           HOLDS AND THE ONE THE PEER CANNOT GET AT ALL. §9.5 is "given null or an element (container) and an
+           origin (origin)", and BOTH of its arguments are HERE: the element is `container`, in this document's
+           tree, and the origin is the child's — the one this same create computed and puts on the record two
+           fields along. The peer holds neither. So the algorithm runs ONCE, in the heap that has its
+           arguments, and its RESULT crosses.
+           IT IS THE RESULT AND NOT THE INPUTS, and the difference decides how much has to cross and how many
+           places evaluate one algorithm. §9.7's steps 2 and 3 run §9.8 over the CONTAINER DOCUMENT's own
+           permissions policy at two different origins, step 5 matches §9.4's container policy against the
+           child's origin, and step 7 compares the two origins — so "the inputs" is that document's whole
+           policy (inherited AND declared), its origin, and the `allow` attribute's bytes, and a peer given
+           them would be a SECOND site running §9.7.
+           WITHOUT IT THE PEER TOOK §9.7 STEP 1 — "if container is null, return `Enabled`" — for a navigable
+           that HAS a container, which grants a cross-origin child every supported feature its embedder was
+           never asked about, `cross-origin-isolated` included. It crashes there now instead, and this is what
+           it crashes for the want of.
+           A `null` CONTAINER IS SENT AS A WORD, not as an empty field: §7.3.1.7 step 8's AUXILIARY navigable
+           has no element anywhere in its algorithm, which is a FACT about it, and the peer reads the two apart
+           through permissions_policy_serialized_has_container. `is_child` is that condition — this function
+           asserts the pairing with `container` at its head — and it is the same condition the parent field
+           above splits on, which is not a duplication: they are two links of §7.3.1.3 that a child navigable
+           has both of and an auxiliary one has neither of, and a peer that was told only one would have to
+           infer the other. */
+        if (is_child) {
+            PermissionsPolicy *child_policy = document_permissions_policy_for_container(container, origin);
+
+            container_policy = permissions_policy_serialize(child_policy);
+            permissions_policy_free(child_policy);
+        } else {
+            container_policy = strdup(PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
+        }
+        CHECK(container_policy != NULL,
+              "navigable: OOM stating §9.5's answer for this navigable's container to a peer instance");
+        DCHECK(!strchr(container_policy, '\t'),
+               "Permissions Policy §9.5's answer was serialized with a TAB in it and this record is "
+               "tab-delimited — §4.1's feature tokens and §4.2's `Enabled`/`Disabled` contain none, so a tab "
+               "here is that grammar having changed under a record that splits on one, and the creator's "
+               "policy text would land on the wrong field");
         parent_id = remote_object_encode(ctx, is_child ? document_window_proxy(ctx) : JS_UNDEFINED);
         CHECK(parent_id != NULL, "navigable: OOM naming this navigable's §7.3.1.3 parent for a peer instance");
         DCHECK(!strchr(parent_id, '\t'),
@@ -2033,10 +2077,10 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
             strlen(creator_policy.embedder.endpoint) +
             strlen(embedder_policy_value_token(creator_policy.embedder.report_only_value)) +
             strlen(creator_policy.embedder.report_only_endpoint) +
-            strlen(parent_id) + 32;
+            strlen(parent_id) + strlen(container_policy) + 32;
         op = malloc(n);
         CHECK(op != NULL, "navigable: OOM building the create notice");
-        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
+        snprintf(op, n, "navigable.create\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
                  world_doc_name(child),
                  world_doc_name(document_doc(ctx)), addr, origin_serialized(origin), tlu,
                  creator_policy.self_origin,
@@ -2045,10 +2089,12 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                  embedder_policy_value_token(creator_policy.embedder.report_only_value),
                  creator_policy.embedder.report_only_endpoint,
                  parent_id,
+                 container_policy,
                  creator_policy.csp ? creator_policy.csp : "");
         engine_host_notify(ctx, op);
         free(op);
         free(parent_id);
+        free(container_policy);
         /* THROUGH THE ONE DOOR, so this navigable is the one a peer's answer resolves to. The child was just
            minted and nothing has named it yet, so this ask is the mint — but it is the ask that RECORDS it,
            and without the record `w.frames[0] === iframe.contentWindow` is false about the frame this line
@@ -2125,6 +2171,41 @@ JSValue navigable_root(JSContext *ctx, uint32_t doc, const char *name, OpenerPol
     proxy = window_proxy_new_self(ctx, doc, name, opener_policy, parent);
     JS_FreeValue(ctx, parent);
     return proxy;
+}
+
+/* THE OTHER LINK OF §7.3.1.3 FOR THAT SAME NAVIGABLE — its CONTAINER, which for the navigable an instance is
+ * rooted in is an element in the CREATING instance's tree. See core/frame/navigable.h.
+ *
+ * THE TWO LINKS ARE ASSERTED AGAINST EACH OTHER HERE, and that is the whole reason this is a function of this
+ * component rather than a straight write into the proxy. §7.3.1.3 defines a CHILD NAVIGABLE as one whose
+ * parent is non-null, and §7.3.1.3's create is the only algorithm that makes one — it is handed an element and
+ * links both. So "has a remote parent" and "has a container" are one fact said twice for a navigable rooted in
+ * a peer, and a record where they disagree describes two different navigables. Neither direction is harmless:
+ * a container with no parent is a top-level traversable presented by an element, and a remote parent with no
+ * container is the §9.7 step 1 that grants a cross-origin child every feature its embedder holds. */
+void navigable_root_container(JSContext *ctx, JSValueConst proxy, const char *container_policy)
+{
+    JSValue parent = window_proxy_parent_navigable(ctx, proxy);
+    bool remote_parent = window_proxy_is(parent) && window_proxy_is_remote(parent);
+
+    JS_FreeValue(ctx, parent);
+    DCHECK(container_policy != NULL && *container_policy != '\0',
+           "a navigable was rooted and then told NOTHING about its §7.3.1.3 CONTAINER — Permissions Policy "
+           "§9.5's answer and \"there is no container\" are the two things this statement can make, and an "
+           "empty field is a host that stopped making it rather than a navigable with no container");
+    DCHECK(permissions_policy_serialized_has_container(container_policy) == remote_parent,
+           "§7.3.1.3's two links contradict each other for the navigable this instance is rooted in — the "
+           "section makes a CHILD NAVIGABLE one whose parent is non-null and its create links a container "
+           "element in the same steps, so a navigable with a container in a peer instance has a parent there "
+           "too and one without has neither. A container with no parent is a top-level traversable presented "
+           "by an element; a remote parent with no container is §9.7 step 1 for a frame, which returns "
+           "`Enabled` for every supported feature");
+    /* "THERE IS NO CONTAINER" IS RECORDED BY RECORDING NOTHING, and that is not a hole a reader could fill:
+       the navigable's own container slot is already JS_NULL, which is §7.3.1.3's answer and what §9.7 step 1
+       reads. The branch is on what this statement SAYS rather than on which host made it, so there is no
+       shape of caller it silently serves differently. */
+    if (permissions_policy_serialized_has_container(container_policy))
+        window_proxy_set_remote_container(proxy, container_policy);
 }
 
 /* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, given `target`, this document's

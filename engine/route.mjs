@@ -143,11 +143,19 @@ let instanceSerial = 0;
    nothing is declaring a TOP-LEVEL TRAVERSABLE — which is exactly what an instance provisioned for a
    CROSS-ORIGIN CHILD is not. It crosses as the emitting engine's own navigable identity, relayed verbatim; `u`
    is that grammar's undefined and is what a root document with no embedder states, which is why it is the
-   default here and never an empty string. */
+   default here and never an empty string.
+   `containerPolicy` IS §7.3.1.3's OTHER LINK — the CONTAINER of that same navigable — and it carries an
+   ANSWER rather than an element, because an element belongs to a heap and crosses no instance boundary.
+   Permissions Policy §9.5 is "given null or an element (container) and an origin (origin)", and both of those
+   arguments belong to the creating instance: it holds the `<iframe>` and it computed the child's origin. So
+   §9.5 runs ONCE there and this relays its result. `null` is that grammar's own word for "there is no
+   container", which is what this driver's own root documents state — it invented them, nothing presents them —
+   and it is the same fact `u` states one link along. Without it the engine takes §9.7 step 1, "if container is
+   null, return `Enabled`", for a navigable that HAS one. */
 async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inheritedCsp, inheritedCspSelf,
                           inheritedCoep = 'unsafe-none', inheritedCoepEndpoint = '',
                           inheritedCoepReportOnly = 'unsafe-none', inheritedCoepReportOnlyEndpoint = '',
-                          parentNavigable = 'u') {
+                          parentNavigable = 'u', containerPolicy = 'null') {
   const M = await boot();
   const cs = (s) => { const n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n); M.stringToUTF8(s, p, n); return p; };
   const str = (f, ...a) => String(M.ccall(f, 'string', a.map(() => 'number'), a.map(cs)) ?? '');
@@ -187,12 +195,12 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     const [hp, hn] = bs(html);
     M.ccall('qjs_init', 'number',
       ['number','number','number','number','number','number','number','number',
-       'number','number','number','number','number'],
+       'number','number','number','number','number','number'],
       [hp, hn, cs(url), cs(docId), cs(headers || ''), cs(topLevelUrl),
        cs(inheritedCsp || ''), cs(inheritedCspSelf || ''),
        cs(inheritedCoep), cs(inheritedCoepEndpoint),
        cs(inheritedCoepReportOnly), cs(inheritedCoepReportOnlyEndpoint),
-       cs(parentNavigable)]);
+       cs(parentNavigable), cs(containerPolicy)]);
     M._free(hp);
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
@@ -480,18 +488,21 @@ async function drainNotices(e) {
       if (holderOf(f[1])) console.log(`  [${e.tag}] create for ${f[1]}, already held — routing to the live instance`);
       /* FIELD 6 IS CSP §2.2's SELF-ORIGIN of the inherited list, FIELDS 7-10 ARE §7.1.4's EMBEDDER POLICY —
          its value, its reporting endpoint, its report-only value and its report-only endpoint — FIELD 11 IS
-         HTML §7.3.1.3's PARENT NAVIGABLE, and FIELD 12 IS THE LIST. The policy is the record's REMAINDER (a
+         HTML §7.3.1.3's PARENT NAVIGABLE, FIELD 12 IS THAT SECTION'S OTHER LINK (what the navigable's
+         CONTAINER answered, which is Permissions Policy §9.5's result and which only the creating instance
+         could compute, since §9.5's two arguments are that element and the child's origin), and FIELD 13 IS
+         THE LIST. The policy is the record's REMAINDER (a
          raw CSP header may contain HTAB), which is why everything that is not the policy sits before it: an
          origin's serialization cannot contain a tab, nor can §7.1.4's tokens, nor can remote_object.c's
          one-letter tag and '.'-terminated base64, and RFC 8941 §3.3.3 "Strings" excludes one from a
          `report-to` endpoint.
          THE PARENT IS NOT PART OF THE CONTAINER BESIDE IT and is passed on its own: this fixture's `a` opens a
-         CROSS-ORIGIN WINDOW, which §7.3.1.7 step 8 makes an AUXILIARY navigable — a full policy container and
-         NO parent — so the record carries `u` here, and a driver that folded the two together could not tell
-         that from a frame.
+         CROSS-ORIGIN WINDOW, which §7.3.1.7 step 8 makes an AUXILIARY navigable — a full policy container, NO
+         parent and NO container element — so the record carries `u` and `null` here, and a driver that folded
+         either of them into the container beside them could not tell that from a frame.
          The child has no response headers of its own in this fixture, so that slot is empty. */
-      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(12).join('\t'),
-                                         f[6], f[7], f[8], f[9], f[10], f[11]));
+      else engines.push(await makeEngine(HTML_B, f[3], f[1], '', f[5], undefined, f.slice(13).join('\t'),
+                                         f[6], f[7], f[8], f[9], f[10], f[11], f[12]));
     }
     /* HTML §7.1.3.2's BROWSING CONTEXT GROUP SWAP — `navigable.swap <new doc> <url> <origin>`. The same act as
        a create and a different record: §7.3.2.3 makes the new browsing context "with null, null, and group", a

@@ -1472,12 +1472,17 @@ static ChildDoc *wpt_child_for(const char *name)
    policies and says nothing about a tree — and it is the one fact a child PROCESS could never recover: a
    navigable "is a child navigable", "which means that its parent is non-null", and this process is the only
    party that knows the navigable it is about to provision hangs off one of its own. `u` is that grammar's
-   undefined and is the positive statement that there is none, which is what §7.1.3.2's swap sends. */
+   undefined and is the positive statement that there is none, which is what §7.1.3.2's swap sends.
+   AND `container_policy` IS §7.3.1.3's CONTAINER OF THAT SAME NAVIGABLE — the element is in THIS process's
+   tree and the child cannot see it, so what it carries is what the element ANSWERED: Permissions Policy
+   §9.5's result, serialized. A `navigable.create` carries the creator's; §7.1.3.2's swap has no container at
+   all (§7.3.2.3 makes the new browsing context "with null, null, and group") and says so in that grammar's
+   own word. */
 static void wpt_spawn_child(const char *name, const char *url, const char *origin, const char *csp,
                             const char *csp_self_origin, const char *top_level_url,
                             const char *coep, const char *coep_endpoint,
                             const char *coep_report_only, const char *coep_report_only_endpoint,
-                            const char *parent)
+                            const char *parent, const char *container_policy)
 {
     int down[2], up[2];
     pid_t pid;
@@ -1520,7 +1525,8 @@ static void wpt_spawn_child(const char *name, const char *url, const char *origi
            indexing has one rule and not one per generation. */
         execl(g_self_exe, g_self_exe, "--document", name, url, origin, csp ? csp : "",
               top_level_url ? top_level_url : "", csp_self_origin ? csp_self_origin : "",
-              coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, (char *)NULL);
+              coep, coep_endpoint, coep_report_only, coep_report_only_endpoint, parent, container_policy,
+              (char *)NULL);
         _exit(127);
     }
     close(down[0]); close(up[1]);
@@ -1662,7 +1668,7 @@ static void wpt_route_post(JSContext *ctx, const char *doc, const char *record, 
 
 static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin)
 {
-    char *f[13]; int nf = 0; char *q;
+    char *f[14]; int nf = 0; char *q;
     /* THE RECORD THE EMITTING ENGINE WROTE, kept whole before this router takes it apart. The split below
        writes NULs into `line`, and a routed post crosses to its instance VERBATIM — the receiving engine's own
        entry parses it, so a rejoin of the fields here would be this host restating a grammar it does not own. */
@@ -1671,21 +1677,23 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
     CHECK(whole != NULL, "wpt: OOM keeping a host notice whole");
     /* THE SPLIT STOPS AT THE LAST FIELD AND KEEPS THE REMAINDER VERBATIM, because the last field of a
        navigable.create IS a raw CSP header and HTTP allows HTAB inside one. */
-    for (q = line, f[nf++] = q; *q && nf < 13; q++)
+    for (q = line, f[nf++] = q; *q && nf < 14; q++)
         if (*q == '\t') { *q = 0; f[nf++] = q + 1; }
-    if (nf == 13 && !strcmp(f[0], "navigable.create")) {
+    if (nf == 14 && !strcmp(f[0], "navigable.create")) {
         /* FIELD 5 IS HTML §8.1.3.1's TOP-LEVEL CREATION URL, FIELD 6 IS CSP §2.2's SELF-ORIGIN and FIELDS
            7-10 ARE §7.1.4's EMBEDDER POLICY — its value, its reporting endpoint, its report-only value and its
            report-only endpoint — all of which cross for one reason: they are ITEMS of HTML §7.1.7's clone of
            the creator's container, which moves whole, and the instance that will host the child can derive
            none of them. FIELD 11 IS HTML §7.3.1.3's PARENT NAVIGABLE, which is not an item of that container
            at all — it is the tree link that decides whether the child's own instance is rooted in a child
-           navigable or in a top-level traversable, and no process but this one holds it. They all come BEFORE
-           the policy at field 12 because the policy is the record's remainder: neither an origin's
-           serialization, nor an §7.1.4 value's token, nor remote_object.h's base64 identity can contain a tab,
-           and RFC 8941 §3.3.3 "Strings" excludes one from the `report-to` endpoint, while a raw CSP header may
-           hold one. */
-        wpt_spawn_child(f[1], f[3], f[4], f[12], f[6], f[5], f[7], f[8], f[9], f[10], f[11]);
+           navigable or in a top-level traversable, and no process but this one holds it. FIELD 12 IS
+           §7.3.1.3's OTHER LINK — what that navigable's CONTAINER ELEMENT answered, which is Permissions
+           Policy §9.5's result and which only the creating instance could compute, since §9.5's two arguments
+           are that element and the child's origin and it holds both. They all come BEFORE the policy at field
+           13 because the policy is the record's remainder: neither an origin's serialization, nor an §7.1.4
+           value's token, nor remote_object.h's base64 identity, nor §4.1's feature tokens with §4.2's two
+           words can contain a tab, while a raw CSP header may hold one. */
+        wpt_spawn_child(f[1], f[3], f[4], f[13], f[6], f[5], f[7], f[8], f[9], f[10], f[11], f[12]);
         free(whole);
         return;
     }
@@ -1708,8 +1716,12 @@ static void wpt_route_notice(JSContext *ctx, char *line, const char *from_origin
            AND §7.3.1.3's PARENT IS `u`, WHICH IS THE SPEC AND NOT A BLANK: §7.1.3.2's swap is asserted at its
            own site to be reached only for a TOP-LEVEL browsing context ("if browsingContext is not a top-level
            browsing context, then return browsingContext"), so the navigable it provisions has no parent by the
-           standard's own step 2 rather than by this host having nothing to say. */
-        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u");
+           standard's own step 2 rather than by this host having nothing to say.
+           AND §7.3.1.3's CONTAINER IS ABSENT FOR THE SAME SENTENCE: §7.3.2.3 creates the new browsing context
+           "with null, null, and group", so there is no element presenting the navigable a swap provisions and
+           Permissions Policy §9.7 step 1 is its own correct answer rather than a value withheld. */
+        wpt_spawn_child(f[1], f[2], f[3], "", "", f[2], "unsafe-none", "", "unsafe-none", "", "u",
+                        PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
         free(whole);
         return;
     }
@@ -2375,13 +2387,20 @@ static JSContext *wpt_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const
    parent is non-null", so a `--document` child that was told nothing would root its document in a navigable
    that presents as a top-level traversable. `u` is that grammar's undefined and is what the top-level test
    document passes: this runner loaded it from the corpus and nothing embeds it. */
+/* AND `container_policy` IS §7.3.1.3's OTHER LINK — the CONTAINER of that same navigable, which for a
+   `--document` child is an element in the PARENT PROCESS's tree. What crosses is not the element but what it
+   ANSWERED: Permissions Policy §9.5's result, in the text core/permissions_policy/permissions_policy.h
+   serializes an inherited policy into. §9.5 takes "null or an element (container) and an origin (origin)" and
+   both of those belong to the creator — it holds the `<iframe>` and it computed the child's origin — so the
+   creator runs §9.5 once and this is its answer. The top-level test document passes that grammar's "there is
+   no container", which is the same fact its `u` parent states one link along. */
 static JSContext *wpt_build_document(const char *doc_name, const char *origin, const char *top_level_url,
                                      const char *html, size_t html_n, const HeaderList *html_headers,
                                      const char *inherited_csp, const char *inherited_csp_self_origin,
                                      const char *inherited_coep, const char *inherited_coep_endpoint,
                                      const char *inherited_coep_report_only,
                                      const char *inherited_coep_report_only_endpoint,
-                                     const char *parent_navigable)
+                                     const char *parent_navigable, const char *container_policy)
 {
     static const char DOC[] = "<!doctype html><html><head></head><body></body></html>";
     char *fetched = NULL;
@@ -2542,6 +2561,11 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
                                             inherited, &np.embedder);
 
         CHECK(!JS_IsException(root_proxy), "the root navigable's WindowProxy could not be allocated");
+        /* AND §7.3.1.3's CONTAINER, BEFORE THE INSTALL BELOW: Permissions Policy §9.5 runs once per Document a
+           navigable is given, and for a navigable rooted in another process's frame tree only that process
+           could have run it. Stated after the rooting for §7.3.1.3's own order, exactly as the product host
+           states it — one algorithm, two hosts, and no copy of it here. */
+        navigable_root_container(ctx, root_proxy, container_policy);
         /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, origin,
@@ -2715,6 +2739,15 @@ static int wpt_child_main(int argc, char **argv)
        undefined — is a REAL answer here (§7.1.3.2's swap sends it), so "the parent did not state it" and "the
        parent stated no parent" would be one value, and that is the difference between a frame and a page. */
     const char *parent_navigable = argc > 12 ? argv[12] : NULL;
+    /* AND §7.3.1.3's CONTAINER OF THAT NAVIGABLE — what the element presenting it ANSWERED, since the element
+       is in the parent process's tree and this one holds no part of it. Permissions Policy §9.5's result, in
+       core/permissions_policy/permissions_policy.h's serialization, or that grammar's "there is no container".
+       APPENDED, like every field above it, so every position already read keeps its meaning. NOT DEFAULTED
+       WHEN ABSENT, and this one has the sharpest reason of the three: §9.7 step 1's "if container is null,
+       return `Enabled`" is a REAL answer that a `--document` child legitimately gives (a swap provisions a
+       navigable nothing presents), so "the parent did not state it" and "the parent stated no container" would
+       be one value — and that value hands a cross-origin frame every supported feature its embedder holds. */
+    const char *container_policy = argc > 13 ? argv[13] : NULL;
     JSContext *ctx;
     char *html = NULL;
     size_t html_n = 0;
@@ -2754,6 +2787,13 @@ static int wpt_child_main(int argc, char **argv)
           "not derivable here: it belongs to the CREATOR's response, which this process never saw. Reading it "
           "as `unsafe-none` would put a cross-origin-isolated creator's child under the wrong rule for every "
           "no-CORS fetch it makes, with nothing anywhere to say so");
+    CHECK(container_policy && *container_policy,
+          "wpt: a child document was started with no §7.3.1.3 CONTAINER statement — Permissions Policy §9.5 is "
+          "\"given null or an element (container) and an origin (origin)\", and BOTH of those arguments belong "
+          "to the process that created this navigable: it holds the element and it computed this document's "
+          "origin. So §9.5 runs there and its ANSWER arrives here. Without the field this process would take "
+          "§9.7 step 1 for a navigable that HAS a container, returning `Enabled` for every supported feature "
+          "the embedder was never asked about");
     snprintf(g_base_url, sizeof g_base_url, "%s", url && *url ? url : "about:blank");
     /* `about:blank` HAS NO BYTES TO FETCH — its Document is the empty one §7.4 creates, which is what makes it
        synchronous in a browser and what makes an <iframe> with no src scriptable immediately. */
@@ -2773,7 +2813,7 @@ static int wpt_child_main(int argc, char **argv)
        Contexts §4.2 exists to close. */
     ctx = wpt_build_document(name, origin, top_level_url, html, html_n, html ? &html_headers : NULL,
                              csp, csp_self_origin, coep, coep_endpoint, coep_report_only,
-                             coep_report_only_endpoint, parent_navigable);
+                             coep_report_only_endpoint, parent_navigable, container_policy);
     free(html);
     header_list_free(&html_headers);
 
@@ -2947,7 +2987,8 @@ int main(int argc, char **argv)
        the corpus itself, so nothing embeds it and its navigable is a top-level traversable. A `--document`
        child reaches the same build with the identity its parent process wrote on its command line. */
     ctx = wpt_build_document("wpt", WPT_TOP_ORIGIN, g_base_url, NULL, 0, NULL, "", "",
-                             "unsafe-none", "", "unsafe-none", "", "u");
+                             "unsafe-none", "", "unsafe-none", "", "u",
+                             PERMISSIONS_POLICY_SERIALIZED_NO_CONTAINER);
     /* THE REALM A RELAYED NOTICE IS DELIVERED INTO. A child's notice arrives while this process is blocked
        inside wpt_child_ask, which has no ctx of its own — this names the one it routes into, and a notice
        arriving before there is one is a message with nowhere to go. */
