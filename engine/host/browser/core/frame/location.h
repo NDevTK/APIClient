@@ -43,7 +43,16 @@ JSValue location_object(JSContext *ctx);
    OPENER'S copy, so the opener's next relative fetch resolved against the popup's address. A per-realm fact
    stored per agent is the same defect as `name` having had two sources, and the Document already holds it.
    IT IS THE ADDRESS AND NOT §2.4.3's DOCUMENT BASE URL, which this header used to call the same thing. They
-   differ exactly when a page ships `<base href>`: HTML §8.1.5.1's API base URL moves and `location.href` does
-   not, so a Location reading the base URL would report an address the navigable was never at. */
+   differ exactly when a page ships `<base href>`: the API base URL moves and `location.href` does not, so a
+   Location reading the base URL would report an address the navigable was never at. THE SETTERS NEED THE
+   OTHER ONE — §7.2.4's href setter, `assign` and `replace` encoding-parse relative to the entry settings
+   object, whose API base URL is §7.2.2.6 "Script settings for Window objects"'s "the current base URL of
+   window's associated Document" — so this component reads BOTH and the two are never one call.
+   THE SECTION USED TO BE CITED AS §8.1.5.1, AND THAT IS "The resolution algorithm" — a real section that
+   READS an API base URL for module specifiers and defines nothing about this one. The field is declared in
+   §8.1.3.2 "Environment settings objects" and a Window's value is §7.2.2.6's. The wrong number reads as
+   authoritative and sends the next reader to a section that does not say what the code claims, which is the
+   one thing a citation must not do; core/dom/document.h carries the same wrong number and is not this
+   component's to edit. */
 
 #endif

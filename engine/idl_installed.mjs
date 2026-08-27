@@ -740,6 +740,12 @@ const CALL_FORMS = new Map(Object.entries({
   idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3, kind: "accessor" },
   idl_install_accessor_step:     { target: 1, name: 2, kind: "accessor" },
   idl_install_method:            { target: 1, name: 2, kind: "data" },
+  /* §3.4.10's [LegacyUnforgeable] for an OPERATION, the twin of the accessor form two rows up and registered
+     with it for the same reason: what differs is where the property LANDS (the object that implements the
+     interface, not its prototype) and its descriptor, neither of which changes that this is an install naming
+     a member. Unregistered, HTML §7.2.4's `assign`, `replace` and `reload` would be members that SHIP and read
+     ABSENT — the false-absent direction this file's own header calls the thing an auditor may not do. */
+  idl_install_method_unforgeable: { target: 1, name: 2, kind: "data" },
   idl_install_step_method:       { target: 1, name: 2, kind: "data" },
   idl_install_replaceable:       { target: 1, name: 2, fn: 3, kind: "accessor" },
   idl_install_replaceable_value: { target: 1, name: 2, kind: "accessor" },

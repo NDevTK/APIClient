@@ -66,11 +66,41 @@ bool url_record_copy(UrlRecord *dst, const UrlRecord *src);
    URL constructor throw. `out` is left initialised-and-empty on failure, so the caller frees it either way. */
 bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *base);
 
-/* §4.4 with a STATE OVERRIDE — what every §5.1 setter is one call to. The override values are the parser's own
-   state numbering and are private to url.c, which is where the setters live; -1 is a fresh parse and is what
-   url_parse passes. On failure with an override the record is left UNTOUCHED, which is what §5.1's "return"
-   means — a setter that refuses its input must not also destroy the URL. */
-bool url_parse_into(UrlRecord *url, const char *input, size_t len, const UrlRecord *base, int state_override);
+/* §4.4 with a STATE OVERRIDE — the entry every setter algorithm in every standard is one call to, named by the
+   STATE its own section names rather than by a number.
+   THE SEVEN ARE THE ONES OTHER STANDARDS INVOKE, and there is no eighth: §6.1's URL setters and HTML §7.2.4's
+   Location setters between them reach scheme start, host, hostname, port, path start, query and fragment, each
+   written out in the calling step ("Basic URL parse the given value, with copyURL as url and host state as
+   state override"). Every other state §4.4 defines is an internal transition of the machine and no section
+   sends a caller to one, so the enum is a CLOSED list rather than a subset someone stopped extending — the day
+   a standard names an eighth, it arrives here and in the switch that maps it, together.
+   THIS USED TO PUBLISH `url_parse_into` WITH A RAW `int state_override`, described in this very comment as "the
+   parser's own state numbering … private to url.c, which is where the setters live". Both halves were wrong at
+   once: a header cannot hand out a numbering and call it private, and the setters are NOT all in url.c —
+   §4.4's scheme state says so itself, "This indication of failure is used exclusively by the Location object's
+   protocol setter", and that setter is core/frame/location.c's. The function had no caller outside url.c at
+   all, so what the header published was an invitation to depend on a numbering nobody had agreed to.
+   `base` is gone with it rather than passed as NULL: every one of the seven states is reached with the record
+   ALREADY built, so a base is what a state BEFORE them would have consumed and there is no override for which
+   one is meaningful.
+   ON FAILURE THE RECORD IS LEFT UNTOUCHED, which is what a setter's "return" means — a setter that refuses its
+   input must not also destroy the URL. FAILURE IS ONLY EVER OBSERVABLE IN THE SCHEME STATES: §4.4 returns
+   failure under an override in exactly two arms, both in scheme start/scheme state, and the standard names the
+   one caller that reads it. */
+typedef enum {
+    URL_OVERRIDE_SCHEME_START,   /* §4.4 scheme start state — the only override whose failure is observable */
+    URL_OVERRIDE_HOST,           /* §4.4 host state */
+    URL_OVERRIDE_HOSTNAME,       /* §4.4 hostname state — host state refusing the `:` that would start a port */
+    URL_OVERRIDE_PORT,           /* §4.4 port state */
+    URL_OVERRIDE_PATH_START,     /* §4.4 path start state */
+    URL_OVERRIDE_QUERY,          /* §4.4 query state */
+    URL_OVERRIDE_FRAGMENT,       /* §4.4 fragment state */
+} UrlStateOverride;
+bool url_parse_override(UrlRecord *url, const char *input, size_t len, UrlStateOverride state);
+
+/* §4.2 "URL miscellaneous": "A URL cannot have a username/password/port if its host is null or the empty host,
+   or its scheme is `file`." The preamble of §6.1's and HTML §7.2.4's port setters both, verbatim. */
+bool url_cannot_have_username_password_port(const UrlRecord *u);
 
 /* §4.5 "URL serializer" — the whole record, or every part of it. Each returns a malloc'd string. */
 /* §4.4's ELEVEN MEMBERS, by index. Public because §4.6.3's HTMLHyperlinkElementUtils is the same eleven
@@ -110,6 +140,12 @@ int  url_default_port(const char *scheme);
    answers `about` and misses `data:` and `blob:` — which are exactly the two schemes whose Document has an
    OPAQUE origin, and therefore exactly the case CSP §2.2's self-origin note is written about. */
 bool url_scheme_is_local(const char *scheme);
+
+/* FETCH §2.1 "URL", the next sentence: "An HTTP(S) scheme is `http` or `https`." Beside `local` because it is
+   the same section and the same kind of membership test. HTML §7.2.4's protocol setter is what asks: the step
+   that TERMINATES a protocol set whose result is not http(s) is why `location.protocol = "data"` changes
+   nothing rather than throwing. */
+bool url_scheme_is_http_s(const char *scheme);
 
 /* §5.1's URLENCODED SERIALIZER's encode set, exported because URLSearchParams is the other user of it. */
 char *url_percent_encode(const char *s, size_t len, int set);

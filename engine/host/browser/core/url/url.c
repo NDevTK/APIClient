@@ -149,6 +149,16 @@ bool url_scheme_is_local(const char *scheme)
     return false;
 }
 
+/* FETCH §2.1 "URL", the sentence after the one above: "An HTTP(S) scheme is `http` or `https`." It sits here
+   for the reason `local` does — the same section, the same KIND of question, and no property of a scheme makes
+   it one. Its caller is HTML §7.2.4's protocol setter, whose step 6 is "if copyURL's scheme is not an HTTP(S)
+   scheme, then terminate these steps": that step is what makes `location.protocol = "data"` a silent no-op on
+   an http document while `location.protocol = "†"` is a SyntaxError, which is two whole WPT files. */
+bool url_scheme_is_http_s(const char *scheme)
+{
+    return scheme && (!strcmp(scheme, "http") || !strcmp(scheme, "https"));
+}
+
 int url_default_port(const char *scheme)
 {
     size_t i;
@@ -771,9 +781,15 @@ enum {
     ST_HOSTNAME_OVERRIDE,
 };
 
-/* §4.1: "cannot have a username/password/port" — a URL with no host, an empty host or the `file` scheme. The
-   three setters that write those parts all return early on it. */
-static bool url_cannot_have_credentials(const UrlRecord *u)
+/* §4.2 "URL miscellaneous": "A URL cannot have a username/password/port if its host is null or the empty
+   host, or its scheme is `file`." The three setters that write those parts all return early on it.
+   IT CARRIES THE SPEC'S WHOLE NAME AND IS PUBLIC. It was `url_cannot_have_credentials`, private — a name that
+   drops the PORT, which is the one of the three another standard asks about: HTML §7.2.4's port setter opens
+   with this predicate word for word. A shortened name invites the reader who needs the port arm to re-read
+   three fields in their own file, which is the second answer that drifts. (The section is §4.2, not §4.1 as
+   the line above this used to cite: §4.1 is URL representation and defines the record's FIELDS; the
+   predicates over them — special, includes credentials, opaque path, this one — are §4.2's.) */
+bool url_cannot_have_username_password_port(const UrlRecord *u)
 {
     return u->host.kind == URL_HOST_NULL || u->host.kind == URL_HOST_EMPTY ||
            (u->scheme && !strcmp(u->scheme, "file"));
@@ -789,8 +805,8 @@ static bool url_includes_credentials(const UrlRecord *u)
    rather than applied, and the host, port and hostname states return the moment they have their answer
    instead of running on into the path. Writing the setters as field assignments instead would be eleven
    places to get `u.protocol = "https:"` wrong; this is one. */
-bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const UrlRecord *base,
-                    int state_override)
+static bool url_parse_into(UrlRecord *url, const char *input_raw, size_t raw_len, const UrlRecord *base,
+                           int state_override)
 {
     char *input;
     size_t len = 0, i;
@@ -1310,8 +1326,10 @@ done_ok:
 fail:
     ustr_free(&buffer);
     free(input);
-    /* A SETTER THAT FAILS LEAVES THE URL ALONE. §5.1's setters "return" on a parse failure, so wiping the
-       record here would turn a no-op into a destroyed URL — only a fresh parse owns what it built. */
+    /* A SETTER THAT FAILS LEAVES THE URL ALONE. §6.1's setters "return" on a parse failure, so wiping the
+       record here would turn a no-op into a destroyed URL — only a fresh parse owns what it built. And HTML
+       §7.2.4's setters depend on it twice over: each of them parses into a COPY of the Location's url, so a
+       refusal that wiped the copy would navigate to an empty URL rather than doing nothing. */
     if (!ok && state_override < 0) {
         url_record_free(url);
         url_record_init(url);
@@ -1323,6 +1341,41 @@ bool url_parse(UrlRecord *out, const char *input, size_t len, const UrlRecord *b
 {
     return url_parse_into(out, input, len, base, -1);
 }
+
+/* §4.4's STATE OVERRIDE, NAMED BY THE STATE RATHER THAN NUMBERED — the entry another standard reaches this
+   parser through. The numbering above is this file's own and stays that way; what crosses the header is the
+   spec's vocabulary, so a caller writes the state its own section names ("with copyURL as url and host state
+   as state override") and cannot express a state no standard sends it to.
+   IT EXISTS BECAUSE THE SETTERS ARE NOT ALL IN THIS FILE. url.h used to publish `url_parse_into` with a raw
+   `int state_override` and a comment calling the values "private to url.c, which is where the setters live" —
+   a header that hands out a numbering while saying it is not public, and a claim the URL Standard itself
+   contradicts in the scheme state: "This indication of failure is used exclusively by the Location object's
+   protocol setter". HTML §7.2.4's setters are the other caller, and they are in core/frame/location.c.
+   The mapping is a SWITCH and not a table, so a value added to one enum and not the other is a compile
+   diagnostic on the missing case rather than a row that reads as the wrong state. */
+bool url_parse_override(UrlRecord *url, const char *input, size_t len, UrlStateOverride state)
+{
+    int st;
+
+    switch (state) {
+    case URL_OVERRIDE_SCHEME_START: st = ST_SCHEME_START; break;
+    case URL_OVERRIDE_HOST:         st = ST_HOST;         break;
+    case URL_OVERRIDE_HOSTNAME:     st = ST_HOSTNAME_OVERRIDE; break;
+    case URL_OVERRIDE_PORT:         st = ST_PORT;         break;
+    case URL_OVERRIDE_PATH_START:   st = ST_PATH_START;   break;
+    case URL_OVERRIDE_QUERY:        st = ST_QUERY;        break;
+    case URL_OVERRIDE_FRAGMENT:     st = ST_FRAGMENT;     break;
+    default:
+        DFAIL("§4.4's basic URL parser was entered at a state override no standard names — the public enum is "
+              "the seven states other specifications invoke this parser at, so a value outside it is a caller "
+              "inventing an entry point rather than citing one");
+        return false;
+    }
+    /* §4.4's `base` is not passed with a state override and never can be: every one of the seven states above
+       is reached with the record ALREADY built, and a base is what a state before them would have consumed. */
+    return url_parse_into(url, input, len, NULL, st);
+}
+
 
 
 /* ---- §5.1's `application/x-www-form-urlencoded` list ------------------------------------------------------
@@ -1852,7 +1905,13 @@ static const IdlStepDecl js_url_ctor_decl = {
     "URL §5.1 new URL(url, base)", URL_CTOR_STEPS
 };
 
-/* §5.1's SETTERS. Each is the basic URL parser with a state override plus the component's own preamble, and
+/* §6.1 "URL class"'s SETTERS — the interface's, and NOT the ones HTML §7.2.4 gives a Location, which
+   core/frame/location.c implements separately over the same parser because three of them genuinely differ
+   (protocol throws, search parses in the document's encoding, hash has no empty-string case and bails out on
+   an unchanged fragment). This comment used to cite §5.1, which is `application/x-www-form-urlencoded`
+   parsing — a real section of this standard that this block has nothing to do with, which is the shape of
+   wrong citation that reads as authoritative.
+   Each is the basic URL parser with a state override plus the component's own preamble, and
    every one of those preambles is a spec step rather than a guard someone thought of: `pathname` on an
    opaque-path URL does nothing, `port` on a URL that cannot have one does nothing, and an empty `search` or
    `hash` sets the component to NULL rather than to the empty string — which is the difference between
@@ -1880,38 +1939,38 @@ int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
         ustr_init(&t);
         ustr_put(&t, v, vlen);
         ustr_putc(&t, ':');
-        url_parse_into(u, t.p, t.n, NULL, ST_SCHEME_START);
+        url_parse_override(u, t.p, t.n, URL_OVERRIDE_SCHEME_START);
         ustr_free(&t);
         break;
     }
     case URL_USERNAME:
-        if (!url_cannot_have_credentials(u)) {
+        if (!url_cannot_have_username_password_port(u)) {
             free(u->username);
             u->username = url_percent_encode(v, vlen, URL_SET_USERINFO);
         }
         break;
     case URL_PASSWORD:
-        if (!url_cannot_have_credentials(u)) {
+        if (!url_cannot_have_username_password_port(u)) {
             free(u->password);
             u->password = url_percent_encode(v, vlen, URL_SET_USERINFO);
         }
         break;
     case URL_HOST:
-        if (!u->opaque_path) url_parse_into(u, v, vlen, NULL, ST_HOST);
+        if (!u->opaque_path) url_parse_override(u, v, vlen, URL_OVERRIDE_HOST);
         break;
     case URL_HOSTNAME:
-        if (!u->opaque_path) url_parse_into(u, v, vlen, NULL, ST_HOSTNAME_OVERRIDE);
+        if (!u->opaque_path) url_parse_override(u, v, vlen, URL_OVERRIDE_HOSTNAME);
         break;
     case URL_PORT:
-        if (!url_cannot_have_credentials(u)) {
+        if (!url_cannot_have_username_password_port(u)) {
             if (vlen == 0) u->port = -1;
-            else url_parse_into(u, v, vlen, NULL, ST_PORT);
+            else url_parse_override(u, v, vlen, URL_OVERRIDE_PORT);
         }
         break;
     case URL_PATHNAME:
         if (!u->opaque_path) {
             while (u->npath) path_pop(u);
-            url_parse_into(u, v, vlen, NULL, ST_PATH_START);
+            url_parse_override(u, v, vlen, URL_OVERRIDE_PATH_START);
         }
         break;
     case URL_SEARCH:
@@ -1923,7 +1982,7 @@ int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
             size_t n = v[0] == '?' ? vlen - 1 : vlen;
             free(u->query);
             u->query = xstrdup("");
-            url_parse_into(u, in, n, NULL, ST_QUERY);
+            url_parse_override(u, in, n, URL_OVERRIDE_QUERY);
         }
         break;
     default:
@@ -1936,7 +1995,7 @@ int url_member_set(UrlRecord *u, int magic, const char *v, size_t vlen)
             size_t n = v[0] == '#' ? vlen - 1 : vlen;
             free(u->fragment);
             u->fragment = xstrdup("");
-            url_parse_into(u, in, n, NULL, ST_FRAGMENT);
+            url_parse_override(u, in, n, URL_OVERRIDE_FRAGMENT);
         }
         break;
     }

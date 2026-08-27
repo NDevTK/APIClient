@@ -34,13 +34,35 @@
  * both non-writable and non-configurable, so ToPrimitive on a Location reaches the unforgeable stringifier and
  * nothing a page can install.
  *
- * WHAT §7.2.4 STILL WANTS AND THIS BUILD DOES NOT HAVE. Every member's SETTER, `assign`, `replace` and
- * `reload` all end in "Location-object navigate", and navigation from a Location is not built; `ancestorOrigins`
- * is a DOMStringList, an interface that does not exist here. They are honestly ABSENT and the IDL audit names
- * them, rather than being stubs that would let a page believe it had navigated. The §7.2.4.1-.10 EXOTIC
- * INTERNAL METHODS are a separate surface from the members: two of them ([[PreventExtensions]] returning false
- * and [[SetPrototypeOf]] being SetImmutablePrototype) have no hook in quickjs's exotic table at all, so they
- * are a quickjs-side capability rather than something this component can express.
+ * THE INTERFACE IS ITS SETTERS, AND THIS FILE HAD NONE OF THEM. What stood here said every member's setter,
+ * `assign`, `replace` and `reload` "all end in Location-object navigate, and navigation from a Location is not
+ * built", and that `ancestorOrigins` is "a DOMStringList, an interface that does not exist here". BOTH HAD
+ * STOPPED BEING TRUE: core/frame/navigable.h has §7.4.2.2's navigate, reached by every hyperlink this engine
+ * follows, and core/html/dom_string_list.h is HTML §2.6.5's DOMStringList with four consumers. It is the stale
+ * claim this project's own §DFAIL rule is written about — accurate about the SPEC, wrong about THIS TREE — and
+ * it was load-bearing rather than decorative, because the two DCHECKs it justified REFUSED THE INSTALL of
+ * `href`'s setter and of `replace` until a capability was built that nothing needed. A mitigation that forbids
+ * the member it protects is not a mitigation.
+ *
+ * WHY THOSE TWO ASSERTS ARE GONE RATHER THAN SATISFIED. They asked this file to build §7.2.4.5-.10's
+ * cross-origin filtered Location before shipping the two members §7.2.1 puts on CrossOriginProperties(Location),
+ * on the ground that "window_proxy.c's assert is the only thing standing between a cross-origin page and a
+ * Location it can navigate". That IS the guard, and it is the RIGHT place for it: a filter is a property of the
+ * object that CROSSES, and in this engine no Location crosses — window_proxy.c's WP_LOCATION answers out of
+ * proxy_realm, whose first DCHECK is that the navigable's active document is this agent's, so a cross-origin
+ * read aborts at the boundary rather than reaching a member here. A second copy of that guard, phrased as a
+ * refusal to implement §7.2.4 at all, does not make the boundary safer; it makes the interface absent. The
+ * cross-origin LIST stays declared beside the members below, because what it is for is the day a Location does
+ * cross: it is then the statement of which two members survive the filter.
+ *
+ * WHAT §7.2.4 STILL WANTS AND THIS BUILD DOES NOT HAVE, named at the ONE place each is reached rather than as
+ * a list here that a reader would have to re-check: §7.4.2.3.3 "Fragment navigations"' same-document
+ * navigation crashes inside loc_navigate, `reload`'s last step crashes in its own body, and `ancestorOrigins`
+ * crashes at the step that wants §7.3.2.1's ancestor origins list. Every one of them is REACHED only after the
+ * steps in front of it have run, which is what makes the crash name a subproblem instead of a surface. The §7.2.4.1-.10 EXOTIC INTERNAL METHODS are a separate surface from the members: two
+ * of them ([[PreventExtensions]] returning false and [[SetPrototypeOf]] being SetImmutablePrototype) have no
+ * hook in quickjs's exotic table at all, so they are a quickjs-side capability rather than something this
+ * component can express.
  *
  * EVERY MEMBER READS THE DOCUMENT'S ADDRESS AT THE CALL. §7.2.4: "A Location object has an associated url,
  * which is this Location object's relevant Document's URL". The six concrete members were serialized ONCE at
@@ -55,12 +77,17 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/concolic.h"
+#include "solver/world.h"        /* this agent HOSTS this Document — §7.2.4's security check's whole premise */
 #include "core/agent_state.h"
 #include "core/frame/location.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/url/url.h"
 #include "core/dom/document.h"   /* this realm's address — the one place a document's URL lives */
+#include "core/encoding/encoding.h"      /* §7.2.4's search setter parses in the DOCUMENT's encoding */
+#include "core/frame/navigable.h"        /* §7.4.2.2's navigate — what "Location-object navigate" performs */
+#include "core/frame/window_proxy.h"     /* §7.5.10 step 8's null browsing context — the relevant Document */
+#include "core/html/dom_string_list.h"   /* §2.6.5's DOMStringList — `ancestorOrigins` answers with one */
 
 /* THE MEMBER LIST, IN ONE PLACE, in the order §7.2.4's IDL declares them, and with the cross-origin entry
    §7.2.1 "Security infrastructure for Window, WindowProxy, and Location objects" gives each — read three
@@ -75,24 +102,39 @@ typedef enum {
     LOC_XO_SETTER,
 } LocCrossOrigin;
 
-#define LOC_MEMBERS(X)                          \
-    X(HREF,     "href",     LOC_XO_SETTER)      \
-    X(ORIGIN,   "origin",   LOC_XO_NONE)        \
-    X(PROTOCOL, "protocol", LOC_XO_NONE)        \
-    X(HOST,     "host",     LOC_XO_NONE)        \
-    X(HOSTNAME, "hostname", LOC_XO_NONE)        \
-    X(PORT,     "port",     LOC_XO_NONE)        \
-    X(PATHNAME, "pathname", LOC_XO_NONE)        \
-    X(SEARCH,   "search",   LOC_XO_NONE)        \
-    X(HASH,     "hash",     LOC_XO_NONE)
+/* THE NINE URL MEMBERS, whose getters are all one read of §7.2.4's url and whose setters are all one write
+   into a copy of it. §7.2.4's tenth attribute, `ancestorOrigins`, is deliberately NOT here: it reads a
+   different fact (the Document's own list, not the url), so it has its own getter and no setter, and folding
+   it in would give this table a column that is empty for nine rows out of ten.
+   THE THIRD COLUMN IS §7.2.1's, and it is the READ-ONLY-ness that the fourth is: `origin` is the one member
+   §7.2.4 declares `readonly`, and the day a tenth arrives the table is what says so rather than an `if` in the
+   install loop. */
+#define LOC_MEMBERS(X)                                     \
+    X(HREF,     "href",     LOC_XO_SETTER, false)          \
+    X(ORIGIN,   "origin",   LOC_XO_NONE,   true)           \
+    X(PROTOCOL, "protocol", LOC_XO_NONE,   false)          \
+    X(HOST,     "host",     LOC_XO_NONE,   false)          \
+    X(HOSTNAME, "hostname", LOC_XO_NONE,   false)          \
+    X(PORT,     "port",     LOC_XO_NONE,   false)          \
+    X(PATHNAME, "pathname", LOC_XO_NONE,   false)          \
+    X(SEARCH,   "search",   LOC_XO_NONE,   false)          \
+    X(HASH,     "hash",     LOC_XO_NONE,   false)
 
-#define LOC_ENUM_ONE(id, str, xo) LOC_##id,
-#define LOC_NAME_ONE(id, str, xo) str,
-#define LOC_XO_ONE(id, str, xo)   xo,
+#define LOC_ENUM_ONE(id, str, xo, ro) LOC_##id,
+#define LOC_NAME_ONE(id, str, xo, ro) str,
+#define LOC_XO_ONE(id, str, xo, ro)   xo,
+#define LOC_RO_ONE(id, str, xo, ro)   ro,
 
 enum { LOC_MEMBERS(LOC_ENUM_ONE) LOC_N };
 static const char *const LOC_NAME[] = { LOC_MEMBERS(LOC_NAME_ONE) };
 static const LocCrossOrigin LOC_XO[] = { LOC_MEMBERS(LOC_XO_ONE) };
+static const bool LOC_READONLY[] = { LOC_MEMBERS(LOC_RO_ONE) };
+
+/* §7.2.4's THREE OPERATIONS. `assign` and `replace` share a body and are told apart by this magic; `reload`
+   takes no argument and has its own. They are not members of the table above because an operation is not an
+   attribute — it has an argument list and no getter — and giving the table a row that means neither is how a
+   list stops being readable. */
+enum { LOC_ASSIGN, LOC_REPLACE };
 
 /* §7.2.1's CrossOriginProperties(Location), verbatim: « { [[Property]]: "href", [[NeedsSetter]]: true },
    { [[Property]]: "replace" } ». Those two are what a document of ANOTHER origin may reach; §7.2.4.5 through
@@ -113,6 +155,13 @@ static const char *const LOC_CROSS_ORIGIN_OPERATIONS[] = { "replace" };
    Object.getOwnPropertyDescriptor and apply it — which a browser answers with a TypeError, so this does. */
 static JSClassID g_loc_class;
 static int g_obj_slot = -1;   /* this realm's one Location */
+
+/* DECLARED ONCE PER AGENT, INSTALLED PER REALM — the IDL pool is sealed after agent init, so a helper that
+   mints inline works for the first realm and aborts on the second (core/html/hyperlink.c states the same
+   rule for the same reason). `origin` and `ancestorOrigins` are readonly and hold -1 here, which is what
+   idl_install_accessor_unforgeable's `setter_stepid` means by "read-only". */
+static int g_loc_set[LOC_N];
+static int g_loc_assign = -1, g_loc_replace = -1, g_loc_reload = -1;
 
 static bool loc_brand(JSContext *ctx, JSValueConst this_val)
 {
@@ -142,15 +191,70 @@ static void loc_assert_this_realm(JSContext *ctx, JSValueConst this_val)
                  "cow_capture_host_record contract that entails) so the member reads it off THIS");
 }
 
+/* §7.2.4's RELEVANT DOCUMENT, AS A YES/NO — "a Location object has an associated relevant Document, which is
+   its relevant global object's browsing context's active document, if this Location object's relevant global
+   object's browsing context is non-null, and NULL OTHERWISE".
+ *
+ * IT IS THE FIRST STEP OF EVERY SETTER AND EVERY METHOD, and the order is observable: `href`, `protocol`,
+ * `host`, `hostname`, `port`, `pathname`, `search`, `hash`, `assign`, `replace`, `reload` and `ancestorOrigins`
+ * each open with "if this's relevant Document is null, then return", BEFORE the security check that would
+ * throw and before the parse that would throw. A Location whose browsing context is gone is therefore INERT,
+ * not broken — a whole WPT file (no-browsing-context.window.js, 46 subtests) is nothing but that distinction.
+ *
+ * WHAT ANSWERS IT IS §7.5.10 "DESTROYING DOCUMENTS" STEP 8, "set document's browsing context to null" —
+ * core/frame/window_proxy.h names that write as the one it performs, so this is that fact asked rather than a
+ * second flag beside it. A realm with no navigable at all (nothing this file can build a Location for today,
+ * but the same sentence covers it) has a null browsing context by the same clause. */
+static bool loc_document_is_null(JSContext *ctx)
+{
+    JSValueConst proxy = document_window_proxy(ctx);
+
+    return !window_proxy_is(proxy) || window_proxy_destroyed(proxy);
+}
+
+/* §7.2.4's SECURITY CHECK, which every member but `href`'s setter and `replace` performs: "if this's relevant
+   Document's origin is not same origin-domain with the entry settings object's origin, then throw a
+   SecurityError". (The two exceptions are the standard's own, stated twice in notes: "the href setter
+   intentionally has no security check" and "the replace() method intentionally has no security check".)
+ *
+ * ITS ANSWER IS A CONSTANT HERE, AND WHAT MAKES IT CONSTANT IS ASSERTED RATHER THAN ASSUMED. An instance is an
+ * ORIGIN-KEYED AGENT CLUSTER, so a Document THIS AGENT HOLDS is same origin with every realm the entry
+ * settings object could be — that is the same premise window_proxy.c's proxy_realm opens with, and
+ * `document.domain` is a no-op in this engine, so same origin-domain and same origin are one question. The
+ * premise is what this checks: `world_doc_hosted` over this Location's own Document. It is a condition that
+ * CAN be false — solver/world.h's hosting is a decision §7.4 makes per document, and a Location reached for a
+ * navigable a PEER instance holds would fail it — so this is a real check and not a restatement of the null
+ * test the callers already ran.
+ * IT IS STATED ONCE RATHER THAN SKIPPED TWELVE TIMES, because a step silently absent from twelve bodies is
+ * indistinguishable from a step nobody read; the day a Location does cross an instance, this is the line that
+ * has to grow the real cross-instance comparison, and the assert fires there first. */
+static void loc_assert_same_origin_domain(JSContext *ctx)
+{
+    DCHECK(world_doc_hosted(document_doc(ctx)),
+           "§7.2.4's security check ran against a Document a PEER INSTANCE holds — an instance is an "
+           "origin-keyed agent cluster, so a Document this agent hosts is same origin-domain with every realm "
+           "the entry settings object could be, and that premise is the ONLY reason this check can be a "
+           "constant. A Location whose Document lives elsewhere needs the real comparison: §7.2.1's filtered "
+           "cross-origin object, and a SecurityError for the members outside CrossOriginProperties(Location)");
+}
+
 /* THIS LOCATION'S URL — §7.2.4's "A Location object has an associated url, which is this Location object's
-   relevant Document's URL". Read AT THE CALL, which is what the sentence says: a realm's intrinsics are built
-   before its navigable has a document, so there is nothing to capture at the install, and a navigation is
-   exactly what makes a captured copy wrong. `rec` is filled and the caller frees it. */
+   relevant Document's URL, IF THIS LOCATION OBJECT'S RELEVANT DOCUMENT IS NON-NULL, AND about:blank
+   OTHERWISE". Read AT THE CALL, which is what the sentence says: a realm's intrinsics are built before its
+   navigable has a document, so there is nothing to capture at the install, and a navigation is exactly what
+   makes a captured copy wrong. `rec` is filled and the caller frees it.
+   THE about:blank ARM IS NOT A FALLBACK. It is the second half of the definition, and it is what makes the
+   GETTERS on a browsing-context-less Location answer the way a browser does: `href` is "about:blank",
+   `pathname` is "blank" (about:blank has an OPAQUE path, so the path serializer answers the opaque string
+   without a leading slash), `host`, `port`, `search` and `hash` are empty, and `origin` is the string "null"
+   because §4.7 gives an `about:` URL an opaque origin. Reading the destroyed document's last address instead
+   would agree with a browser on five of those and disagree on `origin` — the one that matters, because it is
+   the answer a page makes a trust decision out of. */
 static void loc_url(JSContext *ctx, UrlRecord *rec)
 {
     /* THE DOCUMENT OWNS WHAT ITS ADDRESS IS, and it asserts that it has one — a realm whose Document was never
        installed aborts THERE, at the origin of the fact, rather than in a second copy of the same check here. */
-    const char *addr = document_url(ctx);
+    const char *addr = loc_document_is_null(ctx) ? "about:blank" : document_url(ctx);
 
     /* THE ADDRESS GOES THROUGH THE REAL PARSER, which initialises the record itself. A hand-rolled splitter
        stood here once — strstr("://"), strrchr(':'), fixed 256-byte buffers — and it was wrong wherever a URL
@@ -274,6 +378,448 @@ static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc,
     return js_loc_get(ctx, this_val, LOC_HREF);
 }
 
+/* ---- §7.2.4's setters, its three operations, and the one navigate all twelve end in ----------------------- */
+
+/* §7.2.4's "LOCATION-OBJECT NAVIGATE a Location object location to a URL url, optionally given a
+ * NavigationHistoryBehavior historyHandling (default "auto")", whose four steps are:
+ *   1. Let navigable be location's relevant global object's navigable.
+ *   2. Let sourceDocument be the incumbent global object's associated Document.
+ *   3. If location's relevant Document is not yet completely loaded, and the incumbent global object does not
+ *      have transient activation, then set historyHandling to "replace".
+ *   4. Navigate navigable to url using sourceDocument, with exceptionsEnabled set to true and historyHandling
+ *      set to historyHandling.
+ *
+ * ONE FUNCTION FOR ALL TWELVE ALGORITHMS, which is the whole reason the setters above it are small: each of
+ * them computes a URL and hands it here, so what §7.4 owes this component is owed ONCE and crashes ONCE,
+ * naming itself, instead of twelve bodies each deciding separately what to do about it.
+ *
+ * §7.4.2.2 "BEGINNING NAVIGATION" IS WHAT PERFORMS IT, and core/frame/navigable.h has it — this used to be
+ * the "navigation from a Location is not built" that kept every setter out of this file. What it does NOT have
+ * is the branch §7.4.2.2 takes when nothing needs fetching, and that branch is not a refinement: its four
+ * conjuncts are "documentResource is null; response is null; url equals navigable's active session history
+ * entry's URL WITH EXCLUDE FRAGMENTS SET TO TRUE; and url's fragment is non-null", and when they hold the
+ * algorithm runs §7.4.2.3.3 "Fragment navigations"'s NAVIGATE TO A FRAGMENT and RETURNS. That is a
+ * SAME-DOCUMENT operation — it appends a session history entry, fires `hashchange`, and the Document, its
+ * realm and every flow suspended in it survive — where navigable_navigate would fetch the address again and
+ * build a second Document. Doing the second thing where the spec says the first is not a partial
+ * implementation, it is a silent one: `location.hash = "#/route"` would tear down the router that ran it.
+ *
+ * SO IT CRASHES THERE, and the crash is the work queue. This condition is asked HERE rather than in
+ * navigable.c only because navigable_navigate takes a STRING and resolves it itself, so the parsed record the
+ * comparison needs exists on this side of the call; §7.4.2.2 owns the branch, and the day navigable.c grows it
+ * this check is deleted with the DFAIL it guards rather than left as a second opinion.
+ *
+ * `history_handling` IS §7.4.2.2's ARGUMENT and it is READ, not carried for show: navigable_navigate has no
+ * parameter for it, because a cross-document navigation in this engine rebuilds the session history record
+ * outright (core/frame/session_history.c's session_history_install_document starts a fresh list at step 0 and
+ * asserts one Document per realm), so "push" and "replace" leave byte-identical state and there is nothing yet
+ * for the argument to change. The one algorithm that WOULD see the difference is the fragment navigation
+ * above — §7.4.2.3.3 step 4 fires its navigate event with navigationType set to historyHandling — so the value
+ * rides into that crash, which is the site that has to consume it. */
+static void loc_navigate(JSContext *ctx, const UrlRecord *target, const char *history_handling)
+{
+    UrlRecord here;
+    char *addr, *bare_target, *bare_here;
+    bool same_document;
+    JSValue r;
+
+    DCHECK(!loc_document_is_null(ctx),
+           "§7.2.4's Location-object navigate ran for a Location whose relevant Document is NULL — every one "
+           "of the twelve algorithms that reach it returns at its own step 1 in that case, so arriving here "
+           "means a body skipped it and is about to navigate a navigable that has no browsing context");
+
+    /* URL §4.6 "URL equivalence" with exclude fragments, which is the third conjunct — and it is a comparison
+       of SERIALIZATIONS and nothing else: "Let serializedA be the result of serializing A, with exclude
+       fragment set to exclude fragments … Return true if serializedA is serializedB; otherwise false."
+       The record here is this Location's url; §7.4.2.2 says the active SESSION HISTORY ENTRY's URL, and for a
+       navigable showing one document the two are the same string — §7.4.4's URL and history update steps write
+       both, which is what keeps them so after a `history.pushState`. */
+    loc_url(ctx, &here);
+    bare_here = url_serialize(&here, /*exclude_fragment*/ true);
+    bare_target = url_serialize(target, /*exclude_fragment*/ true);
+    CHECK(bare_here && bare_target, "location: a URL could not be serialized for §4.6's equality");
+    same_document = strcmp(bare_here, bare_target) == 0 && target->fragment != NULL;
+    free(bare_here);
+    free(bare_target);
+    url_record_free(&here);
+
+    if (same_document) {
+        /* THE MESSAGE CARRIES historyHandling BECAUSE THE MISSING ALGORITHM CONSUMES IT — §7.4.2.3.3 step 4
+           fires its navigate event "with navigationType set to historyHandling" — so whoever builds it needs
+           to know which value this call site was going to hand over. A crash that names a mechanism and not
+           its argument is one the reader has to re-derive; sized past the format's minimum so the tail that
+           names the file to build in survives. */
+        char why[512];
+
+        snprintf(why, sizeof why,
+                 "§7.4.2.2's navigate reached its SAME-DOCUMENT branch with historyHandling \"%s\" — the "
+                 "destination equals this navigable's URL with exclude fragments set to true and has a "
+                 "non-null fragment, so the spec runs §7.4.2.3.3's NAVIGATE TO A FRAGMENT and returns. That "
+                 "algorithm appends a session history entry and fires `hashchange` while the Document, its "
+                 "realm and every flow suspended in it survive; navigable_navigate would fetch the address "
+                 "again and build a SECOND Document, which is not a weaker answer but a different one — every "
+                 "`location.hash = ...` router would be torn down by its own route change. BUILD §7.4.2.3.3 "
+                 "in core/frame/navigable.c (fire a push/replace/reload navigate event with navigationType "
+                 "set to that historyHandling, append the entry, apply the history step) and give "
+                 "navigable_navigate the branch, then delete this check with the DFAIL it guards",
+                 history_handling);
+        DFAIL(why);
+    }
+
+    addr = url_serialize(target, /*exclude_fragment*/ false);
+    CHECK(addr != NULL, "location: the destination could not be serialized");
+    /* §7.4.2.2 step 4. navigable_navigate answers JS_UNDEFINED only for an address that does not parse, and
+       this one is a SERIALIZATION of a record the parser produced, so a failure here is this file's bug. */
+    r = navigable_navigate(ctx, document_window_proxy(ctx), addr);
+    free(addr);
+    CHECK(!JS_IsUndefined(r),
+          "§7.4.2.2's navigate refused a URL this component serialized out of a parsed record — a serialized "
+          "URL re-parses, so this is a round-trip the URL component broke rather than anything a page did");
+    JS_FreeValue(ctx, r);
+}
+
+/* THE ASSIGNED VALUE, AS BYTES. §7.2.4's setters write into a URL RECORD, which is bytes — so unknown external
+   input has no modelled answer here for the same reason core/html/hyperlink.c's §4.6.3 setters do not: asking
+   a concolic for a C string is the ToString this engine has no concolic semantics for, and it would take the
+   source identity and the domain off the triple on the way into the address bar.
+   IT IS THE @S OPEN-REDIRECT SHAPE, so the crash names what to build rather than pretending: `location.href =
+   location.hash.slice(1)` and `location = new URLSearchParams(location.search).get("next")` are the two
+   spellings, and both want the destination to stay concolic through the navigation so the sink is detected at
+   the address rather than lost at the assignment. Returns NULL with an exception pending. */
+static const char *loc_value_bytes(JSContext *ctx, JSValueConst val, size_t *len)
+{
+    DCHECK(!concolic_is(val),
+           "unknown external input was assigned to a Location member — §7.2.4's setter writes it into a URL "
+           "record as bytes, which takes the source identity and the domain off the triple, and the value is "
+           "then a destination this engine navigates to with no @S record that it came from the attacker. "
+           "Build the URL-record write over a concolic component (core/url/url.h's url_parse_override is where "
+           "the bytes land) and carry the provenance into §7.4.2.2's navigate");
+    return JS_ToCStringLen(ctx, len, val);
+}
+
+/* HTML §2.4.2 "Parsing URLs"'s ENCODING-PARSE A URL, "relative to the entry settings object" — the three
+ * algorithms in §7.2.4 that take a whole URL rather than one component: the `href` setter, `assign` and
+ * `replace`.
+ *
+ * THE BASE IS THE API BASE URL AND NOT THIS LOCATION'S ADDRESS, and the two are different objects that happen
+ * to be the same string until a page ships `<base href>`. §2.4.2 step: "let baseURL be environment's base URL,
+ * if environment is a Document object; otherwise environment's API base URL" (§8.1.3.2 "Environment settings
+ * objects" is where that field is declared), and HTML §7.2.2.6 "Script settings for Window objects" gives a
+ * Window's the answer "return the current base URL of window's associated Document" — which is
+ * core/dom/document.h's document_base_url, stated there as §2.4.3's DOCUMENT BASE URL and explicitly NOT the
+ * address that document_url answers. Using the address would resolve `location.href = "x"` against the
+ * navigable's current URL and ignore the `<base>` the page set, which is the same confusion that header
+ * records having already cost this component once.
+ *
+ * WHOSE settings object it is remains an approximation, and it is the engine's rather than this file's: §7.2.4
+ * says the ENTRY settings object (the script that ran), and a C member here runs in the realm that DEFINED it,
+ * so what is reachable is the RELEVANT one. They differ only when one document sets another's location with a
+ * relative URL, and every realm this instance holds is same-origin by construction. core/frame/history.c's
+ * §7.2.5 push/replace state makes the same substitution at its own encoding-parse.
+ *
+ * §2.4.2's ENCODING half is UTF-8 for these three: the algorithm sets encoding from the environment's
+ * Document's character encoding, and the only component that observably carries a non-UTF-8 one into a URL is
+ * the query — which is the `search` setter's own step and asserts there. Returns false for §4.4's FAILURE,
+ * which each caller turns into a SyntaxError. */
+static bool loc_encoding_parse(JSContext *ctx, const char *v, size_t vlen, UrlRecord *out)
+{
+    UrlRecord base;
+    const char *api_base = document_base_url(ctx);
+    bool ok;
+
+    url_record_init(&base);
+    CHECK(url_parse(&base, api_base, strlen(api_base), NULL),
+          "§7.2.2.6's API base URL of this realm is not a URL — §2.4.3 resolves a document base URL out of the "
+          "document's address and a `<base href>`, both of which parsed, so an unparseable result is that "
+          "resolution's bug and not this caller's");
+    ok = url_parse(out, v, vlen, &base);
+    url_record_free(&base);
+    return ok;
+}
+
+/* EVERY SETTER §7.2.4 DECLARES, once. Its magic is the member index, exactly as the getter's is, so a member
+   cannot arrive with a hand-written setter that forgets step 1 or the security check.
+ *
+ * THE SHARED PREAMBLE IS THE FIRST TWO STEPS AND ITS ORDER IS OBSERVABLE. Every setter here opens with "if
+ * this's relevant Document is null, then return" and then the security check — so a browsing-context-less
+ * Location swallows the write BEFORE anything can throw, which is what makes `loc.port = "notaport"` on a
+ * removed frame a no-op rather than a SyntaxError. `href` is the one exception and the standard states it as
+ * one: "The href setter intentionally has no security check."
+ *
+ * WHAT DIFFERS PER MEMBER IS ONLY WHAT copyURL BECOMES, which is why they are one switch and not nine
+ * functions: seven of them are §4.4's basic URL parser entered at the state the member's own step names, and
+ * the difference between §7.2.4's setters and §6.1's URL setters — which url.c already implements over the
+ * same parser — is exactly three things, all of them tested by name in this directory:
+ *   `protocol` THROWS on the parser's failure where §6.1 ignores it, and then TERMINATES rather than
+ *      navigating when the result is not an HTTP(S) scheme;
+ *   `search` parses in the relevant Document's CHARACTER ENCODING where §6.1's is always UTF-8;
+ *   `hash` does NOT special-case the empty string (§6.1's sets the fragment to null; this one does not, and
+ *      the standard's note says why: "to remain compatible with deployed scripts"), and it BAILS OUT when the
+ *      fragment it computed equals the one already there — "necessary for compatibility with deployed content,
+ *      which redundantly sets location.hash on scroll".
+ * So url_member_set is deliberately NOT reused: it is the OTHER interface's algorithm, and the three
+ * differences are the whole of what a Location is. */
+static JSValue js_loc_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    UrlRecord copy;
+    const char *v;
+    size_t vlen = 0;
+    bool navigate = true;
+
+    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    loc_assert_this_realm(ctx, this_val);
+    DCHECK(magic >= 0 && magic < LOC_N, "a Location setter was installed with a magic that is not a member "
+                                        "index — the magic IS the index into the one member X-list");
+    DCHECK(magic != LOC_ORIGIN, "§7.2.4 declares `origin` READONLY, so reaching a setter for it means one was "
+                                "declared — a mistake in the install below and not anything a page can cause");
+
+    /* STEP 1 of every one of them: "If this's relevant Document is null, then return." */
+    if (loc_document_is_null(ctx)) return JS_UNDEFINED;
+    /* STEP 2 for every member but `href`, whose note says it intentionally has none. */
+    if (magic != LOC_HREF) loc_assert_same_origin_domain(ctx);
+
+    v = loc_value_bytes(ctx, val, &vlen);
+    if (!v) return JS_EXCEPTION;
+
+    /* §7.2.4's href setter has no copyURL at all: it ENCODING-PARSES the whole value against the entry
+       settings object and navigates to the result, so a failure is a SyntaxError rather than a no-op. */
+    if (magic == LOC_HREF) {
+        UrlRecord target;
+
+        url_record_init(&target);
+        if (!loc_encoding_parse(ctx, v, vlen, &target)) {
+            url_record_free(&target);
+            JS_FreeCString(ctx, v);
+            return JS_ThrowDOMException(ctx, "SyntaxError",
+                                        "the value assigned to location.href is not a URL");
+        }
+        JS_FreeCString(ctx, v);
+        loc_navigate(ctx, &target, "auto");
+        url_record_free(&target);
+        return JS_UNDEFINED;
+    }
+
+    /* "Let copyURL be a copy of this's url." Every remaining setter starts here, and the copy is what makes a
+       refused write leave the address alone even when the parser wrote into the record before failing. */
+    {
+        UrlRecord here;
+
+        loc_url(ctx, &here);
+        CHECK(url_record_copy(&copy, &here), "location: this document's address could not be copied");
+        url_record_free(&here);
+    }
+
+    switch (magic) {
+    case LOC_PROTOCOL: {
+        /* "Let possibleFailure be the result of BASIC URL PARSING the given value, FOLLOWED BY `:`, with
+           copyURL as url and SCHEME START STATE as state override." The trailing colon is why `https:` and
+           even `https::::` mean the same as `https` — §4.4's scheme state ignores what follows the first one,
+           and the standard says so in a note right there. */
+        char *with_colon = malloc(vlen + 2);
+
+        CHECK(with_colon, "location: OOM building the protocol setter's input");
+        memcpy(with_colon, v, vlen);
+        with_colon[vlen] = ':';
+        with_colon[vlen + 1] = 0;
+        if (!url_parse_override(&copy, with_colon, vlen + 1, URL_OVERRIDE_SCHEME_START)) {
+            /* "If possibleFailure is failure, then throw a SyntaxError DOMException." §4.4's scheme states
+               return failure ONLY under a state override and the standard names the reader: "This indication
+               of failure is used exclusively by the Location object's protocol setter." This is it. */
+            free(with_colon);
+            url_record_free(&copy);
+            JS_FreeCString(ctx, v);
+            return JS_ThrowDOMException(ctx, "SyntaxError",
+                                        "the value assigned to location.protocol is not a scheme");
+        }
+        free(with_colon);
+        /* "If copyURL's scheme is not an HTTP(S) scheme, then terminate these steps." A well-formed scheme the
+           parser accepted but that this step refuses is a SILENT no-op, which is the whole difference between
+           `location.protocol = "data"` and `location.protocol = "†"`. */
+        if (!url_scheme_is_http_s(copy.scheme)) navigate = false;
+        break;
+    }
+    case LOC_HOST:
+        /* "If copyURL has an opaque path, then return." §4.1: a URL has EITHER path segments OR one opaque
+           string, so the field IS the predicate. */
+        if (copy.opaque_path) navigate = false;
+        else url_parse_override(&copy, v, vlen, URL_OVERRIDE_HOST);
+        break;
+    case LOC_HOSTNAME:
+        if (copy.opaque_path) navigate = false;
+        else url_parse_override(&copy, v, vlen, URL_OVERRIDE_HOSTNAME);
+        break;
+    case LOC_PORT:
+        /* "If copyURL cannot have a username/password/port, then return." Then the empty string sets the port
+           to NULL rather than parsing — §4.1's null port, which is not the port 0. */
+        if (url_cannot_have_username_password_port(&copy)) navigate = false;
+        else if (vlen == 0) copy.port = -1;
+        else url_parse_override(&copy, v, vlen, URL_OVERRIDE_PORT);
+        break;
+    case LOC_PATHNAME:
+        /* "If copyURL has an opaque path, then return. Set copyURL's path to the empty list. Basic URL parse
+           the given value, with copyURL as url and PATH START STATE as state override." The emptying is a
+           separate step and it is why `location.pathname = "x"` replaces the path rather than appending. */
+        if (copy.opaque_path) {
+            navigate = false;
+        } else {
+            while (copy.npath) free(copy.path[--copy.npath]);
+            url_parse_override(&copy, v, vlen, URL_OVERRIDE_PATH_START);
+        }
+        break;
+    case LOC_SEARCH:
+        /* "If the given value is the empty string, set copyURL's query to NULL" — null, not empty, which is
+           the difference between `http://x/` and `http://x/?`. */
+        if (vlen == 0) {
+            free(copy.query);
+            copy.query = NULL;
+        } else {
+            /* "Let input be the given value with a single leading `?` removed, if any. Set copyURL's query to
+               the empty string. Basic URL parse input, with null, THE RELEVANT DOCUMENT'S DOCUMENT'S CHARACTER
+               ENCODING, copyURL as url, and query state as state override." */
+            const char *in = v[0] == '?' ? v + 1 : v;
+            size_t n = v[0] == '?' ? vlen - 1 : vlen;
+
+            DCHECK(document_encoding(ctx) == encoding_utf8(),
+                   "§7.2.4's search setter must parse its query in the RELEVANT DOCUMENT'S CHARACTER ENCODING "
+                   "and this document's is not UTF-8 — §4.4's `encoding` parameter is the one argument of the "
+                   "basic URL parser core/url/url.h does not carry, so what would be written is a UTF-8 "
+                   "percent-encoding of bytes the document says are something else (`?x=ß` is `%DF` under "
+                   "windows-1252 and `%C3%9F` under UTF-8). Give url_parse_override the encoding argument and "
+                   "hand it document_encoding");
+            free(copy.query);
+            copy.query = strdup("");
+            CHECK(copy.query != NULL, "location: OOM emptying the query before the search setter's parse");
+            url_parse_override(&copy, in, n, URL_OVERRIDE_QUERY);
+        }
+        break;
+    default: {
+        /* THE HASH SETTER, AND ITS TWO DEPARTURES FROM §6.1's ARE BOTH COMPATIBILITY RULES THE STANDARD
+           EXPLAINS. It does NOT special-case the empty string ("unlike the equivalent API for the a and area
+           elements, the hash setter does not special case the empty string, to remain compatible with deployed
+           scripts"), and it BAILS OUT when the fragment it computed is the one already there ("this bailout is
+           necessary for compatibility with deployed content, which redundantly sets location.hash on scroll").
+           THE BAILOUT IS COMPARED AGAINST thisURLFragment — "copyURL's fragment if it is non-null; OTHERWISE
+           THE EMPTY STRING" — so on a URL with no fragment at all, `location.hash = ""` computes the empty
+           fragment, finds it equal, and does not navigate. Folding null into "" anywhere else would be wrong;
+           here the spec does it itself, in this one step, and only for the comparison. */
+        const char *in = v[0] == '#' ? v + 1 : v;
+        size_t n = v[0] == '#' ? vlen - 1 : vlen;
+        char *before;
+
+        DCHECK(magic == LOC_HASH, "a Location setter was declared for a member this file does not answer — the "
+                                  "magic IS the member, so an unknown one means a name was installed without a "
+                                  "case to write it");
+        before = strdup(copy.fragment ? copy.fragment : "");
+        CHECK(before != NULL, "location: OOM recording the fragment the hash setter compares against");
+        free(copy.fragment);
+        copy.fragment = strdup("");
+        CHECK(copy.fragment != NULL, "location: OOM emptying the fragment before the hash setter's parse");
+        url_parse_override(&copy, in, n, URL_OVERRIDE_FRAGMENT);
+        if (copy.fragment && strcmp(copy.fragment, before) == 0) navigate = false;
+        free(before);
+        break;
+    }
+    }
+
+    JS_FreeCString(ctx, v);
+    if (navigate) loc_navigate(ctx, &copy, "auto");
+    url_record_free(&copy);
+    return JS_UNDEFINED;
+}
+
+/* §7.2.4's `assign(url)` and `replace(url)`, which are ONE body because they differ in exactly two things the
+ * standard states one line apart: `replace` has no security check ("the replace() method intentionally has no
+ * security check") and it navigates with historyHandling "replace". Everything else — step 1's null relevant
+ * Document, the encoding-parse against the entry settings object, and the SyntaxError a failed parse throws —
+ * is written identically in both. */
+static JSValue js_loc_assign_replace(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                     int magic)
+{
+    UrlRecord target;
+    const char *v;
+    size_t vlen = 0;
+
+    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    loc_assert_this_realm(ctx, this_val);
+    DCHECK(argc >= 1, "§7.2.4's assign/replace ran with no argument — `USVString url` is required, so §3.6's "
+                      "arity check answered that before this body was entered");
+    DCHECK(magic == LOC_ASSIGN || magic == LOC_REPLACE,
+           "§7.2.4's assign/replace body ran with a magic neither of its two members declares");
+
+    if (loc_document_is_null(ctx)) return JS_UNDEFINED;             /* step 1, both */
+    if (magic == LOC_ASSIGN) loc_assert_same_origin_domain(ctx);    /* step 2, assign only */
+
+    v = loc_value_bytes(ctx, argv[0], &vlen);
+    if (!v) return JS_EXCEPTION;
+    url_record_init(&target);
+    if (!loc_encoding_parse(ctx, v, vlen, &target)) {
+        url_record_free(&target);
+        JS_FreeCString(ctx, v);
+        return JS_ThrowDOMException(ctx, "SyntaxError", "the URL passed to location.%s could not be parsed",
+                                    magic == LOC_ASSIGN ? "assign" : "replace");
+    }
+    JS_FreeCString(ctx, v);
+    loc_navigate(ctx, &target, magic == LOC_ASSIGN ? "auto" : "replace");
+    url_record_free(&target);
+    return JS_UNDEFINED;
+}
+
+/* §7.2.4's `reload()`: "let document be this's relevant Document; if document is null, then return; if
+ * document's origin is not same origin-domain with the entry settings object's origin, then throw a
+ * SecurityError; RELOAD document's node navigable."
+ * The first three steps are here and the fourth is §7.4.3 "Reloading and traversing"'s, which core/frame/
+ * navigable.h does not have — so the member EXISTS and its steps run in order, which is what makes
+ * `loc.reload()` on a browsing-context-less Location the no-op the spec says it is (it returns at step 2),
+ * and the last step names what to build. */
+static JSValue js_loc_reload(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    (void)argc; (void)argv; (void)magic;
+    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    loc_assert_this_realm(ctx, this_val);
+
+    if (loc_document_is_null(ctx)) return JS_UNDEFINED;   /* step 2 */
+    loc_assert_same_origin_domain(ctx);                   /* step 3 */
+    DFAIL("§7.2.4's reload() reached its last step, RELOAD THIS DOCUMENT'S NODE NAVIGABLE, and §7.4.3 "
+          "\"Reloading and traversing\"'s reload is not built — core/frame/navigable.h has §7.4.2.2's navigate "
+          "and nothing that re-runs a navigable's own last entry. It is NOT `navigate to this address again`: "
+          "§7.4.3's reload keeps the navigable's session history entry and its document state and re-populates "
+          "it, which is why a reload does not push a history entry and a navigation does. Build it in "
+          "core/frame/navigable.c beside navigate; §7.2.6.3 \"Core infrastructure\"'s NavigationType names "
+          "\"reload\" as a value of its own (\"corresponds to calls to reload()\") and core/frame/"
+          "navigation.c already carries it");
+    return JS_UNDEFINED;
+}
+
+/* §7.2.4's `ancestorOrigins`: "if this's relevant Document is null, then return this's EMPTY DOMStringList; if
+ * this's relevant Document's origin is not same origin-domain with the entry settings object's origin, then
+ * throw a SecurityError; assert: this's relevant Document's ancestor origins list is not null; otherwise
+ * return this's relevant Document's ancestor origins list."
+ * THE FIRST ARM IS A REAL ANSWER AND NOT A DEGRADED ONE — the standard gives a Location "an associated empty
+ * DOMStringList" precisely so this member has something to return, and notes that it "cannot carry state
+ * across navigations because it is only returned when there is no relevant Document". */
+static JSValue js_loc_ancestor_origins(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    (void)magic;
+    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    loc_assert_this_realm(ctx, this_val);
+
+    if (loc_document_is_null(ctx)) {
+        JSValue empty = JS_NewArray(ctx);
+
+        CHECK(!JS_IsException(empty), "location: §7.2.4's empty DOMStringList could not be allocated");
+        return dom_string_list_new(ctx, empty);
+    }
+    loc_assert_same_origin_domain(ctx);
+    DFAIL("§7.2.4's ancestorOrigins reached its last step and this Document has no ANCESTOR ORIGINS LIST — "
+          "HTML §7.3.2.1 \"Creating browsing contexts\" is where a Document is given one (\"set document's "
+          "ancestor origins list to the result of running the ancestor origins list creation steps given "
+          "document\"), and core/dom/document.h holds no such field. Build it THERE, at the creation, and not "
+          "here by walking window_proxy_parent at the read: the list is a SNAPSHOT taken when the browsing "
+          "context was created, so a walk performed now would report the ancestors a later navigation left "
+          "behind rather than the ones this document was created under");
+    return JS_UNDEFINED;
+}
+
 JSValue location_object(JSContext *ctx)
 {
     /* OWNED — realm_value_get asserts that THIS realm ran the install that built it. */
@@ -329,8 +875,22 @@ static void loc_pin_to_primitive(JSContext *ctx, JSValueConst loc)
     JS_FreeValue(ctx, global);
 }
 
-/* §7.2.1's list, asserted against the object this realm just built — see LOC_CROSS_ORIGIN_OPERATIONS. */
-static void loc_assert_no_cross_origin_capability(JSContext *ctx, JSValueConst loc)
+/* §7.2.1's list, asserted against the object this realm just built — see LOC_CROSS_ORIGIN_OPERATIONS.
+ *
+ * WHAT IT ASSERTS TURNED OVER, and the old direction was the wrong one. It used to require the two entries on
+ * CrossOriginProperties(Location) to be ABSENT, so that no cross-origin document could reach an unfiltered
+ * Location — and the effect was that §7.2.4's `href` setter and `replace` could not be implemented at all,
+ * which is a mitigation that deletes the interface it protects. The filter is a property of the object that
+ * CROSSES an origin boundary, and no Location crosses one here: window_proxy.c's WP_LOCATION answers out of
+ * proxy_realm, whose first DCHECK is that the navigable's active document belongs to this agent, so a
+ * cross-origin read aborts at the boundary and never reaches a member of this object.
+ *
+ * SO THE LIST IS NOW ASSERTED AS A LIST OF THINGS THAT EXIST, which is what makes it live rather than
+ * decorative: §7.2.1 says a cross-origin document may reach exactly `href`'s setter and `replace`, and the
+ * day a filtered Location is built it needs both to be there to expose. An entry that is MISSING is the
+ * failure now — a §7.2.1 list naming a member this interface does not have is a list that has drifted from
+ * §7.2.4's IDL, which is the one way these two sections can disagree. */
+static void loc_assert_cross_origin_surface(JSContext *ctx, JSValueConst loc)
 {
     size_t i;
 
@@ -344,15 +904,22 @@ static void loc_assert_no_cross_origin_capability(JSContext *ctx, JSValueConst l
         CHECK(has >= 0, "[[HasProperty]] over an engine-built Location runs none of the page's code and has "
                         "nothing to throw with");
         /* An entry with neither [[NeedsGetter]] nor [[NeedsSetter]] is an OPERATION: §7.2.1.3.4 exposes the
-           whole property, so its mere PRESENCE is a surface a cross-origin document can reach. */
-        DCHECK(!has,
-               "HTML §7.2.1 exposes this Location operation to a document of ANOTHER ORIGIN, and this engine "
-               "has no cross-origin Location to filter through — window_proxy.c's `location` asserts rather "
-               "than handing one across, so shipping the operation makes that assert the only thing standing "
-               "between a cross-origin page and an unfiltered Location. BUILD §7.2.4.5-.10's filtered object "
-               "first: a [[GetOwnProperty]], [[Get]], [[Set]], [[Delete]] and [[OwnPropertyKeys]] that answer "
-               "only CrossOriginProperties(Location) and throw a SecurityError for the rest");
+           whole property, so what a filtered Location would hand across is that property itself. */
+        DCHECK(has,
+               "HTML §7.2.1's CrossOriginProperties(Location) names an OPERATION this Location does not have "
+               "— the two sections have drifted, because §7.2.4's IDL is what declares the member and §7.2.1 "
+               "only says which of them survive a cross-origin filter. Add the operation to §7.2.4's install "
+               "below, or take the entry off the list if §7.2.1 no longer names it");
     }
+    /* THE ATTRIBUTE HALF, which has no list of its own because it has exactly one entry: §7.2.1's
+       « { [[Property]]: "href", [[NeedsSetter]]: true } ». The member table's third column carries it, so what
+       is checked here is that the column and the install agree — a cross-origin entry marked [[NeedsSetter]]
+       whose member ships no setter would be a filtered Location with nothing behind its one write. */
+    for (i = 0; i < LOC_N; i++)
+        DCHECK(LOC_XO[i] != LOC_XO_SETTER || !LOC_READONLY[i],
+               "a Location member is on §7.2.1's cross-origin list with [[NeedsSetter]] and is declared "
+               "READONLY by the member table — the two columns describe the same member and cannot both be "
+               "right, and the filtered object §7.2.1 describes would expose a setter that does not exist");
 }
 
 /* ---- the declaration and the per-realm install ------------------------------------------------------------ */
@@ -385,31 +952,24 @@ static void location_install_realm(JSContext *ctx)
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(loc), "the Window's associated Location could not be allocated");
 
-    /* §3.4.10's placement, one member at a time: an OWN, NON-CONFIGURABLE accessor on the Location itself. */
-    for (i = 0; i < LOC_N; i++) {
-        /* §7.2.4 declares a SETTER for every member but `origin`, and every one of them ends in
-           "Location-object navigate" — which is not built, so this build installs none. */
-        int setter = -1;
-
-        /* §7.2.1's OTHER HALF, at the one site that can change it: the cross-origin list's single attribute
-           entry exposes href's SETTER and not its getter, so a setter here is the surface a document of
-           another origin reaches. */
-        DCHECK(setter < 0 || LOC_XO[i] != LOC_XO_SETTER,
-               "HTML §7.2.1 exposes this Location member's SETTER to a document of ANOTHER ORIGIN, and this "
-               "engine has no cross-origin Location to filter through — window_proxy.c's `location` asserts "
-               "rather than handing one across, so shipping the setter makes that assert the only thing "
-               "standing between a cross-origin page and a Location it can navigate. BUILD §7.2.4.5-.10's "
-               "filtered object first: a [[GetOwnProperty]], [[Get]], [[Set]], [[Delete]] and "
-               "[[OwnPropertyKeys]] that answer only CrossOriginProperties(Location) and throw a SecurityError "
-               "for the rest");
-        idl_install_accessor_unforgeable(ctx, loc, LOC_NAME[i], js_loc_get, i, setter);
-    }
+    /* §3.4.10's placement, one member at a time: an OWN, NON-CONFIGURABLE accessor on the Location itself.
+       §7.2.4 declares a SETTER for every member but `origin`, and the table is what says which — the loop has
+       no `if` of its own to get out of step with the IDL. */
+    for (i = 0; i < LOC_N; i++)
+        idl_install_accessor_unforgeable(ctx, loc, LOC_NAME[i], js_loc_get, i, g_loc_set[i]);
+    /* §7.2.4's tenth attribute, readonly, with its own getter — see the member table for why it is not in it. */
+    idl_install_accessor_unforgeable(ctx, loc, "ancestorOrigins", js_loc_ancestor_origins, 0, -1);
+    /* §3.7.7's UNFORGEABLE OPERATIONS: on the INSTANCE, non-writable and non-configurable, which is what
+       [LegacyUnforgeable] means for an operation exactly as it does for an attribute. */
+    idl_install_method_unforgeable(ctx, loc, "assign", 1, g_loc_assign);
+    idl_install_method_unforgeable(ctx, loc, "replace", 1, g_loc_replace);
+    idl_install_method_unforgeable(ctx, loc, "reload", 0, g_loc_reload);
     /* §3.7.8: the stringifier is unforgeable, so its property is on the object with
        {[[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false}. */
     JS_DefinePropertyValueStr(ctx, loc, "toString",
                               JS_NewCFunction(ctx, js_loc_to_string, "toString", 0), JS_PROP_ENUMERABLE);
     loc_pin_to_primitive(ctx, loc);
-    loc_assert_no_cross_origin_capability(ctx, loc);
+    loc_assert_cross_origin_surface(ctx, loc);
 
     /* §7.2.2's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location location`. It was a plain
        writable data property, so `window.location = {href: "..."}` REPLACED the Location object outright —
@@ -430,9 +990,22 @@ static void location_install_realm(JSContext *ctx)
 void location_init(JSContext *ctx)
 {
     JSClassDef d = { "Location" };
+    static const IdlArgType URL_ARG[] = { IDL_USVSTRING };
+    int i;
 
     DCHECK(g_obj_slot < 0, "location_init ran twice — the class, the slot and the two sources are declared once "
                            "per AGENT");
+    /* §7.2.4's EIGHT SETTERS AND THREE OPERATIONS, declared here because the IDL pool is sealed after agent
+       init: minting one inside location_install_realm would work for the first realm and abort on the second,
+       which is exactly the per-realm-fact-from-a-shared-place shape this file already carries a paragraph
+       about. The member table's readonly column decides which get one, so the IDL and this loop cannot drift.
+       `USVString url` for both assign and replace; `reload()` takes nothing, which is a NULL type list. */
+    for (i = 0; i < LOC_N; i++)
+        g_loc_set[i] = LOC_READONLY[i] ? -1
+                                       : idl_setter_id(ctx, IDL_USVSTRING, false, js_loc_set, i);
+    g_loc_assign  = idl_method_id(ctx, URL_ARG, 1, js_loc_assign_replace, LOC_ASSIGN);
+    g_loc_replace = idl_method_id(ctx, URL_ARG, 1, js_loc_assign_replace, LOC_REPLACE);
+    g_loc_reload  = idl_method_id(ctx, NULL, 0, js_loc_reload, 0);
     /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS. A source's browser delivery is a fact about the COMPONENT,
        not about a document, so it belongs beside the class registration and not in the per-realm install. A
        second same-origin document re-declaring it is what caught this.
@@ -476,11 +1049,15 @@ void location_init(JSContext *ctx)
  * have found it. */
 void location_free(void)
 {
+    int i;
+
     DCHECK(g_obj_slot >= 0, "§7.2.4's Location was released in an agent that never declared it");
     /* The prototypes, the interface objects and the Locations are the REALMS' — each is released with its
-       context. What the agent holds is the brand and the slot. */
+       context. What the agent holds is the brand, the slot and the eleven member ids the IDL pool issued. */
     g_obj_slot = -1;
     g_loc_class = 0;
+    for (i = 0; i < LOC_N; i++) g_loc_set[i] = -1;
+    g_loc_assign = g_loc_replace = g_loc_reload = -1;
     /* THE SOURCE CLAIMS, GIVEN BACK BY THE COMPONENT THAT OWNS THE SOURCES, and LAST because they are declared
        FIRST — a release is the inverse of its declaration. Their STORAGE is solver/concolic.c's registry and
        the CLAIM is this component's (core/platform.h's fourth paragraph), so they come back at the release of

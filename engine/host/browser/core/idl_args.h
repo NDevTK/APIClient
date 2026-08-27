@@ -997,6 +997,12 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
 /* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
    all — suspends and resumes at the exact argument it was on. */
 void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
+/* §3.4.10's [LegacyUnforgeable] FOR AN OPERATION — the twin of idl_install_accessor_unforgeable, and it goes
+   through §3.7.7's own descriptor: on the INSTANCE the caller passes rather than on a prototype, and
+   {[[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false}. Two installers because §3.7.7 states
+   two, not because a caller may pick. */
+void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int length,
+                                    int stepid);
 /* THE SAME INSTALL FOR A METHOD THAT STATES ITS IDL'S EXPOSURE — §3.3.13's [SecureContext] REMOVES the member,
    for an operation exactly as for an attribute, and this is that one rule asked in the one place. */
 void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,

@@ -3428,6 +3428,28 @@ void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, i
     JS_SetPropertyStr(ctx, (JSValue)target, name, idl_step_function(ctx, name, length, stepid));
 }
 
+/* §3.7.7 "Operations"'s UNFORGEABLE HALF, which is the operation twin of idl_install_accessor_unforgeable and
+   was the missing one. §3.7.7's define-the-operations reads "let modifiable be false if op is unforgeable and
+   true otherwise" and then defines {[[Value]]: method, [[Writable]]: modifiable, [[Enumerable]]: true,
+   [[Configurable]]: modifiable}, and §3.7.7's own opening sentence says WHERE: "Regular operations are exposed
+   on the interface prototype object, UNLESS the operation is unforgeable … in which case they are exposed on
+   every object that implements the interface." So it is the same two differences the attribute half already
+   states — the INSTANCE rather than the prototype, and non-configurable — plus the non-writable that only an
+   operation has, since a data property is what an operation is.
+   THE ATTRIBUTE HALF EXISTING ALONE IS WHY THIS IS NOT A CONVENIENCE. HTML §7.2.4 marks `assign`, `replace`
+   and `reload` [LegacyUnforgeable] for the same security reason it marks the attributes, and the only
+   installer available was idl_install_method — a JS_SetPropertyStr, so configurable AND writable, which is
+   precisely the forgery `[LegacyUnforgeable]` on a Location exists to prevent. A component reaching for the
+   wrong installer would not fail; it would ship a Location whose `replace` a page can overwrite. */
+void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int length,
+                                    int stepid)
+{
+    DCHECK(idl_declared_before_seal(stepid), name);
+    DCHECK(stepid >= 0, "an unforgeable IDL operation was installed before it was declared");
+    JS_DefinePropertyValueStr(ctx, (JSValue)target, name, idl_step_function(ctx, name, length, stepid),
+                              JS_PROP_ENUMERABLE);
+}
+
 /* A DOM METHOD WHOSE ALGORITHM IS A STEP MACHINE BUT WHOSE ARGUMENTS ARE NOT THIS MACHINE'S. `click` and
    `dispatchEvent` register their own JSTrampStepDef and have no entry in this pool, so there is nothing here to
    name and nothing to convert — they are a genuinely different thing, not a member that skipped a step, and
