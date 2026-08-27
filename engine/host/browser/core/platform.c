@@ -905,7 +905,7 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
     g_declared_in = JS_GetRuntime(ctx);
     /* THE PRINCIPAL BECOMES A RECORD BEFORE ANY COMPONENT IS DECLARED, and it is not a row on the list because
        it is not a surface: no class, no member, nothing installed into a realm. It is the agent's ORIGIN
-       (core/url/origin.h) — the value §7.2.1's filter, §7.3.1's inheritance and Storage's key are all decided
+       (core/url/origin.h) — the value §7.2.1's filter, §7.3.2.1's inheritance and Storage's key are all decided
        against — and it must exist before the first declaration that asserts it does. ONE adopt per agent is
        also what gives an opaque principal its IDENTITY: the host states "null", and the nonce minted here is
        what every document of this agent then shares. */
@@ -991,11 +991,12 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
            "a document was installed with no PRINCIPAL — every same-origin check compares it");
     /* THE TWO FACTS ARE TWO ARGUMENTS, which is the whole of the fix for them: a host with one of them passed
        whichever it had, and the address is the one that decides where `fetch("api/users")` goes.
-       AND THEY ARE NOW COMPARED, BY §7.3.1's OWN STEP 5, WHICH IS NOT THE COMPARISON THIS SITE USED TO SAY
-       COULD NOT BE MADE. The reason recorded here was that "a document AT the origin root legitimately has
-       both the same" — which argues against comparing the ADDRESS to the PRINCIPAL as strings, a comparison
-       nobody would write. The one §7.3.1 defines is between the principal and the address's ORIGIN ("return
-       url's origin"), it is well defined for every Document, and it was the assertion the prose stood in for.
+       AND THEY ARE NOW COMPARED, BY §7.3.2.1 "Creating browsing contexts"'s OWN STEP 5, WHICH IS NOT
+       THE COMPARISON THIS SITE USED TO SAY COULD NOT BE MADE. The reason recorded here was that "a document
+       AT the origin root legitimately has both the same" — which argues against comparing the ADDRESS to the
+       PRINCIPAL as strings, a comparison nobody would write. The one §7.3.2.1 "Creating browsing contexts"
+       defines is between the principal and the address's ORIGIN ("return url's origin"), it is well defined
+       for every Document, and it was the assertion the prose stood in for.
        THREE STEPS LEGITIMATELY BREAK IT AND EACH IS EXCLUDED BY ITS OWN FACT RATHER THAN BY A TOLERANCE.
        Steps 3 and 4 INHERIT (`about:srcdoc` always, `about:blank` when there is a source origin), so a
        document whose address is one of those two carries its SOURCE's principal and the address says nothing
@@ -1015,7 +1016,7 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
     /* GUARDED BECAUSE THE WORK IS THE CHECK. A DCHECK's condition is compiled out in release, and this one's
        inputs are a URL PARSE and an origin SERIALIZATION — real allocation, per document — so leaving them
        outside the guard would make a release build pay for an assertion it does not make. That is the reason
-       for the block rather than a side-effect-free condition: §7.3.1 step 5 cannot be asked without running
+       for the block rather than a side-effect-free condition: §7.3.2.1 step 5 cannot be asked without running
        §4.4's parser, and a parse is not something a DCHECK may contain. */
 #if APICLIENT_DEV
     {
@@ -1032,9 +1033,9 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
             !url_matches_about(&u, "srcdoc", true) && !url_matches_about(&u, "blank", false)) {
             char *addr_origin = origin_serialize_of_url(&u);
 
-            CHECK(addr_origin != NULL, "platform: OOM stating §7.3.1 step 5's origin for a document's address");
+            CHECK(addr_origin != NULL, "platform: OOM stating §7.3.2.1 step 5's origin for a document's address");
             DCHECK(strcmp(addr_origin, doc->origin) == 0,
-                   "a document's PRINCIPAL is not its ADDRESS's origin, and §7.3.1 step 5 says it must be — "
+                   "a document's PRINCIPAL is not its ADDRESS's origin, and §7.3.2.1 step 5 says it must be — "
                    "the three steps that inherit or mint one instead are excluded above, so this is a "
                    "principal decided somewhere other than from these bytes. The shape that produces it is a "
                    "principal stated BEFORE the fetch: a peer instance provisioned from a `navigable.create` "

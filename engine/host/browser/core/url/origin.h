@@ -17,7 +17,7 @@
  * Step 1 compares IDENTITY, and identity is exactly what the serialization drops: every opaque origin
  * serializes to "null". A string-holding engine therefore cannot tell ONE opaque origin looked at twice from
  * TWO distinct ones, and this one guessed "two" — right for two sandboxed frames, wrong for the case step 1
- * exists for. §7.3.1's determine-the-origin hands ONE opaque origin to several Documents on purpose ("if url is
+ * exists for. §7.3.2.1's determine-the-origin hands ONE opaque origin to several Documents on purpose ("if url is
  * about:srcdoc … return sourceOrigin", "if url matches about:blank and sourceOrigin is non-null, then return
  * sourceOrigin", with the standard's own note that these "result in two Documents that end up with the same
  * underlying origin"), so a `data:` document's `about:blank` child is a pair that MUST be same origin and was
@@ -27,8 +27,8 @@
  *
  * SO THE IDENTITY IS A NONCE (Blink's SecurityOrigin carries one for the same reason). It is MINTED by every
  * site where the standard says "return a NEW opaque origin" (URL §4.7's `data:`/`file:`/unknown-scheme case,
- * §7.3.1's sandboxed origin browsing context flag and its null-url case) and COPIED — the same record, so the
- * same nonce — by §7.3.1's two inheritance cases. After that, `origin_same` decides step 1 by comparing
+ * §7.3.2.1's sandboxed origin browsing context flag and its null-url case) and COPIED — the same record, so the
+ * same nonce — by §7.3.2.1's two inheritance cases. After that, `origin_same` decides step 1 by comparing
  * nonces and step 2 by comparing tuples, and nothing anywhere decides anything with a serialization.
  *
  * THE SERIALIZATION STAYS, AS AN OPERATION AND NOT AS THE TYPE. §7.1.1's serializer is what `event.origin`,
@@ -148,7 +148,7 @@ char *origin_serialize_of_url(const UrlRecord *u);   /* OWNED */
    kept for the agent, for a question that never compares two origins. */
 const UrlRecord *origin_tuple_url(const UrlRecord *u, UrlRecord *scratch);
 
-/* HTML §7.3.1's DETERMINE THE ORIGIN, verbatim, and the reason this file exists:
+/* HTML §7.3.2.1 "Creating browsing contexts"' DETERMINE THE ORIGIN, verbatim, and the reason this file exists:
      1. If sandboxFlags has its sandboxed origin browsing context flag set, then return a new opaque origin.
      2. If url is null, then return a new opaque origin.
      3. If url is about:srcdoc: assert sourceOrigin is non-null; return sourceOrigin.

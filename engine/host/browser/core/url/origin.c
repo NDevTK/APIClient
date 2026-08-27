@@ -32,7 +32,7 @@ struct Origin {
        mutable field of an otherwise immutable record: the running flow captures it into its COW delta by BYTES
        before writing, and a byte capture may only ever restore a pointer that is still live. g_domains below is
        what keeps every parsed domain alive for the agent, exactly as g_origins does for the records.
-       AN ORIGIN IS SHARED BETWEEN DOCUMENTS (§7.3.1's inheritance cases), and the standard says so precisely to
+       AN ORIGIN IS SHARED BETWEEN DOCUMENTS (§7.3.2.1's inheritance cases), and the standard says so precisely to
        state that document.domain "affects both" — which is why origins are never interned BY VALUE here: two
        Documents the spec gives separate tuple origins to must not become one record this setter changes for
        both, and two Documents it gives ONE record to must. */
@@ -77,7 +77,7 @@ static Origin *origin_alloc(void)
 
 /* THE MINT — the standard's "return a NEW opaque origin", and the one place a nonce is created. Every caller
    of it is a spec step that says exactly those words: URL §4.7's `data:`/`file:`/unknown-scheme case, and
-   §7.3.1's steps 1 and 2. */
+   §7.3.2.1's steps 1 and 2. */
 static const Origin *origin_opaque_new(void)
 {
     Origin *o = origin_alloc();
@@ -367,7 +367,7 @@ const Origin *origin_of_url(const UrlRecord *u)
     const UrlRecord *t;
     const Origin *o;
 
-    DCHECK(u != NULL, "URL §4.7 was asked for the origin of no URL — the spec's null URL is §7.3.1 step 2's "
+    DCHECK(u != NULL, "URL §4.7 was asked for the origin of no URL — the spec's null URL is §7.3.2.1 step 2's "
                       "case and is spelled by passing NULL to origin_determine, not to this");
     t = origin_tuple_url(u, &scratch);
     o = t ? origin_tuple_new(t->scheme, &t->host, t->port) : origin_opaque_new();
@@ -385,9 +385,9 @@ char *origin_serialize_of_url(const UrlRecord *u)
     return s;
 }
 
-/* ---- HTML §7.3.1's DETERMINE THE ORIGIN ------------------------------------------------------------------- */
+/* ---- HTML §7.3.2.1's DETERMINE THE ORIGIN ------------------------------------------------------------------- */
 
-/* HTML §2.4.1's TWO MATCH RELATIONS live in core/url/url.c now — §7.3.1 is no longer their only asker.
+/* HTML §2.4.1's TWO MATCH RELATIONS live in core/url/url.c now — §7.3.2.1 is no longer their only asker.
    §2.4.3's fallback base URL asks the same two questions of the same records, and two copies of a relation
    this precise (the query is tested for one and deliberately not for the other) is how they drift apart. */
 
@@ -404,7 +404,7 @@ const Origin *origin_determine(const UrlRecord *url, bool sandboxed_origin, cons
        step 1 answers true for them: "the cases that return sourceOrigin result in two Documents that end up
        with the same underlying origin". */
     if (url_matches_about(url, "srcdoc", /*query_must_be_null*/ true)) {
-        DCHECK(source != NULL, "§7.3.1 step 3's assert: an about:srcdoc document was created with no source "
+        DCHECK(source != NULL, "§7.3.2.1 step 3's assert: an about:srcdoc document was created with no source "
                                "origin, and an srcdoc document has no origin of its own to fall back to");
         return source;
     }
