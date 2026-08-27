@@ -1938,6 +1938,9 @@ void concolic_free(void)
     free(g_cand_src);
     free(g_cand_payload);
     g_cand_src = g_cand_payload = NULL;
+    /* AND THE PUBLISHED-NAMESPACE PATHS, for the same reason the source rows above are given back here: a path
+       names a record of a document that is gone, and the addresses it is keyed by are about to be reused. */
+    absent_free();
     /* §Solver's VALUE CLASS IS DELIBERATELY NOT GIVEN BACK HERE, and that is asserted rather than commented —
        the same statement core/dom/document.c makes about §gc's realm-mark hook, for the same reason. Every live
        Concolic OUTLIVES this call: the objects are freed by JS_FreeRuntime, whose finalizer reaches each
@@ -2229,10 +2232,10 @@ int concolic_add_hook(JSContext *ctx, JSValue *sp, JSConcolicAddOp op) {
    adds, compares, coerces, reports its type — is the value class's own semantics, and it must be installed
    wherever a concolic can be reached at all: without it every operator falls through to the ordinary-object
    path and `"x" + document.cookie` throws "toPrimitive" from an expression the page never wrote. Where a
-   concolic COMES FROM is a different decision. absent_global_hook mints one out of a global that was never
-   set, which is §solver's "server-injected absent state is unknown input" — a deliberate exploration choice,
-   and the opposite of what a conformance run wants, where an unset global is a ReferenceError and the spec
-   says so.
+   concolic COMES FROM is a different decision. absent_read_hook mints one out of a global that was never set,
+   and out of a field the document's own record does not hold, which is §solver's "server-injected absent state
+   is unknown input" — a deliberate exploration choice, and the opposite of what a conformance run wants, where
+   an unset global is a ReferenceError and a missing field is `undefined` and the spec says so.
    They were one set, so a host that wanted the first was forced to take the second and every host that
    declined took neither. The conformance runner declined, and paid for it by growing a SECOND Location
    component out of the address to avoid the concolic it could not coerce — which is how a §7.10.5 stringifier
@@ -2269,7 +2272,11 @@ void concolic_install_source_overlay(void)
                                 "source that cannot be added or coerced is a value the page's first expression "
                                 "throws on");
     g_source_overlay = 1;
-    g_hooks.absent = absent_global_hook;
+    g_hooks.absent = absent_read_hook;
+    /* THE TWO ENDS OF ONE CHANNEL, INSTALLED TOGETHER. `.publish` is what makes the engine mark the records a
+       document injects at all, and `.absent` is the only thing that reads those marks; a host that installed
+       one without the other would either pay for marks nobody consults or ask about a graph nobody built. */
+    g_hooks.publish = absent_publish_hook;
     JS_SetConcolicHooks(&g_hooks);
 }
 

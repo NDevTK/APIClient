@@ -5424,9 +5424,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
                what answers now, and it is asserted where the answer is WRITTEN —
                flow_deliver_one_reply moves the address out of the body column at the one moment it can, and
                asserts the column was empty before it did. */
+            int src_flags = 0;
             {
                 const char *ext = flow_dyn_url(f);
                 if (ext) prog_name = ext;
+                /* …AND WHICH HALF OF THE DOCUMENT THIS PROGRAM IS. HTML §4.12.1 "The script element" splits a
+                   document's programs by one attribute — `src` "denotes that instead of using the element's
+                   child text content as the script content, the script will be fetched from the specified
+                   URL" — so a page-script row with no ADDRESS is an INLINE script and its source text came in
+                   the document's own response, rendered against this visitor's credentials. An external row's
+                   bytes are a subresource served identically to everybody, which is the whole reason its code
+                   contains the logged-in surface a logged-out visit never runs.
+                   THE KIND IS ASKED TOO, because an address is not the only thing a row can lack: a candidate
+                   body, a `javascript:` URL and a driven orphan are all address-free and none of them is a
+                   `<script>` the server rendered. The solver reads this at the one place it decides whether a
+                   missing member of a present record is unknown INPUT or `undefined` — see
+                   solver/absent.h. */
+                if (!ext && flow_dyn_kind(f) == DYN_PAGE_SCRIPT)
+                    src_flags = JS_EVAL_FLAG_INLINE_SCRIPT;
             }
             /* A MODULE IS A DIFFERENT ALGORITHM, NOT A FLAG — §8.1.4.4 has two entries and this is where they
                part. A CLASSIC script is a program: JS_FlowNew wraps it in a preemptible frame the scheduler
@@ -5452,12 +5467,12 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        "§4.12.1.1's module arm asserts this document's currentScript is null and it is not — "
                        "a classic script's §3.1.7 bracket has outlived the program it belonged to, so this "
                        "module would run with some other script element globally exposed");
-                ev = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, 0);
+                ev = JS_FlowEvalModule(prog_ctx, body, body_n, prog_name, src_flags);
                 started = !JS_IsException(ev);
                 if (started) module_report_rejection(prog_ctx, ev);   /* §8.1.4.4 step 8 */
                 JS_FreeValue(prog_ctx, ev);
             } else {
-                f->frame = JS_FlowNew(prog_ctx, body, body_n, prog_name, 0);   /* classic non-strict global */
+                f->frame = JS_FlowNew(prog_ctx, body, body_n, prog_name, src_flags);   /* classic non-strict global */
                 started = (f->frame != NULL);
                 /* §4.12.1.1's CLASSIC arm, steps 1-2, and the reason they are HERE and not around a call: the
                    arm's third step ("run the classic script") is the JS_FlowNew above plus every JS_FlowResume

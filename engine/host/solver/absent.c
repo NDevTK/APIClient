@@ -1,14 +1,14 @@
-/* WHICH ABSENT GLOBAL IS INPUT, AND WHICH IS A COMPONENT THIS ENGINE OWES.
+/* WHICH ABSENT READ IS INPUT, AND WHICH IS A COMPONENT THIS ENGINE OWES.
  *
  * Both wear the same shape — a name that resolves nowhere — and answering them the same way loses either the
  * whole logged-in surface or every forcing function.
  *
- * SERVER-INJECTED APP STATE is unknown INPUT. `window.__FLAGS`, `__USER`, `__NEXT_DATA__` are written into the
- * document by the server for a logged-in visitor and simply absent for this one, so what they hold is not
- * `undefined` — it is UNKNOWN. Answering `undefined` makes `__FLAGS.admin` throw on the first field access and
- * buries every endpoint behind it, which is precisely the surface this tool exists to reach: the bundle ships
- * the auth and admin code to a logged-out visitor and it never runs. Symbolic instead, so the gate FORKS and
- * the logged-in arm is explored.
+ * SERVER-INJECTED APP STATE is unknown INPUT. `window.__FLAGS`, `__USER`, `gon` are written into the document
+ * by the server for a logged-in visitor and simply absent for this one, so what they hold is not `undefined` —
+ * it is UNKNOWN. Answering `undefined` makes `__FLAGS.admin` throw on the first field access and buries every
+ * endpoint behind it, which is precisely the surface this tool exists to reach: the bundle ships the auth and
+ * admin code to a logged-out visitor and it never runs. Symbolic instead, so the gate FORKS and the logged-in
+ * arm is explored.
  *
  * A WEB API THIS ENGINE HAS NOT BUILT is honestly absent. Its ReferenceError is the forcing function that names
  * the component to write, and handing back a symbol instead would let a flow run past a missing capability and
@@ -20,7 +20,22 @@
  * interface off that list (Node, Element, Event, DOMException, HTMLElement, and ~1300 more) was mistaken for
  * app state, so a branch on one FORKED instead of throwing. A page touching eight of them multiplied the
  * frontier by 256; a WPT document exhausted 2.8 GB in forty seconds doing it. A hand-maintained allowlist
- * cannot be right about a surface of this size, and the moment it is wrong the error is silent. */
+ * cannot be right about a surface of this size, and the moment it is wrong the error is silent.
+ *
+ * AND THE QUESTION IS ASKED OF A PRESENT PARENT AS OFTEN AS OF A MISSING GLOBAL, which is the half this file
+ * did not have. A server does not only decline to write `window.__FLAGS`; far more often it writes
+ * `window.gon={}` and then the two of the twenty-three fields the bundle reads that THIS visitor is entitled
+ * to. Every one of the other twenty-one missed on a present object and answered `undefined`, so
+ * `if (!gon.current_user_id) return null` never forked and the logged-in surface stayed buried behind a rule
+ * that was written for it. The engine decides WHICH records those are (a document-built record reachable from
+ * the global — see js_publish_document_namespace); what this file owes is the PATH each one is read by,
+ * because a member's identity is `gon.current_user_id` and never a bare `current_user_id` that a second
+ * namespace's identically-named field would be indistinguishable from.
+ *
+ * THE REGISTRY HOLDS NO REFERENCE, and that is sound rather than lucky: a row is only ever consulted for an
+ * object the ENGINE has marked as published, the mark is cleared at every allocation, and the only thing that
+ * sets it is the publication that files the row. So a recycled address cannot answer with a dead document's
+ * path — it has no mark until something publishes it, and publishing appends the row that describes it. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -52,23 +67,132 @@ int absent_is_platform_name(const char *name)
     return 0;
 }
 
-JSValue absent_global_hook(JSContext *ctx, JSAtom name)
-{
-    const char *s = JS_AtomToCString(ctx, name);
-    JSValue r = JS_UNINITIALIZED;
-    char shape[128], src[128];
+/* THE PUBLISHED RECORDS AND THE PATHS THEY WERE PUBLISHED AT. Keyed by the record's ADDRESS — see the header
+   comment for why that is exact and not a heuristic. Newest first on lookup, so that if an address is ever
+   recycled between two published records the row that describes the live one is the one found. */
+typedef struct { void *obj; char *path; } NsRow;
+static NsRow *g_ns;
+static int g_ns_n, g_ns_cap;
 
+static const char *ns_path_of(JSValueConst v)
+{
+    void *p = JS_VALUE_GET_PTR(v);
+    int i;
+
+    for (i = g_ns_n - 1; i >= 0; i--)
+        if (g_ns[i].obj == p)
+            return g_ns[i].path;
+    return NULL;
+}
+
+void absent_free(void)
+{
+    int i;
+
+    for (i = 0; i < g_ns_n; i++)
+        free(g_ns[i].path);
+    free(g_ns);
+    g_ns = NULL;
+    g_ns_n = g_ns_cap = 0;
+}
+
+void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSValueConst value)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    int is_root = (JS_VALUE_GET_PTR(parent) == JS_VALUE_GET_PTR(g));
+    const char *base = is_root ? NULL : ns_path_of(parent);
+    const char *n = JS_AtomToCString(ctx, name);
+    char *path;
+    size_t len;
+
+    JS_FreeValue(ctx, g);
+    /* A CHILD ARRIVING BEFORE ITS PARENT IS THE ENGINE AND THIS FILE DISAGREEING, not a case to default past.
+       js_publish_document_namespace walks OUT from the global object and publishes a record before it descends
+       into it, so a parent that is neither the global nor a filed row means the walk reached this record by
+       some other route than the one this path is composed for — and the composed name would then describe a
+       place in the document's namespace that nothing was published at. */
+    DCHECK(is_root || base != NULL,
+           "a record was published under a parent this file has never filed — the engine's walk publishes a "
+           "parent before descending into it, so a missing parent path means the two disagree about what the "
+           "published graph is, and every member read off this record would be reported under a name the "
+           "document never published it at");
+    CHECK(n != NULL, "absent: OOM spelling the name a document published a record under");
+    len = (base ? strlen(base) + 1 : 0) + strlen(n) + 1;
+    path = (char *)malloc(len);
+    CHECK(path != NULL, "absent: OOM composing the path a document published a record at");
+    if (base)
+        snprintf(path, len, "%s.%s", base, n);
+    else
+        snprintf(path, len, "%s", n);
+    JS_FreeCString(ctx, n);
+
+    if (g_ns_n == g_ns_cap) {
+        int cap = g_ns_cap ? g_ns_cap * 2 : 8;
+        NsRow *rows = (NsRow *)realloc(g_ns, sizeof(*rows) * (size_t)cap);
+        CHECK(rows != NULL, "absent: OOM growing the published-namespace registry");
+        g_ns = rows;
+        g_ns_cap = cap;
+    }
+    g_ns[g_ns_n].obj = JS_VALUE_GET_PTR(value);
+    g_ns[g_ns_n].path = path;
+    g_ns_n++;
+}
+
+JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    int is_global = (JS_VALUE_GET_PTR(obj) == JS_VALUE_GET_PTR(g));
+    const char *s = JS_AtomToCString(ctx, name);
+    const char *base = NULL;
+    JSValue r = JS_UNINITIALIZED;
+    char *shape = NULL, *src = NULL;
+    size_t n;
+
+    JS_FreeValue(ctx, g);
     if (!s)
         return JS_UNINITIALIZED;
-    /* A name the platform owns is a component this engine owes; leave the read alone so its throw names it. */
-    if (absent_is_platform_name(s))
-        goto done;
-    /* Anything else the page reads and nothing defines is the server's to have injected. Example-free: nothing
-       here knows what a logged-in visitor's flags WOULD hold, and inventing one fabricates an observation. */
-    snprintf(shape, sizeof(shape), "{%s}", s);
-    snprintf(src,   sizeof(src),   "%s", s);
+    if (is_global) {
+        /* A name the platform owns is a component this engine owes; leave the read alone so its throw names
+           it. Asked ONLY of the global, because the platform's names live there: `gon.Node` is a field of an
+           app record that happens to be spelled like an interface, and suppressing it would answer a real
+           unknown with `undefined`. */
+        if (absent_is_platform_name(s))
+            goto done;
+    } else {
+        base = ns_path_of(obj);
+        /* THE ENGINE HAS ALREADY DECIDED THIS RECORD IS PUBLISHED — it does not ask otherwise — so a record
+           with no filed path is the mark and the registry disagreeing, and the alternative to crashing is a
+           member reported under a name no document published. */
+        DCHECK(base != NULL,
+               "a read missed on a record the engine says the document published, and this file holds no path "
+               "for it — the mark is set only by the walk that files the row, so the two cannot come apart "
+               "unless a row was dropped; without the path this member would be reported as a bare field name "
+               "that any other namespace's identically-named field is indistinguishable from");
+        if (!base)
+            goto done;
+    }
+    /* Example-free: nothing here knows what a logged-in visitor's flags WOULD hold, and inventing one
+       fabricates an observation. The PROVENANCE is the whole read as the run composed it — `gon` and
+       `gon.current_user_id` are two different unknowns and each must decide only its own predicates, so the
+       path is composed WHOLE rather than into a fixed buffer: a truncated provenance is not a shorter name
+       for one unknown, it is one name for every unknown that shares a prefix, and every predicate over any of
+       them would then decide all of them. A server's state tree is as deep and as verbosely named as the
+       server chose. */
+    n = (base ? strlen(base) + 1 : 0) + strlen(s) + 3;
+    shape = (char *)malloc(n);
+    src   = (char *)malloc(n);
+    CHECK(shape != NULL && src != NULL, "absent: OOM spelling the provenance of an unknown read");
+    if (base) {
+        snprintf(shape, n, "{%s.%s}", base, s);
+        snprintf(src,   n, "%s.%s", base, s);
+    } else {
+        snprintf(shape, n, "{%s}", s);
+        snprintf(src,   n, "%s", s);
+    }
     r = concolic_new(ctx, shape, src, JS_UNDEFINED);
 done:
+    free(shape);
+    free(src);
     JS_FreeCString(ctx, s);
     return r;
 }
