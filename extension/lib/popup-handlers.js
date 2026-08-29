@@ -323,6 +323,27 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
       return;
     }
 
+    /* THE FRONTIER'S SHARE OF THIS PERSON'S DISK — read and set through the ONE entry into the host
+       (`astDispatch`), never by reaching into bridge.js's own state from here. The two commands are one case
+       because they are one question: setting a share answers with the share that is now in force, so a popup
+       that sets 0 and is told 0 knows the setting landed, and there is no separate read to disagree with it.
+       `bytes` is passed through UNCOERCED. The popup sends a number; anything else is that surface broken,
+       and the bridge asserts it at the edge that acts on it rather than this relay inventing a plausible one
+       — a share silently rounded here would be a setting the user made and the store never saw. */
+    case "FRONTIER_SHARE": {
+      DCHECK(typeof self.astDispatch === "function",
+             "the trusted zone has no astDispatch to ask the frontier's share of — it is the ONE entry to the " +
+             "host, so its absence is bridge.js not having loaded in this document and the popup would be " +
+             "shown a storage setting that governs nothing");
+      const reply = await self.astDispatch({ type: "AST_FRONTIER_SHARE", bytes: msg.bytes });
+      DCHECK(reply && reply.success === true && reply.result && typeof reply.result.share === "number",
+             "the host answered the frontier-share command with something other than the share now in force " +
+             "— the popup renders this number as the user's own setting, and a missing one would render as a " +
+             "control showing a value nothing is using");
+      sendResponse(reply.result);
+      return;
+    }
+
     case "GET_ENDPOINT_SCHEMA": {
       // GLOBAL — keyed by endpointKey/service against the cumulative store,
       // never per-tab/document (only the network-stream log is per-tab).

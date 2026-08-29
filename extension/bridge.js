@@ -538,16 +538,53 @@ function clusterKeyOf(msg) {
    resumed into the environment it parked in and is DELETED here rather than resumed under a policy container
    nobody delivered. A one-time grammar change, not a frontier reset — and not a default either, which is the
    alternative it replaces: `|| {}` at the read would resume every v1 entry as a page whose server sent no CSP. */
+/* THE UPGRADE IS PER-VERSION AND ADDITIVE, WHICH IS WHAT IndexedDB §5.7 "Upgrading a database" MEANS BY AN
+   UPGRADE TRANSACTION AND WHAT THIS DID NOT DO. It ran ONE body for every version change and that body began
+   by DELETING the frontier object store — so the v1 purge described above, which was a deliberate one-time
+   grammar change, was written as an unconditional statement that ANY future version bump wipes every parked
+   residue on the machine. The next person to add a store would have reset the ONE continuous cross-session
+   frontier as a side effect of adding one, and nothing would have said so: an empty frontier is exactly what
+   a fresh profile looks like. `oldVersion` is what distinguishes them and it has always been on the event;
+   each arm now states which version introduced it, and a v3 profile skips both.
+   v3 ADDS `prefs`: the configured share of this person's device (see §RESIDENCY). It lives here rather than
+   in `chrome.storage.local`, which CLAUDE.md bans, and beside the frontier rather than in a database of its
+   own because it is a fact ABOUT this store that must be read on the same edge, in the same zone. */
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open("apiclient-frontier", 2);
-    r.onupgradeneeded = () => {
+    const r = indexedDB.open("apiclient-frontier", 3);
+    r.onupgradeneeded = (ev) => {
       const db = r.result;
-      if (db.objectStoreNames.contains("frontier")) db.deleteObjectStore("frontier");
-      db.createObjectStore("frontier");
+      if (ev.oldVersion < 2) {   // v1's entry grammar cannot state its document's response; it is not resumable
+        if (db.objectStoreNames.contains("frontier")) db.deleteObjectStore("frontier");
+        db.createObjectStore("frontier");
+      }
+      if (ev.oldVersion < 3 && !db.objectStoreNames.contains("prefs")) db.createObjectStore("prefs");
     };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
+}
+/* THE PREFERENCE EDGE. Its failures are surfaced exactly like the frontier's own three (frontierFail): an
+   unreadable preference must not be indistinguishable from one the user never set, because the second is
+   answered by the device default and the first is this zone's storage failing. */
+function frontierPref(name) {
+  return new Promise((res, rej) => {
+    idbOpen().then((db) => {
+      const t = db.transaction("prefs").objectStore("prefs").get(name);
+      t.onsuccess = () => res(t.result === undefined ? null : t.result);
+      t.onerror = () => rej(t.error);
+    }, rej);
+  }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference read", e); return null; });
+}
+function frontierPrefPut(name, value) {
+  return new Promise((res, rej) => {
+    idbOpen().then((db) => {
+      const tx = db.transaction("prefs", "readwrite");
+      const t = tx.objectStore("prefs").put(value, name);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error || tx.error);
+      tx.onabort = () => rej(tx.error || t.error);
+    }, rej);
+  }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference write", e); });
 }
 /* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
    responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs
@@ -570,7 +607,11 @@ function idbOpen() {
    resume a session later. NOTHING IS DEFAULTED: `{}` is the honest header list of a response that carried no
    headers, so substituting it for a producer that stated none turns a CSP-protected page into an unprotected
    one, and "CSP does not block this sink" is then a reported exploit that is not real. */
-function frontierDoc(e, when) {
+/* THE HALF OF AN ENTRY THAT IS TRUE OF IT WHETHER OR NOT IT STILL HOLDS ITS DOCUMENT — the address the
+   recipes replay at, the environment they replay in, the principal they replay under, and the policy they are
+   judged against. Split out of frontierDoc verbatim so a SHED entry (below) is asserted by the same sentences
+   rather than by a second copy of them that can drift. */
+function frontierPlace(e, when) {
   DCHECK(e && typeof e === "object",
          "a cold-tier entry " + when + " as no record at all — the entry IS the parked document, so there is " +
          "nothing to resume the recipe's flows inside of");
@@ -591,6 +632,18 @@ function frontierDoc(e, when) {
          "a cold-tier entry " + when + " with no response header list — HTML §7.1.7 \"Policy containers\" " +
          "makes those headers this Document's policy container, so the parked flows would resume under a " +
          "policy nobody delivered and every @S verdict on them would be decided against it");
+  return e;
+}
+function frontierDoc(e, when) {
+  frontierPlace(e, when);
+  /* AND IT IS A RECORD THAT STILL HOLDS ITS DOCUMENT. A shed entry (see §THE THIRD CATEGORY below) is a
+     complete, resumable residue whose bytes are on the network instead of in the store; reading one HERE
+     would build an engine over `undefined` markup, which is the one thing every assert under this line is
+     for. The two states are told apart by a field, not by whether a read happened to find bytes. */
+  DCHECK(e.shed !== true,
+         "a cold-tier entry " + when + " as a document while it is SHED — its bytes were discarded against a " +
+         "proved re-fetch and live on the network, so this record must be re-derived before it is read as a " +
+         "document rather than parsed as one that is missing");
   DCHECK(e.html instanceof Uint8Array || typeof e.html === "string",
          "a cold-tier entry " + when + " as neither a byte sequence nor characters — the parked document " +
          "would rebuild as a page that parses to nothing, which reads as an origin whose flows found nothing");
@@ -598,6 +651,204 @@ function frontierDoc(e, when) {
          "a cold-tier entry " + when + " with no script inventory — it is the empty string when the document " +
          "carries its own scripts, which is a different thing from absent");
   return e;
+}
+/* ── RESIDENCY: A CONFIGURED SHARE OF THIS PERSON'S DEVICE, AND THE ONE ORDER ─────────────────────────
+   WHAT THIS IS NOT. It is not a quota handler. The extension declares `unlimitedStorage` (manifest.json),
+   which exempts the extension origin — the offscreen document's, which is where SECURITY.md puts every
+   persisted byte; the renderer frames are opaque origins with no persistent storage at all — from the
+   ordinary origin quota. So the platform ceiling that would otherwise turn "the frontier is the union of
+   every flow from every origin ever visited and is NEVER RESET" into a certain eventual abort is REMOVED
+   rather than handled, and nothing here runs anywhere near a crash.
+   WHAT REPLACES IT IS A POLICY QUESTION, AND IT HAS NO ENGINE-SIDE ANSWER: how much of THIS person's device
+   should THIS tool consume. That depends on the device and on the person, so it is a PREFERENCE — defaulted
+   from what the device reports, adjustable by the user, and read here. A share is not a cap in §NO BOUNDS'
+   sense and the distinction is exact: a cap decides work will not HAPPEN; a share decides how much of the
+   work already done is STORED rather than RE-DERIVED. No flow is dropped, no recipe is discarded, no
+   exploration is truncated — the frontier's MEMBERSHIP is untouched at every share.
+   AND THERE IS NO EVICTION POLICY, BECAUSE THERE IS NOTHING TO ASK BUT THE ONE ORDER. Residency is not a
+   second subsystem beside the WFQ; it IS the WFQ's ordering, applied to a second resource. The store keeps
+   the DOCUMENT half of the highest-weight entries until the share is spent, and the rest keep everything
+   else. `frontierWeight` is the same function `_hostOps.evictee` asks of the resident set and `admit` asks
+   of the candidate set — no age, no recency, no count, no timestamp: `ts` is written by the park and read by
+   nothing, and reading it here would be exactly the recency cap this design refuses. §THERE IS NO GRIND is
+   satisfied by construction rather than by care: nothing polls, nothing sweeps, nothing is triggered.
+   WHAT A SHED ENTRY LOSES, STATED RATHER THAN HIDDEN: nothing, until its document is needed. The recipes,
+   the counters, the address, the principal and the policy stay, so a shed residue resumes on the next VISIT
+   exactly as it always did (engineRoot seeds from `prior.recipes` and never reads the bytes) and
+   cold-rehydrates by fetching its document back. What it costs is one re-fetch, which is why the
+   re-derivability test below is a TIEBREAK on what leaves first and not a gate on whether anything may. */
+/* THE SHARE. Bytes of this profile's disk the cross-session frontier's DOCUMENT halves may occupy.
+   THE DEFAULT IS COMPUTED FROM THE DEVICE, NOT PICKED. `navigator.deviceMemory` is the coarse, deliberately
+   capped hint the platform exposes without a permission (Device Memory §2 "The deviceMemory attribute" —
+   powers of two, clamped to [0.25, 8], so a 64GB workstation reports 8); a share proportional to it lands a
+   phone somewhere a phone can afford and a workstation somewhere a workstation will not notice.
+   `chrome.system.memory.getInfo()` would report real capacity and is NOT used: it costs a new
+   `system.memory` permission on an extension that already holds `<all_urls>`, to refine a number the user
+   can simply set, and a permission bought for a default is a bad trade.
+   IT IS NOT DEFAULTED PAST — `deviceMemory` is absent in workers and in browsers that do not ship it, and
+   that absence is a POSITIVE statement ("this device declines to say"), answered by the conservative share
+   rather than by a plausible number pulled out of a `||`. The two arms are different facts and say so. */
+const FRONTIER_SHARE_UNKNOWN_DEVICE = 256 * 1024 * 1024;
+const FRONTIER_SHARE_PER_DEVICE_GB = 64 * 1024 * 1024;
+function frontierDefaultShare() {
+  const gb = (typeof navigator !== "undefined") ? navigator.deviceMemory : undefined;
+  if (typeof gb !== "number" || !(gb > 0)) return FRONTIER_SHARE_UNKNOWN_DEVICE;
+  return Math.round(gb * FRONTIER_SHARE_PER_DEVICE_GB);
+}
+/* THE CONFIGURED VALUE, HELD IN THE STORE IT GOVERNS. `chrome.storage.local` is banned (CLAUDE.md §Security)
+   and this zone's state is IndexedDB, so the preference lives in a `prefs` object store beside the frontier —
+   read once into `_frontierShare` at the first residency question and written by the popup's setting.
+   NULL IS "NOT ASKED YET", WHICH IS A THIRD STATE AND NOT A ZERO. A zero share is a legitimate setting (store
+   no documents at all, re-derive everything) and must not be indistinguishable from an unread preference. */
+let _frontierShare = null;
+async function frontierShare() {
+  if (_frontierShare !== null) return _frontierShare;
+  const stored = await frontierPref("share");
+  /* THE STORED VALUE IS VALIDATED, NOT TRUSTED. It is written by the popup — a realm this zone asserts its
+     contracts against like every other — and a share that is not a finite non-negative number would make
+     every comparison below false, which reads as an unlimited share rather than as a broken preference. */
+  DCHECK(stored === null || (typeof stored === "number" && Number.isFinite(stored) && stored >= 0),
+         "the frontier's stored share is not a byte count (" + String(stored) + ") — every residency " +
+         "comparison against it would be false, which is an UNLIMITED store wearing the appearance of a " +
+         "configured one, and the user's setting silently doing nothing");
+  _frontierShare = (typeof stored === "number" && Number.isFinite(stored) && stored >= 0)
+                   ? stored : frontierDefaultShare();
+  return _frontierShare;
+}
+/* THE SIZE OF AN ENTRY'S DOCUMENT HALF — the only part residency can give back, so the only part it counts.
+   The recipes, the counters and the address stay at every share and are not weighed against it: they are the
+   frontier's MEMBERSHIP, and a design that traded them for disk would be the reset this file exists instead
+   of. Characters are counted as bytes because the store holds them as UTF-16 and the point of the number is
+   the order it induces, not an accounting identity with the disk. */
+function frontierDocBytes(e) {
+  if (e.shed === true) return 0;
+  const h = (e.html instanceof Uint8Array) ? e.html.length : e.html.length * 2;
+  return h + e.code.length * 2;
+}
+/* THE TIEBREAK: WHICH ENTRY GIVES UP ITS DOCUMENT FIRST WHEN TWO ARE BOTH BELOW THE LINE. It is a cheap,
+   simple test on the record itself and NOT a proof, because the stakes are a re-fetch: a residue whose
+   document does come back loses nothing, and one whose document does not keeps its recipes and its
+   visit-resume and loses only its cold rehydration (recorded as `_frontierStats.stranded`, never silent).
+   AN ELABORATE CONSERVATIVE TEST WOULD BE THE WRONG TRADE HERE and it was the first thing built for this:
+   re-fetching each candidate and requiring byte-identity before discarding it. That belongs to the frame
+   where a wrong answer destroyed the only copy at a crashing quota. It does not belong to this one, where
+   the share is a preference nobody is near the edge of.
+   EACH ARM IS A FACT ABOUT THE RECORD. An address that is not http(s) NAMES bytes rather than a server, so
+   nothing re-requests it. A principal its address does not state is an opaque or sandboxed document, whose
+   re-fetch answers with a document belonging to somebody else. A caller-assembled script inventory came from
+   a caller and no fetch of the address re-derives it. Those three are the residue §OOM/paging calls the only
+   copy there is, and they go LAST rather than never. */
+function frontierRederivable(e) {
+  if (typeof self.safeFetch !== "function") return false;
+  let u = null;
+  try { u = new URL(e.sourceUrl); } catch (_) { return false; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  if (e.origin !== u.origin) return false;
+  /* A SHED ENTRY HAS NO SCRIPT INVENTORY LEFT TO ASK ABOUT — it went with the document, and this record is
+     shed precisely BECAUSE this test passed on it while it still had one. Asking `e.code === ""` of an absent
+     field answers false, which would make every shed entry read as unrecoverable and frontierRederive strand
+     every single one on sight, having fetched nothing. */
+  if (e.shed === true) return true;
+  return e.code === "";
+}
+/* THE STORE'S DECISIONS, COUNTED WHERE THEY ARE MADE. A share cannot be observed by its outcome — a store
+   that did not crash looks the same at every setting — so what is reported is what the one order DECIDED:
+   documents shed, documents re-derived, and residues that were shed and then could not be fetched back.
+   `stranded` rising is this design being wrong in the direction that costs something, stated as a number
+   rather than left as the silence CLAUDE.md's defaulted-field rule is about. `overShare` is the other one:
+   the bytes the share asked for and residency would not take, because taking them meant discarding the only
+   copy of a residue. */
+const _frontierStats = { shed: 0, rederived: 0, stranded: 0, docBytes: 0, overShare: 0 };
+/* RESIDENCY, RESTORED AT THE ONE DOOR THAT CAN BREAK IT. This is not a pressure loop and has no trigger: the
+   store's document halves must fit the share, that is an invariant of the store, and `frontierPut` is the
+   only thing that can make it false — so it is re-established there, on the way through, exactly as the
+   ranking view is.
+   THE ORDER IS THE ONLY POLICY. Sort by `frontierWeight` — the same reward+optimism the pool ranks work
+   items by — keep documents from the top down while the share lasts, shed the rest. Within the tail that
+   must go, the re-derivable leave first; an unrecoverable residue is shed only once nothing re-derivable is
+   left below the line, and even then only while the share is still exceeded.
+   AND IT MAY REFUSE THE SHARE. If what remains over the line is all unrecoverable, residency STOPS: the
+   entries stay, the share is exceeded, and the overage is REPORTED. That is the sane behaviour the floor
+   case asks for — a preference about disk is not worth the only copy of work nobody can recompute — and a
+   number the popup can show is how the user finds out, instead of an abort they cannot act on. */
+async function frontierResidency() {
+  const share = await frontierShare();
+  const rows = [];
+  let total = 0;
+  for (const row of (await frontierIndex()).values()) { total += row.bytes; if (row.bytes > 0) rows.push(row); }
+  _frontierStats.docBytes = total;
+  _frontierStats.overShare = 0;
+  if (total <= share) return;
+  /* HIGHEST WEIGHT FIRST, so the walk below spends the share on the work the one order says is worth most
+     and the tail it reaches is exactly the tail that order puts last. */
+  rows.sort((a, b) => frontierWeight(b) - frontierWeight(a));
+  /* THE LINE IS A STRICT PREFIX OF THE ORDER, WHICH IS THE WHOLE OF "the top N by the order the scheduler
+     already computes". The obvious alternative — keep walking and take whatever still fits — is a BEST FIT,
+     and a best fit is a second policy: it keeps a lower-weight small document over a higher-weight large one,
+     so the store's residency stops being the WFQ's answer and starts being a packing heuristic nobody chose.
+     The first entry that does not fit ends the resident set; everything after it is tail, whatever its size. */
+  let kept = 0;
+  let cut = rows.length;
+  for (let i = 0; i < rows.length; i++) {
+    if (kept + rows[i].bytes > share) { cut = i; break; }
+    kept += rows[i].bytes;
+  }
+  const tail = rows.slice(cut);
+  /* THE TIEBREAK IS APPLIED WITHIN THE TAIL AND CHANGES NOTHING ABOUT WHO IS IN IT — the one order decides
+     that. It decides only the sequence in which the tail gives its documents up, so a shed that is enough
+     takes the recoverable ones and stops. */
+  tail.sort((a, b) => (a.rederivable === b.rederivable) ? 0 : (a.rederivable ? -1 : 1));
+  for (const row of tail) {
+    if (total <= share) break;
+    if (!row.rederivable) {
+      /* NOTHING RECOVERABLE IS LEFT BELOW THE LINE. The sort put every re-derivable row ahead of this one, so
+         this is the whole remaining tail and every entry in it is the only copy of itself. Residency stops
+         here rather than buying disk with work that cannot be recomputed. */
+      _frontierStats.docBytes = total;
+      _frontierStats.overShare = total - share;
+      return;
+    }
+    const e = await frontierGet(row.key);
+    DCHECK(e, "the cold tier's ranking view named an entry the store does not hold while residency was being " +
+              "restored — this zone is the store's only writer, so a row with no entry is the projection and " +
+              "the store having drifted apart, and shedding would be deciding about a residue nobody can read");
+    const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
+                   responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
+                   ts: e.ts, credentialed: e.credentialed, shed: true };
+    frontierRecord(shed, "was shed to the configured share");
+    await frontierWrite(e.key, shed);
+    if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
+    total -= row.bytes;
+    _frontierStats.shed++;
+  }
+  _frontierStats.docBytes = total;
+}
+/* THE ONE RECORD DOOR, WHICH ROUTES ON A FIELD RATHER THAN ON WHETHER A READ FOUND BYTES. The two states of
+   an entry are complementary by construction and the invariant is asserted on both halves together, so a
+   record that is shed while holding a document — or holds none while claiming not to be shed — crashes at
+   the door instead of becoming a page that parses to nothing one session later. That complementarity is also
+   why nothing here DEFAULTS `shed`: an entry written before this field existed holds its document, so the
+   absence of the field IS the positive statement "not shed", and the assert is what keeps it one. */
+function frontierRecord(e, when) {
+  frontierPlace(e, when);
+  DCHECK((e.html !== undefined) !== (e.shed === true),
+         "a cold-tier entry " + when + " claiming `shed=" + String(e.shed) + "` while its document half is " +
+         (e.html === undefined ? "absent" : "present") + " — the two are complements, and a record that " +
+         "disagrees with itself is read as a document by one consumer and as a re-fetchable residue by another");
+  DCHECK(e.stranded !== true || e.shed === true,
+         "a cold-tier entry " + when + " marked STRANDED while it still holds its document — stranded means a " +
+         "shed entry's proved re-derivation stopped working, and an entry with its bytes has nothing to " +
+         "re-derive");
+  if (e.shed === true) {
+    DCHECK(e.code === undefined,
+           "a SHED cold-tier entry " + when + " still carrying a script inventory — the shed discards the " +
+           "document HALF, and half a discard leaves the quota it was taken to relieve exactly where it was");
+    DCHECK(typeof e.recipes === "string" && e.recipes !== "",
+           "a SHED cold-tier entry " + when + " with no recipes — the recipes are the whole of what a shed " +
+           "keeps, so shedding an entry down to nothing is the reset this category exists instead of");
+    return e;
+  }
+  return frontierDoc(e, when);
 }
 /* THE COLD TIER'S THREE EDGES, AND WHAT THEIR ERRORS USED TO MEAN. Each was `catch (_) { return <empty> }`
    plus an `onerror` that RESOLVED with an empty answer, so an IndexedDB that refused a read reported the same
@@ -618,16 +869,47 @@ async function frontierGet(key) {
     return await new Promise((res, rej) => { const t = db.transaction("frontier").objectStore("frontier").get(key); t.onsuccess = () => res(t.result || null); t.onerror = () => rej(t.error); });
   } catch (e) { RETHROW_FATAL(e); frontierFail("read", e); return null; }
 }
+/* THE ONE WRITE, WHICH ANSWERS WITH ITS FAILURE INSTEAD OF THROWING IT. Its caller must tell a full store
+   from a broken one, and an exception carries both to the same place. A QUOTA REFUSAL IS NOT AN ERROR IN THIS
+   ZONE — it is the store stating its size, which this design has an answer for — while every other failure is
+   the edge itself failing and travels on to frontierFail.
+   THE TRANSACTION'S ABORT IS LISTENED FOR AS WELL AS THE REQUEST'S ERROR, because a quota refusal is reported
+   on whichever the implementation reaches first, and a promise that only ever settles on `t.onerror` would
+   hang on the arm where the transaction aborts without the request having failed. */
+/* THE ONE WRITE. It rejects on failure like every other edge here; there is no quota arm because there is no
+   quota (`unlimitedStorage`), and the residency question is asked by frontierPut AFTER the write rather than
+   in response to one being refused.
+   THE TRANSACTION'S ABORT IS LISTENED FOR AS WELL AS THE REQUEST'S ERROR: an IndexedDB write can fail on
+   either, and a promise that only ever settled on `t.onerror` would HANG on the arm where the transaction
+   aborts without the request itself having failed — a park that never returns, which is the ONE continuous
+   frontier stopping with nothing to say so. */
+function frontierWrite(key, entry) {
+  return new Promise((res, rej) => {
+    idbOpen().then((db) => {
+      const tx = db.transaction("frontier", "readwrite");
+      const s = tx.objectStore("frontier");
+      const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key);
+      t.onsuccess = () => res();
+      t.onerror = () => rej(t.error || tx.error);
+      tx.onabort = () => rej(tx.error || t.error);
+    }, rej);
+  });
+}
 async function frontierPut(key, entry) {
-  if (entry && entry.recipes) frontierDoc(entry, "was written");   // before the edge: the grammar, not the storage
+  if (entry && entry.recipes) frontierRecord(entry, "was written");   // before the edge: the grammar, not the storage
   try {
-    const db = await idbOpen();
-    await new Promise((res, rej) => { const s = db.transaction("frontier", "readwrite").objectStore("frontier"); const t = (entry && entry.recipes) ? s.put(entry, key) : s.delete(key); t.onsuccess = () => res(); t.onerror = () => rej(t.error); });
+    await frontierWrite(key, entry);
     /* THE RANKING VIEW MOVES WITH THE STORE, ON THE ONE DOOR THAT WRITES IT AND ONLY ONCE THE WRITE LANDED —
        so a refused write leaves a row claiming a residue the store does not hold, which is the one way this
        projection could start lying. It is skipped entirely when the index has not been built yet: an unbuilt
        index is rebuilt from the store, which by then contains this. */
     if (_frontierIndexBuilt) { if (entry && entry.recipes) _frontierIndex.set(key, frontierRow(entry)); else _frontierIndex.delete(key); }
+    /* AND RESIDENCY IS RE-ESTABLISHED HERE, ON THE ONE DOOR THAT CAN BREAK IT — after the ranking view has
+       moved, so the order this asks is the order the store is actually in. It is not a trigger and not a
+       pressure response: "the stored document halves fit the configured share" is an invariant of this store,
+       and an invariant is restored where it is broken. A store already inside its share does one comparison
+       and returns. */
+    await frontierResidency();
   } catch (e) { RETHROW_FATAL(e); frontierFail("write", e); }
 }
 async function frontierAll() {
@@ -688,7 +970,18 @@ function frontierRow(e) {
          "a cold-tier entry carries no document address — the pool excludes a parked item whose document a " +
          "LIVE tab already holds, and an item with no address is one it would rehydrate into a second " +
          "instance beside the tab that is already running it");
-  return { key: e.key, sourceUrl: e.sourceUrl, emit: e.emit, visits: e.visits };
+  /* THE STATE BITS THE ORDER READS, DECIDED AT THE ONE DOOR THAT BUILDS A ROW. `shed` says this entry has
+     already given its document up; `stranded` says the re-fetch that was supposed to bring it back stopped
+     answering, so it is not a cold candidate any more (only a VISIT resumes it). They are strict booleans
+     HERE rather than `||`-read at each consumer: frontierRecord has already asserted that their absence means
+     the entry holds its document and has never failed to re-derive, so what crosses into the ranking is a
+     decided fact rather than a field the next reader must default.
+     AND THE TWO NUMBERS RESIDENCY ASKS, COMPUTED ONCE HERE FOR THE SAME REASON THE WEIGHT'S ARE: the ranking
+     view exists so that ordering the whole store does not deserialize every page this profile has parked, and
+     a residency pass that had to open each entry to learn its size would put that cost straight back. */
+  return { key: e.key, sourceUrl: e.sourceUrl, emit: e.emit, visits: e.visits,
+           shed: e.shed === true, stranded: e.stranded === true,
+           bytes: frontierDocBytes(e), rederivable: frontierRederivable(e) };
 }
 async function frontierIndex() {
   if (_frontierIndexBuilt) return _frontierIndex;
@@ -699,10 +992,56 @@ async function frontierIndex() {
     DCHECK(e && typeof e.recipes === "string" && e.recipes !== "",
            "the cross-session frontier holds an entry with no parked recipes — frontierPut deletes rather than " +
            "storing one, so this is a residue whose flows were dropped between the park and the store");
+    /* AND THE RECORD GRAMMAR ITSELF, ASSERTED IN THE DIRECTION IT IS READ. frontierPut asserts it on the way
+       IN; this is the same door on the way OUT, which is where an entry written by an older build (or by a
+       write that landed half a shed) is met. Without it the row builder below reads `e.html.length` off a
+       record that has none and the failure lands in a size computation instead of at the grammar. */
+    frontierRecord(e, "came back from the store");
     _frontierIndex.set(e.key, frontierRow(e));
   }
   _frontierIndexBuilt = true;
   return _frontierIndex;
+}
+/* THE RE-DERIVATION, WHICH IS THE REQUEST THE SHED WAS PROVED AGAINST — same chokepoint, same principal,
+   uncredentialed, the same address. It answers the document half a rehydration needs, or null.
+   THE HEADERS THAT COME BACK ARE THE ONES USED, NOT THE PARKED ONES. HTML §7.1.7 "Policy containers" makes a
+   Document's policy container out of the response THAT DOCUMENT came from, and the document about to be
+   parsed is the one this response just delivered — so relaying the stored list beside these bytes would judge
+   today's document under last week's CSP, which is the same defect as answering a child document with no
+   policy at all, one edition later.
+   A CHANGED DOCUMENT IS SAFE WITHOUT BEING CHECKED HERE, and the mechanism is the KEY rather than a
+   comparison: engineRoot re-derives `address|bundle` from what the engine actually parsed, so a redeployed
+   bundle produces a DIFFERENT key, `frontierGet` answers null and the engine boots fresh instead of replaying
+   this residue's arms positionally against a program that never asked those questions.
+   A FAILURE HERE IS NOT A `@WHY`. Residency shed this document because the record said it was re-fetchable,
+   and the world is allowed to make that false — a site goes down, a route is retired. That is not this zone's
+   logic being wrong, so it does not abort; it is RECORDED, both on the entry (which stops being a cold
+   candidate rather than being re-fetched every round) and in `_frontierStats.stranded`, which is the number
+   that keeps a shed that cost something from being a silence. The residue itself is NOT lost: its recipes are
+   untouched and the next VISIT to this address resumes them exactly as before. */
+async function frontierRederive(e) {
+  DCHECK(e.shed === true,
+         "a cold-tier entry that still holds its document was sent to be re-derived — the fetch would replace " +
+         "bytes this store already has, and the round would pay a network round trip to learn nothing");
+  let r = null;
+  if (frontierRederivable(e)) {
+    try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl }); }
+    catch (err) { RETHROW_FATAL(err); r = null; }
+  }
+  const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
+  if (r && r.ok && landed === e.sourceUrl && r.body instanceof Uint8Array && r.headers) {
+    _frontierStats.rederived++;
+    return { bytes: r.body, headers: r.headers };
+  }
+  const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
+                          responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
+                          visits: e.visits, ts: e.ts, credentialed: e.credentialed,
+                          shed: true, stranded: true };
+  frontierRecord(strandedEntry, "was stranded");
+  await frontierWrite(e.key, strandedEntry);
+  if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(strandedEntry));
+  _frontierStats.stranded++;
+  return null;
 }
 /* ────────────────────────────────────────────────────────────────────────────────────────────────────
    HOST-LEVEL WFQ (Level-1 of the ONE attention): interleave the LIVE document engines by value-of-
@@ -828,6 +1167,13 @@ function _bestCandidate(idx) {
   for (const row of idx.values()) {
     if (live.has(row.sourceUrl)) continue;
     if (_pool.some((p) => p.fkey === row.key)) continue;
+    /* A STRANDED RESIDUE IS NOT ADMISSIBLE AND IS THEREFORE NOT A CANDIDATE — the same sentence the sub-frame
+       above is excluded by, and the same non-loss. Its document was shed against a proof and its re-derivation
+       has since stopped answering, so there are no bytes for an instance to be built over; offering it here
+       would spend one fetch per round on an address that has already said no. Nothing drops it: its recipes
+       are intact and the next VISIT to this address resumes them through engineRoot's own frontierGet, which
+       reads recipes and never bytes. */
+    if (row.stranded) continue;
     const w = frontierWeight(row);
     if (!best || w > best.w) best = { kind: "cold", row, w };
   }
@@ -3403,7 +3749,24 @@ const _hostOps = {
              "the cold tier's ranking view named an entry the store does not hold — this zone is the store's " +
              "only writer and frontierPut updates the view on its way through, so a row with no entry is the " +
              "projection and the store having drifted apart");
-      const doc = frontierDoc(stored, "came back from the cold tier");
+      /* A SHED RESIDUE'S DOCUMENT IS ON THE NETWORK RATHER THAN IN THE STORE, so it is fetched back here —
+         the same request the shed decision was PROVED against, performed for real. It is awaited inside the
+         round for the same reason the boot below it is: this arm already suspends on the store and then on a
+         whole wasm instantiation, so a fetch ahead of them is the same shape and not a new one. A
+         re-derivation that fails strands the entry and this round seats nothing — it is not offered again
+         (see `_bestCandidate`), so the failure costs one fetch in total rather than one per round. */
+      let doc;
+      if (stored.shed) {
+        const back = await frontierRederive(stored);
+        if (!back) return;
+        doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
+                            origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
+                            recipes: stored.recipes, emit: stored.emit, visits: stored.visits, ts: stored.ts,
+                            credentialed: stored.credentialed },
+                          "was re-derived for the cold tier");
+      } else {
+        doc = frontierDoc(stored, "came back from the cold tier");
+      }
       /* THE PRINCIPAL RESUMES WITH THE RECIPE. A parked flow's world is only the same world if the
          document it resumes into is the same PRINCIPAL — and this zone cannot re-derive one from
          c.sourceUrl without re-fabricating the tuple origin a sandboxed document does not have. The stamp
@@ -3733,6 +4096,17 @@ self.rendererPoolProbe = function rendererPoolProbe() {
                            navigated: _reserveStats.navigated,
                            evicted: _reserveStats.evicted, rehydrated: _reserveStats.rehydrated },
            coldRows: _frontierIndexBuilt ? _frontierIndex.size : null,   // null = the ranking view has not been asked for yet
+           /* THE STORE'S DECISIONS, WHICH ARE THE ONLY THING ABOUT QUOTA THAT CAN BE OBSERVED FROM OUTSIDE. A
+              store that did not crash is not evidence the relief works, so what is reported is what the one
+              order DECIDED: documents shed to the share, documents fetched back, residues that were shed and
+              then could not be fetched back (`stranded` — this design being wrong in the direction that costs
+              something, stated as a number), and `overShare`, the bytes the share asked for that residency
+              refused to take because taking them meant discarding the only copy of a residue. `share` is null
+              until the preference has been read, which is a different fact from a share of zero. */
+           frontier: { shed: _frontierStats.shed, rederived: _frontierStats.rederived,
+                       stranded: _frontierStats.stranded, docBytes: _frontierStats.docBytes,
+                       overShare: _frontierStats.overShare, share: _frontierShare,
+                       defaultShare: frontierDefaultShare() },
            runs: self._engineLog.length, recent: self._engineLog.slice(-4),
            crashes: self._engineCrashOccurred };
 };
@@ -3812,12 +4186,43 @@ self.astDispatch = async function astDispatch(msg) {
        is bounded by resident WASM memory and not by a user-set instance count, and a wall-clock throttle over
        the cooperative quantum is a step cap. What is left is a real refusal, so it aborts rather than
        reporting a false success to a caller that will not look. */
-    DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR"),
+    DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR" ||
+                     msg.type === "AST_FRONTIER_SHARE"),
            "the trusted zone dispatched a type this bridge does not answer: `" + (msg && msg.type) + "` — " +
            "every edge into the engine is built here, so an unanswered type is a capability that was asked " +
            "for and never made, not an option the caller may proceed without");
     if (!msg) return { success: false, error: "dispatch with no message" };   // release path under the assert
     if (msg.type === "AST_CLEAR") return { success: true, result: { cleared: await hostClear() } };
+    /* THE ONE SETTING THIS SURFACE MAY CARRY, AND WHY IT IS NOT THE TWO THAT WERE DELETED. "Yield throttle
+       (ms)" was a step cap under a label and "Analyzer workers" was a fixed instance count the RAM floor
+       exists to refuse — both were knobs on WORK, and CLAUDE.md §NO BOUNDS says work is not the user's to
+       bound. This one is a knob on STORAGE: how much of the user's own disk the cross-session frontier's
+       stored DOCUMENTS may occupy. It decides nothing about what runs, what is explored, or what is
+       remembered — every recipe, every counter and every entry survives at every setting, including zero —
+       only whether a document is held or FETCHED BACK when it is next wanted. That is a preference about the
+       person's device, which nothing in the engine can answer for them.
+       IT IS NOT SILENTLY REFUSED, WHICH IS WHAT THE DELETED PAIR WAS. The reply carries the value that is now
+       in force, so a caller that set one and reads back another knows it. */
+    if (msg.type === "AST_FRONTIER_SHARE") {
+      DCHECK(msg.bytes === undefined ||
+             (typeof msg.bytes === "number" && Number.isFinite(msg.bytes) && msg.bytes >= 0),
+             "a frontier-share setting arrived that is not a byte count (`" + String(msg.bytes) + "`) — it is " +
+             "compared against the stored document halves, and a value no comparison is true of is an " +
+             "UNLIMITED store wearing the appearance of a configured one");
+      if (typeof msg.bytes === "number" && Number.isFinite(msg.bytes) && msg.bytes >= 0) {
+        await frontierPrefPut("share", msg.bytes);
+        _frontierShare = msg.bytes;
+        /* THE SETTING TAKES EFFECT ON THE SETTING, not at the next park. Residency is an invariant of the
+           store and this call is one of the two things that can break it (the other is a write), so it is
+           restored here for the same reason and in the same place. */
+        await frontierResidency();
+      }
+      return { success: true, result: { share: await frontierShare(), defaultShare: frontierDefaultShare(),
+                                        docBytes: _frontierStats.docBytes, overShare: _frontierStats.overShare,
+                                        shed: _frontierStats.shed, stranded: _frontierStats.stranded,
+                                        rederived: _frontierStats.rederived,
+                                        entries: (await frontierIndex()).size } };
+    }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };
     const html = msg.pageHtml || "";
     const code = msg.code || "";           // any brain-assembled scripts (usually empty); the DOM carries the page

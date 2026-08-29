@@ -1869,3 +1869,26 @@ details summary:hover {
 .mp-fue-row { display: flex; gap: 4px; }
 .mp-fue-row input { flex: 1; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 6px; border-radius: 4px; font-size: 12px; font-family: monospace; }
 .mp-editor-raw textarea { width: 100%; background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; font-family: monospace; font-size: 12px; padding: 6px; border-radius: 4px; }
+
+/* The stored-page-cache setting (popup.html §ONE SETTING SURVIVES). It sits in the header rather than a
+   settings panel because there is no settings panel: the two controls that made one were deleted for being
+   knobs on WORK, and one knob on STORAGE does not re-earn a panel. */
+.frontier-share {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.frontier-share input {
+  width: 5.5em;
+}
+.frontier-share .frontier-share-status {
+  opacity: 0.75;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -22,6 +22,26 @@
          running the QuickJS analyzer", a pool that no longer exists at all. A wall-clock throttle layered
          over the cooperative quantum is a step cap under a settings label. -->
 
+    <!-- ONE SETTING SURVIVES THAT REASONING, AND IT IS NOT OF THE SAME KIND. Both deleted controls bounded
+         WORK, which CLAUDE.md §NO BOUNDS says is not the user's to bound. This one bounds STORAGE: how much
+         of this person's own disk the cross-session frontier's stored page DOCUMENTS may occupy. Nothing
+         about what runs, what is explored or what is remembered changes with it — every parked flow, every
+         recipe and every counter survives at every setting, zero included; only whether a page's bytes are
+         HELD or FETCHED BACK when they are next wanted. It is a question about the device, which the engine
+         cannot answer for the person using it, and the default is computed from what the device reports
+         rather than picked (see bridge.js §RESIDENCY).
+         WHAT IS SHOWN BESIDE IT IS THE DECISION, NOT THE OUTCOME: what is stored now, what the share is, and
+         how many documents were shed / fetched back / stranded — the last being the one number that says
+         this policy cost something. `over` appears only when residency REFUSED the share because what was
+         left below the line was the only copy of itself. -->
+    <div class="frontier-share">
+      <label for="frontier-share-mb">Stored page cache</label>
+      <input id="frontier-share-mb" type="number" min="0" step="16" />
+      <span class="unit">MB</span>
+      <button id="btn-frontier-share" type="button" class="btn-small">Apply</button>
+      <span id="frontier-share-status" class="frontier-share-status"></span>
+    </div>
+
     <div id="deep-status" class="deep-status" style="display:none"></div>
 
     <nav>

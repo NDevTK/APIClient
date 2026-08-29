@@ -307,6 +307,21 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("btn-clear").addEventListener("click", clearState);
 
+  /* THE STORED-PAGE-CACHE SETTING. It is wired, it reaches a command the host actually answers, and the
+     answer it renders is the value now IN FORCE rather than the value that was typed — which is the whole of
+     what the deleted settings panel got wrong (see popup.html): a control whose refusal every sender
+     swallowed, so it moved and meant nothing. There is no catch on this path for the same reason. */
+  document.getElementById("btn-frontier-share").addEventListener("click", async () => {
+    const el = document.getElementById("frontier-share-mb");
+    const mb = Number(el.value);
+    /* THE INPUT IS THE ONE PLACE A NON-NUMBER CAN ENTER, so it is refused HERE rather than sent on as a
+       plausible byte count. `<input type=number>` answers "" for text it could not parse, and Number("") is
+       0 — a real setting, and the wrong one to make out of a typo. */
+    if (!(Number.isFinite(mb) && mb >= 0) || el.value === "") { await renderFrontierShare(); return; }
+    await renderFrontierShare(Math.round(mb * 1024 * 1024));
+  });
+  renderFrontierShare();
+
   // Discovery panel (lib/popup-discovery.js): one delegated click path for the three active-discovery probes.
   initDiscoveryPanel();
 
@@ -876,6 +891,28 @@ async function loadState() {
   await loadRequestLog();
   render();
   _refreshSendEnabled();   // readiness may have changed (pin became live / stale / not-ready)
+}
+
+/* THE SHARE, AND THE DECISIONS RESIDENCY MADE UNDER IT. Called with a byte count it SETS the share first;
+   either way it renders what the host reports back, so the control can never show a number the store is not
+   using. Everything here is a producer field the host writes on every reply — none of it is defaulted,
+   because a `|| 0` on `stranded` would render "this policy has cost nothing" for a host that stopped
+   reporting, which is the one thing this row exists to say. */
+async function renderFrontierShare(bytes) {
+  const r = await chrome.runtime.sendMessage(
+    bytes === undefined ? { type: "FRONTIER_SHARE" } : { type: "FRONTIER_SHARE", bytes });
+  DCHECK(r && typeof r.share === "number" && typeof r.docBytes === "number" &&
+         typeof r.overShare === "number" && typeof r.shed === "number" &&
+         typeof r.stranded === "number" && typeof r.rederived === "number" && typeof r.entries === "number",
+         "the frontier-share command answered without the store's own numbers — this row is the only place " +
+         "the user can see what the setting is doing, and a partial answer would render a policy that looks " +
+         "as if it had never had to act");
+  const mb = (n) => (n / (1024 * 1024)).toFixed(1);
+  document.getElementById("frontier-share-mb").value = String(Math.round(r.share / (1024 * 1024)));
+  document.getElementById("frontier-share-status").textContent =
+    mb(r.docBytes) + " MB stored across " + r.entries + " parked page(s)" +
+    (r.overShare > 0 ? "; " + mb(r.overShare) + " MB over the share is the only copy there is and was kept" : "") +
+    "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be";
 }
 
 async function clearState() {

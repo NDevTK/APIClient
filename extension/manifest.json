@@ -7,7 +7,8 @@
     "offscreen",
     "webNavigation",
     "scripting",
-    "tabs"
+    "tabs",
+    "unlimitedStorage"
   ],
   "host_permissions": ["<all_urls>"],
   "background": {
