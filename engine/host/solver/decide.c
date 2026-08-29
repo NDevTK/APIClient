@@ -809,22 +809,22 @@ static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int re
  * check.h's data-integrity clause: proceeding is worse than crashing, in every build. */
 static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
     if (nonforking != 0 && nonforking != 1) {
-        /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (concolic_ident_compose), and
-           this line goes out as JSON with no escaping — so the one thing the reader needs from it, the name of
-           the predicate, is copied through printable-only. Same rule, same reason, as engine.c's C-body fork. */
-        char why[512], name[192];
+        /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (concolic_ident_compose), so
+           the one thing the reader needs from it — the name of the predicate — is copied through
+           printable-only. NOT for the record's sake: check.h escapes what it emits, so a raw separator would
+           arrive intact and legal as `\u0001`. It is for the READER's, who is looking for an identifier and
+           would be handed a run of escapes in the middle of it. Same rule as engine.c's C-body fork. */
+        char name[192];
         size_t i;
         for (i = 0; i + 1 < sizeof name && key && key[i]; i++)
-            name[i] = (key[i] >= 0x20 && key[i] < 0x7f && key[i] != '"' && key[i] != '\\') ? key[i] : '.';
+            name[i] = (key[i] >= 0x20 && key[i] < 0x7f) ? key[i] : '.';
         name[i] = '\0';
-        snprintf(why, sizeof why,
-                 "a NEW decision was reached in a session that explores nothing, and the site that asked it "
-                 "declared no non-forking answer (SOLVER_NO_NONFORKING_ARM) — so there is one world to be in "
-                 "and no way to say which. The seam will not pick: a two-armed question its own site cannot "
-                 "answer is a program deleted at random. Fix the CALLER that put an undecidable operand in "
-                 "front of this site in a non-forking session, not the site. The question was: %s",
-                 key ? name : "(no source identity)");
-        CHECK_FAIL(why);
+        CHECK_FAILF("a NEW decision was reached in a session that explores nothing, and the site that asked it "
+                    "declared no non-forking answer (SOLVER_NO_NONFORKING_ARM) — so there is one world to be in "
+                    "and no way to say which. The seam will not pick: a two-armed question its own site cannot "
+                    "answer is a program deleted at random. Fix the CALLER that put an undecidable operand in "
+                    "front of this site in a non-forking session, not the site. The question was: %s",
+                    key ? name : "(no source identity)");
     }
     dec_append(nonforking, asked);
     g_c++;

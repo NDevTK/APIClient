@@ -661,17 +661,15 @@ void flow_registry_free(JSContext *ctx) {
     {
         JSRuntime *rt = JS_GetRuntime(ctx);
 #if APICLIENT_DEV
-        char why[640];
-        snprintf(why, sizeof why,
-                 "the frontier is gone and %d heap CALL FRAME(S) are still live — a suspended chain that no "
-                 "flow owns is unreachable memory, and every frame of it holds its locals, its closed cells "
-                 "and its callee. %d flow(s) were released; the last SUSPENDED one whose release freed no "
-                 "frame was #%d (frame=%d park=%d paged=%d started=%d). A -1 there means every suspended flow "
-                 "did drop its chain, so these frames were never owned by one and the leak is upstream of the "
-                 "frontier",
-                 JS_TrampFrameCount(rt), rel_i, culprit, culprit_frame, culprit_park, culprit_paged,
-                 culprit_started);
-        DCHECK(JS_TrampFrameCount(rt) == 0, why);
+        DCHECKF(JS_TrampFrameCount(rt) == 0,
+                "the frontier is gone and %d heap CALL FRAME(S) are still live — a suspended chain that no "
+                "flow owns is unreachable memory, and every frame of it holds its locals, its closed cells "
+                "and its callee. %d flow(s) were released; the last SUSPENDED one whose release freed no "
+                "frame was #%d (frame=%d park=%d paged=%d started=%d). A -1 there means every suspended flow "
+                "did drop its chain, so these frames were never owned by one and the leak is upstream of the "
+                "frontier",
+                JS_TrampFrameCount(rt), rel_i, culprit, culprit_frame, culprit_park, culprit_paged,
+                culprit_started);
 #endif
         DCHECK(JS_StepMachineCount(rt) == 0,
                "the frontier is gone and STEP MACHINES are still live — a continuation-holding builtin's state "

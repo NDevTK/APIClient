@@ -221,15 +221,11 @@ JSValue storage_shed_obtain_bottle_map(JSContext *ctx, StorageType type, const c
     DCHECK(identifier != NULL && *identifier, "a storage bottle map was obtained for no §4.1 storage identifier");
     for (i = 0; i < ENDPOINTS_N; i++)
         if (ENDPOINTS[i].type == type && strcmp(ENDPOINTS[i].identifier, identifier) == 0) known = 1;
-    if (!known) {
-        static char why[320];
-        snprintf(why, sizeof why,
-                 "no registered storage endpoint of this type has the identifier `%s` — Storage §4.1's table "
-                 "is the five rows this component builds, and a standard that registers its own (File System "
-                 "§3's \"fileSystem\") adds its row to ENDPOINTS here rather than obtaining a bottle nothing "
-                 "created", identifier);
-        DFAIL(why);
-    }
+    if (!known)
+        DFAILF("no registered storage endpoint of this type has the identifier `%s` — Storage §4.1's table "
+               "is the five rows this component builds, and a standard that registers its own (File System "
+               "§3's \"fileSystem\") adds its row to ENDPOINTS here rather than obtaining a bottle nothing "
+               "created", identifier);
 
     key = obtain_storage_key(ctx);          /* §4.6 step 3 via §4.4 step 1 */
     if (!key) return JS_UNDEFINED;          /* §4.4 step 2: shelf is failure */

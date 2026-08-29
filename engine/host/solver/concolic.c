@@ -904,16 +904,11 @@ void concolic_declare_source(const char *component, const char *src, const char 
                a declaration that ran twice or a claimant whose rows are dynamic and did not ask first; a
                DIFFERENT component is two claimants over one source, and then the give-back of either takes a
                row it does not own. The old message could not tell those apart. */
-#if APICLIENT_DEV
-            static char msg[400];
-            snprintf(msg, sizeof msg,
-                     "a source declared its browser delivery twice — `%s` is already declared by %s, and one "
-                     "component owns one source in BOTH directions. A second declaration by that same "
-                     "component is a claimant with dynamic rows that did not ask concolic_source_declared_by "
-                     "first; a declaration by any other is two claimants over one row, whichever of them "
-                     "releases first taking a row it does not own", src, g_srcs[i].component);
-            DFAIL(msg);
-#endif
+            DFAILF("a source declared its browser delivery twice — `%s` is already declared by %s, and one "
+                   "component owns one source in BOTH directions. A second declaration by that same "
+                   "component is a claimant with dynamic rows that did not ask concolic_source_declared_by "
+                   "first; a declaration by any other is two claimants over one row, whichever of them "
+                   "releases first taking a row it does not own", src, g_srcs[i].component);
             return;
         }
     if (g_srcs_n == g_srcs_cap) {
@@ -1915,18 +1910,13 @@ void concolic_init(JSContext *ctx) {
 void concolic_free(void)
 {
 #if APICLIENT_DEV
-    if (g_srcs_n != 0) {
-        static char msg[400];
-
-        snprintf(msg, sizeof msg,
-                 "%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
-                 "Each row is a claim in this component's array whose claimant releases it at its own "
-                 "concolic_undeclare_sources, on core/platform.h's release column, which platform_agent_free "
-                 "runs before this call. A row left behind is not only a leaked pair of strings: it describes "
-                 "a browser delivery for a document that is gone, and it is what the next agent's declaration "
-                 "of the same source collides with", g_srcs[0].component, g_srcs[0].src);
-        DFAIL(msg);
-    }
+    if (g_srcs_n != 0)
+        DFAILF("%s did not give back the attacker SOURCE `%s` before the solver's agent state was released. "
+               "Each row is a claim in this component's array whose claimant releases it at its own "
+               "concolic_undeclare_sources, on core/platform.h's release column, which platform_agent_free "
+               "runs before this call. A row left behind is not only a leaked pair of strings: it describes "
+               "a browser delivery for a document that is gone, and it is what the next agent's declaration "
+               "of the same source collides with", g_srcs[0].component, g_srcs[0].src);
 #endif
     free(g_srcs);
     g_srcs = NULL;
@@ -2323,16 +2313,14 @@ JSValue concolic_source_wrap(JSContext *ctx, const char *shape, const char *src,
 #if APICLIENT_DEV
     if (src && concolic_source_encodes(src)) {
         char *hole = shapef("{%s}", src);
-        static char msg[400];
 
-        snprintf(msg, sizeof msg,
-                 "the attacker source `%s` was minted with the display shape `%s`, and the one its own "
-                 "declaration spells is `%s`. A declared source's shape is its provenance in braces — that is "
-                 "what makes it a hole an @H param and an @S envelope can both name — so this is a second "
-                 "spelling of one fact, and the consumer that reads the other one reports a mechanism as "
-                 "broken forever. Spell both halves from the component's own token (core/frame/location.h)",
-                 src, shape ? shape : "(none)", hole);
-        DCHECK(shape && !strcmp(shape, hole), msg);
+        DCHECKF(shape && !strcmp(shape, hole),
+                "the attacker source `%s` was minted with the display shape `%s`, and the one its own "
+                "declaration spells is `%s`. A declared source's shape is its provenance in braces — that is "
+                "what makes it a hole an @H param and an @S envelope can both name — so this is a second "
+                "spelling of one fact, and the consumer that reads the other one reports a mechanism as "
+                "broken forever. Spell both halves from the component's own token (core/frame/location.h)",
+                src, shape ? shape : "(none)", hole);
         free(hole);
     }
 #endif

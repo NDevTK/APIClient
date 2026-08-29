@@ -102,17 +102,13 @@ void agent_state_check_released(void)
     for (i = 0; i < g_n; i++) {
         /* The message is the COMPONENT and the STATE, because the reader of this `@WHY` is standing at a
            teardown that already ran: what they need is which release to go and finish, not an address. */
-        static char msg[320];
-
         if (slot_is_pre_init(&g_slots[i])) continue;
-        snprintf(msg, sizeof msg,
-                 "%s did not undo its declaration: %s is still set after the release column ran. A handle left "
-                 "behind is invisible to both of JS_FreeRuntime's censuses — the reference WAS given back — and "
-                 "the only code that ever reads it is this component's own next _init, which consults it to "
-                 "decide it has already been declared. The next agent in this process gets a component that "
-                 "reports itself built and whose every other handle is null.",
-                 g_slots[i].component, g_slots[i].what);
-        DFAIL(msg);
+        DFAILF("%s did not undo its declaration: %s is still set after the release column ran. A handle left "
+               "behind is invisible to both of JS_FreeRuntime's censuses — the reference WAS given back — and "
+               "the only code that ever reads it is this component's own next _init, which consults it to "
+               "decide it has already been declared. The next agent in this process gets a component that "
+               "reports itself built and whose every other handle is null.",
+               g_slots[i].component, g_slots[i].what);
     }
 #endif
 }

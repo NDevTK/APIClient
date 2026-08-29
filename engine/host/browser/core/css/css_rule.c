@@ -1230,27 +1230,16 @@ static void build_free(RuleBuild *b)
     b->n_built = b->cap_built = 0;
 }
 
-/* THE CRASH FOR A ROW OF THAT TABLE THAT POINTS AT NOTHING. Its buffer is sized from its format string plus
-   ONE at-keyword bound PER SUBSTITUTION — three, not two — for the reason `rule_unbuilt_fail`'s is: a
-   truncated `@WHY` deletes the sentence the crash exists to deliver, silently, at the one moment somebody is
-   reading it, and a size that counts the ARGUMENTS rather than the `%s`es is off by exactly one name. Both
-   names are a row of the table above, so both are short; the 64 is the same conservative at-keyword bound its
-   sibling takes, and it is written as a `sizeof` of the field that carries one so it cannot go stale. */
+/* THE CRASH FOR A ROW OF THAT TABLE THAT POINTS AT NOTHING. */
 static void rule_alias_unbuilt_fail(const char *written, const char *target)
 {
-#define RULE_ALIAS_UNBUILT_FMT                                                                                 \
-    "CSS Compatibility Standard §3.1 \"CSS At-rules\" aliases `@%s` onto `@%s`, and this builder has no arm "   \
-    "for `@%s`. §3.1's table maps a prefixed spelling onto an at-rule the platform ALREADY HAS, so the thing "  \
-    "to build is the UNPREFIXED rule's §6.4 interface, in rule_from_parse, exactly as if the page had written " \
-    "it unprefixed — and then this row starts working with no further change. Do NOT answer this by deleting " \
-    "the row: §3.1 says the prefixed spelling MUST be supported, so a missing row is a page's rule silently "   \
-    "vanishing out of `cssRules` rather than a crash anyone will see"
-
-    char msg[sizeof RULE_ALIAS_UNBUILT_FMT + 3 * sizeof ((RuleBuild *)0)->unbuilt];
-
-    snprintf(msg, sizeof msg, RULE_ALIAS_UNBUILT_FMT, written, target, target);
-    DFAIL(msg);
-#undef RULE_ALIAS_UNBUILT_FMT
+    DFAILF("CSS Compatibility Standard §3.1 \"CSS At-rules\" aliases `@%s` onto `@%s`, and this builder has no "
+           "arm for `@%s`. §3.1's table maps a prefixed spelling onto an at-rule the platform ALREADY HAS, so "
+           "the thing to build is the UNPREFIXED rule's §6.4 interface, in rule_from_parse, exactly as if the "
+           "page had written it unprefixed — and then this row starts working with no further change. Do NOT "
+           "answer this by deleting the row: §3.1 says the prefixed spelling MUST be supported, so a missing "
+           "row is a page's rule silently vanishing out of `cssRules` rather than a crash anyone will see",
+           written, target, target);
 }
 
 /* THE AT-KEYWORDS A CSS SPECIFICATION DEFINES — the registry CSS Syntax Level 3 §8 "CSS stylesheets"'s "not
@@ -1804,10 +1793,8 @@ static void rule_unbuilt_fail(const char *name)
         "is recognised (CSS Syntax §8 forbids discarding it) and has no object it can become. Do NOT invent an "
         "interface, and do NOT skip the rule — skipping renumbers every rule after it. What this needs is the "
         "standard, so take it there";
-    char msg[sizeof RULE_UNBUILT_FMT + sizeof ACT_BUILD + sizeof ACT_NONE + 512];
     const unsigned n = (unsigned)(sizeof RULE_UNBUILT / sizeof RULE_UNBUILT[0]);
     unsigned i, hit = n;
-    int wrote;
 
     for (i = 0; i < n; i++) {
         DCHECK(i == 0 || strcmp(RULE_UNBUILT[i - 1].at, RULE_UNBUILT[i].at) < 0,
@@ -1823,35 +1810,21 @@ static void rule_unbuilt_fail(const char *name)
         if (strcmp(RULE_UNBUILT[i].at, name) == 0) hit = i;
     }
     if (hit == n) {
-/* SIZED FROM ITS OWN LITERAL, for the reason the message below is: written as a round 256 this truncated at
-   320 bytes against a 526-byte text, and the engine's build passes `-Wno-format-truncation`, so the one
-   diagnostic that names it is off. A `sizeof` of the format is what it will actually be. */
-#define RULE_UNBUILT_MISS_FMT                                                                                  \
-    "`@%s` is in CSS Syntax §8's recognized-at-rule registry, has no arm in rule_from_parse, and has NO ROW "   \
-    "in the §6.4 unbuilt-interface table — so this crash cannot say what to build. Add the row (interface, "    \
-    "spec, section NUMBER and section TITLE, read off the specification and never recalled; a NULL interface "  \
-    "where no standard declares one) in the same diff that finds this. THIS assert is the half that stops the " \
-    "list under-reporting, which it has done twice: it fires at the exact page that exposed the gap, which is " \
-    "the only moment anybody is looking"
-
-        char miss[sizeof RULE_UNBUILT_MISS_FMT + sizeof ((RuleBuild *)0)->unbuilt];
-
-        wrote = snprintf(miss, sizeof miss, RULE_UNBUILT_MISS_FMT, name);
-        DCHECK(wrote >= 0 && (size_t)wrote < sizeof miss, "the missing-row `@WHY` was itself truncated");
-        DFAIL(miss);
+        DFAILF("`@%s` is in CSS Syntax §8's recognized-at-rule registry, has no arm in rule_from_parse, and "
+               "has NO ROW in the §6.4 unbuilt-interface table — so this crash cannot say what to build. Add "
+               "the row (interface, spec, section NUMBER and section TITLE, read off the specification and "
+               "never recalled; a NULL interface where no standard declares one) in the same diff that finds "
+               "this. THIS assert is the half that stops the list under-reporting, which it has done twice: "
+               "it fires at the exact page that exposed the gap, which is the only moment anybody is looking",
+               name);
         return;
-#undef RULE_UNBUILT_MISS_FMT
     }
-    wrote = snprintf(msg, sizeof msg, RULE_UNBUILT_FMT, name,
-                     RULE_UNBUILT[hit].interface ? "The interface to build is "
-                                                 : "NO specification declares a CSSOM interface for it",
-                     RULE_UNBUILT[hit].interface ? RULE_UNBUILT[hit].interface : "",
-                     RULE_UNBUILT[hit].where,
-                     RULE_UNBUILT[hit].interface ? ACT_BUILD : ACT_NONE);
-    DCHECK(wrote >= 0 && (size_t)wrote < sizeof msg,
-           "this `@WHY` was TRUNCATED, which silently deletes the sentence the crash exists to deliver at the "
-           "one moment somebody is reading it — grow the buffer, never the other way round");
-    DFAIL(msg);
+    DFAILF(RULE_UNBUILT_FMT, name,
+           RULE_UNBUILT[hit].interface ? "The interface to build is "
+                                       : "NO specification declares a CSSOM interface for it",
+           RULE_UNBUILT[hit].interface ? RULE_UNBUILT[hit].interface : "",
+           RULE_UNBUILT[hit].where,
+           RULE_UNBUILT[hit].interface ? ACT_BUILD : ACT_NONE);
 #undef RULE_UNBUILT_FMT
 }
 

@@ -774,20 +774,13 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
        so it says it in the abort rather than leaving the reader to guess. (The zone does not drop a live
        asker's rendezvous — bridge.js keeps the token until the instance is finalized precisely so every
        completion is relayed — so this is not a stale relay.) */
-#if APICLIENT_DEV
-    {
-        char why[512];
-        snprintf(why, sizeof why,
-                 "a PEER's answer arrived for a request NO register holds — the asking flow left and took the "
-                 "entry with it (it took its first answer, it finished, or it was paged out), so this timeline "
-                 "of the answering document has nowhere to land and the arm it would have forked is silently "
-                 "missing. Keep the entry alive past the flow's departure while the peer still holds timelines "
-                 "that may answer, and fork from it as flow_answer_fork already does. This session sold %ld "
-                 "flow(s) owing %ld synchronous request(s), which is the only one of the three doors this "
-                 "engine can still see from here", g_flows_sold, g_paged_reqs);
-        DFAIL(why);
-    }
-#endif
+    DFAILF("a PEER's answer arrived for a request NO register holds — the asking flow left and took the "
+           "entry with it (it took its first answer, it finished, or it was paged out), so this timeline "
+           "of the answering document has nowhere to land and the arm it would have forked is silently "
+           "missing. Keep the entry alive past the flow's departure while the peer still holds timelines "
+           "that may answer, and fork from it as flow_answer_fork already does. This session sold %ld "
+           "flow(s) owing %ld synchronous request(s), which is the only one of the three doors this "
+           "engine can still see from here", g_flows_sold, g_paged_reqs);
     return 0;
 }
 
@@ -2259,12 +2252,11 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
 #if APICLIENT_DEV
                 if ((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(value)) {
                     JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
-                    char why[320];
-                    snprintf(why, sizeof why,
-                             "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
-                             "this record, so the producer is the trusted zone's reply path and not this "
-                             "file's register. request=%s %s", method, url);
-                    DCHECK(JS_IsArray(ul), why);
+
+                    DCHECKF(JS_IsArray(ul),
+                            "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
+                            "this record, so the producer is the trusted zone's reply path and not this "
+                            "file's register. request=%s %s", method, url);
                     JS_FreeValue(ctx, ul);
                 }
 #endif
@@ -2308,16 +2300,10 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
        request leaves the join the moment it is answered, so the host was never shown it a second time. The
        shape it catches is a host with TWO lists that overlap — the extension's `GetChunks` names URLs that are
        already parked module loads and would answer each of them again. */
-#if APICLIENT_DEV
-    if (matched && !n) {
-        char why[400];
-        snprintf(why, sizeof why,
-                 "a reply was provided for a request every parked entry has ALREADY been answered for — the "
-                 "join drops a request as soon as it carries a value, so the host is answering one it was shown "
-                 "once, twice. request=%s %s", method, url);
-        DFAIL(why);
-    }
-#endif
+    if (matched && !n)
+        DFAILF("a reply was provided for a request every parked entry has ALREADY been answered for — the "
+               "join drops a request as soon as it carries a value, so the host is answering one it was shown "
+               "once, twice. request=%s %s", method, url);
     return n;
 }
 /* WHAT KIND OF PROGRAM a queued body is. It is ONE queue because they are one thing — code the page caused to
@@ -2701,8 +2687,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JSValue ul = JS_GetPropertyStr(ctx, pv, "urlList");
                 JSValue uv2 = pending_get(p, PEND_URL);
                 const char *u2 = JS_IsString(uv2) ? JS_ToCString(ctx, uv2) : NULL;
-                char why[640];
-                int wi;
+                char fields[320];
+                size_t fi = 0;
                 JSAtom cn = JS_ATOM_NULL;
                 const char *cns = NULL;
                 /* AND WHAT THE RECORD ACTUALLY IS, because "it has no urlList" names a hole and the FIELDS name
@@ -2723,29 +2709,42 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     cn = JS_GetClassName(JS_GetRuntime(ctx), JS_GetClassID(pv));
                     cns = JS_AtomToCString(ctx, cn);
                 }
-                wi = snprintf(why, sizeof why,
-                              "a fetch reply carrying no `urlList` is about to be delivered — the record on "
-                              "this entry was not built by fetch_reply_new, so some other writer reached a "
-                              "FLOW_PENDING_RESOLVE entry. url=%s kind=%d tag=%d class=%s ptr=%p fields=",
-                              u2 ? u2 : "(none)", kind, (int)JS_VALUE_GET_TAG(pv),
-                              cns ? cns : "(not an object)",
-                              JS_IsObject(pv) ? JS_VALUE_GET_PTR(pv) : NULL);
+                /* THE FIELD LIST IS DATA, so it is composed as data and the assert's own message is a format
+                   like every other. It is the one thing here with no bound of its own — an object can carry
+                   any number of own properties — so it says WHERE it stopped rather than ending on whichever
+                   name happened to fit, which would read as the complete list of a different object. */
+                memcpy(fields, "(not an object)", 16);
                 if (JS_IsObject(pv)) {
                     JSPropertyEnum *tab = NULL;
                     uint32_t pn = 0, pi;
+                    fields[0] = '\0';
                     if (JS_GetOwnPropertyNames(ctx, &tab, &pn, pv, JS_GPN_STRING_MASK) == 0) {
-                        for (pi = 0; pi < pn && wi < (int)sizeof why - 2; pi++) {
+                        for (pi = 0; pi < pn; pi++) {
                             const char *nm = JS_AtomToCString(ctx, tab[pi].atom);
-                            wi += snprintf(why + wi, sizeof why - (size_t)wi, "%s%s", pi ? "," : "",
-                                           nm ? nm : "?");
+                            int w = snprintf(fields + fi, sizeof fields - fi, "%s%s", pi ? "," : "",
+                                             nm ? nm : "?");
+
                             if (nm) JS_FreeCString(ctx, nm);
+                            if (w < 0 || (size_t)w >= sizeof fields - fi) break;
+                            fi += (size_t)w;
+                        }
+                        if (pi < pn) {
+                            const char more[] = ",…";
+                            size_t at = fi + sizeof more <= sizeof fields ? fi : sizeof fields - sizeof more;
+
+                            memcpy(fields + at, more, sizeof more);
                         }
                         JS_FreePropertyEnum(ctx, tab, pn);
                     }
-                    if (pn == 0 && wi < (int)sizeof why - 8)
-                        snprintf(why + wi, sizeof why - (size_t)wi, "(none)");
+                    if (pn == 0) memcpy(fields, "(none)", 7);
                 }
-                DCHECK(JS_IsArray(ul), why);
+                DCHECKF(JS_IsArray(ul),
+                        "a fetch reply carrying no `urlList` is about to be delivered — the record on "
+                        "this entry was not built by fetch_reply_new, so some other writer reached a "
+                        "FLOW_PENDING_RESOLVE entry. url=%s kind=%d tag=%d class=%s ptr=%p fields=%s",
+                        u2 ? u2 : "(none)", kind, (int)JS_VALUE_GET_TAG(pv),
+                        cns ? cns : "(not an object)",
+                        JS_IsObject(pv) ? JS_VALUE_GET_PTR(pv) : NULL, fields);
                 if (cns) JS_FreeCString(ctx, cns);
                 if (cn != JS_ATOM_NULL) JS_FreeAtom(ctx, cn);
                 if (u2) JS_FreeCString(ctx, u2);
@@ -2848,23 +2847,21 @@ int engine_prepare_fork(JSContext *ctx, void *dec_blob, void *pin_blob, const ch
            the driver holds the resume point and takes the first branch above. */
 #if APICLIENT_DEV
         {
-            char why[512], name[192];
+            char name[192];
             size_t i;
             /* THE KEY IS LENGTH-PREFIXED AND ITS FIELD SEPARATORS ARE CONTROL BYTES (decide.c's
-               concolic_ident_compose), and this line goes out as JSON with no escaping — so the one thing the
-               reader needs from it, the name of the predicate that forked, is copied through printable-only.
-               A raw separator here would break the bridge's parse of the very message that names the caller. */
+               concolic_ident_compose), so the one thing the reader needs from it — the name of the predicate
+               that forked — is copied through printable-only. NOT for the record's sake: check.h escapes what
+               it emits, so a raw separator would arrive intact and legal. It is for the READER's, who is
+               looking for an identifier and would be handed a run of escapes in the middle of it. */
             for (i = 0; i + 1 < sizeof name && asked && asked[i]; i++)
-                name[i] = (asked[i] >= 0x20 && asked[i] < 0x7f && asked[i] != '"' && asked[i] != '\\')
-                          ? asked[i] : '.';
+                name[i] = (asked[i] >= 0x20 && asked[i] < 0x7f) ? asked[i] : '.';
             name[i] = '\0';
-            snprintf(why, sizeof why,
-                     "a C builtin forked over unknown input from inside its own activation, so the sibling has "
-                     "nowhere to resume: nothing will clone a frame for it and re-running the flow's step does "
-                     "not re-reach the ask. Declare that builtin a step machine (JS_CFUNC_STEP_DEF) and move "
-                     "this question into its step_fork_run, so the driver snapshots the machine AT the ask. "
-                     "The question was: %s", asked ? name : "(no source identity)");
-            DFAIL(why);
+            DFAILF("a C builtin forked over unknown input from inside its own activation, so the sibling has "
+                   "nowhere to resume: nothing will clone a frame for it and re-running the flow's step does "
+                   "not re-reach the ask. Declare that builtin a step machine (JS_CFUNC_STEP_DEF) and move "
+                   "this question into its step_fork_run, so the driver snapshots the machine AT the ask. "
+                   "The question was: %s", asked ? name : "(no source identity)");
         }
 #endif
         (void)asked;
@@ -4961,7 +4958,7 @@ static const char *g_step_unit = "(none)";
 static void engine_no_stray_completion(JSContext *ctx, const char *where, int detail)
 {
     JSValue le;
-    char et[320], why[900];
+    char et[320];
 
     if (ctx == NULL || !JS_HasException(ctx))
         return;
@@ -4973,17 +4970,15 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
        that ran page code which suspended looks exactly like one that ran it to the end. A park standing here
        says the work is suspended and the completion was never this segment's to take; no park says the segment
        finished and dropped it. */
-    snprintf(why, sizeof why,
-             "a completion was still live in the runtime at a SCHEDULER BOUNDARY — at `%s`, after the `%s` "
-             "step unit. The exception slot is per-RUNTIME and a completion is per-EVALUATION (§6.2.4), so the "
-             "next flow resumed would receive a throw §5.2.4.3 says belongs to whoever asked for the "
-             "evaluation that produced it. Take it where it is produced: a program's through JS_FlowResume's "
-             "`pres`, a job's at the job, a parked continuation's through JS_ResumeParkedFlow's `pres`, a "
-             "delivery's at JS_CallAsFlow. parked=%d detail=%d. The throw was: %s",
-             where, g_step_unit, JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, detail,
-             *et ? et : "(a throw this engine could not describe)");
     JS_FreeValue(ctx, le);
-    DFAIL(why);
+    DFAILF("a completion was still live in the runtime at a SCHEDULER BOUNDARY — at `%s`, after the `%s` "
+           "step unit. The exception slot is per-RUNTIME and a completion is per-EVALUATION (§6.2.4), so the "
+           "next flow resumed would receive a throw §5.2.4.3 says belongs to whoever asked for the "
+           "evaluation that produced it. Take it where it is produced: a program's through JS_FlowResume's "
+           "`pres`, a job's at the job, a parked continuation's through JS_ResumeParkedFlow's `pres`, a "
+           "delivery's at JS_CallAsFlow. parked=%d detail=%d. The throw was: %s",
+           where, g_step_unit, JS_HasParkedFlow(JS_GetRuntime(ctx)) ? 1 : 0, detail,
+           *et ? et : "(a throw this engine could not describe)");
 }
 #define ENGINE_NO_STRAY(ctx, where, detail) engine_no_stray_completion((ctx), (where), (detail))
 #else
@@ -5539,18 +5534,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    that belongs, exactly as the reader of a `@WHY` gets a file:line and no stack. */
 #if APICLIENT_DEV
                 if (kind == DYN_PAGE_SCRIPT || kind == DYN_CROSS_AGENT_OP) {
-                    char et[320], why[900];
+                    char et[320];
 
                     result_error_text(ctx, exc, et, sizeof et);
-                    snprintf(why, sizeof why, "%s — the compile reported: %s",
-                             kind == DYN_PAGE_SCRIPT
-                                 ? "flow_step: a page <script>/chunk did not start — its source did not COMPILE "
-                                   "(a classic script's program, or a module script's 16.2.1.7.1 ParseModule)"
-                                 : "the program that performs a cross-agent operation did not compile — it is "
-                                   "this engine's own text, and skipping it parks the asking flow on an answer "
-                                   "nothing will send",
-                             *et ? et : "(a throw this engine could not describe)");
-                    DFAIL(why);
+                    DFAILF("%s — the compile reported: %s",
+                           kind == DYN_PAGE_SCRIPT
+                               ? "flow_step: a page <script>/chunk did not start — its source did not COMPILE "
+                                 "(a classic script's program, or a module script's 16.2.1.7.1 ParseModule)"
+                               : "the program that performs a cross-agent operation did not compile — it is "
+                                 "this engine's own text, and skipping it parks the asking flow on an answer "
+                                 "nothing will send",
+                           *et ? et : "(a throw this engine could not describe)");
                 }
 #endif
                 JS_FreeValue(ctx, exc);
@@ -6541,6 +6535,28 @@ double engine_top_weight(void) {
     return b ? flow_weight(b) : -1.0 / 0.0;
 }
 
+#if APICLIENT_DEV
+/* A PRINTABLE, BOUNDED EXCERPT of page bytes for a diagnostic. The source is unbounded — a payload or a
+   script body is whatever the page shipped — so a message quotes an excerpt, and an excerpt that stopped SAYS
+   so: bytes that simply end read as the whole of them, which is a different claim from the true one. Walked by
+   LENGTH rather than to a terminator, because ECMAScript §11.1 "Source Text" permits a U+0000 in a program and
+   a body that carries one would otherwise be quoted as the empty string. */
+static void excerpt(char *out, size_t cap, const char *src, size_t n)
+{
+    size_t i;
+
+    for (i = 0; i + 1 < cap && i < n && src != NULL; i++)
+        out[i] = (src[i] >= 0x20 && src[i] < 0x7f) ? src[i] : '.';
+    out[i] = '\0';
+    if (src != NULL && i < n) {
+        const char more[] = "…";
+        size_t at = i + sizeof more <= cap ? i : cap - sizeof more;
+
+        memcpy(out + at, more, sizeof more);
+    }
+}
+#endif
+
 static int engine_sched_slice(void) {
     JSContext *ctx = g_sess_ctx;
     Flow *cur = g_sess_cur;
@@ -6950,33 +6966,23 @@ static int engine_sched_slice(void) {
                     /* SIZED FOR THE WHOLE LINE, and 256 was not: the fixed text alone is over 200 bytes before
                        quantum_measure()'s 54, so `unit=` and `script_i=` — the two fields that say WHERE — were
                        the first things off the end. */
-                    char why[512];
-                    snprintf(why, sizeof why,
-                             "%d ms of THREAD CPU consumed in one step with NO suspend point offered (measure: "
-                             "%s; %ld units of work, which is why the work verdict cannot see this one) — this "
-                             "stretch has no suspend/resume seam; unit=%s script_i=%d",
-                             (int)((now - t0) / 1000), quantum_measure(), work, g_step_unit,
-                             cur ? cur->script_i : -1);
-                    DFAIL(why);
+                    DFAILF("%d ms of THREAD CPU consumed in one step with NO suspend point offered (measure: "
+                           "%s; %ld units of work, which is why the work verdict cannot see this one) — this "
+                           "stretch has no suspend/resume seam; unit=%s script_i=%d",
+                           (int)((now - t0) / 1000), quantum_measure(), work, g_step_unit,
+                           cur ? cur->script_i : -1);
                 }
                 if (work > ENGINE_SEAMLESS_WORK && g_preempt_asked == pa0) {
-                    /* Sized for the whole line INCLUDING quantum_measure(), which on the host that has no CPU
-                       clock is a sentence rather than a word — it names the transport requirement, and a buffer
-                       that truncated it would drop the payload and the body, which are the two fields that
-                       localise the stretch.
-                       IT DID TRUNCATE, AND THE MESSAGE IS THE PROOF: a corpus row reports this verdict ending
-                       at `unit=drive-orp`, which is `drive-orphans` cut mid-token at byte 640 — so `script_i`,
-                       `flow`, `payload` and `body` were all off the end, and the reader was left with a symptom
-                       and no location. quantum_measure() on the wasm host is 246 bytes by itself, so on the ONE
-                       host this verdict actually fires on, the fixed text could never fit.
-                       AND THE OVERFLOW PATH WAS WORSE THAN THE LOSS. `wi` took snprintf's return, which is the
-                       length it WOULD have written — 900-odd here — so the body append below computed
-                       `why + 900` and `sizeof why - 900` (a size_t that underflows to ~2^64), and the
-                       terminator wrote `why[900]` in a 640-byte stack buffer. The diagnostic that names a
-                       missing seam smashed the stack at the moment it named it. `wi` is CLAMPED below for that,
-                       and the buffer is sized so there is nothing to clamp. */
-                    char why[1536];
-                    int wi = 0, wn = 0;
+                    /* THE TWO EXCERPTS ARE THE ONLY BOUNDED THINGS HERE, and they are bounded because their
+                       SOURCES are unbounded — a payload and a script body are page bytes of any length, so a
+                       diagnostic quotes an excerpt and says it is one. Everything else on this line is the
+                       assert's message and is sized by check.h, which is what deleted the clamp that used to
+                       stand here: `wi` took snprintf's return — the length it WOULD have written — so a
+                       truncated prefix left an index past the end and the body append computed `why + 900`
+                       with `sizeof why - 900` underflowing to ~2^64, writing the terminator outside a 640-byte
+                       stack buffer. The diagnostic that names a missing seam smashed the stack at the moment
+                       it named it. There is no index to get wrong now. */
+                    char pl_txt[512], body_txt[1024];
                     const char *sk = cur && cur->cand_sink ? cur->cand_sink : "(exploration flow)";
                     const char *pl = cur ? cur->cand_payload : NULL;
                     /* WHICH PROGRAM. "a resume ran 5s" is still a symptom until the JS it was running is named,
@@ -7021,45 +7027,28 @@ static int engine_sched_slice(void) {
                        count with a small gap is a real seamless stretch on an idle box, and a big gap with the
                        same work count says the box was also loaded — neither changes the verdict, and that is
                        the point. */
-                    wn = snprintf(why, sizeof why,
-                                   "%ld units of work (forks+flows+jobs) with NO suspend point offered "
-                                   "(wall gap %d ms, step ran %d ms — reported, NOT the verdict; the slice's own "
-                                   "measure here is %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest "
-                                   "Web API member step: %s %dms of %dms over %ld member steps; wrapper map "
-                                   "%ld/%ld; live objects %lld, heap %lld KiB) — this stretch has no "
-                                   "suspend/resume seam; unit=%s script_i=%d "
-                                   "flow=%s payload=",
-                                   work, (int)gap, (int)spent, quantum_measure(),
-                                   (unsigned long long)(g_preempt_asked - pa0),
-                                   (unsigned long long)(pq - pq0),
-                                   (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
-                                   (int)steps_ms, steps_n, wrap_n, wrap_cap,
-                                   (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
-                                   g_step_unit, si, sk);
-                    /* THE CLAMP, AND IT IS THE ONLY THING BETWEEN THIS DIAGNOSTIC AND A STACK SMASH. snprintf
-                       returns what it WOULD have written, so a truncated prefix leaves an index past the end of
-                       the buffer; every write below is relative to it. Clamped once, here, rather than at each
-                       of the three sites that consume it. */
-                    wi = wn < 0 ? 0 : (wn >= (int)sizeof why ? (int)sizeof why - 1 : wn);
-                    /* The payload is attacker-shaped bytes and the message lands inside JSON unescaped, so
-                       anything that would break the line is replaced rather than emitted. */
-                    for (; pl && *pl && wi < (int)sizeof why - 2; pl++, wi++)
-                        why[wi] = (*pl < 0x20 || *pl > 0x7E || *pl == '"' || *pl == '\\') ? '.' : *pl;
-                    /* THE BODY IS WALKED BY ITS LENGTH, NOT TO ITS FIRST NUL — this diagnostic exists to NAME
+                    /* BOTH EXCERPTS ARE WALKED BY LENGTH, NOT TO A TERMINATOR — this diagnostic exists to NAME
                        the program a stuck flow is running, and a bundle carrying a U+0000 (ECMAScript §11.1
                        "Source Text" permits one) would have named the empty string or a prefix of itself. The
-                       byte filter below already replaces every non-printable with '.', so a NUL prints as one
-                       character like every other control. */
-                    if (bodytxt) {
-                        const char *b = bodytxt;
-                        const char *bend = bodytxt + bodyn;
-                        wn = snprintf(why + wi, sizeof why - (size_t)wi, " body=");
-                        wi += wn < 0 ? 0 : (wn >= (int)sizeof why - wi ? (int)sizeof why - wi - 1 : wn);
-                        for (; b < bend && wi < (int)sizeof why - 2; b++, wi++)
-                            why[wi] = (*b < 0x20 || *b > 0x7E || *b == '"' || *b == '\\') ? '.' : *b;
-                    }
-                    why[wi] = 0;
-                    DFAIL(why);
+                       byte filter replaces every non-printable with '.', so a NUL prints as one character like
+                       every other control. It is NOT for the record's sake — check.h escapes what it emits —
+                       it is so a reader gets one line of source text instead of a run of escapes. */
+                    excerpt(pl_txt, sizeof pl_txt, pl, pl ? strlen(pl) : 0);
+                    excerpt(body_txt, sizeof body_txt, bodytxt, bodyn);
+                    DFAILF("%ld units of work (forks+flows+jobs) with NO suspend point offered "
+                           "(wall gap %d ms, step ran %d ms — reported, NOT the verdict; the slice's own "
+                           "measure here is %s; points asked=%llu, preempts wanted=%llu fired=%llu; slowest "
+                           "Web API member step: %s %dms of %dms over %ld member steps; wrapper map "
+                           "%ld/%ld; live objects %lld, heap %lld KiB) — this stretch has no "
+                           "suspend/resume seam; unit=%s script_i=%d "
+                           "flow=%s payload=%s body=%s",
+                           work, (int)gap, (int)spent, quantum_measure(),
+                           (unsigned long long)(g_preempt_asked - pa0),
+                           (unsigned long long)(pq - pq0),
+                           (unsigned long long)(pf - pf0), slow_name, (int)slow_ms,
+                           (int)steps_ms, steps_n, wrap_n, wrap_cap,
+                           (long long)mem.obj_count, (long long)(mem.malloc_size / 1024),
+                           g_step_unit, si, sk, pl_txt, body_txt);
                 }
             }
 #endif

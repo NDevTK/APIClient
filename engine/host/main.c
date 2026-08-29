@@ -1389,17 +1389,12 @@ QJS_EXPORT void qjs_provide(const char *method, const char *url, const char *rep
         /* THE CONDITION RUNS IN EVERY BUILD AND THE MESSAGE IS BUILT IN NONE BUT DEV — the take CONSUMES a
            sale, so it is not a DCHECK's side-effect-free condition and cannot live inside one. */
         if (n == 0 && !engine_take_paged_owed()) {
-#if APICLIENT_DEV
             /* NAMING BOTH HALVES, because the pairing that can be off is now the PAIR's: a zone that fetched
                the right address with the wrong verb produces exactly this, and a message naming the URL alone
                would send the reader to look for a URL that is in fact on the list. */
-            char why[512];
-            snprintf(why, sizeof why,
-                     "a reply was provided for a request no flow is parked on and none was paged out — the "
-                     "host's pending/provide pairing is off, and resolving nothing leaves the flow that IS "
-                     "parked waiting forever. request=%s %s", method, url);
-            DFAIL(why);
-#endif
+            DFAILF("a reply was provided for a request no flow is parked on and none was paged out — the "
+                   "host's pending/provide pairing is off, and resolving nothing leaves the flow that IS "
+                   "parked waiting forever. request=%s %s", method, url);
         }
     }
 }

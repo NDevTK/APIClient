@@ -512,7 +512,7 @@ static void idl_dict_order_check(const IdlDictMember *members, int n, int k)
            dictionary argument is an ANONYMOUS array, and giving every one of them a name would be a change at
            every declaration in the engine. Its MEMBER LIST identifies it exactly and costs only this buffer.
            THE PAIR STAYS FIRST so that a message this truncates loses the list and never the diagnosis. */
-        char why[640], list[320];
+        char list[320];
         size_t used = 0;
         int i;
 
@@ -523,12 +523,19 @@ static void idl_dict_order_check(const IdlDictMember *members, int n, int k)
             if (w < 0 || (size_t)w >= sizeof list - used) break;
             used += (size_t)w;
         }
-        snprintf(why, sizeof why,
-                 "a dictionary's members were declared out of Web IDL 3.2.17's read order: `%s` (level %d) is "
-                 "declared after `%s` (level %d). Inherited levels come first, and each level's own members "
-                 "sort lexicographically among themselves. The table declares [%s]",
-                 members[k].name, members[k].level, members[k - 1].name, members[k - 1].level, list);
-        DFAIL(why);
+        /* AND IT SAYS WHERE IT STOPPED. The loop leaves on the member that would not fit, and a list that
+           simply ends is read as a COMPLETE table — a shorter table than the one declared, which is a
+           different defect from the one being reported. */
+        if (i < n) {
+            const char more[] = ", …";
+            size_t at = used + sizeof more <= sizeof list ? used : sizeof list - sizeof more;
+
+            memcpy(list + at, more, sizeof more);
+        }
+        DFAILF("a dictionary's members were declared out of Web IDL 3.2.17's read order: `%s` (level %d) is "
+               "declared after `%s` (level %d). Inherited levels come first, and each level's own members "
+               "sort lexicographically among themselves. The table declares [%s]",
+               members[k].name, members[k].level, members[k - 1].name, members[k - 1].level, list);
     }
 #endif
 }
@@ -3338,16 +3345,13 @@ static void idl_check_global_target(JSContext *ctx, JSValueConst target, const c
 {
     JSValue g = JS_GetGlobalObject(ctx);
     bool same = JS_VALUE_GET_PTR(g) == JS_VALUE_GET_PTR(target);
-    char why[400];
 
     JS_FreeValue(ctx, g);   /* balanced, so the check observes nothing */
     if (same) return;
-    snprintf(why, sizeof why,
-             "the %s attribute `%s` was installed on something that is not the realm's global object — its "
-             "accessor applies Web IDL §3.7.6's TypeError against the Window brand, which is right only "
-             "because Window is the only [Global] interface in this engine. Give the install the interface's "
-             "own brand as data, the way IdlExposure and IdlAttrForge are stated", form, name);
-    DFAIL(why);
+    DFAILF("the %s attribute `%s` was installed on something that is not the realm's global object — its "
+           "accessor applies Web IDL §3.7.6's TypeError against the Window brand, which is right only "
+           "because Window is the only [Global] interface in this engine. Give the install the interface's "
+           "own brand as data, the way IdlExposure and IdlAttrForge are stated", form, name);
 }
 #define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) idl_check_global_target((c), (t), (n), (f))
 #else
@@ -3494,15 +3498,9 @@ JSValue idl_step_function(JSContext *ctx, const char *name, int length, int step
     int idx = idl_member_of_step(stepid);
     /* NAMING THE OFFENDER IS THE POINT. "some member was never declared" sends whoever hits it grepping every
        install site; the name is right here in the argument, so the assert says it. */
-    if (idx < 0) {
-        /* Sized past the format's own minimum, which the compiler computes and warns about: this message ends
-           by naming the install function to use instead, and a truncated DFAIL loses exactly that tail. */
-        char why[288];
-        snprintf(why, sizeof why,
-                 "step function '%s' was minted for a member this pool never declared — a step machine that is "
-                 "not an args-machine member installs through idl_install_step_method", name ? name : "?");
-        DFAIL(why);
-    }
+    if (idx < 0)
+        DFAILF("step function '%s' was minted for a member this pool never declared — a step machine that is "
+               "not an args-machine member installs through idl_install_step_method", name ? name : "?");
     DCHECK(name != NULL && *name, "a step function was minted with no name — the pool has nothing to call it");
     idl_member(idx)->name = name;
     return JS_NewCFunction2(ctx, NULL, name, length, JS_CFUNC_step, stepid);

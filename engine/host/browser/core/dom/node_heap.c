@@ -114,63 +114,50 @@ void node_heap_detach(lxb_dom_document_t *doc)
            the stale-DFAIL failure with a number attached, so the arithmetic goes first and the trees after it.
            §Testing states the general form of this at the allocation that OOMs: "the reader of a `@WHY` is
            standing at the allocation, and 'OOM' alone tells them nothing about realms". */
-#if APICLIENT_DEV
-        {
-            /* THE BUFFER IS THE MESSAGE'S SIZE AND NOT A ROUND NUMBER. At 1024 the format expanded to at
-               least 1305 and `snprintf` truncated it mid-word — the ORDER arm, the last third and the one a
-               large count needs, never reached the reader, and the build's own `-Wno-format-truncation` is why
-               no gate said so. A diagnosis that is cut off is §Testing's report about nothing with the
-               explanation attached. The literal below is a little over 3500 characters and each `%zu` can
-               expand to 20, so this holds it with the two counts at their widest and an arm's worth of room
-               for the next cause that has to be named here. */
-            char why[4096];
-            snprintf(why, sizeof why,
-                     "the agent's DOM heap still holds %zu node allocation(s) and %zu text allocation(s) after "
-                     "the last document that could name them was destroyed. READ THE RATIO FIRST, because the "
-                     "two arenas count different things and the list of what each kind owns is node_heap.h's: "
-                     "an ATTRIBUTE with a value is three allocations, two here and one there, so nodes at "
-                     "TWICE text is an attribute list nothing freed; a TEXT, COMMENT or CDATASection is one of "
-                     "each, so nodes at ROUGHLY text is character data; text at ZERO with nodes non-zero is "
-                     "element or fragment structs alone. THEN THE MAGNITUDE. A HANDFUL is a second structure "
-                     "reached from an element and from nowhere in any tree, which no walk of children can see "
-                     "— DOM §4.8's shadow root is the one left, its edge from the host being a slot on the "
-                     "host's WRAPPER, so only a per-flow delta's kind-4 entry ever frees one (§4.9's "
-                     "attributes and §4.12.3's template contents are the same shape and are freed by "
-                     "core/dom/node_interface.c's dispatcher). HUNDREDS, in proportion, is the ORDER instead: "
-                     "a delta released after this line rather than before it, leaving a whole flow's creations "
-                     "live (and every one of them would then be freed out of an arena that is gone). A node "
-                     "created while capture was off and then detached is the remaining shape and looks like "
-                     "the handful. AND A HUGE COUNT IS NOT A LEAK AT ALL — `ref_count` is UNSIGNED and "
-                     "`lexbor_mraw_free` decrements it while validating nothing, so a count near SIZE_MAX is "
-                     "that many frees TOO MANY: read it as a negative and the magnitude is the number of "
-                     "double frees. It is the more serious half, because the same call also inserted a pointer "
-                     "this arena never handed out into this arena's size-keyed free cache, so the two arenas "
-                     "now ALIAS and the next allocation of that size gets memory the other one still owns. "
-                     "core/dom/document_type.h is the worked example: lexbor allocates a doctype's two ids "
-                     "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2. "
-                     "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE NOBODY FREED, and no "
-                     "other arm produces that shape. TWO CAUSES REACH IT AND THE SCALING SEPARATES THEM. If "
-                     "the count moves when only the SCHEDULE moved, it is a value REPLACEMENT: an attribute's "
-                     "bytes are re-allocated on every write with the ones they replace freed in the same call, "
-                     "and the per-flow DOM delta rewrites an attribute at every apply and every unapply, so a "
-                     "missed free is paid per SWAP rather than per parse. That one is asserted at its ORIGIN — "
-                     "core/dom/attr_list.c's dom_attr_set_value reads both arenas across the write — so "
-                     "reaching HERE with it means the write did not go through that accessor at all. If the "
-                     "count moves with the number of PARSES, it is a token's attribute values instead: they "
-                     "come out of this arena and no lexbor destructor frees them; core/html/html_parse.h owns "
-                     "them, releasing at token-done whatever the DOM did not take and learning what the DOM "
-                     "took from the document's `attr_mutation->append`, which `lxb_dom_element_attr_append` "
-                     "fires with the adopted pointer already in `attr->value->data`. So that count means one "
-                     "of the two halves did not run for some parse: a document whose `attr_mutation` is not that "
-                     "one (the token-done wrapper asserts it per token, so read that @WHY first), or a parse "
-                     "whose tokenizer never got the wrapper at all (`html_parse_owns_tokens_of`, asserted at "
-                     "dom_document_destroy). A value adopted through some path that is NOT "
-                     "`lxb_dom_element_attr_append` would show up as the OPPOSITE — a double free, read the "
-                     "huge-count arm above.",
-                     (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
-            DCHECK(g_nodes->ref_count == 0 && g_text->ref_count == 0, why);
-        }
-#endif
+        DCHECKF(g_nodes->ref_count == 0 && g_text->ref_count == 0,
+                "the agent's DOM heap still holds %zu node allocation(s) and %zu text allocation(s) after "
+                "the last document that could name them was destroyed. READ THE RATIO FIRST, because the "
+                "two arenas count different things and the list of what each kind owns is node_heap.h's: "
+                "an ATTRIBUTE with a value is three allocations, two here and one there, so nodes at "
+                "TWICE text is an attribute list nothing freed; a TEXT, COMMENT or CDATASection is one of "
+                "each, so nodes at ROUGHLY text is character data; text at ZERO with nodes non-zero is "
+                "element or fragment structs alone. THEN THE MAGNITUDE. A HANDFUL is a second structure "
+                "reached from an element and from nowhere in any tree, which no walk of children can see "
+                "— DOM §4.8's shadow root is the one left, its edge from the host being a slot on the "
+                "host's WRAPPER, so only a per-flow delta's kind-4 entry ever frees one (§4.9's "
+                "attributes and §4.12.3's template contents are the same shape and are freed by "
+                "core/dom/node_interface.c's dispatcher). HUNDREDS, in proportion, is the ORDER instead: "
+                "a delta released after this line rather than before it, leaving a whole flow's creations "
+                "live (and every one of them would then be freed out of an arena that is gone). A node "
+                "created while capture was off and then detached is the remaining shape and looks like "
+                "the handful. AND A HUGE COUNT IS NOT A LEAK AT ALL — `ref_count` is UNSIGNED and "
+                "`lexbor_mraw_free` decrements it while validating nothing, so a count near SIZE_MAX is "
+                "that many frees TOO MANY: read it as a negative and the magnitude is the number of "
+                "double frees. It is the more serious half, because the same call also inserted a pointer "
+                "this arena never handed out into this arena's size-keyed free cache, so the two arenas "
+                "now ALIAS and the next allocation of that size gets memory the other one still owns. "
+                "core/dom/document_type.h is the worked example: lexbor allocates a doctype's two ids "
+                "from `mraw` and frees them into `text`, which is exactly nodes at +2 and text at -2. "
+                "FINALLY, TEXT AT +N WITH NODES UNCHANGED IS AN ATTRIBUTE VALUE NOBODY FREED, and no "
+                "other arm produces that shape. TWO CAUSES REACH IT AND THE SCALING SEPARATES THEM. If "
+                "the count moves when only the SCHEDULE moved, it is a value REPLACEMENT: an attribute's "
+                "bytes are re-allocated on every write with the ones they replace freed in the same call, "
+                "and the per-flow DOM delta rewrites an attribute at every apply and every unapply, so a "
+                "missed free is paid per SWAP rather than per parse. That one is asserted at its ORIGIN — "
+                "core/dom/attr_list.c's dom_attr_set_value reads both arenas across the write — so "
+                "reaching HERE with it means the write did not go through that accessor at all. If the "
+                "count moves with the number of PARSES, it is a token's attribute values instead: they "
+                "come out of this arena and no lexbor destructor frees them; core/html/html_parse.h owns "
+                "them, releasing at token-done whatever the DOM did not take and learning what the DOM "
+                "took from the document's `attr_mutation->append`, which `lxb_dom_element_attr_append` "
+                "fires with the adopted pointer already in `attr->value->data`. So that count means one "
+                "of the two halves did not run for some parse: a document whose `attr_mutation` is not that "
+                "one (the token-done wrapper asserts it per token, so read that @WHY first), or a parse "
+                "whose tokenizer never got the wrapper at all (`html_parse_owns_tokens_of`, asserted at "
+                "dom_document_destroy). A value adopted through some path that is NOT "
+                "`lxb_dom_element_attr_append` would show up as the OPPOSITE — a double free, read the "
+                "huge-count arm above.",
+                (size_t)g_nodes->ref_count, (size_t)g_text->ref_count);
         g_nodes = lexbor_mraw_destroy(g_nodes, true);
         g_text  = lexbor_mraw_destroy(g_text, true);
     }

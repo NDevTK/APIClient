@@ -831,23 +831,16 @@ static void platform_check_agent_state(void)
     int i;
 
     for (i = 0; i < PLATFORM_N; i++) {
-        static char msg[320];
         int n = agent_state_count(PLATFORM[i].name);
 
-        if (PLATFORM[i].release != NULL && n == 0) {
-            snprintf(msg, sizeof msg,
-                     "%s is on the release column and declared no agent state — the release column is the "
-                     "inverse of the declaration, and a release with nothing declared against it cannot be "
-                     "asserted to have undone anything (core/agent_state.h)", PLATFORM[i].name);
-            DFAIL(msg);
-        }
-        if (PLATFORM[i].release == NULL && n > 0) {
-            snprintf(msg, sizeof msg,
-                     "%s declared agent state and has no release — what a C static holds for the whole agent "
-                     "is freed by nothing when the agent goes, which is what every leak this file's comments "
-                     "record already was", PLATFORM[i].name);
-            DFAIL(msg);
-        }
+        if (PLATFORM[i].release != NULL && n == 0)
+            DFAILF("%s is on the release column and declared no agent state — the release column is the "
+                   "inverse of the declaration, and a release with nothing declared against it cannot be "
+                   "asserted to have undone anything (core/agent_state.h)", PLATFORM[i].name);
+        if (PLATFORM[i].release == NULL && n > 0)
+            DFAILF("%s declared agent state and has no release — what a C static holds for the whole agent "
+                   "is freed by nothing when the agent goes, which is what every leak this file's comments "
+                   "record already was", PLATFORM[i].name);
     }
 #endif
 }
