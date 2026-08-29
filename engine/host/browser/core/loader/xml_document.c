@@ -26,6 +26,7 @@
 #include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
 #include "core/xml/xml_parse.h"
+#include "solver/rest_unit.h"   /* how many items each of this loader's four phases rests after */
 #include "check.h"
 
 /* DOM §1.4 "Namespaces"' HTML namespace, written out for core/xml/xml_ns.h's reason: lexbor's interning is
@@ -35,7 +36,11 @@
 /* HTML §14.2 "Parsing XML documents"' script handling, as the crash that names it — for ONE node of the tree
    the parse just built. It is one node and not a walk because the walk is the DRIVER's: a document is
    attacker-length, so a loop over its nodes is exactly as unbounded as the loop over its constructs was, and
-   the loader would have closed the parse's drive-to-completion only to open a second one behind it. */
+   the loader would have closed the parse's drive-to-completion only to open a second one behind it. HOW MANY
+   of these one rest point covers is solver/rest_unit.h's REST_UNIT_NODE_VISITS and not this function's: what
+   it costs is fixed per node (a type test, a name extraction into fixed buffers, two comparisons against short
+   literals), which is precisely what makes a multiplier safe here and not on either of the two phases below
+   whose item is a quantity the document chooses. */
 static void xml_document_refuse_script(lxb_dom_node_t *n)
 {
     const char *ns, *local;
@@ -62,15 +67,21 @@ static void xml_document_refuse_script(lxb_dom_node_t *n)
               "instead is a page that loads with the code it shipped silently not running");
 }
 
-/* THE FOUR THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Every one of them is a LOOP over
-   something the response controls, which is why each is a phase with an O(1) step rather than a stretch of a
+/* THE FOUR THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Three of them are a LOOP over
+   something the response controls, which is why each is a phase with a bounded step rather than a stretch of a
    completing function: the constructs of [1] `document`, the top-level children a failed parse left behind,
    and the elements §14.2 has an opinion about. A phase list is what makes the loader's own state a thing a
-   driver can stand in the middle of. */
-enum { XML_LOAD_PARSE = 0,   /* one item of core/xml/xml_parse.h's walk */
-       XML_LOAD_DISCARD,     /* one child of the partial tree a failed parse left */
-       XML_LOAD_ERRDOC,      /* §7.5.3's inline report, which is O(1) */
-       XML_LOAD_SCRIPTS,     /* one node of the §14.2 refusal walk */
+   driver can stand in the middle of.
+   EACH PHASE'S REST UNIT IS solver/rest_unit.h's AND NOT A `1` HELD HERE, and the three answers are not the
+   same number for a reason worth reading there: two of these phases are counted in items whose SIZE the
+   document picks — a [14] `CharData` run, a subtree — so a multiplier on them would multiply an unbounded
+   quantity, which is a bound wearing a granularity's name. The third is counted in a fixed amount of work per
+   node and is multiplied. Nothing about that reasoning is decidable from inside this file, which is why the
+   numbers are not in it. */
+enum { XML_LOAD_PARSE = 0,   /* REST_UNIT_XML_CONSTRUCTS items of core/xml/xml_parse.h's walk */
+       XML_LOAD_DISCARD,     /* REST_UNIT_SUBTREE_REMOVALS children of the partial tree a failed parse left */
+       XML_LOAD_ERRDOC,      /* §7.5.3's inline report, which is one element and one text node — no unit */
+       XML_LOAD_SCRIPTS,     /* REST_UNIT_NODE_VISITS nodes of the §14.2 refusal walk */
        XML_LOAD_DONE };
 
 /* WHAT A §7.5.3 LOAD IS BETWEEN TWO ITEMS. `parse` is live exactly while the phase is XML_LOAD_PARSE and is
@@ -129,6 +140,8 @@ bool xml_document_load_ended(const XmlDocumentLoad *load)
 
 void xml_document_load_step(XmlDocumentLoad *load)
 {
+    size_t n;
+
     DCHECK(load != NULL, "xml_document_load_step was asked of no load");
     DCHECK(load->phase != XML_LOAD_DONE,
            "an HTML §7.5.3 load was stepped after it had nothing left to do — xml_document_load_ended is what "
@@ -137,7 +150,16 @@ void xml_document_load_step(XmlDocumentLoad *load)
     switch (load->phase) {
     case XML_LOAD_PARSE:
         if (!xml_parse_ended(load->parse)) {
-            xml_parse_step(load->parse);
+            /* THE UNIT IS ASKED FOR EVEN WHERE THE ANSWER IS ONE. Writing the `1` here instead would put a
+               granularity decision back inside the component that rests, which is where nobody can see it
+               beside the other three — and the day core/xml/'s walk gains a pull of its own for [14]
+               `CharData` (whose unbounded length is the reason this answer is 1) the number to move is in one
+               file rather than in this loop. */
+            n = rest_unit_items(REST_UNIT_XML_CONSTRUCTS);
+            rest_unit_begin(REST_UNIT_XML_CONSTRUCTS);
+            while (n-- > 0 && !xml_parse_ended(load->parse))
+                xml_parse_step(load->parse);
+            rest_unit_end();
             return;
         }
         if (xml_parse_finish(load->parse, &load->report)) {
@@ -155,10 +177,16 @@ void xml_document_load_step(XmlDocumentLoad *load)
     case XML_LOAD_DISCARD:
         /* §7.5.3: "Error messages from the parse process (e.g., XML namespace well-formedness errors) may be
            reported inline by mutating the Document." The partial tree the parse built is what a browser
-           discards before doing so — ONE top-level child per step, because [1] `document`'s `Misc*` is as
-           long as the response chooses to make it. */
+           discards before doing so — a REST UNIT's worth of top-level children per step, because [1]
+           `document`'s `Misc*` is as long as the response chooses to make it. That unit is one child today and
+           solver/rest_unit.h says why it stays one: removing a child removes its subtree, so a multiplier here
+           would multiply a size the document picked rather than a fixed cost. */
         if (load->root->first_child != NULL) {
-            dom_cow_remove_child(load->root->first_child);
+            n = rest_unit_items(REST_UNIT_SUBTREE_REMOVALS);
+            rest_unit_begin(REST_UNIT_SUBTREE_REMOVALS);
+            while (n-- > 0 && load->root->first_child != NULL)
+                dom_cow_remove_child(load->root->first_child);
+            rest_unit_end();
             return;
         }
         load->phase = XML_LOAD_ERRDOC;
@@ -177,8 +205,13 @@ void xml_document_load_step(XmlDocumentLoad *load)
             load->phase = XML_LOAD_DONE;
             return;
         }
-        xml_document_refuse_script(load->scan);
-        load->scan = node_next_in(load->scan, load->root);
+        n = rest_unit_items(REST_UNIT_NODE_VISITS);
+        rest_unit_begin(REST_UNIT_NODE_VISITS);
+        while (n-- > 0 && load->scan != NULL) {
+            xml_document_refuse_script(load->scan);
+            load->scan = node_next_in(load->scan, load->root);
+        }
+        rest_unit_end();
         return;
     }
     /* NOT A `default:` ARM — the switch is exhaustive over the phases above, so a phase added without a body

@@ -57,11 +57,24 @@
  * that is a flow steps it and returns to the one WFQ; a driver that is not steps it to the end. Which of those
  * a caller is, is a fact about the caller.
  *
- * EVERY STEP IS ONE ITEM AND EVERY ITEM IS O(1): one byte into the input byte stream for §7.5.2 and §7.5.4,
- * one construct of XML §2.1's [1] `document` for §7.5.3 — and, for §7.5.3, one node of each of the two walks
- * that follow a parse (the discard of a failed parse's partial tree, and HTML §14.2's script refusal). A byte
- * is the finest unit lexbor offers and it needs no chosen quantum, which is what a "N bytes then yield" would
- * have to invent and defend.
+ * EVERY STEP IS ONE REST UNIT, AND WHAT A REST UNIT IS, IS THE SCHEDULER'S TO SAY. The items are the
+ * substrate's — bytes into the parser's input byte stream for §7.5.2 and §7.5.4, constructs of XML §2.1
+ * "Well-Formed XML Documents"' [1] `document` for §7.5.3, and for §7.5.3 also the children of the partial tree
+ * a failed parse left and the nodes of HTML §14.2 "Parsing XML documents"' script refusal walk — but HOW MANY
+ * of them one step performs is solver/rest_unit.h's answer and not any loader's.
+ *
+ * THE FIRST VERSION OF THIS PULL RESTED AFTER ONE ITEM EVERYWHERE, and said here that a byte is the finest
+ * unit lexbor offers and so needs no chosen quantum to invent and defend. That is a constant of 1 that nobody
+ * argued for, and it is the expensive one: one full scheduler round trip — a step-machine yield, a frontier
+ * re-rank, possibly a COW delta swap — per BYTE of every document this engine loads. CLAUDE.md §NO BOUNDS: a
+ * bound decides work will not happen, a granularity decides only how often a flow OFFERS to rest, and the two
+ * are not the same rule. And the standard names the unit outright: §7.5.2 and §7.5.4 both say "each task that
+ * the networking task source places on the task queue while fetching runs must then fill the parser's input
+ * byte stream with THE FETCHED BYTES" — a task's worth of them.
+ *
+ * WHAT IS PRESERVED EXACTLY IS THE GUARANTEE. The rest point is still OFFERED at every unit boundary, the
+ * resume is still byte-identical, and no step's cost grows with the response — solver/rest_unit.h states the
+ * two bounds an answer has to satisfy and asserts the one that is a choice rather than a fact.
  *
  * `text` IS BORROWED FOR THE LIFE OF THE LOAD. lexbor's chunked tokenizer holds pointers into whatever buffer
  * it was handed until the run terminates, so the caller owes the bytes until `document_load_finish` returns;
@@ -79,7 +92,8 @@ DocumentLoad *document_load_begin(lxb_html_document_t *document, DomParseRootKin
 /* IS THERE NOTHING LEFT TO DO? What a driver's loop tests; stepping past it is a DCHECK. */
 bool document_load_ended(const DocumentLoad *load);
 
-/* ONE ITEM. The status is LATCHED into the load rather than returned, for the reason core/xml/xml_parse.h
+/* ONE REST UNIT — solver/rest_unit.h's count of the arm's own items. The status is LATCHED into the load
+   rather than returned, for the reason core/xml/xml_parse.h
    states about its own step: a driver that must ask after every step is a driver that can forget to, and
    `document_load_ended` already answers the only question the loop has. */
 void document_load_step(DocumentLoad *load);

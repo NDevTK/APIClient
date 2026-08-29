@@ -14,6 +14,16 @@
  * and a task for the implied EOF, which is a pull. The header states the citation; what this file holds is the
  * position in the response, which is the only state a fill has between two of those tasks.
  *
+ * AND ONE OF THOSE TASKS IS A CHUNK, WHICH IS THE STANDARD'S OWN WORD FOR IT AND NOT THIS FILE'S CHOICE. §7.5.2
+ * says "each task … must then fill the parser's input byte stream with THE FETCHED BYTES"; the fill this file
+ * performed for a while was ONE BYTE, on the grounds that a byte is the finest unit lexbor offers and so needs
+ * no constant to defend. That is a constant of 1 nobody argued for, and it bought one whole scheduler round
+ * trip per byte of every document the engine loads. HOW MANY BYTES ONE FILL IS, IS NOT THIS COMPONENT'S TO
+ * DECIDE: it trades the cost of asking the scheduler against the delay before a due suspension is taken, and
+ * both sides of that trade belong to the scheduler. solver/rest_unit.h owns the number and the reasoning, this
+ * file asks — which is also why core/loader/text_document.c, filling the same stream under the same sentence,
+ * cannot end up disagreeing with it.
+ *
  * A LOADER WHOSE BODY IS ONE CALL IS STILL WHERE THE ASSERT BELONGS. CLAUDE.md §Browser half: the parser must
  * be unreachable for a type it does not serve, ASSERTED WHERE THE PARSE IS, so that a route added later fires
  * instead of silently widening the old wrong answer. Asserting it at the dispatch instead is vacuous — the
@@ -27,6 +37,7 @@
 #include "core/loader/document_load_type.h"
 #include "core/loader/html_document.h"
 #include "core/mime/mime_type.h"
+#include "solver/rest_unit.h"   /* how many bytes one networking task's fill is — the SCHEDULER's number */
 #include "check.h"
 
 /* WHAT A §7.5.2 LOAD IS BETWEEN TWO OF ITS NETWORKING TASKS: the Document being filled, the response's
@@ -80,16 +91,30 @@ bool html_document_load_ended(const HtmlDocumentLoad *load)
 
 void html_document_load_step(HtmlDocumentLoad *load)
 {
+    size_t n;
+
     DCHECK(load != NULL, "html_document_load_step was asked of no load");
     DCHECK(!html_document_load_ended(load),
            "an HTML §7.5.2 load was stepped after the whole response had been filled into the parser's input "
            "byte stream — html_document_load_ended is what a driver's loop tests, and asking past it would "
            "read one byte off the end of the response");
     /* §7.5.2's "fill the parser's input byte stream with the fetched bytes and cause the HTML parser to
-       perform the appropriate processing of the input stream", for ONE byte. In lexbor those are one call:
-       the input stream is not a buffer this engine holds, it is the tokenizer's own cursor. */
-    html_parse_document_write(load->document, load->html + load->off, 1);
-    load->off++;
+       perform the appropriate processing of the input stream", for ONE NETWORKING TASK'S BYTES. In lexbor
+       those are one call: the input stream is not a buffer this engine holds, it is the tokenizer's own
+       cursor, and a chunk boundary is invisible to it — a run of characters that has not been terminated is
+       carried in the tokenizer's temporary buffer across the boundary, so the token sequence reaching §13.2.6
+       tree construction does not depend on where the fills were cut. That is the whole reason the unit may be
+       a policy input at all: it changes how often this load offers to rest and NOTHING the parse produces. */
+    n = rest_unit_items(REST_UNIT_INPUT_BYTES);
+    /* THE LAST FILL IS SHORT, AND THAT IS THE UNIT MEETING THE RESPONSE RATHER THAN A CLAMP PAST A BROKEN
+       INVARIANT. `ended` is off == len and this runs only when it is false, so the remainder is at least one
+       byte and the read stays inside the response. */
+    if (n > load->len - load->off)
+        n = load->len - load->off;
+    rest_unit_begin(REST_UNIT_INPUT_BYTES);
+    html_parse_document_write(load->document, load->html + load->off, n);
+    rest_unit_end();
+    load->off += n;
 }
 
 lxb_status_t html_document_load_finish(HtmlDocumentLoad *load)

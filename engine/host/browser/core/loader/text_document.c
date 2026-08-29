@@ -57,6 +57,7 @@
 #include "core/loader/document_load_type.h"
 #include "core/loader/text_document.h"
 #include "core/mime/mime_type.h"
+#include "solver/rest_unit.h"   /* how many bytes one networking task's fill is — the SCHEDULER's number */
 #include "check.h"
 
 /* §7.5.4 step 4's TWO SYNTHETIC TOKENS, in the two pieces the paragraph above splits them into. Static storage
@@ -151,6 +152,8 @@ bool text_document_load_ended(const TextDocumentLoad *load)
 
 void text_document_load_step(TextDocumentLoad *load)
 {
+    size_t n;
+
     DCHECK(load != NULL, "text_document_load_step was asked of no load");
     DCHECK(!text_document_load_ended(load),
            "an HTML §7.5.4 load was stepped after the whole response had been filled into the parser's input "
@@ -158,11 +161,23 @@ void text_document_load_step(TextDocumentLoad *load)
            "read one byte off the end of the response");
     /* §7.5.4 step 4's "each task that the networking task source places on the task queue while fetching runs
        must then fill the parser's input byte stream with the fetched bytes and cause the HTML parser to
-       perform the appropriate processing of the input stream", for ONE byte. Every byte lands in HTML §13.2.5.5
-       "PLAINTEXT state", which is the state `begin` left the tokenizer in and the only state it can be in
-       here: that state has no transition out of itself. */
-    html_parse_document_write(load->document, load->text + load->off, 1);
-    load->off++;
+       perform the appropriate processing of the input stream" — one TASK'S bytes, which is what the sentence
+       says and what solver/rest_unit.h sizes. It is the same unit core/loader/html_document.c fills, asked of
+       the same place, because it is the same sentence of the standard in two subsections: two components with
+       two private constants would be two answers to one question.
+       Every byte lands in HTML §13.2.5.5 "PLAINTEXT state", which is the state `begin` left the tokenizer in
+       and the only state it can be in here: that state has no transition out of itself. So a fill of many
+       bytes is a longer stretch of the SAME state rather than a state machine crossing a boundary, and the
+       character run this extends is the one `begin` opened with the synthetic LINE FEED. */
+    n = rest_unit_items(REST_UNIT_INPUT_BYTES);
+    /* THE LAST FILL IS SHORT — the unit meeting the response, not a clamp past a broken invariant: `ended` is
+       off == len and this runs only when it is false, so the remainder is at least one byte. */
+    if (n > load->len - load->off)
+        n = load->len - load->off;
+    rest_unit_begin(REST_UNIT_INPUT_BYTES);
+    html_parse_document_write(load->document, load->text + load->off, n);
+    rest_unit_end();
+    load->off += n;
 }
 
 lxb_status_t text_document_load_finish(TextDocumentLoad *load)

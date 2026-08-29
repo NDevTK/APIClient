@@ -1610,11 +1610,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     STEP_GOTO(s->hdr.stage, NAV_LOAD_CREATE, NULL);
     STEP_JUMP(NAV_LOAD_CREATE);
 
-    /* §7.5.2 / §7.5.3 / §7.5.4, ONE ITEM PER ENTRY. The scheduler is asked between every one of them, so a
-       higher-value sibling preempts a page-sized parse, the cooperative quantum can take the thread back
+    /* §7.5.2 / §7.5.3 / §7.5.4, ONE REST UNIT PER ENTRY. The scheduler is asked between every one of them, so
+       a higher-value sibling preempts a page-sized parse, the cooperative quantum can take the thread back
        inside it, and the flow that is doing it is an ordinary member of the ONE frontier rather than a C loop
-       nothing can interrupt. There is no second driver here and no loop: this arm performs ONE item and
-       returns, and what decides whether it runs again is the frontier. */
+       nothing can interrupt. There is no second driver here and no loop: this arm performs ONE unit and
+       returns, and what decides whether it runs again is the frontier.
+       WHAT A UNIT IS, IS NOT ASKED HERE AND MUST NOT BE. solver/rest_unit.h owns the count — a networking
+       task's worth of bytes for the two HTML-parser arms, per §7.5.2's and §7.5.4's own sentence — because it
+       trades the cost of this round trip against the delay before a due suspension is taken, and both of those
+       are the scheduler's quantities rather than a loader's or a driver's. */
     STEP_ARM(NAV_LOAD_CREATE);
     DCHECK(s->create != NULL,
            "§7.4 step 14's load resumed at its creation stage with no creation — the fetch stage transfers "
