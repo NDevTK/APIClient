@@ -17,30 +17,33 @@
  * boxes ALONG a line and then §10.8 takes two maxima across it. A single walk carrying both would be two
  * algorithms behind one `if`, and the `if` would be re-asked per child instead of once per box.
  *
- * WHAT THIS COMPONENT CAN MEASURE, STATED AS THE ONE INPUT IT DOES NOT NEED. §10.8's three steps are
- * arithmetic over `line-height`, `A` and `D`, all of which core/css/css_computed_value.h answers per element —
- * so the HEIGHT of a line box needs no font outlines at all. What needs them is HOW MANY line boxes there are:
- * §9.4.2 distributes inline-level boxes across "two or more vertically-stacked line boxes" when they "cannot
- * fit horizontally within a single line box", and css-text-3 §5 "Line Breaking and Word Boundaries" makes that
- * a question about the CONTENT — "wrapping is only performed at an allowed break point, called a soft wrap
- * opportunity", and in most writing systems "a soft wrap opportunity occurs only at word boundaries", found
- * from the characters. So the number of line boxes is a function of the ADVANCE MEASURE of each glyph on the
- * line and of where the run may break, and BOTH of those are answered now — core/css/font_metrics.h measures
- * every Unicode scalar value off the first available font's own 'cmap' and 'hmtx', and core/layout/text_run.h
- * accumulates a run's inline size and its widest unbreakable segment over [UAX14]'s rules. What this file still
- * lacks is the loop that spends them: how many line boxes there are is the run's advances measured against the
- * AVAILABLE WIDTH of each line, which text_run.h does not compute because a min-content size is measured
- * against no width at all.
+ * THE TWO HALVES OF THE ANSWER ARE MEASURED BY DIFFERENT THINGS, and keeping them apart is what makes this
+ * component readable. §10.8's three steps are arithmetic over `line-height`, `A` and `D`, all of which
+ * core/css/css_computed_value.h answers per element — so the HEIGHT of one line box needs no font outlines at
+ * all. HOW MANY line boxes there are is the other half and it needs everything: §9.4.2 distributes
+ * inline-level boxes across "two or more vertically-stacked line boxes" when they "cannot fit horizontally
+ * within a single line box", which is the run's own advances (core/css/font_metrics.h, per Unicode scalar
+ * value off the first available face's 'cmap' and 'hmtx') and its soft wrap opportunities ([UAX14], through
+ * core/layout/line_break.h) measured against the AVAILABLE WIDTH of each line. That distribution is
+ * `text_run_measure_fill`, and it lives in core/layout/text_run.h beside css-sizing-3 §2.1's two intrinsic
+ * partitions because all three are walks over ONE [UAX14] pass and a second pass is the one way they could
+ * disagree about where this run may break.
  *
- * THE CASE THAT NEEDS NO ADVANCE IS THEREFORE NOT A SPECIAL CASE BUT A THEOREM, and css-text-3 §5.5 "Line
- * Breaking Details" is the sentence it rests on: "OUT-OF-FLOW BOXES AND INLINE BOX BOUNDARIES DO NOT INTRODUCE
- * A FORCED LINE BREAK OR SOFT WRAP OPPORTUNITY IN THE FLOW." An inline formatting context holding no glyphs —
- * non-replaced inline boxes, nested to any depth, and nothing else — therefore contains NO soft wrap
- * opportunity and no forced line break, so §9.4.2 has nothing to break at and there is EXACTLY ONE line box,
- * however wide the boxes on it are. That conclusion is independent of every width in the document, which is
- * why it can be reached with no advance and why widening it later cannot be done by guessing one: the very
- * next case, css-text-3 §5.5's "there is a soft wrap opportunity before and after each replaced element or
- * other ATOMIC INLINE", turns the count back into a function of the boxes' widths.
+ * SO THIS COMPONENT COLLECTS, FILLS, AND THEN MEASURES EACH LINE, and the order is forced rather than chosen:
+ * §10.8's step 3 is "the distance between the uppermost box top and the lowermost box bottom" of ONE line, so
+ * which boxes those maxima are taken over is a question only the fill can answer. A walk over the ELEMENT TREE
+ * cannot: an inline box whose text spans three lines is on all three and one whose text fits is on one, and
+ * the tree records neither. That is the same fact CSSOM VIEW §6's `getClientRects()` step 3 reports as a
+ * fragment count.
+ *
+ * THE AVAILABLE WIDTH IS ASKED FOR ONLY WHERE IT IS AN OPERAND, which is §9.4.2's own overflow sentence and
+ * not an optimisation: "if an inline box cannot be split (e.g., if the inline box contains a single
+ * character …), then the inline box OVERFLOWS the line box." A run with no break position inside it is
+ * therefore ONE line box at every width — css-text-3 §5.5 "Line Breaking Details" is what makes an inline
+ * formatting context of empty inline boxes such a run, since "out-of-flow boxes and inline box boundaries do
+ * not introduce a forced line break or soft wrap opportunity in the flow" — and deriving a width for it would
+ * run CSS 2.1 §10.3 over this box to discard the result. `text_run_measure_splits` is that question and the
+ * fill ASSERTS the theorem rather than letting a caller trust it.
  *
  * §9.4.2's ZERO-HEIGHT LINE BOX IS A SECOND ANSWER AND NOT A ROUNDING OF THE FIRST, which is why the entry
  * reports it separately. "Line boxes that contain no text, no preserved white space, no inline elements with

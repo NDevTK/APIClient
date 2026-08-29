@@ -12,8 +12,10 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/intrinsic_size.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
 
 static char *lb_computed(lxb_dom_element_t *el, const char *name)
@@ -195,9 +197,10 @@ static bool lb_has_nonzero_box_edges(lxb_dom_element_t *el)
 }
 
 /* ---- THE TWO ELEMENTS THAT BREAK THE LINE WITHOUT PUTTING A GLYPH ON IT ------------------------------------
-   line_box.h's theorem rests on css-text-3 §5.5 "Line Breaking Details" — "out-of-flow boxes and inline box
-   boundaries do not introduce a forced line break or soft wrap opportunity in the flow" — so a formatting
-   context of empty inline boxes has exactly one line box. HTML §15.3.4 "Phrasing content" names the two
+   css-text-3 §5.5 "Line Breaking Details" says "out-of-flow boxes and inline box boundaries do not introduce a
+   forced line break or soft wrap opportunity in the flow", and core/layout/text_run.h collects an inline box
+   as exactly that — two EDGE items carrying a width and no code point, invisible to [UAX14]. These two
+   elements are inline boxes for which that is FALSE. HTML §15.3.4 "Phrasing content" names the two
    elements that are inline boxes and are NOT merely boundaries:
      `br  { display-outside: newline; }`             a FORCED line break, so there are two line boxes and the
                                                      first "ends with a preserved newline", which is the
@@ -226,92 +229,61 @@ static void lb_require_no_break_element(lxb_dom_element_t *el)
     if (n == 2 && memcmp(tag, "br", 2) == 0)
         DFAIL("HTML §15.3.4 \"Phrasing content\" gives `br` the UA declaration `display-outside: newline`, "
               "which is a FORCED LINE BREAK — css-text-3 §5 \"Line Breaking and Word Boundaries\" calls a break "
-              "\"due to explicit line-breaking controls (such as a preserved newline character)\" forced — so "
-              "this formatting context has MORE THAN ONE line box and core/layout/line_box.h's one-line-box "
-              "theorem does not hold. It also makes the line EXIST: §9.4.2 exempts a line box only when it "
-              "\"do[es] not end with a preserved newline\", and this one does. THE VALUE IS DEFINED BY NO CSS "
-              "MODULE — css-display-4 §2 \"Box Layout Modes: the display property\" does not contain the "
-              "keyword `newline` at all — so there is no computed value to derive and this element arrives as "
-              "a plain `display: inline` box with nothing to distinguish it. BUILD the forced break as what "
-              "css-text-3 §5 makes it, a break \"due to explicit line-breaking controls\", carried wherever "
-              "the cascade can answer for it, then stack one line box per break here — each measured by §10.8 "
-              "exactly as the single one already is, which is arithmetic this file holds and needs no glyph "
-              "advance for");
+              "\"due to explicit line-breaking controls (such as a preserved newline character)\" forced. "
+              "COLLECTED AS IT STANDS IT WOULD BE A PAIR OF ZERO-WIDTH EDGE ITEMS, which §5.5 says introduces "
+              "no break at all — so CSS 2.2 §9.4.2's fill would run every line of this context together and "
+              "answer a line COUNT that is simply wrong rather than absent, and css-sizing-3 §2.1's "
+              "max-content size would be the whole paragraph on one line. It also makes the line EXIST: "
+              "§9.4.2 exempts a line box only when it \"do[es] not end with a preserved newline\", and this "
+              "one does. THE STACKING IS NO LONGER WHAT IS MISSING — core/layout/text_run.h's fill already "
+              "distributes a run across as many line boxes as its forced breaks and its available width "
+              "produce, and this file already measures §10.8 over each of them. WHAT IS MISSING IS ONE FACT "
+              "REACHING THE RUN: the value is DEFINED BY NO CSS MODULE — css-display-4 §2 \"Box Layout Modes: "
+              "the display property\" does not contain the keyword `newline` at all — so there is no computed "
+              "value to derive and this element arrives as a plain `display: inline` box with nothing to "
+              "distinguish it. BUILD the forced break as what css-text-3 §5 makes it, carried wherever the "
+              "cascade can answer for it, and give text_run.h a way to place one in the collected run beside "
+              "its CHAR and EDGE items — [UAX14] cannot decide it, because there is no code point here for it "
+              "to decide about");
     if (n == 3 && memcmp(tag, "wbr", 3) == 0)
         DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
               "break-opportunity`, which puts a SOFT WRAP OPPORTUNITY on this line — css-text-3 §5 says "
               "\"wrapping is only performed at an allowed break point, called a soft wrap opportunity\", and "
               "the UA \"must minimize the amount of content overflowing a line by wrapping the line at a soft "
-              "wrap opportunity, if one exists\". Whether this one is TAKEN depends on the used widths of the "
-              "boxes on either side of it against the line box's own width, so the number of line boxes stops "
-              "being a fact about the content alone — which is precisely the input core/layout/line_box.h "
-              "exists without. The keyword is defined by no CSS module either (css-display-4 §2 does not "
+              "wrap opportunity, if one exists\". THE WIDTH-DRIVEN SEARCH IS BUILT and this is no longer part "
+              "of what this names: core/layout/text_run.h's fill decides every soft wrap opportunity in a run "
+              "against the available width of each line, which is exactly the comparison this element adds one "
+              "more position to. The keyword is defined by no CSS module either (css-display-4 §2 does not "
               "contain `break-opportunity`), so it arrives as a plain `display: inline` box exactly as `br` "
-              "does. BUILD it with `br`'s break, and the width-driven break search with the atomic-inline "
-              "case that needs the same thing");
+              "does, and its opportunity is invisible to [UAX14] for the same reason `br`'s break is — there "
+              "is no code point here to decide about. BUILD it with `br`'s forced break, as a third item kind "
+              "in the collected run; the atomic inline needs the same item carrying a WIDTH as well as an "
+              "opportunity, which is why css-text-3 §5.5's \"soft wrap opportunity before and after each "
+              "replaced element or other atomic inline\" is the next case and not a separate one");
 }
 
 /* ---- the walk over the formatting context's content ------------------------------------------------------- */
 
-typedef struct {
-    LbExtent line;    /* §10.8's step 3, accumulated */
-    bool     exists;  /* §9.4.2: this line box is NOT one of the zero-height ones */
-} LbCtx;
+static void lb_walk(TextRunMeasure *m, lxb_dom_element_t *el);
 
-static void lb_walk(LbCtx *cx, lxb_dom_element_t *el);
-
-/* WHY A COLLAPSIBLE WHITE-SPACE RUN IS SKIPPED HERE AND NOT MEASURED, which is a claim about the WHOLE
-   formatting context and not about this text node — so it is stated where it is relied on.
-   css-text-3 §4.1.1 "Phase I: Collapsing and Transformation" collapses any collapsible space immediately
-   following another "even one outside the boundary of the inline containing that space, provided both spaces
-   are within the same inline formatting context", and §4.1.2 "Phase II: Trimming and Positioning" then removes
-   "a sequence of collapsible spaces at the beginning of a line" and again "at the end of a line". A line whose
-   only other content is inline box BOUNDARIES has no character anywhere in it, so after Phase I every
-   collapsible space in the context is one run, and that run is simultaneously at the beginning and the end of
-   the line — removed by both sentences, leaving zero glyphs.
-   THE ANTECEDENT IS ENFORCED BY THE WALK ITSELF rather than checked here: every node that could put a glyph on
-   the line — a non-collapsible text run, a preserved white-space run, a replaced element, an atomic inline —
-   CRASHES below. So a walk that RETURNS has proved there was no such node, and the skip was sound; a walk that
-   would have been unsound never returns. That is why this is not an ordering hazard even though a space is
-   reached before the text that would have kept it. */
-static void lb_text(lxb_dom_element_t *parent, lxb_dom_node_t *n)
+/* ONE TEXT NODE of the formatting context, added to the run CSS 2.2 §9.4.2 distributes.
+   A WHOLLY-COLLAPSIBLE RUN IS NOT SKIPPED HERE — IT IS NOT CONTENT. CSS 2.2 §9.2.2.1 "Anonymous inline boxes"
+   is the sentence, and core/layout/block_flow.h answers it once for every walk over a block container's
+   children: white space that would be collapsed away "does not generate any anonymous inline boxes", so there
+   is no box to put on a line and no character for css-text-3 §4.1 to process. Asking block_flow.h rather than
+   re-deriving it is what keeps this walk and §9.4.1's stack agreeing about what a document's white space is,
+   and it is the same call core/layout/intrinsic_size.c makes at the same arm of the same classification.
+   WHAT SURVIVES THAT TEST GOES INTO THE RUN UNCHANGED, because css-text-3 §4.1.1's collapsing is stated over
+   the FORMATTING CONTEXT and not over a node — a space either side of an inline box boundary is one run — so
+   the accumulator and not this walk is where a run split across two text nodes is joined. */
+static void lb_text(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 {
     if (!block_flow_text_child_generates_box(parent, n)) return;
-    DFAIL("CSS 2.2 §9.4.2 \"Inline formatting contexts\" has a TEXT RUN on this line, and the height of the "
-          "block container is \"the bottom edge of the LAST line box\" (§10.6.3) — so the answer is a function "
-          "of HOW MANY line boxes there are, which is where the run BREAKS. css-text-3 §5 \"Line Breaking and "
-          "Word Boundaries\" makes that a measurement: \"wrapping is only performed at an allowed break point, "
-          "called a soft wrap opportunity\", the UA \"must minimize the amount of content overflowing a line by "
-          "wrapping the line at a soft wrap opportunity\", and which opportunity that is depends on how wide "
-          "the glyphs before it are. THE MISSING INPUT IS ONE NAMEABLE THING AND NOT A CHAPTER: the ADVANCE "
-          "MEASURE of an arbitrary glyph — css-values-4 §6.1.1's own defined term, \"its advance width or "
-          "height, whichever is in the inline axis of the element\". THE ENTRY THAT ANSWERS IT IS "
-          "`font_metrics_advance_measure_em` (core/css/font_metrics.h) AND IT NOW ANSWERS FOR EVERY UNICODE "
-          "SCALAR VALUE, off the first available font's own OpenType 'cmap' and 'hmtx' — including a codepoint "
-          "the face does not cover, which css-fonts-4 §5.2 \"Matching font styles\" renders as \"the missing "
-          "character glyph from a default font\" and which therefore has a real advance too. Call it per "
-          "typographic character unit of this run with the direction css-writing-modes-4 §5.1 resolves for "
-          "that character, which core/css/css_computed_value.h's `css_font_advance_measure_px` now does per "
-          "element. AND THE SOFT WRAP OPPORTUNITIES ARE ANSWERED TOO: core/layout/text_run.h walks a run under "
-          "css-text-3 §4.1's white space processing and [UAX14]'s rules and reports its whole advance and its "
-          "widest unbreakable segment. NEITHER OF THOSE IS THE THING THIS FILE STILL LACKS, and the difference "
-          "is one operand: text_run.h measures against NO WIDTH — a min-content size is defined without one — "
-          "while §9.4.2 distributes boxes across line boxes when they \"cannot fit horizontally within a single "
-          "line box\", which is a comparison against the AVAILABLE WIDTH of each line. So the work here is the "
-          "GREEDY FILL that text_run.h's accumulator is deliberately not: take the segments in order, place "
-          "each on the current line while it fits, start a new line box when it does not, and take §10.8's "
-          "steps 1 to 3 over each — which this file already computes for one line box, over `line-height`, `A` "
-          "and `D`. The available width is core/layout/used_value.h's used width of the establishing block "
-          "container, and §9.4.2's own \"line boxes may vary in width if available horizontal space is reduced "
-          "due to floats\" is why a float in this context still crashes above rather than being a term. TWO "
-          "THINGS WILL CRASH ON THE WAY AND BOTH ARE THE RIGHT KIND: a VERTICAL advance asks a face with no "
-          "'vhea'/'vmtx' and names css-writing-modes-4 §5.1.1's synthesis, and this engine does not SHAPE — it "
-          "has no 'GSUB'/'GPOS', so a run's advance is the sum of its glyphs' and a ligature or a kern pair is "
-          "a measurement it does not yet make");
+    text_run_measure_add_text(m, parent, n);
 }
 
 /* ONE CHILD NODE of the inline formatting context. */
-static void lb_child(LbCtx *cx, lxb_dom_element_t *parent, lxb_dom_node_t *n)
+static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 {
     lxb_dom_element_t *el;
     char *d;
@@ -319,7 +291,7 @@ static void lb_child(LbCtx *cx, lxb_dom_element_t *parent, lxb_dom_node_t *n)
 
     switch (n->type) {
     case LXB_DOM_NODE_TYPE_TEXT:
-        lb_text(parent, n);
+        lb_text(m, parent, n);
         return;
     case LXB_DOM_NODE_TYPE_COMMENT:
     case LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION:
@@ -373,9 +345,14 @@ static void lb_child(LbCtx *cx, lxb_dom_element_t *parent, lxb_dom_node_t *n)
               "a function of this box's own used WIDTH — §10.3.9's for an inline-block, its own module's for an "
               "inline-flex or inline-grid — and §10.8's step 1 wants its MARGIN BOX height rather than its "
               "`line-height` (\"for replaced elements, inline-block elements, and inline-table elements, this "
-              "is the height of their margin box\"). BUILD the inline-level used width in "
-              "core/layout/used_value.c and the break search over it; the height this file computes is correct "
-              "only while the line has nowhere to break");
+              "is the height of their margin box\"). THE BREAK SEARCH IS BUILT and is no longer part of what "
+              "this names: core/layout/text_run.h's fill already distributes a run against each line's "
+              "available width. TWO THINGS ARE LEFT AND THEY ARE BOTH ABOUT THIS BOX. (1) Its used inline "
+              "size, from core/layout/used_value.c, carried into the run as an item that has a WIDTH and its "
+              "own two opportunities — which is neither of the two item kinds text_run.h has, since a CHAR is "
+              "sized by an advance measure and an EDGE introduces no break. (2) §10.8's step 1 over its margin "
+              "box, which `lb_strut_extent` does not compute: that function is §10.8.1's strut for a box "
+              "containing no glyphs, and an atomic inline is a box whose own height is a layout");
     /* CSS 2.2 §9.2.1.1's SECOND PARAGRAPH, which is a DIFFERENT box structure from its first and is reached
        from here rather than from block_flow.c — the block-level box is not a child of the block container at
        all, so the classification that delimits the anonymous runs never sees it. It is named apart from the
@@ -420,36 +397,106 @@ static void lb_child(LbCtx *cx, lxb_dom_element_t *parent, lxb_dom_node_t *n)
               "box\" rather than its `line-height`, and css-text-3 §5.5 puts a soft wrap opportunity before "
               "and after it — the same two consequences an atomic inline has, reached through the element's "
               "own nature rather than through its `display`. Its natural dimensions are already answered "
-              "(core/layout/replaced_element.h); what is missing is the used width §10.3.2 derives from them "
-              "and the break search that width feeds. BUILD those, with the atomic inline case above, since "
-              "one loop over the line serves both");
-    /* THE ONE-LINE-BOX THEOREM IS CHECKED BEFORE ANYTHING IS MEASURED, because every number below is a
-       measurement of ONE line box and a box that breaks the line makes them measurements of the wrong thing
-       rather than incomplete ones. */
+              "(core/layout/replaced_element.h) and so is the break search the width feeds — "
+              "core/layout/text_run.h's fill — so what is missing is the used width §10.3.2 derives from "
+              "those dimensions, and the same run item the atomic inline case above names: one carrying a "
+              "WIDTH and its own two soft wrap opportunities. BUILD it with that case, since one item kind "
+              "serves both");
+    /* THE ELEMENTS THAT CHANGE WHERE THE RUN BREAKS ARE REFUSED BEFORE IT IS COLLECTED, because the fill's
+       whole answer is a function of the break positions and a run collected without one of them is a partition
+       of different text. */
     lb_require_no_break_element(el);
-    /* §10.8's step 2, then its step 1 with §10.8.1's leading. The alignment is asked FIRST because it is what
-       makes the two distances comparable across the line (see lb_require_baseline_alignment). */
+    /* §10.8's step 2 for this box. It is asked at the WALK and not at the per-line pass below even though the
+       height is measured there, because it is a question about the BOX — whether §10.8.1's `A'` and `D'` are
+       measured from the same baseline as its neighbours' — and every box in this context is reached exactly
+       once here, while the per-line pass reaches a box once per ITEM it owns. */
     lb_require_baseline_alignment(el);
-    lb_take(&cx->line, lb_strut_extent(el));
-    if (lb_has_nonzero_box_edges(el)) cx->exists = true;
+    /* css-text-3 §5.5 places this box's two edges AT ITS BOUNDARIES and not at every break inside it — "inline
+       box boundaries do not introduce a forced line break or soft wrap opportunity in the flow" — so they are
+       emitted in call order around the descent and it is the run's own break-position mapping that decides
+       which line each of them lands on. That is what makes an inline box spanning three lines put its opening
+       edge on the first and its closing edge on the third, which is the same fact CSSOM VIEW §6's
+       `getClientRects()` step 3 reports as a fragment count. They are emitted even when both are ZERO, because
+       an edge occupies a POSITION and that position is what says which line an otherwise-empty inline box is
+       on — which is precisely what §9.4.2's zero-height rule is then asked about.
+       THE SIZE IS core/layout/intrinsic_size.h's, NOT A SECOND COPY OF IT: §9.4.2's "horizontal margins,
+       borders, and padding are respected between these boxes" and css-sizing-3 §2.2's outer size are the same
+       six lengths, and two derivations of them would be two answers to how wide this line is. */
+    text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, false));
     /* §10.8's step 1 is over EVERY inline-level box on the line, and a nested inline box is one — §10.8.1's
        "boxes of child elements do not influence this height" is about the PARENT box's own height, not about
-       whether the child is on the line. So the walk descends and each box contributes its own `A'` and `D'`. */
-    lb_walk(cx, el);
+       whether the child is on the line. So the walk descends and each box's own items carry it onto whichever
+       lines the fill puts them on. */
+    lb_walk(m, el);
+    text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, true));
 }
 
-static void lb_walk(LbCtx *cx, lxb_dom_element_t *el)
+static void lb_walk(TextRunMeasure *m, lxb_dom_element_t *el)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el), *c;
 
-    for (c = n->first_child; c != NULL; c = c->next) lb_child(cx, el, c);
+    for (c = n->first_child; c != NULL; c = c->next) lb_child(m, el, c);
+}
+
+/* ---- §10.8 OVER ONE OF THE FILL'S LINE BOXES -------------------------------------------------------------
+   §10.8's steps 1 to 3 for the line box holding the items `[line.from, line.to)`, and §9.4.2's SECOND question
+   about that same line answered on the same pass.
+   THE STRUT IS SEEDED PER LINE AND NOT ONCE PER FORMATTING CONTEXT, which is §10.8's own wording: "the minimum
+   height consists of a minimum height above the baseline and a minimum depth below it, exactly as if EACH LINE
+   BOX starts with a zero-width inline box with the element's font and line height properties. We call that
+   imaginary box a 'strut'." A strut taken once for the whole context would make a second line box as tall as
+   the first only by accident. §10.8's step 3 counts it ("this includes the strut, as explained under
+   'line-height' below"), which is why a line with nothing else on it is still exactly as tall as the strut.
+   FOR §9.2.1.1's ANONYMOUS BLOCK BOX THE STRUT IS STILL THE ENCLOSING ELEMENT'S, and that is the section's own
+   sentence rather than an approximation of one: "the font of the anonymous box is inherited from the DIV", and
+   `line-height` is inherited too — so the imaginary zero-width box §10.8 starts each line with has exactly the
+   properties `style` computes, whether or not the box wrapping the run has an element of its own.
+   A BOX IS ON THIS LINE EXACTLY WHEN ONE OF ITS ITEMS IS, which is what the fill's partition means and is why
+   this walks items rather than the tree. An inline box whose text spans three lines contributes its `A'` and
+   `D'` to all three — §10.8's step 1 is over the inline-level boxes on the line, and each of its fragments is
+   one — while an inline box on one line contributes to that line alone, which a walk over the ELEMENT TREE
+   could not distinguish. `lb_strut_extent` is idempotent under `lb_take`, so a box owning several items on one
+   line contributes once however many that is.
+   `*exists` IS §9.4.2's OTHER ANSWER and it is per LINE, because the section states it per line: "line boxes
+   that contain no text, no preserved white space, no inline elements with non-zero margins, padding, or
+   borders, and no other in-flow content … and do not end with a preserved newline must be treated as
+   ZERO-HEIGHT line boxes … and must be treated as NOT EXISTING for any other purpose."
+   A CHARACTER ITEM IS "TEXT" FOR THAT LIST, AND THAT IS A DERIVATION OVER WHAT REACHES HERE rather than a
+   reading of the word. The only character a line could hold that renders nothing is css-text-3 §4.1.1's one
+   surviving collapsible space, and a run consisting only of those never arrives: CSS 2.2 §9.2.2.1 "Anonymous
+   inline boxes" removes it before the walk ("white space content that would subsequently be collapsed away …
+   does not generate any anonymous inline boxes"), which core/layout/block_flow.h decides at `lb_text`. So a
+   line holding a character item holds a character the document contains. The other three conjuncts crash on
+   the way here — preserved white space in `tr_wraps`, in-flow content at the atomic-inline and replaced arms,
+   the preserved newline at `lb_require_no_break_element` — leaving the box-edges conjunct as the only one this
+   function still decides. */
+static LbExtent lb_line_extent(lxb_dom_element_t *style, const TextRunMeasure *m, TextRunLine line, bool *exists)
+{
+    LbExtent out = lb_strut_extent(style);
+    size_t i;
+
+    DCHECK(line.from < line.to,
+           "CSS 2.2 §9.4.2's fill reported a line box holding NO items. \"Line boxes are created as needed to "
+           "hold inline-level content\", so a line with nothing on it is not one the section creates — and its "
+           "height would be the strut's, added to §10.6.3's total for content that is not there");
+    *exists = false;
+    for (i = line.from; i < line.to; i++) {
+        lxb_dom_element_t *box = text_run_measure_item_style(m, i);
+
+        lb_take(&out, lb_strut_extent(box));
+        if (text_run_measure_item_is_text(m, i) || lb_has_nonzero_box_edges(box)) *exists = true;
+    }
+    return out;
 }
 
 CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, lxb_dom_node_t *end,
                               bool *any_line_box)
 {
-    LbCtx cx;
+    TextRunMeasure m;
+    TextRunLine *lines = NULL;
+    CssPx height = css_px(0.0), available = css_px(0.0);
     lxb_dom_node_t *c;
+    size_t n, i;
 
     DCHECK(style != NULL && any_line_box != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked for with no element or nowhere to report whether any of "
@@ -460,35 +507,68 @@ CssPx line_box_content_height(lxb_dom_element_t *style, lxb_dom_node_t *first, l
            "anonymous block box — the content is one run of the container's children and the style is the "
            "enclosing non-anonymous box's — so a run from somewhere else would measure one document's line "
            "boxes against another element's font and `line-height`");
-    /* §10.8's STRUT, which is the line box's floor and belongs to the BLOCK CONTAINER rather than to anything
-       on the line: "the minimum height consists of a minimum height above the baseline and a minimum depth
-       below it, exactly as if each line box starts with a ZERO-WIDTH INLINE BOX with THE ELEMENT'S font and
-       line height properties. We call that imaginary box a 'strut'." It is seeded before the walk because
-       §10.8's step 3 includes it ("this includes the strut, as explained under 'line-height' below") and
-       because a line with nothing else on it is still exactly as tall as the strut.
-       FOR AN ANONYMOUS BLOCK BOX THE STRUT IS STILL THE ENCLOSING ELEMENT'S, and that is §9.2.1.1's own
-       sentence rather than an approximation of one: "the font of the anonymous box is inherited from the DIV",
-       and `line-height` is inherited too — so the imaginary zero-width box §10.8 starts the line with has
-       exactly the properties `style` computes, whether or not the box wrapping the run has an element. */
-    cx.line = lb_strut_extent(style);
-    cx.exists = false;
-    for (c = first; c != NULL && c != end; c = c->next) lb_child(&cx, style, c);
+    /* §9.4.2's CONTENT, COLLECTED BEFORE ANY OF IT IS MEASURED, which [UAX14] forces rather than anyone
+       choosing: its rules read forward past the boundary they decide, so no per-character state can settle a
+       break as the character arrives. core/layout/text_run.h states it in full. */
+    text_run_measure_init(&m);
+    for (c = first; c != NULL && c != end; c = c->next) lb_child(&m, style, c);
     DCHECK(c == end,
            "the half-open run handed to CSS 2.2 §9.4.2's inline formatting context ran off the end of the "
            "child list without ever meeting its exclusive end, so the two came from different lists or the "
-           "tree changed under the walk — and the boxes just measured are some prefix of a formatting context "
+           "tree changed under the walk — and the boxes just collected are some prefix of a formatting context "
            "no box has");
-    *any_line_box = cx.exists;
-    if (!cx.exists) {
-        /* §9.4.2: such a line box "must be treated as ZERO-HEIGHT … for the purposes of determining the
-           positions of any elements inside of them, and must be treated as NOT EXISTING for any other
-           purpose". §10.6.3's height is one of those other purposes — there is no last line box for its
-           bottom edge to be — so the container's content height is zero, and the caller learns through
-           `any_line_box` that this is an ABSENT line box rather than a measured zero. */
-        return css_px(0.0);
+    text_run_measure_finish(&m);
+    /* §9.4.2: "THE WIDTH OF A LINE BOX IS DETERMINED BY A CONTAINING BLOCK and the presence of floats", and
+       the float half is refused at the walk above — so every line box here is as wide as the content box of
+       the block container that establishes this formatting context, which is `style`.
+       FOR §9.2.1.1's ANONYMOUS BLOCK BOX THAT IS STILL `style`'s CONTENT WIDTH and not a second derivation:
+       the anonymous box's non-inherited properties "have their initial value", so it has no margin, border or
+       padding, and it is a block-level box in its parent's block formatting context — §10.3.3's constraint
+       equation with six zero terms makes its width the containing block's, which is the parent's content
+       width. The same number, reached without giving an element-less box a `used_value` query it cannot
+       answer.
+       IT IS DERIVED ONLY WHERE IT IS AN OPERAND. §9.4.2's overflow sentence makes a run with no break position
+       inside it ONE line box at every width, so asking for one there would run CSS 2.1 §10.3 over this box to
+       throw the answer away — and for a great many block containers (`<div><span></span></div>`, an empty
+       one) that layout is not merely wasted but is the earlier subproblem `used_value.c` still crashes for.
+       The fill asserts the theorem this skip rests on rather than trusting it. */
+    if (text_run_measure_splits(&m)) available = used_value_content_px(style, false);
+    n = text_run_measure_fill(&m, available, &lines);
+    DCHECK(n == 0 || lines != NULL, "CSS 2.2 §9.4.2's fill reported line boxes and handed back none of them");
+    *any_line_box = false;
+    for (i = 0; i < n; i++) {
+        bool exists = false;
+        LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
+        CssPx lh;
+
+        /* §9.4.2: a line box the section says "must be treated as ZERO-HEIGHT … and must be treated as NOT
+           EXISTING for any other purpose" adds nothing to §10.6.3's distance, and §8.3.1 asks the caller's
+           other question over the same fact — its adjoining test excepts such line boxes by name and its
+           collapse-through note requires that the box "does not contain a line box". So the two answers are
+           produced by one pass and cannot come to describe different lines. */
+        if (!exists) continue;
+        *any_line_box = true;
+        lh = css_px_add(e.above, e.below);
+        DCHECK(lh.px >= 0.0,
+               "CSS 2.2 §10.8's step 3 produced a NEGATIVE height for one line box. It is \"the distance "
+               "between the uppermost box top and the lowermost box bottom\", and every box on the line "
+               "contributes `A' + D'` = its own `line-height`, which css-inline-3 §5.1 makes "
+               "`<number [0,∞]>` / `<length-percentage [0,∞]>` and says outright that \"negative values are "
+               "illegal\" — so a negative maximum is a declaration that should have been dropped by "
+               "css-values-4 §5.1's range restriction reaching the arithmetic");
+        /* §9.4.2: "line boxes are stacked with NO VERTICAL SEPARATION (except as specified elsewhere) and they
+           never overlap", so §10.6.3's "distance from its top content edge to the bottom edge of the last line
+           box" is the SUM of the heights above it — no gap term, and no need to carry a running position. */
+        height = css_px_add(height, lh);
     }
-    /* §10.8's step 3: "the line box height is the distance between the uppermost box top and the lowermost box
-       bottom". With one line box in the formatting context (see line_box.h for why there is exactly one for
-       the content this component measures), §10.6.3's "bottom edge of the last line box" is that height. */
-    return css_px_add(cx.line.above, cx.line.below);
+    free(lines);
+    /* THE MEASUREMENT ENDS HERE AND NOT BEFORE: every line above named its boxes by an index into the
+       collection, so `lines` and the items it indexes are one object with two owners for the length of that
+       loop. core/layout/text_run.h asserts a read after this. */
+    text_run_measure_release(&m);
+    /* When no line box exists, §10.6.3 has no last line box for its bottom edge to be and the accumulated
+       height is exactly the zero this started at — the caller learns through `any_line_box` that this is an
+       ABSENT line box rather than a measured zero, which is the distinction §8.3.1 needs and a single number
+       cannot carry. */
+    return height;
 }

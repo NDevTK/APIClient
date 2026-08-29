@@ -29,9 +29,31 @@
  * character that settles it — so no amount of per-character state can decide a boundary as the character
  * arrives. core/layout/line_break.h states that in full. Blink resolves it the same way, by collecting an
  * inline formatting context's text content into one buffer and running the break iterator over that. The
- * collection is FREED by `finish`; nothing survives the call, for core/layout/used_value.h's reason — a
- * measurement is per-flow state, so a cached run width is shared state solver/dom_cow.h does not swap and a
- * stale one is another flow's text.
+ * collection and that one [UAX14] pass are RELEASED BY `text_run_measure_release` and by nothing else, and the
+ * span between `finish` and `release` is the whole life of the measurement: nothing is cached across it, for
+ * core/layout/used_value.h's reason — a measurement is per-flow state, so a stored run width is shared state
+ * solver/dom_cow.h does not swap and a stale one is another flow's text.
+ *
+ * THREE PARTITIONS OF ONE RUN, OVER ONE [UAX14] PASS — which is why the pass survives `finish` at all. The two
+ * sizes above are css-sizing-3 §2.1's DEFINITIONS: they take NO opportunities and ALL of them, and neither
+ * mentions a width. CSS 2.2 §9.4.2 "Inline formatting contexts" asks a third and different question — "when
+ * several inline-level boxes cannot fit horizontally within a single line box, they are distributed among two
+ * or more vertically-stacked line boxes" — which is a GREEDY FILL against the available width of each line, and
+ * it is `text_run_measure_fill`. It is a third partition and NOT a generalisation of the other two: a fill at an
+ * unbounded width and a fill at zero would reproduce their line sets, but by a chain of floating-point
+ * comparisons where §2.1 needs none, so deriving a definition from a layout would make the definition depend on
+ * arithmetic it is not stated over. All three read the SAME `actions` array, which is what makes it impossible
+ * for them to disagree about where this run may break.
+ *
+ * §9.4.2's OVERFLOW SENTENCE IS WHY THE FILL NEEDS NO BOUND AND WHY `text_run_measure_splits` EXISTS. "If an
+ * inline box cannot be split (e.g., if the inline box contains a single character, or language specific word
+ * breaking rules disallow a break within the inline box, or if the inline box is affected by a white-space
+ * value of nowrap or pre), then the inline box overflows the line box." So a segment always goes onto the
+ * current line, however narrow that line is — the fill never has to invent a break — and a run with no break
+ * position INSIDE it is ONE line box at EVERY available width. That second half is a theorem and not an
+ * optimisation, and it is exported because it tells a caller whether it has to derive an available width at
+ * all: a caller that would have to run CSS 2.1 §10.3 to answer a question whose answer cannot depend on it is
+ * running a layout to discard it. The fill asserts the theorem rather than trusting the predicate.
  *
  * WHAT PHASE I LEAVES, FOR THE ONE `white-space` GROUP THIS COMPONENT MEASURES, is one sentence and it is
  * derived rather than assumed. Under `normal` or `nowrap` every space, tab and segment break is COLLAPSIBLE,
@@ -97,6 +119,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/line_break.h"
 
 /* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because two different things occupy positions in it and
  * only one of them is text. css-sizing-3 §2.2 "Intrinsic Contributions" puts an inline box's own horizontal
@@ -159,10 +182,26 @@ typedef struct {
        following another collapsible space" taken as a property of the run. It survives between nodes, which is
        what makes a run split across two text nodes collapse as ONE. */
     bool in_white_space_run;
+    /* [UAX14]'s ACTION AT EVERY POSITION of the run's own characters — `actions[k]` is the action at the
+       boundary immediately before character `k`, and `item_of_char[k]` is the ITEM that character is. Both are
+       written by `finish` and RETAINED until `release`, because all three partitions above are walks over this
+       one pass: a second `line_break_actions` call for the fill would be the same rules run twice with two
+       chances to disagree about where this run may break. Owned; NULL exactly while `nchars` is zero. */
+    LineBreakAction *actions;
+    size_t *item_of_char;
+    size_t nchars;
     /* css-sizing-3 §2.1's two answers, written by `finish` and undefined before it. */
     CssPx max_content;
     CssPx min_content;
+    /* CSS 2.2 §9.4.2's own theorem, written by `finish`: is there a position STRICTLY INSIDE this run that is a
+       forced line break or an ENABLED soft wrap opportunity. [UAX14] LB3 makes the position at end of text
+       mandatory and that one is not a split — it closes the run rather than dividing it — so this is false for
+       a run the section says "overflows the line box" rather than being distributed. */
+    bool splits;
     bool finished;
+    /* `release` has run. The two sizes and the fill are all derived from a collection it freed, so this is the
+       end of the measurement and not a step in it — read through the same assert the answers go through. */
+    bool released;
 } TextRunMeasure;
 
 /* BEGIN a formatting context's measurement. Every field is written, so a caller reading one back has a
@@ -192,10 +231,64 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
    decides the line an otherwise-empty inline box is on. */
 void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
 
-/* RUN [UAX14] OVER EVERYTHING COLLECTED and produce the two answers, then release the collection. Every caller
-   must reach this: the measurement does not exist until it runs, and the memory the walk collected is this
-   call's to free. Adding a node afterwards is a caller that ran two measurements through one accumulator. */
+/* RUN [UAX14] OVER EVERYTHING COLLECTED and produce css-sizing-3 §2.1's two answers. Every caller must reach
+   this: the measurement does not exist until it runs. Adding a node afterwards is a caller that ran two
+   measurements through one accumulator.
+   IT NO LONGER FREES ANYTHING, and that is what makes CSS 2.2 §9.4.2's fill a walk over the same [UAX14] pass
+   rather than a second one. `text_run_measure_release` is the call that ends the measurement, and every caller
+   of this owes it exactly one. */
 void text_run_measure_finish(TextRunMeasure *m);
+
+/* END THE MEASUREMENT and free the collection and the [UAX14] pass. Nothing on the accumulator may be read
+   afterwards — the two sizes are derived from bytes this call returns to the allocator, so a read after it is
+   answered from freed memory whether or not the numbers happen to survive in the struct, and the accessors
+   below crash rather than letting one through. */
+void text_run_measure_release(TextRunMeasure *m);
+
+/* ONE LINE BOX of CSS 2.2 §9.4.2's distribution — the half-open run `[from, to)` of COLLECTED ITEMS that landed
+   on it, and the inline size those items occupy once css-text-3 §4.1.2 "Phase II: Trimming and Positioning" has
+   removed the collapsible spaces at its two ends.
+   THE RANGE IS OVER ITEMS AND NOT OVER CHARACTERS because that is what a consumer needs: CSS 2.2 §10.8's step 3
+   is two maxima over the inline-level BOXES on the line, and an inline box is on a line exactly when one of its
+   items is — which is the same reason `text_run_measure_add_box_edge` takes no side argument. */
+typedef struct {
+    size_t from, to;
+    CssPx size;
+} TextRunLine;
+
+/* CSS 2.2 §9.4.2's DISTRIBUTION of this run's content across line boxes at one AVAILABLE WIDTH — "the width of
+   a line box is determined by a containing block and the presence of floats", so `available` is the used
+   content width of the box that establishes this formatting context, and a caller with a float in the context
+   has a different width per line and is not this entry's caller yet.
+   IT ANSWERS THE NUMBER OF LINE BOXES and stores a newly allocated array of that many `TextRunLine`s at
+   `*lines`, WHICH THE CALLER OWNS AND MUST FREE. The lines PARTITION the collected items in order — every item
+   is on exactly one line, including a box edge that trails the last character — because §9.4.2's own count is
+   what CSSOM VIEW §6's `getClientRects()` step 3 reports as a fragment count, and a partition is the only shape
+   in which "which line is this box on" has an answer for every box.
+   IT IS GREEDY, WHICH IS §9.4.2 AND NOT A HEURISTIC: the section breaks only when boxes "cannot fit
+   horizontally within a single line box" and its overflow sentence says what to do when even one cannot, so the
+   line takes the widest prefix that fits and takes one segment regardless when nothing does. `available` is
+   IGNORED — provably, and asserted — when `text_run_measure_splits` is false. */
+size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLine **lines);
+
+/* CSS 2.2 §9.4.2's theorem: is there anywhere INSIDE this run for the fill to break. False means one line box
+   at every available width, so a caller need not derive one. See the header above. */
+bool text_run_measure_splits(const TextRunMeasure *m);
+
+/* THE ELEMENT WHOSE COMPUTED PROPERTIES ITEM `i`'s BOX HAS — the inline box a character is in, or the box an
+   edge belongs to. It is the one field asked WITHOUT a kind because both kinds carry it and for the same
+   reason: css-values-4 §6.1.1's advance measure is stated over "the element on which it is used" and
+   css-sizing-3 §2.2's outer size is a fact about one box, so an item with no element would be a measurement
+   with no typography.
+   THE RAW ITEM IS DELIBERATELY NOT EXPOSED. Every other field belongs to exactly one kind, and this file's own
+   asserts exist because a walk that lost track of which kind it is standing on would measure an edge as a
+   U+0000 or sum a character's uninitialised size — handing a consumer the struct would move that defect
+   outside the component that can catch it. A consumer asks the questions it has, and there are two. */
+lxb_dom_element_t *text_run_measure_item_style(const TextRunMeasure *m, size_t i);
+
+/* IS ITEM `i` A CHARACTER. CSS 2.2 §9.4.2's zero-height rule opens with "line boxes that contain NO TEXT" and
+   a consumer deciding whether one of the fill's lines exists is asking exactly this of each of its items. */
+bool text_run_measure_item_is_text(const TextRunMeasure *m, size_t i);
 
 /* css-sizing-3 §2.1's MAX-CONTENT and MIN-CONTENT INLINE SIZES, in CSS pixels — the two answers, read through
    entries rather than off the struct so that the one relation between them is asserted where it is read. */

@@ -46,9 +46,27 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_INTRINSIC_SIZE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_INTRINSIC_SIZE_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+
+/* css-sizing-3 §2.2 "Intrinsic Contributions"' OUTER SIZE at ONE SIDE of an INLINE BOX, in CSS pixels — the
+   trailing side for `trailing` true. §2.2 states both contributions as "based on the OUTER SIZE of the box; for
+   this purpose auto margins are treated as zero", so an inline box's own horizontal margin, border and padding
+   are part of what it puts on a line, and css-text-3 §5.5 "Line Breaking Details" is what says WHERE: "inline
+   box boundaries do not introduce a forced line break or soft wrap opportunity in the flow", so the two edges
+   sit at the box's boundaries and not at every break inside it.
+   IT IS EXPORTED BECAUSE THE SAME NUMBER IS AN OPERAND OF TWO SECTIONS, and a second copy of it would be the
+   one way they could disagree about how wide a line is. §5.2's intrinsic contribution sums it (this component),
+   and CSS 2.2 §9.4.2's line box holds it too — "horizontal margins, borders, and padding are respected between
+   these boxes" — which is core/layout/line_box.c's fill deciding where the line runs out. Both hand it to
+   core/layout/text_run.h as an EDGE item at a position, which is why neither of them adds it to a total.
+   A PERCENTAGE CRASHES rather than resolving, and that is a CYCLE and not a gap in the model: a percentage on
+   any of the six resolves against the containing block width, which for a shrink-to-fit box is CSS 2.2
+   §10.3.5's own output — the answer the measurement is being run to produce. */
+CssPx intrinsic_inline_box_edge_px(lxb_dom_element_t *el, bool trailing);
 
 /* css-sizing-3 §5.1's PAIR. They are returned together and never separately because §2.1 defines them over the
    same content with only the soft wrap opportunities differing, so one walk produces both — and because the

@@ -162,9 +162,14 @@ static CssPx sa_descendants_extreme(lxb_dom_element_t *el, bool vertical, bool e
                       "exact comparison `scrollWidth > clientWidth` is asked to decide. WHAT IS MISSING IS THE "
                       "PLACEMENT and not the measurement: this member needs the fragment's own MARGIN EDGE — a "
                       "coordinate — which is a function of which line box §9.4.2 flowed each fragment onto and "
-                      "of where along that line it starts, and neither is a size. BUILD the greedy line fill "
-                      "in core/layout/line_box.c (its own crash names it, and it is the same loop this member "
-                      "needs), then fold each fragment's margin edge into `best` here");
+                      "of where along that line it starts, and neither is a size. THE FIRST HALF IS BUILT: "
+                      "`text_run_measure_fill` (core/layout/text_run.h) distributes the run across §9.4.2's "
+                      "line boxes and reports the items on each, so WHICH line a fragment is on is answered. "
+                      "The second half is a per-item running POSITION along the line, which the fill does not "
+                      "produce and which §9.4.2 hands to `text-align` — the same two numbers "
+                      "core/layout/flow_position.c crashes for when it asks where an INLINE BOX starts. BUILD "
+                      "the per-item position beside the fill, then fold each fragment's margin edge into "
+                      "`best` here");
         }
         if (n->first_child != NULL) { n = n->first_child; continue; }
         while (n != root && n->next == NULL) n = n->parent;

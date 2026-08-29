@@ -33,24 +33,12 @@ static bool is_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* css-sizing-3 §2.2 "Intrinsic Contributions"' OUTER SIZE at ONE SIDE of an inline box, in CSS pixels. The
-   section states both contributions as "based on the OUTER SIZE of the box; for this purpose auto margins are
-   treated as zero" — so an inline box's own horizontal margins, borders and padding are part of what it
-   contributes, and css-text-3 §5.5 "Line Breaking Details" is what says WHERE: "inline box boundaries do not
-   introduce a forced line break or soft wrap opportunity in the flow", so those edges sit at the box's two
-   boundaries and NOT at every break inside it. A box whose text spans three lines puts its opening edge on the
-   first line and its closing edge on the third, which is why this is summed per SIDE and handed to the run as
-   an item at a position rather than added to any total.
+/* css-sizing-3 §2.2's outer size at one side of an inline box — see intrinsic_size.h for the contract, for why
+   it is exported, and for why a percentage is a CYCLE rather than a gap.
    `auto` IS ZERO BY THE SPEC'S OWN SENTENCE and not by this file's convenience — §2.2's "for this purpose auto
    margins are treated as zero", which CSS 2.2 §10.3.1 "Inline, non-replaced elements" states again for the used
-   value ("a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'").
-   A PERCENTAGE IS NOT RESOLVED HERE AND CRASHES, and that is a CYCLE rather than a gap in the model: an
-   intrinsic size is what CSS 2.2 §10.3.5's shrink-to-fit consumes to DECIDE the containing block width, and a
-   percentage margin or padding resolves against that same width — so resolving one here would ask for the
-   answer this walk is being run to produce. css-sizing-3 has its own resolution for that cycle and this engine
-   has not built it, so the crash names it rather than substituting a zero, which would silently under-report
-   the contribution of every percentage-padded inline box. */
-static CssPx is_inline_edge_px(lxb_dom_element_t *el, bool trailing)
+   value ("a computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"). */
+CssPx intrinsic_inline_box_edge_px(lxb_dom_element_t *el, bool trailing)
 {
     const char *const NAME[2][3] = {
         { "margin-left",  "padding-left",  "border-left-width"  },
@@ -177,9 +165,9 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
            run's own break-position mapping is what then puts each on the line its fragment is on. They are
            emitted even when both are ZERO, because an edge occupies a POSITION and that position is what says
            which line an otherwise-empty inline box sits on. */
-        text_run_measure_add_box_edge(m, el, is_inline_edge_px(el, false));
+        text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, false));
         is_walk(m, el);
-        text_run_measure_add_box_edge(m, el, is_inline_edge_px(el, true));
+        text_run_measure_add_box_edge(m, el, intrinsic_inline_box_edge_px(el, true));
         return;
     }
     DFAIL("css-sizing-3 §5.2 \"Intrinsic Contributions\" is what an ELEMENT CHILD adds to this box's intrinsic "
@@ -254,11 +242,15 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
     /* THE MEASUREMENT DOES NOT EXIST UNTIL THIS RUNS, and that is [UAX14]'s doing rather than a lifecycle
        anybody chose: its rules read forward past the boundary they decide (LB25's `PO × OP IS NU` by three
        characters) and LB9 puts an unbounded run of combining marks between the two, so no per-character state
-       can settle a break as the character arrives. core/layout/text_run.h states it in full. This call also
-       releases the characters the walk collected, so the walk above and this line are one operation. */
+       can settle a break as the character arrives. core/layout/text_run.h states it in full. It RETAINS what
+       the walk collected — CSS 2.2 §9.4.2's fill is a third partition over the same [UAX14] pass — so the
+       release below is this function's to make and the two numbers are read between them. */
     text_run_measure_finish(&m);
     out.min_content = text_run_measure_min_content(&m);
     out.max_content = text_run_measure_max_content(&m);
+    /* §5.1's answer is a PAIR OF NUMBERS and not a view onto the run, so the measurement ends here: this
+       component asks §9.4.2 nothing, and a caller of it holds no items to be handed. */
+    text_run_measure_release(&m);
     /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
        make CSS 2.2 §10.3.5's formula produce a negative used width for a box with content in it — which
        css-sizing-3 §3.3's "as the content width and height cannot be negative, this computation is floored at

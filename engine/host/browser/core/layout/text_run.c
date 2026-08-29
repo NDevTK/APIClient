@@ -166,9 +166,14 @@ void text_run_measure_init(TextRunMeasure *m)
     m->count = 0;
     m->capacity = 0;
     m->in_white_space_run = false;
+    m->actions = NULL;
+    m->item_of_char = NULL;
+    m->nchars = 0;
     m->max_content = css_px(0.0);
     m->min_content = css_px(0.0);
+    m->splits = false;
     m->finished = false;
+    m->released = false;
 }
 
 /* ONE ITEM'S STORAGE, with every field of BOTH kinds written. A partially-initialised item is the defect this
@@ -468,9 +473,7 @@ static size_t tr_item_boundary_of_char(const size_t *item_of_char, size_t k)
 void text_run_measure_finish(TextRunMeasure *m)
 {
     uint32_t *cps;
-    LineBreakAction *actions;
-    size_t *item_of_char;
-    size_t i, nchars = 0, max_line = 0, min_line = 0;
+    size_t i, k = 0, max_line = 0, min_line = 0;
 
     DCHECK(m != NULL, "a text run measurement was finished with nothing to finish");
     DCHECK(!m->finished, "a text run measurement was finished twice — the second call would run [UAX14] over a "
@@ -483,62 +486,67 @@ void text_run_measure_finish(TextRunMeasure *m)
         return;
     }
     for (i = 0; i < m->count; i++)
-        if (m->items[i].kind == TEXT_RUN_ITEM_CHAR) nchars++;
-    if (nchars == 0) {
+        if (m->items[i].kind == TEXT_RUN_ITEM_CHAR) m->nchars++;
+    if (m->nchars == 0) {
         /* A run of BOX EDGES AND NOTHING ELSE — an inline formatting context whose only content is empty inline
            boxes. [UAX14] is not run at all: css-text-3 §5.5's "inline box boundaries do not introduce a forced
            line break or soft wrap opportunity in the flow" means there is nowhere to break, so there is exactly
            ONE line and both of css-sizing-3 §2.1's answers are that line's size. This is core/layout/
-           line_box.h's own one-line-box theorem reached from the inline-size side, and it is a THEOREM here for
-           the same reason it is one there — independent of every width in the document. */
+           §9.4.2's own count reached from the inline-size side, and it is a THEOREM here for the same reason it
+           is one there — independent of every width in the document. `splits` stays FALSE for exactly that
+           statement, which is what tells the fill's caller it has no available width to derive. */
         m->max_content = tr_line_size(m, 0, m->count);
         m->min_content = m->max_content;
-        free(m->items);
-        m->items = NULL;
-        m->count = 0;
-        m->capacity = 0;
         return;
     }
-    cps = malloc(nchars * sizeof *cps);
-    actions = malloc((nchars + 1) * sizeof *actions);
-    item_of_char = malloc(nchars * sizeof *item_of_char);
-    CHECK(cps != NULL && actions != NULL && item_of_char != NULL,
+    cps = malloc(m->nchars * sizeof *cps);
+    m->actions = malloc((m->nchars + 1) * sizeof *m->actions);
+    m->item_of_char = malloc(m->nchars * sizeof *m->item_of_char);
+    CHECK(cps != NULL && m->actions != NULL && m->item_of_char != NULL,
           "out of memory running [UAX14]'s line breaking over one inline formatting context. Every allocation "
           "is one entry per character of the run's own text, so a failure here is the physical floor");
-    nchars = 0;
     for (i = 0; i < m->count; i++) {
         if (m->items[i].kind != TEXT_RUN_ITEM_CHAR) continue;
-        cps[nchars] = m->items[i].cp;
-        item_of_char[nchars] = i;
-        nchars++;
+        cps[k] = m->items[i].cp;
+        m->item_of_char[k] = i;
+        k++;
     }
-    line_break_actions(cps, nchars, actions);
+    DCHECK(k == m->nchars,
+           "the second walk over the collection found a different number of CHARACTER items than the first "
+           "one did, so the [UAX14] arrays are sized for a run that is not the one being copied into them. "
+           "Nothing may append between the two walks — they are one statement in one function");
+    line_break_actions(cps, m->nchars, m->actions);
     /* THE TWO ANSWERS ARE THE SAME WALK OVER DIFFERENT LINES, which is css-sizing-3 §2.1's own construction:
        the sizes differ by "if NONE of the soft wrap opportunities were taken" against "if ALL" were. So the
        max-content lines are cut by FORCED breaks alone — CSS 2.2 §10.3.5's "without breaking lines other than
        where explicit line breaks occur" — and the min-content lines by every break there is. `actions[count]`
        is LB3's mandatory break at eot, so the last line of each answer is closed by the loop rather than after
        it, and there is no tail case to get wrong. */
-    for (i = 1; i <= nchars; i++) {
+    for (i = 1; i <= m->nchars; i++) {
         /* §4.1.2's line ends where this break puts it, in ITEM coordinates — see tr_item_boundary_of_char for
            why the boundary is taken after character `i-1` and not before character `i`. At `i == nchars` the
            line runs to the END OF THE COLLECTION rather than to that boundary, because every trailing box edge
            after the last character is still on the last line: LB3 closes the text, not the items. */
-        size_t at = i == nchars ? m->count : tr_item_boundary_of_char(item_of_char, i);
-        bool forced = actions[i] == LINE_BREAK_MANDATORY;
+        size_t at = i == m->nchars ? m->count : tr_item_boundary_of_char(m->item_of_char, i);
+        bool forced = m->actions[i] == LINE_BREAK_MANDATORY;
         bool soft = false;
 
         /* AT eot THERE IS NO RIGHT-HAND CHARACTER TO ASK ABOUT, and there is no question either: LB3 makes
            `actions[nchars]` MANDATORY, so the opportunity arm is unreachable there. Written as a guard rather
            than left to `&&`'s short-circuit because the index it protects is `item_of_char[i]`, which is one
            past the end at that position — a reader must be able to see that it is never taken. */
-        if (i < nchars && actions[i] == LINE_BREAK_OPPORTUNITY)
-            soft = tr_opportunity_enabled(m, item_of_char[i - 1], item_of_char[i]);
-        DCHECK(i < nchars || forced,
+        if (i < m->nchars && m->actions[i] == LINE_BREAK_OPPORTUNITY)
+            soft = tr_opportunity_enabled(m, m->item_of_char[i - 1], m->item_of_char[i]);
+        DCHECK(i < m->nchars || forced,
                "[UAX14] LB3 \"Always break at the end of text\" did not make the action at eot MANDATORY. "
                "core/layout/line_break.h states that the action at position `count` always is, and the walk "
                "below has no tail case precisely because of it");
-        if (forced && i < nchars) {
+        /* CSS 2.2 §9.4.2's theorem, recorded on the ONE pass that can see it: a position strictly inside the
+           run at which the fill may divide it. The eot position is excluded by `i < nchars` because LB3's
+           mandatory action there CLOSES the run — a fill that treated it as a division would report a run with
+           nowhere to break as splittable and send its caller off to derive a width that cannot matter. */
+        if (i < m->nchars && (forced || soft)) m->splits = true;
+        if (forced && i < m->nchars) {
             LineBreakClass cls = line_break_class_of(cps[i - 1]);
 
             DCHECK(cls == LB_CLASS_BK || cls == LB_CLASS_NL,
@@ -564,13 +572,34 @@ void text_run_measure_finish(TextRunMeasure *m)
            "answers over the whole ITEM collection, so a run's tail was collected and never measured. The last "
            "line runs to `count` rather than to a break position exactly so that a box edge after the final "
            "character is still on a line; a short answer here is that mapping and this walk disagreeing");
+    /* THE CODE POINTS ARE THE ONE THING NO PARTITION READS AGAIN. [UAX14]'s answer for this run is `actions`,
+       and every walk over it — the two above and CSS 2.2 §9.4.2's fill — asks the ACTION at a position and
+       never re-derives it from a character, which is the whole reason there is one pass. An advance measure is
+       read off the ITEM (`tr_line_size`), which carries the element the code point belongs to and which a bare
+       code point could not answer for. */
     free(cps);
-    free(actions);
-    free(item_of_char);
+}
+
+void text_run_measure_release(TextRunMeasure *m)
+{
+    DCHECK(m != NULL, "a text run measurement was released with nothing to release");
+    DCHECK(m->finished,
+           "a text run measurement was released before [UAX14] ever ran over it, so the collection is being "
+           "freed by a caller that never asked it anything. text_run.h states the sequence — collect, finish, "
+           "read and fill, release — and a walk that skipped the middle of it measured a document and threw "
+           "the measurement away");
+    DCHECK(!m->released, "a text run measurement was released twice, and the second call frees pointers the "
+                         "first one returned to the allocator");
+    m->released = true;
     free(m->items);
+    free(m->actions);
+    free(m->item_of_char);
     m->items = NULL;
+    m->actions = NULL;
+    m->item_of_char = NULL;
     m->count = 0;
     m->capacity = 0;
+    m->nchars = 0;
 }
 
 /* THE ONE RELATION BETWEEN THE TWO ANSWERS, asserted where they are read rather than where they are written,
@@ -589,6 +618,11 @@ static void tr_require_answers(const TextRunMeasure *m)
            "over its characters yet. text_run_measure_finish is what produces them, and the fields before it "
            "hold the zero text_run_measure_init wrote — which is a plausible answer for a run with text in it "
            "and is why this is a crash rather than a default");
+    DCHECK(!m->released,
+           "a text run measurement was read AFTER `text_run_measure_release`. Every answer this component has "
+           "— css-sizing-3 §2.1's two sizes and CSS 2.2 §9.4.2's line boxes — is derived from a collection "
+           "that call returned to the allocator, so the numbers still sitting in the struct describe a run "
+           "whose items are gone and the fill would walk freed memory. The measurement ENDS at the release");
     DCHECK(m->min_content.px <= m->max_content.px,
            "a text run's MIN-CONTENT inline size came out WIDER than its max-content inline size. css-sizing-3 "
            "§2.1 states the first as the size \"if ALL soft wrap opportunities within the box were taken\" and "
@@ -607,4 +641,142 @@ CssPx text_run_measure_min_content(const TextRunMeasure *m)
 {
     tr_require_answers(m);
     return m->min_content;
+}
+
+lxb_dom_element_t *text_run_measure_item_style(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    DCHECK(m->items[i].style != NULL,
+           "a collected item carries no element. `tr_append_item` writes one on every path for both kinds, so "
+           "a NULL here is a record that was reached before it was filled");
+    return m->items[i].style;
+}
+
+bool text_run_measure_item_is_text(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    return m->items[i].kind == TEXT_RUN_ITEM_CHAR;
+}
+
+bool text_run_measure_splits(const TextRunMeasure *m)
+{
+    tr_require_answers(m);
+    return m->splits;
+}
+
+/* ---- CSS 2.2 §9.4.2's DISTRIBUTION ACROSS LINE BOXES ------------------------------------------------------
+   "When several inline-level boxes cannot fit horizontally within a single line box, they are distributed among
+   two or more vertically-stacked line boxes."
+   THE ITERATION IS THE SAME ONE `text_run_measure_finish` RUNS, AND THAT IS THE POINT: the same positions, the
+   same `actions`, the same `tr_opportunity_enabled` question about the same pair of inline boxes. What differs
+   is only which of those positions is TAKEN — none of them for §2.1's max-content, all of them for its
+   min-content, and here the ones a width forces.
+   `prev` IS THE LAST POSITION THAT STILL FIT and it is what makes this greedy rather than optimal: when a
+   position's line has grown past `available`, the break goes back to `prev` — the widest prefix that fitted —
+   and the segment between them opens the next line. When there is no such prefix (`prev == start`, the very
+   first segment of a line) §9.4.2's own sentence applies and NOTHING is emitted early: "if an inline box cannot
+   be split … then the inline box OVERFLOWS the line box." That is why this loop needs no bound and cannot fail
+   to terminate — every position either closes a line at a strictly greater boundary or leaves the line alone.
+   EVERY LINE IS NON-EMPTY IN ITEMS AND THE LINES PARTITION `[0, count)`, which is what bounds the allocation
+   at `count` exactly rather than by a guess: a line is closed at a boundary strictly greater than its start
+   (`tr_item_boundary_of_char` is strictly increasing in the character index, and the last line closes at
+   `count`), so there can be no more lines than there are items. */
+size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLine **lines)
+{
+    TextRunLine *out;
+    size_t i, n = 0, start = 0, prev = 0;
+
+    tr_require_answers(m);
+    DCHECK(lines != NULL,
+           "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to put them. The count alone is not the "
+           "answer this entry has: a caller asks which line each BOX is on — §10.8's step 3 is two maxima over "
+           "the boxes on ONE line — and a number cannot be asked that");
+    if (m->count == 0) {
+        /* §9.4.2: "line boxes are created AS NEEDED to hold inline-level content within an inline formatting
+           context", and there is none. This is not the zero-height line box the section describes two
+           sentences later — that one is a line box that exists and is treated as not existing; this is a
+           formatting context with no line box in it at all. */
+        DCHECK(m->items == NULL, "an empty run holds a collection it never appended to");
+        *lines = NULL;
+        return 0;
+    }
+    out = malloc(m->count * sizeof *out);
+    CHECK(out != NULL, "out of memory distributing one inline formatting context's content across CSS 2.2 "
+                       "§9.4.2's line boxes. The array is one entry per collected item and the lines partition "
+                       "them, so a failure here is the physical floor");
+    if (m->nchars == 0) {
+        /* css-text-3 §5.5 "Line Breaking Details": "out-of-flow boxes and inline box boundaries do not
+           introduce a forced line break or soft wrap opportunity in the flow." A run of box edges therefore
+           has nowhere to break at any width, which is `splits` being false, and §9.4.2's overflow sentence
+           puts all of it on ONE line box. */
+        DCHECK(!m->splits, "a run with no characters in it reported a break position, and css-text-3 §5.5 says "
+                           "an inline box boundary is not one — so `finish` recorded a split from an item that "
+                           "carries no code point for [UAX14] to have decided about");
+        out[0].from = 0;
+        out[0].to = m->count;
+        out[0].size = tr_line_size(m, 0, m->count);
+        *lines = out;
+        return 1;
+    }
+    for (i = 1; i <= m->nchars; i++) {
+        size_t at = i == m->nchars ? m->count : tr_item_boundary_of_char(m->item_of_char, i);
+        bool forced = m->actions[i] == LINE_BREAK_MANDATORY;
+        bool soft = false;
+
+        if (i < m->nchars && m->actions[i] == LINE_BREAK_OPPORTUNITY)
+            soft = tr_opportunity_enabled(m, m->item_of_char[i - 1], m->item_of_char[i]);
+        if (!forced && !soft) continue;
+        DCHECK(at > prev, "CSS 2.2 §9.4.2's fill met two break positions at the SAME item boundary, so one of "
+                          "them divides nothing. `tr_item_boundary_of_char` is strictly increasing in the "
+                          "character index and the eot position maps past every item, so this is that mapping "
+                          "having stopped being a function of the character");
+        /* "cannot fit horizontally within a single line box" — measured over the line as it WOULD be if this
+           position were not taken, which is why the comparison is against `at` and the emission is at `prev`.
+           `prev > start` is §9.4.2's cannot-be-split condition stated positively: below it there is no earlier
+           position on this line to fall back to, and the section says the content overflows instead. */
+        if (prev > start && tr_line_size(m, start, at).px > available.px) {
+            DCHECK(n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items, and "
+                                 "the lines partition the items — so a line was emitted empty or a boundary "
+                                 "went backwards");
+            out[n].from = start;
+            out[n].to = prev;
+            out[n].size = tr_line_size(m, start, prev);
+            n++;
+            start = prev;
+        }
+        if (forced) {
+            /* css-text-3 §5.5 makes this break MANDATORY "regardless of the white-space value", so the line
+               ends here whether or not anything overflowed — and at `i == nchars` this is [UAX14] LB3 closing
+               the run, which is what leaves no tail case below. */
+            DCHECK(n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items at a "
+                                 "FORCED break, and the lines partition the items");
+            out[n].from = start;
+            out[n].to = at;
+            out[n].size = tr_line_size(m, start, at);
+            n++;
+            start = at;
+        }
+        prev = at;
+    }
+    DCHECK(start == m->count,
+           "[UAX14] LB3 \"Always break at the end of text\" did not close CSS 2.2 §9.4.2's last line box over "
+           "the whole ITEM collection, so the run's tail is on no line at all. The last line runs to `count` "
+           "rather than to a break position exactly so that a box edge after the final character is still on a "
+           "line, and a caller reading these lines would place that box nowhere");
+    DCHECK(n >= 1, "CSS 2.2 §9.4.2 produced NO line box for a run that has characters in it — \"line boxes are "
+                   "created as needed to hold inline-level content\" and there is content");
+    /* §9.4.2's OVERFLOW THEOREM, CLOSED HERE RATHER THAN TRUSTED. `text_run_measure_splits` tells a caller it
+       need not derive an available width, and the only thing that makes that safe is this: with no position
+       inside the run, the loop above can emit only at eot, so the answer is ONE line box and `available` was
+       never compared against anything. A caller that skipped the derivation and got two lines would have been
+       handed a layout computed against whatever it passed instead. */
+    DCHECK(m->splits || n == 1,
+           "CSS 2.2 §9.4.2's fill divided a run that `text_run_measure_splits` says has nowhere to be divided. "
+           "The section's \"if an inline box cannot be split … then the inline box overflows the line box\" is "
+           "what makes that predicate a theorem, and a caller trusting it has passed an available width it "
+           "derived from nothing");
+    *lines = out;
+    return n;
 }
