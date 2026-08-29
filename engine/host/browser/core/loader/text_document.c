@@ -49,6 +49,8 @@
  * PLAINTEXT state emits none — so setting the mode once the prefix is through, and CHECKING at the close that
  * it is still what it was set to, is the flag's whole behaviour with the check that catches the day it is not.
  */
+#include <stdlib.h>
+
 #include <lexbor/html/tokenizer/state.h>
 
 #include "core/html/html_parse.h"
@@ -63,14 +65,24 @@
 static const lxb_char_t TEXT_DOC_PRE[] = "<pre>";
 static const lxb_char_t TEXT_DOC_LF[]  = "\n";
 
-lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                HtmlScriptingMode scripting,
-                                const MimeType *type, const lxb_char_t *text, size_t size)
+/* WHAT A §7.5.4 LOAD IS BETWEEN TWO OF ITS NETWORKING TASKS — the same three facts core/loader/html_document.c
+   holds, for the same reason and with the same borrow: the Document being filled, the response's characters,
+   and how far into them the input byte stream has been filled. The synthetic prefix, the mode and the tokenizer
+   state are all `begin`'s and none of them is state a step reads. */
+struct TextDocumentLoad {
+    lxb_html_document_t *document;
+    const lxb_char_t    *text;
+    size_t               len, off;
+    lxb_status_t         st;
+};
+
+TextDocumentLoad *text_document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                           HtmlScriptingMode scripting,
+                                           const MimeType *type, const lxb_char_t *text, size_t size)
 {
+    TextDocumentLoad *l;
     lxb_dom_document_t *doc;
     lxb_html_parser_t *parser;
-    lxb_dom_node_t *first;
-    lxb_html_body_element_t *body;
     lxb_status_t st;
 
     DCHECK(document != NULL,
@@ -89,10 +101,21 @@ lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind 
            "not send to it — the arm is a fact about the COMPUTED TYPE and this loader re-asks it, so this is "
            "a route into the text loader that never asked what it fetched");
 
+    l = malloc(sizeof(*l));
+    CHECK(l != NULL,
+          "OOM opening an HTML §7.5.4 document load — the DOM this parse produces is what every flow of this "
+          "instance reads, so a load that cannot even begin is not a document with no endpoints");
+    l->document = document;
+    l->text     = text;
+    l->len      = size;
+    l->off      = 0;
+
     /* §7.5.4 step 4's `pre` START TAG, alone. See the file comment for why the LINE FEED is not here. */
     st = html_parse_document_open(document, root_kind, scripting, TEXT_DOC_PRE, sizeof TEXT_DOC_PRE - 1);
-    if (st != LXB_STATUS_OK)
-        return st;
+    if (st != LXB_STATUS_OK) {
+        l->st = st;
+        return l;
+    }
 
     doc = lxb_dom_interface_document(document);
     /* §7.5.4 steps 2 and 3, in the order the standard writes them and at the one moment they are both true:
@@ -110,15 +133,58 @@ lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind 
        `plaintext` start tag, which is what makes this the standard's state rather than a state like it. */
     lxb_html_tokenizer_state_set(parser->tkz, lxb_html_tokenizer_state_plaintext_before);
 
-    /* §7.5.4 step 4's LINE FEED, then the response. Two chunks of ONE character run: the tokenizer holds the
-       run across the boundary, so §13.2.6 sees a single character token beginning with the synthetic LF, which
-       is exactly what §13.2.6.4.7's `pre` rule is written to consume. */
-    st = html_parse_document_write(document, TEXT_DOC_LF, sizeof TEXT_DOC_LF - 1);
+    /* §7.5.4 step 4's LINE FEED. It is `begin`'s and not a step's because it is SYNTHETIC — it belongs to the
+       prefix the standard acts as if the tokenizer had emitted, not to the response — and because the run it
+       opens is the one every step then extends: the tokenizer holds a character run across a chunk boundary,
+       so §13.2.6 sees a single character token beginning with the synthetic LF, which is exactly what
+       §13.2.6.4.7's `pre` rule is written to consume. */
+    html_parse_document_write(document, TEXT_DOC_LF, sizeof TEXT_DOC_LF - 1);
+    l->st = LXB_STATUS_OK;
+    return l;
+}
+
+bool text_document_load_ended(const TextDocumentLoad *load)
+{
+    DCHECK(load != NULL, "text_document_load_ended was asked of no load");
+    return load->st != LXB_STATUS_OK || load->off == load->len;
+}
+
+void text_document_load_step(TextDocumentLoad *load)
+{
+    DCHECK(load != NULL, "text_document_load_step was asked of no load");
+    DCHECK(!text_document_load_ended(load),
+           "an HTML §7.5.4 load was stepped after the whole response had been filled into the parser's input "
+           "byte stream — text_document_load_ended is what a driver's loop tests, and asking past it would "
+           "read one byte off the end of the response");
+    /* §7.5.4 step 4's "each task that the networking task source places on the task queue while fetching runs
+       must then fill the parser's input byte stream with the fetched bytes and cause the HTML parser to
+       perform the appropriate processing of the input stream", for ONE byte. Every byte lands in HTML §13.2.5.5
+       "PLAINTEXT state", which is the state `begin` left the tokenizer in and the only state it can be in
+       here: that state has no transition out of itself. */
+    html_parse_document_write(load->document, load->text + load->off, 1);
+    load->off++;
+}
+
+lxb_status_t text_document_load_finish(TextDocumentLoad *load)
+{
+    lxb_html_document_t *document;
+    lxb_dom_document_t *doc;
+    lxb_dom_node_t *first;
+    lxb_html_body_element_t *body;
+    lxb_status_t st;
+
+    DCHECK(load != NULL, "text_document_load_finish was asked of no load");
+    DCHECK(text_document_load_ended(load),
+           "an HTML §7.5.4 load was finished with response bytes still unfilled — §13.2.7 \"The end\"'s "
+           "implied EOF character is what this emits, and emitting it over a stream that has not been given "
+           "the whole response builds a `pre` out of a prefix of it");
+    document = load->document;
+    st       = load->st;
+    free(load);
     if (st != LXB_STATUS_OK)
         return st;
-    st = html_parse_document_write(document, text, size);
-    if (st != LXB_STATUS_OK)
-        return st;
+
+    doc = lxb_dom_interface_document(document);
     /* §13.2.7 "The end" — the implied EOF character §7.5.4's "when no more bytes are available" asks for. */
     st = html_parse_document_close(document);
     if (st != LXB_STATUS_OK)

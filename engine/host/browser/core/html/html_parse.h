@@ -203,15 +203,18 @@ bool html_parse_insertion_point_defined(const lxb_dom_document_t *doc);
    CRASHES on a document whose insertion point is undefined, because a stream that is not open has no position
    to insert at.
  *
- * TWO ALGORITHMS SAY THIS, WHICH IS WHY THE ENTRY IS NOT NAMED AFTER EITHER. §8.4.3 "document.write()" steps 10
- * AND 11 — "insert string into the input stream just before the insertion point", then "have the HTML parser
- * process string, one code point at a time" — where step 9 is what answers an undefined insertion point, so
- * reaching here without a live stream means that caller skipped it. And HTML §7.5.4 "Loading text documents"
- * step 4 — "each task that the networking task source places on the task queue while fetching runs must then
- * fill the parser's input byte stream with the fetched bytes and cause the HTML parser to perform the
- * appropriate processing of the input stream" — which is core/loader/text_document.c, whose open, writes and
- * close are one uninterrupted operation and which needs a second chunk only because it switches the tokenizer
- * to §13.2.5.5 "PLAINTEXT state" between them.
+ * THREE ALGORITHMS SAY THIS, WHICH IS WHY THE ENTRY IS NOT NAMED AFTER ANY OF THEM. §8.4.3 "document.write()"
+ * steps 10 AND 11 — "insert string into the input stream just before the insertion point", then "have the HTML
+ * parser process string, one code point at a time" — where step 9 is what answers an undefined insertion
+ * point, so reaching here without a live stream means that caller skipped it. And HTML §7.5.2 "Loading HTML
+ * documents" and §7.5.4 "Loading text documents", which carry the SAME SENTENCE as each other: "each task that
+ * the networking task source places on the task queue while fetching runs must then fill the parser's input
+ * byte stream with the fetched bytes and cause the HTML parser to perform the appropriate processing of the
+ * input stream". Those two are core/loader/html_document.c and core/loader/text_document.c, and each of them
+ * is a PULL — one byte per call, one call per step of whatever drives the load — because the sentence
+ * describes a task per arrival of bytes and a completing call collapses every one of them into an
+ * un-interruptible span the length of the document. §7.5.4 additionally needs its own first chunk separated
+ * from the rest, because it switches the tokenizer to §13.2.5.5 "PLAINTEXT state" between them.
  *
  * THE OWNERSHIP QUESTION IS THE `document.write` CALLER'S, NOT THIS ENTRY'S. §13.2.6 tree construction inserts
  * through lexbor's own mutators, and solver/dom_cow.h is a CONVENTION over the browser components rather than a

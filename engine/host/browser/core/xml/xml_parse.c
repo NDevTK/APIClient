@@ -98,38 +98,89 @@ static size_t xml_parse_strip_signature(const char *text, size_t len)
     return 0;
 }
 
-bool xml_parse_document(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,
-                        const char *text, size_t len, XmlParseReport *report)
-{
-    XmlTreeBuild *b;
-    size_t        off;
+/* WHAT A PARSE IS BETWEEN TWO ITEMS: the build, and the record being assembled about it. Nothing else — the
+   position, the reader, the scope stack and the open element are core/xml/xml_tree.h's and stay there. */
+struct XmlParse {
+    XmlTreeBuild  *b;
+    XmlParseReport report;
+};
 
-    DCHECK(report != NULL,
-           "an XML parse was asked for without the record it writes — \"the parse failed\" and \"nobody "
-           "looked\" are the same false to a consumer that did not take one");
+XmlParse *xml_parse_begin(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,
+                          const char *text, size_t len)
+{
+    XmlParse *p;
+    size_t    off;
+
     DCHECK(doc != NULL && parent != NULL && text != NULL,
            "an XML parse was asked for without a Document, a node to append [1] document's children to, and a "
            "pointer to the entity — an EMPTY entity is a zero LENGTH over a real pointer");
 
-    memset(report, 0, sizeof(*report));
+    p = malloc(sizeof(*p));
+    CHECK(p != NULL,
+          "OOM opening an XML parse — a dropped parse is a document the caller would go on to read as empty, "
+          "which is the same false as a document that never had one");
+    memset(&p->report, 0, sizeof(p->report));
     off = xml_parse_strip_signature(text, len);
-    b = xml_tree_build_create(doc, parent, kind, text + off, len - off);
+    p->b = xml_tree_build_create(doc, parent, kind, text + off, len - off);
+    p->report.tree = XML_TREE_OK;
+    return p;
+}
 
-    report->tree = XML_TREE_OK;
-    while (!xml_tree_build_ended(b)) {
-        report->tree = xml_tree_build_step(b, &report->detail);
-        if (report->tree != XML_TREE_OK) break;
-    }
-    report->character = xml_tree_build_character_error(b);
-    report->line      = xml_tree_build_line(b);
-    report->column    = xml_tree_build_column(b);
-    report->ok        = (report->tree == XML_TREE_OK);
-    DCHECK(!report->ok || report->character == XML_CHAR_OK,
+bool xml_parse_ended(const XmlParse *p)
+{
+    DCHECK(p != NULL, "xml_parse_ended was asked of no parse");
+    return xml_tree_build_ended(p->b);
+}
+
+void xml_parse_step(XmlParse *p)
+{
+    DCHECK(p != NULL, "xml_parse_step was asked of no parse");
+    DCHECK(!xml_tree_build_ended(p->b),
+           "an XML parse was stepped after [1] document matched to the last byte of the entity or reported a "
+           "fatal error — xml_parse_ended is what a driver's loop tests, and asking past it is a driver that "
+           "did not");
+    /* THE ERROR IS LATCHED AND NOT RETURNED, and the reason is core/xml/xml_tree.h's own: a build that has
+       reported an error IS ended, so a driver that tests `xml_parse_ended` needs no second question and
+       cannot forget to ask one. */
+    p->report.tree = xml_tree_build_step(p->b, &p->report.detail);
+}
+
+bool xml_parse_finish(XmlParse *p, XmlParseReport *report)
+{
+    bool ok;
+
+    DCHECK(p != NULL, "xml_parse_finish was asked of no parse");
+    DCHECK(report != NULL,
+           "an XML parse was finished without the record it writes — \"the parse failed\" and \"nobody "
+           "looked\" are the same false to a consumer that did not take one");
+    DCHECK(xml_tree_build_ended(p->b),
+           "an XML parse was finished with items of [1] document left to build — the line and column below "
+           "name where the reader STOPPED, so a report assembled here would name a position the document has "
+           "not reached and call a partial tree well-formed");
+
+    p->report.character = xml_tree_build_character_error(p->b);
+    p->report.line      = xml_tree_build_line(p->b);
+    p->report.column    = xml_tree_build_column(p->b);
+    p->report.ok        = (p->report.tree == XML_TREE_OK);
+    DCHECK(!p->report.ok || p->report.character == XML_CHAR_OK,
            "an XML parse reported a well-formed document while the character layer's §1.2 latch is set — that "
            "latch is a FATAL error, after which XML §1.2 \"Terminology\" says a processor MUST NOT continue "
            "normal processing, so the two cannot both be true");
-    xml_tree_build_destroy(b);
-    return report->ok;
+    xml_tree_build_destroy(p->b);
+    *report = p->report;
+    ok = p->report.ok;
+    free(p);
+    return ok;
+}
+
+bool xml_parse_document(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,
+                        const char *text, size_t len, XmlParseReport *report)
+{
+    XmlParse *p = xml_parse_begin(doc, parent, kind, text, len);
+
+    while (!xml_parse_ended(p))
+        xml_parse_step(p);
+    return xml_parse_finish(p, report);
 }
 
 void xml_parse_error_document(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,

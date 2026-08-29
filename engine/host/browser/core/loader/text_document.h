@@ -3,6 +3,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LOADER_TEXT_DOCUMENT_H
 #define ENGINE_HOST_BROWSER_CORE_LOADER_TEXT_DOCUMENT_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include <lexbor/html/html.h>
@@ -28,11 +29,24 @@
  * `size` may be zero: an empty response is still a text document, and §7.5.4 gives it an empty `pre`.
  *
  * `root_kind` is html_parse.h's — DOM_PARSE_ROOT_PRIVATE for a Document the same uninterrupted operation
- * created, DOM_PARSE_ROOT_SHARED for the active one. It is carried through unread; the open, the two writes
- * and the close are one uninterrupted operation exactly as `html_parse_document` is, so this loader adds no
- * capture question of its own. */
-lxb_status_t text_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
-                                HtmlScriptingMode scripting,
-                                const MimeType *type, const lxb_char_t *text, size_t size);
+ * created, DOM_PARSE_ROOT_SHARED for the active one. It is carried through unread.
+ *
+ * IT IS A PULL, for core/loader/html_document.h's reason and out of the same sentence of §7.5.4 step 4: "each
+ * task that the networking task source places on the task queue while fetching runs must then fill the
+ * parser's input byte stream with the fetched bytes and cause the HTML parser to perform the appropriate
+ * processing of the input stream". A task per arrival is the algorithm, and handing the tokenizer the whole
+ * response in one call collapsed all of them into an un-interruptible span the length of the document.
+ * `begin` performs §7.5.4 steps 1-4 — the parser, the mode, the synthetic `pre` and LINE FEED, and the switch
+ * to HTML §13.2.5.5 "PLAINTEXT state" — `step` fills ONE byte of the response, and `finish` emits §13.2.7
+ * "The end"'s implied EOF and asserts the tree §7.5.4 describes. `text` is BORROWED for the life of the load
+ * (core/loader/html_document.h states why nothing is copied). */
+typedef struct TextDocumentLoad TextDocumentLoad;
+
+TextDocumentLoad *text_document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                           HtmlScriptingMode scripting,
+                                           const MimeType *type, const lxb_char_t *text, size_t size);
+bool             text_document_load_ended(const TextDocumentLoad *load);
+void             text_document_load_step(TextDocumentLoad *load);
+lxb_status_t     text_document_load_finish(TextDocumentLoad *load);
 
 #endif

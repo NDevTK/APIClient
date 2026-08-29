@@ -16,6 +16,8 @@
  * DOM is right, and the code the page shipped does not run, with nothing anywhere to say so. That is the
  * §Offensive-programming case exactly: a capability that does not exist is honestly ABSENT and the crash is
  * what names it. */
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "core/dom/element.h"
@@ -30,19 +32,21 @@
    case-folding and a table lookup would make this comparison depend on how the document happened to spell it. */
 #define XML_LOADER_HTML_NAMESPACE "http://www.w3.org/1999/xhtml"
 
-/* HTML §14.2 "Parsing XML documents"' script handling, as the crash that names it. One walk of the tree the
-   parse just built, run only where the standard enables XML scripting support. */
-static void xml_document_refuse_scripts(lxb_dom_node_t *root)
+/* HTML §14.2 "Parsing XML documents"' script handling, as the crash that names it — for ONE node of the tree
+   the parse just built. It is one node and not a walk because the walk is the DRIVER's: a document is
+   attacker-length, so a loop over its nodes is exactly as unbounded as the loop over its constructs was, and
+   the loader would have closed the parse's drive-to-completion only to open a second one behind it. */
+static void xml_document_refuse_script(lxb_dom_node_t *n)
 {
-    lxb_dom_node_t *n;
-    for (n = node_next_in(root, root); n != NULL; n = node_next_in(n, root)) {
-        const char *ns, *local;
-        char nsbuf[128], lobuf[64];
-        if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        element_ns_and_local(lxb_dom_interface_element(n), &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
-        if (local == NULL || strcmp(local, "script") != 0) continue;
-        if (ns == NULL || strcmp(ns, XML_LOADER_HTML_NAMESPACE) != 0) continue;
-        DFAIL("HTML §14.2 \"Parsing XML documents\": this document holds a `script` element in the HTML "
+    const char *ns, *local;
+    char nsbuf[128], lobuf[64];
+
+    DCHECK(n != NULL, "the §14.2 script refusal was asked about no node");
+    if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) return;
+    element_ns_and_local(lxb_dom_interface_element(n), &ns, &local, nsbuf, sizeof(nsbuf), lobuf, sizeof(lobuf));
+    if (local == NULL || strcmp(local, "script") != 0) return;
+    if (ns == NULL || strcmp(ns, XML_LOADER_HTML_NAMESPACE) != 0) return;
+    DFAIL("HTML §14.2 \"Parsing XML documents\": this document holds a `script` element in the HTML "
               "namespace and §7.5.3 \"Loading XML documents\" runs its XML parser with XML SCRIPTING SUPPORT "
               "ENABLED — so §14.2's steps are owed and this build does not have them. BUILD THEM AT THE "
               "PARSE: when the XML parser creates a `script` element it must set the element's parser document "
@@ -56,15 +60,38 @@ static void xml_document_refuse_scripts(lxb_dom_node_t *root)
               "HTML §8.5.1 `parseFromString` creates its parser \"with XML scripting support disabled\", and "
               "XMLHttpRequest §3.6.6 \"set a document response\" runs no script. Leaving the element inert "
               "instead is a page that loads with the code it shipped silently not running");
-    }
 }
 
-lxb_status_t xml_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
-                               HtmlScriptingMode scripting,
-                               const MimeType *type, const lxb_char_t *xml, size_t size)
+/* THE FOUR THINGS A §7.5.3 LOAD CAN BE DOING, in the order it can reach them. Every one of them is a LOOP over
+   something the response controls, which is why each is a phase with an O(1) step rather than a stretch of a
+   completing function: the constructs of [1] `document`, the top-level children a failed parse left behind,
+   and the elements §14.2 has an opinion about. A phase list is what makes the loader's own state a thing a
+   driver can stand in the middle of. */
+enum { XML_LOAD_PARSE = 0,   /* one item of core/xml/xml_parse.h's walk */
+       XML_LOAD_DISCARD,     /* one child of the partial tree a failed parse left */
+       XML_LOAD_ERRDOC,      /* §7.5.3's inline report, which is O(1) */
+       XML_LOAD_SCRIPTS,     /* one node of the §14.2 refusal walk */
+       XML_LOAD_DONE };
+
+/* WHAT A §7.5.3 LOAD IS BETWEEN TWO ITEMS. `parse` is live exactly while the phase is XML_LOAD_PARSE and is
+   destroyed by the finish that assembles `report`; `scan` is the §14.2 walk's cursor, which is a NODE and not
+   an index because the tree it walks is the one this same load built and nothing else can reach yet. */
+struct XmlDocumentLoad {
+    lxb_html_document_t *document;
+    lxb_dom_node_t      *root;
+    DomParseRootKind     root_kind;
+    HtmlScriptingMode    scripting;
+    XmlParse            *parse;
+    lxb_dom_node_t      *scan;
+    XmlParseReport       report;
+    uint8_t              phase;
+};
+
+XmlDocumentLoad *xml_document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                         HtmlScriptingMode scripting,
+                                         const MimeType *type, const lxb_char_t *xml, size_t size)
 {
-    XmlParseReport  report;
-    lxb_dom_node_t *root;
+    XmlDocumentLoad *l;
 
     DCHECK(document != NULL,
            "HTML §7.5.3 was reached with no Document — its own step creates one and hands it to the XML "
@@ -78,18 +105,101 @@ lxb_status_t xml_document_load(lxb_html_document_t *document, DomParseRootKind r
            "subsection — the arm is a fact about the COMPUTED TYPE and this loader re-asks it, so this is a "
            "route into the XML parse that never asked what it fetched");
 
-    root = lxb_dom_interface_node(document);
-    if (!xml_parse_document(lxb_dom_interface_document(document), root, root_kind,
-                            (const char *)xml, size, &report)) {
+    l = malloc(sizeof(*l));
+    CHECK(l != NULL,
+          "OOM opening an HTML §7.5.3 document load — the DOM this parse produces is what every flow of this "
+          "instance reads, so a load that cannot even begin is not a document with no endpoints");
+    l->document  = document;
+    l->root      = lxb_dom_interface_node(document);
+    l->root_kind = root_kind;
+    l->scripting = scripting;
+    l->scan      = NULL;
+    l->phase     = XML_LOAD_PARSE;
+    memset(&l->report, 0, sizeof(l->report));
+    l->parse = xml_parse_begin(lxb_dom_interface_document(document), l->root, root_kind,
+                               (const char *)xml, size);
+    return l;
+}
+
+bool xml_document_load_ended(const XmlDocumentLoad *load)
+{
+    DCHECK(load != NULL, "xml_document_load_ended was asked of no load");
+    return load->phase == XML_LOAD_DONE;
+}
+
+void xml_document_load_step(XmlDocumentLoad *load)
+{
+    DCHECK(load != NULL, "xml_document_load_step was asked of no load");
+    DCHECK(load->phase != XML_LOAD_DONE,
+           "an HTML §7.5.3 load was stepped after it had nothing left to do — xml_document_load_ended is what "
+           "a driver's loop tests, and asking past it is a driver that did not");
+
+    switch (load->phase) {
+    case XML_LOAD_PARSE:
+        if (!xml_parse_ended(load->parse)) {
+            xml_parse_step(load->parse);
+            return;
+        }
+        if (xml_parse_finish(load->parse, &load->report)) {
+            load->parse = NULL;
+            /* A WELL-FORMED PARSE, so the tree stands and §14.2 is the only question left — and only where
+               §7.5.3 enables XML scripting support, which is what this loader alone does. */
+            load->phase = (load->scripting == HTML_SCRIPTING_ENABLED) ? XML_LOAD_SCRIPTS : XML_LOAD_DONE;
+            load->scan  = node_next_in(load->root, load->root);
+            return;
+        }
+        load->parse = NULL;
+        load->phase = XML_LOAD_DISCARD;
+        return;
+
+    case XML_LOAD_DISCARD:
         /* §7.5.3: "Error messages from the parse process (e.g., XML namespace well-formedness errors) may be
            reported inline by mutating the Document." The partial tree the parse built is what a browser
-           discards before doing so, and the description is the layer's own sentence — see
-           core/xml/xml_parse.h. */
-        lxb_dom_node_t *c, *next;
-        for (c = root->first_child; c != NULL; c = next) { next = c->next; dom_cow_remove_child(c); }
-        xml_parse_error_document(lxb_dom_interface_document(document), root, root_kind, &report);
-        return LXB_STATUS_OK;
+           discards before doing so — ONE top-level child per step, because [1] `document`'s `Misc*` is as
+           long as the response chooses to make it. */
+        if (load->root->first_child != NULL) {
+            dom_cow_remove_child(load->root->first_child);
+            return;
+        }
+        load->phase = XML_LOAD_ERRDOC;
+        return;
+
+    case XML_LOAD_ERRDOC:
+        /* ONE ELEMENT AND ONE TEXT NODE — the description is the layer's own sentence, see
+           core/xml/xml_parse.h — so this phase is a single step and never a loop. */
+        xml_parse_error_document(lxb_dom_interface_document(load->document), load->root, load->root_kind,
+                                 &load->report);
+        load->phase = XML_LOAD_DONE;
+        return;
+
+    case XML_LOAD_SCRIPTS:
+        if (load->scan == NULL) {
+            load->phase = XML_LOAD_DONE;
+            return;
+        }
+        xml_document_refuse_script(load->scan);
+        load->scan = node_next_in(load->scan, load->root);
+        return;
     }
-    if (scripting == HTML_SCRIPTING_ENABLED) xml_document_refuse_scripts(root);
+    /* NOT A `default:` ARM — the switch is exhaustive over the phases above, so a phase added without a body
+       does not compile rather than falling into a generic crash. XML_LOAD_DONE is refused by the DCHECK at the
+       top, which is where a step past the end belongs. */
+    DFAIL("an HTML §7.5.3 load stepped in a phase this loader does not define — the phase enum and this "
+          "switch are one list and something wrote a value that is in neither");
+}
+
+lxb_status_t xml_document_load_finish(XmlDocumentLoad *load)
+{
+    DCHECK(load != NULL, "xml_document_load_finish was asked of no load");
+    DCHECK(load->phase == XML_LOAD_DONE,
+           "an HTML §7.5.3 load was finished with work left — the parse, the discard of a failed parse's "
+           "partial tree, §7.5.3's inline error report and §14.2's refusal are each a phase, and finishing "
+           "inside one leaves a Document the caller will read as complete");
+    DCHECK(load->parse == NULL,
+           "an HTML §7.5.3 load reached its end still holding an open XML parse — xml_parse_finish is what "
+           "destroys the build, so a live one here is a tree build leaked with the load");
+    free(load);
+    /* §7.5.3 HAS NO FAILURE STATUS. An ill-formed document is not a load that failed — it is a load whose
+       Document is the inline report the standard permits, which the phases above have already built. */
     return LXB_STATUS_OK;
 }

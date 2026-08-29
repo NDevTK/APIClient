@@ -3,6 +3,7 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_LOADER_XML_DOCUMENT_H
 #define ENGINE_HOST_BROWSER_CORE_LOADER_XML_DOCUMENT_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include <lexbor/html/html.h>
@@ -35,9 +36,27 @@
  * link-header processing is the networking task source's, "scripts may run for the newly-created document" is
  * §7.5.1's shared creation infrastructure, and the during-loading navigation ID is WebDriver BiDi's. What this
  * owns is the parse and what §7.5.3 says about its errors — "Error messages from the parse process (e.g., XML
- * namespace well-formedness errors) may be reported inline by mutating the Document", which is taken. */
-lxb_status_t xml_document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
-                               HtmlScriptingMode scripting,
-                               const MimeType *type, const lxb_char_t *xml, size_t size);
+ * namespace well-formedness errors) may be reported inline by mutating the Document", which is taken.
+ *
+ * IT IS A PULL, and this arm is where the pull was already half built. core/xml/xml_tree.h has been a walk of
+ * one construct per call since it was written, for the reason it states — an XML document is attacker-length,
+ * so the loop over its constructs is unbounded and must be able to stop between iterations — and the only
+ * thing standing between that and a suspension was a driver that looped to the end. It loops HERE now, one
+ * construct per `step`, and so do the two other unbounded walks this loader owns: discarding the partial tree
+ * a failed parse left behind, and HTML §14.2 "Parsing XML documents"' refusal over the elements the parse
+ * built. Three loops over response-controlled quantities, three phases, one O(1) step each — closing the first
+ * and leaving the other two would have moved the drive-to-completion rather than removed it.
+ *
+ * `xml` IS BORROWED ONLY ACROSS `begin`: core/xml/xml_tree.h's build takes its own copy of the entity, so a
+ * load outliving the caller's buffer is still reading its own bytes. `finish` has no failure status of its
+ * own, because §7.5.3 defines none — an ill-formed document is a Document holding the inline report. */
+typedef struct XmlDocumentLoad XmlDocumentLoad;
+
+XmlDocumentLoad *xml_document_load_begin(lxb_html_document_t *document, DomParseRootKind root_kind,
+                                         HtmlScriptingMode scripting,
+                                         const MimeType *type, const lxb_char_t *xml, size_t size);
+bool             xml_document_load_ended(const XmlDocumentLoad *load);
+void             xml_document_load_step(XmlDocumentLoad *load);
+lxb_status_t     xml_document_load_finish(XmlDocumentLoad *load);
 
 #endif
