@@ -319,6 +319,31 @@ typedef struct Flow {
        JS_FlowNew for a program it already started. Re-compiling is a REPLAY, which this engine does not do — a
        replay re-executes side effects the flow already performed against a delta that already holds them. */
     int   last_compiled;   /* -1 until the flow compiles its first program */
+    /* WHERE A RUN OF INTERPOSED PROGRAMS HAS REACHED, so that a SECOND interposition at one slot goes BEHIND
+     * the first instead of in front of it. HTML §4.12.1 "The script element"'s "prepare the script element"
+     * ends "Otherwise, immediately execute the script element el, even if other scripts are already
+     * executing", and in a browser that run happens INSIDE the causing program — so two elements one program
+     * prepares run in the order it prepared them. This engine expresses "inside" as the slot after the cursor,
+     * and that expression ALONE reverses them: both interpositions compute the same slot, and the second
+     * shifts the first down. `document.write("<script>a()</script><script>b()</script>")` and
+     * `body.appendChild(s1); body.appendChild(s2)` are the same two lines of that defect.
+     *
+     * THE WITNESS IS THE BASE SLOT, NOT THE CURSOR, AND THAT IS WHAT MAKES THE PAIR SELF-VALIDATING. The base
+     * is `script_i + 1` inside a program and `script_i` between programs (`frame` is exactly "inside a
+     * program"), so the two programs that can stand at one cursor — the row itself, and a job running before
+     * it — have DIFFERENT bases, and a stale pair can only be reused by a program whose interpositions really
+     * do belong behind the ones already there. There is therefore no invalidation site to remember, which
+     * matters because the cursor is advanced from more than one place.
+     *
+     * NO PER-ROW COLUMN WOULD DO, which is the shape this was nearly built as. "Which rows did the RUNNING
+     * program interpose" cannot be read off `dyn_pos`: a row an ANCESTOR interposed carries DYN_POS_IMMEDIATE
+     * too and sits in the same run, so a scan that skipped every immediate row would put a grandchild's
+     * program behind its parent's sibling — the same reversal one level up.
+     *
+     * A FORK CARRIES IT, like every other field of the parent's history: an arm is its parent's timeline
+     * continued, standing at the same cursor over the same rows, with the same interpositions already made. */
+    int   imm_at;          /* the base slot `imm_next` was computed from; -1 while no run is open */
+    int   imm_next;        /* the slot the next IMMEDIATE row of that run takes */
     /* this flow's OWN program bodies (per-flow, not global): a lazily-loaded chunk, a queued document script —
        or, while the kind beside it is DYN_SCRIPT_SRC, the ADDRESS of a script whose source has not arrived. One
        column either way, because it is one queue and the entry is one position in it.

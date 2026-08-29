@@ -807,6 +807,9 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
     g_acct_live++;
     f->cand_src = NULL; f->cand_payload = NULL; f->cand_sink = NULL;
     f->last_compiled = -1;   /* nothing compiled yet; see the no-replay DCHECK at the compile site */
+    /* NOTHING INTERPOSED YET — flow.h states why the pair is what says so and why -1 is a cursor no program
+       can be standing at rather than a sentinel this initialisation invents. */
+    f->imm_at = -1; f->imm_next = 0;
     f->world = w;
     g_flows[g_flows_n++] = f;
     frontier_rank_changed();   /* frontier changed: the newcomer may outrank the flow holding the thread */

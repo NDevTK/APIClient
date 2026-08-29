@@ -2994,6 +2994,12 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        field above and below carries: an arm is its parent's timeline continued, so it has run what its parent
        had run. */
     sib->last_compiled = parent->last_compiled;
+    /* AND WHERE THE PROGRAM IT IS STANDING IN HAS ALREADY INTERPOSED (flow.h). The arm inherits the parent's
+       `dyn` rows, so it inherits the interpositions among them; without this pair it would compute its next
+       IMMEDIATE slot as if the program had made none and shift them apart. Two lines because the pair only
+       means anything together — `imm_next` without the cursor it was computed against is a slot in a sequence
+       nobody is standing in. */
+    sib->imm_at = parent->imm_at; sib->imm_next = parent->imm_next;
     sib->delta = cow_delta_fork(ctx, (CowDelta *)parent->delta);   /* O(1) shared base segment, then diverges */
     /* GENERATOR-STATE swaps built by clone_deep_flow for this fork: record each on the sibling's delta so the
        shared generator object resolves to the sibling's own cloned execution state while it runs. */
@@ -3937,6 +3943,25 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
            inserted from a running <script> is at the slot after it. One expression, both cases, and neither is
            the tail. */
         at = f->frame ? f->script_i + 1 : f->script_i;
+        /* …AND BEHIND WHAT HAS ALREADY BEEN INTERPOSED AT THAT SAME SLOT. The expression above is the slot for
+           a first interposition and the wrong slot for a second: both compute it identically, so the second
+           shifts the first down and the two run in the REVERSE of the order they were prepared in. §4.12.1
+           "The script element" ends "prepare the script element" with "Otherwise, immediately execute the
+           script element el, even if other scripts are already executing" — in a browser that run happens
+           INSIDE the causing program, so two elements one program prepares run in the order it prepared them:
+           `document.write("<script>a()</script><script>b()</script>")` runs `a` then `b`, and so does
+           `body.appendChild(s1); body.appendChild(s2)`.
+           THE WITNESS IS THE BASE SLOT AND NOT THE CURSOR, which is the one distinction that makes the pair
+           self-validating with no invalidation site. A frameless job at cursor i and the framed program at
+           cursor i-1 are DIFFERENT programs standing at the same cursor — and they share a base, correctly:
+           the job runs after that program, so its script goes behind the one that program interposed. The
+           framed program AT cursor i has base i+1, which is a different witness, so it starts a fresh run —
+           correctly again, because its own interpositions belong ahead of everything the job queued behind it.
+           NO PER-ROW COLUMN WOULD DO — see flow.h: a row an ANCESTOR interposed carries DYN_POS_IMMEDIATE too
+           and stands in the same run, so a scan over `dyn_pos` cannot tell the two apart. */
+        if (f->imm_at == at) at = f->imm_next;
+        else                 f->imm_at = at;
+        f->imm_next = at + 1;
         /* AND EVERY SLOT THE CURSOR CAN BE AT IS NOW NAMEABLE, which is what deleted the `CHECK` that used to
            stand here. The cursor used to walk the session document's static sequence [0, n) before this flow's
            own rows, so `at` was `cursor - n` and went NEGATIVE for a page that `eval`d or injected from any
