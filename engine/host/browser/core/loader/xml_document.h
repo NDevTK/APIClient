@@ -58,5 +58,10 @@ XmlDocumentLoad *xml_document_load_begin(lxb_html_document_t *document, DomParse
 bool             xml_document_load_ended(const XmlDocumentLoad *load);
 void             xml_document_load_step(XmlDocumentLoad *load);
 lxb_status_t     xml_document_load_finish(XmlDocumentLoad *load);
+/* ABANDON THE LOAD MID-ITEM — the flow driving it is gone. It closes whatever the arm has open (a stream that
+   is still taking bytes; the tree build's own reader) and destroys the handle. The partially built tree is
+   LEFT WHERE IT STANDS: whoever owns the Document decides what becomes of it, exactly as they do for a failed
+   parse, and a loader that emptied it would be deciding a consequence that is not its own. */
+void             xml_document_load_abort(XmlDocumentLoad *load);
 
 #endif

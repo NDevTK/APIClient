@@ -109,3 +109,17 @@ lxb_status_t html_document_load_finish(HtmlDocumentLoad *load)
     free(load);
     return st;
 }
+
+void html_document_load_abort(HtmlDocumentLoad *load)
+{
+    DCHECK(load != NULL, "html_document_load_abort was asked of no load");
+
+/* THE STREAM IS SHUT AND NOT LEFT OPEN, because §13.2.7 "The end" is also what releases the per-flow parse
+   declaration solver/dom_cow.h keyed on this parse's tree builder — a record left standing would be found by
+   the next parser allocated at that address and called somebody else's document. The EOF token §13.2.7 emits
+   builds `html`, `head` and `body` over whatever prefix arrived, which is a tree nobody will read: the caller
+   that abandoned this load is what owns the Document. */
+    if (load->st == LXB_STATUS_OK)
+        html_parse_document_close(load->document);
+    free(load);
+}

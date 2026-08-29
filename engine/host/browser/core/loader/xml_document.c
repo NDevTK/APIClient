@@ -203,3 +203,16 @@ lxb_status_t xml_document_load_finish(XmlDocumentLoad *load)
        Document is the inline report the standard permits, which the phases above have already built. */
     return LXB_STATUS_OK;
 }
+
+void xml_document_load_abort(XmlDocumentLoad *load)
+{
+    DCHECK(load != NULL, "xml_document_load_abort was asked of no load");
+    /* THE PHASES AFTER THE PARSE HAVE NOTHING TO ABANDON — the discard, §7.5.3's inline report and §14.2's
+       refusal each act on the TREE, which this does not touch, so the only thing an abandoned §7.5.3 load
+       still holds is an open tree build. */
+    if (load->parse) {
+        xml_parse_abort(load->parse);
+        load->parse = NULL;
+    }
+    free(load);
+}

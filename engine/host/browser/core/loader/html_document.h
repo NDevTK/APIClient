@@ -68,5 +68,10 @@ void html_document_load_step(HtmlDocumentLoad *load);
    parse ended with; a load whose OPEN failed closes nothing, which is `lxb_html_document_parse`'s own
    `goto failed`. */
 lxb_status_t html_document_load_finish(HtmlDocumentLoad *load);
+/* ABANDON THE LOAD MID-ITEM — the flow driving it is gone. It closes whatever the arm has open (a stream that
+   is still taking bytes; the tree build's own reader) and destroys the handle. The partially built tree is
+   LEFT WHERE IT STANDS: whoever owns the Document decides what becomes of it, exactly as they do for a failed
+   parse, and a loader that emptied it would be deciding a consequence that is not its own. */
+void html_document_load_abort(HtmlDocumentLoad *load);
 
 #endif

@@ -87,6 +87,11 @@ void document_load_step(DocumentLoad *load);
 /* CLOSE THE ARM and destroy the load. Returns the status the parse ended with — non-OK is the allocation floor
    and nothing else, since §13.2 rejects no input and §7.5.3 defines no failure for an ill-formed document. */
 lxb_status_t document_load_finish(DocumentLoad *load);
+/* ABANDON THE LOAD MID-ITEM — the flow driving it is gone. It closes whatever the arm has open (a stream that
+   is still taking bytes; the tree build's own reader) and destroys the handle. The partially built tree is
+   LEFT WHERE IT STANDS: whoever owns the Document decides what becomes of it, exactly as they do for a failed
+   parse, and a loader that emptied it would be deciding a consequence that is not its own. */
+void document_load_abort(DocumentLoad *load);
 
 /* THE COMPLETE LOAD — begin, step to the end, finish — FOR A CALLER WITH NO FLOW TO YIELD TO, and the DCHECK
    inside it is what holds that to being true. HTML §7.4.5's load-a-document reaches this engine from three

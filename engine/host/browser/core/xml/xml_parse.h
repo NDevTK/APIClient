@@ -110,6 +110,14 @@ void xml_parse_step(XmlParse *p);
    document it can assert about rather than one this file already emptied. */
 bool xml_parse_finish(XmlParse *p, XmlParseReport *report);
 
+/* ABANDON A PARSE MID-CONSTRUCT — the driver that was stepping it is gone, so nothing will ever read a report
+   about it. It is a SEPARATE entry and not `finish` with the assert relaxed, because the two are different
+   statements: a finish says the walk reached the end of the entity and assembles what it found, and this says
+   nobody is going to ask. The tree the parse built is left exactly where it stands, PARTIAL and all, for the
+   same reason a failed parse's is — whoever owns the Document decides that, and here that is whoever abandoned
+   the load. */
+void xml_parse_abort(XmlParse *p);
+
 /* THE COMPLETE PARSE — begin, step to the end, finish — for the consumers that have no flow to yield to.
    HTML §8.5.1 `parseFromString` and XMLHttpRequest §3.6.6 "set a document response" are both reached from a
    plain C function with no step machine under it, so there is no driver for them to park in and the loop is

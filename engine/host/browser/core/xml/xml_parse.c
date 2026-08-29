@@ -173,6 +173,13 @@ bool xml_parse_finish(XmlParse *p, XmlParseReport *report)
     return ok;
 }
 
+void xml_parse_abort(XmlParse *p)
+{
+    DCHECK(p != NULL, "xml_parse_abort was asked of no parse");
+    xml_tree_build_destroy(p->b);
+    free(p);
+}
+
 bool xml_parse_document(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,
                         const char *text, size_t len, XmlParseReport *report)
 {

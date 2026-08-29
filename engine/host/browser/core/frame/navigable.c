@@ -258,10 +258,16 @@ static bool child_in_this_agent(const Origin *child_origin)
    from. A response that carried no `Content-Type` is a DIFFERENT fact and does not arrive here as NULL — MIME
    Sniffing §7 computed a type for it out of its bytes, which is why this function no longer sees a header
    value at all. */
-static lxb_html_document_t *child_document(const char *body, size_t body_len, const MimeType *computed_type)
+static lxb_html_document_t *child_document(const char *body, size_t body_len, const MimeType *computed_type,
+                                           DocumentLoad **out_load)
 {
     static const char EMPTY[] = "<!doctype html><html><head></head><body></body></html>";
     lxb_html_document_t *dom;
+
+    DCHECK(out_load != NULL,
+           "a child navigable's Document was asked for without the handle its §7.5 load stands in — the parse "
+           "is a PULL and the loop over its items belongs to whoever can park between them, so a caller that "
+           "takes no handle is one that was going to drive it to completion");
 
     /* THE TWO TRAVEL TOGETHER OR NEITHER DOES. A response is bytes AND a computed type; one without the other
        is a caller that computed the type from something that is not this response, or that has a response it
@@ -307,11 +313,26 @@ static lxb_html_document_t *child_document(const char *body, size_t body_len, co
        from the COW declaration would give every framed document §13.2.6.4.7's Disabled arm. §7.4's initial
        `about:blank` takes it too: a page writes into that document and §13.2.6.4.4 PREPARES the written
        `script`, so it is script-running before it has a single byte of its own. */
-    CHECK((body ? document_load(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED, computed_type,
-                                (const lxb_char_t *)body, body_len)
-                : html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED,
-                                      (const lxb_char_t *)EMPTY, sizeof EMPTY - 1)) == LXB_STATUS_OK,
-          "a child navigable's Document did not parse");
+    /* AND THE RESPONSE'S ARM IS OPENED RATHER THAN RUN. A document parse is O(document), so completing one
+       here held the thread for the length of the response inside a flow's slice — core/loader/document_load.h
+       is where that is stated and where the assert that refuses it now stands. What comes back is the load
+       STANDING AT ITS FIRST ITEM; the loop belongs to the step machine above, which parks between items.
+       §7.4's INITIAL about:blank IS NOT THAT and takes no handle: its markup is the fifty-three byte constant
+       on the line above, which is a fact about this build and not about any response, so it is O(1) in the
+       one quantity that matters and there is nothing for a driver to step. */
+    if (body) {
+        *out_load = document_load_begin(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED, computed_type,
+                                        (const lxb_char_t *)body, body_len);
+        CHECK(*out_load != NULL,
+              "a child navigable's response took an HTML §7.4.5 arm this build has no §7.5 loader for — the "
+              "router has already named the subsection in a dev build, and in release this is where the "
+              "navigation stops rather than handing the response to a parser that does not serve it");
+    } else {
+        *out_load = NULL;
+        CHECK(html_parse_document(dom, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_ENABLED,
+                                  (const lxb_char_t *)EMPTY, sizeof EMPTY - 1) == LXB_STATUS_OK,
+              "a child navigable's initial about:blank did not parse");
+    }
     return dom;
 }
 
@@ -451,19 +472,87 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
    documents a navigable has: the load job, which has the bytes §7.4 step 14 fetched, and `proxy_realm`, which
    is materializing the initial about:blank and has none. THE POLICY TRAVELS WITH THE TREE, because §7.2.6's
    container is built from both and a builder handed only the tree would judge the document against its
-   `<meta>` policies alone. */
-JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
-                           const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
-                           const char *content_type, const MimeType *computed_type,
-                           SerializedPolicyContainer policy,
-                           const char *about_base_url, SandboxFlags sandbox_flags)
-{
-    lxb_html_document_t *dom;
-    JSContext *cctx;
+   `<meta>` policies alone: core/dom/document.c's `document_policy_new` WALKS the parsed tree for CSP §3.3's
+   `<meta>` policies, which is why the parse has to be FINISHED before the realm is built and why this cannot
+   be reordered into §7.5's own sequence (create the Document, then fill its input byte stream).
+ *
+ * AND THAT IS WHY IT IS A WORK RECORD AND NOT A CALL. The parse in the middle of it is O(document), so the
+ * whole of this ran inside one un-preemptible span of a flow's slice — core/loader/document_load.h states the
+ * consequence and carries the assert that now refuses it. The loop belongs to the step machine that can park,
+ * and that machine's FRAME cannot hold what the other side of the suspension needs: §7.4.5 determines the
+ * address, the origin, the policy container, the opener policy and the sandboxing flag set into C locals, and
+ * core/frame/policy_container.h says in as many words that its serialization's text is BORROWED and that "a
+ * live value crosses neither an instance, nor a session, nor a PARK". So this record COPIES what it will still
+ * need afterwards and the machine carries ONE pointer across the stage boundary instead of fifteen.
+ *
+ * `navigates` IS A FACT ABOUT THE OPERATION AND NOT ABOUT THE NAVIGABLE. A load hands the navigable its new
+ * active document once that Document exists; `proxy_realm` is MATERIALIZING the initial about:blank the
+ * navigable already has and must move no binding at all. Neither is recoverable by inspecting the navigable,
+ * which is CLAUDE.md's "an operation that becomes a work item takes its inputs with it" exactly — so the
+ * caller states it, the same way the address and the initiator's policy container already travel with the job. */
+typedef struct {
+    uint32_t doc;
+    char *url, *top_level_url, *about_base_url;
+    /* §7.1.7's CONTAINER, ITEM BY ITEM AND COPIED. Its serialization borrows every string from whoever built
+       it (policy_container.h), and this record outlives that frame — so the items are held rather than the
+       struct, and the struct is rebuilt from them at the finish. */
+    char *csp, *self_origin, *coep_endpoint, *coep_report_only_endpoint;
+    EmbedderPolicyValue coep_value, coep_report_only_value;
+    /* §7.1.1's ORIGINS, HELD AS POINTERS AND NOT COPIED, which is a statement about origin records rather than
+       an exception to the paragraph above: an origin belongs to the agent and outlives every frame that names
+       one (nothing in the load job frees these), and its IDENTITY is what §7.3.2.1's determine the origin
+       returns for an `about:` destination — a copy would mint a second record and make the loaded document
+       cross-origin to the document that navigated it. */
+    const Origin *origin, *top_level_origin;
+    OpenerPolicyValue opener_policy;
+    SandboxFlags sandbox_flags;
+    bool navigates;
     /* HTML §13.2.3.2's ANSWER FOR THIS RESPONSE, and the UTF-8 the parser is handed because of it. -1 is "no
        response", which is §7.4's initial about:blank and an address whose fetch failed: those get DOM §4.5
        Interface Document's default ("unless stated otherwise, a document's encoding is the utf-8 encoding"),
        which doc_rec_new already wrote, and there is nothing here to determine. */
+    int encoding;
+    /* THE DECODED ENTITY, OWNED HERE AND BORROWED BY THE LOAD until it is finished — core/loader/
+       document_load.h's contract, and the reason this cannot be freed where the decode happens any more. */
+    char *decoded;
+    lxb_html_document_t *dom;
+    DocumentLoad *load;   /* NULL for a destination with no response — §7.4's initial about:blank */
+} NavCreateWork;
+
+/* A COPY OR NOTHING. Every string this record holds is optional in exactly one sense — `about_base_url` and
+   the CSP text are legitimately absent — and a NULL copy is the same positive statement the original was. */
+static char *nav_strdup(const char *s)
+{
+    char *p;
+    size_t n;
+    if (s == NULL) return NULL;
+    n = strlen(s);
+    p = malloc(n + 1);
+    CHECK(p != NULL, "navigable: OOM copying a §7.5.1 creation item across a suspension");
+    memcpy(p, s, n + 1);
+    return p;
+}
+
+static void nav_create_free(NavCreateWork *w)
+{
+    free(w->url); free(w->top_level_url); free(w->about_base_url);
+    free(w->csp); free(w->self_origin); free(w->coep_endpoint); free(w->coep_report_only_endpoint);
+    free(w->decoded);
+    free(w);
+}
+
+/* HTML §7.5.1 "Shared document creation infrastructure"'s CREATE AND INITIALIZE A DOCUMENT OBJECT, OPENED —
+   every item copied, the response decoded, the Document made, and its §7.5 subsection standing at its first
+   item. Nothing has been parsed when this returns. */
+static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
+                                       const Origin *origin, const Origin *top_level_origin,
+                                       OpenerPolicyValue opener_policy, bool navigates,
+                                       const char *body, size_t body_len,
+                                       const char *content_type, const MimeType *computed_type,
+                                       SerializedPolicyContainer policy,
+                                       const char *about_base_url, SandboxFlags sandbox_flags)
+{
+    NavCreateWork *w;
     int encoding = -1;
     char *decoded = NULL;
     size_t decoded_len = 0;
@@ -479,39 +568,22 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a child navigable's realm was asked for with no TOP-LEVEL CREATION URL — §8.1.3.5 reads it to "
            "decide whether the environment is a secure context, so the realm's platform surface depends on it "
            "and a builder handed nothing would install a surface belonging to no document");
+    DCHECK(url != NULL,
+           "a child navigable's Document was asked for with no ADDRESS — §7.5.1's creationURL is what "
+           "`document.URL`, `location.href` and every relative URL this Document resolves are read off, and a "
+           "Document created without one resolves them against nothing");
     DCHECK(g_realm_builder != NULL,
            "a same-origin child navigable was reached in an agent whose host declared no realm builder — a "
            "same-origin document is a second REALM in this heap, and only the host knows which platform "
            "surface a document of this build has; declare it with navigable_set_realm_builder");
-    /* HTML §13.2.3.2 "Determining the character encoding", THEN §13.2.3.1 "Parsing with a known character
-       encoding" — the two halves of what this site used to do by handing the response's bytes to a parser that
-       takes UTF-8 and hoping. The comment at the fetch (js_nav_load_step) named this as the decode still owed
-       once the bytes stopped being destroyed a zone earlier, and this is it: the response's `Content-Type`,
-       its BOM and its first 1024 bytes decide the encoding (core/html/html_encoding_sniff.h), and Encoding
-       §6.1 Legacy hooks for standards' `decode` turns the body into the UTF-8 lexbor's tokenizer requires.
-       THE CONTAINER DOCUMENT'S ENCODING IS §13.2.3.2's STEP 6, and `ctx` is the realm of the document that is
-       performing this navigation — which for a child navigable IS the container document. Its origin is the
-       same as this one's by the assertion at the top of this function (an instance is an ORIGIN-KEYED agent
-       cluster, so a realm built here can only be same-origin), which is the first half of the step's own
-       condition; the second half is the algorithm's and is applied there.
-       A DECODE IS NOT A RE-ENCODE OF THE SAME BYTES: `decoded` is what the tree is built from, so the token
-       byte ownership html_parse.h describes attaches to the decoded buffer's contents through lexbor's own
-       copies, and this buffer is freed as soon as the parse that consumed it has returned. */
-    if (body) {
-        encoding = html_encoding_sniff(body, body_len, content_type, document_encoding(ctx));
-        decoded = encoding_decode(body, body_len, encoding, &decoded_len);
-        CHECK(decoded != NULL, "navigable: OOM decoding a child navigable's response body");
-    }
-    dom = child_document(body ? decoded : NULL, decoded_len, computed_type);
-    free(decoded);
-    /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
-       principal — and because the identity it would have to carry is this agent's, asserted above. */
     /* §7.1.5 STATES A CONSEQUENCE OF THE FLAG SET THIS AGENT CANNOT HONOUR, AND IT IS ASSERTED RATHER THAN
        IGNORED: the SANDBOXED ORIGIN flag "forces content into an opaque origin", and an opaque origin is same
        origin with nothing — so a Document carrying it is a document of a DIFFERENT agent cluster and belongs
        in another instance. Reaching here with it set means §7.3.2.1's determine-the-origin was asked with a
        different flag set than the one the Document is being created with, which is the "an operation takes
-       its inputs with it" split getting one of its two answers from the wrong place. */
+       its inputs with it" split getting one of its two answers from the wrong place.
+       IT IS ASKED BEFORE THE PARSE and not after it, which is where it used to sit: a Document this build
+       refuses is a Document it must not spend a response building. */
     DCHECK(!(sandbox_flags & SANDBOX_ORIGIN),
            "a realm of THIS agent was built for a Document whose active sandboxing flag set has the sandboxed "
            "origin browsing context flag — §7.1.5 forces such a Document into a fresh OPAQUE origin, which is "
@@ -526,14 +598,120 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "a realm was built with no §7.1.7 POLICY CONTAINER — every Document is created with one, and CSP "
            "§2.2 gives its list a self-origin, so a Document without one resolves `'self'` against nothing and "
            "reports its own scripts as blocked by its own policy");
-    cctx = g_realm_builder(JS_GetRuntime(ctx), dom, url, top_level_url, origin_serialized(origin),
-                           policy, sandbox_flags, doc, nav_proxy);
+    DCHECK(policy.embedder.endpoint != NULL && policy.embedder.report_only_endpoint != NULL,
+           "a §7.1.4 EMBEDDER POLICY reached §7.5.1's creation with a null endpoint — the section spells an "
+           "absent endpoint as the EMPTY STRING, so a null is a second absence with no meaning and the copy "
+           "this record takes could not tell the two apart");
+
+    /* HTML §13.2.3.2 "Determining the character encoding", THEN §13.2.3.1 "Parsing with a known character
+       encoding" — the two halves of what this site used to do by handing the response's bytes to a parser that
+       takes UTF-8 and hoping. The comment at the fetch (js_nav_load_step) named this as the decode still owed
+       once the bytes stopped being destroyed a zone earlier, and this is it: the response's `Content-Type`,
+       its BOM and its first 1024 bytes decide the encoding (core/html/html_encoding_sniff.h), and Encoding
+       §6.1 Legacy hooks for standards' `decode` turns the body into the UTF-8 lexbor's tokenizer requires.
+       THE CONTAINER DOCUMENT'S ENCODING IS §13.2.3.2's STEP 6, and `ctx` is the realm of the document that is
+       performing this navigation — which for a child navigable IS the container document. Its origin is the
+       same as this one's by the assertion at the top of this function (an instance is an ORIGIN-KEYED agent
+       cluster, so a realm built here can only be same-origin), which is the first half of the step's own
+       condition; the second half is the algorithm's and is applied there.
+       A DECODE IS NOT A RE-ENCODE OF THE SAME BYTES: `decoded` is what the tree is built from, so the token
+       byte ownership html_parse.h describes attaches to the decoded buffer's contents through lexbor's own
+       copies — and this buffer is now OWNED BY THIS RECORD rather than freed at the call, because the §7.5
+       load BORROWS it across every suspension until it is finished. */
+    if (body) {
+        encoding = html_encoding_sniff(body, body_len, content_type, document_encoding(ctx));
+        decoded = encoding_decode(body, body_len, encoding, &decoded_len);
+        CHECK(decoded != NULL, "navigable: OOM decoding a child navigable's response body");
+    }
+
+    w = calloc(1, sizeof *w);
+    CHECK(w != NULL, "navigable: OOM opening HTML §7.5.1's create and initialize a Document object");
+    w->doc                      = doc;
+    w->url                      = nav_strdup(url);
+    w->top_level_url            = nav_strdup(top_level_url);
+    w->about_base_url           = nav_strdup(about_base_url);
+    w->csp                      = nav_strdup(policy.csp);
+    w->self_origin              = nav_strdup(policy.self_origin);
+    w->coep_endpoint            = nav_strdup(policy.embedder.endpoint);
+    w->coep_report_only_endpoint = nav_strdup(policy.embedder.report_only_endpoint);
+    w->coep_value               = policy.embedder.value;
+    w->coep_report_only_value   = policy.embedder.report_only_value;
+    w->origin                   = origin;
+    w->top_level_origin         = top_level_origin;
+    w->opener_policy            = opener_policy;
+    w->sandbox_flags            = sandbox_flags;
+    w->navigates                = navigates;
+    w->encoding                 = encoding;
+    w->decoded                  = decoded;
+    w->dom = child_document(body ? decoded : NULL, decoded_len, computed_type, &w->load);
+    return w;
+}
+
+/* HAS THE DOCUMENT'S §7.5 SUBSECTION NOTHING LEFT TO FILL? TRUE with no load at all, which is §7.4's initial
+   about:blank and a positive statement rather than a hole: that Document came from no response. */
+static bool nav_create_ended(const NavCreateWork *w)
+{
+    DCHECK(w != NULL, "nav_create_ended was asked of no creation");
+    return w->load == NULL || document_load_ended(w->load);
+}
+
+static void nav_create_step(NavCreateWork *w)
+{
+    DCHECK(w != NULL, "nav_create_step was asked of no creation");
+    DCHECK(!nav_create_ended(w),
+           "§7.5.1's creation was stepped after its §7.5 subsection had nothing left to fill — "
+           "nav_create_ended is what a driver's loop tests, and asking past it is a driver that did not");
+    document_load_step(w->load);
+}
+
+/* THE FLOW THAT WAS BUILDING THIS DOCUMENT IS GONE — the machine's teardown, and the only place that owns
+   what a half-built creation holds. NOTHING ELSE CAN EVER COLLECT IT: no realm was built, so no navigable and
+   no world row names this Document, and the parse's own lexbor parser is reachable from it alone. */
+static void nav_create_abandon(NavCreateWork *w)
+{
+    if (w->load) {
+        document_load_abort(w->load);
+        w->load = NULL;
+    }
+    if (w->dom) {
+        dom_document_destroy(w->dom);
+        w->dom = NULL;
+    }
+    nav_create_free(w);
+}
+
+/* §7.5.1's CREATE AND INITIALIZE A DOCUMENT OBJECT, FINISHED — the parse's own end, then the realm the host
+   builds around the finished tree, then §7.4.6.2's update the document for a navigation. */
+static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueConst nav_proxy)
+{
+    SerializedPolicyContainer policy;
+    JSContext *cctx;
+
+    DCHECK(w != NULL, "nav_create_finish was asked of no creation");
+    DCHECK(nav_create_ended(w),
+           "§7.5.1's creation was finished with response bytes still unfilled — the realm is built around the "
+           "PARSED tree (document_policy_new walks it for CSP §3.3's `<meta>` policies), so a Document handed "
+           "over here would be judged under the policies of a prefix of itself");
+    if (w->load) {
+        CHECK(document_load_finish(w->load) == LXB_STATUS_OK, "a child navigable's Document did not parse");
+        w->load = NULL;
+    }
+    /* THE CONTAINER, REBUILT FROM THE ITEMS THIS RECORD COPIED. It is assembled here rather than held as a
+       struct because what a struct of borrowed pointers survives is a call and not a park. */
+    policy = serialized_policy_container(w->csp, w->self_origin,
+                                         serialized_embedder_policy(w->coep_value, w->coep_endpoint,
+                                                                    w->coep_report_only_value,
+                                                                    w->coep_report_only_endpoint));
+    /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
+       principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
+    cctx = g_realm_builder(JS_GetRuntime(ctx), w->dom, w->url, w->top_level_url, origin_serialized(w->origin),
+                           policy, w->sandbox_flags, w->doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
        about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.
        It is written here rather than before the parse because the Document RECORD is what carries it and the
        record is the realm builder's product — the bytes the parse consumed were already decoded with it. */
-    if (encoding >= 0) document_set_encoding(cctx, encoding);
+    if (w->encoding >= 0) document_set_encoding(cctx, w->encoding);
     /* HTML §7.4's ABOUT BASE URL, WRITTEN BEFORE ANYTHING RESOLVES A URL IN THIS DOCUMENT. It is §2.4.3's
        fallback base URL for a Document addressed `about:blank`, so §4.2.3's freeze and every relative
        reference read it — which is why it is set here, between the realm's construction and the scripts
@@ -543,7 +721,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
        the HOST's — it declares which platform surface a document of this build gets — and whose base URL a
        created Document inherits is a fact about the OPERATION §7.4 is performing, which is this component's.
        A host cannot answer it and would have to be told, which is a second protocol for one fact. */
-    if (about_base_url && *about_base_url) document_set_about_base_url(cctx, about_base_url);
+    if (w->about_base_url && *w->about_base_url) document_set_about_base_url(cctx, w->about_base_url);
     if (g_realms_n == g_realms_cap) {
         int cap = g_realms_cap ? g_realms_cap * 2 : 8;
         JSContext **g = realloc(g_realms, (size_t)cap * sizeof *g);
@@ -557,7 +735,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
        BEFORE the reference handoff below, so nothing here reads a realm whose only reference has just gone.
        The initial about:blank reaches this with an empty tree and seeds nothing, which is §7.4's own fact
        rather than a case to test for: that Document came from no response and has no scripts by construction. */
-    navigable_seed_scripts(cctx, dom, doc);
+    navigable_seed_scripts(cctx, w->dom, w->doc);
     /* THE BUILDER'S REFERENCE IS HANDED TO THE NAVIGABLE — see the list's own note for why the agent must not
        keep one. What holds the realm afterwards is its own graph: the WindowProxy holds the child's Window, the
        Window's methods are C function objects, and every one of those holds a counted reference to the realm
@@ -568,7 +746,44 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "are what keep a realm alive, and a realm with none of them is not a realm this agent can hand to a "
            "navigable");
     JS_FreeContext(cctx);
+    /* §7.4.6.2's UPDATE THE DOCUMENT, and §7.5.1's OPENER POLICY ROW for the Document this navigation creates
+       — "opener policy … navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP. It
+       moves with the rest of the binding because a navigation is what replaces a navigable's active document,
+       and it is HERE rather than at the load job's frame because the frame that determined it has already
+       parked and come back: the record is what carried those five facts across the suspension. */
+    if (w->navigates)
+        window_proxy_navigate(ctx, nav_proxy, cctx, w->doc, w->url, w->top_level_url,
+                              w->top_level_origin, w->origin, w->opener_policy);
+    nav_create_free(w);
     return cctx;
+}
+
+/* THE ONE-CALL FORM, for the caller with no response and therefore nothing to step: `proxy_realm`
+   materializing §7.4's initial about:blank, whose markup is a constant of this build. A caller arriving here
+   WITH a response has skipped the pull — the parse of a response is O(document) and the loop over it belongs
+   to the step machine that can park between its items — and that is asserted rather than described. */
+JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const char *top_level_url,
+                           const Origin *origin, JSValueConst nav_proxy, const char *body, size_t body_len,
+                           const char *content_type, const MimeType *computed_type,
+                           SerializedPolicyContainer policy,
+                           const char *about_base_url, SandboxFlags sandbox_flags)
+{
+    NavCreateWork *w;
+
+    (void)body; (void)body_len; (void)content_type; (void)computed_type;
+    DCHECK(body == NULL && body_len == 0 && content_type == NULL && computed_type == NULL,
+           "a Document was created from a RESPONSE through the one-call realm entry — §7.4.5's response arm is "
+           "the load job's, where it is opened with nav_create_begin, stepped one item at a time and finished "
+           "on the other side of however many suspensions the frontier asked for. This entry exists for the "
+           "destination that has no response at all, and driving a response through it would hold the thread "
+           "for the length of the document inside whatever flow happened to be running");
+    w = nav_create_begin(ctx, doc, url, top_level_url, origin, NULL, OPENER_POLICY_UNSAFE_NONE, /*navigates*/false,
+                         NULL, 0, NULL, NULL, policy, about_base_url, sandbox_flags);
+    DCHECK(nav_create_ended(w),
+           "§7.4's initial about:blank was opened as a creation with items left to fill — its markup is a "
+           "constant of this build and reaches child_document as the no-response arm, which takes no load "
+           "handle at all, so a steppable one here is a response that arrived through the entry above");
+    return nav_create_finish(ctx, w, nav_proxy);
 }
 
 /* §7.4 STEP 14's NAVIGATE IS A SCHEDULED WORK ITEM, and it has to be one because NOT ONE of its three callers
@@ -613,16 +828,32 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
 typedef struct {
     JSStepHdr hdr;
     uint32_t  req;   /* the host-owed response, 0 before it is asked for */
+    /* §7.5.1's CREATION, ONCE §7.4.5 HAS DETERMINED EVERYTHING IT IS MADE OF — the one thing that crosses this
+       machine's stage boundary. It is a POINTER and not the fifteen values it holds because those values are
+       borrowed text and C locals, and a park is exactly what neither survives (see NavCreateWork). NULL until
+       the response has been turned into one, and NULL again the moment it is finished. */
+    NavCreateWork *create;
 } NavLoadState;
 
-/* WHERE THIS MACHINE RESTS. It is §7.4 step 14's load as a JOB, and its whole body is one step of the
-   standard: fetch the destination, build the Document from what came back, and hand the navigable to it. The
-   wait for the host's answer is a sub-sequence within that step (`req` is its cursor) and not a step of its
-   own — no page code of this document runs across it, because the document does not exist yet. */
+/* WHERE THIS MACHINE RESTS. It is §7.4 step 14's load as a JOB, and it rests in TWO places because the
+   standard's own §7.4.5 hands off to a §7.5 subsection whose work is O(DOCUMENT). The wait for the host's
+   answer is a sub-sequence WITHIN the first (`req` is its cursor) and not a step of its own — no page code of
+   this document runs across it, because the document does not exist yet.
+   THE SECOND STAGE IS A STAGE PER ITEM AND NOT A SPAN, which is JSTrampStepDef.steps' own rule: "a span over
+   anything of the PAGE'S SIZE (a list, a tree, a string, a collection, a PARSE) is not a range at all: it is a
+   stage per step, and the stage that walks returns JS_STEP_YIELD at every turn, so the scheduler is ASKED at
+   each one and answers from the frontier rather than from the algorithm". It used to be inside the first
+   stage, which made that stage a declaration this machine could not keep: a response-sized parse with no rest
+   point in it, inside a flow's slice, unpreemptible and unparkable. */
+#define NAV_LOAD_ALGORITHM "HTML §7.4 step 14's load"
 #define NAV_LOAD_STAGES(X) \
     X(NAV_LOAD_FETCH, "HTML §7.4 step 14 → §7.4.5 populate a session history entry (fetch the destination, " \
-                      "then §7.1.7's policy container, §7.1.3's opener policy and §7.5.1's create and " \
-                      "initialize a Document object over the response)")
+                      "then §7.1.7's policy container, §7.1.3's opener policy, and OPEN §7.5.1's create and " \
+                      "initialize a Document object over the response)") \
+    X(NAV_LOAD_CREATE, "HTML §7.5.2 \"Loading HTML documents\" / §7.5.3 \"Loading XML documents\" / §7.5.4 " \
+                       "\"Loading text documents\" (fill the parser's input byte stream with the fetched " \
+                       "bytes, one item per step), then §13.2.7 \"The end\" and §7.4.6.2's update the " \
+                       "document)")
 enum { NAV_LOAD_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const NAV_LOAD_STEPS[] = { NAV_LOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -826,7 +1057,6 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        binding to move, and one flag is what keeps those two facts from being asked twice. */
     bool swapped = false;
     size_t body_len = 0;
-    JSContext *cctx;
     SandboxFlags final_flags, csp_flags;
     uint32_t doc, oid = 0;
     int orc;
@@ -837,8 +1067,14 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     mime_type_init(&computed);
     memset(&response_headers, 0, sizeof response_headers);
     opener_policy_init(&response_coop);   /* §7.4.5: "Let responseCOOP be a new opener policy" */
-    DCHECK(s->hdr.stage == NAV_LOAD_FETCH, "the document-load job resumed at a stage §7.4 does not have");
     DCHECK(window_proxy_is(proxy), "the document-load job was given something that is not a WindowProxy");
+    /* THE ENTRY-STAGE TRANSFER, GENERATED FROM THE STAGE LIST — there is no `else` and no un-named span, so a
+       stage added to the declaration with no arm does not link and an arm naming no stage does not compile.
+       Everything above it runs on EVERY entry, which is a statement about those lines rather than an accident
+       of where a guard happened to land. */
+    STEP_DISPATCH(NAV_LOAD_STAGES, s->hdr.stage, NAV_LOAD_ALGORITHM, JS_STEP_ABRUPT);
+
+    STEP_ARM(NAV_LOAD_FETCH);
     addr = JS_ToCString(ctx, step_arg(&s->hdr, 1));
     if (!addr) return JS_STEP_ABRUPT;
     /* IS THERE ANYTHING TO FETCH — one spec fact about the SCHEME, asked where the fetch is. `about:blank` has
@@ -954,7 +1190,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            run its own — so a document served in any other encoding reached lexbor already replaced with U+FFFD
            and the algorithm that decides its encoding had nothing left to decide. §2.2.5's body is a byte
            sequence and the host now hands one over (core/fetch/fetch.h), and HTML §13.2.3.2 "Determining the
-           character encoding" runs on it in navigable_realm — the BOM sniff, then the transport layer's
+           character encoding" runs on it in nav_create_begin — the BOM sniff, then the transport layer's
            charset, then the prescan of the first 1024 bytes — with Encoding §6.1 Legacy hooks for standards'
            `decode` producing the UTF-8 lexbor's tokenizer takes. So the pair that travels from here is the
            BYTES AND THE HEADER VALUE, never a string somebody already decoded: reinstating a decode on this
@@ -1256,7 +1492,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             /* §7.1.3.2's SWAP ARM, performed by core/frame/browsing_context_group.c — a new top-level browsing
                context in a NEW group, announced to the host as a SECOND INSTANCE, and this navigable's browsing
                context discarded. THIS NAVIGATION THEN CREATES NO DOCUMENT HERE, which is what `swapped` gates
-               below: `navigable_realm` would build the swapped Document's realm in this heap, which is the
+               below: nav_create_begin/_finish would build the swapped Document's realm in this heap, which is the
                second agent cluster in one JSRuntime SECURITY.md's key forbids, and `window_proxy_navigate`
                would move this navigable's binding onto it — precisely the update §7.1.3.2 withholds, and the
                update whose ABSENCE is what makes the opener's handle answer `closed`. The document NAME is not
@@ -1299,13 +1535,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            to. So both arms name the address the response came from, and the address the navigation ASKED for is
            the FIRST item of that list. It is what `document.URL`, `location.href` and every relative URL this
            Document resolves are read off. */
-        cctx = navigable_realm(ctx, doc, dest_url, tlu, origin, proxy, (const char *)body, body_len, resp_ctype,
-                               computed_defined ? &computed : NULL,
-                               policy, about_base, final_flags);
-        /* §7.5.1's OPENER POLICY ROW for the Document this navigation creates — "opener policy …
-           navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP above. It moves with
-           the rest of the binding because a navigation is what replaces a navigable's active document. */
-        window_proxy_navigate(ctx, proxy, cctx, doc, dest_url, tlu, tlo, origin, response_coop.value);
+        /* §7.5.1's CREATION IS OPENED HERE AND FINISHED IN THE NEXT STAGE. Everything §7.4.5 determined is
+           handed over in this one call — including §7.5.1's opener policy row and the top-level origin, which
+           §7.4.6.2's update the document needs on the far side of however many suspensions the parse takes —
+           because the record COPIES what a park does not carry, and this frame's locals are all freed below.
+           `navigates` is TRUE: this is a navigation, so the navigable takes the Document as its active one. */
+        s->create = nav_create_begin(ctx, doc, dest_url, tlu, origin, tlo, response_coop.value,
+                                     /*navigates*/true, (const char *)body, body_len, resp_ctype,
+                                     computed_defined ? &computed : NULL,
+                                     policy, about_base, final_flags);
     }
     opener_policy_free(&response_coop);
     embedder_policy_free(&response_ep);
@@ -1322,8 +1560,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     free(resp_csp);
     free(resp_ctype);
     /* CSP §2.2.2's SELF-ORIGIN BYTES, WHICH THIS FRAME OWNS AND THE CONTAINER HAS COPIED — the same ownership
-       as `resp_csp` beside it, and freed after navigable_realm for the same reason: the container the realm was
-       built with names these bytes until it has taken its own copy of them. */
+       as `resp_csp` beside it, and freed after nav_create_begin for the same reason: the container the
+       creation record was opened with names these bytes until that record has taken its own copy — which it
+       does at the OPEN and not at the finish, because the finish is on the far side of a suspension and
+       policy_container.h's serialization is borrowed text that does not cross one. */
     free(response_self);
     /* Initialised at the top of this frame and freed unconditionally — §4.4 leaves an empty record behind on
        failure, so a `free` of one that was never filled is the same operation as a free of one that was, and
@@ -1333,7 +1573,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     mime_type_free(&computed);
     JS_FreeCString(ctx, field_lines);
     /* NO `JS_FreeCString(ctx, body)`: `body` points INTO `bodyv`'s own buffer and owns nothing, so its whole
-       lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */
+       lifetime is that value's — which is why the release below must stay AFTER nav_create_begin, which is
+       where §13.2.3.2's decode copies the bytes into a buffer the creation record owns. */
     JS_FreeValue(ctx, headersv);
     JS_FreeValue(ctx, bodyv);
     JS_FreeValue(ctx, urlv);
@@ -1355,6 +1596,39 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        borrow would be a double free of whichever it was. */
     JS_FreeCString(ctx, resp_url);
     JS_FreeCString(ctx, addr);
+    /* AND THE STAGE ENDS WITH EVERYTHING THIS FRAME OWNED ALREADY RELEASED, which is what makes the rest point
+       below a rest point at all: the creation record is the only thing left alive, the host register has been
+       taken and cleared, and a flow parked here holds no borrowed string and no unanswered request. A load
+       that SWAPPED browsing context groups creates no Document in this heap and has no creation to finish. */
+    if (s->create == NULL)
+        return JS_STEP_DONE;
+    /* THE TRANSFER IS MADE IN THIS SAME ENTRY AND IS NOT ITSELF A REST POINT — what it crosses is the arm
+       boundary and nothing else, which is the one thing STEP_JUMP is for. The rest point is INSIDE the arm,
+       at each item, so a destination with no response (§7.4's `about:blank`, whose markup is a constant of
+       this build) finishes in this entry exactly as it did before there were two stages, and a response
+       yields after its first item. */
+    STEP_GOTO(s->hdr.stage, NAV_LOAD_CREATE, NULL);
+    STEP_JUMP(NAV_LOAD_CREATE);
+
+    /* §7.5.2 / §7.5.3 / §7.5.4, ONE ITEM PER ENTRY. The scheduler is asked between every one of them, so a
+       higher-value sibling preempts a page-sized parse, the cooperative quantum can take the thread back
+       inside it, and the flow that is doing it is an ordinary member of the ONE frontier rather than a C loop
+       nothing can interrupt. There is no second driver here and no loop: this arm performs ONE item and
+       returns, and what decides whether it runs again is the frontier. */
+    STEP_ARM(NAV_LOAD_CREATE);
+    DCHECK(s->create != NULL,
+           "§7.4 step 14's load resumed at its creation stage with no creation — the fetch stage transfers "
+           "here only after nav_create_begin has produced one, so a null here is a stage reached by something "
+           "that is not this machine's own transfer");
+    if (!nav_create_ended(s->create)) {
+        nav_create_step(s->create);
+        return JS_STEP_YIELD;
+    }
+    /* §13.2.7 "The end", the realm the host builds around the finished tree, this document's own scripts, and
+       §7.4.6.2's update the document — all of it inside nav_create_finish, which is where the five facts this
+       frame determined before the suspension come back out of the record. */
+    nav_create_finish(ctx, s->create, proxy);
+    s->create = NULL;
     return JS_STEP_DONE;
 }
 
@@ -1362,17 +1636,64 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
    those, the response is the host register's until it is taken, and the load leaves its results on the
    navigable rather than in this state. The declaration is still REQUIRED and is not a formality — a machine
    with no visit cannot be FORKED, so a concolic branch reached from inside the load would abort the fork
-   instead of exploring both arms, and check_step_visits is what says so before anything is compiled. */
+   instead of exploring both arms, and check_step_visits is what says so before anything is compiled.
+   THE CREATION RECORD IS NOT NAMED HERE AND CANNOT BE. JSStepVisit has no operation for a half-built Document
+   — the same hole core/dom/element.c's fragment parse names — so what answers the fork is `unforkable` below
+   and what answers the TEARDOWN is `fini`, which are different consumers and different questions. */
 static void js_nav_load_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
     (void)ctx; (void)st; (void)v;
 }
 
-/* No fini: the state holds no JSValue of its own — the job's arguments are the header's. */
-static const JSTrampStepDef js_nav_load_def = { sizeof(NavLoadState), js_nav_load_step, NULL, 0,
+/* THE FLOW DRIVING THIS LOAD IS GONE — abandoned mid-parse, or unwound by a throw. The state holds no JSValue,
+   so this exists for exactly one thing: the creation record, which owns the decoded entity, an open §7.5 load
+   with a lexbor parser inside it, and the half-built Document itself. NOTHING ELSE NAMES ANY OF THEM — the
+   realm has not been built, so no navigable and no world row points at that Document — and a step state is
+   plain memory no gc walk and no refcount report can reach, which is exactly the leak class §C-stack's
+   ownership rule is about. There is no completion to state: this machine's result is a navigable holding a
+   document, never a value. */
+static JSValue js_nav_load_fini(JSContext *ctx, void *st, bool take_result)
+{
+    NavLoadState *s = st;
+    (void)ctx; (void)take_result;
+    if (s->create) {
+        nav_create_abandon(s->create);
+        s->create = NULL;
+    }
+    return JS_UNDEFINED;
+}
+
+/* WHY THIS MACHINE MUST NOT BE FORKED WHILE IT IS CREATING A DOCUMENT — core/dom/element.c's fragment parse
+   states the whole argument at frag_unforkable and this is the same object: between two items of §7.5.2's
+   fill, the machine holds an lxb_html_parser_t standing at a position with an open-element stack and an
+   insertion mode behind it, and lexbor exposes no copy of one; it also holds the half-built Document itself,
+   which JSStepVisit has no operation for, so a sibling arm would share ONE tree with the original and both
+   teardowns would destroy it. IT IS A PROPERTY OF THE ENGINE AND NOT OF THE PAGE: no page code runs across a
+   fill, but RAM pressure, a cold-tier eviction and a cross-session resume never ask what the page is doing,
+   and a fork can arrive from anywhere the scheduler puts one. */
+static const char *js_nav_load_unforkable(const void *st)
+{
+    const NavLoadState *s = st;
+    return s->create
+         ? "§7.4 step 14's document load cannot be forked while it is creating its Document — between two "
+           "items of §7.5.2/§7.5.3/§7.5.4's fill this machine owns the decoded entity, an open §7.5 load "
+           "holding a parser standing at a position, and the half-built Document those bytes are going into. "
+           "js_nav_load_visit declares none of them, because JSStepVisit has no operation for a PRIVATE DOM "
+           "TREE and none for a lexbor parser, so the sibling arm would share one Document with the original: "
+           "two arms filling one tree and two teardowns destroying it. WHAT TO BUILD IS core/dom/element.c's "
+           "frag_unforkable list, unchanged and already ordered — the `v->tree` operation whose clone deep-"
+           "copies a subtree through a node->node map (core/html/tree_construction.c's copy_subtree), and "
+           "then HTML §13.2.5's tokenizer as an engine component whose state is a spec-named enum rather than "
+           "a raw code pointer into lexbor's 182 static state functions. Both halves serve that machine and "
+           "this one, which is why neither is named twice"
+         : NULL;
+}
+
+static const JSTrampStepDef js_nav_load_def = { sizeof(NavLoadState), js_nav_load_step, js_nav_load_fini, 0,
                                                 .visit = js_nav_load_visit,
-                                                .algorithm = "HTML §7.4 step 14's document load, as a job",
-                                                .steps = NAV_LOAD_STEPS };
+                                                .algorithm = NAV_LOAD_ALGORITHM,
+                                                .steps = NAV_LOAD_STEPS,
+                                                .unforkable = js_nav_load_unforkable };
 static int g_nav_load_stepid = -1;
 
 /* `inherit_policy` is HTML §7.1.7's CLONE OF THE INITIATING DOCUMENT'S POLICY CONTAINER, and WHOSE it is

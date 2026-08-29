@@ -522,24 +522,20 @@ lxb_status_t html_parse_document_write(lxb_html_document_t *document, const lxb_
            no insertion point for any of them, and every `document.write` on that document lands here. The fix
            is that the ACTIVE document's parse is opened with html_parse_document_open and closed at §13.2.7's
            own moment — the lifecycle stage that moves the readiness to "interactive" — instead of being
-           completed by html_parse_document before the first flow is seeded. That change has TWO hazards that
-           must be answered with it, and the second is the bigger one:
-             (a) lexbor emits the EOF token in `chunk_end`, and §13.2.6 builds `html`/`head`/`body` from that
-                 token when the source produced none, so a ZERO-LENGTH response left open has no document
-                 element until the close and every walk of the tree in between sees an empty document. That is
-                 what a browser does too — a still-parsing empty document has a null `documentElement` — so
-                 what has to change is each reader that assumes otherwise, not this.
-             (b) THE NODES THIS CALL'S TREE CONSTRUCTION BUILDS BELONG TO NO FLOW. The WRITES are captured:
-                 §13.2.6 goes through solver/dom_cow.c's members, the parse declared DOM_PARSE_ROOT_SHARED, and
-                 an insert and a removal each push the delta entry that reverts them — so a `document.write`
-                 run inside a slice is isolated per flow exactly like an `appendChild` from script. What is
-                 still owed is OWNERSHIP: every other parse in this engine is out-of-tree and its result is
-                 PLACED through the chokepoint, and dom_cow_take_private is where the flow becomes the owner of
-                 what it placed. A live parser feeding the document's own tree has no placement step, so a
-                 discarded flow detaches its written nodes and nothing frees them. dom_cow.c's shared arm names
-                 the shape of the fix at its own assert (the creation record belongs where §13.2.6 MAKES the
-                 node, never at the insert, because §13.2.6.4.7's adoption agency re-inserts nodes it removed),
-                 and that is the mechanism this entry is waiting on. */
+           completed by html_parse_document before the first flow is seeded. ONE hazard is left, and it is the
+           smaller of the two this paragraph used to name: lexbor emits the EOF token in `chunk_end`, and
+           §13.2.6 builds `html`/`head`/`body` from that token when the source produced none, so a ZERO-LENGTH
+           response left open has no document element until the close and every walk of the tree in between
+           sees an empty document. That is what a browser does too — a still-parsing empty document has a null
+           `documentElement` — so what has to change is each reader that assumes otherwise, not this.
+           THE BIGGER ONE IS BUILT AND IS NO LONGER OWED, which is why it is not described here any more. It
+           was OWNERSHIP: the WRITES of a SHARED parse were always captured (§13.2.6 goes through
+           solver/dom_cow.c's members and an insert and a removal each push the entry that reverts them), but
+           nothing owned the nodes themselves, so a discarded flow detached what its parse had written and
+           nothing freed them. §13.2.6 now announces a node where it MAKES it — solver/dom_cow.h's fifth
+           tree-construction member, which is a CREATION and not a mutation, and which had to be at the make
+           rather than at the insert because §13.2.6.4.7's adoption agency re-inserts nodes it removed — so a
+           SHARED parse left open across a suspension is safe, and that is a capability rather than a debt. */
     DCHECK(html_parse_insertion_point_defined(lxb_dom_interface_document(document)),
            "bytes were inserted into the input stream of a document whose §13.2.3.5 insertion point is "
            "undefined — for §8.4.3 \"document.write()\" step 10 see the paragraph above this assert for the "

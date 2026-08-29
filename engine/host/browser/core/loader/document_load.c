@@ -164,6 +164,23 @@ lxb_status_t document_load_finish(DocumentLoad *load)
     return st;
 }
 
+void document_load_abort(DocumentLoad *load)
+{
+    DCHECK(load != NULL, "document_load_abort was asked of no load");
+    switch (load->arm) {
+    case DOC_LOAD_HTML: html_document_load_abort(load->u.html); break;
+    case DOC_LOAD_TEXT: text_document_load_abort(load->u.text); break;
+    case DOC_LOAD_XML:  xml_document_load_abort(load->u.xml);   break;
+    case DOC_LOAD_MULTIPART:
+    case DOC_LOAD_MEDIA:
+    case DOC_LOAD_EXTERNAL:
+        DFAIL("a load-a-document handle names an arm this build has no loader for — document_load_begin "
+              "returns NULL for those, so a handle carrying one was not built by it");
+        break;
+    }
+    free(load);
+}
+
 lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_kind,
                            HtmlScriptingMode scripting,
                            const MimeType *type, const lxb_char_t *text, size_t size)
@@ -184,10 +201,13 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
        flow's thread today. BUILD THE STAGE: give that machine a stage that calls document_load_begin, one
        that calls document_load_step and returns JS_STEP_YIELD while document_load_ended is false, and one that
        calls document_load_finish — the seam is here, every item is O(1), and the whole of the load's state is
-       in the handle rather than on the C stack. The Document that load parses into is
-       DOM_PARSE_ROOT_PRIVATE, which is what makes the park legal at all: the half-built tree is the flow's
-       own, so a sibling running mid-parse cannot see it (a DOM_PARSE_ROOT_SHARED parse left open across a
-       suspension owes the ownership mechanism core/html/html_parse.h names at html_parse_document_write). */
+       in the handle rather than on the C stack.
+       AND IT IS LEGAL FOR EITHER DECLARATION, WHICH IT WAS NOT WHEN THIS ASSERT WAS WRITTEN. A
+       DOM_PARSE_ROOT_PRIVATE parse is trivially safe to leave open — the half-built tree is the flow's own and
+       no sibling can reach it — and a DOM_PARSE_ROOT_SHARED one is safe too now that §13.2.6 ANNOUNCES the
+       nodes it makes through solver/dom_cow.h's fifth tree-construction member: the creation record is what
+       destroys them when a discarded flow's delta goes, which is the half a capture alone never had. So the
+       child navigable is where this fires, and it is not the only place the seam serves. */
     DCHECK(flow_running() == NULL,
            "HTML §7.4.5's load-a-document was driven to completion while a flow held the thread — a document "
            "parse is O(document) and this drive cannot be preempted, cannot give the thread back for a "
