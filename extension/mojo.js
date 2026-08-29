@@ -177,6 +177,58 @@
              "declares — " + decls[i].why);
   }
 
+  /* THE OUTGOING PARAMETER LIST, WALKED OFF THE DECLARATION AND LOOKED UP BY NAME. A positional argument list
+     is a SECOND copy of the parameter list kept by hand at every call site, and the copies go short in
+     silence: the only thing a positional caller can be told is a COUNT, so `checkValues` above can say 13
+     against 14 and cannot say WHICH parameter is absent — and where every declared parameter is a `string`, a
+     caller that pads to the right count in the WRONG ORDER passes every check this transport has, which is
+     not a degraded call but a wrong one carrying plausible values. That is the same defect `defineInterface`
+     refuses one layer up, where a method is identified by its ORDINAL and never by its position, and the same
+     one the reply direction has never had: a reply is already handed back keyed by its declared names, and
+     this file's own paragraph said so as the reason a reply field can be added without every call site
+     re-counting. The two directions are now that one shape.
+     A DECLARED PARAMETER WITH NO OWN PROPERTY REFUSES BY NAME, and so does a property no parameter declares.
+     Both skews are real and they are opposite: a caller OLDER than the interface has a hole, a caller NEWER
+     than it has a key nobody reads — and a key nobody reads is a value its author believes it sent.
+     A METHOD THAT DECLARES NO PARAMETERS TAKES NO ARGUMENT AT ALL, which is a positive statement rather than
+     an omitted record: there is no record to send, so `{}` would be a caller asserting the existence of one.
+     The JS arity is therefore asserted as well — exactly one record where the mojom declares parameters, none
+     where it declares none.
+     THE COMPOSITION DOES NOT DEPEND ON THE ASSERTS, because they are DCHECK-class and a release build strips
+     them. A missing name then reaches the wire as `undefined` and the RECEIVER refuses it under `checkValues`'
+     CHECK-class arm, which is fatal in release — the boundary SECURITY.md calls hostile is the one that stays
+     validated, and this end's asserts are this process's own logic being correct. */
+  function placeParams(m, argv) {
+    DCHECK(argv.length === (m.params.length === 0 ? 0 : 1),
+           "a call to " + m.iface + "." + m.name + " passed " + argv.length + " JS argument(s) — a mojo call " +
+           "takes ONE record keyed by the parameter names its mojom declares, and no argument at all where it " +
+           "declares none (" + m.params.length + " parameter(s) here)");
+    if (m.params.length === 0) return [];
+    var rec = argv[0], vals = [], declared = new Set(), i, keys, k;
+    DCHECK(!!rec && typeof rec === "object" && !Array.isArray(rec),
+           "a call to " + m.iface + "." + m.name + " passed something other than a parameter record — an " +
+           "array here would be the positional list this transport stopped taking, and it stopped taking it " +
+           "because a short one can only report a count and never the name of what is missing");
+    for (i = 0; i < m.params.length; i++) {
+      declared.add(m.params[i].name);
+      DCHECK(!!rec && Object.prototype.hasOwnProperty.call(rec, m.params[i].name),
+             "a call to " + m.iface + "." + m.name + " has no value for the parameter `" + m.params[i].name +
+             "`, which its mojom declares — " + m.params[i].why + ". This caller is OLDER than the interface, " +
+             "and the one thing it must not do is send the values it does have anyway: that reads every later " +
+             "parameter one position early, which is a wrong call rather than a missing one");
+      vals.push(rec === null || rec === undefined ? undefined : rec[m.params[i].name]);
+    }
+    keys = (rec === null || rec === undefined) ? [] : Object.keys(rec);
+    for (i = 0; i < keys.length; i++) {
+      k = keys[i];
+      DCHECK(declared.has(k),
+             "a call to " + m.iface + "." + m.name + " carries `" + k + "`, which its mojom declares no " +
+             "parameter of — this caller is NEWER than the interface or has misspelled a name, and either " +
+             "way the value goes nowhere while its author believes it crossed");
+    }
+    return vals;
+  }
+
   /* HANDLES ARE COLLECTED INTO THE TRANSFER LIST, which is what makes `handle<message_pipe>` a real pipe pass
      rather than a clone: a transferred port is DETACHED in the sender and re-materialized in the receiver, so
      the endpoint genuinely moves and the sender provably no longer holds it. */
@@ -381,11 +433,13 @@
              badMessages: _rejected, wire: wireDigest(wireContract()) };
   }
 
-  /* ── THE CALLER END. One JS method per mojom method, named by Chromium's JS-binding rule, taking the
-     parameters positionally and answering an OBJECT keyed by the reply's declared names — which is what
-     Chromium's generated bindings do, and it is why a reply field can be added without every call site
-     re-counting positions. A fire-and-forget method (`reply: null`) returns nothing at all: there is no
-     promise to await, because there is no answer, and handing one back would invite a caller to wait on it. */
+  /* ── THE CALLER END. One JS method per mojom method, named by Chromium's JS-binding rule, taking ONE RECORD
+     keyed by the parameter's declared names and answering an OBJECT keyed by the reply's — the same shape in
+     both directions, for the reason `placeParams` states: a name can report what is missing and a position
+     cannot. It used to take the parameters positionally, and this paragraph used to argue for the reply's
+     naming on exactly the ground the send side then lacked. A fire-and-forget method (`reply: null`) returns
+     nothing at all: there is no promise to await, because there is no answer, and handing one back would
+     invite a caller to wait on it. */
   function Remote(conn, def, port) {
     var self_ = this;
     this.kind = "remote";
@@ -398,15 +452,16 @@
     _endpoints.add(this);
     conn._endpoints.add(this);
     def.byJs.forEach(function (m) {
-      self_[m.js] = function () { return self_._send(m, Array.prototype.slice.call(arguments)); };
+      self_[m.js] = function () { return self_._send(m, arguments); };
     });
   }
 
-  Remote.prototype._send = function (m, args) {
+  Remote.prototype._send = function (m, argv) {
     DCHECK(!this.conn.dead,
            "a call was made on " + m.iface + "." + m.name + " after " + this.conn.name + " died (" +
            this.conn.deadReason + ") — what failed is that process, so this call would be a second crash " +
            "reported as a first, and its caller would park on a reply nothing is left to produce");
+    var args = placeParams(m, argv);
     checkValues(DCHECK, "a call to " + m.iface + "." + m.name, m.params, args);
     var xfer = [];
     collectHandles(m.params, args, xfer);

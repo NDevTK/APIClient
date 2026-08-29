@@ -626,7 +626,7 @@
       await Promise.all(PEERS.map(async function (p, idx) {
         var r = p.r;
         /* THE DOCUMENT CROSSES AS BYTES — `Init`'s `array<uint8>`, which is what `qjs_init` takes (a pointer
-           and a LENGTH: a document may contain a 0x00). The twelve strings beside it are §4.4's address, the
+           and a LENGTH: a document may contain a 0x00). The thirteen strings beside it are §4.4's address, the
            name this agent's root document is known by, the response's header field lines (empty: this document
            had no response), §8.1.3.1's top-level creation URL, which for a root document is its own, and HTML
            §7.1.7's inherited policy container: the two halves of its CSP list are BOTH EMPTY, because this
@@ -634,14 +634,24 @@
            empty pair is the positive statement that there is no creator. §7.1.4's EMBEDDER POLICY item beside
            them has no empty spelling — §7.1.7 gives every container one — so this states the section's own
            "a new embedder policy" rather than leaving four fields blank.
-           AND THE LAST TWO ARE HTML §7.3.1.3's TWO LINKS. Its PARENT is `u`: this probe invented each document
-           and nothing embeds it, so its navigable is a top-level traversable. Its CONTAINER is `null` — the
-           same fact one link along, in the grammar Permissions Policy §9.5's answer crosses in, because a
-           navigable nothing embeds is a navigable no element presents. Both are stated in the engine's own
-           encodings for the absence rather than left empty, because "there is none" and "nobody said" are two
-           different facts and only the first is true here. */
-        var v = await r.renderer.init(new TextEncoder().encode(p.doc), p.addr, "probe", "", p.addr, "", "",
-                                      "unsafe-none", "", "unsafe-none", "", "u", "null");
+           AND THE LAST THREE ARE ONE SET THAT IS TRUE OR FALSE TOGETHER: no parent, no container, no
+           ancestors. HTML §7.3.1.3's PARENT is `u`, because this probe invented each document and nothing
+           embeds it, so its navigable is a top-level traversable; that section's other link, its CONTAINER, is
+           `null` in the grammar Permissions Policy §9.5's answer crosses in, because a navigable nothing
+           embeds is a navigable no element presents; and HTML §3.1.3's ancestor origin objects list is `none`,
+           because a document with no container document is one §3.1.3's own steps return the empty output for.
+           Each is stated in that grammar's own word for the absence rather than left empty, because "there is
+           none" and "nobody said" are two different facts and only the first is true here.
+           THE RECORD IS KEYED BY THE MOJOM'S OWN PARAMETER NAMES and not aligned by position, which is why
+           this call is here to be read at all: it was thirteen values against a fourteen-parameter interface,
+           and a positional list could only ever have reported the COUNT. `mojo.js`'s `placeParams` now refuses
+           a declared parameter this record has no entry for, BY NAME. */
+        var v = await r.renderer.init({
+          document: new TextEncoder().encode(p.doc), url: p.addr, docId: "probe", headers: "",
+          topLevelUrl: p.addr, inheritedCsp: "", inheritedCspSelfOrigin: "",
+          inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
+          inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
+          parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none" });
         var b = await r.renderer.getBundleId();
         var child = await r.childProcess.getMojoStats();
         rec.peers[idx] = { origin: p.origin, routingId: r.routingId, name: r.name, addr: p.addr,

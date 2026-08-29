@@ -1267,12 +1267,14 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      fact from the parent: a parent crosses as an identity the receiver mints a proxy from, while a container
      is an element that cannot cross, so what crosses is Permissions Policy §9.5's answer over it. Relayed
      here too — the creating engine computed it and this zone reads none of it. */
-  const _init = await rend.renderer.init(_doc, msg.sourceUrl, eng.docId, _headers, _tlu,
-                                         inherited ? inherited.csp : "",
-                                         inherited ? inherited.selfOrigin : "",
-                                         _initEp.value, _initEp.endpoint,
-                                         _initEp.reportOnlyValue, _initEp.reportOnlyEndpoint,
-                                         parentNavigable, containerPolicy, ancestorOrigins);
+  const _init = await rend.renderer.init({
+    document: _doc, url: msg.sourceUrl, docId: eng.docId, headers: _headers, topLevelUrl: _tlu,
+    inheritedCsp: inherited ? inherited.csp : "",
+    inheritedCspSelfOrigin: inherited ? inherited.selfOrigin : "",
+    inheritedCoep: _initEp.value, inheritedCoepEndpoint: _initEp.endpoint,
+    inheritedCoepReportOnly: _initEp.reportOnlyValue,
+    inheritedCoepReportOnlyEndpoint: _initEp.reportOnlyEndpoint,
+    parentNavigable, containerPolicy, ancestorOrigins });
   DCHECK(_init.rc === 0, "qjs_init reported a failure this zone has no handling for — the engine's own entry " +
                          "CHECKs every precondition and aborts, so a non-zero return is a contract that changed");
   /* NEVER 0 — document_bundle_id folds an empty scan to 1 precisely so that a 0 cannot mean two things. A 0
@@ -1308,7 +1310,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "decision vectors and never explored from its own first script");
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
-  await rend.renderer.begin((prior && prior.recipes) ? prior.recipes : "");
+  await rend.renderer.begin({ recipes: (prior && prior.recipes) ? prior.recipes : "" });
   // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
   // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
   // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
@@ -1742,13 +1744,14 @@ async function engineJoin(eng, msg, docName, topLevelUrl, inherited, parentNavig
          "container only where there is one, and this one's is created from its OWN response — so the empty " +
          "pair is the positive statement the engine already reads it as, and demanding a creator would have " +
          "made this zone invent one");
-  const _join = await eng.r.renderer.join(_doc, msg.sourceUrl, docName,
-                                          responseFieldLines(msg.responseHeaders), topLevelUrl,
-                                          inherited.csp, inherited.selfOrigin,
-                                          inherited.embedder.value, inherited.embedder.endpoint,
-                                          inherited.embedder.reportOnlyValue,
-                                          inherited.embedder.reportOnlyEndpoint,
-                                          parentNavigable, containerPolicy, ancestorOrigins);
+  const _join = await eng.r.renderer.join({
+    document: _doc, url: msg.sourceUrl, docId: docName,
+    headers: responseFieldLines(msg.responseHeaders), topLevelUrl,
+    inheritedCsp: inherited.csp, inheritedCspSelfOrigin: inherited.selfOrigin,
+    inheritedCoep: inherited.embedder.value, inheritedCoepEndpoint: inherited.embedder.endpoint,
+    inheritedCoepReportOnly: inherited.embedder.reportOnlyValue,
+    inheritedCoepReportOnlyEndpoint: inherited.embedder.reportOnlyEndpoint,
+    parentNavigable, containerPolicy, ancestorOrigins });
   DCHECK(_join.rc === 0,
          "qjs_join reported a failure this zone has no handling for — the engine's own entry CHECKs " +
          "every precondition and aborts, so a non-zero return is a contract that changed");
@@ -1824,7 +1827,7 @@ async function engineUnload(eng, docName, incomingDocName) {
      the one §7.2.2.1's `closed` is read for. Splicing it out would make `hostHolderOf` say no instance holds
      the name, and the very next arrival spelling that document would try to JOIN it and hit the engine's
      one-realm-per-document CHECK. */
-  await eng.r.renderer.unload(docName);
+  await eng.r.renderer.unload({ docId: docName });
   /* THE ROUND ENDS HERE, SO IT RECORDS — engineJoin's reason exactly: an unload attaches a job to every live
      timeline, so the frontier this instance's Level-1 weight is computed from has moved. */
   await engineRecordFacts(eng);
@@ -1939,8 +1942,8 @@ async function engineProvide(eng, method, url, rep) {
   DCHECK(rep === null || (rep && typeof rep === "object" && rep.meta && rep.bytes instanceof Uint8Array),
          "`fetched` answered neither §5.6's network error (null) nor a reply — a reply is its JSON metadata " +
          "and its BYTES together, and a record arriving without one of the two is half a response");
-  await eng.r.renderer.provide(method, url, JSON.stringify(rep === null ? null : rep.meta),
-                               rep === null ? null : rep.bytes);
+  await eng.r.renderer.provide({ method, url, reply: JSON.stringify(rep === null ? null : rep.meta),
+                                 body: rep === null ? null : rep.bytes });
 }
 /* ONE LINE, SPLIT IN ONE PLACE — the mirror of the engine's own `engine_pending_split`, which exists because
    three C hosts each finding the TAB for themselves is three places for the grammar to drift; a fourth host in
@@ -2369,7 +2372,7 @@ async function hostNotice(eng, line) {
     CHECK(!!eng.origin, "a cross-document message was posted by an instance with no recorded principal — only " +
                         "the trusted zone may state a sender's origin, and this one has none to state; carry " +
                         "the document's browser-stated origin into the cold recipe so a resumed instance keeps it");
-    await target.r.renderer.route(line, stampOrigin(eng.origin));
+    await target.r.renderer.route({ record: line, senderOrigin: stampOrigin(eng.origin) });
     return;
   }
   /* `remoteop.answer <token> <world> <completion>` — a COMPLETION this instance produced for an operation it was asked
@@ -2411,7 +2414,8 @@ async function hostNotice(eng, line) {
        refuses a repeat of the same timeline at its own delivery entry, which is what makes relaying all of
        them safe rather than merely permitted. */
     if (!to || _t3 < 0) return;
-    await to.asker.r.renderer.hostAnswerRemote(to.req, line.slice(_t2 + 1, _t3), line.slice(_t3 + 1));
+    await to.asker.r.renderer.hostAnswerRemote({ request: to.req, world: line.slice(_t2 + 1, _t3),
+                                                 completion: line.slice(_t3 + 1) });
     return;
   }
   /* `world.gone <world>` — a world of THIS instance is finished with: the flow holding it left the frontier, or
@@ -2435,7 +2439,7 @@ async function hostNotice(eng, line) {
     for (const peer of _pool) {
       if (peer === eng) continue;
       if (peer.state !== "hot" && peer.state !== "fetching") continue;
-      await peer.r.renderer.worldGone(f[1]);
+      await peer.r.renderer.worldGone({ world: f[1] });
     }
     return;
   }
@@ -2585,7 +2589,7 @@ async function engineServiceHostRequests(eng) {
          unanswered request is re-reported by qjs_host_requests on every step, so a round that started the ask
          and recorded it afterwards would let the next round see the same id unrecorded and perform the peer's
          operation — a program, with the page's own side effects — a second time. */
-      await holder.r.renderer.perform(token, op);
+      await holder.r.renderer.perform({ token, record: op });
       continue;
     }
     // XHR §3.5.6's fetch is the SECOND thing this zone can genuinely answer, and for the identical reason: it
@@ -2629,7 +2633,7 @@ async function engineServiceHostRequests(eng) {
    NORMAL completion — this zone fetched bytes rather than running another instance's program, so it has
    nothing to have thrown in. */
 async function engineAnswer(eng, id, meta, bytes) {
-  await eng.r.renderer.hostAnswer(id, JSON.stringify(meta), 0, bytes);
+  await eng.r.renderer.hostAnswer({ request: id, answer: JSON.stringify(meta), completion: 0, body: bytes });
 }
 async function engineFinalize(eng) {
   /* ASK THE ENGINE FOR ITS RESULT — the ABI entry that exists for exactly this and had NO CALLER anywhere in
@@ -3019,7 +3023,7 @@ const _hostOps = {
     DCHECK(Number.isFinite(floor) || floor === -Infinity,
            "the pool set a yield floor that is not a number — the engine compares its top flow's weight " +
            "against it, and a NaN floor makes every comparison false so the flow never yields");
-    await eng.r.renderer.setYieldFloor(floor);
+    await eng.r.renderer.setYieldFloor({ floor });
   },
   /* WHICH RESIDENT ENGINE MUST GIVE UP ITS RAM, ASKED OF THE ONE ORDER — the third moment of the SAME question
      `admit` asks and `frontierWeight` answers, and the reason those are no longer three policies. Admission

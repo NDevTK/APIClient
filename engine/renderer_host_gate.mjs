@@ -631,15 +631,18 @@ try {
      empty field is "a host that stopped writing this" and `none` is "this document has no ancestors" — the
      distinction the mojom's own `why` draws, and the one that decides whether a peer answers
      `location.ancestorOrigins` with an empty list or refuses. */
-  const initReply = await opener.renderer.init(new TextEncoder().encode(OPENER_DOC), OPENER_ADDR, 'opener', '',
-                                               OPENER_ADDR, '', '', 'unsafe-none', '', 'unsafe-none', '', 'u',
-                                               'null', 'none');
+  const initReply = await opener.renderer.init({
+    document: new TextEncoder().encode(OPENER_DOC), url: OPENER_ADDR, docId: 'opener', headers: '',
+    topLevelUrl: OPENER_ADDR, inheritedCsp: '', inheritedCspSelfOrigin: '',
+    inheritedCoep: 'unsafe-none', inheritedCoepEndpoint: '',
+    inheritedCoepReportOnly: 'unsafe-none', inheritedCoepReportOnlyEndpoint: '',
+    parentNavigable: 'u', containerPolicy: 'null', ancestorOrigins: 'none' });
   if (initReply.rc !== 0)
     fail(`the renderer refused the document phase 4 handed it (rc=${initReply.rc}) — every precondition in ` +
          '`qjs_init` aborts rather than returning, so a non-zero return is a contract that changed');
   /* THE EMPTY STRING IS A FRESH FRONTIER, which the mojom declares is a different thing from a resumed one
      that happened to hold nothing. This gate has no residue to replay. */
-  await opener.renderer.begin('');
+  await opener.renderer.begin({ recipes: '' });
   let create = null, steps = 0, drained = false;
   while (create === null) {
     const st = await opener.renderer.step();
@@ -655,11 +658,11 @@ try {
       if (tab <= 0) fail(`a pending line carries no METHOD, which is half the request's identity: ${line}`);
       const method = line.slice(0, tab), u = line.slice(tab + 1);
       console.log(`${TAG}   pending: ${method} ${u}`);
-      await opener.renderer.provide(
-        method, u,
-        JSON.stringify({ status: 200, statusText: 'OK', headers: [],
-                         urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json' }),
-        new TextEncoder().encode('{}'));
+      await opener.renderer.provide({
+        method, url: u,
+        reply: JSON.stringify({ status: 200, statusText: 'OK', headers: [],
+                                urlList: [new URL(u, OPENER_ADDR).href], computedType: 'application/json' }),
+        body: new TextEncoder().encode('{}') });
     }
     /* DRAINED BY THE READ, so a notice this zone does not act on is one nothing else will ever see. */
     for (const n of (await opener.renderer.getHostNotices()).notices.split('\n').filter(Boolean)) {

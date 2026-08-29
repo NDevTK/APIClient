@@ -287,6 +287,17 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
           'performs no placement for that type — see renderer.html\'s PLACEABLE for what a placement is. A ' +
           'guessed one is an operand count this driver cannot know.');
     }
+    /* AND THE OTHER SKEW, WHICH THE WALK ALONE DOES NOT SEE. A declared parameter with no value is a driver
+       OLDER than the interface and refuses above; a value no parameter declares is a driver NEWER than it, or
+       one that misspelled a name — and that one is SILENT under a walk, because a walk only ever asks for the
+       names it was given. The value is then computed, held, and placed nowhere, which is a fact its author
+       believes crossed. `mojo.js`'s `placeParams` refuses both directions for every caller that goes through
+       the transport; this driver bypasses the transport, so it states the same rule itself. */
+    for (const k of Object.keys(values))
+      if (!declared.some((p) => p.name === k))
+        throw new Error(`route.mjs computes a value for \`${k}\` and content.mojom.Renderer.Init declares no ` +
+          'parameter of that name — this driver is newer than the interface or has misspelled one, and either ' +
+          'way the value is placed nowhere while this file reads as though it crossed.');
     if (operands.length !== want)
       throw new Error(`route.mjs places ${operands.length} operand(s) into qjs_init — walked off the ` +
         `${declared.length} parameter(s) content.mojom.Renderer.Init declares — and the built glue declares ` +
