@@ -45,28 +45,37 @@ noise on any site that aborted.
 harness.js derives its extension directory from its own location. That copy is what makes the browser
 provably load an artifact no other lane can rebuild under you mid-pass.
 
-`control/` is the INSTRUMENT CONTROL and is not a corpus site. It is FOUR documents, one question each, and
-a census wants all four rows:
+`control/` is the INSTRUMENT CONTROL and is not a corpus site. It is one document per question, and a census
+wants every row — `serve.mjs`'s own `DOCS` list is the set, and a count written here instead would be a
+second copy of it that goes quiet when the next document lands:
 
     node site.mjs control      http://127.0.0.1:8899/ <pass>  # the endpoint column
     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>  # the @S column
     node site.mjs control-url  http://127.0.0.1:8901/ <pass>  # rungs that fail by aborting
-    node site.mjs control-data http://127.0.0.1:8902/ <pass>  # server-injected state, both channels
+    node site.mjs control-data http://127.0.0.1:8902/ <pass>  # server-injected state, both in-document channels
+    node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>  # the same state over the NETWORK channel
 
-FOUR PORTS AND NOT FOUR PATHS, because `site.mjs` isolates a row by ORIGIN: it selects the row's runs and
-documents with `d.url.startsWith(origin)`, so three documents on one origin make every row the UNION of
-whatever the engine reached there during the dwell. Measured: all three rows came back with an IDENTICAL
-six-endpoint list and `docsSeenMine 5`, and only the one whose own rungs produce those six was measuring
-itself. `PORT` sets the base and the others follow it, so a lane takes a private set the same way it takes
-a private `LANE` and `HARNESS_PORT`.
+ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
+the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every
+row the UNION of whatever the engine reached there during the dwell. Measured: all three rows came back with
+an IDENTICAL six-endpoint list and `docsSeenMine 5`, and only the one whose own rungs produce those six was
+measuring itself. `PORT` sets the base and the others follow it, so a lane takes a private set the same way
+it takes a private `LANE` and `HARNESS_PORT`.
 
 `injected-state.html` holds the SERVER-INJECTED-STATE question in both of the channels a server has: an
 inline `<script>` that writes the record directly, and a §4.12.1 data block a SUBRESOURCE parses. The two
 records are byte-identical, so the inline arm is the control on the control — its zero means the document did
-not run, and only then is the block arm's zero unreadable. Each arm reads one PRESENT member (which must
-arrive as the bytes the server sent) and one ABSENT member (whose gate must FORK), because those are the two
-halves of "the extent was the server's choice" and a run that gets one without the other has answered half a
-question.
+not run, and only then is the block arm's zero unreadable. `loaded-config.html` asks the same question of the
+channel a server has over the NETWORK, which is why it is a fifth origin rather than a rung on the fourth.
+
+EACH ARM OF ALL THREE READS THE SAME FOUR KINDS OF MEMBER, and the reason is the half a differential cannot supply
+for itself: three rows that are supposed to be ONE FACT cannot be compared through three different questions.
+A member the record HOLDS owes TWO lines — the concrete address, because the bytes are an observation the run
+made, and the call site's SHAPE, because the value is opaque for control flow all the same and a gate over it
+must still fork to the logged-in arm. A member it does NOT hold owes the forked gate and no example, because
+nothing knows what a logged-in visitor's record would have held. A run that emits an arm's concrete line and
+its not-held line and neither of the other three reads as a pass on its own and is the defect these rungs
+exist for: that channel answered a HELD member as a plain value, so every gate over one took a single arm.
 
 `index.html` holds `fetch` calls the engine certainly sees — one inline, one in a subresource, one behind an
 absent-state flag, one in a function nobody calls, one built from a config value. `security.html` holds
