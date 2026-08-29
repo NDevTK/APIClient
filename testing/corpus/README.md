@@ -55,6 +55,7 @@ second copy of it that goes quiet when the next document lands:
     node site.mjs control-data http://127.0.0.1:8902/ <pass>  # server-injected state, both in-document channels
     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>  # the same state over the NETWORK channel
     node site.mjs control-xhr  http://127.0.0.1:8904/ <pass>  # the same reply through the OTHER interface
+    node site.mjs control-flight http://127.0.0.1:8905/ <pass>  # a reply whose BODY names addresses
 
 ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
 the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every
@@ -74,8 +75,14 @@ cannot make: `fetch`'s Response and XMLHttpRequest are two doors onto one server
 carrying provenance while the other does not is one capability wearing two names, which reads as an ordinary
 difference in what two documents happened to learn.
 
-EACH ARM OF ALL THREE READS THE SAME FOUR KINDS OF MEMBER, and the reason is the half a differential cannot supply
-for itself: three rows that are supposed to be ONE FACT cannot be compared through three different questions.
+`flight-chunks.html` is the third shape of the same channel and the only one whose floors are ADDRESSES: a
+`text/x-component` reply lists the JavaScript a route loads to hydrate, so a route ships the chunk list of
+components this visitor never reached. Its frozen stream is written to be the format's structural cases rather
+than a sample of one site's — the chunk list is nested and made of `"$<row>"` references, a typed marker
+shares the reference's lead byte and is not one, and a reference points into the row holding that marker.
+
+EACH ARM OF ALL FOUR READS THE SAME FOUR KINDS OF MEMBER, and the reason is the half a differential cannot supply
+for itself: four rows that are supposed to be ONE FACT cannot be compared through four different questions.
 A member the record HOLDS owes TWO lines — the concrete address, because the bytes are an observation the run
 made, and the call site's SHAPE, because the value is opaque for control flow all the same and a gate over it
 must still fork to the logged-in arm. A member it does NOT hold owes the forked gate and no example, because

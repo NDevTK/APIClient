@@ -1,0 +1,40 @@
+<!doctype html><html><head><title>instrument control — the chunk list inside a React Flight reply</title></head><body>
+<!--
+  INSTRUMENT CONTROL, FLIGHT HALF. One question: does a reply whose body NAMES addresses put those addresses on
+  the @H surface, when the naming is by REFERENCE into the stream's own rows rather than by writing them out?
+
+  WHY IT IS A ROW AT ALL. This is the lazy-chunk surface CLAUDE.md §Attacker sources calls the headline moat
+  surface, arriving through the channel that carries it for every App Router site: the route's own payload
+  lists the JavaScript the page will load to hydrate it, so a route ships the chunk list of components the
+  visitor never reached. It is the third delivery of the same idea as the other config rows — a body the server
+  composed for this visitor — and it differs in what is IN the body: addresses rather than a record's members.
+
+  WHY IT IS ITS OWN ORIGIN, like every other row here: a row is isolated by ORIGIN, and these addresses would
+  otherwise be counted into whichever neighbour shared the port.
+
+  WHAT MAKES THE FROZEN STREAM WORTH FREEZING is that its rows are the structural cases and not a sample —
+  serve.mjs's FLIGHT names each one. The short version: the chunk list is NESTED and made of `"$<row>"`
+  REFERENCES, a typed marker (`$Sreact.fragment`) shares the same lead byte and is NOT a reference, and one
+  reference points into the row that holds that marker. A reader that took only the strings directly under the
+  chunk list recovers a row id, refuses it as an address, and reports a reply that named nothing.
+
+  WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable:
+      /f/entry.js                    a chunk named through a reference
+      /f/lazy.js                     the same, from the second element of the list
+      /f/direct.js                   a chunk written inline, past a reference that resolves to a typed marker
+      /api/flight-entry              …and the chunk was LOADED and RUN
+      /api/flight-lazy               the same
+      /api/flight-direct             the same
+      runOutcomesMine {complete:1}
+  AND TWO THINGS IT MUST NOT PRODUCE, which are the halves a floor cannot state:
+      f/bare.js  or  /f/bare.js      an asset-prefix-relative chunk. This engine has not been told the prefix,
+                                     so resolving it against the document's directory would invent an address
+                                     that parses, looks plausible and was never served — §RUN, DON'T MATCH's
+                                     "COMPUTE OR SHAPE, NEVER INVENT", where inventing is the worse half.
+      any address holding `$`        a row id or a typed marker recorded as though it were a path.
+  THE TWO FLOORS ARE ORDERED AND THE ORDER IS THE DIAGNOSIS. Three chunk addresses and no `/api/flight-*` is
+  the chunk list recovered and the code behind it never driven; no chunk addresses at all is the reader having
+  read the reply and found nothing in it, which is what it did for every stream these sites actually serve.
+-->
+<script src="/flight.js"></script>
+</body></html>

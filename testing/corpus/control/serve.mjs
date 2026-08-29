@@ -57,13 +57,20 @@
 //     two doors onto one fact, and a run in which one door's gates fork and the other's do not is one
 //     capability wearing two names — a difference that reads as ordinary variation in a single row.
 //
-// Six rows, and a census wants all six (PORT sets the base; the others follow it):
+//   - AND A REPLY WHOSE BODY NAMES ADDRESSES IS A SEVENTH ORIGIN, because what it puts on the surface is not a
+//     record's members but ENDPOINTS, and a row whose floors are addresses cannot share a port with rows whose
+//     floors are counted out of the same list. flight-chunks.html's stream is `text/x-component`, read by
+//     solver/reply_decode.c at engine_provide rather than by anything the document does, so this row is also
+//     the only one here whose rungs do not depend on the page's own code reaching them.
+//
+// Seven rows, and a census wants all seven (PORT sets the base; the others follow it):
 //     node site.mjs control      http://127.0.0.1:8899/ <pass>
 //     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
 //     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
 //     node site.mjs control-data http://127.0.0.1:8902/ <pass>
 //     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>
 //     node site.mjs control-xhr  http://127.0.0.1:8904/ <pass>
+//     node site.mjs control-flight http://127.0.0.1:8905/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -86,6 +93,7 @@ const DOCS = [
   ['injected-state.html', 'control-data'],
   ['loaded-config.html', 'control-cfg'],
   ['xhr-config.html', 'control-xhr'],
+  ['flight-chunks.html', 'control-flight'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
@@ -95,6 +103,31 @@ const DOCS = [
    gates on are present and `false`, and one it gates on is absent — see loaded-config.html, which names what
    each one is for and why answering either of them concretely loses an endpoint. */
 const CONFIG = '{"region":"us-east-1","tier":"gold","admin":false,"nested":{"beta":false}}';
+
+/* A REACT FLIGHT STREAM, FROZEN, AND EVERY ROW OF IT IS A RUNG. `text/x-component` is the type React's own
+   server responses carry and the type solver/reply_decode.c reads a client reference under; what makes this
+   bytes worth freezing is the four structural facts the format has and a hand-written sample usually lacks:
+     row 0   a chunk path a reference points AT, rather than one written inline
+     row 1   the same, but ASSET-PREFIX-RELATIVE — which record_chunk refuses, because resolving it against
+             the document's directory would invent an address that parses and was never served
+     row 2   a TYPED marker (`$S…` is a Symbol) that shares its lead byte with a reference and is not one
+     row 3   a client reference whose chunk list is NESTED (`[entry,[deps…],[sizes…]]`) and made of
+             references, which is the shape every current Next.js build emits and which a reader that took
+             only the strings directly under the list recovered nothing from
+     row 6   a reference to row 2, so the walk follows a `$` INTO a row and meets the typed marker there —
+             the case that distinguishes "resolve against the stream's own row table" from "guess which lead
+             bytes are ids"
+   The paths are this control's own, not a real site's: an address copied from a live bundle would make the
+   rung depend on that site continuing to serve it. */
+const FLIGHT = [
+  '0:"/f/entry.js"',
+  '1:"f/bare.js"',
+  '2:"$Sreact.fragment"',
+  '3:I[100,[["$0",["$1"],[10,20]],"$4"],"default"]',
+  '4:"/f/lazy.js"',
+  '6:I[200,["$2","/f/direct.js"],"default"]',
+  '',
+].join('\n');
 
 let bound = 0;
 DOCS.forEach(([doc, name], i) => {
@@ -108,6 +141,19 @@ DOCS.forEach(([doc, name], i) => {
     if (p === '/cfg.json') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(CONFIG);
+    }
+    if (p === '/route.rsc') {
+      res.writeHead(200, { 'content-type': 'text/x-component' });
+      return res.end(FLIGHT);
+    }
+    /* THE CHUNKS THE STREAM NAMES, AND EACH ONE FETCHES A DISTINCT ADDRESS. That is the second floor and it is
+       a strictly stronger claim than the first: the chunk list can be recovered onto the @H surface and the
+       chunk still never loaded, so a row that reports `/f/entry.js` and not `/api/flight-entry` says the
+       address was learned and the code behind it was not. `/f/bare.js` is served too — it must never be
+       requested, and a server that 404'd it could not tell "not requested" from "requested and missing". */
+    if (/^\/f\/[a-z-]+\.js$/.test(p)) {
+      res.writeHead(200, { 'content-type': 'application/javascript' });
+      return res.end(`fetch('/api/flight-${p.slice(3, -3)}');\n`);
     }
     const f = p === '/' ? join(D, doc)
             : /^\/[a-z0-9_-]+\.js$/.test(p) ? join(D, p.slice(1))
