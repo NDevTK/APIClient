@@ -511,7 +511,13 @@ async function service(e) {
        carried none, which is what this driver serves these bytes out of a literal with. It used to carry one
        extracted policy (`{csp: null}`), which is the shape that kept §7.1.3's opener policy out of every
        navigated Document. */
-    e.answer(id, { headers: "" }, HTML_B);
+    /* AND FETCH §2.2.6 "Responses"' RESPONSE URL, which HTML §7.4.5 "Populating a session history entry"
+       determines the loaded Document's ORIGIN over — "set responseOrigin to the result of determining the
+       origin given RESPONSE'S URL". This driver serves one literal document to every address and follows no
+       redirect, so the response's URL is the ADDRESS THAT WAS ASKED FOR; stating it is a fact about this
+       driver's own network rather than a field copied to satisfy a reader, and a host that DOES follow a
+       redirect reports a different string in the same slot. */
+    e.answer(id, { url: op.slice('document.fetch\t'.length), headers: "" }, HTML_B);
     paid++;
   }
   await drainNotices(e);

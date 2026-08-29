@@ -697,7 +697,7 @@ static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst pro
            "value this load carries, the same shape §7.4.5's network-error arm above still needs");
 }
 
-/* THE RESPONSE IS `{body, headers}` — one answer, because everything §7.5.1 creates a Document from is a
+/* THE RESPONSE IS `{url, body, headers}` — one answer, because everything §7.5.1 creates a Document from is a
    property of THE RESPONSE and asking for any of it separately is asking a second time and may get a second
    answer. It was `{body, csp}`, one policy the trusted zone had pulled out of the list, and that is why a
    navigated Document could not have an opener policy, an embedder policy or an `Origin-Agent-Cluster` answer
@@ -705,28 +705,59 @@ static void nav_check_embedder_policy_adherence(JSContext *ctx, JSValueConst pro
    is the same form qjs_init takes for the root document's response — one shape, one parse (core/fetch/
    headers.h), and Fetch's own `get` is then what decides what a REPEATED header means. A missing or null
    `body` is a fetch that did not load, which is a document the navigable still gets (an error page is a
-   document). */
+   document).
+
+   `url` IS Fetch §2.2.6 "Responses"' RESPONSE URL — "a pointer to the last URL in response's URL list" — AND
+   IT IS NOT THE ADDRESS THIS JOB REQUESTED. Every algorithm below that this frame runs over the destination
+   is written by the standard over the RESPONSE's URL and not over the request's: §7.4.5's determine-the-origin
+   ("given response's URL, finalSandboxFlags, and entry's document state's initiator origin"), §7.1.7's
+   determine-navigation-params-policy-container ("given a URL responseURL"), CSP §2.2.2's self-origin
+   ("self-origin is response's URL's origin"), and §7.5.1's Document address. A redirect is what separates the
+   two, and it separates them by ORIGIN: a request to this instance's own origin that 302s off it produced a
+   Document this frame determined the origin of from the address it ASKED for, so the cross-agent question one
+   algorithm down was answered `true` for a Document that belongs to a PEER, and the Document was created in
+   this heap under a principal the response contradicts. That is the defect the origin's move from the enqueue
+   to this job was made to fix, and it was only half fixed: the move corrected the TIME the question is asked
+   and left it reading the wrong URL, which is silent in both hosts because a request that does not redirect
+   makes the two strings equal.
+   IT IS THE RESPONSE'S AND NOT THE LOCATION URL, which §7.4.5 states in its own note beside the step: "if
+   response is a redirect, then response's URL will be the URL that led to the redirect to response's location
+   URL; it will not be the location URL itself." A host that FOLLOWS redirects reports the URL of the response
+   it finally received, which is that same URL for the response this frame is handed; a host that follows none
+   reports the request's, which is a positive statement about its own network and not an absence. */
 static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     NavLoadState *s = st;
     JSValueConst proxy = step_arg(&s->hdr, 0);
     JSValueConst answer = JS_UNDEFINED;
     const char *addr, *tlu;
+    /* Fetch §2.2.6 "Responses"' RESPONSE URL, OWNED — the string the answer above carries, released with
+       `addr` at the one exit this frame has past the fetch. NULL for a destination that made no request, which
+       is the same fact `fetches` states one line down and is why the borrowed pointer below is separate. */
+    const char *resp_url = NULL;
+    /* AND THE URL EVERY ALGORITHM BELOW IS RUN OVER, BORROWED from one of the two above. §7.4.5 builds
+       navigation params three ways and only create-navigation-params-BY-FETCHING has a response: its
+       responseURL is the response's, while the srcdoc and non-fetch-scheme constructors are written over
+       ENTRY'S URL, which is the address this job was enqueued with. So the `about:` arm taking `addr` is the
+       standard's own other constructor and not this frame defaulting past an absent field. */
+    const char *dest_url;
     const uint8_t *body = NULL;
     /* §7.4.5's `responseOrigin` and §7.4.2.2's `initiatorOriginSnapshot`, which are TWO values and were one.
        The second rides the job (navigable_load_enqueue); the first is DETERMINED below, at the response, out
        of the second and the final sandboxing flag set — which is the order §7.4.5 states and the only order in
-       which both of §7.3.1's inputs exist. */
+       which both of §7.3.2.1's inputs exist. */
     const Origin *origin = NULL, *initiator, *tlo;
-    /* §4.7's RECORD FOR THE DESTINATION, because §7.3.1 reads the URL and not its serialization: its steps 3
-       and 4 are §2.4.1's two match relations over a parsed record, and step 5 is §4.7 over one. */
+    /* §4.7's RECORD FOR THE DESTINATION, because §7.3.2.1's determine-the-origin reads the URL and not its
+       serialization: its steps 3 and 4 are §2.4.1's two match relations over a parsed record, and step 5 is
+       §4.7 over one. */
     UrlRecord dest;
     bool dest_parsed;
     /* CSP §2.2's SELF-ORIGIN FOR THE RESPONSE'S OWN LIST, which §2.2.2 defines as "response's URL's origin" —
-       a URL's origin SERIALIZED, and never the origin §7.3.1 determined. The two agree for every response that
-       sends no `sandbox` directive, and that is exactly the coincidence this frame used to rest on. */
+       a URL's origin SERIALIZED, and never the origin §7.3.2.1's determine-the-origin answered. The two agree
+       for every response that sends no `sandbox` directive, and that is exactly the coincidence this frame
+       used to rest on. */
     char *response_self = NULL;
-    JSValue bodyv = JS_UNDEFINED, headersv = JS_UNDEFINED;
+    JSValue bodyv = JS_UNDEFINED, headersv = JS_UNDEFINED, urlv = JS_UNDEFINED;
     /* §7.1.7's CLONE OF THE INITIATOR'S CONTAINER, carried on the job because whose clone it is belongs to the
        OPERATION — the CREATOR's when §7.4 creates a navigable, the INITIATOR's when §7.4.2.2 navigates one —
        and by the time this job runs the only document it could ask is the one being replaced. It is ALWAYS
@@ -841,16 +872,41 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         return JS_STEP_YIELD;
     }
     /* §7.4.2.2's initiatorOriginSnapshot, CARRIED AS A HANDLE. It is an INPUT of the operation — the origin of
-       the document whose script ran — and a handle is what preserves its identity across a JSValue: §7.3.1's
-       steps 3 and 4 return this record ITSELF for an `about:` destination, and a serialization would mint a
-       second one and make the loaded document cross-origin to the document that navigated it. */
+       the document whose script ran — and a handle is what preserves its identity across a JSValue: §7.3.2.1's
+       determine-the-origin steps 3 and 4 return this record ITSELF for an `about:` destination, and a
+       serialization would mint a second one and make the loaded document cross-origin to the document that
+       navigated it. */
     orc = JS_ToUint32(ctx, &oid, step_arg(&s->hdr, 2));
     (void)orc;
     DCHECK(orc == 0 && oid != 0, "the document-load job carried no INITIATOR ORIGIN handle — §7.4.2.2 snapshots "
-                                 "the source document's origin before anything is fetched, and §7.3.1 inherits "
-                                 "that record for a destination with no response");
+                                 "the source document's origin before anything is fetched, and §7.3.2.1's "
+                                 "determine the origin inherits that record for a destination with no response");
     initiator = origin_by_id(oid);
     if (fetches) {
+        /* Fetch §2.2.6 "Responses"' RESPONSE URL, WHICH IS THE FIRST THING TAKEN OFF THIS ANSWER BECAUSE EVERY
+           ALGORITHM BELOW IS WRITTEN OVER IT. See this function's own header for the redirect that separates
+           it from the address requested, and for why reading the request's URL here was a Document created in
+           this heap under a principal its response had moved off.
+           DCHECKed rather than defaulted: a host that fetched knows the URL of the response it received, and
+           a host that could not fetch at all still knows the URL it was asked for — "the request URL is a fact
+           even when the reply is not" is the trusted zone's own sentence about the list this field is the last
+           item of (extension/lib/safe-fetch.js). So there is no response for which this field is legitimately
+           absent, and an `|| addr` here would put the two apart exactly where they differ. */
+        urlv = JS_GetPropertyStr(ctx, answer, "url");
+        DCHECK(JS_IsString(urlv),
+               "§7.4 step 14's response answer carries no `url` field — Fetch §2.2.6 \"Responses\" gives every "
+               "response a URL (the last of its URL list) and the trusted zone is the only party that saw the "
+               "redirect chain, so a missing one is a producer that stopped writing it. Without it §7.4.5's "
+               "determine-the-origin, §7.1.7's determine-navigation-params-policy-container and CSP §2.2.2's "
+               "self-origin all run over the address this job REQUESTED, and a response that moved off this "
+               "origin becomes a Document created in this heap under a principal it does not have");
+        resp_url = JS_ToCString(ctx, urlv);
+        CHECK(resp_url != NULL, "navigable: OOM taking §7.4 step 14's response URL");
+        DCHECK(*resp_url != '\0',
+               "§7.4 step 14's response answer carries an EMPTY response URL — Fetch §2.2.6's URL list is empty "
+               "only for a response no request was ever made for, and this job made one; an empty string here "
+               "would parse as no URL at all and §7.3.2.1's determine the origin would mint an opaque origin "
+               "for a document the server answered normally");
         bodyv = JS_GetPropertyStr(ctx, answer, "body");
         /* THE HEADER LIST, AS THE HTTP FIELD LINES THE RESPONSE DELIVERED — `name: value`, one per line, the
            one form a header list crosses an ABI in (core/fetch/headers.h) and exactly what qjs_init takes for
@@ -905,6 +961,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
             computed_defined = true;
         }
     }
+    /* AND THE URL EVERYTHING BELOW IS RUN OVER, DECIDED ONCE, HERE. §7.4.5's three constructors differ in
+       exactly this: create-navigation-params-by-fetching has a response and states its URL, while the srcdoc
+       and non-fetch-scheme ones have none and are written over ENTRY'S URL. `fetches` is that same split
+       already made — a destination with a response has one, an `about:` destination does not — so the arm is
+       the standard's own and not this frame reading past an absent field. */
+    dest_url = fetches ? resp_url : addr;
     /* §7.1.7's TWO CANDIDATE CONTAINERS, ASSEMBLED HERE AND CHOSEN BETWEEN BY §7.1.7'S OWN ALGORITHM BELOW.
        This site used to make the choice itself, with the predicate "did the response carry a policy" — which is
        precisely the approximation core/frame/policy_container.h names: it puts a cross-origin child whose
@@ -976,8 +1038,13 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        loading an `https` document into an `http` page's iframe leaves it a non-secure context (Secure Contexts
        §4.2 — otherwise an iframe plus postMessage is a shim around every gated API).
        This is the one thing about the operation the TARGET legitimately decides, exactly like the document's
-       identity below: whether a navigable is nested is a fact about the navigable and not about the load. */
-    tlu = window_proxy_is_top_level(proxy) ? addr : window_proxy_top_level_url(proxy);
+       identity below: whether a navigable is nested is a fact about the navigable and not about the load.
+       AND THE ADDRESS IT MOVES TO IS THE RESPONSE'S, not the one requested: §7.5.1 "Shared document creation
+       infrastructure" sets a top-level environment's top-level creation URL to the SAME `creationURL` it gives
+       the Document ("let topLevelCreationURL be creationURL"), so the two are one string by the standard's own
+       step — and a top-level traversable whose request redirected would otherwise decide Secure Contexts §4.2
+       for a document at an address it is not at. */
+    tlu = window_proxy_is_top_level(proxy) ? dest_url : window_proxy_top_level_url(proxy);
     DCHECK(tlu != NULL && *tlu,
            "a nested navigable was navigated with no top-level creation URL on its proxy — §7.4 gives every "
            "navigable one when it creates it, so a proxy without one was minted somewhere that did not");
@@ -1007,68 +1074,102 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                                secure_context_url_potentially_trustworthy(tlu));
     else
         embedder_policy_init(&response_ep);
-    /* §4.7's RECORD FOR THE DESTINATION, PARSED ONCE AND READ BY BOTH OF THE ALGORITHMS BELOW. `addr` is an
-       ABSOLUTE serialization — url_serialize's output at the enqueue, or the literal `about:blank` — so it
-       parses with no base, and a failure here is this engine's own serializer having produced something its
-       own parser refuses rather than anything a page can cause. */
+    /* §4.7's RECORD FOR THE DESTINATION, PARSED ONCE AND READ BY BOTH OF THE ALGORITHMS BELOW. `dest_url` is an
+       ABSOLUTE serialization — the trusted zone's report of Fetch §2.2.6's response URL, or url_serialize's
+       output at the enqueue for a destination that made no request — so it parses with no base, and a failure
+       here is a serializer and a parser disagreeing about one string rather than anything a page can cause. */
     url_record_init(&dest);
-    dest_parsed = url_parse(&dest, addr, strlen(addr), NULL);
+    dest_parsed = url_parse(&dest, dest_url, strlen(dest_url), NULL);
     (void)dest_parsed;   /* the parse is the STATEMENT; a DCHECK condition is compiled out in release */
     DCHECK(dest_parsed,
-           "a document load's destination would not re-parse — the address was serialized by §4.4's own "
-           "serializer when the navigation was enqueued, so a URL record that cannot be recovered from it is "
-           "the parser and the serializer disagreeing about one string, and §7.3.1 has no URL to determine an "
-           "origin from");
+           "a document load's destination would not re-parse — it is either §4.4's own serializer's output from "
+           "the enqueue or the URL the trusted zone reported the response arrived from, so a URL record that "
+           "cannot be recovered from it is a parser and a serializer disagreeing about one string, and "
+           "§7.3.2.1's determine the origin has no URL to answer over");
     /* CSP §2.2.2's SELF-ORIGIN FOR THIS RESPONSE'S OWN LIST, WHICH IS THE RESPONSE URL'S ORIGIN AND NOT THE
-       ORIGIN §7.3.1 DETERMINES. §2.2.2 "Parse response's Content Security Policies" states it from outside the
-       bytes — "self-origin is response's URL's origin" — and §7.3.1's answer can differ from it by exactly one
-       header: a `sandbox` directive without `allow-same-origin` mints a fresh OPAQUE origin for the Document
-       while `'self'` still resolves against the URL it came from. This frame used to pass the determined origin
-       and assert the difference away; the assert is gone because the difference is now REAL and §2.2.2's own
-       sentence is what stands in its place. */
+       ORIGIN §7.3.2.1 DETERMINES. §2.2.2 "Parse response's Content Security Policies" states it from outside
+       the bytes — "self-origin is response's URL's origin" — and the determined origin can differ from it by
+       exactly one header: a `sandbox` directive without `allow-same-origin` mints a fresh OPAQUE origin for the
+       Document while `'self'` still resolves against the URL it came from. This frame used to pass the
+       determined origin and assert the difference away; the assert is gone because the difference is REAL and
+       §2.2.2's own sentence is what stands in its place.
+       AND "RESPONSE'S URL" IS NOW THE RESPONSE'S. `dest` is parsed from the reported response URL, so a policy
+       delivered by a redirected response resolves `'self'` against the origin that delivered it rather than
+       against the address the navigation asked for — which for a cross-origin redirect is a `'self'` naming a
+       server that sent no policy at all. */
     response_self = origin_serialize_of_url(&dest);
     CHECK(response_self != NULL, "navigable: OOM stating CSP §2.2.2's self-origin for a navigation response");
     /* §2.2.2's pair for this load's own response: its policies and that self-origin, beside §7.1.4's item
        obtained just above. */
     response = serialized_policy_container(resp_csp, response_self,
                                            serialized_embedder_policy_of(&response_ep));
-    policy = policy_container_determine_navigation_params(addr, response, inherited);
+    /* §7.1.7's DETERMINE NAVIGATION PARAMS POLICY CONTAINER, WHOSE FIRST ARGUMENT THE SECTION NAMES
+       `responseURL` — "to determine navigation params policy container given a URL responseURL and four policy
+       container-or-nulls". Its two remaining predicates are `responseURL is about:srcdoc` and `responseURL is
+       local`, and both change answer under a redirect: a request for a `data:`-or-`about:` local URL cannot
+       redirect, but a request for an http URL that redirects TO one would have been judged non-local off the
+       address requested and handed the response's container where §7.1.7 clones the INITIATOR's. */
+    policy = policy_container_determine_navigation_params(dest_url, response, inherited);
     csp_flags = policy_csp_derived_sandboxing_flags(policy.csp, policy.csp ? strlen(policy.csp) : 0);
     final_flags = window_proxy_creation_sandbox_flags(proxy) | csp_flags;
-    /* HTML §7.3.1's DETERMINE THE ORIGIN, RUN HERE BECAUSE HERE IS WHERE ITS INPUTS EXIST. §7.4.5 "Populating a
-       session history entry", inside create-navigation-params-by-fetching: "Set responsePolicyContainer to the
-       result of creating a policy container from a fetch response … Set finalSandboxFlags to the union of
-       targetSnapshotParams's sandboxing flags and responsePolicyContainer's CSP list's CSP-derived sandboxing
-       flags. Set responseOrigin to the result of determining the origin given RESPONSE'S URL, finalSandboxFlags,
-       and entry's document state's initiator origin." All three lines are the three above, in that order, and
-       the order is the whole point: the flag set is a fact about the RESPONSE, so the origin cannot be known
-       before one exists.
+    /* HTML §7.3.2.1 "Creating browsing contexts"' DETERMINE THE ORIGIN, RUN HERE BECAUSE HERE IS WHERE ITS
+       INPUTS EXIST. §7.4.5 "Populating a session history entry", inside create-navigation-params-by-fetching:
+       "Set responsePolicyContainer to the result of creating a policy container from a fetch response … Set
+       finalSandboxFlags to the union of targetSnapshotParams's sandboxing flags and responsePolicyContainer's
+       CSP list's CSP-derived sandboxing flags. Set responseOrigin to the result of determining the origin given
+       RESPONSE'S URL, finalSandboxFlags, and entry's document state's initiator origin." All three lines are
+       the three above, in that order, and the order is the whole point: the flag set is a fact about the
+       RESPONSE, so the origin cannot be known before one exists.
+       AND SO IS THE URL. The section names the argument RESPONSE'S URL, and this call ran over the address the
+       job REQUESTED until `dest` was parsed from the reported response URL — two strings that a redirect makes
+       different and that a same-origin request makes equal, which is why nothing said so. The move of this
+       call from the enqueue to the job fixed the TIME the question is asked; this fixes the VALUE, and both
+       halves were named by the same sentence of §7.4.5.
        IT USED TO BE ANSWERED AT THE ENQUEUE, and a `Content-Security-Policy: sandbox` was the header that made
        that observable — the Document ran under a principal the response had revoked. That is fixed by position
        rather than by a check, which is why the check that named it is deleted rather than moved.
        THE `about:` ARM IS THE SAME CALL AND NOT AN EXCEPTION: a destination that fetched nothing reaches
-       §7.3.1 step 4, which returns the INITIATOR's record itself, so the inheritance that used to be performed
-       at the enqueue is performed here by the same algorithm with the same source. */
+       step 4, which returns the INITIATOR's record itself, so the inheritance that used to be performed at the
+       enqueue is performed here by the same algorithm with the same source. */
     origin = origin_determine(&dest, (final_flags & SANDBOX_ORIGIN) != 0, initiator);
     /* AND WHICH INSTANCE THE INCOMING DOCUMENT BELONGS TO IS ASKED OF THAT ANSWER — the first point in this
        navigation at which the question has one. An instance is an ORIGIN-KEYED AGENT CLUSTER, so a Document
-       whose §7.3.1 origin is not this agent's is a PEER's, and this side may not build its realm.
+       whose §7.3.2.1 origin is not this agent's is a PEER's, and this side may not build its realm.
        WHAT IS MISSING IS NOT THE CREATE NOTICE, AND ROUTING THIS THROUGH ONE WOULD BE WRONG. §7.4's create
        provisions a NEW navigable and its peer FETCHES the address for itself; this navigable ALREADY EXISTS in
        this instance, in the same browsing context group, presented by an element of this document, and its
        WindowProxy is an object the page is holding across the navigation (§7.2.3 — that is what a WindowProxy
        is for). Three things have to be built and none of them is a field on an existing record:
-         (1) A RECORD THAT HANDS A PEER A DOCUMENT FOR A NAVIGABLE IT DOES NOT OWN — the bytes and the computed
-             type this frame already holds, this origin, §7.1.7's `policy` container the Document is created
-             WITH, §8.1.3.1's `tlu` and top-level origin, §7.3.1.3's parent navigable, Permissions Policy §9.5's
-             answer for the container element, and `final_flags`. The BYTES cross because this instance is the
-             one that fetched, and it had to be: §7.4.5 runs the fetch ONCE, through a manual redirect loop,
-             with the initiator's referrer — a peer re-fetching is a second request the server may answer
-             differently, and the origin decided here would then not be the origin of the peer's Document.
+         (1) A RECORD THAT NAMES A PEER A DOCUMENT FOR A NAVIGABLE IT DOES NOT OWN — the ADDRESS, this origin,
+             §7.1.7's `policy` container the Document is created WITH, §8.1.3.1's `tlu` and top-level origin,
+             §7.3.1.3's parent navigable, Permissions Policy §9.5's answer for the container element, and
+             `final_flags`. IT DOES NOT CARRY THE BYTES, AND THAT IS SECURITY.md's RULE RATHER THAN A
+             SIMPLIFICATION — this line used to say the opposite and it was a spec-wrong instruction to the
+             next reader. SECURITY.md's §The principal is MINTED in one place states it in general ("a message
+             from an untrusted zone carries MATERIAL … and never identity") and bridge.js's own §7.1.3.2 swap
+             arm states the combined form this record would break: an untrusted engine that could supply BYTES
+             and an ADDRESS the zone then derives a principal from could name any origin's document into
+             existence — attacker bytes at a victim origin, in a heap the zone believes is the victim's. So the
+             engine names the address and the TRUSTED ZONE loads it, exactly as it already does for §7.4's
+             create notice, and the principal comes from the load that zone performed.
+             THE SECOND REQUEST THAT LEAVES IS A REAL RESIDUAL AND IT IS THE ZONE'S TO CLOSE, not this record's:
+             §7.4.5 runs the fetch once, so a peer re-fetching is a request the server may answer differently.
+             bridge.js already names the closure for the identical residual on the swap arm — the zone remembers
+             its OWN reply to the `document.fetch` this navigation already made, keyed by (instance, address) —
+             and that memo is what makes a redirected load correct rather than merely cheap, since the reply it
+             replays carries the RESPONSE's URL this frame determined the origin over.
          (2) A LOCAL-TO-REMOTE TRANSITION FOR AN EXISTING WindowProxy. window_proxy_navigate takes a REALM, and
              window_proxy_is_remote asserts a remote proxy holds neither realm nor Window — so the transition
-             has to RELEASE both, which is §7.4.6.1's deactivate-a-document-for-a-cross-document-navigation and
-             not a free: a flow parked in the outgoing Document resumes there.
+             has to RELEASE both, which is §7.4.6.1 "Updating the traversable"'s deactivate-a-document-for-a-
+             cross-document-navigation and not a free: a flow parked in the outgoing Document resumes there.
+             ITS OWN FIRST SUBPROBLEM IS WHERE THE UNLOAD IS QUEUED, and it is not a detail: that operation is
+             engine_unload_document (solver/engine.h), which takes the INCOMING document and asserts this agent
+             HOSTS it, because document_lifecycle_unload_replaced queues §7.5.9's unload in a realm that must
+             survive §7.5.10 step 7's drop of the destroyed document's tasks — and it asserts that realm is not
+             the outgoing one. For this navigation the incoming Document is a peer's and there is no such realm
+             on this side, so §7.5.9's optional `newDocument` has to be answered as ABSENT and the queue home
+             decided from the standard rather than from whichever realm is to hand. Read those two entries
+             before building for this line.
          (3) A HOST THAT ROUTES IT. Both hosts provision a peer for `navigable.create` and `navigable.swap`
              (wpt_runner.c spawns a child process; bridge.js roots a cluster), and neither can carry this one:
              both of those CREATE a navigable in the peer, and this one must attach a Document to a navigable
@@ -1078,30 +1179,27 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        with the initial about:blank and NAVIGATES it at step 14, so a create whose address is same-origin takes
        the local arm, enqueues that navigation, and its response arrives HERE — a redirect off-origin then
        fires this line rather than silently loading a peer's document into this heap.
-       WHAT IS STILL SILENT IS THE OTHER ARM, AND IT IS SILENT IN THE PEER RATHER THAN HERE. A create whose
-       REQUEST url is already cross-origin emits the notice, and the host provisions an instance from the
-       origin that notice carried; that instance runs platform_agent_init, which calls origin_agent_adopt
-       BEFORE anything is fetched, and its root Document is handed to it as BYTES the host fetched rather than
-       through this job. So a redirect on that fetch gives the peer a principal its own response contradicts,
-       and `origin_agent_adopt`'s "one adopt per agent" assert cannot see it — the agent is not wrong twice,
-       it is wrong once and consistently. The check that closes it belongs where the host states the principal,
-       against the response's own URL, and it is NOT this site's to make: this instance never sees that
-       response. Naming it here is naming a defect in another file, so read that entry before building for it
-       (core/platform.c's adopt, and each host's provisioning of a peer) rather than from this line. */
+       THE OTHER ARM IS THE HOST'S AND IS ANSWERED WHERE THE HOST STATES THE PRINCIPAL. A create whose REQUEST
+       url is already cross-origin emits the notice, and the peer's root Document is handed to it as BYTES the
+       host fetched rather than through this job — so the address that instance is rooted at, and therefore the
+       principal `origin_agent_adopt` takes, is the host's to state, and it must be the URL the response came
+       from. That is a claim about other files and it is where the answer lives: read them rather than build
+       from this line (each host's provisioning of a peer, and core/platform.c's adopt). */
     DCHECK(child_in_this_agent(origin),
            "§7.4.5 determined this navigation's RESPONSE ORIGIN and it is not this agent's, so the incoming "
            "Document belongs to a PEER instance — an instance is an origin-keyed agent cluster and the "
            "navigable stays here while its ACTIVE DOCUMENT moves. This is not §7.4's create notice: that one "
            "provisions a NEW navigable whose peer fetches for itself, and this navigable already exists in "
            "this group, presented by an element of this document, behind a WindowProxy the page holds across "
-           "the navigation. Build the three named above this line — a record that hands a peer the BYTES this "
-           "frame already fetched together with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's parent and "
-           "§9.5's container answer; a local-to-remote transition for this proxy that runs §7.4.6.1's "
-           "deactivate-a-document-for-a-cross-document-navigation rather than freeing a realm a parked flow "
-           "resumes into; and the host route for it");
+           "the navigation. Build the three named above this line — a record that names a peer this ADDRESS "
+           "together with §7.1.7's container, §8.1.3.1's pair, §7.3.1.3's parent and §9.5's container answer, "
+           "and NOT the bytes (SECURITY.md: an untrusted engine that supplies bytes for an address the zone "
+           "derives a principal from can name any origin's document into existence); a local-to-remote "
+           "transition for this proxy that runs §7.4.6.1's deactivate-a-document-for-a-cross-document-"
+           "navigation rather than freeing a realm a parked flow resumes into; and the host route for it");
     /* AND §8.1.3.1's TOP-LEVEL ORIGIN, asked of the same fact about the navigable that `tlu` is: §7.11 gives a
        TOP-LEVEL traversable's new environment the origin of the document it is loading — this document IS the
-       top-level environment, and §7.3.1's answer for the response is the one just computed — while a NESTED
+       top-level environment, and §7.3.2.1's answer for the response is the one just computed — while a NESTED
        navigable keeps the pair its creation gave it, which is what makes a cross-origin frame's permission key
        its EMBEDDER's (Permissions §5.1: "Most powerful features grant permission to the top-level origin and
        delegate access to the requesting document via Permissions Policy").
@@ -1154,7 +1252,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                minted either: §7.5.1's own note says the Window, Document and agent on the swapped-past side
                "will not end up being used". */
             swapped = true;
-            browsing_context_group_swap(ctx, proxy, addr, origin, final_flags);
+            browsing_context_group_swap(ctx, proxy, dest_url, origin, final_flags);
         }
     }
     header_list_free(&response_headers);
@@ -1182,13 +1280,21 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         } else {
             doc = window_proxy_doc(proxy);   /* §7.4 minted and adopted it when it created the navigable */
         }
-        cctx = navigable_realm(ctx, doc, addr, tlu, origin, proxy, (const char *)body, body_len, resp_ctype,
+        /* AND THE DOCUMENT'S ADDRESS IS §7.5.1 "Shared document creation infrastructure"'s `creationURL`, which
+           the section builds out of exactly the two URLs a redirect separates: "let creationURL be
+           navigationParams's response's URL. If navigationParams's request is non-null, then set creationURL to
+           navigationParams's request's CURRENT URL" — and Fetch §2.2.5 "Requests" makes a request's current URL
+           "a pointer to the last URL in request's URL list", which the redirect loop appends the new address
+           to. So both arms name the address the response came from, and the address the navigation ASKED for is
+           the FIRST item of that list. It is what `document.URL`, `location.href` and every relative URL this
+           Document resolves are read off. */
+        cctx = navigable_realm(ctx, doc, dest_url, tlu, origin, proxy, (const char *)body, body_len, resp_ctype,
                                computed_defined ? &computed : NULL,
                                policy, about_base, final_flags);
         /* §7.5.1's OPENER POLICY ROW for the Document this navigation creates — "opener policy …
            navigationParams's cross-origin opener policy", which is §7.4.5's responseCOOP above. It moves with
            the rest of the binding because a navigation is what replaces a navigable's active document. */
-        window_proxy_navigate(ctx, proxy, cctx, doc, addr, tlu, tlo, origin, response_coop.value);
+        window_proxy_navigate(ctx, proxy, cctx, doc, dest_url, tlu, tlo, origin, response_coop.value);
     }
     opener_policy_free(&response_coop);
     embedder_policy_free(&response_ep);
@@ -1219,6 +1325,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        lifetime is that value's — which is why the release below must stay AFTER navigable_realm. */
     JS_FreeValue(ctx, headersv);
     JS_FreeValue(ctx, bodyv);
+    JS_FreeValue(ctx, urlv);
     if (s->req) {
         /* §7.4 step 14's response is the HOST'S OWN — it fetched the bytes; it did not run a peer's program —
            so a throw completion here is a host that answered a network request with something other than the
@@ -1231,6 +1338,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         JS_FreeValue(ctx, taken);
         s->req = 0;
     }
+    /* THE TWO ADDRESSES THIS FRAME OWNS — the one the navigation asked for and the one the response came from.
+       `resp_url` is NULL for a destination that made no request, which is the same fact `fetches` states and
+       the reason `dest_url` borrows rather than owns: one of these two is what it points at, and a free of the
+       borrow would be a double free of whichever it was. */
+    JS_FreeCString(ctx, resp_url);
     JS_FreeCString(ctx, addr);
     return JS_STEP_DONE;
 }

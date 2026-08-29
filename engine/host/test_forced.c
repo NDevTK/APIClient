@@ -4123,14 +4123,28 @@ static int hostreq_answer_all(JSContext *ctx)
                                                               : JS_NULL;
             } else if (!strncmp(tab + 1, "document.fetch\t", 15)) {
                 /* §7.4 STEP 14'S NETWORK HALF — this fixture standing in for it exactly as it stands in for
-                   the peer above, so the load's suspend/resume runs end to end. `{body, headers}` is ONE
+                   the peer above, so the load's suspend/resume runs end to end. `{url, body, headers}` is ONE
                    answer because everything §7.5.1 creates a Document from is a property of THE RESPONSE.
                    The body is a DOCUMENT WITH A SCRIPT,
                    because the only thing that proves a navigation happened is the loaded document RUNNING. */
                 static const char DOC[] =
                     "<!doctype html><html><head></head><body>"
                     "<script>fetch('/api/iframesrc?v=loaded');</script></body></html>";
+                const char *asked = tab + 1 + 15;   /* past `document.fetch<TAB>` */
+
                 v = JS_NewObject(ctx);
+                /* FETCH §2.2.6 "Responses"' RESPONSE URL, WHICH THIS FIXTURE SERVES OUT OF A LITERAL AND
+                   THEREFORE FOLLOWS NO REDIRECT FOR — so the response's URL is the address that was asked for,
+                   and saying so is a statement about this fixture's own network rather than a field copied to
+                   satisfy a reader. HTML §7.4.5 determines the loaded Document's ORIGIN over this string, so a
+                   host that DID redirect would put a different one here and the Document would belong to
+                   another agent cluster. */
+                DCHECK(asked < end,
+                       "a document.fetch request carried no address after its tab — the load job writes "
+                       "`document.fetch<TAB><url>` with an absolute serialization, so an empty tail is that "
+                       "record's two ends disagreeing rather than a page navigating to nothing");
+                JS_DefinePropertyValueStr(ctx, v, "url",
+                                          JS_NewStringLen(ctx, asked, (size_t)(end - asked)), JS_PROP_C_W_E);
                 /* AS BYTES: §2.2.5's body is a byte sequence, and a Document is parsed from one.
                    AND AS OWN DEFINES, for the reason core/fetch/fetch.c's fetch_reply_new states in full at
                    its own writes: this record is built by the zone standing in for the trusted host, IN THE

@@ -1259,14 +1259,27 @@ static int wpt_request_finish(JSContext *ctx, WptRequest *r)
            "Message Body Length decides where a body ends and this one is a prefix, which parses as a short "
            "document rather than reporting anything");
     if (r->deliver == WPT_DELIVER_DOCUMENT) {
-        /* THE ANSWER IS `{body, headers}`: a navigated Document is created from THIS response, so everything
-           §7.5.1 reads off a header list belongs in it. The block is the same field-line form qjs_init takes,
-           serialized by the component that parses it so the two cannot disagree.
+        /* THE ANSWER IS `{url, body, headers}`: a navigated Document is created from THIS response, so
+           everything §7.5.1 reads off a header list belongs in it. The block is the same field-line form
+           qjs_init takes, serialized by the component that parses it so the two cannot disagree.
            §2.2.5's BODY IS A BYTE SEQUENCE and this answer carries one as one — `JS_NewStringLen` would be
            quickjs's own UTF-8 decode, run by the zone that FETCHED on bytes HTML's encoding sniffing has not
-           looked at yet. */
+           looked at yet.
+           `url` IS Fetch §2.2.6 "Responses"' RESPONSE URL — the last of its URL list — and it is the ADDRESS
+           THIS RUNNER REQUESTED because this runner serves the checked-out corpus and FOLLOWS NO REDIRECT,
+           which is the same statement wpt_reply_value above makes for the same reason. That is a positive fact
+           about this host's network and not a default: HTML §7.4.5 determines a navigation's origin over the
+           response's URL, so the field exists in order that a host which DOES follow redirects reports a
+           different string here, and this one reports the string that its own behaviour makes correct.
+           STATED EVEN FOR A FETCH THAT FAILED, where `body` is null: the URL that was asked for is a fact even
+           when the reply is not, and §7.4.5 still creates a Document for a navigable whose load did not load. */
         JSValue v = JS_NewObject(ctx);
         char *field_lines = header_list_field_lines(&r->hdrs);
+        DCHECK(r->url != NULL && *r->url,
+               "a corpus document load completed with no request URL on its record — this runner writes the "
+               "address onto the request when it begins one, and §7.4.5 determines the loaded Document's origin "
+               "over the URL the response came from, which for a host that follows no redirect is that address");
+        JS_SetPropertyStr(ctx, v, "url", JS_NewString(ctx, r->url));
         JS_SetPropertyStr(ctx, v, "body",
                           body ? JS_NewArrayBufferCopy(ctx, (const uint8_t *)body, len) : JS_NULL);
         JS_SetPropertyStr(ctx, v, "headers", JS_NewString(ctx, field_lines));

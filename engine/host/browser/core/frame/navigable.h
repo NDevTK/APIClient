@@ -66,7 +66,11 @@
  * real one. */
 
 /* THE NETWORK HALF IS A HOST-OWED ANSWER, not a callback — `document.fetch<TAB><url>`, issued by §7.4 step
-   14's load job and parked on until the host answers with `{body, csp}` (navigable.c). There is nothing for a
+   14's load job and parked on until the host answers with `{url, body, headers}` (navigable.c). The `url` is
+   Fetch §2.2.6 "Responses"' RESPONSE URL and is the field only a host can state: HTML §7.4.5 "Populating a
+   session history entry" determines the loaded Document's origin over it, and a host is the only party that
+   saw the redirect chain — a host that follows none states the address it was asked for, which is a statement
+   about its own network rather than an absence. There is nothing for a
    host to install here, which is the point: a synchronous fetcher could only ever be implemented by a host
    whose network happens to be synchronous, and the product host's is the trusted zone's — every request parks
    the asking flow. The one shape that serves both is the one every other host-owed answer in this engine

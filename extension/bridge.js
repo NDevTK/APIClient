@@ -1468,9 +1468,20 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // sink gets reported as exploitable. A load that does not load answers `bytes: null`, which is a navigable
   // that still exists showing an error page, exactly as the engine's own child_document reads it.
   const fetchedDocument = async (u) => {
-    if (!canFetch) return { headers: {}, bytes: null };
+    /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. HTML
+       §7.4.5 "Populating a session history entry" determines the loaded Document's ORIGIN over the RESPONSE's
+       URL, and a navigable whose load did not load still gets a Document — so "there was no response" is not a
+       reason to answer without one, and the honest URL in that case is the one that was requested. An address
+       that will not parse is the ENGINE's own serializer output disagreeing with a URL parser, which is a
+       broken contract rather than a page's doing.
+       IT IS RESOLVED OUTSIDE THE `try`, DELIBERATELY. It used to sit inside it, whose catch answers "a load
+       that did not load" — so an address the engine's own serializer produced and a URL parser refuses became
+       a navigable showing an error page. The parse THROWS here instead: a DFAIL would be a no-op in release
+       and leave every arm below reading `undefined`, which is the defaulted-field defect with a check's name
+       on it. */
+    const abs = new URL(u, msg.sourceUrl).href;
+    if (!canFetch) return { url: abs, headers: {}, bytes: null };
     try {
-      const abs = new URL(u, msg.sourceUrl).href;
       // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed:
       // §7.4's fetch is a navigation this engine initiated, not a learned GET being replayed for its reply.
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl });
@@ -1478,9 +1489,25 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
              "safeFetch answered a document load with something other than its reply record — §7.4 step 14 " +
              "reads the BODY and the POLICY off it, and a Document judged under no policy is how a page whose " +
              "CSP kills a sink gets reported as exploitable");
+      /* AND FETCH §2.2.6 "Responses"' URL LIST, WHOSE LAST ITEM IS THE RESPONSE'S URL — "a pointer to the last
+         URL in response's URL list". THIS ZONE IS THE ONLY PARTY THAT SAW THE REDIRECT CHAIN (safe-fetch.js
+         says so in its own header), and the engine determines the Document's origin over exactly this string:
+         a same-origin request that 302s off this origin produces a Document belonging to ANOTHER agent
+         cluster, and an engine handed the requested address instead has no way to know that. It is asserted
+         rather than read past, because the list is empty only for a URL that would not parse — and this call
+         hands safeFetch an already-absolute href, so an empty list here is the chokepoint's contract having
+         changed under a reader that decides a principal. */
+      DCHECK(Array.isArray(r.urlList) && r.urlList.length >= 1 &&
+             typeof r.urlList[r.urlList.length - 1] === "string" && r.urlList[r.urlList.length - 1] !== "",
+             "safeFetch answered a document load with no Fetch §2.2.6 URL LIST — its last item is the " +
+             "RESPONSE's URL, which is what HTML §7.4.5 determines the loaded Document's origin, CSP §2.2.2's " +
+             "self-origin and §7.5.1's creationURL over. Without it a redirect off this origin becomes a " +
+             "Document created under the principal of the address that was merely requested");
       /* NOT OK IS A LOAD THAT DID NOT LOAD — the navigable still exists and shows an error page, which is what
-         a null body means to the engine's child_document. That is a real §7.4 outcome, not a softening. */
-      if (!r.ok) return { headers: {}, bytes: null };
+         a null body means to the engine's child_document. That is a real §7.4 outcome, not a softening. The
+         URL still crosses: a response that failed still came from somewhere, and where it came from is what
+         the Document a browser shows for it is at. */
+      if (!r.ok) return { url: r.urlList[r.urlList.length - 1], headers: {}, bytes: null };
       /* THE BYTES, because a Document is PARSED from a byte sequence. This answered `r.body` while that was
          `resp.text()`'s UTF-8 decode, so a document served in any other encoding reached lexbor already
          replaced with U+FFFD and HTML §13.2.3.2's encoding sniffing — the BOM, then the transport charset,
@@ -1493,8 +1520,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          cross-origin isolation of a response that sent nothing. Which names matter is the ENGINE's question,
          in the browser components that own those standards; this zone relays what the response carried, the
          same way it already does for the document that roots an instance (responseFieldLines). */
-      return { headers: r.headers, bytes: r.body };
-    } catch (e) { RETHROW_FATAL(e); return { headers: {}, bytes: null }; }
+      return { url: r.urlList[r.urlList.length - 1], headers: r.headers, bytes: r.body };
+    } catch (e) { RETHROW_FATAL(e); return { url: abs, headers: {}, bytes: null }; }
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
      this zone stamps on everything it sends — both are read only by the notice router below, which is the
@@ -2052,7 +2079,16 @@ async function hostNotice(eng, line) {
        performed. RESIDUAL, named because it is not yet built: a child whose creator applied `sandbox`
        (attribute or CSP) has an OPAQUE origin that this derivation cannot see — the sandbox flag set is not
        yet carried on the notice, so such a child is currently stamped with its address's tuple origin. Carry
-       the flags on the notice and mint a per-document opaque token here, the way _senderOrigin does. */
+       the flags on the notice and mint a per-document opaque token here, the way _senderOrigin does.
+       AND "THE URL THIS ZONE FETCHED" IS THE URL THE RESPONSE CAME FROM, WHICH IS `loaded.url` AND NOT `f[3]`.
+       The notice carries the address the creating engine ASKED for; only this zone followed the redirect
+       chain, so only this zone can say where the bytes below actually came from. Every one of the three
+       things derived from it is a different answer when they differ: the child's PRINCIPAL (this line),
+       the cluster it is routed to, and the ADDRESS its instance is rooted at — which is what HTML §7.5.1
+       "Shared document creation infrastructure" calls `creationURL` and what every relative URL that
+       document builds resolves against. Loading a redirected child under the requesting address gave a peer
+       instance a principal its own response contradicts, consistently enough that `origin_agent_adopt`'s
+       one-adopt-per-agent assert could not see it. */
     /* THE CHILD'S BROWSING-CONTEXT GROUP IS ITS CREATOR'S, and that is the spec rather than a convenience: a
        nested navigable is in its parent's group by construction, and §7.4's auxiliary one is too unless
        `noopener` severed it. So the child's cluster key is (creator's group, the origin of the URL this zone
@@ -2065,9 +2101,13 @@ async function hostNotice(eng, line) {
        sequence is the `about:blank`-shaped document the engine's own child_document builds for one. */
     DCHECK(loaded && (loaded.bytes === null || loaded.bytes instanceof Uint8Array),
            "the document load answered neither bytes nor the null that means it did not load");
+    DCHECK(loaded && typeof loaded.url === "string" && loaded.url !== "",
+           "the document load answered no RESPONSE URL for a cross-origin child — the address the notice " +
+           "carries is the one the creating engine ASKED for, and the principal this zone stamps on a peer " +
+           "instance has to be the origin of the URL its bytes CAME from");
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
-    const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: f[3],
-                  origin: originOf(f[3]), groupId: eng.groupId,
+    const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
+                  origin: originOf(loaded.url), groupId: eng.groupId,
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* THE RESPONSE'S OWN HEADER LIST, WHOLE. The creator's inherited container does NOT go in here — it is
        relayed as a container of its own below, for the reason stated there. */
@@ -2264,8 +2304,15 @@ async function hostNotice(eng, line) {
            "the swapped-to document load answered no header list — §7.5.1 creates its Document from the " +
            "response's headers, and §7.1.3 obtains the opener policy that decides its new group's cross-origin " +
            "isolation mode out of the same list");
+    /* AND ITS RESPONSE'S URL, for the create arm's reason exactly: the notice carries the address the engine
+       ASKED for, this zone is the only party that followed the redirect chain, and the swapped-to instance's
+       principal and §7.5.1 `creationURL` are both the address its bytes CAME from. */
+    DCHECK(typeof swapped.url === "string" && swapped.url !== "",
+           "the swapped-to document load answered no RESPONSE URL — §7.1.3.2 provisions a new instance from " +
+           "the address the Document is at, which after a redirect is not the address the swap requested");
     const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
-                      sourceUrl: f[2], origin: originOf(f[2]), groupId: "swap:" + (_nextSwapGroup++),
+                      sourceUrl: swapped.url, origin: originOf(swapped.url),
+                      groupId: "swap:" + (_nextSwapGroup++),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* NO INHERITED POLICY LINE HERE, and its absence is the spec rather than a field this record forgot: the
@@ -2284,7 +2331,11 @@ async function hostNotice(eng, line) {
        no parent by the standard rather than by this zone having nothing to say.
        AND HTML §3.1.3's LIST IS `none` BY THAT SAME SENTENCE READ ONE ALGORITHM ALONG: its steps 2-3 return
        an empty output for a Document with no CONTAINER DOCUMENT, and a top-level browsing context has none. */
-    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], f[2], true, null, "u", "null",
+    /* HTML §8.1.3.1's TOP-LEVEL CREATION URL is `swapped.url` AND NOT `f[2]`, for the same sentence as the
+       principal above: the swapped-to navigable IS a top-level traversable, so its environments' top-level
+       creation URL is its own Document's address (§7.5.1's `creationURL`), which after a redirect is where
+       the response came from and not where the swap pointed. */
+    await engineCreate("", swapMsg.pageHtml, swapMsg, false, f[1], swapped.url, true, null, "u", "null",
                        "none")._readyP;
     return;
   }
@@ -2550,11 +2601,19 @@ async function engineServiceHostRequests(eng) {
     // JSON, because the answer carries its TYPE across this seam: a null body is a load that did not load, and
     // the string "null" is a one-word document. The BODY is not in that JSON — a Document is parsed from a
     // BYTE SEQUENCE, and this seam carries one (HostAnswer's `array<uint8>?` body).
-    /* §7.4 step 14's answer: the RESPONSE'S HEADER LIST as the HTTP field lines it delivered, and the
+    /* §7.4 step 14's answer: the RESPONSE'S URL, its HEADER LIST as the HTTP field lines it delivered, and the
        document as BYTES. It carried one extracted policy (`{csp}`) — see fetchedDocument. The field-line form
        is the one a header list crosses this ABI in and is exactly what qjs_init takes, so a navigated Document
-       and a rooted one are built from the identical shape by the identical parse. */
-    await engineAnswer(eng, id, { headers: responseFieldLines(r.headers) }, r.bytes);
+       and a rooted one are built from the identical shape by the identical parse.
+       THE URL IS FETCH §2.2.6's RESPONSE URL AND NOT THE ADDRESS THE ENGINE ASKED FOR. Everything HTML §7.4.5
+       decides about the incoming Document — its origin, and therefore which agent cluster it belongs to at
+       all — is written over the response's URL, and a redirect is what makes the two different. Only this zone
+       saw the chain, so only this zone can state it. */
+    DCHECK(typeof r.url === "string" && r.url !== "",
+           "the document load answered no RESPONSE URL — fetchedDocument states one on every arm, including " +
+           "the ones where the load did not load, because §7.4.5 determines a Document's origin over it and a " +
+           "navigable whose load failed still gets a Document");
+    await engineAnswer(eng, id, { url: r.url, headers: responseFieldLines(r.headers) }, r.bytes);
   }
 }
 /* THE SAME TWO CHANNELS FOR A SYNCHRONOUS ANSWER. Two of the requests this zone can genuinely answer carry a
