@@ -1239,6 +1239,39 @@ bool session_history_is_initial_about_blank(JSContext *ctx)
     return sh_is_initial_about_blank(ctx);
 }
 
+/* ---- WHAT §7.4.3's RELOAD READS OFF THE ACTIVE ENTRY — see session_history.h for why it is the ENTRY -------- */
+
+JSValue session_history_active_entry_url(JSContext *ctx)
+{
+    JSValue e = sh_active_entry(ctx), url = JS_GetPropertyStr(ctx, e, SH_E_URL);
+
+    JS_FreeValue(ctx, e);
+    DCHECK(JS_IsString(url),
+           "§7.4.1.1's session history entry held no URL — sh_entry_new writes one for every entry this "
+           "component makes and the field has no other writer, so an entry without one was not built here");
+    return url;
+}
+
+JSValue session_history_active_entry_navigation_state(JSContext *ctx)
+{
+    JSValue e = sh_active_entry(ctx), buf = JS_GetPropertyStr(ctx, e, SH_E_NAV_STATE);
+
+    JS_FreeValue(ctx, e);
+    DCHECK(JS_IsArrayBuffer(buf),
+           "§7.4.1.1's navigation API state held something that is not the SERIALIZED bytes — every writer of "
+           "the field is in this file and every one writes an ArrayBuffer");
+    return buf;
+}
+
+uint32_t session_history_active_entry_step(JSContext *ctx)
+{
+    JSValue e = sh_active_entry(ctx);
+    uint32_t step = sh_entry_step(ctx, e);
+
+    JS_FreeValue(ctx, e);
+    return step;
+}
+
 /* §7.4.4's TWO HALVES — see session_history.h for where the split is and why it is there.
  *
  * ONE REST POINT, which is step 11's request. Steps 12 and 13 after it are the finalize and the
@@ -1493,7 +1526,12 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
        navigationAPIState." Every caller here is a navigation, not `navigation.navigate(url, {state})`, so the
        argument is null and step 3 does not fire — which is the standard's own note: "for other fragment
        navigations, including user-initiated ones, the navigation API state is CARRIED OVER from the previous
-       entry". It is carried at step 6 below, straight off the active entry, so nothing has to hold it here.
+       entry". It is carried at step 6 below, straight off the active entry — AND IT IS ALSO STEP 4's, which
+       this site used to leave out: the sentence above accounted for the ENTRY the algorithm builds and said
+       nothing about the NAVIGATE EVENT it fires first, so the page's own `navigate` listener was handed
+       `event.destination.getState()` of the serialization of `null` for a state the page itself had put on
+       the entry. Reading it HERE and not at step 6 is the same rule the destination above is taken by: every
+       `navigate` listener runs between the two, and any of them may make a different entry active.
        STEP 4: "let continue be the result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with
        navigationType set to historyHandling, isSameDocument set to TRUE, … destinationURL set to url, and
        navigationAPIState set to destinationNavigationAPIState."
@@ -1502,8 +1540,14 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
        §7.4.1.1 states about the entry ("the classic history API state is never carried over"). */
     url = JS_ToCString(ctx, w->url);
     CHECK(url != NULL, "session history: §7.4.2.3.3's destination could not be read");
-    navigate_event_fire_push_replace_reload_begin(ctx, &w->fire, w->history_handling, url,
-                                                  /*is_same_document*/ true, /*classic_state*/ NULL);
+    {
+        JSValue dest_state = session_history_active_entry_navigation_state(ctx);
+
+        navigate_event_fire_push_replace_reload_begin(ctx, &w->fire, w->history_handling, url,
+                                                      /*is_same_document*/ true, /*classic_state*/ NULL,
+                                                      dest_state);
+        JS_FreeValue(ctx, dest_state);
+    }
     JS_FreeCString(ctx, url);
     /* AND IT RETURNS RATHER THAN RUNNING ON: the dispatch is the next stage, and a body that sets its stage and
        falls into the next arm has crossed a boundary the driver never saw. `in` is this entry's request answer

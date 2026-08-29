@@ -68,6 +68,12 @@ typedef struct {
     bool        same_document;   /* the wrapper's isSameDocument, which becomes destination's is same document */
     JSValue     url;             /* the destination URL, serialized (owned string) */
     JSValue     classic;         /* §7.2.6.10.1's classic history API state: the bytes (ArrayBuffer) or JS_NULL */
+    /* §7.2.6.10.4's navigationAPIState, which step 11 makes the DESTINATION's state — the bytes (ArrayBuffer),
+       or JS_UNDEFINED for the wrapper's own default. JS_UNDEFINED is a POSITIVE statement and not a hole: the
+       wrapper declares "an optional serialized state navigationAPIState (default StructuredSerializeForStorage
+       (null))", so a caller that names nothing has named that value and the machine performs the serialization
+       rather than reading a field nobody wrote. */
+    JSValue     nav_state;
     JSValue     destination;     /* §7.2.6.10.3's, built at step 7 of the wrapper (owned) */
     JSValue     event;           /* the NavigateEvent, held across the dispatch (owned) */
     /* §7.2.6.8's ABORT, which this algorithm performs at TWO of its steps — the wrapper's step 2 (as the loop)
@@ -90,15 +96,27 @@ void navigate_event_fire_work_release(JSContext *ctx, NavigateEventFireWork *w);
  *   `is_same_document` is the wrapper's isSameDocument.
  *   `classic_state` is its classicHistoryAPIState — the serialized bytes a `pushState` carries, or NULL for
  *      every navigation that has none. BORROWED; the bytes are copied.
- * THE WRAPPER'S OTHER FIVE ARGUMENTS ARE AT THE STANDARD'S OWN DEFAULTS and are not parameters, because a
+ *   `navigation_api_state` is its navigationAPIState, as the SERIALIZED bytes core/frame/session_history.c
+ *      holds one in (an ArrayBuffer), or JS_UNDEFINED for the wrapper's declared default,
+ *      StructuredSerializeForStorage(null). BORROWED; the value is duplicated.
+ *      IT IS A PARAMETER BECAUSE TWO OF THE THREE CALLERS PASS SOMETHING ELSE, and both pass the SAME thing
+ *      for the same reason: §7.4.2.3.3 "Fragment navigations" step 3 and §7.4.3 "Reloading and traversing"
+ *      step 1.2 each open with "let destinationNavigationAPIState be navigable's ACTIVE SESSION HISTORY
+ *      ENTRY's navigation API state", which §7.4.1.1's own note explains — "for other fragment navigations,
+ *      including user-initiated ones, the navigation API state is CARRIED OVER from the previous entry". The
+ *      default is §7.2.5's `pushState`/`replaceState` alone. It is read by `event.destination.getState()`, so
+ *      a caller passing the default where the standard carries the entry's state answers a page's own
+ *      `navigate` listener with the serialization of `null` for a state the page put there itself.
+ * THE WRAPPER'S OTHER FOUR ARGUMENTS ARE AT THE STANDARD'S OWN DEFAULTS and are not parameters, because a
  * parameter whose only caller passes the default is a field with one writer: userInvolvement is "none" (a
  * script called this, not the browser UI), sourceElement is null (no link, form or submit button is
- * responsible), formDataEntryList is null (a POST form submission is what fills it), navigationAPIState is
- * StructuredSerializeForStorage(null), and apiMethodTracker is null (§7.2.6.7's `navigate`/`reload` are its
- * only producers). Each becomes a parameter with the caller that passes something else. */
+ * responsible), formDataEntryList is null (a POST form submission is what fills it), and apiMethodTracker is
+ * null (§7.2.6.7's `navigate`/`reload` are its only producers). Each becomes a parameter with the caller that
+ * passes something else. */
 void navigate_event_fire_push_replace_reload_begin(JSContext *ctx, NavigateEventFireWork *w,
                                                    const char *navigation_type, const char *destination_url,
-                                                   bool is_same_document, const StructuredData *classic_state);
+                                                   bool is_same_document, const StructuredData *classic_state,
+                                                   JSValueConst navigation_api_state);
 
 /* THE ALGORITHM, DRIVEN. JS_STEP_CALL or JS_STEP_YIELD = return it (it has parked on the page's `navigate`
    listeners, or at one of its own rest points), 0 = it has ANSWERED and `*pcontinue` holds §7.2.6.10.4's

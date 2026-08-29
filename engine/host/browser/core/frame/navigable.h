@@ -37,6 +37,8 @@
 #include <lexbor/html/html.h>
 
 #include "quickjs.h"
+#include "quickjs-step.h"                 /* §7.4.3's reload is a machine: its first step runs the page's code */
+#include "core/frame/navigate_event_fire.h" /* §7.2.6.10.4's fire, which §7.4.3 step 1 performs */
 /* §7.1.7's POLICY CONTAINER in the form it crosses a seam — a Document is created with one and a navigable is
    created with the clone of its creator's, so both entries below take one. */
 #include "core/frame/policy_container.h"
@@ -240,6 +242,58 @@ void navigable_install(JSContext *ctx, JSValueConst global, const char *origin);
 JSValue navigable_tree_order(JSContext *ctx);
 
 JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url);
+
+/* HTML §7.4.3 "Reloading and traversing"'s RELOAD, over the navigable whose ACTIVE DOCUMENT is this realm's.
+ *
+ * IT IS NOT "NAVIGATE TO MY OWN ADDRESS", and the difference is not academic — it is why this is its own
+ * algorithm and not a call to navigable_navigate above with `document_url`. Three of its steps say so:
+ *   — ITS DESTINATION IS THE ACTIVE SESSION HISTORY ENTRY'S URL, not the Document's. Those are two fields with
+ *     two writers (core/frame/session_history.h), and §7.4.4's URL and history update steps move one without
+ *     the other in the general case; reading the wrong one is how a reload would fetch an address the page
+ *     never asked for.
+ *   — §7.4.2.2 STEP 11'S FRAGMENT ARM MUST NOT RUN. `https://x/y#a` reloaded satisfies every conjunct of
+ *     that test — the destination equals the active entry's URL with exclude fragments set to true and its
+ *     fragment is non-null — so routing a reload through navigate would answer `location.reload()` on any
+ *     page with a fragment by firing `popstate` and fetching nothing at all. §7.4.3 has no same-document arm.
+ *   — ITS NAVIGATE EVENT'S NavigationType IS "reload", which a router's own `navigate` listener branches on,
+ *     and its destinationNavigationAPIState is the ENTRY's rather than the wrapper's default.
+ *
+ * IT IS A STEP MACHINE BECAUSE ITS FIRST STEP RUNS THE PAGE'S CODE. Step 1 fires a push/replace/reload
+ * navigate event at the Navigation, which any `navigate` listener may cancel with `preventDefault()`, and a
+ * cancelled reload fetches nothing. So `location.reload()` suspends inside its own call, siblings run, and it
+ * resumes — the same conversion core/frame/location.c's setters and its assign/replace already took.
+ *
+ * WHOSE NAVIGABLE IT IS, ANSWERED BY THE REALM AND NEVER BY A PARAMETER. §7.4.6.1 says a reload "is always
+ * treated as if it were done by the navigable itself, EVEN IN CASES LIKE parent.location.reload()", which is
+ * also what makes reading the initiator's own facts here correct rather than the §scheduler violation it would
+ * be for a navigation: for a reload the operation's initiator IS the target. And a Location's members run in
+ * the realm that DEFINED them (core/frame/location.c's loc_assert_this_realm), so `parent.location.reload()`
+ * already arrives in the parent's realm — `ctx` is the target navigable's active document either way.
+ *
+ * WHAT ITS LAST STEP COLLAPSES TO, and the one thing it costs, is stated at the enqueue in navigable.c and
+ * asserted there rather than described here. */
+typedef struct {
+    uint8_t stage;                /* NAV_RELOAD_STAGES in navigable.c */
+    /* §7.4.3 step 1.4's destinationURL — the ACTIVE SESSION HISTORY ENTRY's URL, taken WITH the operation as a
+       string that parks. Between step 1's dispatch and step 4's job every `navigate` listener the page has
+       runs, and any of them may push an entry or navigate; a machine that re-read the entry on resume would
+       reload whatever a listener left behind. */
+    JSValue url;
+    NavigateEventFireWork fire;   /* step 1 */
+} NavigableReloadWork;
+
+void navigable_reload_start(NavigableReloadWork *w);
+void navigable_reload_visit(JSContext *ctx, NavigableReloadWork *w, JSStepVisit *v);
+/* §7.4.3 step 1's values, read at the moment the operation is CREATED. `userInvolvement` is "none" and
+   `navigationAPIState` and `apiMethodTracker` are null — the defaults §7.2.4's `reload()` calls this with, and
+   its only caller — so step 1's "if userInvolvement is not `browser UI`" is taken and step 1.3 leaves
+   destinationNavigationAPIState at the active entry's state. Each becomes a parameter with the caller that
+   passes something else, which is §7.2.6.7's `navigation.reload()`. */
+void navigable_reload_begin(JSContext *ctx, NavigableReloadWork *w);
+/* THE ALGORITHM, DRIVEN. JS_STEP_CALL/JS_STEP_YIELD = return it, 0 = §7.4.3 has finished (its load is
+   enqueued, or a `navigate` listener cancelled it — the caller cannot tell those apart and must not, because
+   §7.2.4's `reload()` has no return value and a cancellation is not an error), JS_STEP_ABRUPT = it threw. */
+int navigable_reload_run(JSContext *ctx, NavigableReloadWork *w, JSValue in, JSValue **out_cb, int *out_argc);
 
 /* HTML §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL, over a navigable whose active document is THIS one — which is
  * every `javascript:` navigation whose chosen navigable is the initiator's own, the `_self` case and the one a

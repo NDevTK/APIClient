@@ -56,9 +56,12 @@
  * cross: it is then the statement of which two members survive the filter.
  *
  * WHAT §7.2.4 STILL WANTS AND THIS BUILD DOES NOT HAVE, named at the ONE place each is reached rather than as
- * a list here that a reader would have to re-check: `reload`'s last step crashes in its own body, and
- * `ancestorOrigins` crashes at the step that wants §7.3.2.1's ancestor origins list. Each is REACHED only after
- * the steps in front of it have run, which is what makes the crash name a subproblem instead of a surface.
+ * a list here that a reader would have to re-check: `ancestorOrigins` crashes at the step that wants
+ * §7.3.2.1's ancestor origins list. It is REACHED only after the steps in front of it have run, which is what
+ * makes the crash name a subproblem instead of a surface. `reload`'s last step USED TO BE ON THAT LIST and is
+ * not: HTML §7.4.3 "Reloading and traversing"'s reload is core/frame/navigable.h's, and the member is the
+ * machine that drives it — which it has to be, because §7.4.3 step 1 fires a navigate event the page can
+ * cancel.
  * §7.4.2.3.3 "Fragment navigations" USED TO BE ON THAT LIST and is not: every member here that navigates now
  * takes §7.4.2.2's same-document arm when the destination selects it, which is what makes `location.hash =
  * "#/route"` a route change instead of a second Document over the router that ran it. The §7.2.4.1-.10 EXOTIC INTERNAL METHODS are a separate surface from the members: two
@@ -87,7 +90,8 @@
 #include "core/url/url.h"
 #include "core/dom/document.h"   /* this realm's address — the one place a document's URL lives */
 #include "core/encoding/encoding.h"      /* §7.2.4's search setter parses in the DOCUMENT's encoding */
-#include "core/frame/navigable.h"        /* §7.4.2.2's navigate — what "Location-object navigate" performs */
+#include "core/frame/navigable.h"        /* §7.4.2.2's navigate — what "Location-object navigate" performs —
+                                            and §7.4.3's reload, which `reload()`'s last step IS */
 #include "core/frame/remote_location.h"   /* §7.2.1.3.1's CrossOriginProperties(Location), spelled once */
 #include "core/frame/session_history.h"  /* §7.4.2.2's same-document test, and §7.4.2.3.3's own machine */
 #include "core/frame/window_proxy.h"     /* §7.5.10 step 8's null browsing context — the relevant Document */
@@ -926,28 +930,89 @@ static const IdlStepDecl LOC_ASSIGN_DECL = {
 /* §7.2.4's `reload()`: "let document be this's relevant Document; if document is null, then return; if
  * document's origin is not same origin-domain with the entry settings object's origin, then throw a
  * SecurityError; RELOAD document's node navigable."
- * The first three steps are here and the fourth is §7.4.3 "Reloading and traversing"'s, which core/frame/
- * navigable.h does not have — so the member EXISTS and its steps run in order, which is what makes
- * `loc.reload()` on a browsing-context-less Location the no-op the spec says it is (it returns at step 2),
- * and the last step names what to build. */
-static JSValue js_loc_reload(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+ *
+ * ITS LAST STEP IS HTML §7.4.3 "Reloading and traversing"'s RELOAD, WHICH RUNS THE PAGE'S CODE, so this member
+ * is a machine like the setters and assign/replace above it. §7.4.3 step 1 fires a push/replace/reload navigate
+ * event with navigationType "reload", and a router's `navigate` listener may `preventDefault()` it — so a
+ * plain C body could neither wait for the answer nor honour it, and reaching for the dispatch from one would be
+ * a C activation hosting the page's loops.
+ *
+ * ALL FOUR OF §7.4.3's OPTIONAL ARGUMENTS ARE AT THEIR DEFAULTS HERE, which is what "reload document's node
+ * navigable" with no further words means: navigationAPIState null (so step 1.3 leaves the destination state at
+ * the active entry's), userInvolvement "none" — NOT "browser UI", which is why step 1 is taken at all rather
+ * than skipped — and apiMethodTracker null. §7.2.6.7's `navigation.reload()` is the caller that passes others.
+ *
+ * THE STATE IS §7.4.3's OWN RECORD and this member holds nothing beside it: steps 1-3 compute no value that
+ * outlives them, and the destination §7.4.3 parks on is taken off the active session history entry by
+ * navigable_reload_begin rather than by anything here. */
+#define LOC_RELOAD_STAGES(X)                                                                                   \
+    X(LOC_RELOAD_CHECKS,    "HTML §7.2.4's `reload()` steps 1-3 (this's relevant Document, and the same "       \
+                            "origin-domain security check), ending at step 4's reload of the Document's node "  \
+                            "navigable")                                                                       \
+    X(LOC_RELOAD_NAVIGABLE, "HTML §7.4.3's reload a navigable (its navigate event and everything past it, "     \
+                            "whose own rest points its work record names)")
+enum { IDL_STEP_STAGE_BASE(LOC_RELOAD_STAGES) LOC_RELOAD_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const LOC_RELOAD_STEPS[] = { LOC_RELOAD_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THE OWNERSHIP IS §7.4.3's, DECLARED ONCE, BY FORWARDING — the same shape and the same reason as
+   loc_nav_visit above: a second list here would be a second place a field added to that record has to be
+   named, and the one that is not updated leaks it. */
+static void loc_reload_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    (void)argc; (void)argv; (void)magic;
-    if (!loc_brand(ctx, this_val)) return JS_EXCEPTION;
+    navigable_reload_visit(ctx, st, v);
+}
+
+static int js_loc_reload(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                         JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    NavigableReloadWork *w = st;
+    JSValueConst this_val = hdr->this_val;
+    int r;
+
+    (void)argc; (void)argv;
+
+    STEP_DISPATCH(LOC_RELOAD_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(LOC_RELOAD_CHECKS);
+    /* Nothing has been asked for yet, so this entry's request answer belongs to nobody; the stage below
+       collects its own. */
+    JS_FreeValue(ctx, cb_result);
+    *presult = JS_UNDEFINED;
+    navigable_reload_start(w);
+    if (!loc_brand(ctx, this_val)) return JS_STEP_ABRUPT;
     loc_assert_this_realm(ctx, this_val);
 
-    if (loc_document_is_null(ctx)) return JS_UNDEFINED;   /* step 2 */
+    /* STEP 2 — and it is why `loc.reload()` on a browsing-context-less Location is the NO-OP the standard says
+       it is rather than a throw: the return comes before the security check. */
+    if (loc_document_is_null(ctx)) return JS_STEP_DONE;
     loc_assert_same_origin_domain(ctx);                   /* step 3 */
-    DFAIL("§7.2.4's reload() reached its last step, RELOAD THIS DOCUMENT'S NODE NAVIGABLE, and §7.4.3 "
-          "\"Reloading and traversing\"'s reload is not built — core/frame/navigable.h has §7.4.2.2's navigate "
-          "and nothing that re-runs a navigable's own last entry. It is NOT `navigate to this address again`: "
-          "§7.4.3's reload keeps the navigable's session history entry and its document state and re-populates "
-          "it, which is why a reload does not push a history entry and a navigation does. Build it in "
-          "core/frame/navigable.c beside navigate; §7.2.6.3 \"Core infrastructure\"'s NavigationType names "
-          "\"reload\" as a value of its own (\"corresponds to calls to reload()\") and core/frame/"
-          "navigation.c already carries it");
-    return JS_UNDEFINED;
+    /* STEP 4, CREATED HERE AND DRIVEN AT THE NEXT STAGE — the same split every member above takes, and for the
+       same reason: between this line and the navigate event's answer the page's own listeners run. */
+    navigable_reload_begin(ctx, w);
+    /* THE PHASE LIST STEP_GOTO WOULD ASSERT OVER IS EMPTY BY CONSTRUCTION: the work record was started at the
+       top of THIS entry and nothing has issued a request since, so there is no sub-sequence for the next
+       stage's request site to collect the answer of. */
+    STEP_GOTO(hdr->stage, LOC_RELOAD_NAVIGABLE, NULL);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(LOC_RELOAD_NAVIGABLE);
+    /* §7.4.3, DRIVEN. It owns every rest point past this line and re-enters itself at whichever of them its
+       record holds, so a resume here runs none of this member's own steps again. A reload a `navigate`
+       listener CANCELLED answers 0 exactly as a completed one does, and the member returns undefined either
+       way: §7.2.4's `reload()` has no return value and §7.4.3 step 1.5's return is not an error. */
+    r = navigable_reload_run(ctx, w, cb_result, out_cb, out_argc);
+    if (r != 0) return r;
+    /* SET ON THE ENTRY THAT FINISHES, not once in the head: `presult` is an out-parameter of EACH entry, so a
+       member that wrote it before it parked would leave the resumed entry's answer as whatever the driver's
+       slot held. */
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
 }
+
+static const IdlStepDecl LOC_RELOAD_DECL = {
+    js_loc_reload, sizeof(NavigableReloadWork), loc_reload_visit, NULL,
+    "HTML §7.2.4's `reload`, over §7.4.3's reload a navigable", LOC_RELOAD_STEPS
+};
 
 /* §7.2.4's `ancestorOrigins`: "if this's relevant Document is null, then return this's EMPTY DOMStringList; if
  * this's relevant Document's origin is not same origin-domain with the entry settings object's origin, then
@@ -1168,7 +1233,7 @@ void location_init(JSContext *ctx)
                                        : idl_setter_id_step(ctx, IDL_USVSTRING, false, &LOC_SET_DECL, i);
     g_loc_assign  = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_ASSIGN);
     g_loc_replace = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_REPLACE);
-    g_loc_reload  = idl_method_id(ctx, NULL, 0, js_loc_reload, 0);
+    g_loc_reload  = idl_method_id_step(ctx, NULL, 0, NULL, 0, &LOC_RELOAD_DECL, 0);
     /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS. A source's browser delivery is a fact about the COMPONENT,
        not about a document, so it belongs beside the class registration and not in the per-realm install. A
        second same-origin document re-declaring it is what caught this.

@@ -129,30 +129,58 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
 }
 
 
-/* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. §7.3.1's DETERMINE THE ORIGIN decides the second: an
-   `about:blank` navigable — which is what `open()` with no URL creates, and what an `<iframe>` with no `src`
-   creates — gets the CREATOR'S ORIGIN RECORD, the same record and therefore the same identity, which is the
-   whole reason a same-origin popup or frame can be scripted at all AND the reason a `data:` document's
-   about:blank child is same origin with it (both hold one opaque origin, and §7.1.1 step 1 compares identity).
-   Any other URL contributes URL §4.7's answer for itself.
+/* THE CHILD'S ADDRESS AND ORIGIN, from ONE parse. HTML §7.3.2.1 "Creating browsing contexts"' DETERMINE THE
+   ORIGIN decides the second: an `about:blank` navigable — which is what `open()` with no URL creates, and what
+   an `<iframe>` with no `src` creates — gets the CREATOR'S ORIGIN RECORD, the same record and therefore the
+   same identity, which is the whole reason a same-origin popup or frame can be scripted at all AND the reason
+   a `data:` document's about:blank child is same origin with it (both hold one opaque origin, and §7.1.1 step 1
+   compares identity). Any other URL contributes URL §4.7 "Origin"'s answer for itself.
    IT IS RESOLVED HERE, not by the host. `open("/admin")` and `<iframe src=a.html>` are how most real uses are
    written, and a relative reference has neither an origin nor a meaning outside the document that wrote it —
    handing the host the raw text would make it resolve against something, and the only base it could pick is a
    guess. Returns false when the reference does not parse; `*out_url` is owned and `*out_origin` is BORROWED
    (an origin lives for the agent).
-   `sandbox_flags` IS THE FLAG SET OF THE DOCUMENT BEING CREATED, NOT OF THE CREATOR — §7.3.1's determine the
-   origin takes `sandboxFlags`, and §7.2 passes it the NEW browsing context's creation sandboxing flags, whose
-   SANDBOXED ORIGIN BROWSING CONTEXT FLAG is what mints a fresh opaque origin. Handing it the creator's set
-   instead would make `<iframe sandbox>` leave the child same-origin with its embedder (the creator is not
-   itself sandboxed) and would make a `sandbox allow-same-origin` frame of a sandboxed page opaque (the creator
-   is). It is an input of the operation, which is why it is a parameter here and not a read off anything. */
+   `sandbox_flags` IS THE FLAG SET OF THE DOCUMENT BEING CREATED, NOT OF THE CREATOR — §7.3.2.1's determine the
+   origin takes `sandboxFlags`, and §7.3.2.1's create passes it the NEW browsing context's creation sandboxing
+   flags, whose SANDBOXED ORIGIN BROWSING CONTEXT FLAG is what mints a fresh opaque origin. Handing it the
+   creator's set instead would make `<iframe sandbox>` leave the child same-origin with its embedder (the
+   creator is not itself sandboxed) and would make a `sandbox allow-same-origin` frame of a sandboxed page
+   opaque (the creator is). It is an input of the operation, which is why it is a parameter here and not a read
+   off anything.
+
+   `out_javascript` IS THE SCHEME DISPATCH, ANSWERED BY THE COMPONENT THAT PARSES AND NEVER BY A CALLER'S `if`.
+   HTML §7.4.2.2 "Beginning navigation" branches on the scheme — "if url's scheme is `javascript`: queue a
+   global task on the navigation and traversal task source … to navigate to a javascript: URL" and RETURN — so
+   §7.3.2.1's determine-the-origin never sees one, and `*out_origin` is NULL for that arm rather than an origin
+   nobody may use. Each caller then either SERVES the arm (navigable_navigate does) or asserts it is
+   unreachable (navigable_create does), which is the shape a dispatch over "what is this destination" has to
+   have: an entry that skips the question does not report an absent capability, it reports an unrelated
+   subsystem failing on input that subsystem should never have been shown.
+   WHICH ANSWER IT WOULD OTHERWISE PRODUCE IS WHY THIS IS WORSE THAN A MISSING BRANCH. URL §4.7 "Origin"
+   switches on the scheme and its last arm is "Otherwise: Return a new opaque origin", with the standard's own
+   note: "This does indeed mean that these URLs cannot be same origin with themselves." So a `javascript:` URL
+   run through the determine below is given an OPAQUE origin, child_in_this_agent compares it against this
+   agent's and answers false, and §7.4's create provisions the popup as a CROSS-ORIGIN PEER INSTANCE — a second
+   engine, for a URL that was never a document. Everything after that is a correct consequence of the one wrong
+   answer, which is what makes it hard to read backwards: the page's own handle is a REMOTE WindowProxy, so
+   §7.2.1's cross-origin member list rejects a property set on it where the spec has a same-realm write, and
+   every read of it is a cross-instance suspend where the spec has a synchronous one. None of those symptoms
+   names a scheme.
+   IT IS ASKED OF THE PARSED SCHEME AND NEVER OF THE CALLER'S BYTES, which is why it is here and not one line
+   above the parse where it used to be. `<a href="JavaScript:x()">` is a `javascript:` URL — URL §4.4's scheme
+   state lowercases as it appends — and so is one written with leading C0 controls or spaces, which §4.4 step 1
+   strips; core/html/hyperlink.c hands this the RAW attribute value, so a byte compare on the argument answered
+   NO for both and sent them into the determine. The SERIALIZED url is the exact operand: URL §4.5's serializer
+   opens with "let output be url's scheme, followed by U+003A (:)", so the prefix test below is the scheme
+   comparison written once. */
 static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_flags, char **out_url,
-                          const Origin **out_origin)
+                          const Origin **out_origin, bool *out_javascript)
 {
     UrlRecord base, rec;
     const char *base_url;
     bool have_base, ok = false;
 
+    *out_javascript = false;
     /* THE about:blank CASE ANSWERS WITHOUT A BASE, and must be checked FIRST. Reading the document's address
        up here evaluated it even for `open()` with no argument — the one call that needs no address at all —
        and in a host with no document installed that is an assert, not a value. It aborted sixteen spec files
@@ -160,45 +188,30 @@ static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_
     if (!url || !*url || !strcmp(url, "about:blank")) {
         *out_url = strdup("about:blank");
         CHECK(*out_url != NULL, "navigable: OOM naming an about:blank child");
-        /* §7.3.1 STEP 4, WITHOUT A PARSE: this IS `about:blank` with a non-null source origin, so the answer is
-           the source origin — this agent's — and no URL record is needed to say so. The sandbox flag is asked
-           first because §7.3.1's step 1 comes first and would mint instead of inherit. */
+        /* §7.3.2.1's determine-the-origin STEP 4, WITHOUT A PARSE: this IS `about:blank` with a non-null source
+           origin, so the answer is the source origin — this agent's — and no URL record is needed to say so.
+           The sandbox flag is asked first because that algorithm's step 1 comes first and would mint instead of
+           inherit. */
         *out_origin = (sandbox_flags & SANDBOX_ORIGIN) ? origin_determine(NULL, true, NULL) : origin_agent();
         return true;
     }
-    /* AND A `javascript:` URL IS NOT AN ADDRESS TO MAKE A CHILD OUT OF AT ALL — the wrong turn is HERE, one
-       algorithm before the place it becomes visible. §7.4.2.2 "Beginning navigation" branches on the scheme
-       before any Document is created from it — "if url's scheme is `javascript`: queue a global task on the
-       navigation and traversal task source … to navigate to a javascript: URL" and RETURN — so nothing that
-       runs §7.3.1's determine-the-origin can legally be holding one.
-       WHICH ANSWER IT PRODUCES IS WHY THIS IS WORSE THAN A MISSING BRANCH. URL §4.7 "Origin" switches on the
-       scheme and its last arm is "Otherwise: Return a new opaque origin", with the standard's own note: "This
-       does indeed mean that these URLs cannot be same origin with themselves." So a `javascript:` URL reaching
-       the parse below is given an OPAQUE origin, child_in_this_agent compares it against this agent's and
-       answers false, and §7.4's create provisions the popup as a CROSS-ORIGIN PEER INSTANCE — a second engine,
-       for a URL that was never a document. Everything after that is a correct consequence of the one wrong
-       answer, which is what makes it hard to read backwards: the page's own handle is a REMOTE WindowProxy, so
-       §7.2.1's cross-origin member list rejects a property set on it where the spec has a same-realm write,
-       and every read of it is a cross-instance suspend where the spec has a synchronous one. None of those
-       symptoms names a scheme.
-       BUILD THE BRANCH IN NAVIGATE, not a second `if` here — navigable_evaluate_javascript_url already
-       implements §7.4.2.3.2 and is reached from one entry. That is a claim about another site: read it before
-       building for it. */
-    DCHECK(strncmp(url, "javascript:", sizeof "javascript:" - 1) != 0,
-           "§7.3.1's child address was asked to turn a `javascript:` URL into an address and an origin — "
-           "§7.4.2.2 \"Beginning navigation\" routes that scheme to §7.4.2.3.2 \"The javascript: URL special "
-           "case\" and returns, so no Document is ever created from one. URL §4.7 \"Origin\" answers a NEW "
-           "OPAQUE origin for it, so this child is cross-origin to the document that opened it and gets "
-           "provisioned as a PEER INSTANCE with a remote WindowProxy. Build the scheme branch in navigate so "
-           "it reaches navigable_evaluate_javascript_url");
     base_url = document_base_url(ctx);
     url_record_init(&base);
     have_base = base_url && url_parse(&base, base_url, strlen(base_url), NULL);
     url_record_init(&rec);
     if (url_parse(&rec, url, strlen(url), have_base ? &base : NULL)) {
         *out_url = url_serialize(&rec, false);
-        *out_origin = origin_determine(&rec, (sandbox_flags & SANDBOX_ORIGIN) != 0, origin_agent());
         ok = *out_url != NULL;
+        /* §7.4.2.2's SCHEME DISPATCH, over the parse this function already made. `*out_origin` stays NULL for
+           it because §7.4.2.2 returns before §7.3.2.1's determine-the-origin is ever reached — the value does
+           not exist, which is a different fact from an origin that could not be computed, and a caller that
+           read one would be reading the opaque origin URL §4.7 mints for a URL that is not a document. */
+        if (ok && strncmp(*out_url, "javascript:", sizeof "javascript:" - 1) == 0) {
+            *out_javascript = true;
+            *out_origin = NULL;
+        } else if (ok) {
+            *out_origin = origin_determine(&rec, (sandbox_flags & SANDBOX_ORIGIN) != 0, origin_agent());
+        }
     }
     url_record_free(&rec);
     url_record_free(&base);
@@ -213,7 +226,7 @@ static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_
    §7.1.1's SAME ORIGIN and nothing else — so two DISTINCT opaque origins are two instances (a sandboxed
    document must not share a heap with the document that sandboxed it, the same rule SECURITY.md states for the
    credentialed-read principal) while ONE opaque origin held by two Documents is ONE agent, which is what
-   §7.3.1's inheritance cases produce and what a serialized comparison could not express: it answered "another
+   §7.3.2.1's inheritance cases produce and what a serialized comparison could not express: it answered "another
    instance" for a `data:` document's own about:blank child, and no host provisions that peer. */
 static bool child_in_this_agent(const Origin *child_origin)
 {
@@ -496,7 +509,7 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
     /* §7.1.5 STATES A CONSEQUENCE OF THE FLAG SET THIS AGENT CANNOT HONOUR, AND IT IS ASSERTED RATHER THAN
        IGNORED: the SANDBOXED ORIGIN flag "forces content into an opaque origin", and an opaque origin is same
        origin with nothing — so a Document carrying it is a document of a DIFFERENT agent cluster and belongs
-       in another instance. Reaching here with it set means §7.3.1's determine-the-origin was asked with a
+       in another instance. Reaching here with it set means §7.3.2.1's determine-the-origin was asked with a
        different flag set than the one the Document is being created with, which is the "an operation takes
        its inputs with it" split getting one of its two answers from the wrong place. */
     DCHECK(!(sandbox_flags & SANDBOX_ORIGIN),
@@ -846,18 +859,17 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        the request target is the script source — spaces, quotes and all — and the authority falls back to a
        default. The reply cannot be a document, and the popup that was supposed to run the program instead
        reports a load that failed, which is a symptom with no `javascript:` anywhere in it.
-       THE EVALUATION IS BUILT AND THE ROUTING IS NOT — navigable_evaluate_javascript_url is §7.4.2.3.2 and it
-       is reached from ONE entry, so every OTHER navigation (§7.2.2.1 "Opening and closing windows" step 16.1's
-       navigate, location's setters, a hyperlink's activation) walks past it into this fetch. What to build is
-       the branch in navigate, once, where every entry already converges — not a second `if` at whichever
-       caller the next failure happens to name. That is a claim about another site: read it before building
-       for it. */
+       WHERE THE ROUTE IS: navigable_navigate serves §7.4.2.2 step 16's arm and every navigation converges
+       there, so a `javascript:` URL reaching THIS job is one that got here without passing through it — which
+       today means §7.4's create, whose fold of §7.3.1.7 step 8 and §7.2.2.1 step 15 crashes at child_address
+       with its own message rather than enqueuing a load. This assert is what keeps a THIRD route from being
+       added without the branch. */
     DCHECK(strncmp(addr, "javascript:", sizeof "javascript:" - 1) != 0,
            "§7.4 step 14's document-load job reached its FETCH with a `javascript:` URL — §7.4.2.2 "
-           "\"Beginning navigation\" routes that scheme to §7.4.2.3.2 \"The javascript: URL special case\" and "
-           "returns, and that section's own request never hits the network. This job would send the script "
-           "source as the request target. Build the scheme branch in navigate so it reaches "
-           "navigable_evaluate_javascript_url, which already implements §7.4.2.3.2");
+           "\"Beginning navigation\" step 16 routes that scheme to §7.4.2.3.2 \"The javascript: URL special "
+           "case\" and returns, and that section's own request never hits the network. This job would send the "
+           "script source as the request target. The branch is in navigable_navigate, which every navigation "
+           "converges on, so whatever enqueued this load bypassed it");
     if (fetches && !s->req) {
         char *op = malloc(strlen(addr) + 20);
         CHECK(op != NULL, "navigable: OOM building §7.4 step 14's fetch request");
@@ -1406,21 +1418,21 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     url = JS_NewString(ctx, addr);
     CHECK(!JS_IsException(url), "the document-load job's address could not be allocated");
     /* §7.4.2.2's initiatorOriginSnapshot — "set initiatorOriginSnapshot to sourceDocument's origin" — WHICH IS
-       NOT THE DESTINATION'S. The job determines the destination's with §7.3.1 when the response arrives, out
+       NOT THE DESTINATION'S. The job determines the destination's with §7.3.2.1 when the response arrives, out
        of this value and the response's own final sandboxing flag set (§7.4.5); what rides here is the INPUT
        that determination takes, and it is an input of the OPERATION in exactly §scheduler's sense — the
        initiator is the document whose script ran, and by the time the job runs the only document it could ask
        is the one being replaced.
-       IT TRAVELS AS A HANDLE, NOT AS ITS SERIALIZATION, because §7.3.1's steps 3 and 4 return sourceOrigin
+       IT TRAVELS AS A HANDLE, NOT AS ITS SERIALIZATION, because §7.3.2.1's steps 3 and 4 return sourceOrigin
        ITSELF: a serialization would mint a second record for an inherited origin, and an `about:blank` child
        would come back cross-origin to the document that navigated it. */
     DCHECK(origin != NULL, "a document load was enqueued with no §7.4.2.2 INITIATOR ORIGIN — every operation "
-                           "that enqueues a load has a source document, and §7.3.1 steps 3 and 4 return that "
+                           "that enqueues a load has a source document, and §7.3.2.1 steps 3 and 4 return that "
                            "document's origin record for an `about:` destination");
     /* AND IT IS THIS AGENT'S, WHICH IS §7.4.2.2's OWN AGENT STEP READ FROM THE OTHER SIDE: the algorithm
        continues in the agent of the navigable's active document, and an instance is an ORIGIN-KEYED agent
        cluster (SECURITY.md), so every document that can reach this call has this agent's principal. Asserted
-       rather than assumed because the value now DECIDES something — it is what §7.3.1 inherits for an `about:`
+       rather than assumed because the value now DECIDES something — it is what §7.3.2.1 inherits for an `about:`
        destination — where before it was merely carried. */
     DCHECK(origin_same(origin, origin_agent()),
            "a document load was enqueued with an INITIATOR ORIGIN that is not this agent's — an instance is an "
@@ -1432,7 +1444,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
        and never as null: the reader reconstitutes a container from these slots, and a null slot would say
        "there was no container" — §7.1.7 step 3's question, answered from the wrong field.
        CSP §2.2's SELF-ORIGIN travels as its SERIALIZATION and not as a handle, unlike the destination's origin
-       above. That origin travels as a handle because §7.3.1's answer for the destination is an IDENTITY a
+       above. That origin travels as a handle because §7.3.2.1's answer for the destination is an IDENTITY a
        re-derivation would lose; this one is measured only against a URL's origin (§6.7.2.8's `'self'` arm is
        its sole reader), and both bullets of that arm read components an OPAQUE origin has none of — so the
        identity a serialization drops decides nothing here, and the bytes are what the realm boundary below
@@ -1502,6 +1514,9 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
 {
     char *addr = NULL;
     const Origin *origin = NULL;
+    /* §7.4.2.2 step 16's scheme test, answered by the one component that parses this destination — see
+       child_address, and the branch below for why it is served HERE and asserted unreachable at the create. */
+    bool is_javascript = false;
 
     DCHECK(window_proxy_is(proxy), "something that is not a WindowProxy was navigated");
     /* AND IT IS ONE OF THIS AGENT'S, asked BEFORE anything is read off it. §7.1's rules for choosing a
@@ -1529,11 +1544,83 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
            "lets the two disagree the moment a page writes `sandbox`. Give the navigable its CONTAINER "
            "(core/html/html_iframe.c holds the element) so this call can re-parse the attribute, rather than "
            "navigating a document under flags from before the write");
-    if (!child_address(ctx, url, window_proxy_creation_sandbox_flags(proxy), &addr, &origin)) {
+    if (!child_address(ctx, url, window_proxy_creation_sandbox_flags(proxy), &addr, &origin, &is_javascript)) {
         free(addr);
         return JS_UNDEFINED;   /* §7.4 step 4: the caller turns this into a SyntaxError */
     }
-    /* §7.3.1's DETERMINE THE ORIGIN IS NOT ASKED HERE, AND THAT IS §7.4.5's ORDER RATHER THAN A DEFERRAL.
+    /* §7.4.2.2 STEP 16 — "If url's scheme is `javascript`: QUEUE A GLOBAL TASK on the navigation and traversal
+     * task source given navigable's active window to NAVIGATE TO A javascript: URL … and RETURN."
+     *
+     * IT IS THE WHOLE OF WHAT THIS SCHEME GETS, and the return is the load-bearing half: nothing is fetched,
+     * no session history entry is built for the URL (HTML §7.4.2.3.2's own note — "javascript: URLs are never
+     * stored in session history, and so can never be traversed to"), and the document the navigable is
+     * showing stays exactly where it is unless the program's completion value is a string.
+     *
+     * WHAT MADE THIS THE RIGHT SITE is that every navigation converges here — core/frame/location.c's twelve
+     * algorithms, core/html/hyperlink.c's activation behaviour and core/html/html_iframe.c's process-the-
+     * iframe-attributes all reach §7.4.2.2 through this one function — so the branch is written once. A copy at
+     * whichever caller a failure happened to name would be one builtin answering differently depending on how
+     * the page spelled the navigation, which is exactly the shape the load job below already crashes about.
+     *
+     * §7.4.2.3.2's STEPS 1-3 ARE NOT THIS BUILD'S: step 1's assert is over a historyHandling this function does
+     * not carry (core/frame/location.c's loc_resolve_history_handling resolves `javascript:` to "replace"
+     * before it gets here, which is §7.4.2.1's "the navigation must be a replace"'s first disjunct), and steps
+     * 2-3 read and clear §7.4.2.5's ONGOING NAVIGATION, which this build does not hold — its only two writers
+     * in the standard are §7.4.2.2 step 16 and §7.4.6.1's cross-document apply-the-history-step, and the second
+     * does not exist here, so a field written by one of two writers would answer §8.4.1 step 8 with a fact
+     * about half a mechanism.
+     * STEP 4 IS BUILT AND IS A SECURITY RETURN, not a formality: "if initiatorOrigin is not same
+     * ORIGIN-DOMAIN with targetNavigable's active document's origin, then return". The initiator is the
+     * document whose script ran, which is `ctx`, and window_proxy_same_origin_domain_of is §7.1.1's other
+     * algorithm asked of the TARGET from the asking realm — the same comparison `iframe.contentDocument` is
+     * filtered by, and the reason `document.domain` participates.
+     * STEPS 5-7 ARE A COMPUTED "Allowed" RATHER THAN AN OMISSION. CSP §4.2.4 "Should navigation request of
+     * type be blocked by Content Security Policy?" runs each directive's PRE-NAVIGATION CHECK, and `form-action`
+     * (CSP §6.4.1.1 "form-action Pre-Navigation Check") is the only directive that defines one — its first
+     * step past the assert is "if navigation type is `form-submission`", and §7.4.2.2 step 1 makes
+     * cspNavigationType "other" for every navigation with no form data entry list. A navigation reached
+     * through this function has none (core/html/html_form.c submits through its own path), so no policy of any
+     * document can block it and the answer is "Allowed" for the reason the standard gives rather than for want
+     * of the check.
+     * STEP 8 IS THE EVALUATION, and steps 9-17's new Document is where the completion value goes — which is
+     * the ONE place that value exists, so the string arm crashes by name in solver/engine.c rather than here.
+     *
+     * IT IS WRITTEN ABOVE STEP 11'S ASSERTION AND THE TWO ARMS ARE DISJOINT, which is why the order here does
+     * not restate the standard's. Step 11's third conjunct is "url equals navigable's ACTIVE SESSION HISTORY
+     * ENTRY's URL with exclude fragments set to true", and no entry's URL is ever a `javascript:` URL —
+     * §7.4.2.3.2's own note again — so a destination cannot satisfy both tests and neither arm can hide the
+     * other.
+     *
+     * IT RUNS IN THE TARGET NAVIGABLE'S REALM, which §7.4.2.3.2 step 5 states outright ("let settings be
+     * targetNavigable's active document's relevant settings object") and which is not always `ctx`: an
+     * `<a href="javascript:x=1" target="frame">` writes `x` into the FRAME's global, where a later script of
+     * that document reads it. The proxy is asserted local above, so the realm is this heap's. */
+    if (is_javascript) {
+        JSContext *target;
+
+        if (!window_proxy_same_origin_domain_of(ctx, proxy)) {
+            free(addr);
+            return JS_DupValue(ctx, proxy);              /* §7.4.2.3.2 step 4's return */
+        }
+        DCHECK(window_proxy_materialized(proxy),
+               "§7.4.2.3.2 was reached for a navigable this instance has not materialized — step 5 takes the "
+               "settings object and API base URL of the TARGET navigable's ACTIVE DOCUMENT, and an "
+               "unmaterialized navigable is holding the initial about:blank §7.3.2.1 created it with, whose "
+               "realm has not been built. Materialize it here (navigable_realm, with no response) so the "
+               "program runs in the document the standard names");
+        target = window_proxy_realm(ctx, proxy);
+        DCHECK(target != NULL, "a materialized navigable answered with no realm — window_proxy_materialized is "
+                               "what says one is there to answer with");
+        /* `addr` AND NOT `url`, because §7.4.2.3.2 step 1 is "let urlString be the result of running the URL
+           SERIALIZER on url" and step 2 removes a leading `javascript:` from THAT — core/html/hyperlink.c
+           hands this function a raw `href` attribute value, so `<a href="JavaScript:x()">` reaches here with a
+           prefix step 2 would not find and the whole URL would run as the program. */
+        navigable_evaluate_javascript_url(target, addr);
+        free(addr);
+        return JS_DupValue(ctx, proxy);
+    }
+    /* HTML §7.3.2.1 "Creating browsing contexts"' DETERMINE THE ORIGIN IS NOT ASKED HERE, AND THAT IS
+       §7.4.5's ORDER RATHER THAN A DEFERRAL.
        §7.4.2.2 "Beginning navigation" never determines the destination's origin — it snapshots the INITIATOR's
        ("set initiatorOriginSnapshot to sourceDocument's origin") and puts it on the document state. The
        destination's origin is born one algorithm later, inside §7.4.5 "Populating a session history entry"'s
@@ -1544,18 +1631,18 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
        ways that are not edge cases: a request to this origin that 302s off it is a cross-instance document
        this side would have called local, and a response carrying `Content-Security-Policy: sandbox` mints a
        fresh opaque origin that no reading of the REQUEST url can produce. The load job below is where both
-       inputs exist, so §7.3.1 runs there, once, and the cross-agent question is asked of ITS answer.
+       inputs exist, so §7.3.2.1 runs there, once, and the cross-agent question is asked of ITS answer.
        WHAT THE JOB CARRIES IS THEREFORE THE INITIATOR'S ORIGIN — §7.4.2.2's initiatorOriginSnapshot, which is
        an INPUT of this operation in the sense §scheduler means (this realm's document is the one whose script
        ran, and by the time the job runs the only document it could ask is the one being replaced), where the
        destination's origin is an OUTPUT of the fetch the job performs. */
-    /* AND THE ONE ARM WHERE THE TWO RUNS OF §7.3.1 MUST AGREE IS ASSERTED, so `child_address`'s answer is read
+    /* AND THE ONE ARM WHERE THE TWO RUNS OF §7.3.2.1 MUST AGREE IS ASSERTED, so `child_address`'s answer is read
        rather than discarded: an `about:` destination has no response, so the job's run sees the same null-URL/
        about:blank case with the same source origin and must reach the same RECORD — steps 3 and 4 return
        `sourceOrigin` itself, and that identity is what makes a `data:` document's about:blank child same origin
        with it. The creation flag set is asserted empty above, so step 1 cannot separate them either. */
     DCHECK(strncmp(addr, "about:", 6) != 0 || origin == origin_agent(),
-           "§7.3.1's determine-the-origin answered something other than the INITIATOR's origin record for an "
+           "§7.3.2.1's determine-the-origin answered something other than the INITIATOR's origin record for an "
            "`about:` destination — steps 3 and 4 return sourceOrigin ITSELF, and the load job re-runs the same "
            "algorithm over the same URL with the same source, so a second answer here means the two runs have "
            "come apart and the loaded Document would be cross-origin to the document that navigated it");
@@ -1602,6 +1689,186 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
                            strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL);
     free(addr);
     return JS_DupValue(ctx, proxy);
+}
+
+/* ---- HTML §7.4.3 "Reloading and traversing"'s RELOAD ------------------------------------------------------
+ *
+ * See navigable.h for why it is its own algorithm and why it is a machine. What is here is the four steps and
+ * the one place they collapse.
+ *
+ * ONE REST POINT: step 1.4's navigate event, whose own rest points belong to its work record. Steps 2-4 run
+ * none of the page's code and are the tail of the entry the dispatch answers on. */
+#define NAV_RELOAD_STAGES(X)                                                                                \
+    X(NAV_RELOAD_EVENT, "HTML §7.4.3 step 1 (fire a push/replace/reload navigate event at the navigation "   \
+                        "API with navigationType \"reload\", isSameDocument false, destinationURL the "      \
+                        "navigable's active session history entry's URL, and navigationAPIState that "       \
+                        "entry's navigation API state), then steps 2-4")
+enum { NAV_RELOAD_STAGES(JS_STEP_STAGE_ENUM) };
+/* NO STEPS ARRAY BESIDE THE ENUM, and that is the sub-machine shape rather than an omission: a label list is
+   what a MEMBER's declaration carries into JSTrampStepDef so a parked flow can say where it is, and this
+   record's stage is a byte inside the member that hosts it (core/frame/location.c's, whose own list names the
+   stage this one rests under). core/frame/session_history.c's §7.4.2.3.3 record is declared the same way. */
+#define NAV_RELOAD_ALGORITHM "HTML §7.4.3 reload a navigable"
+
+void navigable_reload_start(NavigableReloadWork *w)
+{
+    /* A zeroed JSValue is the INTEGER 0 and not undefined (JS_TAG_INT is 0), so a slot read before it is
+       written would hand the page a real value — the same rule and the same reason as every other work record
+       in this neighbourhood. */
+    w->stage = NAV_RELOAD_EVENT;
+    w->url = JS_UNDEFINED;
+    navigate_event_fire_work_start(&w->fire);
+}
+
+/* THE WHOLE OWNERSHIP DECLARATION, and there is no `release` beside it: everything this record holds is a
+   JSValue this visit names, so the teardown frees them through the one list. */
+void navigable_reload_visit(JSContext *ctx, NavigableReloadWork *w, JSStepVisit *v)
+{
+    v->val(ctx, &w->url);
+    navigate_event_fire_work_visit(ctx, &w->fire, v);
+}
+
+void navigable_reload_begin(JSContext *ctx, NavigableReloadWork *w)
+{
+    JSValue state;
+    const char *addr;
+
+    DCHECK(JS_IsUndefined(w->url),
+           NAV_RELOAD_ALGORITHM " was begun twice over one work record — a reload holds ONE destination and "
+           "fires ONE navigate event, and the second begin would leave the first event ongoing at the "
+           "Navigation with nothing left holding its destination");
+    /* STEP 1.2 AND STEP 1.3, WHICH ARE ONE READ OF THE ACTIVE ENTRY: "let destinationNavigationAPIState be
+       navigable's active session history entry's navigation API state. If navigationAPIState is not null, then
+       set destinationNavigationAPIState to navigationAPIState." §7.2.4's `reload()` passes null, so the
+       entry's state IS the answer — which is what a page's own `navigate` listener reads back out of
+       `event.destination.getState()`.
+       STEP 1.4's destinationURL is the same entry's URL, for the reason navigable.h gives: it and the
+       Document's address are two fields with two writers. */
+    w->url = session_history_active_entry_url(ctx);
+    state = session_history_active_entry_navigation_state(ctx);
+    addr = JS_ToCString(ctx, w->url);
+    CHECK(addr != NULL, "navigable: §7.4.3's destination could not be read out of the active entry");
+    /* STEP 1.4: "let continue be the result of FIRING A PUSH/REPLACE/RELOAD NAVIGATE EVENT at navigation with
+       navigationType set to \"reload\", isSameDocument set to FALSE, userInvolvement set to userInvolvement,
+       destinationURL set to navigable's active session history entry's URL, navigationAPIState set to
+       destinationNavigationAPIState, and apiMethodTracker set to apiMethodTracker."
+       ITS classicHistoryAPIState IS NULL, which is the wrapper's own default and the same asymmetry
+       §7.4.2.3.3 has: §7.2.5's `pushState` is the one caller that serializes bytes to pass, and §7.4.1.1 says
+       an entry's classic history API state "is never carried over". */
+    navigate_event_fire_push_replace_reload_begin(ctx, &w->fire, "reload", addr,
+                                                  /*is_same_document*/ false, /*classic_state*/ NULL, state);
+    JS_FreeCString(ctx, addr);
+    JS_FreeValue(ctx, state);
+}
+
+/* §7.4.3 STEPS 2-4, IN THE ONE SHAPE THIS ENGINE POPULATES A DOCUMENT IN — and the assertion below is what
+ * says where that shape and the standard's part company, at the site rather than in prose.
+ *
+ * WHAT THE STANDARD DOES: step 2 sets the active entry's document state's RELOAD PENDING, step 3 takes the
+ * traversable, and step 4 appends the traversal steps that apply the reload history step — §7.4.6.1's entry
+ * point, which re-enters apply-the-history-step at the CURRENT step with navigationType "reload". Inside it
+ * `reload pending` does exactly one thing: it is the second conjunct of the update-only test ("if
+ * displayedEntry IS targetEntry and targetEntry's document state's reload pending is FALSE"), which is what
+ * stops a reload from taking the exit a `pushState` takes and makes it re-populate instead. Then §7.4.5's
+ * populate the history entry's document fetches, and §7.4.6.1's second half deactivates the displayed Document
+ * (pageswap, unload-a-document-and-its-descendants, pagehide) and activates the entry over the new one.
+ *
+ * WHAT THIS ENGINE DOES: the populate, the deactivate and the activate are ONE operation here — §7.4 step 14's
+ * document-load job, which fetches, builds the Document and its realm, moves the navigable's binding
+ * (window_proxy_navigate) and unloads the outgoing document. §7.4.2.2's own cross-document navigate takes
+ * exactly the same collapse, so a reload built on it is not a second approximation; it is the same one.
+ *
+ * RELOAD PENDING IS THEREFORE NOT WRITTEN, and that is a decision rather than an omission. Its only reader in
+ * the standard is a test inside apply-the-history-step, and this path does not go through apply-the-history-
+ * step at all — a field with a writer and no reader is the mirror of the defect CLAUDE.md's §Architecture
+ * names, and it would read as evidence that the traversal machinery had been wired up when it had not. It
+ * lands with §7.4.6.1's cross-document arm (core/frame/session_history.c already crashes by name where that
+ * arm belongs), which is also the diff that gives this function somewhere to append traversal steps TO.
+ *
+ * WHAT THE COLLAPSE COSTS IS THE ENTRY, and that is what the last assertion measures. §7.4.3 re-populates the
+ * navigable's EXISTING entry and keeps its document state, so a reload preserves `history.length`,
+ * `history.state` and every entry a page pushed; this build populates by installing a NEW Document in a NEW
+ * realm, and session_history_install_document starts that realm's list fresh at step 0. The two agree exactly
+ * while the active entry IS step 0 — which is every reload of a page that has not called `pushState` — and
+ * disagree silently the moment it is not, so that is the condition, at the site, in a form the next reader can
+ * re-run rather than take on trust. */
+static void nav_reload_enqueue(JSContext *ctx, const char *addr)
+{
+    JSValueConst proxy = document_window_proxy(ctx);
+
+    DCHECK(window_proxy_is(proxy),
+           NAV_RELOAD_ALGORITHM " ran in a realm whose Document has no navigable — §7.2.4's `reload()` returns "
+           "at its own step 2 when the relevant Document is null, so a realm with no WindowProxy at all "
+           "reached this past a check that was supposed to have stopped it");
+    /* §7.4.6.1 says a reload "is always treated as if it were done by the navigable ITSELF, even in cases like
+       parent.location.reload()", so the target is this realm's own navigable and never a peer's — which is
+       also what makes the initiator facts below this realm's to state. */
+    DCHECK(!window_proxy_is_remote(proxy),
+           NAV_RELOAD_ALGORITHM " was asked to reload a navigable whose ACTIVE DOCUMENT a PEER instance holds "
+           "— §7.4.5's populate builds that Document, its policy container and its origin in the instance that "
+           "holds the navigable, so this is a host route and not a load this agent can perform");
+    /* §7.4.6.1's "let targetSnapshotParams be the result of SNAPSHOTTING TARGET SNAPSHOT PARAMS given
+       navigable", whose sandboxing flags are determine-the-creation-sandboxing-flags over the navigable's
+       CONTAINER — the same re-snapshot navigable_navigate owes and for the same reason (§4.8.5 lets a written
+       `sandbox` attribute and the set computed at creation disagree, and the attribute "only takes effect when
+       the content navigable is navigated", which a reload is). */
+    DCHECK(window_proxy_creation_sandbox_flags(proxy) == 0,
+           "a SANDBOXED navigable was RELOADED, and §7.4.6.1 re-snapshots its container's IFRAME SANDBOXING "
+           "FLAG SET while this proxy carries only the set its creation computed — §4.8.5 lets the two "
+           "disagree the moment a page writes `sandbox`. Give the navigable its CONTAINER "
+           "(core/html/html_iframe.c holds the element) so this call can re-parse the attribute, rather than "
+           "re-populating a document under flags from before the write");
+    DCHECK(session_history_active_entry_step(ctx) == 0,
+           "§7.4.3's reload re-populates the navigable's EXISTING session history entry and keeps its document "
+           "state — so `history.length`, `history.state` and every entry a page pushed survive it — and this "
+           "build populates by installing a NEW Document in a NEW realm, whose "
+           "session_history_install_document starts a fresh ONE-ENTRY list at step 0 and asserts one Document "
+           "per realm. The active entry is past step 0, so those entries are about to be discarded and "
+           "`history.length` will answer 1. BUILD THE CARRY: the entries are ordinary JS objects in one heap, "
+           "so the load job can hand the incoming Document's install the list and the active entry it is "
+           "re-populating instead of letting that install mint a first entry — which is the same diff that "
+           "makes a cross-document NAVIGATION stop resetting the history, and the diff §7.4.6.1's "
+           "cross-document apply-the-history-step needs under it");
+    /* §7.4.5's INITIATOR BASE URL for an `about:` destination, and §7.1.7's initiator policy container: for a
+       reload BOTH are this document's own, which is not the §scheduler shortcut it would be for a navigation.
+       §7.4.6.1 states it — "we treat this situation as if navigable navigated itself" and
+       "potentiallyTargetSpecificSourceSnapshotParams … the result of snapshotting source snapshot params given
+       navigable's ACTIVE DOCUMENT" — so the operation's initiator IS the target here, and reading the target
+       is reading the operation's own input. They are still read at the ENQUEUE and never inside the job, for
+       the reason navigable_load_enqueue states: by the time the job runs the only document it could ask is the
+       one being replaced. */
+    navigable_load_enqueue(ctx, proxy, addr, origin_agent(),
+                           serialized_policy_container_of(document_policy(ctx)),
+                           strncmp(addr, "about:", 6) == 0 ? document_base_url(ctx) : NULL);
+}
+
+int navigable_reload_run(JSContext *ctx, NavigableReloadWork *w, JSValue in, JSValue **out_cb, int *out_argc)
+{
+    bool proceed = false;
+    const char *addr;
+    int r;
+
+    STEP_DISPATCH(NAV_RELOAD_STAGES, w->stage, NAV_RELOAD_ALGORITHM, JS_STEP_ABRUPT);
+
+    STEP_ARM(NAV_RELOAD_EVENT);
+    DCHECK(JS_IsString(w->url),
+           NAV_RELOAD_ALGORITHM " was driven over a record nothing began — navigable_reload_begin is what takes "
+           "the destination off the active session history entry, and an algorithm with no destination has "
+           "nothing to ask the page about and nothing to populate");
+    /* §7.4.3 STEP 1.4, DRIVEN. It owns every rest point past this line — the `navigate` dispatch, and
+       §7.2.6.8's abort at either of the two steps that perform one — and re-enters itself at whichever of them
+       its own record holds, so a resume here runs none of this algorithm's steps again. */
+    r = navigate_event_fire_run(ctx, &w->fire, in, out_cb, out_argc, &proceed);
+    if (r != 0) return r;
+    /* STEP 1.5: "If continue is false, then RETURN." A cancelled reload is not an error and has no observable
+       of its own — §7.2.4's `reload()` answers undefined either way — so this is the same 0 a completed
+       reload returns. */
+    if (!proceed) return 0;
+    addr = JS_ToCString(ctx, w->url);
+    CHECK(addr != NULL, "navigable: §7.4.3's destination could not be read back after its navigate event");
+    nav_reload_enqueue(ctx, addr);
+    JS_FreeCString(ctx, addr);
+    return 0;
 }
 
 /* §7.4.2.3.2's EVALUATE A JAVASCRIPT: URL — see navigable.h for why it is not a load and not a fetch. */
@@ -2003,6 +2270,9 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     SerializedPolicyContainer creator_policy;
     char *addr = NULL;
     const Origin *origin = NULL;
+    /* §7.4.2.2's scheme dispatch, as child_address answered it — see the assertion below for why a create is
+       the arm that has no answer for it rather than the arm that serves it. */
+    bool destination_is_javascript = false;
     /* §7.1.5's DETERMINE THE CREATION SANDBOXING FLAGS, and the two arms are §7.4's two shapes of navigable.
        A CHILD has an embedder element, so its set is the union of that element's IFRAME SANDBOXING FLAG SET
        and the embedder document's own ACTIVE SANDBOXING FLAG SET — which is how a sandbox is inherited down a
@@ -2081,12 +2351,32 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
     embedder.document_flags = document_active_sandbox_flags(ctx);
     creation_flags = sandbox_creation_flags(is_child ? &embedder : NULL,
                                             is_child ? 0 : sandbox_popup_flags(embedder.document_flags));
-    if (!child_address(ctx, url, creation_flags, &addr, &origin)) {   /* the reference does not parse; the caller decides what that means */
+    if (!child_address(ctx, url, creation_flags, &addr, &origin, &destination_is_javascript)) {
+        /* the reference does not parse; the caller decides what that means */
         JS_FreeCString(ctx, creator_tlu_s);
         JS_FreeValue(ctx, creator_tlu);
         free(addr);
         return JS_UNDEFINED;
     }
+    /* §7.4.2.2's SCHEME ARM IS UNREACHABLE FROM A CREATE, AND THE REASON IS THE FOLD navigable.h ALREADY NAMES
+       AS THE NEXT THING TO REMOVE. §7.3.1.7 "Navigable target names" step 8 creates a top-level traversable
+       with NO url — the navigable is created holding §7.3.2.1's initial `about:blank` — and §7.2.2.1 "Opening
+       and closing windows" step 15 navigates it afterwards, which is where the `javascript:` branch lives. So
+       in the standard `window.open("javascript:x()")` reaches §7.4.2.3.2 through NAVIGATE, in a navigable that
+       already has an active document to run the program in and to take its settings object and API base URL
+       from. This engine folds step 8 and step 15 into one call that takes a url, so the same spelling arrives
+       HERE with no active document yet, and there is no realm for §7.4.2.3.2 step 5's settings object to be.
+       UNFOLDING IT IS THE BUILD, not a second evaluate here: make navigable_create take no url, give
+       §7.2.2.1's step 15 and §4.6.5's step 9 the navigate they each already own (navigable.h states the
+       asymmetry this leaves in the meantime), and this arm then reaches navigable_navigate below like every
+       other destination. */
+    DCHECK(!destination_is_javascript,
+           "§7.4's create was asked to make a navigable whose ADDRESS is a `javascript:` URL — §7.3.1.7 step 8 "
+           "creates a navigable with no url at all and §7.2.2.1 step 15 navigates it, which is the algorithm "
+           "that routes the scheme to §7.4.2.3.2 \"The javascript: URL special case\". Nothing is fetched for "
+           "one and no Document is created from one, so there is no address here to create a navigable at. "
+           "Unfold the create and the navigate (navigable.h names it), so `window.open(\"javascript:…\")` and "
+           "`<a href=\"javascript:…\" target=_blank>` reach navigable_navigate's scheme branch");
     /* MINTED FROM THE CREATOR, not from the instance root: this agent holds one realm per same-origin
        document, and naming every child "<root>.<n>" would collide the moment two realms both created one. */
     child = world_mint_doc(document_doc(ctx));
@@ -2117,10 +2407,11 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
            realms, one navigable, and nothing to say so. With about:blank here that early read materializes
            the document §7.4 actually created (no response, no fetch) and the job supersedes it, which is both
            what the spec describes and the only version with one load in it. */
-        /* §7.3.1 FOR THE DOCUMENT THIS NAVIGABLE IS CREATED WITH, WHICH IS THE INITIAL about:blank AND NOT THE
-           DESTINATION. Its address is `about:blank` two lines down for exactly that reason, and its origin is
-           the matching answer: about:blank with a non-null source origin returns the SOURCE origin, which is
-           this agent's. The destination's origin belongs to the LOAD and travels with the job (which is why
+        /* §7.3.2.1's DETERMINE THE ORIGIN FOR THE DOCUMENT THIS NAVIGABLE IS CREATED WITH, WHICH IS THE
+           INITIAL about:blank AND NOT THE DESTINATION. Its address is `about:blank` two lines down for
+           exactly that reason, and its origin is the matching answer: about:blank with a non-null source
+           origin returns the SOURCE origin, which is this agent's. The destination's origin belongs to the
+           LOAD and travels with the job (which is why
            the job carries a handle); recording it here would give the initial Document a principal it never
            had — the same "an operation takes its inputs with it" split the address already makes. */
         /* HTML §7.3.2.1's INHERITED OPENER POLICY, the last step of create-a-new-browsing-context-and-

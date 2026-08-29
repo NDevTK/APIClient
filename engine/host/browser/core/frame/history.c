@@ -399,8 +399,14 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        it — core/frame/navigate_event_fire.h states why: between this line and the dispatch's answer every
        `navigate` listener the page has runs, so an algorithm that read the destination back off the navigable
        would resolve this navigation against whatever a listener left behind. */
+    /* AND ITS navigationAPIState IS THE WRAPPER'S OWN DEFAULT, which §7.2.5's shared steps state by SAYING
+       NOTHING: they name historyHandling, isSameDocument, destinationURL and classicHistoryAPIState and no
+       fifth value, so the default StructuredSerializeForStorage(null) is the standard's answer here and not an
+       omission — §7.4.1.1's carry-over note is about a FRAGMENT navigation's entry, and `pushState` builds an
+       entry whose navigation API state §7.4.4 takes from §7.4.1.1's initial value instead. */
     navigate_event_fire_push_replace_reload_begin(ctx, &s->fire, magic == HIST_PUSH ? "push" : "replace",
-                                                  new_url, /*is_same_document*/ true, &serialized);
+                                                  new_url, /*is_same_document*/ true, &serialized,
+                                                  JS_UNDEFINED);
     free(new_url);
     structured_data_free(ctx, &serialized);
     url_record_free(&doc_url);

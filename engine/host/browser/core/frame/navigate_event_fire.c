@@ -68,7 +68,7 @@ void navigate_event_fire_work_start(NavigateEventFireWork *w)
     w->phase = 0;
     w->navigation_type = NULL;
     w->same_document = false;
-    w->url = w->classic = w->destination = w->event = JS_UNDEFINED;
+    w->url = w->classic = w->destination = w->event = w->nav_state = JS_UNDEFINED;
     navigation_abort_work_start(&w->abort);
     STEP_CB_FOREACH(w->cb, k) w->cb[k] = JS_UNDEFINED;
 }
@@ -81,6 +81,7 @@ void navigate_event_fire_work_visit(JSContext *ctx, NavigateEventFireWork *w, JS
     v->val(ctx, &w->classic);
     v->val(ctx, &w->destination);
     v->val(ctx, &w->event);
+    v->val(ctx, &w->nav_state);
     navigation_abort_work_visit(ctx, &w->abort, v);
     STEP_CB_FOREACH(w->cb, k) v->val(ctx, &w->cb[k]);
 }
@@ -96,7 +97,8 @@ void navigate_event_fire_work_release(JSContext *ctx, NavigateEventFireWork *w)
     JS_FreeValue(ctx, w->classic);
     JS_FreeValue(ctx, w->destination);
     JS_FreeValue(ctx, w->event);
-    w->url = w->classic = w->destination = w->event = JS_UNDEFINED;
+    JS_FreeValue(ctx, w->nav_state);
+    w->url = w->classic = w->destination = w->event = w->nav_state = JS_UNDEFINED;
     navigation_abort_work_release(ctx, &w->abort);
     STEP_CB_FOREACH(w->cb, k) {
         JS_FreeValue(ctx, w->cb[k]);
@@ -112,7 +114,8 @@ void navigate_event_fire_work_release(JSContext *ctx, NavigateEventFireWork *w)
 
 void navigate_event_fire_push_replace_reload_begin(JSContext *ctx, NavigateEventFireWork *w,
                                                    const char *navigation_type, const char *destination_url,
-                                                   bool is_same_document, const StructuredData *classic_state)
+                                                   bool is_same_document, const StructuredData *classic_state,
+                                                   JSValueConst navigation_api_state)
 {
     DCHECK(w->stage == NEF_ABORT && JS_IsUndefined(w->url),
            "§7.2.6.10.4's fire-a-push/replace/reload-navigate-event was created over a work record that is "
@@ -148,6 +151,16 @@ void navigate_event_fire_push_replace_reload_begin(JSContext *ctx, NavigateEvent
     } else {
         w->classic = JS_NULL;
     }
+    /* §7.2.6.10.4's navigationAPIState, TAKEN WITH THE OPERATION for the reason the two values above it are:
+       its producers read it off the navigable's ACTIVE SESSION HISTORY ENTRY, and between this line and the
+       dispatch's answer every `navigate` listener the page has runs — each of which may push an entry and so
+       change which entry is active. A record that re-read it at NEF_PREPARE would hand the listener the state
+       of an entry a listener made. */
+    DCHECK(JS_IsUndefined(navigation_api_state) || JS_IsArrayBuffer(navigation_api_state),
+           "§7.2.6.10.4 was handed a navigationAPIState that is not SERIALIZED BYTES — §7.4.1.1 holds an "
+           "entry's navigation API state as a serialized state and core/frame/session_history.c carries one as "
+           "an ArrayBuffer, so a live value here is a caller that skipped StructuredSerializeForStorage");
+    w->nav_state = JS_DupValue(ctx, navigation_api_state);
 }
 
 /* §7.2.6.10.4's inner algorithm step 20's four-conjunct hashChange test, over the two URLs it names: step 19's
@@ -282,15 +295,22 @@ int navigate_event_fire_run(JSContext *ctx, NavigateEventFireWork *w, JSValue in
        visible between two of them would be an event whose `type` is not yet "navigate".
        THE WRAPPER'S STEPS 7-11 build the destination, and every one of the four fields is a value this
        operation was CREATED with — the URL and the same-document flag are the caller's, the entry is null
-       (only fire-a-traverse-navigate-event sets one), and the state is StructuredSerializeForStorage(null)
-       because the wrapper's navigationAPIState argument is at its default. */
-    CHECK(structured_serialize(ctx, JS_NULL, &d) == 0,
-          "navigate event: StructuredSerializeForStorage(null) failed — null is serializable by every clause "
-          "of §2.7, so a refusal is the serializer being unable to allocate");
-    state = JS_NewArrayBufferCopy(ctx, d.buf, d.len);
-    CHECK(!JS_IsException(state), "navigate event: the destination's navigation API state could not be "
-                                  "allocated");
-    structured_data_free(ctx, &d);
+       (only fire-a-traverse-navigate-event sets one), and the state is either the caller's own
+       navigationAPIState or, when it named none, the wrapper's declared default. THE DEFAULT IS PERFORMED
+       HERE RATHER THAN SUBSTITUTED FOR AN ABSENT FIELD: `nav_state` is JS_UNDEFINED exactly when the caller
+       said "the default", which is the positive statement StructuredSerializeForStorage(null), and the
+       serialization below is that statement carried out. */
+    if (JS_IsUndefined(w->nav_state)) {
+        CHECK(structured_serialize(ctx, JS_NULL, &d) == 0,
+              "navigate event: StructuredSerializeForStorage(null) failed — null is serializable by every "
+              "clause of §2.7, so a refusal is the serializer being unable to allocate");
+        state = JS_NewArrayBufferCopy(ctx, d.buf, d.len);
+        CHECK(!JS_IsException(state), "navigate event: the destination's navigation API state could not be "
+                                      "allocated");
+        structured_data_free(ctx, &d);
+    } else {
+        state = JS_DupValue(ctx, w->nav_state);
+    }
     url = JS_ToCString(ctx, w->url);
     CHECK(url != NULL, "navigate event: the destination URL could not be read back");
     w->destination = navigation_destination_new(ctx, url, JS_NULL, state, w->same_document);

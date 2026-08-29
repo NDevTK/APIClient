@@ -290,4 +290,25 @@ bool    session_history_entry_is_this_document(JSContext *ctx, JSValueConst e);
    it as its third clause, which is the only reader outside this component. */
 bool    session_history_is_initial_about_blank(JSContext *ctx);
 
+/* ---- WHAT §7.4.3 "Reloading and traversing" READS OFF THE ACTIVE SESSION HISTORY ENTRY ------------------------
+ *
+ * A RELOAD IS DEFINED OVER THE ENTRY AND NEVER OVER THE DOCUMENT, which is the whole reason these three are
+ * here rather than being read off `document_url` at the caller. §7.4.3 step 1.4 sets the navigate event's
+ * destinationURL from "navigable's ACTIVE SESSION HISTORY ENTRY's URL", and §7.4.5 then re-populates THAT
+ * entry — so after `history.pushState(s, "", "/x")` a reload fetches `/x` and carries `s` forward, and a
+ * caller that asked the Document instead would be reading a field with a different writer that happens to
+ * agree today. The distinction is exactly the one session_history_is_fragment_navigation exists for, one
+ * algorithm along.
+ *
+ * THE STATE COMES BACK AS THE SERIALIZED BYTES and not as a deserialized value, unlike
+ * session_history_entry_nav_state above: §7.2.6.10.4 step 11 sets the DESTINATION's state to it and
+ * §7.2.6.10.3 deserializes afresh per `getState()` call, so deserializing here would mint a value the
+ * destination would have to re-serialize. OWNED (an ArrayBuffer).
+ *
+ * THE STEP IS §7.4.1.1's, and its one reader is the assertion §7.4.3's reload makes about this build's
+ * collapsed populate — core/frame/navigable.c states what the two disagree about. */
+JSValue  session_history_active_entry_url(JSContext *ctx);              /* OWNED string */
+JSValue  session_history_active_entry_navigation_state(JSContext *ctx); /* OWNED ArrayBuffer */
+uint32_t session_history_active_entry_step(JSContext *ctx);
+
 #endif
