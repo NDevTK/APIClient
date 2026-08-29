@@ -208,10 +208,11 @@ typedef struct {
     char   *top_level_url;
     /* HTML §8.1.3.1's TOP-LEVEL ORIGIN — the OTHER field of that pair, and a separate one because the standard
        says so in the field's own definition: "This is distinct from the top-level creation URL's origin when
-       sandboxing, workers, and worklets are involved." §7.3.2.1 states them in one breath and answers them
-       differently — the URL is `about:blank` for a top-level browsing context while the origin is the initial
-       Document's own — and §4.7 over a URL cannot express the third case at all, because §7.3.1 hands ONE
-       opaque origin to several Documents and an opaque origin has no serialization it can be recreated from.
+       sandboxing, workers, and worklets are involved." §7.3.2.1 "Creating browsing contexts" states them in
+       one breath and answers them differently — the URL is `about:blank` for a top-level browsing context
+       while the origin is the initial Document's own — and §4.7 over a URL cannot express the third case at
+       all, because §7.3.2.1's determine-the-origin hands ONE opaque origin to several Documents and an opaque
+       origin has no serialization it can be recreated from.
        Permissions §5.1 step 5 reads THIS one: its key is generated from "settings's top-level origin", and
        §3.2 compares two keys with §7.1.1's same origin, whose step 1 is an identity comparison.
        BORROWED and POD, exactly like `origin` beside it: an origin lives for the agent, a navigation REPLACES
@@ -219,8 +220,9 @@ typedef struct {
     const Origin *top_level_origin;
     /* §7.2.2.1's `closed` IS TWO FACTS AND THE GETTER IS THEIR OR — "true if this's browsing context is null or
        its is closing is true". They are two because they happen at two TIMES. `close()` sets is-closing at its
-       own call site and QUEUES the destruction; §7.3.1's removal of a container queues one without setting
-       is-closing at all; and the browsing context does not become null until §7.5.10 step 8 runs, in a task.
+       own call site and QUEUES the destruction; §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable
+       queues one without setting is-closing at all; and the browsing context does not become null until
+       §7.5.10 step 8 runs, in a task.
        Held as ONE byte those two times collapsed into the removal's, so a frame's WindowProxy reported a
        destruction that had not happened — while its Document, its queued tasks and its entangled ports were
        all still live, with nothing anywhere holding the fact that they had not been dealt with. */
@@ -343,7 +345,7 @@ static ProxyData *proxy_of(JSValueConst v)
  * return true" is an IDENTITY comparison, and identity is exactly what §7.1.1's serializer drops — every opaque
  * origin serializes to "null" — so this component could not tell one opaque origin looked at twice from two
  * distinct ones and guessed "two". That is right for two sandboxed frames and wrong for the case step 1 exists
- * for: §7.3.1's determine-the-origin hands ONE opaque origin to several Documents on purpose, so a `data:`
+ * for: §7.3.2.1's determine-the-origin hands ONE opaque origin to several Documents on purpose, so a `data:`
  * document's `about:blank` child was refused every member of its own navigable outside the fixed cross-origin
  * list, and its `contentDocument` was null. The origin is a record now (core/url/origin.h) and the guess is
  * gone with the assert that named it.
@@ -352,22 +354,24 @@ static ProxyData *proxy_of(JSValueConst v)
  * whoever is reading is this agent's, and there is exactly one of those. */
 static bool proxy_same_origin(const ProxyData *p)
 {
-    DCHECK(p->origin != NULL, "a WindowProxy carries no origin — §7.4 gives every navigable's document one and "
-                              "§7.3.1 decides which, so a proxy without one was minted somewhere that did not");
+    DCHECK(p->origin != NULL, "a WindowProxy carries no origin — §7.4 gives every navigable's document one "
+                              "and §7.3.2.1's determine the origin decides which, so a proxy without one was "
+                              "minted somewhere that did not");
     return origin_same(p->origin, origin_agent());
 }
 
-/* §7.1.1's SAME ORIGIN-DOMAIN over the same pair — §7.3.1's `content document` filter, which is a DIFFERENT
- * algorithm from the one above and not a laxer spelling of it.
+/* §7.1.1's SAME ORIGIN-DOMAIN over the same pair — §7.3.1.3 "Child navigables"' `content document` filter,
+ * which is a DIFFERENT algorithm from the one above and not a laxer spelling of it.
  *
  * AND ITS ACCESSOR SIDE IS THE ASKING DOCUMENT'S ORIGIN, NOT THE AGENT'S. That is the one place the two checks
  * must be written differently, and the reason is §7.1.1.2: every origin in this heap is same ORIGIN with the
  * agent's by construction, so proxy_same_origin may compare against the agent's record and be exact — but a
- * DOMAIN is per Document. §7.3.1's content document filters "container document" against the content document,
- * and a child navigable's Document holds its own tuple record (§7.3.1 step 5 mints one per address), so a
- * child that has relaxed its domain while its container has not is a pair the standard's own table answers
- * ❌ for. Reading the agent's record here would have answered ✅ — right until the moment the member it exists
- * to gate became implementable, which is what makes it worth one argument. */
+ * DOMAIN is per Document. §7.3.1.3's content document filters "container document" against the content
+ * document, and a child navigable's Document holds its own tuple record (§7.3.2.1's determine the origin
+ * step 5 mints one per address), so a child that has relaxed its domain while its container has not is a
+ * pair the standard's own table answers ❌ for. Reading the agent's record here would have answered ✅ —
+ * right until the moment the member it exists to gate became implementable, which is what makes it worth
+ * one argument. */
 static bool proxy_same_origin_domain(JSContext *ctx, const ProxyData *p)
 {
     DCHECK(p->origin != NULL, "a WindowProxy carries no origin");
@@ -565,9 +569,10 @@ void window_proxy_navigate(JSContext *ctx, JSValueConst proxy, JSContext *realm,
     /* THE OLD STRINGS ARE NOT FREED. A parked flow's saved bytes still name them (see proxy_of), so freeing
        here would resume that flow onto freed memory; they are the PROXY's and are released with it. */
     p->url    = proxy_strdup(url);
-    DCHECK(origin != NULL, "a navigable was navigated to a document with no origin — §7.3.1 answers for every "
-                           "Document, and a navigation's answer is the one the LOAD computed, never re-derived "
-                           "here from the address (that second answer is what loses an inherited identity)");
+    DCHECK(origin != NULL, "a navigable was navigated to a document with no origin — §7.3.2.1's determine "
+                           "the origin answers for every Document, and a navigation's answer is the one the "
+                           "LOAD computed, never re-derived here from the address (that second answer is what "
+                           "loses an inherited identity)");
     p->origin = origin;   /* BORROWED, and REPLACED rather than mutated — see the field */
     /* THE NEW DOCUMENT'S ENVIRONMENT MOVED WITH IT, and the caller states where to — a navigation of a
        TOP-LEVEL traversable puts the environment at the new address, while a nested navigable's stays where
@@ -683,9 +688,10 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
     p->window = JS_UNDEFINED;   /* materialized by proxy_realm — at creation, or on the first read */
     p->realm  = NULL;
     p->url    = url ? proxy_strdup(url) : NULL;   /* NULL only for the self proxy, whose realm is already built */
-    DCHECK(origin != NULL, "a navigable was created with no origin — §7.3.1's determine-the-origin answers for "
-                           "every Document, including the initial about:blank one §7.4 creates a navigable "
-                           "with, and the answer is a RECORD whose identity the same-origin check compares");
+    DCHECK(origin != NULL, "a navigable was created with no origin — §7.3.2.1's determine-the-origin "
+                           "answers for every Document, including the initial about:blank one §7.4 creates a "
+                           "navigable with, and the answer is a RECORD whose identity the same-origin check "
+                           "compares");
     p->origin = origin;   /* BORROWED — an origin lives for the agent (core/url/origin.h) */
     p->name   = name && *name ? proxy_strdup(name) : NULL;
     /* §7.4 NAMED IT. This mint is the one §7.4's create-a-new-navigable reaches, so the name it was given is
@@ -790,26 +796,28 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
 
     CHECK(tlus != NULL, "the realm's top-level creation URL would not convert to a C string");
     /* §8.1.3.1's TOP-LEVEL ORIGIN FOR THE ONE NAVIGABLE NO §7.3.2.1 RAN FOR — the instance's root, whose
-       environment the HOST built. The URL it built it with is above; the ORIGIN is §7.3.1's determine the
-       origin over that URL with THIS AGENT'S origin as the source origin, which is the whole of what an
-       origin-keyed agent cluster has to inherit from. That is not a re-derivation dressed up: §7.3.1 IS the
-       algorithm that answers "whose origin is a Document at this address", and its two inheritance cases are
-       exactly the addresses §4.7 cannot answer for — `about:blank`, which is the address §7.3.2.1 creates
-       EVERY top-level browsing context at, and `about:srcdoc`. A host that started this instance at a real
+       environment the HOST built. The URL it built it with is above; the ORIGIN is §7.3.2.1 "Creating
+       browsing contexts"' determine the origin over that URL with THIS AGENT'S origin as the source origin,
+       which is the whole of what an origin-keyed agent cluster has to inherit from. That is not a
+       re-derivation dressed up: determine the origin IS the algorithm that answers "whose origin is a
+       Document at this address", and its two inheritance cases are exactly the addresses §4.7 cannot answer
+       for — `about:blank`, which is the address §7.3.2.1 creates EVERY top-level browsing context at, and
+       `about:srcdoc`. A host that started this instance at a real
        address gets §4.7's tuple, which is the same origin as this agent's by construction. */
     url_record_init(&rec);
     tlo = url_parse(&rec, tlus, strlen(tlus), NULL) ? origin_determine(&rec, false, origin_agent())
                                                     : origin_determine(NULL, false, NULL);
     url_record_free(&rec);
-    /* THE ONE ANSWER §7.3.1 CANNOT REACH FROM A URL, named where it would otherwise be silent. A `data:` or
-       `file:` top-level creation URL takes §7.3.1 step 5 to §4.7, which MINTS a new opaque origin — and an
-       opaque origin that is not this agent's own record is same origin with nothing, so every environment of
-       this instance would be keyed to a value no other environment can ever equal. Which Document that origin
-       belongs to is a fact only the zone that created this instance holds. */
+    /* THE ONE ANSWER §7.3.2.1'S DETERMINE THE ORIGIN CANNOT REACH FROM A URL, named where it would otherwise
+       be silent. A `data:` or `file:` top-level creation URL takes its step 5 to §4.7, which MINTS a new
+       opaque origin — and an opaque origin that is not this agent's own record is same origin with nothing,
+       so every environment of this instance would be keyed to a value no other environment can ever equal.
+       Which Document that origin belongs to is a fact only the zone that created this instance holds. */
     DCHECK(!origin_is_opaque(tlo) || origin_same(tlo, origin_agent()),
            "this instance's root environment has a TOP-LEVEL CREATION URL whose §4.7 origin is OPAQUE and is "
-           "not this agent's own, so §7.3.1 minted a second one rather than inheriting: an opaque origin has "
-           "no serialization it can be recreated from, and a URL therefore cannot say WHOSE it is. STATE "
+           "not this agent's own, so §7.3.2.1's determine the origin minted a second one rather than "
+           "inheriting: an opaque origin has no serialization it can be recreated from, and a URL therefore "
+           "cannot say WHOSE it is. STATE "
            "§8.1.3.1's TOP-LEVEL ORIGIN beside the top-level creation URL from the zone that created this "
            "instance — it is the same statement, made by the same party, for the same reason");
     /* §7.1.5: AN EMPTY CREATION SANDBOXING FLAG SET, and it is the spec's answer rather than a placeholder —
@@ -1000,10 +1008,11 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
    — they were two bytes, and closing through one left the other reporting open. Captured through proxy_of, so
    the flow that closed the window is the only one whose timeline contains it.
    THIS AGENT'S, AND THE CALLERS ARE WHY THAT IS THE RIGHT QUESTION. Every one of them is an ENGINE WALK over
-   navigables this agent holds — §7.3.1's fully-active ancestor chain, §7.1's named-target search, the
-   tree-order walk — and each is asking whether to keep walking THIS agent's tree, which is exactly what this
-   record answers. The JS-visible member is a different question and has a different answer path: a traversable
-   whose active document is in another instance is closed by whichever agent ran §7.2.2.1's close(), so the
+   navigables this agent holds — §7.3.3 "Fully active documents"' ancestor chain, §7.1's named-target
+   search, the tree-order walk — and each is asking whether to keep walking THIS agent's tree, which is
+   exactly what this record answers. The JS-visible member is a different question and has a different answer
+   path: a traversable whose active document is in another instance is closed by whichever agent ran
+   §7.2.2.1's close(), so the
    member suspends and asks that one (proxy_get_step). A caller that wants the standard's `closed` about an
    arbitrary navigable must go through the member, because only the member can suspend.
    IT IS AN OR OVER TWO FLAGS, which is the getter's own wording rather than a convenience: the two are set by

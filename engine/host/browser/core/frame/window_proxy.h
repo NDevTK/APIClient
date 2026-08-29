@@ -112,8 +112,9 @@ bool window_proxy_is_popup(JSValueConst proxy);
    navigating, and `window.name` then reads as unknown external input. A host that loaded the document itself
    knows the answer is "" and says so.
    §8.1.3.1's TWO TOP-LEVEL FIELDS ARE READ OFF THE REALM THE HOST ALREADY BUILT, not passed in — the URL
-   verbatim (realm_top_level_creation_url) and the ORIGIN by running §7.3.1's determine the origin over it with
-   THIS AGENT'S origin as the source origin, which is the only source origin an origin-keyed agent cluster has.
+   verbatim (realm_top_level_creation_url) and the ORIGIN by running §7.3.2.1 "Creating browsing contexts"'
+   determine the origin over it with THIS AGENT'S origin as the source origin, which is the only source
+   origin an origin-keyed agent cluster has.
    That is the standard's own answer for the two addresses a URL cannot carry an origin for: an `about:blank`
    top-level environment (§7.3.2.1 creates every top-level browsing context at that address) inherits the
    source, and a real address gives §4.7's tuple. */
@@ -508,17 +509,18 @@ void window_proxy_set_opener(JSContext *ctx, JSValueConst proxy, JSValueConst op
 
 /* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN WITH THIS ONE? §7.2.1's check — §7.1.1's SAME ORIGIN over
    two origin RECORDS (core/url/origin.h), so its step 1 is a nonce comparison and an OPAQUE origin is same
-   origin with ITSELF and with nothing else. A `data:` document's `about:blank` child is that case, and §7.3.1
-   makes the pair on purpose.
+   origin with ITSELF and with nothing else. A `data:` document's `about:blank` child is that case, and
+   §7.3.2.1's determine the origin makes the pair on purpose.
    IT IS NOT THE "IS THIS ORIGIN OPAQUE" QUESTION, and it used to be reached as one: a serialized comparison
    answered false for every opaque origin, so §7.2.6.3's disabled clause, Storage's storage key and the file
    picker's first check all got the answer they wanted from the wrong predicate. They ask origin_is_opaque
    directly now — see each of those files. */
 bool window_proxy_same_origin_of(JSValueConst proxy);
 
-/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN-DOMAIN WITH THIS ONE? §7.1.1's OTHER algorithm, and §7.3.1's
-   `content document` filters `iframe.contentDocument` by THIS one rather than by the check above. They differ
-   exactly where `document.domain` has been set, which is now a member (core/dom/document_domain.c).
+/* IS THE NAVIGABLE'S ACTIVE DOCUMENT SAME ORIGIN-DOMAIN WITH THIS ONE? §7.1.1's OTHER algorithm, and
+   §7.3.1.3 "Child navigables"' `content document` filters `iframe.contentDocument` by THIS one rather than
+   by the check above. They differ exactly where `document.domain` has been set, which is now a member
+   (core/dom/document_domain.c).
    IT TAKES A REALM WHERE THE SAME-ORIGIN CHECK DOES NOT, and that asymmetry is the spec's: same ORIGIN may be
    answered against the agent's one record because every origin in this heap is same origin with it, while a
    DOMAIN belongs to a DOCUMENT — so this compares against the ASKING realm's Document's origin. */

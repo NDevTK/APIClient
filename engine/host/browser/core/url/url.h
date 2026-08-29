@@ -46,7 +46,8 @@ void url_record_init(UrlRecord *u);
 void url_record_free(UrlRecord *u);
 /* HTML §2.4.1's "a URL MATCHES about:blank" / "matches about:srcdoc" — `what` is "blank" or "srcdoc", and
    `query_must_be_null` is the one place the two relations differ (srcdoc's query must be null, blank's need
-   not be). Two askers: HTML §7.3.1's determine the origin and §2.4.3's fallback base URL. */
+   not be). Two askers: HTML §7.3.2.1 "Creating browsing contexts"' determine the origin and §2.4.3's
+   fallback base URL. */
 bool url_matches_about(const UrlRecord *u, const char *what, bool query_must_be_null);
 /* A HOST on its own — released, parsed and compared without a URL record around it, because a host is parsed
    and compared in places that have none. HTML §7.1.1's origin holds two (its host and its domain), and

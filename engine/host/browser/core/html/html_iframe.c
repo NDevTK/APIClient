@@ -364,12 +364,12 @@ void iframe_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, 
     JS_FreeValue(ctx, wrap);
 }
 
-/* §4.8.5's REMOVING STEPS: an <iframe> that leaves a document runs §7.3.1's DESTROY A CHILD NAVIGABLE over the
-   navigable it contained. The container's half is SYNCHRONOUS and the document's half is a JOB, which is the
-   spec's own split and is why this used to be wrong: the element loses its navigable on this line (step 3, so
-   `contentWindow` is null from here on), while step 5's destruction of the active document and everything under
-   it is queued — it disentangles that document's ports, drops its queued tasks and only then nulls its browsing
-   context, none of which can happen inside a tree mutation.
+/* §4.8.5's REMOVING STEPS: an <iframe> that leaves a document runs §7.3.1.6 "Navigable destruction"'s DESTROY
+   A CHILD NAVIGABLE over the navigable it contained. The container's half is SYNCHRONOUS and the document's
+   half is a JOB, which is the spec's own split and is why this used to be wrong: the element loses its
+   navigable on this line (step 3, so `contentWindow` is null from here on), while step 5's destruction of the
+   active document and everything under it is queued — it disentangles that document's ports, drops its
+   queued tasks and only then nulls its browsing context, none of which can happen inside a tree mutation.
    WHAT WAS HERE INSTEAD WAS ONE BYTE. Setting `closed` on the proxy announced a destruction that had not
    happened and never would: the child's Document, its Window, its realm, its queued tasks and its whole
    subtree were left exactly as they were, and the announcement is what made that invisible. The proxy a page
@@ -379,8 +379,8 @@ void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
 {
     JSValue proxy = iframe_navigable(ctx, wrap);
 
-    if (JS_IsUndefined(proxy)) return;   /* this flow never had one — §7.3.1 step 2 */
-    document_lifecycle_destroy_child(ctx, proxy);   /* §7.3.1 steps 4-5 */
+    if (JS_IsUndefined(proxy)) return;   /* this flow never had one — destroy-a-child-navigable step 2 */
+    document_lifecycle_destroy_child(ctx, proxy);   /* destroy-a-child-navigable steps 4-5 */
     JS_FreeValue(ctx, proxy);
     /* CLEARED, not deleted: the slot is non-configurable so it cannot be deleted, and it does not need to be —
        an empty slot is what "this element has no navigable" means everywhere it is read. It is an ordinary
@@ -531,20 +531,20 @@ JSValue iframe_child_navigable(JSContext *ctx, int index)
  * NAME of it, and this side resolves that name to the one reference for it. `contentDocument` is therefore a
  * step machine where `contentWindow` is a plain accessor — a WindowProxy names a NAVIGABLE, which this agent
  * created and knows, and a Document is the peer's object. */
-/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. §4.8.5's getter is one sentence over §7.3.1's
-   `content document`, whose four steps are: no content navigable → null; its active document; §7.2.1's same
-   origin-domain filter; return it. Steps 1-3 are one stage — they are decided here, and no page code runs
-   between them. Step 4 is its OWN stage whenever the document lives in another instance, because that answer
-   arrives from a peer's scheduled turn and this flow is parked until it does; the resume point was a request
-   handle being non-zero, which is a stage nothing could name.
+/* WHERE THIS MACHINE RESTS, AS THE STANDARD NUMBERS IT. §4.8.5's getter is one sentence over §7.3.1.3 "Child
+   navigables"' `content document`, whose four steps are: no content navigable → null; its active document;
+   §7.2.1's same origin-domain filter; return it. Steps 1-3 are one stage — they are decided here, and no page
+   code runs between them. Step 4 is its OWN stage whenever the document lives in another instance, because
+   that answer arrives from a peer's scheduled turn and this flow is parked until it does; the resume point
+   was a request handle being non-zero, which is a stage nothing could name.
    Same-origin in THIS agent the two documents are one heap, so step 4 is answered in the same turn and the
    machine never rests at the second stage — a suspend there would be observable, which makes it a fidelity bug
    rather than extra rigor. */
 #define CONTENT_DOC_STAGES(X) \
-    X(CONTENTDOC_RESOLVE, "HTML §4.8.5 contentDocument → §7.3.1 content document steps 1-3 (the content " \
+    X(CONTENTDOC_RESOLVE, "HTML §4.8.5 contentDocument → §7.3.1.3 content document steps 1-3 (the content " \
                           "navigable's active document, filtered by §7.2.1's same origin-domain check)") \
-    X(CONTENTDOC_ANSWER,  "HTML §7.3.1 content document step 4 (the answer, from the instance that holds the " \
-                          "document)")
+    X(CONTENTDOC_ANSWER,  "HTML §7.3.1.3 content document step 4 (the answer, from the instance that holds " \
+                          "the document)")
 enum { IDL_STEP_STAGE_BASE(CONTENT_DOC_STAGES) CONTENT_DOC_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const CONTENT_DOC_STEPS[] = { CONTENT_DOC_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -583,11 +583,12 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
             *presult = JS_NULL;
             return JS_STEP_DONE;
         }
-        /* §7.3.1's content document step 3 filters BEFORE asking: a cross-origin child's document is null, and
-           asking the peer for it would both leak and suspend a flow on a question whose answer is already
-           known. THE FILTER IS SAME ORIGIN-DOMAIN, which is §7.1.1's other algorithm and the one this step
-           names. It is NOT the same answer as same origin: a child that has run §7.1.1.2's `document.domain`
-           setter while this container has not is same origin with it and NOT same origin-domain, which is the
+        /* §7.3.1.3's content document step 3 filters BEFORE asking: a cross-origin child's document is
+           null, and asking the peer for it would both leak and suspend a flow on a question whose answer is
+           already known. THE FILTER IS SAME ORIGIN-DOMAIN, which is §7.1.1's other algorithm and the one this
+           step names. It is NOT the same answer as same origin: a child that has run §7.1.1.2's
+           `document.domain` setter while this container has not is same origin with it and NOT same
+           origin-domain, which is the
            standard's own fourth table row, and this line is what turns that into a null. */
         if (!window_proxy_same_origin_domain_of(ctx, nav)) {
             JS_FreeValue(ctx, nav);
@@ -631,12 +632,13 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
         hdr->stage = CONTENTDOC_ANSWER;
         return JS_STEP_YIELD;
     }
-    DCHECK(hdr->stage == CONTENTDOC_ANSWER, "contentDocument resumed into a stage §7.3.1 does not have");
+    DCHECK(hdr->stage == CONTENTDOC_ANSWER, "contentDocument resumed into a stage §7.3.1.3's content "
+                                            "document does not have");
     DCHECK(s->req != 0, "contentDocument is parked on step 4 with no request outstanding — the stage says a "
                         "peer was asked and nothing was");
     if (!engine_host_answered(s->req, &answer))
         return JS_STEP_YIELD;
-    /* The peer answered with a COMPLETION: §7.3.1's read runs the peer's own program, and a throw from it is
+    /* The peer answered with a COMPLETION: §7.3.1.3's read runs the peer's own program, and a throw from it is
        raised here, at the `iframe.contentDocument` that parked. */
     {
         int r = engine_host_take_completion(ctx, s->req, presult);
@@ -648,7 +650,7 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
 static const IdlStepDecl CONTENT_DOC_DECL = { iframe_content_document_step, sizeof(ContentDocState),
                                               iframe_cd_visit, NULL,
                                               "HTML §4.8.5 HTMLIFrameElement.contentDocument "
-                                              "(over §7.3.1's content document)", CONTENT_DOC_STEPS };
+                                              "(over §7.3.1.3's content document)", CONTENT_DOC_STEPS };
 
 /* §4.8.5 `contentWindow`: this flow's child navigable, or null when there is none. Reading THROUGH it is what
    suspends; this read does not, because the proxy is a local object naming a remote document. */
