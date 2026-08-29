@@ -95,8 +95,14 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
               "physical twins' but which need css-writing-modes §6's mapping from the element's computed "
               "`writing-mode` and `direction` to say WHICH twin, a mapping this engine does not have and "
               "lexbor's property registry carries no logical longhand for; and (2) `transform-origin`, whose "
-              "line is `transformable elements` (css-transforms §3), a definition over the element's box type "
-              "and its `transform-box`. RECORD the line beside the others, from the property's own spec");
+              "line is `transformable elements` (css-transforms-1 §4 \"The transform-origin Property\"). THE "
+              "DEFINITION OF THAT TERM IS NO LONGER MISSING and this line used to imply it was: "
+              "core/css/css_transform.h states css-transforms-1 §2 \"Terminology\"'s transformable element out "
+              "of the computed `display` and HTML §15.4's replaced-ness, exactly as the lines below are "
+              "stated. What recording the row here would then reach is §9's OTHER conjunct — a USED value for "
+              "`transform-origin`, which core/layout/used_value.h does not carry (it is not one of the ten "
+              "physical box-model lengths) and which css-transforms-1 §5 \"Transform reference box\" resolves "
+              "a percentage against. BUILD that used value, then record the line beside the others");
         return false;
     }
     display = css_computed_value(el, "display");

@@ -1730,6 +1730,16 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
     { "font-variant-emoji", "normal" }, { "font-variant-ligatures", "normal" },
     { "font-variant-numeric", "normal" }, { "font-variant-position", "normal" },
     { "font-variation-settings", "normal" },
+    /* css-transforms-1 §3 "The transform Property" (§4 in the CR — the module renumbered when its ED dropped
+       the number off "Terminology"), whose `Initial:` line is `none`. THE ROW IS WHAT MAKES "NO TRANSFORM" A
+       COMPUTED VALUE RATHER THAN A SILENCE, and the difference is not pedantic: lexbor's registry carries no
+       `transform` entry, so with no row here §7.1 had no initial value to fall to and the cascade answered
+       NULL for every element on every page — which is not `none`, and which is why every consumer that asked
+       "is this element transformed" got an answer it could not read. A DECLARED transform does reach the
+       cascade already (lexbor turns a property it has no id for into a `__CUSTOM` declaration carrying the
+       real name and the raw value), so this row completes the pair rather than standing in for it: declared
+       values come through the cascade and undeclared ones come through here. */
+    { "transform", "none" },
 };
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.

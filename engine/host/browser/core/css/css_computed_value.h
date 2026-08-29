@@ -87,6 +87,19 @@ bool css_computed_models(const char *name);
 /* Is it a LENGTH — so `css_computed_length` is the entry and `css_computed_value` is not? */
 bool css_computed_models_length(const char *name);
 
+/* CSS Cascade §7.2 "Inheritance"'s PARENT ELEMENT, "on the flattened element tree": the parent node when
+   it is an element, and the HOST when it is a SHADOW ROOT — a shadow tree's children inherit across the
+   boundary, which is why §7.2 states the flat tree rather than the node tree. NULL is the case §7.2 answers
+   itself ("for the root element, which has no parent element, the inherited value is the initial value"), and
+   an element whose parent is a Document or a plain DocumentFragment, or which has no parent at all, has no
+   parent element in exactly that sense.
+   IT IS EXPORTED BECAUSE INHERITANCE IS NOT THE ONLY THING THAT NESTS. A property whose EFFECT nests asks the
+   same chain and must get the same answer — css-transforms-1's "the element and its ancestors" is the flat
+   tree for the same reason §7.2 is, since a shadow host's transform moves the boxes its shadow tree generates
+   — and a second walk written beside this one is one flat-tree answer with two implementations, free to
+   disagree about a shadow boundary that only one of them was written to cross. */
+lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el);
+
 /* The element's BOX PARENT's `display` — the nearest ancestor element that GENERATES a box, which is not the
    parent element when a `display: contents` ancestor sits between them. OWNED, or NULL at the root. Exported
    because it is the question "is this box a flex or grid ITEM", and TWO algorithms ask it: CSS Display §2.7's

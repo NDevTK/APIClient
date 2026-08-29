@@ -647,15 +647,21 @@ static bool io_compute_visibility(JSContext *ctx, JSValueConst state)
     JS_FreeValue(ctx, tv);
     if (!track) return false;                                             /* step 1 */
     DFAIL("INTERSECTION OBSERVER §3.2.8 steps 2 to 5 decide whether a target is UNOCCLUDED, UNTRANSFORMED, "
-          "UNFILTERED AND OPAQUE, and this engine can answer none of the four: step 2 needs §3.2.9's EFFECTIVE "
-          "TRANSFORMATION MATRIX (a post-multiplication up the containing block chain of each box's computed "
-          "`transform`, which core/css/css_computed_value.c's CSS_RESOLVED_TRANSFORM crash asks for and which "
-          "core/dom/element_view.c's getClientRects step 3 names the same absence for); steps 3 and 4 need the "
-          "computed `opacity` and `filter` of the target and of every element in its containing block chain; "
-          "step 5 needs the ink overflow rectangles of the page's other content, which is a PAINT ORDER this "
-          "engine does not build. BUILD the computed transform first — it unblocks §3.2.9, this step, and "
-          "getClientRects' first constraint together — then opacity and filter, then step 5's occlusion. An "
-          "observer that did NOT ask for `trackVisibility` never reaches here: step 1 answers it, above");
+          "UNFILTERED AND OPAQUE, and this engine can answer none of the four. Step 2 needs §3.2.9 \"Calculate a "
+          "target's Effective Transformation Matrix\" — a post-multiplication up the containing block chain of "
+          "each box's computed "
+          "`transform`. THE ELEMENT-LEVEL HALF OF THAT EXISTS NOW and this line used to say it did not: "
+          "core/css/css_transform.h answers whether a transform applies to an element and to its ancestors, "
+          "out of each one's own computed value, so an untransformed chain is a REAL answer of the identity "
+          "matrix rather than an absence. What is still missing is the MATRIX ITSELF for a chain that is not "
+          "untransformed: core/css/css_computed_value.c crashes for the computed value of a <transform-list> "
+          "and names css-transforms-1 §7 \"The Transform Functions\"' grammar, and §3.2 \"Resolved value of "
+          "transform\" is the reduction to one 4x4 matrix over it. Steps 3 and 4 need the computed `opacity` "
+          "and `filter` of the target and of every element in its containing block chain; step 5 needs the ink "
+          "overflow rectangles of the page's other content, which is a PAINT ORDER this engine does not build. "
+          "BUILD the transform-function grammar first — it unblocks §3.2.9, this step, and getClientRects' "
+          "first constraint together — then opacity and filter, then step 5's occlusion. An observer that did "
+          "NOT ask for `trackVisibility` never reaches here: step 1 answers it, above");
     /* A RELEASE BUILD CANNOT BUILD THE FOUR MISSING COMPONENTS, so it answers the one outcome this model can
        justify — steps 2 to 5 each RETURN FALSE when their condition is not met, and an engine that cannot see
        a transform, an opacity, a filter or an occluder cannot claim to have ruled them out. */

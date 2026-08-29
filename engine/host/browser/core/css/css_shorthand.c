@@ -1238,6 +1238,14 @@ bool css_shorthand_complete_for(const char *longhand)
        typed and nothing had taken apart, so all three read as undeclared, with their initial values to show
        for it and nothing to say the declaration was never looked at.
 
+       `transform` — NO shorthand in CSS sets it. css-transforms-1 §3 "The transform Property" declares it as a
+       standalone property with its own `Value:` line (`none | <transform-list>`), and the module states no
+       shorthand over it: its §4 `transform-origin` and §5 `transform-box` are SIBLING longhands, not
+       containers, and css-transforms-2's `translate`, `rotate`, `scale` and `perspective` are separate
+       PROPERTIES that contribute to the same rendering — §3's own "Any computed value other than none for the
+       transform affects containing block and stacking context" is stated over this property alone — rather
+       than longhands of this one. `transition` and `animation` name a property, they do not set it.
+
        THE FONT LONGHANDS, and the SEVEN that are deliberately absent. css-fonts-4 §2.7's `font` is the only
        shorthand in CSS that sets `font-size`, `line-height`, `font-family`, `font-style`, `font-weight` or
        `font-stretch` — §2.3.1 makes `font-width` a legacy name ALIAS of that last one rather than a second
@@ -1250,7 +1258,7 @@ bool css_shorthand_complete_for(const char *longhand)
        matters — a `font-variant: small-caps` two lines above a `font-variant-caps` read would be invisible. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
-        "direction", "writing-mode",
+        "direction", "writing-mode", "transform",
         "baseline-source", "alignment-baseline", "baseline-shift",
         "font-size", "line-height", "font-family", "font-style", "font-weight", "font-stretch",
         "font-feature-settings", "font-kerning", "font-language-override", "font-optical-sizing",

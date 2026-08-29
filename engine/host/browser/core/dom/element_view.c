@@ -13,6 +13,7 @@
 #include "quickjs.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/css/css_transform.h"
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/element_view.h"
@@ -556,25 +557,41 @@ static JSValue ev_client_px(JSContext *ctx, CssPx v)
 static void ev_border_area_px(const EvTarget *t, CssPx out[4])
 {
     lxb_dom_element_t *el = lxb_dom_interface_element(t->node);
-    CssPx w = used_value_border_edge_px(el, false);
-    CssPx h = used_value_border_edge_px(el, true);
-    FlowPoint o = flow_border_box_origin(el);
-    CssPx x = css_px_sub(o.x, css_px(viewport_window_scroll(t->dctx, false)));
-    CssPx y = css_px_sub(o.y, css_px(viewport_window_scroll(t->dctx, true)));
+    lxb_dom_element_t *transformed = css_transform_applied_self_or_ancestor(el);
+    CssPx w, h, x, y;
+    FlowPoint o;
 
-    /* Step 3's FIRST CONSTRAINT, and the last term of the rectangle this engine does not have. */
-    DFAIL("CSSOM VIEW §6's getClientRects() step 3 states its first constraint as 'Apply the transforms that "
-          "apply to the element and its ancestors', and this engine has no computed `transform` to apply — so "
-          "the border area above is the UNTRANSFORMED one and reporting it would silently drop an author's own "
-          "declaration, which is a wrong rectangle rather than an absent one. This is NOT the scroll-bar term "
-          "every other member here reads as zero: no scroll bar is a UA CHOICE this model makes, and a dropped "
-          "`transform` is a declaration the cascade never carried. THE MISSING PIECE IS NAMED WHERE IT BELONGS "
-          "— core/css/css_computed_value.c's own CSS_RESOLVED_TRANSFORM crash asks for the transform-function "
-          "grammar and css-transforms §5's reference box, and states that a list with no percentage needs no "
-          "box so that half lands first. BUILD the computed value, then apply the matrix here and to every "
-          "ancestor's");
-    /* A RELEASE BUILD CANNOT BUILD THE COMPUTED VALUE, so it answers the identity transform — the case this
-       engine does model, exactly as every other §6 member here answers past its own DFAIL. */
+    /* STEP 3'S FIRST CONSTRAINT, ASKED BEFORE THE RECTANGLE IS BUILT — "Apply the transforms that apply to the
+       element and its ancestors."
+       THE CONSTRAINT IS SATISFIED, NOT SKIPPED, WHEN NOTHING IS TRANSFORMED. css-transforms-1 §2 Terminology
+       makes a TRANSFORMED ELEMENT one "with a computed value other than none for the transform property", and
+       §3's `Applies to:` line restricts even that to TRANSFORMABLE elements; core/css/css_transform.h asks
+       both of this element and of every one of its ancestors, out of each element's own computed value. When
+       none of them answers, the transformation matrix this step would map the border area through is the
+       IDENTITY, and mapping a rectangle through the identity is the rectangle — so the four numbers below ARE
+       the constrained ones. That is a derivation over the whole chain and not the silence it replaced: this
+       member used to crash for EVERY element because the cascade had no `transform` value at all to read, so
+       an untransformed `div` and a rotated one were one unanswerable case.
+       WHAT IS LEFT IS THE MATRIX, and it is reached only by an element that really is transformed. */
+    if (transformed != NULL)
+        DFAIL("CSSOM VIEW §6 \"Extensions to the Element Interface\"'s getClientRects() step 3 states its first "
+              "constraint as \"Apply the transforms that apply to the element and its ancestors\", and one of "
+              "them IS transformed — core/css/css_transform.h found a transformable element at or above this "
+              "one whose computed `transform` is not `none`. Reporting the border area below would drop an "
+              "author's own declaration, which is a WRONG rectangle rather than an absent one. This is not the "
+              "scroll-bar term every other member here reads as zero: no scroll bar is a UA CHOICE this model "
+              "makes, and a transform is a declaration the page wrote. WHAT TO BUILD, IN ORDER: "
+              "core/css/css_computed_value.c crashes for the COMPUTED value of a <transform-list> and names "
+              "css-transforms-1 §7 \"The Transform Functions\"' grammar; then §3.2 \"Resolved value of "
+              "transform\"'s reduction of a list to one 4x4 matrix; then THIS step, which post-multiplies the "
+              "matrices of the element and of every ancestor and maps the border area's four corners through "
+              "the product — the result is the AXIS-ALIGNED bounding box of those corners, which is why a "
+              "rotated box reports a rectangle wider than its own width");
+    w = used_value_border_edge_px(el, false);
+    h = used_value_border_edge_px(el, true);
+    o = flow_border_box_origin(el);
+    x = css_px_sub(o.x, css_px(viewport_window_scroll(t->dctx, false)));
+    y = css_px_sub(o.y, css_px(viewport_window_scroll(t->dctx, true)));
     out[0] = x; out[1] = y; out[2] = w; out[3] = h;
 }
 

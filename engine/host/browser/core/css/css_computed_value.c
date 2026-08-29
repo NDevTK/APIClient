@@ -59,12 +59,9 @@ static bool css_is_root_element(const lxb_dom_node_t *n)
 
 /* ---- CSS Cascade §7's DEFAULTING, over the two shapes a computed value comes in ---------------------------- */
 
-/* §7.2's PARENT ELEMENT, "on the flattened element tree": the parent node when it is an element, and the HOST
-   when it is a SHADOW ROOT — a shadow tree's children inherit across the boundary, which is why §7.2 states the
-   flat tree rather than the node tree. NULL is the case §7.2 answers itself: "for the root element, which has
-   no parent element, the inherited value is the initial value", and an element whose parent is a Document or a
-   plain DocumentFragment, or which has no parent at all, has no parent element in exactly that sense. */
-static lxb_dom_element_t *css_cv_parent_element(lxb_dom_element_t *el)
+/* §7.2's PARENT ELEMENT, "on the flattened element tree" — see css_computed_value.h for the contract and for
+   why it is exported rather than being re-walked by each caller that needs the chain. */
+lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el)
 {
     lxb_dom_node_t *p = lxb_dom_interface_node(el)->parent;
 
@@ -98,7 +95,7 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
                "the environment fact it derives from — serializing it here to hand it down the tree is exactly "
                "the drop css_computed_value.h describes, and `css_computed_length` is the entry that carries "
                "it whole");
-        parent = css_cv_parent_element(el);
+        parent = css_parent_element(el);
         if (parent == NULL) break;
         return css_computed_models(name) ? css_computed_value(parent, name) : css_cv_specified(parent, name);
     case CSS_DEFAULTING_INITIAL:
@@ -324,7 +321,7 @@ typedef struct {
    properties, if the element has no parent" are the same number, and §2.5's `Initial:` line names it. */
 static CssPx css_cv_parent_font_size(lxb_dom_element_t *el)
 {
-    lxb_dom_element_t *parent = css_cv_parent_element(el);
+    lxb_dom_element_t *parent = css_parent_element(el);
     CssLength len;
 
     if (parent == NULL) return css_default_font_size(css_cv_realm(el));
@@ -549,7 +546,7 @@ static CssPx css_cv_font_metric(void *p, CssFontMetric which)
         } else {
             on = f->el;
         }
-        from = (f->lh_affecting && on == f->el) ? css_cv_parent_element(on) : on;
+        from = (f->lh_affecting && on == f->el) ? css_parent_element(on) : on;
         /* §6.1.1's own no-parent clause, which is the same base case §7.2's inheritance falls to. */
         if (from == NULL) return css_cv_initial_line_height_px(realm);
         return css_used_line_height_px(from);
@@ -928,6 +925,7 @@ bool css_computed_models(const char *name)
            strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
            strcmp(name, "line-height") == 0 ||
            strcmp(name, "alignment-baseline") == 0 || strcmp(name, "baseline-source") == 0 ||
+           strcmp(name, "transform") == 0 ||
            css_computed_models_length(name) ||
            css_border_side_of(name, "style") >= 0;
 }
@@ -978,7 +976,7 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            too — an inherited `font-size` is a NUMBER and §2.5's keyword and percentage arms were resolved one
            node up, where their base was. The exception is a border width, whose rule reads THIS element's own
            `border-*-style` and is therefore re-applied. */
-        lxb_dom_element_t *parent = css_cv_parent_element(el);
+        lxb_dom_element_t *parent = css_parent_element(el);
 
         free(cascaded);
         if (parent != NULL) {
@@ -1049,7 +1047,7 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
            turn a number into text a reader could not tell from a length, which is precisely the difference
            §5.1's example says the children see. */
         free(cascaded);
-        parent = css_cv_parent_element(el);
+        parent = css_parent_element(el);
         if (parent != NULL) return css_computed_line_height(parent);
         cascaded = NULL;
         break;
@@ -1149,6 +1147,35 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
         return computed_overflow(el, name, spec);
     if (strcmp(name, "display") == 0)
         return computed_display(el, spec);
+    /* css-transforms-1 §3 "The transform Property" states `Computed value: as specified, but with lengths made
+       absolute` — TWO CLAUSES, and `none` satisfies the second vacuously because it contains no lengths, so
+       for that value the specified value IS the computed one and this is a derivation rather than a default.
+       It is also the value of every element no `transform` declaration reached, which is what
+       core/css/css_transform.h's `transformed element` test needs and what CSSOM VIEW §6's client rectangles
+       wait on. A `<transform-list>` is the other arm and it is BOTH clauses at once: this file cannot find the
+       lengths without the `<transform-function>` grammar, so it cannot absolutize them. */
+    if (strcmp(name, "transform") == 0) {
+        if (css_cv_is(spec, "none")) return spec;
+        free(spec);
+        DFAIL("css-transforms-1 §3 \"The transform Property\" gives `transform` a `Computed value:` of \"as "
+              "specified, but with lengths made absolute\", and this element's specified value is a "
+              "<transform-list> rather than `none`. TWO THINGS ARE MISSING AND THE FIRST IS THE ONE TO BUILD. "
+              "(1) THE GRAMMAR: `<transform-list> = <transform-function>+`, whose functions are §7 \"The "
+              "Transform Functions\" — this file parses none of them, so it cannot even find which components "
+              "of the value are lengths, let alone absolutize them. (2) THE REFERENCE BOX: §5 \"Transform "
+              "reference box: the transform-box property\" is what a PERCENTAGE translation resolves against, "
+              "and it is the element's border box and therefore a layout — but a list with no percentage needs "
+              "no box, so that half is not on the critical path and the grammar alone unblocks the common "
+              "case. THREE ALGORITHMS ARE WAITING ON THIS ONE VALUE and each names it: §3.2 \"Resolved value "
+              "of transform\" post-multiplies the list into one matrix() below, CSSOM VIEW §6 "
+              "\"Extensions to the Element Interface\"'s getClientRects() step 3 maps a border area through "
+              "it, and INTERSECTION OBSERVER §3.2.9 \"Calculate a target's Effective Transformation Matrix\" up a "
+              "containing block chain. BUILD §7's function grammar in its own component beside "
+              "core/css/css_transform.c, then the absolutization, then each consumer's own step");
+        /* A RELEASE BUILD CANNOT BUILD THE GRAMMAR, so it answers the clause it CAN honour — the value as
+           specified, which is the whole of §3's line for every list that carries no relative length. */
+        return css_cv_specified(el, name);
+    }
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
        do — so the specified value IS the answer here rather than a stand-in for one. css-backgrounds-3 §3.2
@@ -1336,7 +1363,7 @@ static char *css_cv_used_color_value(lxb_dom_element_t *el, const char *name)
     if (!css_cv_kw_is(spec, "currentcolor")) return spec;
     free(spec);
     if (strcmp(name, "color") != 0) return css_cv_used_color_value(el, "color");
-    parent = css_cv_parent_element(el);
+    parent = css_parent_element(el);
     if (parent != NULL) return css_cv_used_color_value(parent, "color");
     spec = cssom_initial_value("color");
     DCHECK(!css_cv_kw_is(spec, "currentcolor"),
@@ -1552,18 +1579,27 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         return css_resolved_px(ctx, css_px_scale(css_cv_font_size_px(el), v.number));
     }
     case CSS_RESOLVED_TRANSFORM: {
-        /* css-transforms §3.2: "When the computed value is a <transform-list>, the resolved value is one
-           matrix() function … For other computed values, the resolved value is the computed value." */
-        char *v = css_cv_specified(el, name);
+        /* css-transforms-1 §3.2 "Resolved value of transform": "When the computed value is a <transform-list>,
+           the resolved value is one <matrix()> function … For other computed values, the resolved value is the
+           computed value."
+           THE COMPUTED VALUE IS ASKED FOR AS ONE, not re-derived from the cascade here: §3's own line has an
+           absolutization in it, so a resolved value built out of the SPECIFIED value would report a `10em`
+           translation as `10em` on a page whose font size makes it 160px. The entry above crashes for a list
+           and names the grammar, which is why only `none` reaches the escape below today. */
+        char *v = css_computed_value(el, name);
 
         if (css_cv_is(v, "none")) { out = JS_NewString(ctx, v); free(v); return out; }
         free(v);
-        DFAIL("css-transforms §3.2 makes `transform` a resolved value special case: a <transform-list> resolves "
-              "to ONE matrix() function, post-multiplying every function in the list into a 4x4 matrix and "
-              "serializing that. Two pieces are missing — the transform-function grammar this file does not "
-              "parse, and the TRANSFORM REFERENCE BOX (css-transforms §5) a percentage translation resolves "
-              "against, which is the element's border box and therefore a layout. BUILD the function list and "
-              "its matrix reduction; a list with no percentage needs no box, so that half lands first");
+        DFAIL("css-transforms-1 §3.2 \"Resolved value of transform\" makes `transform` a resolved value special "
+              "case: a <transform-list> resolves to ONE <matrix()> function, built by initializing a 4x4 matrix "
+              "to the identity, POST-MULTIPLYING every <transform-function> in the list into it, and "
+              "serializing the result. The computed value now exists (the entry above), so what is left is "
+              "exactly those three steps plus §12 \"Mathematical Description of Transform Functions\"'s matrix "
+              "for each function. BUILD the reduction beside core/css/css_transform.c, whose consumers need "
+              "the same matrix rather than its serialization — CSSOM VIEW §6's client rectangles and "
+              "INTERSECTION OBSERVER §3.2.9 \"Calculate a target's Effective Transformation Matrix\" — so the "
+              "MATRIX is the component "
+              "and this member's string is one reader of it");
         break;
     }
     }
