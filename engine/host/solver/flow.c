@@ -1417,8 +1417,10 @@ int flow_job_drop_realm(JSContext *ctx, Flow *f, JSContext *realm) {
            outside the replayed program. A second kind of external job would have to revisit this line, and
            that sentence is where the obligation is written down.
            COUNTED PER ARM, WHICH IS WHY THE CONSERVATION LAW IS AN INEQUALITY: a fork gives each arm its own
-           Array naming the same record, this walk visits every flow, and each arm's copy is an end that arm
-           would otherwise have reached. */
+           Array naming the same record, so ONE queued delivery becomes an end in EACH timeline that holds a
+           copy — reached here when that timeline destroys the target Document, and at the running side when it
+           gets to fire. This walk is over ONE flow's queue (solver/engine.c's drop hook states why), so the
+           arms are counted as they each reach it rather than swept in one pass. */
         if (mine && job_field_int(e, JOB_EXTERNAL))
             engine_routed_task_end(ROUTED_TASK_TARGET_GONE);
         if (mine) { JS_FreeValue(ctx, e); continue; }

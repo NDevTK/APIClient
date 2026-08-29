@@ -1800,25 +1800,31 @@ async function engineUnload(eng, docName, incomingDocName) {
          "routes a document to an instance and what records which documents each one holds, so a name that " +
          "is in neither `docId` nor `joinedDocIds` is this table and the agent disagreeing about what is in " +
          "the agent, and the engine's own `world_doc_hosted` assert is what it would reach");
+  /* THE ORDER OF THE TWO HALVES IS CHECKED HERE AND NOWHERE ELSE, and it moved here rather than being
+     dropped. HTML §7.4.6.1 "Updating the traversable" unloads `displayedDocument` GIVEN `targetEntry`'s
+     document, so the incoming Document exists before the outgoing one is deactivated — and this zone is the
+     only party that knows both halves belong to one navigation, because it is the party that performed it.
+     THE ENGINE NO LONGER CHECKS IT AND MUST NOT: it used to, by requiring the incoming name to be a document
+     it held, which is precisely wrong for the navigation this ordering matters most for — a cross-origin
+     incoming Document loads into a PEER instance, so the agent being asked to unload will never hold it.
+     What the engine takes is the outgoing name alone, which is also the only realm HTML §7.5.9 "Unloading
+     documents" step 6 queues the operation in. */
   DCHECK(typeof incomingDocName === "string" && incomingDocName !== "" && incomingDocName !== docName,
          "a navigation was reported with no INCOMING document, or with one document named as both halves — " +
-         "HTML §7.4.6.1 replaces a navigable's active document WITH ANOTHER, and the incoming name is what " +
-         "makes the ORDER checkable at the engine (it must already be joined) and what gives the engine a " +
-         "realm to queue the operation in that is not the one being destroyed; §7.5.10 step 7 removes every " +
-         "queued task of the destroyed document, so the outgoing realm would make the first timeline's " +
-         "destruction drop every other timeline's");
+         "HTML §7.4.6.1 replaces a navigable's active document WITH ANOTHER, so a report with only an " +
+         "outgoing half is a destruction wearing a navigation's name, and one naming a single document as " +
+         "both halves is a navigation that did not happen");
   DCHECK(eng.joinedDocIds.indexOf(incomingDocName) >= 0,
          "a navigation named an INCOMING document this instance has not joined (" + incomingDocName + ") — " +
          "engineJoin is what puts it in the agent and is what pushes the name here, so this is the two halves " +
-         "of one navigation called in the wrong order, and the engine's own `world_doc_hosted` assert on the " +
-         "incoming half is what it would reach");
+         "of one navigation called in the wrong order");
   /* THE NAME IS NOT REMOVED FROM `joinedDocIds`, AND THAT IS NOT AN OVERSIGHT. §7.5.10 destroys the DOCUMENT,
      not the realm: the engine still interns that name, still answers for it, and a peer's route to it must
      still resolve here — to an instance that reports it as a destroyed navigable, which is the true answer and
      the one §7.2.2.1's `closed` is read for. Splicing it out would make `hostHolderOf` say no instance holds
      the name, and the very next arrival spelling that document would try to JOIN it and hit the engine's
      one-realm-per-document CHECK. */
-  await eng.r.renderer.unload(docName, incomingDocName);
+  await eng.r.renderer.unload(docName);
   /* THE ROUND ENDS HERE, SO IT RECORDS — engineJoin's reason exactly: an unload attaches a job to every live
      timeline, so the frontier this instance's Level-1 weight is computed from has moved. */
   await engineRecordFacts(eng);

@@ -657,8 +657,10 @@ JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
  *     _end). Recorded at the push, so an entry stays immutable, and read only by the park.
  *
  * Every mutation runs inside cow_engine_write_begin/end, for pending.h's reason exactly: this is the
- * SCHEDULER's record about a flow, and §7.5.10's drop walks EVERY flow from inside the running one's delta —
- * a delta that captured it would put a dropped job back on the queue the moment a sibling switched in. */
+ * SCHEDULER's record about a flow rather than state a page wrote, and it is mutated from inside whichever
+ * flow's delta happens to be applied — a routed delivery and engine_unload_document's fan-out both push onto
+ * a queue that is NOT the running flow's. A delta that captured any of it would put a dropped job back on the
+ * queue, or take a pushed one off it, the moment a sibling switched in. */
 int  flow_job_pending(const Flow *f);
 /* DOES IT STILL HOLD A MICROTASK? The checkpoint is over exactly when it does not — a task on the queue is the
    NEXT turn of the event loop and not part of this checkpoint, which is the same distinction the pick makes. */

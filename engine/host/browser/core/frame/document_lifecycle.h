@@ -99,22 +99,36 @@ void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy);
  * committed. Firing it here would offer a page the chance to cancel something that already happened, and would
  * do it with the accumulator js_beforeunload_step names as unbuilt.
  *
- * `proxy` IS THE NAVIGABLE WHOSE ACTIVE DOCUMENT IS BEING REPLACED, AND `ctx` IS THE INCOMING DOCUMENT'S REALM
- * — not the outgoing one's, and that is the standard's own shape rather than a convenience. §7.4.6.1 takes
- * `targetEntry` and hands its Document to the unload, and §7.5.9's "unload a Document oldDocument, given an
- * optional Document newDocument" takes it too; this file's other caller passes the EMBEDDER's realm for the
- * same reason (document_lifecycle_destroy_child), so `ctx` has always been "whoever is doing this" and never
- * "the thing being done to".
- * IT IS ALSO WHAT KEEPS §7.5.10 STEP 7 FROM EATING THIS OPERATION. The step removes every queued task whose
- * enqueuing realm is the DESTROYED document's, and these jobs are queued in `ctx` — so with the outgoing
- * document's own realm passed here, the FIRST timeline to reach its step 7 would drop every OTHER timeline's
- * queued unload, and those timelines would go on running a document the browser replaced with nothing to say
- * so. The incoming document's realm is by construction not the one being destroyed.
+ * `ctx` IS THE OUTGOING DOCUMENT'S OWN REALM AND IT IS THE WHOLE INPUT — the navigable is ASKED of it rather
+ * than passed beside it, so there is no pair for a caller to get wrong. §7.5.9 "Unloading documents"' "unload
+ * a document and its descendants" step 6 queues its global task on `document`'s RELEVANT GLOBAL OBJECT, and
+ * `document` there is the Document being unloaded; the per-document body opens by asserting the same fact from
+ * the other end — step 1, "Assert: this is running as part of a task queued on oldDocument's relevant agent's
+ * event loop". The queue home is therefore a fact about the document being unloaded and about nothing else,
+ * which is what makes it statable for EVERY navigation rather than for the ones whose other half is local.
+ *
+ * §7.5.9's OPTIONAL `newDocument` DOES NOT DECIDE IT, and this entry used to take it for exactly that. Every
+ * use the standard makes of `newDocument` is the DOCUMENT UNLOAD TIMING INFO — step 2 creates it, steps 3 and
+ * 4 null it out, steps 11 and 13 stamp it, step 22 hands it to the incoming Document — and this user agent
+ * carries none of that structure. Step 3 ("If newDocument is not given, then set unloadTimingInfo to null") is
+ * the answer for a `newDocument` that is absent, which is what §7.5.9's own descendant walk passes for every
+ * child navigable, and step 4 is the answer for one in another EVENT LOOP. An entry that needed the incoming
+ * Document's realm could not serve a navigation whose incoming Document belongs to another INSTANCE — an
+ * instance is an origin-keyed agent cluster, so a cross-origin incoming Document is a peer's — while the
+ * outgoing Document is local by construction, because it is the one this agent has been running.
+ *
+ * §7.5.10 STEP 7 DOES NOT EAT THIS OPERATION, AND THE REASON IS THE STANDARD'S ORDER RATHER THAN A CHOICE OF
+ * REALM. The step removes queued tasks "without running those tasks", and the unload task reaches it from
+ * INSIDE its own body (§7.5.9 step 20 destroys the document), by which time it has left the queue. What has to
+ * hold beside that is the SCOPE of the removal: it is over the timeline performing the destruction and not
+ * over every timeline of the instance, because a sibling flow's copy of this operation belongs to that flow
+ * and taking it would leave that timeline running a document the browser replaced. That scope is stated where
+ * the removal is (solver/engine.c's job-drop hook).
  *
  * Called once PER TIMELINE — the destruction is state a page observes (`pagehide` and `unload` fire at
  * listeners a script registered, so they live in the COW delta of the flow that ran that script), so
  * solver/engine.h's engine_unload_document is what walks the frontier and this stays the one-navigable
  * operation. */
-void document_lifecycle_unload_replaced(JSContext *ctx, JSValueConst proxy);
+void document_lifecycle_unload_replaced(JSContext *ctx);
 
 #endif

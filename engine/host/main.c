@@ -953,15 +953,19 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
  * parked inside it holds it by counted reference (core/frame/navigable.c). Its Lexbor tree is this host's
  * until `qjs_teardown`, which is the only moment at which every realm that could still name it is gone.
  *
- * `incoming_doc_id` IS THE DOCUMENT THE NAVIGATION LOADED, AND BOTH STANDARDS TAKE IT: §7.4.6.1 is written
- * over `targetEntry` and hands its Document to the unload, and §7.5.9 takes it as the optional `newDocument`.
- * It is what makes this entry's precondition statable — the incoming Document is joined FIRST, so a zone that
- * called the two the other way round is caught here rather than by whatever ran next — and it is the realm the
- * operation's own queued tasks belong to, which is what keeps §7.5.10 step 7 from removing the other
- * timelines' unloads along with the destroyed document's tasks (solver/engine.h). */
-QJS_EXPORT void qjs_unload(const char *doc_id, const char *incoming_doc_id)
+ * THE INCOMING DOCUMENT'S NAME DOES NOT CROSS, AND ITS ABSENCE IS §7.5.9 "Unloading documents" READ RATHER
+ * THAN A FIELD DROPPED. Step 6 of unload-a-document-and-its-descendants queues the operation on the OUTGOING
+ * document's own relevant global object, so the queue home is a fact about the document named HERE; the
+ * optional `newDocument` feeds only the document unload timing info, which this user agent does not carry, and
+ * step 3 is the standard's own answer for an absent one. This entry took the name and spent it on a realm —
+ * which is exactly what a CROSS-ORIGIN navigation cannot supply, since an instance is an origin-keyed agent
+ * cluster and that Document loads into a PEER. A name nothing reads is a fact crossing a trust boundary with
+ * no consumer, so it stops crossing; the ORDER of the two halves is checked by the zone that performs them,
+ * over the table only it holds (bridge.js), and the day §7.5.9's timing info is built the argument comes back
+ * with the steps that read it. */
+QJS_EXPORT void qjs_unload(const char *doc_id)
 {
-    uint32_t doc, incoming;
+    uint32_t doc;
 
     DCHECK(g_begun,
            "a Document was reported REPLACED to an engine whose frontier was never seeded — §7.5.9's unload is "
@@ -971,18 +975,12 @@ QJS_EXPORT void qjs_unload(const char *doc_id, const char *incoming_doc_id)
            "a Document was reported replaced with no NAME — an instance is an ORIGIN-KEYED AGENT CLUSTER and "
            "holds one realm per same-origin document, so the name is the whole of what says WHICH of them the "
            "browser navigated away from");
-    DCHECK(incoming_doc_id != NULL && *incoming_doc_id,
-           "a navigation was reported with no INCOMING document — §7.4.6.1 replaces a navigable's active "
-           "document WITH ANOTHER, so a navigation with only an outgoing half is a destruction wearing a "
-           "navigation's name, and this entry would have no realm to queue the operation in that is not the "
-           "one being destroyed");
     doc = world_doc_intern(doc_id);
-    incoming = world_doc_intern(incoming_doc_id);
     DCHECK(world_doc_hosted(doc),
            "a Document this agent does not hold was reported replaced — the trusted zone routes on which "
            "instance holds which document, so this arrival is at the wrong instance, and unloading anything "
            "here would destroy a document the browser never navigated away from");
-    engine_unload_document(doc, incoming);
+    engine_unload_document(doc);
 }
 
 /* The frontier KEY's document half. Pure scan, so the host may ask the instant qjs_init returns. */

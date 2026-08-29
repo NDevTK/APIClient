@@ -146,7 +146,7 @@ static void destroy_a_document(JSContext *ctx, JSValueConst proxy)
 
 /* §7.5.9's SALVAGEABLE STATE, DECIDED HERE AND HELD NOWHERE.
  *
- * A Document's salvageable state starts true and step 8 sets it to false whenever `intendToKeepInBfcache` is
+ * A Document's salvageable state starts true and step 9 sets it to false whenever `intendToKeepInBfcache` is
  * false — and intendToKeepInBfcache is "true if the user agent intends to keep oldDocument alive in a session
  * history entry, such that it can later be used for history traversal". This user agent holds session history
  * entries (core/frame/session_history.c) and NO BFCACHE to keep a document in: §7.4.1.2's document state may
@@ -207,12 +207,12 @@ typedef struct {
  *
  * WITH NO newDocument. §7.5.9's optional second argument feeds exactly one thing — `unloadTimingInfo`, the
  * document unload timing info the NEXT document reports as its previous document unload timing — and steps 2-4
- * say that with no newDocument that record is null, which makes steps 10, 12 and 21 no-ops. The one reach that
+ * say that with no newDocument that record is null, which makes steps 11, 13 and 22 no-ops. The one reach that
  * exists here is §7.3's definitely close, which passes null explicitly ("Unload a document and its descendants
  * given traversable's active document, NULL, and afterAllUnloads"), so this is the algorithm for that input
  * rather than the algorithm with a step left out.
  *
- * STEPS 5-7 AND 14 AND 21 count the event loop's TERMINATION NESTING LEVEL and the Document's UNLOAD COUNTER up
+ * STEPS 6-8 AND 14 AND 21 count the event loop's TERMINATION NESTING LEVEL and the Document's UNLOAD COUNTER up
  * and back down. Both exist "to ignore certain operations while the below algorithms run" and both are
  * WRITE-ONLY here: the unload counter's readers are §4.5's `document.open()` and `document.close()`, and the
  * termination nesting level's are the modal dialogs (`alert`, `confirm`, `prompt`) and `window.print` — and this
@@ -226,11 +226,11 @@ typedef struct {
  * destroys the document. "Has been scrolled by the user" is the same shape: a flag whose only reader is a
  * later scroll restoration of this same document. */
 #define UNLOAD_STAGES(X) \
-    X(UNLOAD_ENTER,    "HTML §7.5.9 unload a document steps 1-9.1 (salvageable becomes false; if page showing " \
+    X(UNLOAD_ENTER,    "HTML §7.5.9 unload a document steps 1-10.1 (salvageable becomes false; if page showing " \
                        "is true, page showing becomes false)") \
-    X(UNLOAD_PAGEHIDE, "HTML §7.5.9 unload a document step 9.2 (fire a page transition event named pagehide at " \
+    X(UNLOAD_PAGEHIDE, "HTML §7.5.9 unload a document step 10.2 (fire a page transition event named pagehide at " \
                        "the relevant global object with the document's salvageable state)") \
-    X(UNLOAD_UNLOAD,   "HTML §7.5.9 unload a document steps 9.3-13 (update the visibility state to \"hidden\"; " \
+    X(UNLOAD_UNLOAD,   "HTML §7.5.9 unload a document steps 10.3-12 (update the visibility state to \"hidden\"; " \
                        "fire unload at the relevant global object with the legacy target override flag)") \
     X(UNLOAD_DESTROY,  "HTML §7.5.9 unload a document steps 18-20 (the unloading document cleanup steps, then " \
                        "destroy the document)")
@@ -240,7 +240,7 @@ static const char *const UNLOAD_STEPS[] = { UNLOAD_STAGES(JS_STEP_STAGE_LABEL) N
 typedef struct {
     JSStepHdr hdr;
     uint8_t   fphase;
-    /* WAS STEP 9's BRANCH TAKEN — step 9.3's visibility update is INSIDE "if oldDocument's page showing is
+    /* WAS STEP 10's BRANCH TAKEN — step 10.3's visibility update is INSIDE "if oldDocument's page showing is
        true", and it is a stage away from the test, so the answer has to survive the suspension the pagehide
        fire is. A document whose page showing was already false fires nothing and stays visible until it is
        destroyed, which is what the standard says about a document a page never revealed. */
@@ -408,7 +408,7 @@ static void js_descend_visit(JSContext *ctx, void *st, JSStepVisit *v)
 
 /* ---- the three per-document bodies ---------------------------------------------------------------------------
  *
- * Each is the task §7.4.2.4 step 6 / §7.5.9 step 5 / §7.5.10 step 6 queues for ONE document, and each ends in
+ * Each is the task §7.4.2.4 step 6 / §7.5.9 step 6 / §7.5.10 step 6 queues for ONE document, and each ends in
  * the report that makes the wait above it terminate. */
 
 static int js_beforeunload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
@@ -510,14 +510,14 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         STEP_GOTO(s->hdr.stage, UNLOAD_PAGEHIDE, &s->fphase, NULL);
         JS_FreeValue(ctx, cb_result);
         cb_result = JS_UNDEFINED;
-        /* STEPS 8 AND 9: salvageable becomes false (see UNLOAD_SALVAGEABLE), and then — only if the document
+        /* STEPS 9 AND 10: salvageable becomes false (see UNLOAD_SALVAGEABLE), and then — only if the document
            was ever shown — page showing becomes false and a pagehide is fired with that salvageable state.
-           The two writes are here, before the fire, because step 9.1 precedes step 9.2 and a listener that
+           The two writes are here, before the fire, because step 10.1 precedes step 10.2 and a listener that
            closes another window must not find this document still showing. */
         if (cctx && document_page_showing(cctx)) {
             s->showing = 1;
-            document_page_showing_set(cctx, false);                                    /* step 9.1 */
-            s->ev = page_transition_event_new(cctx, "pagehide", UNLOAD_SALVAGEABLE);   /* step 9.2's event */
+            document_page_showing_set(cctx, false);                                    /* step 10.1 */
+            s->ev = page_transition_event_new(cctx, "pagehide", UNLOAD_SALVAGEABLE);   /* step 10.2's event */
         }
     }
     if (s->hdr.stage == UNLOAD_PAGEHIDE) {
@@ -536,12 +536,12 @@ static int js_unload_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         }
         s->fphase = 0;
         STEP_GOTO(s->hdr.stage, UNLOAD_UNLOAD, &s->fphase, NULL);
-        /* STEP 9.3, INSIDE step 9's branch: update the visibility state of oldDocument to "hidden", which fires
+        /* STEP 10.3, INSIDE step 10's branch: update the visibility state of oldDocument to "hidden", which fires
            `visibilitychange` at the Document when it was not hidden already. A document that was never showing
            never had a visibility state a page could have observed changing. */
         if (s->showing && cctx)
             page_visibility_update(cctx, true);
-        /* STEP 13: salvageable is false, so `unload` fires — at the relevant global object, with the legacy
+        /* STEP 12: salvageable is false, so `unload` fires — at the relevant global object, with the legacy
            target override flag set. */
         if (cctx)
             s->ev = event_new(cctx, "unload", /*bubbles*/ false, /*cancelable*/ false);
@@ -952,20 +952,21 @@ void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy)
  * See the header for why this is not §7.3.1.6's entry and why it carries no continuation, no `pageswap` and no
  * `beforeunload`. What is left of §7.4.6.1 once those three are accounted for is one line, and it is the same
  * line §7.3's definitely close reaches at ITS step 3: unload the document and its descendants. */
-void document_lifecycle_unload_replaced(JSContext *ctx, JSValueConst proxy)
+void document_lifecycle_unload_replaced(JSContext *ctx)
 {
+    /* THE NAVIGABLE IS ASKED OF THE REALM, WHICH IS WHY THERE IS NO LONGER A PAIR TO ASSERT AGREES. §7.5.9
+       "Unloading documents"' unload-a-document-and-its-descendants step 6 queues its global task on
+       `document`'s relevant global object, and every step of the body below reads the SAME document back
+       through active_realm — so a realm and a proxy passed separately were one fact spelled twice, and the
+       only thing an assert over them could catch was a caller contradicting itself. Derived here, the state
+       that assert existed for is not representable. */
+    JSValueConst proxy = document_window_proxy(ctx);
+
     DCHECK(window_proxy_is(proxy),
-           "§7.4.6.1's deactivate a document for a cross-document navigation was given something that is not a "
-           "navigable's WindowProxy");
-    /* THE REALM THE JOBS ARE QUEUED IN IS NOT THE REALM BEING DESTROYED, and that is asserted rather than
-       trusted because the failure is silent in both directions: queued in the outgoing realm, the first
-       timeline's §7.5.10 step 7 drops every other timeline's unload and those timelines keep running a
-       replaced document; and there is nothing in a JSContext* to say which of the two it is. */
-    DCHECK(JS_VALUE_GET_PTR(document_window_proxy(ctx)) != JS_VALUE_GET_PTR(proxy),
-           "§7.4.6.1's unload of a replaced Document was queued IN THAT DOCUMENT'S OWN REALM — `ctx` is the "
-           "INCOMING document's (§7.5.9 takes it as `newDocument` and §7.4.6.1 as `targetEntry`'s document), "
-           "and with the outgoing one passed instead the first timeline to reach §7.5.10 step 7 removes every "
-           "other timeline's queued unload, leaving them running a document the browser replaced");
+           "§7.4.6.1's deactivate a document for a cross-document navigation was given a realm with no "
+           "navigable — §7.5.9 step 6 queues this operation on the OUTGOING document's own relevant global "
+           "object, so a realm whose global is not a navigable's WindowProxy is not a document any navigation "
+           "can have replaced");
     /* THE OUTGOING DOCUMENT IS NAMED BY THE ZONE THAT WATCHED THE BROWSER NAVIGATE, so a second replacement of
        one Document is that zone having lost track of which Document is active in this navigable — and
        descend_enqueue's own early return for a destroyed navigable would swallow it, leaving a navigation

@@ -1509,16 +1509,26 @@ static Flow *g_enqueue_owner;
  * counted references that continuation already holds (core/frame/navigable.c's teardown states the argument
  * beside the assert that rests on it). §NO BOUNDS is untouched: nothing here is a scheduler decision.
  *
- * `incoming` IS THE DOCUMENT THE NAVIGATION LOADED, AND IT IS AN ARGUMENT BECAUSE BOTH STANDARDS TAKE IT.
- * §7.4.6.1 is written over `targetEntry` and hands its Document to the unload; §7.5.9 takes it as the optional
- * `newDocument`. Here it is also what the operation's own tasks are queued in — never the outgoing document's
- * realm, because §7.5.10 step 7 removes every queued task whose enqueuing realm is the DESTROYED document's,
- * so the first timeline to reach its step 7 would drop every other timeline's unload and those timelines would
- * go on running a document the browser replaced. That the two are different documents is asserted here, where
- * both names are in one hand. */
-void engine_unload_document(uint32_t doc, uint32_t incoming)
+ * THE INCOMING DOCUMENT IS NOT AN ARGUMENT, AND THAT IS THE STANDARD'S ANSWER RATHER THAN A SIMPLIFICATION.
+ * §7.5.9 "Unloading documents"' unload-a-document-and-its-descendants step 6 queues the operation's global task
+ * on `document`'s RELEVANT GLOBAL OBJECT, where `document` is the one being unloaded, and the per-document body
+ * asserts the same fact from the other end at its step 1 ("Assert: this is running as part of a task queued on
+ * oldDocument's relevant agent's event loop"). §7.5.9's optional `newDocument` decides nothing about the queue:
+ * its whole use is the document unload timing info (step 2 creates it, steps 3-4 null it, steps 11 and 13 stamp
+ * it, step 22 hands it on), a structure this user agent does not carry, and step 3 is the standard's own answer
+ * for an absent one — the answer §7.5.9's descendant walk already passes for every child navigable.
+ * THIS ENTRY USED TO TAKE IT AND QUEUE IN ITS REALM, which made the operation unperformable for the navigation
+ * that needs it most: an instance is an ORIGIN-KEYED AGENT CLUSTER, so a navigation whose incoming Document is
+ * cross-origin loads it into a PEER, and there is no such realm on this side to queue anything in. The outgoing
+ * Document is local by construction — it is the one this agent has been running — so asking IT for the queue
+ * home is the one question that has an answer for every navigation.
+ * §7.5.10 "Destroying documents" STEP 7 DOES NOT EAT THE OPERATION. It removes queued tasks "without running
+ * those tasks", and the unload reaches it from inside its own body (§7.5.9 step 20), by which time the task has
+ * left the queue; the other half of that is the SCOPE of the removal, which is the timeline performing the
+ * destruction and not every timeline of this instance (engine_drop_jobs). */
+void engine_unload_document(uint32_t doc)
 {
-    JSContext *dctx, *nctx;
+    JSContext *dctx;
     int n, i;
 
     DCHECK(g_sess_live,
@@ -1529,17 +1539,7 @@ void engine_unload_document(uint32_t doc, uint32_t incoming)
            "a Document this agent does not hold was reported replaced — the trusted zone is the only zone that "
            "knows which instance holds which document, and it named this one to the wrong instance; unloading "
            "here would destroy a document the browser did not navigate away from");
-    DCHECK(world_doc_hosted(incoming),
-           "a navigation named an INCOMING Document this agent does not hold — §7.4.6.1 unloads the displayed "
-           "document GIVEN the target entry's document, so the incoming one exists first and is joined to this "
-           "agent before this is called; a zone that called them the other way round has an outgoing document "
-           "to destroy and nowhere to put the navigation that replaced it");
-    DCHECK(doc != incoming,
-           "a navigation named ONE Document as both the incoming and the replaced one — §7.4.6.1 replaces the "
-           "active document of a navigable WITH ANOTHER, so this is the trusted zone reporting a navigation "
-           "that did not happen, and running it would destroy the document that had just arrived");
     dctx = doc_realm(doc);
-    nctx = doc_realm(incoming);
     n = flow_count();
     DCHECK(n > 0,
            "a Document was replaced while every timeline of this instance had already finished — there is no "
@@ -1554,7 +1554,7 @@ void engine_unload_document(uint32_t doc, uint32_t incoming)
            aborts between these two lines aborts the process, so there is no unwind that could leave a stale
            owner naming a flow the registry has since freed. */
         g_enqueue_owner = f;
-        document_lifecycle_unload_replaced(nctx, document_window_proxy(dctx));
+        document_lifecycle_unload_replaced(dctx);
         g_enqueue_owner = NULL;
         /* ASKABLE AGAIN, for engine_route's reason exactly: a flow that reported host-owed is out of the pick
            until the host does something for it, and this IS that something. A flow holding the unload of its
@@ -4815,8 +4815,11 @@ static int engine_enqueue_job(JSContext *ctx, JSJobFunc *fn, int argc, JSValueCo
    the SAME records, so after a branch N flows hold N queued copies of ONE handle — N timelines' copies of one
    queued task, each of which the corresponding arm's own tracker names. Sweeping every flow would delete a
    sibling's task out of the sibling's timeline on the strength of a removal made in this one, which is exactly
-   the shared-state bug the per-flow queues exist to make impossible; §7.5.10's drop walks every flow instead
-   because its key is the DOCUMENT, and a destroyed document is destroyed in every timeline at once.
+   the shared-state bug the per-flow queues exist to make impossible. §7.5.10's drop is the running flow's for
+   the SAME reason and not the opposite one — a destruction is a fact in the timeline that performed it, and
+   the version of this sentence that said a destroyed document is destroyed in every timeline at once was
+   wrong: engine_unload_document exists precisely because a destruction every timeline must perform has to be
+   fanned out to each of them, one operation per flow.
    FINDING NOTHING IS ORDINARY — the task already ran, is running now (a `toggle` listener that closes the
    dialog again asks for the removal of the very task dispatching it), or went with its document. */
 static int engine_remove_job(JSTaskHandle handle) {
@@ -4830,27 +4833,37 @@ static int engine_remove_job(JSTaskHandle handle) {
     return flow_job_remove(f, handle);
 }
 
-/* THE OTHER HALF OF engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 step 7, for the jobs this
-   scheduler TOOK. Nothing else can do it — declining to register this hook would leave every destroyed
-   document's reactions queued on whichever flow enqueued them, and each one would later run in a Document
-   whose browsing context is null.
-   IT WALKS EVERY FLOW, not the running one. A job belongs to the flow that enqueued it and a document is
-   destroyed by whichever flow removed its container, which is not the same flow — a walk of the running flow's
-   queue alone would drop the ones that happen to be there and silently keep the rest. */
+/* THE OTHER HALF OF engine_enqueue_job (installed as JS_SetJobDropHook): HTML §7.5.10 "Destroying documents"
+   step 7, for the jobs this scheduler TOOK. Nothing else can do it — declining to register this hook would
+   leave every destroyed document's reactions queued on whichever flow enqueued them, and each one would later
+   run in a Document whose browsing context is null.
+   IT IS THE RUNNING FLOW'S QUEUE AND NO OTHER, for the reason JSJobRemoveHook's own contract states one line
+   down in quickjs.h: a flow IS a timeline, a fork gives each arm its own copy of the parent's queued jobs, and
+   a destruction is a fact in the timeline that performed it. §7.5.10 step 7 removes tasks from the event loop
+   whose task it is running inside; a sibling flow is a different timeline in which this Document may not be
+   destroyed at all — a `<iframe>` removed in one arm is still in the document in the other — so sweeping its
+   queue deletes work from a world where the removal never happened. That is the shared-state write this
+   engine's per-flow queues exist to make impossible, and it is not a small one: it is also what would make the
+   STANDARD'S queue home unusable, since §7.5.9 step 6 puts every timeline's unload task on the OUTGOING
+   document's own global and the first flow to reach its step 20 would take all the others with it.
+   A DESTRUCTION EVERY TIMELINE MUST PERFORM IS FANNED OUT AT THE SEAM THAT REPORTS IT, never here:
+   engine_unload_document gives each flow its own unload, and each one's step 7 then removes its own queue's
+   tasks. That is one operation per timeline rather than one timeline's operation applied to all of them. */
 static int engine_drop_jobs(JSContext *ctx) {
-    int dropped = 0;
-    /* NOT WHILE THIS WALK HOLDS AN INDEX. It runs inside a flow step, where the allocator's refusal edge is
+    Flow *f = flow_running();
+    int dropped;
+
+    DCHECK(f != NULL,
+           "§7.5.10 step 7 removed a destroyed Document's queued tasks with no flow running — a destruction is "
+           "performed by a timeline (§7.5.9's unload task is a job of one), so a caller here is a platform edge "
+           "reaching for a queue that belongs to a timeline it is not in");
+    if (!f) return 0;   /* release path under the assert: nothing this hook can honestly reach */
+    /* NOT WHILE THIS WALK HOLDS THE FLOW. It runs inside a flow step, where the allocator's refusal edge is
        armed to page a member of the frontier out — and the registry removes by swapping its last member into
-       the hole, so a removal here would move a flow the walk has not reached yet to a position it has already
-       passed. That flow's destroyed-document jobs would stay queued and run against a Document whose browsing
-       context is null: a silently skipped work item, which is what §scheduler's razor forbids. A refusal across
-       this walk is simply a refusal; the step's next allocation is armed again. */
+       the hole, so a reclaim inside this walk can move the Flow record it is holding an index into. A refusal
+       across this walk is simply a refusal; the step's next allocation is armed again. */
     int prev_reclaim = engine_reclaim_set(0);
-    for (int k = 0; ; k++) {
-        Flow *f = flow_at(k);
-        if (!f) break;
-        dropped += flow_job_drop_realm(ctx, f, ctx);
-    }
+    dropped = flow_job_drop_realm(ctx, f, ctx);
     engine_reclaim_set(prev_reclaim);
     return dropped;
 }

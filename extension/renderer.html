@@ -229,8 +229,7 @@
        so the pointer does not outlive the call, and retaining it would be this table asserting an ownership
        main.c does not take. That is the same reason the two policy-container arguments of init/join above are
        transient and their five siblings are not. */
-    unload:           { fn: "qjs_unload",             ret: null,     out: null,
-                        place: ["string", "string"] },
+    unload:           { fn: "qjs_unload",             ret: null,     out: null,       place: ["string"] },
   };
 
   /* WHICH DECLARED TYPES A PLACEMENT MAY PLACE. This is the two-sided assert the table needs to be safe: the

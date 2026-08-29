@@ -544,17 +544,19 @@
          document is one this agent holds, or it is not — so there is no value for a reply field to carry, and
          the acknowledgement is the working set alone (a void entry still answers, so a WASM abort inside it
          reaches this zone as a rejection rather than as silence). */
+      /* THE INCOMING DOCUMENT'S NAME DOES NOT TRAVEL, AND THAT IS HTML §7.5.9 "Unloading documents" READ
+         RATHER THAN A FIELD DROPPED. Step 6 of unload-a-document-and-its-descendants queues the operation's
+         global task on the OUTGOING document's own relevant global object, so the queue home is a fact about
+         `DOCUMENT_ID` and about nothing else; §7.5.9's optional `newDocument` feeds only the document unload
+         timing info, which the engine does not carry, and its step 3 is the standard's own answer for an
+         absent one. This method used to carry `incomingDocId` so the engine could queue in THAT document's
+         realm, which is the one thing a cross-origin navigation cannot supply — an instance is an
+         origin-keyed agent cluster, so that Document loads into a PEER and no such realm exists on the side
+         being asked to unload. What the engine no longer reads may not keep crossing: a wire field with no
+         consumer is a fact leaving a trust boundary for nobody. The ORDER of the two halves is still checked,
+         in the zone that performs them and over the table only that zone holds (bridge.js's engineUnload). */
       { ordinal: 21, name: "Unload",
-        params: [DOCUMENT_ID,
-                 { name: "incomingDocId", type: "string",
-                   why: "the name of the Document the navigation LOADED — HTML §7.4.6.1 is written over " +
-                        "`targetEntry` and hands its Document to the unload, and HTML §7.5.9 \"Unloading " +
-                        "documents\" takes it as the optional `newDocument`. It travels because it is what " +
-                        "makes the ORDER assertable at the engine (the incoming Document is joined first, so " +
-                        "a zone that called Join and Unload the other way round is caught at the entry), and " +
-                        "because the engine queues the operation's own tasks in that document's realm — " +
-                        "§7.5.10 step 7 removes every queued task of the DESTROYED document, so the outgoing " +
-                        "realm would make the first timeline's destruction drop every other timeline's" }],
+        params: [DOCUMENT_ID],
         reply: [WORKING_SET] },
     ],
   });

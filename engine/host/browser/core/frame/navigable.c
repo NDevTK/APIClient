@@ -1162,14 +1162,13 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
              window_proxy_is_remote asserts a remote proxy holds neither realm nor Window — so the transition
              has to RELEASE both, which is §7.4.6.1 "Updating the traversable"'s deactivate-a-document-for-a-
              cross-document-navigation and not a free: a flow parked in the outgoing Document resumes there.
-             ITS OWN FIRST SUBPROBLEM IS WHERE THE UNLOAD IS QUEUED, and it is not a detail: that operation is
-             engine_unload_document (solver/engine.h), which takes the INCOMING document and asserts this agent
-             HOSTS it, because document_lifecycle_unload_replaced queues §7.5.9's unload in a realm that must
-             survive §7.5.10 step 7's drop of the destroyed document's tasks — and it asserts that realm is not
-             the outgoing one. For this navigation the incoming Document is a peer's and there is no such realm
-             on this side, so §7.5.9's optional `newDocument` has to be answered as ABSENT and the queue home
-             decided from the standard rather than from whichever realm is to hand. Read those two entries
-             before building for this line.
+             WHERE THE UNLOAD IS QUEUED IS NO LONGER A SUBPROBLEM OF IT: engine_unload_document takes the
+             OUTGOING document alone, and document_lifecycle_unload_replaced derives the navigable from that
+             document's own realm, which is §7.5.9 "Unloading documents" step 6's answer ("queue a global task
+             … given document's relevant global object") and is local for every navigation. So this transition
+             may call it for a navigation whose incoming Document is a peer's, and what is left to build here
+             is the transition itself — release the realm and the Window through §7.4.6.1's deactivate rather
+             than through a free, since a flow parked in the outgoing Document resumes there.
          (3) A HOST THAT ROUTES IT. Both hosts provision a peer for `navigable.create` and `navigable.swap`
              (wpt_runner.c spawns a child process; bridge.js roots a cluster), and neither can carry this one:
              both of those CREATE a navigable in the peer, and this one must attach a Document to a navigable

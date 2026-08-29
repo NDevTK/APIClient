@@ -689,11 +689,13 @@ void engine_perform(JSContext *ctx, const char *token, const char *record);
    `pagehide`/`unload` listeners, the map of active timers, the navigable's browsing context — belongs to the
    timeline that produced it. Nothing runs inside this call, and no flow is dropped, starved or paged: a flow
    suspended inside the replaced document keeps its snapshot and its place on the frontier.
-   `incoming` IS THE DOCUMENT THE NAVIGATION LOADED, and both standards take it — §7.4.6.1 is written over
-   `targetEntry` and §7.5.9 over the optional `newDocument`. It is also the realm the operation's own tasks are
-   queued in, which is what keeps §7.5.10 step 7 from removing the OTHER timelines' unloads along with the
-   destroyed document's tasks. It must already be joined, and the two must differ; both are asserted. */
-void engine_unload_document(uint32_t doc, uint32_t incoming);
+   THE INCOMING DOCUMENT IS NOT TAKEN, because §7.5.9 "Unloading documents" does not spend it on the queue: step
+   6 of unload-a-document-and-its-descendants queues the task on the OUTGOING document's own relevant global
+   object, and the optional `newDocument`'s whole use is the document unload timing info this user agent does
+   not carry (step 3 is the standard's answer for an absent one). Taking it made this entry unperformable for
+   the navigation that needs it most — a cross-origin incoming Document is a PEER instance's, so its realm is
+   not here to queue anything in, while the outgoing one is local by construction. */
+void engine_unload_document(uint32_t doc);
 
 /* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one `METHOD<TAB>URL` line per outstanding request,
  * newline-terminated, "" for none, DEDUPED BY THE PAIR.
