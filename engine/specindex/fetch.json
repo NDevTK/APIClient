@@ -1,0 +1,1781 @@
+{
+ "spec": "Fetch Standard",
+ "key": "fetch",
+ "base": "https://fetch.spec.whatwg.org/",
+ "specUpdated": "25 August 2026",
+ "fetched": "2026-08-29",
+ "sections": {
+  "1": {
+   "title": "Preface",
+   "page": "",
+   "id": "preface"
+  },
+  "2": {
+   "title": "Infrastructure",
+   "page": "",
+   "id": "infrastructure"
+  },
+  "3": {
+   "title": "HTTP extensions",
+   "page": "",
+   "id": "http-extensions"
+  },
+  "4": {
+   "title": "Fetching",
+   "page": "",
+   "id": "fetching"
+  },
+  "5": {
+   "title": "Fetch API",
+   "page": "",
+   "id": "fetch-api"
+  },
+  "6": {
+   "title": "data: URLs",
+   "page": "",
+   "id": "data-urls"
+  },
+  "2.1": {
+   "title": "URL",
+   "page": "",
+   "id": "url"
+  },
+  "2.2": {
+   "title": "HTTP",
+   "page": "",
+   "id": "http"
+  },
+  "2.2.1": {
+   "title": "Methods",
+   "page": "",
+   "id": "methods"
+  },
+  "2.2.2": {
+   "title": "Headers",
+   "page": "",
+   "id": "terminology-headers"
+  },
+  "2.2.3": {
+   "title": "Statuses",
+   "page": "",
+   "id": "statuses"
+  },
+  "2.2.4": {
+   "title": "Bodies",
+   "page": "",
+   "id": "bodies"
+  },
+  "2.2.5": {
+   "title": "Requests",
+   "page": "",
+   "id": "requests"
+  },
+  "2.2.6": {
+   "title": "Responses",
+   "page": "",
+   "id": "responses"
+  },
+  "2.2.7": {
+   "title": "Miscellaneous",
+   "page": "",
+   "id": "miscellaneous"
+  },
+  "2.3": {
+   "title": "Authentication entries",
+   "page": "",
+   "id": "authentication-entries"
+  },
+  "2.4": {
+   "title": "Fetch groups",
+   "page": "",
+   "id": "fetch-groups"
+  },
+  "2.5": {
+   "title": "Resolving domains",
+   "page": "",
+   "id": "resolving-domains"
+  },
+  "2.6": {
+   "title": "Connections",
+   "page": "",
+   "id": "connections"
+  },
+  "2.7": {
+   "title": "Network partition keys",
+   "page": "",
+   "id": "network-partition-keys"
+  },
+  "2.8": {
+   "title": "HTTP cache partitions",
+   "page": "",
+   "id": "http-cache-partitions"
+  },
+  "2.9": {
+   "title": "Port blocking",
+   "page": "",
+   "id": "port-blocking"
+  },
+  "2.10": {
+   "title": "Should response to request be blocked due to its MIME type?",
+   "page": "",
+   "id": "should-response-to-request-be-blocked-due-to-mime-type?"
+  },
+  "3.1": {
+   "title": "Cookies",
+   "page": "",
+   "id": "cookies"
+  },
+  "3.1.1": {
+   "title": "` Cookie ` header",
+   "page": "",
+   "id": "cookie-header"
+  },
+  "3.1.2": {
+   "title": "` Set-Cookie ` header",
+   "page": "",
+   "id": "set-cookie-header"
+  },
+  "3.1.3": {
+   "title": "Cookie infrastructure",
+   "page": "",
+   "id": "cookie-infrastructure"
+  },
+  "3.2": {
+   "title": "` Origin ` header",
+   "page": "",
+   "id": "origin-header"
+  },
+  "3.3": {
+   "title": "CORS protocol",
+   "page": "",
+   "id": "http-cors-protocol"
+  },
+  "3.3.1": {
+   "title": "General",
+   "page": "",
+   "id": "general"
+  },
+  "3.3.2": {
+   "title": "HTTP requests",
+   "page": "",
+   "id": "http-requests"
+  },
+  "3.3.3": {
+   "title": "HTTP responses",
+   "page": "",
+   "id": "http-responses"
+  },
+  "3.3.4": {
+   "title": "HTTP new-header syntax",
+   "page": "",
+   "id": "http-new-header-syntax"
+  },
+  "3.3.5": {
+   "title": "CORS protocol and credentials",
+   "page": "",
+   "id": "cors-protocol-and-credentials"
+  },
+  "3.3.6": {
+   "title": "Examples",
+   "page": "",
+   "id": "cors-protocol-examples"
+  },
+  "3.3.7": {
+   "title": "CORS protocol exceptions",
+   "page": "",
+   "id": "cors-protocol-exceptions"
+  },
+  "3.4": {
+   "title": "` Content-Length ` header",
+   "page": "",
+   "id": "content-length-header"
+  },
+  "3.5": {
+   "title": "` Content-Type ` header",
+   "page": "",
+   "id": "content-type-header"
+  },
+  "3.6": {
+   "title": "` X-Content-Type-Options ` header",
+   "page": "",
+   "id": "x-content-type-options-header"
+  },
+  "3.6.1": {
+   "title": "Should response to request be blocked due to nosniff?",
+   "page": "",
+   "id": "should-response-to-request-be-blocked-due-to-nosniff?"
+  },
+  "3.7": {
+   "title": "` Cross-Origin-Resource-Policy ` header",
+   "page": "",
+   "id": "cross-origin-resource-policy-header"
+  },
+  "3.8": {
+   "title": "` Sec-Purpose ` header",
+   "page": "",
+   "id": "sec-purpose-header"
+  },
+  "4.1": {
+   "title": "Main fetch",
+   "page": "",
+   "id": "main-fetch"
+  },
+  "4.2": {
+   "title": "Override fetch",
+   "page": "",
+   "id": "override-fetch"
+  },
+  "4.3": {
+   "title": "Scheme fetch",
+   "page": "",
+   "id": "scheme-fetch"
+  },
+  "4.4": {
+   "title": "HTTP fetch",
+   "page": "",
+   "id": "http-fetch"
+  },
+  "4.5": {
+   "title": "HTTP-redirect fetch",
+   "page": "",
+   "id": "http-redirect-fetch"
+  },
+  "4.6": {
+   "title": "HTTP-network-or-cache fetch",
+   "page": "",
+   "id": "http-network-or-cache-fetch"
+  },
+  "4.7": {
+   "title": "HTTP-network fetch",
+   "page": "",
+   "id": "http-network-fetch"
+  },
+  "4.8": {
+   "title": "CORS-preflight fetch",
+   "page": "",
+   "id": "cors-preflight-fetch"
+  },
+  "4.9": {
+   "title": "CORS-preflight cache",
+   "page": "",
+   "id": "cors-preflight-cache"
+  },
+  "4.10": {
+   "title": "CORS check",
+   "page": "",
+   "id": "cors-check"
+  },
+  "4.11": {
+   "title": "TAO check",
+   "page": "",
+   "id": "tao-check"
+  },
+  "4.12": {
+   "title": "Deferred fetching",
+   "page": "",
+   "id": "deferred-fetch"
+  },
+  "4.12.1": {
+   "title": "Deferred fetching quota",
+   "page": "",
+   "id": "deferred-fetch-quota"
+  },
+  "5.1": {
+   "title": "Headers class",
+   "page": "",
+   "id": "headers-class"
+  },
+  "5.2": {
+   "title": "BodyInit unions",
+   "page": "",
+   "id": "bodyinit-unions"
+  },
+  "5.3": {
+   "title": "Body mixin",
+   "page": "",
+   "id": "body-mixin"
+  },
+  "5.4": {
+   "title": "Request class",
+   "page": "",
+   "id": "request-class"
+  },
+  "5.5": {
+   "title": "Response class",
+   "page": "",
+   "id": "response-class"
+  },
+  "5.6": {
+   "title": "Fetch methods",
+   "page": "",
+   "id": "fetch-method"
+  },
+  "5.7": {
+   "title": "Garbage collection",
+   "page": "",
+   "id": "garbage-collection"
+  }
+ },
+ "dfns": {
+  "abort a fetch() call": [
+   "5.6"
+  ],
+  "abort the fetch() call": [
+   "5.6"
+  ],
+  "aborted flag": [
+   "2.2.6"
+  ],
+  "aborted network error": [
+   "2.2.6"
+  ],
+  "access control allow credentials": [
+   "3.3.3"
+  ],
+  "access control allow headers": [
+   "3.3.3"
+  ],
+  "access control allow methods": [
+   "3.3.3"
+  ],
+  "access control allow origin": [
+   "3.3.3"
+  ],
+  "access control expose headers": [
+   "3.3.3"
+  ],
+  "access control max age": [
+   "3.3.3"
+  ],
+  "access control request headers": [
+   "3.3.2"
+  ],
+  "access control request method": [
+   "3.3.2"
+  ],
+  "activated getter steps": [
+   "5.6"
+  ],
+  "add a range header": [
+   "2.2.5"
+  ],
+  "alpn negotiated protocol": [
+   "2.6"
+  ],
+  "append a request cookie header": [
+   "3.1.1"
+  ],
+  "append a request origin header": [
+   "3.2"
+  ],
+  "append to a request navigation timing allow values list": [
+   "4.11"
+  ],
+  "append( name value )": [
+   "5.1"
+  ],
+  "appropriate network error": [
+   "2.2.6"
+  ],
+  "as a body": [
+   "2.2.4"
+  ],
+  "authentication entry": [
+   "2.3"
+  ],
+  "available deferred fetch quota": [
+   "4.12.1"
+  ],
+  "bad port": [
+   "2.9"
+  ],
+  "basic filtered response": [
+   "2.2.6"
+  ],
+  "block bad port": [
+   "2.9"
+  ],
+  "body info": [
+   "2.2.6"
+  ],
+  "body with type": [
+   "2.2.4"
+  ],
+  "build a content range": [
+   "2.2.2"
+  ],
+  "byte serialized origin": [
+   "4.9"
+  ],
+  "byte serializing a request origin": [
+   "2.2.5"
+  ],
+  "cache entry": [
+   "4.9"
+  ],
+  "cache entry match": [
+   "4.9"
+  ],
+  "cache mode": [
+   "2.2.5"
+  ],
+  "cache state": [
+   "2.2.6"
+  ],
+  "clamp and coarsen connection timing info": [
+   "2.6"
+  ],
+  "clear cache entries": [
+   "4.9"
+  ],
+  "collect an http quoted string": [
+   "2.2"
+  ],
+  "collecting an http quoted string": [
+   "2.2"
+  ],
+  "connection end time": [
+   "2.6"
+  ],
+  "connection pool": [
+   "2.6"
+  ],
+  "connection start time": [
+   "2.6"
+  ],
+  "connection timing info": [
+   "2.6"
+  ],
+  "constructor(body init)": [
+   "5.5"
+  ],
+  "constructor(input init)": [
+   "5.4"
+  ],
+  "consume body": [
+   "5.3"
+  ],
+  "content encoding": [
+   "2"
+  ],
+  "content type": [
+   "2"
+  ],
+  "convert header names to a sorted lowercase set": [
+   "2.2.2"
+  ],
+  "cors check": [
+   "4.10"
+  ],
+  "cors exposed header name list": [
+   "2.2.6"
+  ],
+  "cors filtered response": [
+   "2.2.6"
+  ],
+  "cors non wildcard request header name": [
+   "2.2.2"
+  ],
+  "cors preflight cache": [
+   "4.9"
+  ],
+  "cors preflight fetch": [
+   "4.8"
+  ],
+  "cors preflight request": [
+   "3.3.2"
+  ],
+  "cors protocol": [
+   "3.3"
+  ],
+  "cors request": [
+   "3.3.2"
+  ],
+  "cors safelisted method": [
+   "2.2.1"
+  ],
+  "cors safelisted request header": [
+   "2.2.2"
+  ],
+  "cors safelisted response header name": [
+   "2.2.2"
+  ],
+  "cors unsafe request header byte": [
+   "2.2.2"
+  ],
+  "cors unsafe request header names": [
+   "2.2.2"
+  ],
+  "create a connection": [
+   "2.6"
+  ],
+  "create a new cache entry": [
+   "4.9"
+  ],
+  "create an opaque timing info": [
+   "2"
+  ],
+  "creating an opaque timing info": [
+   "2"
+  ],
+  "credentials mode": [
+   "2.2.5"
+  ],
+  "cross origin embedder policy allows credentials": [
+   "2.2.5"
+  ],
+  "cross origin isolated capability": [
+   "2"
+  ],
+  "cross origin resource policy": [
+   "3.7"
+  ],
+  "cross origin resource policy check": [
+   "3.7"
+  ],
+  "cross origin resource policy internal check": [
+   "3.7"
+  ],
+  "cryptographic nonce metadata": [
+   "2.2.5"
+  ],
+  "current url": [
+   "2.2.5"
+  ],
+  "data url processor": [
+   "6"
+  ],
+  "data url struct": [
+   "6"
+  ],
+  "dec octet": [
+   "3.2"
+  ],
+  "decoded size": [
+   "2"
+  ],
+  "default user agent value": [
+   "2.2.2"
+  ],
+  "deferred fetch": [
+   "4.12.1"
+  ],
+  "deferred fetch control document": [
+   "4.12.1"
+  ],
+  "deferred fetch minimal": [
+   "4.12.1"
+  ],
+  "deferred fetch record": [
+   "2.4"
+  ],
+  "deferred fetch records": [
+   "2.4"
+  ],
+  "deferred fetch task source": [
+   "4.12"
+  ],
+  "delete( name )": [
+   "5.1"
+  ],
+  "deserialize a serialized abort reason": [
+   "2"
+  ],
+  "destination type": [
+   "2.2.5"
+  ],
+  "determine nosniff": [
+   "3.6"
+  ],
+  "determine the environment": [
+   "4.3"
+  ],
+  "determine the http cache partition": [
+   "2.8"
+  ],
+  "determine the network partition key": [
+   "2.7"
+  ],
+  "determine the same site mode": [
+   "3.1.3"
+  ],
+  "document accept header value": [
+   "2.2.2"
+  ],
+  "does not contain": [
+   "2.2.2"
+  ],
+  "domain label": [
+   "3.2"
+  ],
+  "domain lookup end time": [
+   "2.6"
+  ],
+  "domain lookup start time": [
+   "2.6"
+  ],
+  "done flag": [
+   "2.2.5"
+  ],
+  "encoded size": [
+   "2"
+  ],
+  "end time": [
+   "2"
+  ],
+  "environment default user agent value": [
+   "2.2.2"
+  ],
+  "extract a length": [
+   "3.4"
+  ],
+  "extract a mime type": [
+   "3.5"
+  ],
+  "extract full timing info": [
+   "2"
+  ],
+  "extract header list values": [
+   "2.2.2"
+  ],
+  "extract header values": [
+   "2.2.2"
+  ],
+  "extracting a length": [
+   "3.4"
+  ],
+  "extracting a mime type": [
+   "3.5"
+  ],
+  "extracting header list values": [
+   "2.2.2"
+  ],
+  "extracting header values": [
+   "2.2.2"
+  ],
+  "fetch controller": [
+   "2"
+  ],
+  "fetch group": [
+   "2.4"
+  ],
+  "fetch params": [
+   "2"
+  ],
+  "fetch record": [
+   "2.4"
+  ],
+  "fetch records": [
+   "2.4"
+  ],
+  "fetch response handover": [
+   "4.1"
+  ],
+  "fetch scheme": [
+   "2.1"
+  ],
+  "fetch timing info": [
+   "2"
+  ],
+  "fetch( input init )": [
+   "5.6"
+  ],
+  "fetch(input init)": [
+   "5.6"
+  ],
+  "fetchlater( input init )": [
+   "5.6"
+  ],
+  "fetchlater(input init)": [
+   "5.6"
+  ],
+  "filtered response": [
+   "2.2.6"
+  ],
+  "final connection timing info": [
+   "2"
+  ],
+  "final network request start time": [
+   "2"
+  ],
+  "final network response start time": [
+   "2"
+  ],
+  "final service worker start time": [
+   "2"
+  ],
+  "first interim network response start time": [
+   "2"
+  ],
+  "forbidden method": [
+   "2.2.1"
+  ],
+  "forbidden request header": [
+   "2.2.2"
+  ],
+  "forbidden response header name": [
+   "2.2.2"
+  ],
+  "force cache": [
+   "5.4"
+  ],
+  "fresh response": [
+   "2.2.6"
+  ],
+  "full timing info": [
+   "2"
+  ],
+  "fully read": [
+   "2.2.4"
+  ],
+  "get a structured field value": [
+   "2.2.2"
+  ],
+  "get decode and split": [
+   "2.2.2"
+  ],
+  "get the mime type": [
+   "5.3"
+  ],
+  "get( name )": [
+   "5.1"
+  ],
+  "getting decoding and splitting": [
+   "2.2.2"
+  ],
+  "handle content codings": [
+   "2.2.4"
+  ],
+  "has( name )": [
+   "5.1"
+  ],
+  "header list": [
+   "2.2.2",
+   "2.2.5",
+   "2.2.6",
+   "5.1"
+  ],
+  "header name": [
+   "2.2.2",
+   "4.9"
+  ],
+  "header name cache entry match": [
+   "4.9"
+  ],
+  "header value": [
+   "2.2.2"
+  ],
+  "headers guard": [
+   "5.1"
+  ],
+  "history navigation flag": [
+   "2.2.5"
+  ],
+  "http fetch": [
+   "4.4"
+  ],
+  "http network fetch": [
+   "4.7"
+  ],
+  "http network or cache fetch": [
+   "4.6"
+  ],
+  "http newline byte": [
+   "2.2"
+  ],
+  "http redirect fetch": [
+   "4.5"
+  ],
+  "http tab or space": [
+   "2.2"
+  ],
+  "http tab or space byte": [
+   "2.2"
+  ],
+  "http whitespace": [
+   "2.2"
+  ],
+  "http whitespace byte": [
+   "2.2"
+  ],
+  "http(s) scheme": [
+   "2.1"
+  ],
+  "incrementally read": [
+   "2.2.4"
+  ],
+  "incrementally read loop": [
+   "2.2.4"
+  ],
+  "initialize a response": [
+   "5.5"
+  ],
+  "initiator type": [
+   "2.2.5"
+  ],
+  "integrity metadata": [
+   "2.2.5"
+  ],
+  "internal priority": [
+   "2.2.5"
+  ],
+  "internal response": [
+   "2.2.6"
+  ],
+  "invoke state": [
+   "2.4"
+  ],
+  "is local": [
+   "2.1"
+  ],
+  "is offline": [
+   "2"
+  ],
+  "json( data init )": [
+   "5.5"
+  ],
+  "json(data init)": [
+   "5.5"
+  ],
+  "legacy extract an encoding": [
+   "3.5"
+  ],
+  "local scheme": [
+   "2.1"
+  ],
+  "local urls only flag": [
+   "2.2.5"
+  ],
+  "location url": [
+   "2.2.6"
+  ],
+  "lower alpha": [
+   "3.2"
+  ],
+  "lower alphanum": [
+   "3.2"
+  ],
+  "main fetch": [
+   "4.1"
+  ],
+  "max age": [
+   "4.9"
+  ],
+  "method cache entry match": [
+   "4.9"
+  ],
+  "mime type": [
+   "6"
+  ],
+  "minimal quota": [
+   "4.12.1"
+  ],
+  "navigation request": [
+   "2.2.5"
+  ],
+  "navigation tao check": [
+   "4.11"
+  ],
+  "navigation timing allow values list": [
+   "2.2.5",
+   "2.2.6"
+  ],
+  "network error": [
+   "2.2.6"
+  ],
+  "network partition key": [
+   "2.7"
+  ],
+  "new connection setting": [
+   "2.6"
+  ],
+  "new headers( init )": [
+   "5.1"
+  ],
+  "new request( input init )": [
+   "5.4"
+  ],
+  "new response( body init )": [
+   "5.5"
+  ],
+  "next manual redirect steps": [
+   "2"
+  ],
+  "no cache": [
+   "5.4"
+  ],
+  "no cors": [
+   "5.4"
+  ],
+  "no cors safelisted request header": [
+   "2.2.2"
+  ],
+  "no cors safelisted request header name": [
+   "2.2.2"
+  ],
+  "no store": [
+   "5.4"
+  ],
+  "non subresource request": [
+   "2.2.5"
+  ],
+  "non zero hex": [
+   "3.2"
+  ],
+  "normal quota": [
+   "4.12.1"
+  ],
+  "notify invoked": [
+   "2.4"
+  ],
+  "null body status": [
+   "2.2.3"
+  ],
+  "obtain a connection": [
+   "2.6"
+  ],
+  "ok status": [
+   "2.2.3"
+  ],
+  "only if cached": [
+   "5.4"
+  ],
+  "opaque filtered response": [
+   "2.2.6"
+  ],
+  "opaque redirect filtered response": [
+   "2.2.6"
+  ],
+  "origin or null": [
+   "3.2"
+  ],
+  "override fetch": [
+   "4.2"
+  ],
+  "parse a single range header value": [
+   "2.2.2"
+  ],
+  "parse and store response set cookie headers": [
+   "3.1.2"
+  ],
+  "parser metadata": [
+   "2.2.5"
+  ],
+  "policy container": [
+   "2.2.5"
+  ],
+  "populate request from client": [
+   "4"
+  ],
+  "post redirect start time": [
+   "2"
+  ],
+  "potential destination": [
+   "2.2.7"
+  ],
+  "potentially free deferred fetch quota": [
+   "4.12.1"
+  ],
+  "potentially override response for a request": [
+   "4.2"
+  ],
+  "preloaded response candidate": [
+   "2"
+  ],
+  "prevent no cache cache control header modification flag": [
+   "2.2.5"
+  ],
+  "privileged no cors request header name": [
+   "2.2.2"
+  ],
+  "process a deferred fetch": [
+   "4.12"
+  ],
+  "process deferred fetches": [
+   "4.12"
+  ],
+  "process early hints response": [
+   "2"
+  ],
+  "process request body chunk length": [
+   "2"
+  ],
+  "process request end of body": [
+   "2"
+  ],
+  "process response": [
+   "2"
+  ],
+  "process response consume body": [
+   "2"
+  ],
+  "process response end of body": [
+   "2"
+  ],
+  "process the next manual redirect": [
+   "2"
+  ],
+  "proxy authentication entry": [
+   "2.3"
+  ],
+  "queue a cross origin embedder policy corp violation report": [
+   "3.7"
+  ],
+  "queue a deferred fetch": [
+   "4.12"
+  ],
+  "queue a fetch task": [
+   "2"
+  ],
+  "quota reserved for deferred fetch minimal": [
+   "4.12.1"
+  ],
+  "range requested flag": [
+   "2.2.6"
+  ],
+  "range status": [
+   "2.2.3"
+  ],
+  "record connection timing info": [
+   "2.6"
+  ],
+  "redirect count": [
+   "2.2.5"
+  ],
+  "redirect end time": [
+   "2"
+  ],
+  "redirect mode": [
+   "2.2.5"
+  ],
+  "redirect start time": [
+   "2"
+  ],
+  "redirect status": [
+   "2.2.3"
+  ],
+  "redirect taint": [
+   "2.2.5",
+   "2.2.6"
+  ],
+  "redirect( url status )": [
+   "5.5"
+  ],
+  "redirect(url status)": [
+   "5.5"
+  ],
+  "referrer policy": [
+   "2.2.5"
+  ],
+  "reload navigation flag": [
+   "2.2.5"
+  ],
+  "remove privileged no cors request headers": [
+   "5.1"
+  ],
+  "render blocking": [
+   "2",
+   "2.2.5"
+  ],
+  "replaces client id": [
+   "2.2.5"
+  ],
+  "report timing": [
+   "2"
+  ],
+  "report timing steps": [
+   "2"
+  ],
+  "request body header name": [
+   "2.2.2"
+  ],
+  "request includes credentials": [
+   "2.2.6"
+  ],
+  "request(input init)": [
+   "5.4"
+  ],
+  "reserve deferred fetch quota": [
+   "4.12.1"
+  ],
+  "reserved client": [
+   "2.2.5"
+  ],
+  "reserved deferred fetch quota": [
+   "4.12.1"
+  ],
+  "resolve an origin": [
+   "2.5"
+  ],
+  "response body info": [
+   "2"
+  ],
+  "response tainting": [
+   "2.2.5"
+  ],
+  "response(body init)": [
+   "5.5"
+  ],
+  "safely extract": [
+   "5.2"
+  ],
+  "same origin": [
+   "5.4"
+  ],
+  "scheme fetch": [
+   "4.3"
+  ],
+  "script like": [
+   "2.2.5"
+  ],
+  "sec purpose": [
+   "3.8"
+  ],
+  "secure connection start time": [
+   "2.6"
+  ],
+  "serialize a response url for reporting": [
+   "2.2.5"
+  ],
+  "serialize an integer": [
+   "2"
+  ],
+  "serialized abort reason": [
+   "2"
+  ],
+  "serialized cookie default path": [
+   "3.1.3"
+  ],
+  "serialized domain": [
+   "3.2"
+  ],
+  "serialized host": [
+   "3.2"
+  ],
+  "serialized ipv4": [
+   "3.2"
+  ],
+  "serialized ipv6": [
+   "3.2"
+  ],
+  "serialized origin": [
+   "3.2"
+  ],
+  "serialized port": [
+   "3.2"
+  ],
+  "serialized scheme": [
+   "3.2"
+  ],
+  "serializing a request origin": [
+   "2.2.5"
+  ],
+  "server timing headers": [
+   "2"
+  ],
+  "service worker timing info": [
+   "2",
+   "2.2.6"
+  ],
+  "service workers mode": [
+   "2.2.5"
+  ],
+  "set a structured field value": [
+   "2.2.2"
+  ],
+  "set( name value )": [
+   "5.1"
+  ],
+  "should be blocked due to a bad port": [
+   "2.9"
+  ],
+  "sort and combine": [
+   "2.2.2"
+  ],
+  "stale response": [
+   "2.2.6"
+  ],
+  "stale while revalidate response": [
+   "2.2.6"
+  ],
+  "start time": [
+   "2"
+  ],
+  "status message": [
+   "2.2.6"
+  ],
+  "subresource request": [
+   "2.2.5"
+  ],
+  "tao check": [
+   "4.11"
+  ],
+  "task destination": [
+   "2"
+  ],
+  "timing allow failed flag": [
+   "2.2.5"
+  ],
+  "timing allow passed flag": [
+   "2.2.6"
+  ],
+  "timing info": [
+   "2",
+   "2.6"
+  ],
+  "top level navigation initiator origin": [
+   "2.2.5"
+  ],
+  "total request length": [
+   "4.12"
+  ],
+  "traversable for user prompts": [
+   "2.2.5"
+  ],
+  "unsafe request flag": [
+   "2.2.5"
+  ],
+  "url list": [
+   "2.2.5",
+   "2.2.6"
+  ],
+  "use cors preflight flag": [
+   "2.2.5"
+  ],
+  "use url credentials flag": [
+   "2.2.5"
+  ],
+  "user activation": [
+   "2.2.5"
+  ],
+  "webdriver id": [
+   "2.2.5"
+  ],
+  "webdriver navigation id": [
+   "2.2.5"
+  ],
+  "webtransport hash": [
+   "2.2.5"
+  ],
+  "webtransport hash list": [
+   "2.2.5"
+  ],
+  "x content type options": [
+   "3.6"
+  ]
+ },
+ "uses": {
+  "access control allow credentials": {
+   "3.3.5": 3
+  },
+  "access control allow origin": {
+   "6": 9,
+   "3.3.5": 3,
+   "3.3.6": 3
+  },
+  "access control expose headers": {
+   "3.3.6": 3
+  },
+  "add a range header": {
+   "2.2.2": 2
+  },
+  "append( name value )": {
+   "6": 2
+  },
+  "appropriate network error": {
+   "4.6": 4
+  },
+  "as a body": {
+   "4.3": 2
+  },
+  "authentication entry": {
+   "2.2.5": 2,
+   "4.6": 3
+  },
+  "body info": {
+   "4.7": 3
+  },
+  "body with type": {
+   "5.2": 2
+  },
+  "byte serializing a request origin": {
+   "3.2": 2,
+   "4.9": 3
+  },
+  "cache mode": {
+   "6": 2,
+   "4.6": 10,
+   "5.4": 6
+  },
+  "cache state": {
+   "4.6": 3
+  },
+  "collect an http quoted string": {
+   "6": 2
+  },
+  "cors check": {
+   "4.4": 3,
+   "4.8": 2
+  },
+  "cors exposed header name list": {
+   "4.1": 2
+  },
+  "cors preflight cache": {
+   "4.8": 3
+  },
+  "cors preflight fetch": {
+   "6": 2,
+   "4.4": 4
+  },
+  "cors preflight request": {
+   "3.3.3": 8,
+   "3.3.5": 2
+  },
+  "cors protocol": {
+   "6": 4,
+   "2.2.5": 2,
+   "3.3.1": 2,
+   "3.3.2": 2,
+   "3.3.3": 3,
+   "3.3.6": 3
+  },
+  "cors request": {
+   "6": 8,
+   "3.3.3": 8
+  },
+  "cors unsafe request header names": {
+   "4.8": 2
+  },
+  "create a new cache entry": {
+   "4.8": 2
+  },
+  "create an opaque timing info": {
+   "6": 2
+  },
+  "credentials mode": {
+   "6": 2,
+   "3.3.3": 2,
+   "3.3.5": 4,
+   "4.6": 3,
+   "4.8": 3,
+   "4.9": 2,
+   "4.10": 2,
+   "5.4": 5
+  },
+  "cross origin isolated capability": {
+   "4.4": 2,
+   "4.7": 3
+  },
+  "cross origin resource policy check": {
+   "4.4": 2
+  },
+  "current url": {
+   "3.1.1": 3,
+   "3.1.2": 4,
+   "3.2": 2,
+   "4.1": 10,
+   "4.2": 2,
+   "4.3": 5,
+   "4.5": 2,
+   "4.6": 5,
+   "4.7": 2,
+   "4.9": 3
+  },
+  "deferred fetch records": {
+   "4.12": 3
+  },
+  "delete( name )": {
+   "6": 2
+  },
+  "determine the network partition key": {
+   "6": 2,
+   "4.9": 3
+  },
+  "document accept header value": {
+   "4": 2
+  },
+  "does not contain": {
+   "4": 3,
+   "6": 2,
+   "4.6": 11,
+   "5.1": 3
+  },
+  "extract a length": {
+   "6": 2
+  },
+  "extract a mime type": {
+   "6": 3,
+   "2.2.2": 2
+  },
+  "extract full timing info": {
+   "6": 2
+  },
+  "extract header list values": {
+   "6": 2,
+   "4.8": 3
+  },
+  "extract header values": {
+   "6": 2
+  },
+  "fetch controller": {
+   "6": 4
+  },
+  "fetch group": {
+   "6": 2,
+   "4.12": 3
+  },
+  "fetch params": {
+   "4.1": 2,
+   "4.6": 2
+  },
+  "fetch records": {
+   "4": 2
+  },
+  "fetch( input init )": {
+   "5": 2,
+   "6": 3,
+   "2.2.5": 2
+  },
+  "fetchlater( input init )": {
+   "6": 3
+  },
+  "filtered response": {
+   "4.1": 2
+  },
+  "final network response start time": {
+   "4.7": 2
+  },
+  "first interim network response start time": {
+   "4.7": 2
+  },
+  "forbidden request header": {
+   "6": 2
+  },
+  "force cache": {
+   "6": 2
+  },
+  "fully read": {
+   "6": 3,
+   "4.1": 2
+  },
+  "get decode and split": {
+   "6": 4,
+   "4.11": 2
+  },
+  "get( name )": {
+   "6": 2
+  },
+  "has( name )": {
+   "6": 2
+  },
+  "header list": {
+   "4": 7,
+   "6": 8,
+   "3.2": 2,
+   "3.6.1": 2,
+   "4.1": 6,
+   "4.3": 6,
+   "4.5": 2,
+   "4.6": 25,
+   "4.8": 9,
+   "4.10": 2,
+   "4.11": 2,
+   "5.3": 2,
+   "5.4": 10,
+   "5.5": 7
+  },
+  "header name": {
+   "6": 2,
+   "5.1": 3
+  },
+  "header name cache entry match": {
+   "4.8": 2
+  },
+  "header value": {
+   "5.1": 2
+  },
+  "history navigation flag": {
+   "5.4": 4
+  },
+  "http fetch": {
+   "2.2.5": 2
+  },
+  "http network or cache fetch": {
+   "4.8": 2
+  },
+  "http redirect fetch": {
+   "4.4": 2
+  },
+  "http tab or space": {
+   "2.2.2": 5
+  },
+  "http(s) scheme": {
+   "4.1": 3
+  },
+  "initiator type": {
+   "6": 4,
+   "4.1": 3
+  },
+  "integrity metadata": {
+   "4.1": 2,
+   "5.4": 4
+  },
+  "internal priority": {
+   "4": 2,
+   "5.4": 4
+  },
+  "internal response": {
+   "6": 4,
+   "3.7": 2,
+   "4.1": 5,
+   "4.4": 2
+  },
+  "invoke state": {
+   "4.12": 2
+  },
+  "json( data init )": {
+   "6": 3
+  },
+  "main fetch": {
+   "4.5": 2
+  },
+  "max age": {
+   "4.8": 3
+  },
+  "method cache entry match": {
+   "4.8": 2
+  },
+  "navigation request": {
+   "6": 2
+  },
+  "navigation timing allow values list": {
+   "6": 2,
+   "4.1": 2,
+   "4.11": 2
+  },
+  "network error": {
+   "6": 3,
+   "2.2.5": 5,
+   "4.1": 17,
+   "4.3": 8,
+   "4.4": 5,
+   "4.5": 6,
+   "4.6": 5,
+   "4.7": 5,
+   "4.8": 5
+  },
+  "network partition key": {
+   "2.6": 3
+  },
+  "new headers( init )": {
+   "6": 5
+  },
+  "new request( input init )": {
+   "6": 5
+  },
+  "new response( body init )": {
+   "6": 7
+  },
+  "no cache": {
+   "6": 2
+  },
+  "no cors": {
+   "6": 2
+  },
+  "no cors safelisted request header": {
+   "5.1": 2
+  },
+  "no store": {
+   "6": 2
+  },
+  "notify invoked": {
+   "4.12": 2
+  },
+  "null body status": {
+   "6": 2,
+   "5.5": 2
+  },
+  "ok status": {
+   "6": 3,
+   "5.5": 2
+  },
+  "only if cached": {
+   "6": 2
+  },
+  "opaque filtered response": {
+   "3.7": 2
+  },
+  "override fetch": {
+   "4.1": 4
+  },
+  "policy container": {
+   "4": 3,
+   "6": 2
+  },
+  "preloaded response candidate": {
+   "4": 3,
+   "4.1": 4
+  },
+  "prevent no cache cache control header modification flag": {
+   "4.6": 2
+  },
+  "privileged no cors request header name": {
+   "5.1": 2
+  },
+  "process early hints response": {
+   "4.7": 2
+  },
+  "process request body chunk length": {
+   "4.7": 2
+  },
+  "process request end of body": {
+   "4.7": 4
+  },
+  "process response": {
+   "4.1": 2
+  },
+  "process response consume body": {
+   "4.1": 3
+  },
+  "process response end of body": {
+   "4.1": 2
+  },
+  "process the next manual redirect": {
+   "6": 2
+  },
+  "proxy authentication entry": {
+   "4.6": 2
+  },
+  "queue a fetch task": {
+   "2.2.4": 5,
+   "4.1": 3,
+   "4.7": 3
+  },
+  "redirect count": {
+   "4.5": 2
+  },
+  "redirect mode": {
+   "6": 3,
+   "4.4": 4,
+   "5.4": 5
+  },
+  "redirect start time": {
+   "4.5": 2
+  },
+  "redirect status": {
+   "6": 2,
+   "2.2.6": 2
+  },
+  "redirect taint": {
+   "6": 2,
+   "4.1": 3
+  },
+  "redirect( url status )": {
+   "6": 3
+  },
+  "referrer policy": {
+   "3.2": 2,
+   "4.1": 2,
+   "4.8": 2,
+   "5.4": 5
+  },
+  "reload navigation flag": {
+   "5.4": 4
+  },
+  "render blocking": {
+   "4": 3,
+   "6": 2
+  },
+  "report timing": {
+   "6": 2
+  },
+  "report timing steps": {
+   "4.1": 2
+  },
+  "reserved client": {
+   "2.7": 2,
+   "4.3": 2
+  },
+  "resolve an origin": {
+   "2.6": 2
+  },
+  "response body info": {
+   "2.2.6": 5
+  },
+  "response tainting": {
+   "3.2": 2,
+   "4.1": 7,
+   "4.4": 2,
+   "4.5": 2,
+   "4.6": 2
+  },
+  "safely extract": {
+   "4.3": 2
+  },
+  "same origin": {
+   "6": 4
+  },
+  "script like": {
+   "3.6.1": 2
+  },
+  "serialize an integer": {
+   "2.2.2": 3,
+   "2.2.5": 2,
+   "4.3": 2
+  },
+  "service worker timing info": {
+   "6": 2,
+   "4.4": 3
+  },
+  "service workers mode": {
+   "6": 2,
+   "4.4": 2
+  },
+  "set( name value )": {
+   "6": 2
+  },
+  "status message": {
+   "4.3": 4,
+   "5.5": 2
+  },
+  "task destination": {
+   "4.1": 5,
+   "4.7": 3
+  },
+  "timing allow passed flag": {
+   "4.1": 2
+  },
+  "timing info": {
+   "6": 2,
+   "4.1": 2,
+   "4.4": 3,
+   "4.7": 2
+  },
+  "traversable for user prompts": {
+   "4": 3,
+   "4.6": 5,
+   "4.7": 2,
+   "5.4": 3
+  },
+  "url list": {
+   "6": 2,
+   "4.1": 3,
+   "4.6": 2,
+   "4.8": 2,
+   "5.4": 3
+  },
+  "use cors preflight flag": {
+   "4.8": 2
+  },
+  "use url credentials flag": {
+   "4.6": 2
+  },
+  "webdriver id": {
+   "4.8": 2
+  },
+  "webtransport hash list": {
+   "6": 2,
+   "2.6": 2
+  }
+ }
+}

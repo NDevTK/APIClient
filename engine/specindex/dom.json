@@ -1,0 +1,2747 @@
+{
+ "spec": "DOM Standard",
+ "key": "dom",
+ "base": "https://dom.spec.whatwg.org/",
+ "specUpdated": "25 August 2026",
+ "fetched": "2026-08-29",
+ "sections": {
+  "1": {
+   "title": "Infrastructure",
+   "page": "",
+   "id": "infrastructure"
+  },
+  "2": {
+   "title": "Events",
+   "page": "",
+   "id": "events"
+  },
+  "3": {
+   "title": "Aborting ongoing activities",
+   "page": "",
+   "id": "aborting-ongoing-activities"
+  },
+  "4": {
+   "title": "Nodes",
+   "page": "",
+   "id": "nodes"
+  },
+  "5": {
+   "title": "Ranges",
+   "page": "",
+   "id": "ranges"
+  },
+  "6": {
+   "title": "Traversal",
+   "page": "",
+   "id": "traversal"
+  },
+  "7": {
+   "title": "Sets",
+   "page": "",
+   "id": "sets"
+  },
+  "8": {
+   "title": "XPath",
+   "page": "",
+   "id": "xpath"
+  },
+  "9": {
+   "title": "XSLT",
+   "page": "",
+   "id": "xslt"
+  },
+  "10": {
+   "title": "Security and privacy considerations",
+   "page": "",
+   "id": "security-and-privacy"
+  },
+  "11": {
+   "title": "Historical",
+   "page": "",
+   "id": "historical"
+  },
+  "1.1": {
+   "title": "Trees",
+   "page": "",
+   "id": "trees"
+  },
+  "1.2": {
+   "title": "Ordered sets",
+   "page": "",
+   "id": "ordered-sets"
+  },
+  "1.3": {
+   "title": "Selectors",
+   "page": "",
+   "id": "selectors"
+  },
+  "1.4": {
+   "title": "Name validation",
+   "page": "",
+   "id": "namespaces"
+  },
+  "2.1": {
+   "title": "Introduction to \"DOM Events\"",
+   "page": "",
+   "id": "introduction-to-dom-events"
+  },
+  "2.2": {
+   "title": "Interface Event",
+   "page": "",
+   "id": "interface-event"
+  },
+  "2.3": {
+   "title": "Legacy extensions to the Window interface",
+   "page": "",
+   "id": "interface-window-extensions"
+  },
+  "2.4": {
+   "title": "Interface CustomEvent",
+   "page": "",
+   "id": "interface-customevent"
+  },
+  "2.5": {
+   "title": "Constructing events",
+   "page": "",
+   "id": "constructing-events"
+  },
+  "2.6": {
+   "title": "Defining event interfaces",
+   "page": "",
+   "id": "defining-event-interfaces"
+  },
+  "2.7": {
+   "title": "Interface EventTarget",
+   "page": "",
+   "id": "interface-eventtarget"
+  },
+  "2.8": {
+   "title": "Observing event listeners",
+   "page": "",
+   "id": "observing-event-listeners"
+  },
+  "2.9": {
+   "title": "Dispatching events",
+   "page": "",
+   "id": "dispatching-events"
+  },
+  "2.10": {
+   "title": "Firing events",
+   "page": "",
+   "id": "firing-events"
+  },
+  "2.11": {
+   "title": "Action versus occurrence",
+   "page": "",
+   "id": "action-versus-occurrence"
+  },
+  "3.1": {
+   "title": "Interface AbortController",
+   "page": "",
+   "id": "interface-abortcontroller"
+  },
+  "3.2": {
+   "title": "Interface AbortSignal",
+   "page": "",
+   "id": "interface-AbortSignal"
+  },
+  "3.2.1": {
+   "title": "Garbage collection",
+   "page": "",
+   "id": "abort-signal-garbage-collection"
+  },
+  "3.3": {
+   "title": "Using AbortController and AbortSignal objects in APIs",
+   "page": "",
+   "id": "abortcontroller-api-integration"
+  },
+  "4.1": {
+   "title": "Introduction to \"The DOM\"",
+   "page": "",
+   "id": "introduction-to-the-dom"
+  },
+  "4.2": {
+   "title": "Node tree",
+   "page": "",
+   "id": "node-trees"
+  },
+  "4.2.1": {
+   "title": "Document tree",
+   "page": "",
+   "id": "document-trees"
+  },
+  "4.2.2": {
+   "title": "Shadow tree",
+   "page": "",
+   "id": "shadow-trees"
+  },
+  "4.2.2.1": {
+   "title": "Slots",
+   "page": "",
+   "id": "shadow-tree-slots"
+  },
+  "4.2.2.2": {
+   "title": "Slottables",
+   "page": "",
+   "id": "light-tree-slotables"
+  },
+  "4.2.2.3": {
+   "title": "Finding slots and slottables",
+   "page": "",
+   "id": "finding-slots-and-slotables"
+  },
+  "4.2.2.4": {
+   "title": "Assigning slottables and slots",
+   "page": "",
+   "id": "assigning-slotables-and-slots"
+  },
+  "4.2.2.5": {
+   "title": "Signaling slot change",
+   "page": "",
+   "id": "signaling-slot-change"
+  },
+  "4.2.3": {
+   "title": "Mutation algorithms",
+   "page": "",
+   "id": "mutation-algorithms"
+  },
+  "4.2.4": {
+   "title": "Mixin NonElementParentNode",
+   "page": "",
+   "id": "interface-nonelementparentnode"
+  },
+  "4.2.5": {
+   "title": "Mixin DocumentOrShadowRoot",
+   "page": "",
+   "id": "mixin-documentorshadowroot"
+  },
+  "4.2.6": {
+   "title": "Mixin ParentNode",
+   "page": "",
+   "id": "interface-parentnode"
+  },
+  "4.2.7": {
+   "title": "Mixin NonDocumentTypeChildNode",
+   "page": "",
+   "id": "interface-nondocumenttypechildnode"
+  },
+  "4.2.8": {
+   "title": "Mixin ChildNode",
+   "page": "",
+   "id": "interface-childnode"
+  },
+  "4.2.9": {
+   "title": "Mixin Slottable",
+   "page": "",
+   "id": "mixin-slotable"
+  },
+  "4.2.10": {
+   "title": "Old-style collections: NodeList and HTMLCollection",
+   "page": "",
+   "id": "old-style-collections"
+  },
+  "4.2.10.1": {
+   "title": "Interface NodeList",
+   "page": "",
+   "id": "interface-nodelist"
+  },
+  "4.2.10.2": {
+   "title": "Interface HTMLCollection",
+   "page": "",
+   "id": "interface-htmlcollection"
+  },
+  "4.3": {
+   "title": "Mutation observers",
+   "page": "",
+   "id": "mutation-observers"
+  },
+  "4.3.1": {
+   "title": "Interface MutationObserver",
+   "page": "",
+   "id": "interface-mutationobserver"
+  },
+  "4.3.2": {
+   "title": "Queuing a mutation record",
+   "page": "",
+   "id": "queueing-a-mutation-record"
+  },
+  "4.3.3": {
+   "title": "Interface MutationRecord",
+   "page": "",
+   "id": "interface-mutationrecord"
+  },
+  "4.4": {
+   "title": "Interface Node",
+   "page": "",
+   "id": "interface-node"
+  },
+  "4.5": {
+   "title": "Interface Document",
+   "page": "",
+   "id": "interface-document"
+  },
+  "4.5.1": {
+   "title": "Interface DOMImplementation",
+   "page": "",
+   "id": "interface-domimplementation"
+  },
+  "4.6": {
+   "title": "Interface DocumentType",
+   "page": "",
+   "id": "interface-documenttype"
+  },
+  "4.7": {
+   "title": "Interface DocumentFragment",
+   "page": "",
+   "id": "interface-documentfragment"
+  },
+  "4.8": {
+   "title": "Interface ShadowRoot",
+   "page": "",
+   "id": "interface-shadowroot"
+  },
+  "4.9": {
+   "title": "Interface Element",
+   "page": "",
+   "id": "interface-element"
+  },
+  "4.9.1": {
+   "title": "Interface NamedNodeMap",
+   "page": "",
+   "id": "interface-namednodemap"
+  },
+  "4.9.2": {
+   "title": "Interface Attr",
+   "page": "",
+   "id": "interface-attr"
+  },
+  "4.10": {
+   "title": "Interface CharacterData",
+   "page": "",
+   "id": "interface-characterdata"
+  },
+  "4.11": {
+   "title": "Interface Text",
+   "page": "",
+   "id": "interface-text"
+  },
+  "4.12": {
+   "title": "Interface CDATASection",
+   "page": "",
+   "id": "interface-cdatasection"
+  },
+  "4.13": {
+   "title": "Interface ProcessingInstruction",
+   "page": "",
+   "id": "interface-processinginstruction"
+  },
+  "4.14": {
+   "title": "Interface Comment",
+   "page": "",
+   "id": "interface-comment"
+  },
+  "5.1": {
+   "title": "Introduction to \"DOM Ranges\"",
+   "page": "",
+   "id": "introduction-to-dom-ranges"
+  },
+  "5.2": {
+   "title": "Boundary points",
+   "page": "",
+   "id": "boundary-points"
+  },
+  "5.3": {
+   "title": "Interface AbstractRange",
+   "page": "",
+   "id": "interface-abstractrange"
+  },
+  "5.4": {
+   "title": "Interface StaticRange",
+   "page": "",
+   "id": "interface-staticrange"
+  },
+  "5.5": {
+   "title": "Interface Range",
+   "page": "",
+   "id": "interface-range"
+  },
+  "6.1": {
+   "title": "Interface NodeIterator",
+   "page": "",
+   "id": "interface-nodeiterator"
+  },
+  "6.2": {
+   "title": "Interface TreeWalker",
+   "page": "",
+   "id": "interface-treewalker"
+  },
+  "6.3": {
+   "title": "Interface NodeFilter",
+   "page": "",
+   "id": "interface-nodefilter"
+  },
+  "7.1": {
+   "title": "Interface DOMTokenList",
+   "page": "",
+   "id": "interface-domtokenlist"
+  },
+  "8.1": {
+   "title": "Interface XPathResult",
+   "page": "",
+   "id": "interface-xpathresult"
+  },
+  "8.2": {
+   "title": "Interface XPathExpression",
+   "page": "",
+   "id": "interface-xpathexpression"
+  },
+  "8.3": {
+   "title": "Mixin XPathEvaluatorBase",
+   "page": "",
+   "id": "mixin-xpathevaluatorbase"
+  },
+  "8.4": {
+   "title": "Interface XPathEvaluator",
+   "page": "",
+   "id": "interface-xpathevaluator"
+  },
+  "9.1": {
+   "title": "Interface XSLTProcessor",
+   "page": "",
+   "id": "interface-xsltprocessor"
+  }
+ },
+ "dfns": {
+  "a attribute": [
+   "4.9.2"
+  ],
+  "abort algorithms": [
+   "3.2"
+  ],
+  "abort reason": [
+   "3.2"
+  ],
+  "abort( reason )": [
+   "3.1",
+   "3.2"
+  ],
+  "activation behavior": [
+   "2.7"
+  ],
+  "add an event listener": [
+   "2.7"
+  ],
+  "add( tokens )": [
+   "7.1"
+  ],
+  "addeventlistener( type callback options )": [
+   "2.7"
+  ],
+  "addeventlistener(type callback options)": [
+   "2.7"
+  ],
+  "addeventlistener(type callback)": [
+   "2.7"
+  ],
+  "adjust a node pointer": [
+   "6.1"
+  ],
+  "adopting steps": [
+   "4.5"
+  ],
+  "adoptnode( node )": [
+   "4.5"
+  ],
+  "after( nodes )": [
+   "4.2.8"
+  ],
+  "allow declarative shadow roots": [
+   "4.5"
+  ],
+  "any type": [
+   "8.1"
+  ],
+  "any unordered node type": [
+   "8.1"
+  ],
+  "any( signals )": [
+   "3.2"
+  ],
+  "append an attribute": [
+   "4.9"
+  ],
+  "append to an event path": [
+   "2.9"
+  ],
+  "append( nodes )": [
+   "4.2.6"
+  ],
+  "appendchild( node )": [
+   "4.4"
+  ],
+  "appenddata( data )": [
+   "4.10"
+  ],
+  "applicable specifications": [
+   "1"
+  ],
+  "assign a slot": [
+   "4.2.2.4"
+  ],
+  "assign slottables": [
+   "4.2.2.4"
+  ],
+  "assign slottables for a tree": [
+   "4.2.2.4"
+  ],
+  "assigned nodes": [
+   "4.2.2.1"
+  ],
+  "assigned slot": [
+   "4.2.2.2"
+  ],
+  "at target": [
+   "2.2"
+  ],
+  "attach a shadow root": [
+   "4.9"
+  ],
+  "attachshadow( init )": [
+   "4.9"
+  ],
+  "attribute change steps": [
+   "4.9"
+  ],
+  "attribute list": [
+   "4.9",
+   "4.9.1"
+  ],
+  "attribute map": [
+   "4.13"
+  ],
+  "attribute name": [
+   "7.1"
+  ],
+  "attribute node": [
+   "4.4"
+  ],
+  "available to element internals": [
+   "4.8"
+  ],
+  "before( nodes )": [
+   "4.2.8"
+  ],
+  "boolean type": [
+   "8.1"
+  ],
+  "boundary point": [
+   "5.2"
+  ],
+  "bubbling phase": [
+   "2.2"
+  ],
+  "canceled flag": [
+   "2.2"
+  ],
+  "candidate reference": [
+   "6.1"
+  ],
+  "capturing phase": [
+   "2.2"
+  ],
+  "cdata section node": [
+   "4.4"
+  ],
+  "change an attribute": [
+   "4.9"
+  ],
+  "child text content": [
+   "4.11"
+  ],
+  "children changed steps": [
+   "4.2.3"
+  ],
+  "clone a node": [
+   "4.4"
+  ],
+  "clone a single node": [
+   "4.4"
+  ],
+  "clone the contents": [
+   "5.5"
+  ],
+  "clonenode( subtree )": [
+   "4.4"
+  ],
+  "cloning steps": [
+   "4.4"
+  ],
+  "cloning the contents": [
+   "5.5"
+  ],
+  "closed shadow hidden": [
+   "4.8"
+  ],
+  "closest( selectors )": [
+   "4.9"
+  ],
+  "collapse( tostart )": [
+   "5.5"
+  ],
+  "comment node": [
+   "4.4"
+  ],
+  "compareboundarypoints( how sourcerange )": [
+   "5.5"
+  ],
+  "comparedocumentposition( other )": [
+   "4.4"
+  ],
+  "comparepoint( node offset )": [
+   "5.5"
+  ],
+  "composed flag": [
+   "2.2"
+  ],
+  "constructor(target data)": [
+   "4.13"
+  ],
+  "constructor(type eventinitdict)": [
+   "2.2",
+   "2.4"
+  ],
+  "contains( other )": [
+   "4.4"
+  ],
+  "contains( token )": [
+   "7.1"
+  ],
+  "content type": [
+   "4.5"
+  ],
+  "contiguous exclusive text nodes": [
+   "4.11"
+  ],
+  "contiguous text nodes": [
+   "4.11"
+  ],
+  "convert nodes into a node": [
+   "4.2.6"
+  ],
+  "create a comment node": [
+   "4.14"
+  ],
+  "create a dependent abort signal": [
+   "3.2"
+  ],
+  "create a doctype": [
+   "4.6"
+  ],
+  "create a document": [
+   "4.5"
+  ],
+  "create a document fragment": [
+   "4.7"
+  ],
+  "create a node": [
+   "4.4"
+  ],
+  "create a processing instruction node": [
+   "4.13"
+  ],
+  "create a text node": [
+   "4.11"
+  ],
+  "create an attribute": [
+   "4.9.2"
+  ],
+  "create an element": [
+   "4.9"
+  ],
+  "create an element internal": [
+   "4.9"
+  ],
+  "create an event": [
+   "2.5"
+  ],
+  "createattribute( localname )": [
+   "4.5"
+  ],
+  "createattributens( namespace qualifiedname )": [
+   "4.5"
+  ],
+  "createcdatasection( data )": [
+   "4.5"
+  ],
+  "createcomment( data )": [
+   "4.5"
+  ],
+  "createdocument( namespace qualifiedname doctype )": [
+   "4.5.1"
+  ],
+  "createdocument(namespace qualifiedname doctype)": [
+   "4.5.1"
+  ],
+  "createdocument(namespace qualifiedname)": [
+   "4.5.1"
+  ],
+  "createdocumenttype( name publicid systemid )": [
+   "4.5.1"
+  ],
+  "createelement( localname options )": [
+   "4.5"
+  ],
+  "createelement(localname options)": [
+   "4.5"
+  ],
+  "createelementns( namespace qualifiedname options )": [
+   "4.5"
+  ],
+  "createelementns(namespace qualifiedname options)": [
+   "4.5"
+  ],
+  "createelementns(namespace qualifiedname)": [
+   "4.5"
+  ],
+  "createevent( interface )": [
+   "4.5"
+  ],
+  "createexpression(expression resolver)": [
+   "8.3"
+  ],
+  "createhtmldocument( title )": [
+   "4.5.1"
+  ],
+  "createnodeiterator( root whattoshow filter )": [
+   "4.5"
+  ],
+  "createnodeiterator(root whattoshow filter)": [
+   "4.5"
+  ],
+  "createnodeiterator(root whattoshow)": [
+   "4.5"
+  ],
+  "creatensresolver( noderesolver )": [
+   "8.3"
+  ],
+  "createprocessinginstruction( target data )": [
+   "4.5"
+  ],
+  "createtextnode( data )": [
+   "4.5"
+  ],
+  "createtreewalker( root whattoshow filter )": [
+   "4.5"
+  ],
+  "createtreewalker(root whattoshow filter)": [
+   "4.5"
+  ],
+  "createtreewalker(root whattoshow)": [
+   "4.5"
+  ],
+  "creating an event": [
+   "2.5"
+  ],
+  "current event": [
+   "2.3"
+  ],
+  "custom element definition": [
+   "4.9"
+  ],
+  "custom element registry": [
+   "4.5",
+   "4.8",
+   "4.9"
+  ],
+  "custom element state": [
+   "4.9"
+  ],
+  "customevent(type eventinitdict)": [
+   "2.4"
+  ],
+  "default passive value": [
+   "2.7"
+  ],
+  "delegates focus": [
+   "4.8"
+  ],
+  "deletedata( offset count )": [
+   "4.10"
+  ],
+  "dependent signals": [
+   "3.2"
+  ],
+  "descendant text content": [
+   "4.11"
+  ],
+  "dispatch flag": [
+   "2.2"
+  ],
+  "dispatchevent( event )": [
+   "2.7"
+  ],
+  "document element": [
+   "4.2.1"
+  ],
+  "document fragment node": [
+   "4.4"
+  ],
+  "document node": [
+   "4.4"
+  ],
+  "document position contained by": [
+   "4.4"
+  ],
+  "document position contains": [
+   "4.4"
+  ],
+  "document position disconnected": [
+   "4.4"
+  ],
+  "document position following": [
+   "4.4"
+  ],
+  "document position implementation specific": [
+   "4.4"
+  ],
+  "document position preceding": [
+   "4.4"
+  ],
+  "document tree": [
+   "4.2.1"
+  ],
+  "document type node": [
+   "4.4"
+  ],
+  "effective global custom element registry": [
+   "4.5"
+  ],
+  "element interface": [
+   "4.5"
+  ],
+  "element node": [
+   "4.4"
+  ],
+  "end node": [
+   "5.3"
+  ],
+  "end offset": [
+   "5.3"
+  ],
+  "end to end": [
+   "5.5"
+  ],
+  "end to start": [
+   "5.5"
+  ],
+  "ensure pre insert validity": [
+   "4.2.3"
+  ],
+  "entity node": [
+   "4.4"
+  ],
+  "entity reference node": [
+   "4.4"
+  ],
+  "evaluate(contextnode type result)": [
+   "8.2"
+  ],
+  "evaluate(contextnode type)": [
+   "8.2"
+  ],
+  "evaluate(expression contextnode resolver type result)": [
+   "8.3"
+  ],
+  "evaluate(expression contextnode resolver type)": [
+   "8.3"
+  ],
+  "evaluate(expression contextnode resolver)": [
+   "8.3"
+  ],
+  "evaluate(expression contextnode)": [
+   "8.3"
+  ],
+  "event constructing steps": [
+   "2.5"
+  ],
+  "event listener": [
+   "2.7"
+  ],
+  "event listener list": [
+   "2.7"
+  ],
+  "event path item": [
+   "2.2"
+  ],
+  "event(type eventinitdict)": [
+   "2.2"
+  ],
+  "exclusive documentfragment node": [
+   "4.7"
+  ],
+  "exclusive text node": [
+   "4.11"
+  ],
+  "filter accept": [
+   "6.3"
+  ],
+  "filter reject": [
+   "6.3"
+  ],
+  "filter skip": [
+   "6.3"
+  ],
+  "find a slot": [
+   "4.2.2.3"
+  ],
+  "find flattened slottables": [
+   "4.2.2.3"
+  ],
+  "find slottables": [
+   "4.2.2.3"
+  ],
+  "fire an event": [
+   "2.10"
+  ],
+  "first child": [
+   "1.1"
+  ],
+  "first ordered node type": [
+   "8.1"
+  ],
+  "flatten element creation options": [
+   "4.5"
+  ],
+  "flatten more": [
+   "2.7"
+  ],
+  "get a processing instruction attribute": [
+   "4.13"
+  ],
+  "get an attribute by name": [
+   "4.9"
+  ],
+  "get an attribute by namespace and local name": [
+   "4.9"
+  ],
+  "get an attribute value": [
+   "4.9"
+  ],
+  "get an element by id": [
+   "4.2.4"
+  ],
+  "get text content": [
+   "4.4"
+  ],
+  "get the common ancestor": [
+   "5.5"
+  ],
+  "get the parent": [
+   "2.7"
+  ],
+  "getattribute( name )": [
+   "4.13"
+  ],
+  "getattribute( qualifiedname )": [
+   "4.9"
+  ],
+  "getattributenode( qualifiedname )": [
+   "4.9"
+  ],
+  "getattributenodens( namespace localname )": [
+   "4.9"
+  ],
+  "getattributens( namespace localname )": [
+   "4.9"
+  ],
+  "getelementbyid( elementid )": [
+   "4.2.4"
+  ],
+  "getelementsbyclassname( classnames )": [
+   "4.5",
+   "4.9"
+  ],
+  "getelementsbytagname( qualifiedname )": [
+   "4.5",
+   "4.9"
+  ],
+  "getelementsbytagnamens( namespace localname )": [
+   "4.5",
+   "4.9"
+  ],
+  "getnameditem( qualifiedname )": [
+   "4.9.1"
+  ],
+  "getnameditemns( namespace localname )": [
+   "4.9.1"
+  ],
+  "getparameter(namespaceuri localname)": [
+   "9.1"
+  ],
+  "getrootnode( options )": [
+   "4.4"
+  ],
+  "handle attribute changes": [
+   "4.9"
+  ],
+  "has an attribute": [
+   "4.9"
+  ],
+  "hasattribute( name )": [
+   "4.13"
+  ],
+  "hasattribute( qualifiedname )": [
+   "4.9"
+  ],
+  "hasattributens( namespace localname )": [
+   "4.9"
+  ],
+  "host including inclusive ancestor": [
+   "4.7"
+  ],
+  "html document": [
+   "4.5"
+  ],
+  "html uppercased qualified name": [
+   "4.9"
+  ],
+  "id dom mutationobserverinit attributefilter attributefilter": [
+   "4.3.1"
+  ],
+  "importnode( node options )": [
+   "4.5"
+  ],
+  "importnode(node options)": [
+   "4.5"
+  ],
+  "in a document": [
+   "4.2.1"
+  ],
+  "in a document tree": [
+   "4.2.1"
+  ],
+  "in passive listener flag": [
+   "2.2"
+  ],
+  "inclusive ancestor": [
+   "1.1"
+  ],
+  "inclusive descendant": [
+   "1.1"
+  ],
+  "inclusive sibling": [
+   "1.1"
+  ],
+  "initcustomevent( type bubbles cancelable detail )": [
+   "2.4"
+  ],
+  "initcustomevent(type bubbles cancelable detail)": [
+   "2.4"
+  ],
+  "initcustomevent(type bubbles cancelable)": [
+   "2.4"
+  ],
+  "initcustomevent(type bubbles)": [
+   "2.4"
+  ],
+  "initevent( type bubbles cancelable )": [
+   "2.2"
+  ],
+  "initevent(type bubbles cancelable)": [
+   "2.2"
+  ],
+  "initevent(type bubbles)": [
+   "2.2"
+  ],
+  "initialized flag": [
+   "2.2"
+  ],
+  "inner event creation steps": [
+   "2.5"
+  ],
+  "inner invoke": [
+   "2.9"
+  ],
+  "insert adjacent": [
+   "4.9"
+  ],
+  "insertadjacentelement( where element )": [
+   "4.9"
+  ],
+  "insertadjacenttext( where data )": [
+   "4.9"
+  ],
+  "insertbefore( node child )": [
+   "4.4"
+  ],
+  "insertdata( offset data )": [
+   "4.10"
+  ],
+  "insertion steps": [
+   "4.2.3"
+  ],
+  "insertnode( node )": [
+   "5.5"
+  ],
+  "internal createelementns steps": [
+   "4.5"
+  ],
+  "intersectsnode( node )": [
+   "5.5"
+  ],
+  "invocation target": [
+   "2.2"
+  ],
+  "invocation target in shadow tree": [
+   "2.2"
+  ],
+  "is a global custom element registry": [
+   "4.5"
+  ],
+  "is active": [
+   "6"
+  ],
+  "is value": [
+   "4.9"
+  ],
+  "isdefaultnamespace( namespace )": [
+   "4.4"
+  ],
+  "isequalnode( othernode )": [
+   "4.4"
+  ],
+  "ispointinrange( node offset )": [
+   "5.5"
+  ],
+  "issamenode( othernode )": [
+   "4.4"
+  ],
+  "item( index )": [
+   "4.2.10.1",
+   "4.2.10.2",
+   "4.9.1",
+   "7.1"
+  ],
+  "iterator collection": [
+   "6.1"
+  ],
+  "keep custom element registry null": [
+   "4.8"
+  ],
+  "last child": [
+   "1.1"
+  ],
+  "legacy canceled activation behavior": [
+   "2.7"
+  ],
+  "legacy obtain service worker fetch event listener callbacks": [
+   "2.8"
+  ],
+  "legacy pre activation behavior": [
+   "2.7"
+  ],
+  "light tree": [
+   "4.2.2"
+  ],
+  "limited quirks mode": [
+   "4.5"
+  ],
+  "list of elements with class names classnames": [
+   "4.4"
+  ],
+  "list of elements with namespace namespace and local name localname": [
+   "4.4"
+  ],
+  "list of elements with qualified name qualifiedname": [
+   "4.4"
+  ],
+  "live collection": [
+   "4.2.10"
+  ],
+  "live range pre remove steps": [
+   "5.5"
+  ],
+  "live ranges": [
+   "5.5"
+  ],
+  "local name": [
+   "4.9",
+   "4.9.2"
+  ],
+  "locate a namespace": [
+   "4.4"
+  ],
+  "locate a namespace prefix": [
+   "4.4"
+  ],
+  "locating a namespace prefix": [
+   "4.4"
+  ],
+  "lookupnamespaceuri( prefix )": [
+   "4.4"
+  ],
+  "lookupprefix( namespace )": [
+   "4.4"
+  ],
+  "manual slot assignment": [
+   "4.2.2.2"
+  ],
+  "matches( selectors )": [
+   "4.9"
+  ],
+  "movebefore( node child )": [
+   "4.2.6"
+  ],
+  "moving steps": [
+   "4.2.3"
+  ],
+  "mutation observer microtask queued": [
+   "4.3"
+  ],
+  "named attribute": [
+   "4.9.2"
+  ],
+  "nameditem( key )": [
+   "4.2.10.2"
+  ],
+  "namespace prefix": [
+   "4.9",
+   "4.9.2"
+  ],
+  "new abortcontroller()": [
+   "3.1"
+  ],
+  "new comment( data )": [
+   "4.14"
+  ],
+  "new document()": [
+   "4.5"
+  ],
+  "new documentfragment()": [
+   "4.7"
+  ],
+  "new eventtarget()": [
+   "2.7"
+  ],
+  "new mutationobserver( callback )": [
+   "4.3.1"
+  ],
+  "new processinginstruction( target data )": [
+   "4.13"
+  ],
+  "new range()": [
+   "5.5"
+  ],
+  "new staticrange( init )": [
+   "5.4"
+  ],
+  "new text( data )": [
+   "4.11"
+  ],
+  "next sibling": [
+   "1.1"
+  ],
+  "no quirks mode": [
+   "4.5"
+  ],
+  "node document": [
+   "4.4"
+  ],
+  "node list": [
+   "4.3.1"
+  ],
+  "node pointer": [
+   "6.1"
+  ],
+  "node tree": [
+   "4.2"
+  ],
+  "nodeiterator pre remove steps": [
+   "6.1"
+  ],
+  "notation node": [
+   "4.4"
+  ],
+  "notify mutation observers": [
+   "4.3"
+  ],
+  "number type": [
+   "8.1"
+  ],
+  "observe( target options )": [
+   "4.3.1"
+  ],
+  "observe(target options)": [
+   "4.3.1"
+  ],
+  "ordered node iterator type": [
+   "8.1"
+  ],
+  "ordered node snapshot type": [
+   "8.1"
+  ],
+  "ordered set parser": [
+   "1.2"
+  ],
+  "ordered set serializer": [
+   "1.2"
+  ],
+  "other applicable specifications": [
+   "1"
+  ],
+  "parent element": [
+   "4.9"
+  ],
+  "partially contained": [
+   "5.5"
+  ],
+  "participate in a tree": [
+   "1.1"
+  ],
+  "participates in a tree": [
+   "1.1"
+  ],
+  "pending mutation observers": [
+   "4.3"
+  ],
+  "pointer before": [
+   "6.1"
+  ],
+  "post connection steps": [
+   "4.2.3"
+  ],
+  "potential event target": [
+   "2.2"
+  ],
+  "pre insert": [
+   "4.2.3"
+  ],
+  "pre remove": [
+   "4.2.3"
+  ],
+  "prepend( nodes )": [
+   "4.2.6"
+  ],
+  "previous sibling": [
+   "1.1"
+  ],
+  "processing instruction node": [
+   "4.4"
+  ],
+  "processinginstruction(target data)": [
+   "4.13"
+  ],
+  "public id": [
+   "4.6"
+  ],
+  "qualified name": [
+   "4.9",
+   "4.9.2"
+  ],
+  "queryselector( selectors )": [
+   "4.2.6"
+  ],
+  "queryselectorall( selectors )": [
+   "4.2.6"
+  ],
+  "queue a mutation observer microtask": [
+   "4.3"
+  ],
+  "queue a mutation record": [
+   "4.3.2"
+  ],
+  "queue a tree mutation record": [
+   "4.3.2"
+  ],
+  "quirks mode": [
+   "4.5"
+  ],
+  "record queue": [
+   "4.3.1"
+  ],
+  "registered observer": [
+   "4.3"
+  ],
+  "registered observer list": [
+   "4.3"
+  ],
+  "remove all event listeners": [
+   "2.7"
+  ],
+  "remove an attribute": [
+   "4.9"
+  ],
+  "remove an attribute by name": [
+   "4.9"
+  ],
+  "remove an attribute by namespace and local name": [
+   "4.9"
+  ],
+  "remove an event listener": [
+   "2.7"
+  ],
+  "remove( tokens )": [
+   "7.1"
+  ],
+  "removeattribute( name )": [
+   "4.13"
+  ],
+  "removeattribute( qualifiedname )": [
+   "4.9"
+  ],
+  "removeattributenode( attr )": [
+   "4.9"
+  ],
+  "removeattributens( namespace localname )": [
+   "4.9"
+  ],
+  "removechild( child )": [
+   "4.4"
+  ],
+  "removeeventlistener( type callback options )": [
+   "2.7"
+  ],
+  "removeeventlistener(type callback options)": [
+   "2.7"
+  ],
+  "removeeventlistener(type callback)": [
+   "2.7"
+  ],
+  "removenameditem( qualifiedname )": [
+   "4.9.1"
+  ],
+  "removenameditemns( namespace localname )": [
+   "4.9.1"
+  ],
+  "removeparameter(namespaceuri localname)": [
+   "9.1"
+  ],
+  "removing steps": [
+   "4.2.3"
+  ],
+  "replace all": [
+   "4.2.3"
+  ],
+  "replace an attribute": [
+   "4.9"
+  ],
+  "replace data": [
+   "4.10"
+  ],
+  "replace( token newtoken )": [
+   "7.1"
+  ],
+  "replacechild( node child )": [
+   "4.4"
+  ],
+  "replacechildren( nodes )": [
+   "4.2.6"
+  ],
+  "replacedata( offset count data )": [
+   "4.10"
+  ],
+  "replacewith( nodes )": [
+   "4.2.8"
+  ],
+  "represented by the collection": [
+   "4.2.10"
+  ],
+  "root of closed tree": [
+   "2.2"
+  ],
+  "run the abort steps": [
+   "3.2"
+  ],
+  "scope match a selectors string": [
+   "1.3"
+  ],
+  "selectnode( node )": [
+   "5.5"
+  ],
+  "selectnodecontents( node )": [
+   "5.5"
+  ],
+  "serialize steps": [
+   "7.1"
+  ],
+  "set an attribute": [
+   "4.9"
+  ],
+  "set an attribute value": [
+   "4.9"
+  ],
+  "set an existing attribute value": [
+   "4.9.2"
+  ],
+  "set text content": [
+   "4.4"
+  ],
+  "set the canceled flag": [
+   "2.2"
+  ],
+  "set the end": [
+   "5.5"
+  ],
+  "set the start": [
+   "5.5"
+  ],
+  "set the start or end": [
+   "5.5"
+  ],
+  "setattribute( name value )": [
+   "4.13"
+  ],
+  "setattribute( qualifiedname value )": [
+   "4.9"
+  ],
+  "setattributenode( attr )": [
+   "4.9"
+  ],
+  "setattributenodens( attr )": [
+   "4.9"
+  ],
+  "setattributens( namespace qualifiedname value )": [
+   "4.9"
+  ],
+  "setend( node offset )": [
+   "5.5"
+  ],
+  "setendafter( node )": [
+   "5.5"
+  ],
+  "setendbefore( node )": [
+   "5.5"
+  ],
+  "setnameditem( attr )": [
+   "4.9.1"
+  ],
+  "setnameditemns( attr )": [
+   "4.9.1"
+  ],
+  "setparameter(namespaceuri localname value)": [
+   "9.1"
+  ],
+  "setstart( node offset )": [
+   "5.5"
+  ],
+  "setstartafter( node )": [
+   "5.5"
+  ],
+  "setstartbefore( node )": [
+   "5.5"
+  ],
+  "shadow adjusted target": [
+   "2.2"
+  ],
+  "shadow host": [
+   "4.9"
+  ],
+  "shadow including ancestor": [
+   "4.8"
+  ],
+  "shadow including descendant": [
+   "4.8"
+  ],
+  "shadow including inclusive ancestor": [
+   "4.8"
+  ],
+  "shadow including inclusive descendant": [
+   "4.8"
+  ],
+  "shadow including preorder depth first traversal": [
+   "4.8"
+  ],
+  "shadow including root": [
+   "4.8"
+  ],
+  "shadow including tree order": [
+   "4.8"
+  ],
+  "shadow root": [
+   "4.8",
+   "4.9"
+  ],
+  "shadow roots": [
+   "4.8"
+  ],
+  "shadow tree": [
+   "4.2.2"
+  ],
+  "show all": [
+   "6.3"
+  ],
+  "show attribute": [
+   "6.3"
+  ],
+  "show cdata section": [
+   "6.3"
+  ],
+  "show comment": [
+   "6.3"
+  ],
+  "show document": [
+   "6.3"
+  ],
+  "show document fragment": [
+   "6.3"
+  ],
+  "show document type": [
+   "6.3"
+  ],
+  "show element": [
+   "6.3"
+  ],
+  "show entity": [
+   "6.3"
+  ],
+  "show entity reference": [
+   "6.3"
+  ],
+  "show notation": [
+   "6.3"
+  ],
+  "show processing instruction": [
+   "6.3"
+  ],
+  "show text": [
+   "6.3"
+  ],
+  "signal a slot change": [
+   "4.2.2.5"
+  ],
+  "signal abort": [
+   "3.1",
+   "3.2"
+  ],
+  "signal slots": [
+   "4.2.2.5"
+  ],
+  "slot assignment": [
+   "4.8"
+  ],
+  "slot in closed tree": [
+   "2.2"
+  ],
+  "source signals": [
+   "3.2"
+  ],
+  "split a text node": [
+   "4.11"
+  ],
+  "splittext( offset )": [
+   "4.11"
+  ],
+  "start node": [
+   "5.3"
+  ],
+  "start offset": [
+   "5.3"
+  ],
+  "start to end": [
+   "5.5"
+  ],
+  "start to start": [
+   "5.5"
+  ],
+  "static collection": [
+   "4.2.10"
+  ],
+  "stop immediate propagation flag": [
+   "2.2"
+  ],
+  "stop propagation flag": [
+   "2.2"
+  ],
+  "string replace all": [
+   "4.4"
+  ],
+  "string type": [
+   "8.1"
+  ],
+  "stringification behavior": [
+   "5.5",
+   "7.1"
+  ],
+  "substring data": [
+   "4.10"
+  ],
+  "substringdata( offset count )": [
+   "4.10"
+  ],
+  "supported tokens": [
+   "7.1"
+  ],
+  "supports( token )": [
+   "7.1"
+  ],
+  "surroundcontents( newparent )": [
+   "5.5"
+  ],
+  "system id": [
+   "4.6"
+  ],
+  "text node": [
+   "4.4"
+  ],
+  "timeout( milliseconds )": [
+   "3.2"
+  ],
+  "toggle( token force )": [
+   "7.1"
+  ],
+  "toggle(token force)": [
+   "7.1"
+  ],
+  "toggleattribute( name force )": [
+   "4.13"
+  ],
+  "toggleattribute( qualifiedname force )": [
+   "4.9"
+  ],
+  "toggleattribute(name force)": [
+   "4.13"
+  ],
+  "toggleattribute(qualifiedname force)": [
+   "4.9"
+  ],
+  "token set": [
+   "7.1"
+  ],
+  "touch target list": [
+   "2.2"
+  ],
+  "transformtofragment(source output)": [
+   "9.1"
+  ],
+  "transient registered observer": [
+   "4.3"
+  ],
+  "traverse children": [
+   "6.2"
+  ],
+  "traverse siblings": [
+   "6.2"
+  ],
+  "tree order": [
+   "1.1"
+  ],
+  "unique identifier (id)": [
+   "4.9"
+  ],
+  "unordered node iterator type": [
+   "8.1"
+  ],
+  "unordered node snapshot type": [
+   "8.1"
+  ],
+  "update attributes from data": [
+   "4.13"
+  ],
+  "update data from attributes": [
+   "4.13"
+  ],
+  "update steps": [
+   "7.1"
+  ],
+  "valid attribute local name": [
+   "1.4"
+  ],
+  "valid doctype name": [
+   "1.4"
+  ],
+  "valid element local name": [
+   "1.4"
+  ],
+  "valid namespace prefix": [
+   "1.4"
+  ],
+  "valid shadow host name": [
+   "4.9"
+  ],
+  "validate and extract": [
+   "1.4"
+  ],
+  "validation steps": [
+   "7.1"
+  ],
+  "webkitmatchesselector( selectors )": [
+   "4.9"
+  ],
+  "xml document": [
+   "4.5"
+  ]
+ },
+ "uses": {
+  "a attribute": {
+   "4.2.10.2": 3
+  },
+  "abort reason": {
+   "3": 2,
+   "3.3": 3
+  },
+  "abort( reason )": {
+   "3": 2,
+   "11": 6
+  },
+  "activation behavior": {
+   "2.9": 4
+  },
+  "add( tokens )": {
+   "11": 4
+  },
+  "addeventlistener( type callback options )": {
+   "11": 3,
+   "2.1": 2
+  },
+  "adoptnode( node )": {
+   "11": 2
+  },
+  "after( nodes )": {
+   "11": 3
+  },
+  "any type": {
+   "11": 2
+  },
+  "any unordered node type": {
+   "11": 2
+  },
+  "any( signals )": {
+   "11": 2
+  },
+  "append( nodes )": {
+   "11": 3
+  },
+  "appendchild( node )": {
+   "11": 2
+  },
+  "appenddata( data )": {
+   "11": 2
+  },
+  "applicable specifications": {
+   "4.2.3": 5,
+   "4.4": 2
+  },
+  "assign a slot": {
+   "4.2.3": 2
+  },
+  "assign slottables": {
+   "4.2.3": 2
+  },
+  "assign slottables for a tree": {
+   "4.2.3": 6
+  },
+  "assigned nodes": {
+   "4.2.2.4": 2,
+   "4.2.3": 4
+  },
+  "assigned slot": {
+   "4.2.3": 2
+  },
+  "at target": {
+   "11": 2,
+   "2.9": 2
+  },
+  "attachshadow( init )": {
+   "11": 2
+  },
+  "attribute change steps": {
+   "7.1": 2
+  },
+  "attribute list": {
+   "11": 2,
+   "4.4": 5
+  },
+  "attribute node": {
+   "11": 2
+  },
+  "before( nodes )": {
+   "11": 3
+  },
+  "boolean type": {
+   "11": 2
+  },
+  "boundary point": {
+   "5.1": 3,
+   "5.5": 12
+  },
+  "bubbling phase": {
+   "11": 2
+  },
+  "canceled flag": {
+   "2.9": 2
+  },
+  "capturing phase": {
+   "11": 2
+  },
+  "cdata section node": {
+   "11": 2
+  },
+  "clone a node": {
+   "5.5": 11
+  },
+  "clone the contents": {
+   "11": 2
+  },
+  "clonenode( subtree )": {
+   "11": 3
+  },
+  "closest( selectors )": {
+   "11": 2
+  },
+  "collapse( tostart )": {
+   "11": 3
+  },
+  "comment node": {
+   "11": 2
+  },
+  "compareboundarypoints( how sourcerange )": {
+   "11": 2
+  },
+  "comparedocumentposition( other )": {
+   "11": 2
+  },
+  "comparepoint( node offset )": {
+   "11": 2
+  },
+  "contains( other )": {
+   "11": 2
+  },
+  "contains( token )": {
+   "11": 2
+  },
+  "content type": {
+   "4.5.1": 2
+  },
+  "contiguous exclusive text nodes": {
+   "4.4": 3
+  },
+  "convert nodes into a node": {
+   "4.2.8": 3
+  },
+  "create a doctype": {
+   "4.5.1": 2
+  },
+  "create a document": {
+   "4.4": 2,
+   "4.5.1": 2
+  },
+  "create a document fragment": {
+   "5.5": 2
+  },
+  "create a node": {
+   "4.9": 2
+  },
+  "create an attribute": {
+   "4.5": 2,
+   "4.9": 3
+  },
+  "create an element": {
+   "4.5": 2,
+   "4.5.1": 4
+  },
+  "create an event": {
+   "11": 2,
+   "2.10": 2
+  },
+  "createattribute( localname )": {
+   "11": 2
+  },
+  "createattributens( namespace qualifiedname )": {
+   "11": 2
+  },
+  "createcdatasection( data )": {
+   "11": 2
+  },
+  "createcomment( data )": {
+   "11": 2
+  },
+  "createdocument( namespace qualifiedname doctype )": {
+   "11": 3
+  },
+  "createdocumenttype( name publicid systemid )": {
+   "11": 2
+  },
+  "createelement( localname options )": {
+   "11": 3
+  },
+  "createelementns( namespace qualifiedname options )": {
+   "11": 3
+  },
+  "createevent( interface )": {
+   "11": 2
+  },
+  "createexpression(expression resolver)": {
+   "11": 3
+  },
+  "createhtmldocument( title )": {
+   "11": 3
+  },
+  "createnodeiterator( root whattoshow filter )": {
+   "11": 4
+  },
+  "creatensresolver( noderesolver )": {
+   "11": 2
+  },
+  "createprocessinginstruction( target data )": {
+   "11": 2
+  },
+  "createtextnode( data )": {
+   "11": 2
+  },
+  "createtreewalker( root whattoshow filter )": {
+   "11": 4
+  },
+  "current event": {
+   "2.9": 3
+  },
+  "custom element registry": {
+   "11": 3,
+   "4.2.3": 6,
+   "4.2.5": 2,
+   "4.4": 7
+  },
+  "customevent(type eventinitdict)": {
+   "11": 5
+  },
+  "deletedata( offset count )": {
+   "11": 2
+  },
+  "dispatch flag": {
+   "2.9": 2
+  },
+  "dispatchevent( event )": {
+   "11": 2
+  },
+  "document element": {
+   "4.4": 4,
+   "4.5": 2
+  },
+  "document fragment node": {
+   "11": 2
+  },
+  "document node": {
+   "11": 2
+  },
+  "document position contained by": {
+   "11": 2
+  },
+  "document position contains": {
+   "11": 2
+  },
+  "document position disconnected": {
+   "11": 2
+  },
+  "document position following": {
+   "11": 2
+  },
+  "document position implementation specific": {
+   "11": 2
+  },
+  "document position preceding": {
+   "11": 2
+  },
+  "document type node": {
+   "11": 2
+  },
+  "effective global custom element registry": {
+   "4.4": 2
+  },
+  "element interface": {
+   "4.9": 2
+  },
+  "element node": {
+   "11": 2
+  },
+  "end node": {
+   "4.2.3": 2,
+   "4.4": 4,
+   "4.10": 2,
+   "4.11": 3,
+   "5.5": 17
+  },
+  "end offset": {
+   "4.2.3": 4,
+   "4.4": 3,
+   "4.10": 4,
+   "4.11": 4,
+   "5.5": 7
+  },
+  "end to end": {
+   "11": 2
+  },
+  "end to start": {
+   "11": 2
+  },
+  "entity node": {
+   "11": 2
+  },
+  "entity reference node": {
+   "11": 2
+  },
+  "evaluate(contextnode type result)": {
+   "11": 4
+  },
+  "evaluate(expression contextnode resolver type result)": {
+   "11": 5
+  },
+  "event listener": {
+   "2.1": 9,
+   "2.2": 2,
+   "2.8": 4,
+   "2.9": 2
+  },
+  "event path item": {
+   "2.9": 4
+  },
+  "event(type eventinitdict)": {
+   "11": 5
+  },
+  "exclusive text node": {
+   "4.4": 8
+  },
+  "filter accept": {
+   "11": 2,
+   "6.2": 9
+  },
+  "filter reject": {
+   "11": 2,
+   "6.2": 3
+  },
+  "filter skip": {
+   "11": 2
+  },
+  "fire an event": {
+   "4.2.3": 2
+  },
+  "first child": {
+   "4.2.6": 2,
+   "4.4": 2,
+   "6.2": 4
+  },
+  "first ordered node type": {
+   "11": 2
+  },
+  "get an attribute value": {
+   "7.1": 2
+  },
+  "get the parent": {
+   "2.9": 2
+  },
+  "getattribute( name )": {
+   "11": 2
+  },
+  "getattribute( qualifiedname )": {
+   "11": 2
+  },
+  "getattributenode( qualifiedname )": {
+   "11": 2
+  },
+  "getattributenodens( namespace localname )": {
+   "11": 2
+  },
+  "getattributens( namespace localname )": {
+   "11": 2
+  },
+  "getelementbyid( elementid )": {
+   "11": 2
+  },
+  "getelementsbyclassname( classnames )": {
+   "11": 4
+  },
+  "getelementsbytagname( qualifiedname )": {
+   "11": 4
+  },
+  "getelementsbytagnamens( namespace localname )": {
+   "11": 4
+  },
+  "getnameditem( qualifiedname )": {
+   "11": 2
+  },
+  "getnameditemns( namespace localname )": {
+   "11": 2
+  },
+  "getparameter(namespaceuri localname)": {
+   "11": 2
+  },
+  "getrootnode( options )": {
+   "11": 3
+  },
+  "has an attribute": {
+   "4.2.10.2": 2,
+   "4.4": 3
+  },
+  "hasattribute( name )": {
+   "11": 2
+  },
+  "hasattribute( qualifiedname )": {
+   "11": 2
+  },
+  "hasattributens( namespace localname )": {
+   "11": 2
+  },
+  "host including inclusive ancestor": {
+   "4.2.3": 2
+  },
+  "html document": {
+   "4.9": 5
+  },
+  "html uppercased qualified name": {
+   "4.4": 2
+  },
+  "importnode( node options )": {
+   "11": 3
+  },
+  "in passive listener flag": {
+   "2.9": 2
+  },
+  "inclusive ancestor": {
+   "2.1": 2,
+   "4.9": 2,
+   "5.5": 19,
+   "6.1": 2
+  },
+  "inclusive descendant": {
+   "4.2.3": 2,
+   "4.4": 2,
+   "5.5": 2,
+   "6.1": 3
+  },
+  "initcustomevent( type bubbles cancelable detail )": {
+   "11": 5
+  },
+  "initevent( type bubbles cancelable )": {
+   "11": 4
+  },
+  "insertadjacentelement( where element )": {
+   "11": 2
+  },
+  "insertadjacenttext( where data )": {
+   "11": 2
+  },
+  "insertbefore( node child )": {
+   "11": 2
+  },
+  "insertdata( offset data )": {
+   "11": 2
+  },
+  "insertnode( node )": {
+   "11": 2
+  },
+  "intersectsnode( node )": {
+   "11": 2
+  },
+  "invocation target": {
+   "2.9": 2
+  },
+  "invocation target in shadow tree": {
+   "2.9": 2
+  },
+  "is a global custom element registry": {
+   "4.4": 2
+  },
+  "isdefaultnamespace( namespace )": {
+   "11": 2
+  },
+  "isequalnode( othernode )": {
+   "11": 2
+  },
+  "ispointinrange( node offset )": {
+   "11": 2
+  },
+  "issamenode( othernode )": {
+   "11": 2
+  },
+  "item( index )": {
+   "11": 8
+  },
+  "keep custom element registry null": {
+   "4.4": 2
+  },
+  "last child": {
+   "4.2.3": 2,
+   "4.2.6": 2,
+   "4.4": 2,
+   "6.2": 4
+  },
+  "legacy canceled activation behavior": {
+   "2.9": 2
+  },
+  "legacy pre activation behavior": {
+   "2.9": 2
+  },
+  "live collection": {
+   "11": 2
+  },
+  "live range pre remove steps": {
+   "4.2.3": 2
+  },
+  "live ranges": {
+   "4.2.3": 4,
+   "4.4": 4,
+   "4.10": 4,
+   "4.11": 4,
+   "5.1": 5
+  },
+  "local name": {
+   "11": 2,
+   "4.4": 9,
+   "4.5": 4
+  },
+  "locate a namespace prefix": {
+   "11": 2
+  },
+  "lookupnamespaceuri( prefix )": {
+   "11": 2
+  },
+  "lookupprefix( namespace )": {
+   "11": 2
+  },
+  "matches( selectors )": {
+   "11": 2
+  },
+  "movebefore( node child )": {
+   "11": 2
+  },
+  "namespace prefix": {
+   "11": 2,
+   "4.4": 9,
+   "4.5": 5
+  },
+  "new abortcontroller()": {
+   "11": 3
+  },
+  "new comment( data )": {
+   "11": 5
+  },
+  "new document()": {
+   "11": 3
+  },
+  "new documentfragment()": {
+   "11": 3
+  },
+  "new eventtarget()": {
+   "11": 3
+  },
+  "new mutationobserver( callback )": {
+   "11": 3
+  },
+  "new processinginstruction( target data )": {
+   "11": 5
+  },
+  "new range()": {
+   "11": 3
+  },
+  "new staticrange( init )": {
+   "11": 3
+  },
+  "new text( data )": {
+   "11": 5
+  },
+  "next sibling": {
+   "4.2.3": 5,
+   "4.4": 4,
+   "4.11": 3,
+   "6.2": 4
+  },
+  "node document": {
+   "2.7": 3,
+   "4.2.3": 8,
+   "4.2.6": 3,
+   "4.2.8": 3,
+   "4.5": 4,
+   "4.9": 17,
+   "4.11": 2,
+   "5.5": 2
+  },
+  "node tree": {
+   "4.2.1": 2,
+   "4.2.2": 3,
+   "4.2.3": 7,
+   "4.2.6": 4,
+   "4.2.8": 3,
+   "4.8": 3,
+   "5.1": 9,
+   "5.4": 2
+  },
+  "nodeiterator pre remove steps": {
+   "4.2.3": 2
+  },
+  "notation node": {
+   "11": 2
+  },
+  "number type": {
+   "11": 2
+  },
+  "observe( target options )": {
+   "11": 3
+  },
+  "ordered node iterator type": {
+   "11": 2
+  },
+  "ordered node snapshot type": {
+   "11": 2
+  },
+  "parent element": {
+   "4.4": 9
+  },
+  "participate in a tree": {
+   "11": 3,
+   "2.2": 2,
+   "4.2": 2,
+   "4.2.3": 3
+  },
+  "potential event target": {
+   "2.9": 3
+  },
+  "pre insert": {
+   "4.2.8": 3,
+   "4.9": 4
+  },
+  "prepend( nodes )": {
+   "11": 3
+  },
+  "previous sibling": {
+   "4.2.3": 5,
+   "4.4": 2,
+   "4.11": 2,
+   "6.1": 2,
+   "6.2": 5
+  },
+  "processing instruction node": {
+   "11": 2
+  },
+  "public id": {
+   "4.4": 2
+  },
+  "qualified name": {
+   "11": 2,
+   "4.4": 5
+  },
+  "queryselector( selectors )": {
+   "11": 2
+  },
+  "queryselectorall( selectors )": {
+   "11": 2
+  },
+  "queue a tree mutation record": {
+   "4.2.3": 7
+  },
+  "record queue": {
+   "4.3": 2
+  },
+  "registered observer": {
+   "4.3.1": 2
+  },
+  "registered observer list": {
+   "4.2.3": 2,
+   "4.3.1": 4
+  },
+  "remove( tokens )": {
+   "11": 4
+  },
+  "removeattribute( name )": {
+   "11": 2
+  },
+  "removeattribute( qualifiedname )": {
+   "11": 2
+  },
+  "removeattributenode( attr )": {
+   "11": 2
+  },
+  "removeattributens( namespace localname )": {
+   "11": 2
+  },
+  "removechild( child )": {
+   "11": 2
+  },
+  "removeeventlistener( type callback options )": {
+   "11": 3
+  },
+  "removenameditem( qualifiedname )": {
+   "11": 2
+  },
+  "removenameditemns( namespace localname )": {
+   "11": 2
+  },
+  "removeparameter(namespaceuri localname)": {
+   "11": 2
+  },
+  "replace data": {
+   "4.4": 3,
+   "5.5": 7
+  },
+  "replace( token newtoken )": {
+   "11": 2
+  },
+  "replacechild( node child )": {
+   "11": 2
+  },
+  "replacechildren( nodes )": {
+   "11": 3
+  },
+  "replacedata( offset count data )": {
+   "11": 2
+  },
+  "replacewith( nodes )": {
+   "11": 3
+  },
+  "represented by the collection": {
+   "4.2.10.1": 2,
+   "4.2.10.2": 3
+  },
+  "scope match a selectors string": {
+   "4.2.6": 2
+  },
+  "selectnode( node )": {
+   "11": 2
+  },
+  "selectnodecontents( node )": {
+   "11": 2
+  },
+  "set an attribute value": {
+   "7.1": 2
+  },
+  "set an existing attribute value": {
+   "4.4": 2
+  },
+  "set the start or end": {
+   "11": 2
+  },
+  "setattribute( name value )": {
+   "11": 2
+  },
+  "setattribute( qualifiedname value )": {
+   "11": 2
+  },
+  "setattributenode( attr )": {
+   "11": 2
+  },
+  "setattributenodens( attr )": {
+   "11": 2
+  },
+  "setattributens( namespace qualifiedname value )": {
+   "11": 2
+  },
+  "setend( node offset )": {
+   "11": 2
+  },
+  "setendafter( node )": {
+   "11": 2
+  },
+  "setendbefore( node )": {
+   "11": 2
+  },
+  "setnameditem( attr )": {
+   "11": 2
+  },
+  "setnameditemns( attr )": {
+   "11": 2
+  },
+  "setparameter(namespaceuri localname value)": {
+   "11": 2
+  },
+  "setstart( node offset )": {
+   "11": 2
+  },
+  "setstartafter( node )": {
+   "11": 2
+  },
+  "setstartbefore( node )": {
+   "11": 2
+  },
+  "shadow adjusted target": {
+   "2.9": 7
+  },
+  "shadow host": {
+   "4.2.3": 2,
+   "4.4": 2
+  },
+  "shadow including inclusive descendant": {
+   "4.2.3": 3
+  },
+  "shadow including root": {
+   "4.2.3": 2,
+   "4.4": 2
+  },
+  "shadow including tree order": {
+   "4.2.3": 4
+  },
+  "shadow root": {
+   "4.4": 12
+  },
+  "shadow roots": {
+   "2.9": 4,
+   "4.2.2": 3,
+   "4.2.2.3": 3,
+   "4.2.3": 7,
+   "4.5": 5,
+   "4.9": 3
+  },
+  "shadow tree": {
+   "4.2.2.1": 2
+  },
+  "show all": {
+   "11": 2
+  },
+  "show attribute": {
+   "11": 2
+  },
+  "show cdata section": {
+   "11": 2
+  },
+  "show comment": {
+   "11": 2
+  },
+  "show document": {
+   "11": 2
+  },
+  "show document fragment": {
+   "11": 2
+  },
+  "show document type": {
+   "11": 2
+  },
+  "show element": {
+   "11": 2
+  },
+  "show entity": {
+   "11": 2
+  },
+  "show entity reference": {
+   "11": 2
+  },
+  "show notation": {
+   "11": 2
+  },
+  "show processing instruction": {
+   "11": 2
+  },
+  "show text": {
+   "11": 2
+  },
+  "signal a slot change": {
+   "4.2.3": 4
+  },
+  "signal abort": {
+   "11": 2
+  },
+  "signal slots": {
+   "4.3": 2
+  },
+  "slot assignment": {
+   "4.2.2.3": 2,
+   "4.2.3": 2
+  },
+  "split a text node": {
+   "5.5": 2
+  },
+  "splittext( offset )": {
+   "11": 2
+  },
+  "start node": {
+   "4.2.3": 2,
+   "4.4": 4,
+   "4.10": 2,
+   "4.11": 3,
+   "5.5": 26
+  },
+  "start offset": {
+   "4.2.3": 4,
+   "4.4": 3,
+   "4.10": 4,
+   "4.11": 4,
+   "5.5": 9
+  },
+  "start to end": {
+   "11": 2
+  },
+  "start to start": {
+   "11": 2
+  },
+  "stop immediate propagation flag": {
+   "2.9": 2
+  },
+  "stop propagation flag": {
+   "2.9": 2
+  },
+  "string type": {
+   "11": 2
+  },
+  "stringification behavior": {
+   "11": 4
+  },
+  "substring data": {
+   "5.5": 6
+  },
+  "substringdata( offset count )": {
+   "11": 2
+  },
+  "supports( token )": {
+   "11": 2
+  },
+  "surroundcontents( newparent )": {
+   "11": 2
+  },
+  "system id": {
+   "4.4": 2
+  },
+  "text node": {
+   "11": 2
+  },
+  "timeout( milliseconds )": {
+   "11": 2
+  },
+  "toggle( token force )": {
+   "11": 3
+  },
+  "toggleattribute( name force )": {
+   "11": 3
+  },
+  "toggleattribute( qualifiedname force )": {
+   "11": 3
+  },
+  "touch target list": {
+   "11": 2,
+   "2.9": 7
+  },
+  "transformtofragment(source output)": {
+   "11": 2
+  },
+  "tree order": {
+   "2.1": 2,
+   "4.2.2.3": 3,
+   "4.2.3": 3,
+   "4.2.10.2": 2,
+   "4.4": 4,
+   "4.9": 2,
+   "4.11": 3,
+   "5.5": 5
+  },
+  "unique identifier (id)": {
+   "4.2.4": 2,
+   "4.2.10.2": 4
+  },
+  "unordered node iterator type": {
+   "11": 2
+  },
+  "unordered node snapshot type": {
+   "11": 2
+  },
+  "valid attribute local name": {
+   "4.9": 2,
+   "4.13": 2
+  },
+  "valid doctype name": {
+   "4.5.1": 2
+  },
+  "valid element local name": {
+   "4.5": 3
+  },
+  "validate and extract": {
+   "4.5": 2
+  },
+  "webkitmatchesselector( selectors )": {
+   "11": 2
+  }
+ }
+}

@@ -1,5 +1,6 @@
 {
- "spec": "HTML",
+ "spec": "HTML Living Standard",
+ "key": "html",
  "base": "https://html.spec.whatwg.org/multipage/",
  "specUpdated": "28 August 2026",
  "fetched": "2026-08-29",
@@ -510,7 +511,7 @@
    "id": "the-htmlallcollection-interface"
   },
   "2.6.4.1.1": {
-   "title": "[[Call]] ( thisArgument, argumentsList )",
+   "title": "[[Call]] ( thisArgument , argumentsList )",
    "page": "common-dom-interfaces.html",
    "id": "HTMLAllCollection-call"
   },
@@ -545,7 +546,7 @@
    "id": "transferable-objects"
   },
   "2.7.3": {
-   "title": "StructuredSerializeInternal ( value, forStorage [ , memory ] )",
+   "title": "StructuredSerializeInternal ( value , forStorage [ , memory ] )",
    "page": "structured-data.html",
    "id": "structuredserializeinternal"
   },
@@ -560,17 +561,17 @@
    "id": "structuredserializeforstorage"
   },
   "2.7.6": {
-   "title": "StructuredDeserialize ( serialized, targetRealm [ , memory ] )",
+   "title": "StructuredDeserialize ( serialized , targetRealm [ , memory ] )",
    "page": "structured-data.html",
    "id": "structureddeserialize"
   },
   "2.7.7": {
-   "title": "StructuredSerializeWithTransfer ( value, transferList )",
+   "title": "StructuredSerializeWithTransfer ( value , transferList )",
    "page": "structured-data.html",
    "id": "structuredserializewithtransfer"
   },
   "2.7.8": {
-   "title": "StructuredDeserializeWithTransfer ( serializeWithTransferResult, targetRealm )",
+   "title": "StructuredDeserializeWithTransfer ( serializeWithTransferResult , targetRealm )",
    "page": "structured-data.html",
    "id": "structureddeserializewithtransfer"
   },
@@ -835,7 +836,7 @@
    "id": "fetching-and-processing-a-resource-from-a-link-element"
   },
   "4.2.4.4": {
-   "title": "Processing `Link` headers",
+   "title": "Processing ` Link ` headers",
    "page": "semantics.html",
    "id": "processing-link-headers"
   },
@@ -915,7 +916,7 @@
    "id": "the-aside-element"
   },
   "4.3.6": {
-   "title": "The h1, h2, h3, h4, h5, and h6 elements",
+   "title": "The h1 , h2 , h3 , h4 , h5 , and h6 elements",
    "page": "sections.html",
    "id": "the-h1,-h2,-h3,-h4,-h5,-and-h6-elements"
   },
@@ -1245,7 +1246,7 @@
    "id": "hyperlink-auditing"
   },
   "4.6.7.1": {
-   "title": "The `Ping-From` and `Ping-To` headers",
+   "title": "The ` Ping-From ` and ` Ping-To ` headers",
    "page": "links.html",
    "id": "the-ping-headers"
   },
@@ -1255,127 +1256,127 @@
    "id": "linkTypes"
   },
   "4.6.8.1": {
-   "title": "Link type \"alternate\"",
+   "title": "Link type \" alternate \"",
    "page": "links.html",
    "id": "rel-alternate"
   },
   "4.6.8.2": {
-   "title": "Link type \"author\"",
+   "title": "Link type \" author \"",
    "page": "links.html",
    "id": "link-type-author"
   },
   "4.6.8.3": {
-   "title": "Link type \"bookmark\"",
+   "title": "Link type \" bookmark \"",
    "page": "links.html",
    "id": "link-type-bookmark"
   },
   "4.6.8.4": {
-   "title": "Link type \"canonical\"",
+   "title": "Link type \" canonical \"",
    "page": "links.html",
    "id": "link-type-canonical"
   },
   "4.6.8.5": {
-   "title": "Link type \"dns-prefetch\"",
+   "title": "Link type \" dns-prefetch \"",
    "page": "links.html",
    "id": "link-type-dns-prefetch"
   },
   "4.6.8.6": {
-   "title": "Link type \"expect\"",
+   "title": "Link type \" expect \"",
    "page": "links.html",
    "id": "link-type-expect"
   },
   "4.6.8.7": {
-   "title": "Link type \"external\"",
+   "title": "Link type \" external \"",
    "page": "links.html",
    "id": "link-type-external"
   },
   "4.6.8.8": {
-   "title": "Link type \"help\"",
+   "title": "Link type \" help \"",
    "page": "links.html",
    "id": "link-type-help"
   },
   "4.6.8.9": {
-   "title": "Link type \"icon\"",
+   "title": "Link type \" icon \"",
    "page": "links.html",
    "id": "rel-icon"
   },
   "4.6.8.10": {
-   "title": "Link type \"license\"",
+   "title": "Link type \" license \"",
    "page": "links.html",
    "id": "link-type-license"
   },
   "4.6.8.11": {
-   "title": "Link type \"manifest\"",
+   "title": "Link type \" manifest \"",
    "page": "links.html",
    "id": "link-type-manifest"
   },
   "4.6.8.12": {
-   "title": "Link type \"modulepreload\"",
+   "title": "Link type \" modulepreload \"",
    "page": "links.html",
    "id": "link-type-modulepreload"
   },
   "4.6.8.13": {
-   "title": "Link type \"nofollow\"",
+   "title": "Link type \" nofollow \"",
    "page": "links.html",
    "id": "link-type-nofollow"
   },
   "4.6.8.14": {
-   "title": "Link type \"noopener\"",
+   "title": "Link type \" noopener \"",
    "page": "links.html",
    "id": "link-type-noopener"
   },
   "4.6.8.15": {
-   "title": "Link type \"noreferrer\"",
+   "title": "Link type \" noreferrer \"",
    "page": "links.html",
    "id": "link-type-noreferrer"
   },
   "4.6.8.16": {
-   "title": "Link type \"opener\"",
+   "title": "Link type \" opener \"",
    "page": "links.html",
    "id": "link-type-opener"
   },
   "4.6.8.17": {
-   "title": "Link type \"pingback\"",
+   "title": "Link type \" pingback \"",
    "page": "links.html",
    "id": "link-type-pingback"
   },
   "4.6.8.18": {
-   "title": "Link type \"preconnect\"",
+   "title": "Link type \" preconnect \"",
    "page": "links.html",
    "id": "link-type-preconnect"
   },
   "4.6.8.19": {
-   "title": "Link type \"prefetch\"",
+   "title": "Link type \" prefetch \"",
    "page": "links.html",
    "id": "link-type-prefetch"
   },
   "4.6.8.20": {
-   "title": "Link type \"preload\"",
+   "title": "Link type \" preload \"",
    "page": "links.html",
    "id": "link-type-preload"
   },
   "4.6.8.21": {
-   "title": "Link type \"privacy-policy\"",
+   "title": "Link type \" privacy-policy \"",
    "page": "links.html",
    "id": "link-type-privacy-policy"
   },
   "4.6.8.22": {
-   "title": "Link type \"search\"",
+   "title": "Link type \" search \"",
    "page": "links.html",
    "id": "link-type-search"
   },
   "4.6.8.23": {
-   "title": "Link type \"stylesheet\"",
+   "title": "Link type \" stylesheet \"",
    "page": "links.html",
    "id": "link-type-stylesheet"
   },
   "4.6.8.24": {
-   "title": "Link type \"tag\"",
+   "title": "Link type \" tag \"",
    "page": "links.html",
    "id": "link-type-tag"
   },
   "4.6.8.25": {
-   "title": "Link Type \"terms-of-service\"",
+   "title": "Link Type \" terms-of-service \"",
    "page": "links.html",
    "id": "link-type-terms-of-service"
   },
@@ -1385,12 +1386,12 @@
    "id": "sequential-link-types"
   },
   "4.6.8.26.1": {
-   "title": "Link type \"next\"",
+   "title": "Link type \" next \"",
    "page": "links.html",
    "id": "link-type-next"
   },
   "4.6.8.26.2": {
-   "title": "Link type \"prev\"",
+   "title": "Link type \" prev \"",
    "page": "links.html",
    "id": "link-type-prev"
   },
@@ -1470,7 +1471,7 @@
    "id": "adaptive-images"
   },
   "4.8.4.2": {
-   "title": "Attributes common to source, img, and link elements",
+   "title": "Attributes common to source , img , and link elements",
    "page": "images.html",
    "id": "attributes-common-to-source-and-img-elements"
   },
@@ -2015,107 +2016,107 @@
    "id": "states-of-the-type-attribute"
   },
   "4.10.5.1.1": {
-   "title": "Hidden state (type=hidden)",
+   "title": "Hidden state ( type=hidden )",
    "page": "input.html",
    "id": "hidden-state-(type=hidden)"
   },
   "4.10.5.1.2": {
-   "title": "Text (type=text) state and Search state (type=search)",
+   "title": "Text ( type=text ) state and Search state ( type=search )",
    "page": "input.html",
    "id": "text-(type=text)-state-and-search-state-(type=search)"
   },
   "4.10.5.1.3": {
-   "title": "Telephone state (type=tel)",
+   "title": "Telephone state ( type=tel )",
    "page": "input.html",
    "id": "telephone-state-(type=tel)"
   },
   "4.10.5.1.4": {
-   "title": "URL state (type=url)",
+   "title": "URL state ( type=url )",
    "page": "input.html",
    "id": "url-state-(type=url)"
   },
   "4.10.5.1.5": {
-   "title": "Email state (type=email)",
+   "title": "Email state ( type=email )",
    "page": "input.html",
    "id": "email-state-(type=email)"
   },
   "4.10.5.1.6": {
-   "title": "Password state (type=password)",
+   "title": "Password state ( type=password )",
    "page": "input.html",
    "id": "password-state-(type=password)"
   },
   "4.10.5.1.7": {
-   "title": "Date state (type=date)",
+   "title": "Date state ( type=date )",
    "page": "input.html",
    "id": "date-state-(type=date)"
   },
   "4.10.5.1.8": {
-   "title": "Month state (type=month)",
+   "title": "Month state ( type=month )",
    "page": "input.html",
    "id": "month-state-(type=month)"
   },
   "4.10.5.1.9": {
-   "title": "Week state (type=week)",
+   "title": "Week state ( type=week )",
    "page": "input.html",
    "id": "week-state-(type=week)"
   },
   "4.10.5.1.10": {
-   "title": "Time state (type=time)",
+   "title": "Time state ( type=time )",
    "page": "input.html",
    "id": "time-state-(type=time)"
   },
   "4.10.5.1.11": {
-   "title": "Local Date and Time state (type=datetime-local)",
+   "title": "Local Date and Time state ( type=datetime-local )",
    "page": "input.html",
    "id": "local-date-and-time-state-(type=datetime-local)"
   },
   "4.10.5.1.12": {
-   "title": "Number state (type=number)",
+   "title": "Number state ( type=number )",
    "page": "input.html",
    "id": "number-state-(type=number)"
   },
   "4.10.5.1.13": {
-   "title": "Range state (type=range)",
+   "title": "Range state ( type=range )",
    "page": "input.html",
    "id": "range-state-(type=range)"
   },
   "4.10.5.1.14": {
-   "title": "Color state (type=color)",
+   "title": "Color state ( type=color )",
    "page": "input.html",
    "id": "color-state-(type=color)"
   },
   "4.10.5.1.15": {
-   "title": "Checkbox state (type=checkbox)",
+   "title": "Checkbox state ( type=checkbox )",
    "page": "input.html",
    "id": "checkbox-state-(type=checkbox)"
   },
   "4.10.5.1.16": {
-   "title": "Radio Button state (type=radio)",
+   "title": "Radio Button state ( type=radio )",
    "page": "input.html",
    "id": "radio-button-state-(type=radio)"
   },
   "4.10.5.1.17": {
-   "title": "File Upload state (type=file)",
+   "title": "File Upload state ( type=file )",
    "page": "input.html",
    "id": "file-upload-state-(type=file)"
   },
   "4.10.5.1.18": {
-   "title": "Submit Button state (type=submit)",
+   "title": "Submit Button state ( type=submit )",
    "page": "input.html",
    "id": "submit-button-state-(type=submit)"
   },
   "4.10.5.1.19": {
-   "title": "Image Button state (type=image)",
+   "title": "Image Button state ( type=image )",
    "page": "input.html",
    "id": "image-button-state-(type=image)"
   },
   "4.10.5.1.20": {
-   "title": "Reset Button state (type=reset)",
+   "title": "Reset Button state ( type=reset )",
    "page": "input.html",
    "id": "reset-button-state-(type=reset)"
   },
   "4.10.5.1.21": {
-   "title": "Button state (type=button)",
+   "title": "Button state ( type=button )",
    "page": "input.html",
    "id": "button-state-(type=button)"
   },
@@ -3375,7 +3376,7 @@
    "id": "nav-traversal-apis"
   },
   "7.2.1": {
-   "title": "Security infrastructure for Window, WindowProxy, and Location objects",
+   "title": "Security infrastructure for Window , WindowProxy , and Location objects",
    "page": "nav-history-apis.html",
    "id": "cross-origin-objects"
   },
@@ -3410,17 +3411,17 @@
    "id": "isplatformobjectsameorigin-(-o-)"
   },
   "7.2.1.3.4": {
-   "title": "CrossOriginGetOwnPropertyHelper ( O, P )",
+   "title": "CrossOriginGetOwnPropertyHelper ( O , P )",
    "page": "nav-history-apis.html",
    "id": "crossorigingetownpropertyhelper-(-o,-p-)"
   },
   "7.2.1.3.5": {
-   "title": "CrossOriginGet ( O, P, Receiver )",
+   "title": "CrossOriginGet ( O , P , Receiver )",
    "page": "nav-history-apis.html",
    "id": "crossoriginget-(-o,-p,-receiver-)"
   },
   "7.2.1.3.6": {
-   "title": "CrossOriginSet ( O, P, V, Receiver )",
+   "title": "CrossOriginSet ( O , P , V , Receiver )",
    "page": "nav-history-apis.html",
    "id": "crossoriginset-(-o,-p,-v,-receiver-)"
   },
@@ -3495,17 +3496,17 @@
    "id": "windowproxy-getownproperty"
   },
   "7.2.3.6": {
-   "title": "[[DefineOwnProperty]] ( P, Desc )",
+   "title": "[[DefineOwnProperty]] ( P , Desc )",
    "page": "nav-history-apis.html",
    "id": "windowproxy-defineownproperty"
   },
   "7.2.3.7": {
-   "title": "[[Get]] ( P, Receiver )",
+   "title": "[[Get]] ( P , Receiver )",
    "page": "nav-history-apis.html",
    "id": "windowproxy-get"
   },
   "7.2.3.8": {
-   "title": "[[Set]] ( P, V, Receiver )",
+   "title": "[[Set]] ( P , V , Receiver )",
    "page": "nav-history-apis.html",
    "id": "windowproxy-set"
   },
@@ -3550,17 +3551,17 @@
    "id": "location-getownproperty"
   },
   "7.2.4.6": {
-   "title": "[[DefineOwnProperty]] ( P, Desc )",
+   "title": "[[DefineOwnProperty]] ( P , Desc )",
    "page": "nav-history-apis.html",
    "id": "location-defineownproperty"
   },
   "7.2.4.7": {
-   "title": "[[Get]] ( P, Receiver )",
+   "title": "[[Get]] ( P , Receiver )",
    "page": "nav-history-apis.html",
    "id": "location-get"
   },
   "7.2.4.8": {
-   "title": "[[Set]] ( P, V, Receiver )",
+   "title": "[[Set]] ( P , V , Receiver )",
    "page": "nav-history-apis.html",
    "id": "location-set"
   },
@@ -3990,12 +3991,12 @@
    "id": "navigational-prefetching"
   },
   "7.6.3": {
-   "title": "The `Speculation-Rules` header",
+   "title": "The ` Speculation-Rules ` header",
    "page": "speculative-loading.html",
    "id": "the-speculation-rules-header"
   },
   "7.6.4": {
-   "title": "The `Sec-Speculation-Tags` header",
+   "title": "The ` Sec-Speculation-Tags ` header",
    "page": "speculative-loading.html",
    "id": "the-sec-speculation-tags-header"
   },
@@ -4040,12 +4041,12 @@
    "id": "speculative-loading-identity-joining"
   },
   "7.7": {
-   "title": "The `X-Frame-Options` header",
+   "title": "The ` X-Frame-Options ` header",
    "page": "speculative-loading.html",
    "id": "the-x-frame-options-header"
   },
   "7.8": {
-   "title": "The `Refresh` header",
+   "title": "The ` Refresh ` header",
    "page": "speculative-loading.html",
    "id": "the-refresh-header"
   },
@@ -4205,27 +4206,27 @@
    "id": "javascript-specification-host-hooks"
   },
   "8.1.6.1": {
-   "title": "HostEnsureCanAddPrivateElement(O)",
+   "title": "HostEnsureCanAddPrivateElement( O )",
    "page": "webappapis.html",
    "id": "the-hostensurecanaddprivateelement-implementation"
   },
   "8.1.6.2": {
-   "title": "HostEnsureCanCompileStrings(realm, parameterStrings, bodyString, codeString, compilationType, parameterArgs, bodyArg)",
+   "title": "HostEnsureCanCompileStrings( realm , parameterStrings , bodyString , codeString , compilationType , parameterArgs , bodyArg )",
    "page": "webappapis.html",
    "id": "hostensurecancompilestrings(realm,-parameterstrings,-bodystring,-codestring,-compilationtype,-parameterargs,-bodyarg)"
   },
   "8.1.6.3": {
-   "title": "HostGetCodeForEval(argument)",
+   "title": "HostGetCodeForEval( argument )",
    "page": "webappapis.html",
    "id": "hostgetcodeforeval(argument)"
   },
   "8.1.6.4": {
-   "title": "HostPromiseRejectionTracker(promise, operation)",
+   "title": "HostPromiseRejectionTracker( promise , operation )",
    "page": "webappapis.html",
    "id": "the-hostpromiserejectiontracker-implementation"
   },
   "8.1.6.5": {
-   "title": "HostSystemUTCEpochNanoseconds(global)",
+   "title": "HostSystemUTCEpochNanoseconds( global )",
    "page": "webappapis.html",
    "id": "hostsystemutcepochnanoseconds"
   },
@@ -4235,32 +4236,32 @@
    "id": "integration-with-javascript-jobs"
   },
   "8.1.6.6.1": {
-   "title": "HostCallJobCallback(callback, V, argumentsList)",
+   "title": "HostCallJobCallback( callback , V , argumentsList )",
    "page": "webappapis.html",
    "id": "hostcalljobcallback"
   },
   "8.1.6.6.2": {
-   "title": "HostEnqueueFinalizationRegistryCleanupJob(finalizationRegistry)",
+   "title": "HostEnqueueFinalizationRegistryCleanupJob( finalizationRegistry )",
    "page": "webappapis.html",
    "id": "hostenqueuefinalizationregistrycleanupjob"
   },
   "8.1.6.6.3": {
-   "title": "HostEnqueueGenericJob(job, realm)",
+   "title": "HostEnqueueGenericJob( job , realm )",
    "page": "webappapis.html",
    "id": "hostenqueuegenericjob"
   },
   "8.1.6.6.4": {
-   "title": "HostEnqueuePromiseJob(job, realm)",
+   "title": "HostEnqueuePromiseJob( job , realm )",
    "page": "webappapis.html",
    "id": "hostenqueuepromisejob"
   },
   "8.1.6.6.5": {
-   "title": "HostEnqueueTimeoutJob(job, realm, milliseconds)",
+   "title": "HostEnqueueTimeoutJob( job , realm , milliseconds )",
    "page": "webappapis.html",
    "id": "hostenqueuetimeoutjob"
   },
   "8.1.6.6.6": {
-   "title": "HostMakeJobCallback(callable)",
+   "title": "HostMakeJobCallback( callable )",
    "page": "webappapis.html",
    "id": "hostmakejobcallback"
   },
@@ -4270,7 +4271,7 @@
    "id": "integration-with-the-javascript-module-system"
   },
   "8.1.6.7.1": {
-   "title": "HostGetImportMetaProperties(moduleRecord)",
+   "title": "HostGetImportMetaProperties( moduleRecord )",
    "page": "webappapis.html",
    "id": "hostgetimportmetaproperties"
   },
@@ -4280,7 +4281,7 @@
    "id": "hostgetsupportedimportattributes"
   },
   "8.1.6.7.3": {
-   "title": "HostLoadImportedModule(referrer, moduleRequest, loadState, payload)",
+   "title": "HostLoadImportedModule( referrer , moduleRequest , loadState , payload )",
    "page": "webappapis.html",
    "id": "hostloadimportedmodule"
   },
@@ -4605,7 +4606,7 @@
    "id": "sse-processing-model"
   },
   "9.2.4": {
-   "title": "The `Last-Event-ID` header",
+   "title": "The ` Last-Event-ID ` header",
    "page": "server-sent-events.html",
    "id": "the-last-event-id-header"
   },
@@ -7183,6 +7184,9 @@
   "check if coop values require a browsing context group switch": [
    "7.1.3.2"
   ],
+  "check if enforcing report only coop would require a browsing context group switch": [
+   "7.1.3.2"
+  ],
   "check if popup coop values require a browsing context group switch": [
    "7.1.3.2"
   ],
@@ -7559,6 +7563,12 @@
   ],
   "converting a character width to pixels": [
    "15.5.6"
+  ],
+  "converting a color value from a non premultiplied representation to a premultiplied one": [
+   "4.12.5.7"
+  ],
+  "converting a color value from a premultiplied representation to a non premultiplied one": [
+   "4.12.5.7"
   ],
   "converttoblob( options )": [
    "4.12.5.3"
@@ -9579,6 +9589,9 @@
   ],
   "initmessageevent( type bubbles cancelable data origin lasteventid source ports )": [
    "9.1"
+  ],
+  "initstorageevent( type bubbles cancelable key oldvalue newvalue url storagearea )": [
+   "12.2.4"
   ],
   "inline documentation for external scripts": [
    "4.12.1.4"
@@ -13692,5 +13705,4080 @@
   "yearless date": [
    "2.3.5.3"
   ]
+ },
+ "uses": {
+  "a label": {
+   "4.8.11.11.2": 2,
+   "4.8.11.11.3": 2,
+   "4.8.11.11.5": 3
+  },
+  "a language": {
+   "4.8.11.11.3": 2,
+   "4.8.11.11.5": 3
+  },
+  "a list of zero or more cues": {
+   "4.8.11.8": 4,
+   "4.8.11.11.2": 2,
+   "4.8.11.11.3": 5,
+   "4.8.11.11.5": 17
+  },
+  "a mode": {
+   "4.8.11.11.3": 12,
+   "4.8.11.11.5": 6
+  },
+  "a pause on exit flag": {
+   "4.8.11.8": 2,
+   "4.8.11.11.5": 3
+  },
+  "a readiness state": {
+   "4.8.10": 2,
+   "4.8.11.11.3": 7
+  },
+  "a serialization of the bitmap as a file": {
+   "4.12.5": 2
+  },
+  "a start time": {
+   "4.8.11.8": 6,
+   "4.8.11.11.5": 3
+  },
+  "abort a running script": {
+   "8.1.4.4": 3,
+   "10.2.4": 3,
+   "10.3.1": 2
+  },
+  "abort controller": {
+   "7.2.6.8": 2,
+   "7.2.6.10.4": 6
+  },
+  "abort the ongoing navigation": {
+   "7.2.6.7": 2
+  },
+  "about base url": {
+   "7.4.2.2": 3,
+   "7.4.2.3.2": 4,
+   "7.4.5": 6,
+   "7.5.1": 2,
+   "7.3.1.2": 2,
+   "7.3.1.3": 2,
+   "2.4.3": 4
+  },
+  "about blank": {
+   "7.3.2.1": 4,
+   "7.2.2.1": 2
+  },
+  "about to be notified rejected promises list": {
+   "8.1.4.7": 2,
+   "8.1.6.4": 2
+  },
+  "accept charset": {
+   "4.10.22.5": 2
+  },
+  "activation notification": {
+   "6.4.1": 2
+  },
+  "active browsing context": {
+   "7.4.5": 2,
+   "7.3.1.7": 7,
+   "7.2.2.1": 4
+  },
+  "active custom element constructor map": {
+   "4.13.5": 4,
+   "3.2.3": 2
+  },
+  "active document": {
+   "7.1.3.2": 2,
+   "7.1.3.3": 12,
+   "7.4": 3,
+   "7.4.2.2": 11,
+   "7.4.2.3.2": 7,
+   "7.4.2.3.3": 4,
+   "7.4.2.4": 3,
+   "7.4.5": 8,
+   "7.4.6.1": 8,
+   "7.4.6.2": 8,
+   "7.5.1": 2,
+   "7.5.11": 3,
+   "7.3.1.6": 3,
+   "7.3.1.7": 5,
+   "7.3.2.1": 3,
+   "7.3.2.2": 10,
+   "7.3.3": 7,
+   "3.1": 3,
+   "4.8.5": 7,
+   "6.2": 2,
+   "6.4.2": 3,
+   "6.6.2": 5,
+   "6.6.4": 5,
+   "6.6.5": 2,
+   "6.6.6": 2,
+   "6.6.7": 2,
+   "7.2.2.1": 2,
+   "7.2.4": 2,
+   "8.1.7.3": 2,
+   "8.1.8.1": 2
+  },
+  "active flag": {
+   "4.8.11.8": 7
+  },
+  "active match": {
+   "6.9.2": 2,
+   "6.9.3": 2
+  },
+  "active parser": {
+   "8.4.1": 2
+  },
+  "active sandboxing flag set": {
+   "7.4.2.1": 2
+  },
+  "active script": {
+   "8.1.6.6.6": 5,
+   "8.1.6.7": 3
+  },
+  "active service worker": {
+   "7.2.2.6": 3,
+   "7.2.8": 4
+  },
+  "active session history entry": {
+   "7.4": 2,
+   "7.4.1.3": 5,
+   "7.4.2.3.3": 6,
+   "7.4.3": 3,
+   "7.4.4": 3,
+   "7.4.6.1": 7,
+   "7.3.1.3": 2,
+   "7.2.5": 8
+  },
+  "active speculative html parser": {
+   "13.2.6.4.8": 2
+  },
+  "active window": {
+   "7.1.5": 2,
+   "7.4.2.2": 4,
+   "7.4.2.4": 2,
+   "7.4.6.1": 8,
+   "7.3.1.7": 2,
+   "6.4.2": 4,
+   "7.2.6.8": 4
+  },
+  "active windowproxy": {
+   "7.2.2.4": 2,
+   "7.2.3.5": 2
+  },
+  "actually disabled": {
+   "6.6.2": 2,
+   "4.16.3": 2
+  },
+  "adjust foreign attributes": {
+   "13.2.6.4.7": 2,
+   "13.2.9": 2
+  },
+  "adjusted current node": {
+   "13.2.6": 6,
+   "13.2.6.4.4": 2,
+   "13.2.6.5": 4
+  },
+  "advisory information": {
+   "15.7.2": 3
+  },
+  "after transition": {
+   "7.2.6.10.5": 2
+  },
+  "agent cluster key": {
+   "7.1.2": 3,
+   "7.3.2.3": 2
+  },
+  "agent cluster map": {
+   "8.1.2.2": 3
+  },
+  "algorithm set": {
+   "7.4.6.1": 3
+  },
+  "algorithm to convert a number to a string": {
+   "4.10.5.4": 2
+  },
+  "algorithm to convert a string to a number": {
+   "4.10.5.3.7": 5,
+   "4.10.5.3.8": 3,
+   "4.10.5.4": 2
+  },
+  "align descendants": {
+   "15.3.3": 4,
+   "15.3.8": 4
+  },
+  "allow downloads": {
+   "4.8.5": 2
+  },
+  "allow forms": {
+   "4.8.5": 4
+  },
+  "allow modals": {
+   "4.8.5": 2
+  },
+  "allow orientation lock": {
+   "4.8.5": 2
+  },
+  "allow pointer lock": {
+   "4.8.5": 2
+  },
+  "allow popups": {
+   "4.8.5": 3
+  },
+  "allow popups to escape sandbox": {
+   "4.8.5": 2
+  },
+  "allow presentation": {
+   "4.8.5": 2
+  },
+  "allow same origin": {
+   "4.8.5": 4
+  },
+  "allow scripts": {
+   "4.8.5": 4
+  },
+  "allow top navigation": {
+   "4.8.5": 5
+  },
+  "allow top navigation by user activation": {
+   "4.8.5": 3
+  },
+  "allow top navigation to custom protocols": {
+   "4.8.5": 3
+  },
+  "allowed by sandboxing to navigate": {
+   "7.3.1.7": 2
+  },
+  "allowed to perform a navigation or history update": {
+   "7.2.5": 2
+  },
+  "allowed to play": {
+   "4.8.11.13": 2
+  },
+  "allowed value step": {
+   "4.10.5.4": 8
+  },
+  "allows auto sizes": {
+   "4.8.2": 2,
+   "4.8.4.2.2": 2
+  },
+  "already constructed marker": {
+   "3.2.3": 2
+  },
+  "already started": {
+   "13.2.6.4.4": 2,
+   "4.12.1.5": 2
+  },
+  "ambiguous ampersand": {
+   "13.1.2": 4
+  },
+  "an end time": {
+   "4.8.11.8": 4,
+   "4.8.11.11.5": 4
+  },
+  "an identifier": {
+   "4.8.11.11.2": 2,
+   "4.8.11.11.5": 6
+  },
+  "an iframe srcdoc document": {
+   "13.2.6.4.1": 3,
+   "4.2.5.4": 2,
+   "2.4.1": 2
+  },
+  "an in band metadata track dispatch type": {
+   "4.8.11.11.2": 7,
+   "4.8.11.11.5": 2
+  },
+  "ancestor navigables": {
+   "7.3.2.2": 2
+  },
+  "ancestor origins list": {
+   "7.2.4": 2
+  },
+  "api base url": {
+   "2.4.2": 2,
+   "8.1.7.5": 2,
+   "11.3.1.3": 4
+  },
+  "api value": {
+   "4.10.19.3": 3,
+   "4.10.20": 3,
+   "4.10.11": 8
+  },
+  "append session history traversal steps": {
+   "7.4.3": 2,
+   "7.3.1.6": 2,
+   "7.2.6.7": 2
+  },
+  "apply the history step": {
+   "7.4.1.3": 4
+  },
+  "apply the traverse history step": {
+   "7.2.6.7": 2
+  },
+  "appropriate end tag token": {
+   "13.2.5.11": 3,
+   "13.2.5.14": 3,
+   "13.2.5.17": 3,
+   "13.2.5.25": 3
+  },
+  "appropriate place for inserting a node": {
+   "13.2.6.4.4": 2
+  },
+  "assigned access key": {
+   "4.11.3.6": 2,
+   "4.11.3.7": 2
+  },
+  "assigned media provider object": {
+   "4.8.11.5": 3
+  },
+  "associated document": {
+   "4.13.4": 4,
+   "3.2.3": 2,
+   "8.4.1": 2,
+   "6.10.2": 3,
+   "7.2.2.3": 8,
+   "7.2.2.6": 7,
+   "7.2.3.5": 2,
+   "7.2.5": 7,
+   "7.2.6.5": 6,
+   "7.2.6.7": 3,
+   "7.2.6.10.4": 6,
+   "7.2.6.10.5": 2,
+   "9.4.4": 2,
+   "8.1.3.4": 2,
+   "8.1.4.9": 5,
+   "8.1.7.2": 2,
+   "8.1.8.2": 2,
+   "12.2.1": 2,
+   "12.2.2": 3,
+   "12.2.3": 3
+  },
+  "attached internals": {
+   "3.2.9": 3
+  },
+  "attempt to populate the history entry document": {
+   "7.4": 2,
+   "7.4.1.3": 2
+  },
+  "autocapitalize and autocorrect inheriting elements": {
+   "4.10.5": 2,
+   "6.8.7": 2,
+   "6.8.8": 3
+  },
+  "autofill anchor mantle": {
+   "4.10.19.7.2": 4
+  },
+  "autofill field": {
+   "4.10.19.7.2": 2
+  },
+  "autofill field name": {
+   "4.10.3": 2
+  },
+  "autonomous custom element": {
+   "4.13.1.4": 4,
+   "4.13.4": 2
+  },
+  "auxiliary browsing context": {
+   "7.1.5": 2,
+   "4.6.8": 3,
+   "4.6.8.14": 3
+  },
+  "await a stable state": {
+   "4.8.11.5": 3,
+   "4.8.11.8": 2
+  },
+  "barred the element from constraint validation": {
+   "4.13.3": 2
+  },
+  "base url": {
+   "8.1.4.3": 6,
+   "8.1.6.7.1": 2
+  },
+  "becomes browsing context connected": {
+   "2.5.6": 2
+  },
+  "being rendered": {
+   "3.2.7": 5,
+   "4.8.6": 2,
+   "4.8.7": 2,
+   "4.10.5": 2,
+   "6.6.2": 4
+  },
+  "best representation of the number n as a floating point number": {
+   "4.10.5.1.13": 4
+  },
+  "bfcache blocking details": {
+   "7.4.6.2": 2
+  },
+  "bitmap data": {
+   "4.12.5.2.2": 6
+  },
+  "block rendering": {
+   "4.12.1.1": 3
+  },
+  "blocked by a modal dialog": {
+   "4.11.4": 2
+  },
+  "boolean attributes": {
+   "4.8.3": 2,
+   "4.10.7": 2,
+   "4.10.10": 2,
+   "4.10.11": 2,
+   "4.8.11.13": 2,
+   "4.12.1": 2,
+   "4.12.3": 4
+  },
+  "browser ui": {
+   "7.4.2.2": 4,
+   "7.4.3": 2,
+   "7.9": 2
+  },
+  "browsing context": {
+   "7.1.3.3": 8,
+   "7.1.5": 5,
+   "7.3.2.1": 2,
+   "7.3.2.2": 7,
+   "7.3.2.3": 4,
+   "7.2.2.1": 3,
+   "7.2.2.4": 4,
+   "7.2.2.5": 2,
+   "7.2.3": 3,
+   "7.2.3.7": 2,
+   "7.2.3.8": 2,
+   "7.2.4": 2,
+   "9.3.3": 2,
+   "8.1.7.3": 2
+  },
+  "browsing context connected": {
+   "4.6.8.5": 2,
+   "4.6.8.6": 5,
+   "4.6.8.11": 2,
+   "4.6.8.12": 2,
+   "4.6.8.18": 3,
+   "4.6.8.19": 3,
+   "4.6.8.20": 5,
+   "4.6.8.23": 7
+  },
+  "browsing context group": {
+   "7.1.2": 2
+  },
+  "browsing context set": {
+   "7.1.3.2": 3
+  },
+  "built in safe baseline configuration": {
+   "8.6.4": 2
+  },
+  "can autoplay flag": {
+   "4.8.11.7": 3,
+   "4.8.11.8": 3
+  },
+  "can have its url rewritten": {
+   "7.2.6.10.2": 2
+  },
+  "candidate for constraint validation": {
+   "4.10.21.3": 6,
+   "4.16.3": 10
+  },
+  "cannot navigate": {
+   "4.10.22.3": 5
+  },
+  "canonical keyword": {
+   "2.6.1": 2
+  },
+  "canonicalize a sanitizer element": {
+   "8.6.4": 2
+  },
+  "canonicalize a sanitizer list": {
+   "8.6.4": 2
+  },
+  "canonicalize a sanitizer name": {
+   "8.6.4": 2
+  },
+  "canonicalized intersection": {
+   "8.6.4": 5
+  },
+  "cc exp": {
+   "4.10.19.7.2": 3
+  },
+  "cc exp month": {
+   "4.10.19.7.2": 2
+  },
+  "cdata sections": {
+   "13.2.2": 3
+  },
+  "change the encoding": {
+   "13.2.6.4.4": 2
+  },
+  "character encoding declaration": {
+   "17.1": 2,
+   "4.2.5": 3
+  },
+  "character reference code": {
+   "13.2.5.82": 6,
+   "13.2.5.83": 2,
+   "13.2.5.84": 6
+  },
+  "character references": {
+   "13.2.2": 9,
+   "13.1.2": 4
+  },
+  "check if unloading is canceled": {
+   "7.2.7.7": 2
+  },
+  "check popover validity": {
+   "4.10.6": 4
+  },
+  "child navigable": {
+   "7.4": 2,
+   "7.4.6.1": 10,
+   "7.3.1.4": 2,
+   "7.3.3": 2,
+   "6.6.5": 2,
+   "15.3.2": 3,
+   "7.7": 2,
+   "8.9.2": 2
+  },
+  "circle state": {
+   "4.8.14.2": 4
+  },
+  "classic history api state": {
+   "7.4.4": 2,
+   "7.2.5": 5,
+   "7.2.6.10.4": 5
+  },
+  "classic script": {
+   "4.12.1": 12,
+   "8.1.4.2": 7,
+   "8.1.6.7": 2
+  },
+  "clear the list of active formatting elements up to the last marker": {
+   "13.2.6.4.11": 2,
+   "13.2.6.4.15": 2
+  },
+  "click focusable": {
+   "6.6.3": 3
+  },
+  "clipping region": {
+   "4.12.5.1.11": 2,
+   "4.12.5.1.22": 2
+  },
+  "close request": {
+   "6.10.2": 2,
+   "6.10.3": 6,
+   "6.12": 3
+  },
+  "close watcher": {
+   "6.10.3": 5,
+   "4.11.5": 2
+  },
+  "color space": {
+   "4.12.5.1": 2,
+   "4.12.5.1.10": 2,
+   "4.12.5.1.16": 6,
+   "4.12.5.4": 2
+  },
+  "color type": {
+   "4.12.5.1": 3
+  },
+  "column group": {
+   "4.9.12.1": 2,
+   "4.9.12.2": 2
+  },
+  "commit early hints": {
+   "7.4.5": 2,
+   "7.5.1": 2
+  },
+  "committed promise": {
+   "7.2.6.10.4": 3
+  },
+  "compare sanitizer items": {
+   "8.6.2": 7
+  },
+  "compatible with cross origin isolation": {
+   "7.1.3.1": 3,
+   "7.1.4.1": 2,
+   "7.1.4.2": 6
+  },
+  "completely available": {
+   "4.8.3": 3,
+   "4.8.4.3.5": 3
+  },
+  "consider speculative loads": {
+   "4.6.4": 4,
+   "8.1.4.9": 2
+  },
+  "construct the entry list": {
+   "4.10.22.3": 2
+  },
+  "constructing entry list": {
+   "4.10.22.4": 3
+  },
+  "construction stack": {
+   "4.13.5": 2,
+   "3.2.3": 3
+  },
+  "constructor storage key": {
+   "10.2.6.4": 2
+  },
+  "constructor url": {
+   "10.2.6.4": 3
+  },
+  "consume history action user activation": {
+   "6.10.2": 2
+  },
+  "consume user activation": {
+   "6.4.1": 2,
+   "6.4.3": 2
+  },
+  "container document": {
+   "7.1.4.2": 3,
+   "7.4.2.2": 2,
+   "7.4.5": 4,
+   "7.3.3": 4,
+   "13.2.3.2": 2,
+   "7.7": 2,
+   "8.1.7.3": 2
+  },
+  "content document": {
+   "4.8.5": 2
+  },
+  "content navigable": {
+   "7.3.1.5": 4,
+   "7.3.1.6": 2,
+   "3.1.7": 2,
+   "4.8.5": 28,
+   "4.8.6": 4,
+   "4.8.7": 9,
+   "6.6.2": 4,
+   "6.6.4": 6,
+   "6.6.5": 2,
+   "7.2.2.3": 2,
+   "16.3.2": 2,
+   "15.6": 3
+  },
+  "content type metadata": {
+   "4.8.6": 2,
+   "4.8.7": 7,
+   "4.8.4.3": 2,
+   "4.10.5.1.19": 2,
+   "4.6.6": 2,
+   "4.6.8.23": 3,
+   "4.12.1.2": 2,
+   "4.2.4.2": 5,
+   "4.2.5.4": 2
+  },
+  "context lost": {
+   "8.1.7.3": 2
+  },
+  "contributes a script blocking style sheet": {
+   "4.6.8.23": 2,
+   "4.2.6": 2
+  },
+  "convert the temporary buffer to a comment": {
+   "13.2.5.73": 2
+  },
+  "convert to a list of name value pairs": {
+   "4.10.22.3": 5
+  },
+  "coop enforcement result": {
+   "7.4.5": 2
+  },
+  "cors cross origin": {
+   "4.12.5.1.9": 2,
+   "4.8.11.5": 2,
+   "8.1.4.2": 3
+  },
+  "cors same origin": {
+   "4.8.11.5": 3,
+   "8.1.4.2": 2
+  },
+  "cors settings attribute": {
+   "4.2.4.4": 3
+  },
+  "country name": {
+   "4.10.19.7.2": 3
+  },
+  "create a classic script": {
+   "8.1.4.2": 3
+  },
+  "create a document to display a user agent page or pdf viewer inline": {
+   "7.4.5": 5
+  },
+  "create a javascript module script": {
+   "8.1.4.2": 2
+  },
+  "create a mediaerror": {
+   "4.8.11.5": 4
+  },
+  "create a new browsing context and document": {
+   "7.5.1": 2
+  },
+  "create a new child navigable": {
+   "4.8.5": 3,
+   "4.8.7": 2
+  },
+  "create a new top level traversable": {
+   "7.3.1.7": 2
+  },
+  "create a speculative mock element": {
+   "13.2.6.1": 2
+  },
+  "create a worklet global scope": {
+   "11.3.2": 4
+  },
+  "create an agent": {
+   "8.1.2.2": 2
+  },
+  "create an element for a token": {
+   "13.2.6.4.7": 2
+  },
+  "create and initialize a document object": {
+   "7.4": 2,
+   "7.5.7": 2
+  },
+  "createimagebitmap( image options )": {
+   "8.2": 2
+  },
+  "creation url": {
+   "7.4.5": 2
+  },
+  "credentials mode": {
+   "8.7": 2
+  },
+  "critical subresources": {
+   "4.2.4.3": 4,
+   "4.2.6": 6
+  },
+  "cross origin isolated capability": {
+   "7.5.9": 2,
+   "2.7.3": 2,
+   "10.2.4": 4,
+   "10.2.6.2": 3
+  },
+  "cross origin isolation mode": {
+   "10.2.4": 2
+  },
+  "cross origin opener policy": {
+   "7.1.3": 2
+  },
+  "cryptographic nonce": {
+   "8.7": 2
+  },
+  "csp list": {
+   "7.4.5": 3
+  },
+  "current compositing and blending operator": {
+   "4.12.5.1.22": 2
+  },
+  "current default path": {
+   "4.12.5.1.14": 2
+  },
+  "current drag operation": {
+   "6.11.6": 3
+  },
+  "current entry": {
+   "7.4.6.1": 2,
+   "7.2.6.4": 2,
+   "7.2.6.6": 2,
+   "7.2.6.7": 2
+  },
+  "current entry index": {
+   "7.2.6.4": 9,
+   "7.2.6.6": 4,
+   "7.2.6.7": 5
+  },
+  "current filter": {
+   "4.12.5.1.22": 4
+  },
+  "current focus chain of a top level traversable": {
+   "6.6.4": 2
+  },
+  "current global object": {
+   "3.2.3": 2
+  },
+  "current input character": {
+   "13.2.5": 2,
+   "13.2.5.1": 2,
+   "13.2.5.8": 2,
+   "13.2.5.11": 4,
+   "13.2.5.14": 4,
+   "13.2.5.17": 4,
+   "13.2.5.25": 4,
+   "13.2.5.26": 5,
+   "13.2.5.31": 5,
+   "13.2.5.33": 2,
+   "13.2.5.45": 2,
+   "13.2.5.46": 2,
+   "13.2.5.54": 2,
+   "13.2.5.55": 2,
+   "13.2.5.56": 2,
+   "13.2.5.79": 2,
+   "13.2.5.82": 3
+  },
+  "current node": {
+   "13.2.6.1": 2,
+   "13.2.6.3": 4,
+   "13.2.6.4.4": 9,
+   "13.2.6.4.5": 4,
+   "13.2.6.4.7": 36,
+   "13.2.6.4.8": 5,
+   "13.2.6.4.9": 3,
+   "13.2.6.4.11": 2,
+   "13.2.6.4.12": 5,
+   "13.2.6.4.13": 4,
+   "13.2.6.4.14": 5,
+   "13.2.6.4.15": 2,
+   "13.2.6.4.18": 6,
+   "13.2.6.5": 6
+  },
+  "current password": {
+   "4.10.19.7.2": 3
+  },
+  "current pixel density": {
+   "4.8.4.3.13": 2
+  },
+  "current playback position": {
+   "4.8.8": 9,
+   "4.8.11.5": 3,
+   "4.8.11.7": 13,
+   "4.8.11.8": 22,
+   "4.8.11.9": 9,
+   "4.8.11.11.1": 2,
+   "4.8.11.16": 4
+  },
+  "current request": {
+   "4.12.5.1.9": 2,
+   "4.8.3": 7,
+   "4.8.4.3.1": 2,
+   "4.8.4.3.5": 33
+  },
+  "current session history entry": {
+   "7.4.2.4": 2,
+   "7.4.6.1": 7,
+   "7.2.6.6": 5
+  },
+  "current session history step": {
+   "7.4.1.3": 8,
+   "7.4.2.3.1": 2,
+   "7.4.2.3.3": 3,
+   "7.4.6.1": 3,
+   "7.3.1.4": 2
+  },
+  "current settings object": {
+   "7.2.1.3.3": 2,
+   "8.1.5.1": 2,
+   "8.1.7.5": 4
+  },
+  "current target element": {
+   "6.11.6": 4
+  },
+  "current template insertion mode": {
+   "13.2.6.4.4": 2,
+   "13.2.6.4.16": 11
+  },
+  "current url": {
+   "4.8.4.3.5": 7
+  },
+  "currently focused area of a top level traversable": {
+   "6.6.4": 10,
+   "6.6.5": 2
+  },
+  "currently running task": {
+   "8.1.7.3": 5
+  },
+  "custom data attribute": {
+   "8.6.2": 4,
+   "8.6.3.1": 7,
+   "8.6.4": 2
+  },
+  "custom element": {
+   "4.13.1.8": 2,
+   "4.13.4": 8,
+   "4.13.6": 3,
+   "4.13.7": 2,
+   "3.2.9": 2
+  },
+  "custom element constructor": {
+   "3.2.3": 4,
+   "13.2.6.1": 2
+  },
+  "custom element definition": {
+   "4.13.1.6": 2,
+   "4.13.4": 6,
+   "4.13.6": 5
+  },
+  "custom element definition set": {
+   "4.13.3": 2,
+   "3.2.3": 2
+  },
+  "custom element reactions stack": {
+   "13.2.6.1": 4
+  },
+  "custom state pseudo class": {
+   "4.13.1.8": 3
+  },
+  "custom validity error message": {
+   "4.13.7.3": 2,
+   "4.10.21.3": 2
+  },
+  "customized built in element": {
+   "4.13.1.4": 10,
+   "4.13.1.5": 2,
+   "13.3": 2
+  },
+  "data block": {
+   "16.2": 2
+  },
+  "default on": {
+   "4.10.5": 2
+  },
+  "default playback start position": {
+   "4.8.11.5": 2
+  },
+  "default state": {
+   "4.8.14.2": 3
+  },
+  "delays the load event": {
+   "4.8.5": 3,
+   "4.8.7": 2,
+   "4.8.11.5": 13,
+   "4.2.4.3": 2
+  },
+  "density corrected natural width and height": {
+   "4.8.3": 5
+  },
+  "deserialization steps": {
+   "2.7.6": 2
+  },
+  "destroy a child navigable": {
+   "4.8.5": 2,
+   "4.8.7": 2
+  },
+  "destroy a document and its descendants": {
+   "7.3.1.6": 2
+  },
+  "determine navigation params policy container": {
+   "7.4.5": 2
+  },
+  "determine the origin": {
+   "7.4.5": 2
+  },
+  "dialog pointerdown target": {
+   "4.11.5": 3
+  },
+  "did perform automatic track selection": {
+   "4.8.11.11.3": 2
+  },
+  "dimension attribute source": {
+   "4.8.4.3.9": 2
+  },
+  "direction of playback": {
+   "4.8.11.7": 3
+  },
+  "dirty value flag": {
+   "4.10.19.3": 2,
+   "4.10.19.4": 2,
+   "4.10.11": 5,
+   "4.10.5": 5
+  },
+  "display size": {
+   "15.5.16": 5
+  },
+  "do not apply": {
+   "4.10.20": 9,
+   "4.10.5.1.1": 3,
+   "4.10.5.1.2": 2,
+   "4.10.5.1.3": 2,
+   "4.10.5.1.4": 2,
+   "4.10.5.1.5": 2,
+   "4.10.5.1.6": 2,
+   "4.10.5.1.7": 2,
+   "4.10.5.1.8": 2,
+   "4.10.5.1.9": 2,
+   "4.10.5.1.10": 2,
+   "4.10.5.1.11": 2,
+   "4.10.5.1.12": 2,
+   "4.10.5.1.13": 2,
+   "4.10.5.1.14": 2,
+   "4.10.5.1.15": 2,
+   "4.10.5.1.16": 2,
+   "4.10.5.1.17": 2,
+   "4.10.5.1.18": 3,
+   "4.10.5.1.19": 3,
+   "4.10.5.1.20": 3,
+   "4.10.5.1.21": 3,
+   "4.10.5.3.9": 2,
+   "4.10.5.4": 7
+  },
+  "document base url": {
+   "4.2.3": 3,
+   "4.2.4.4": 2,
+   "7.6.1.2": 2,
+   "2.4.2": 2
+  },
+  "document browsing context": {
+   "7.1.1.2": 2,
+   "7.4.6.2": 2,
+   "7.5.1": 2,
+   "7.3.2.1": 3,
+   "3.2.1": 2,
+   "8.5.2": 2,
+   "2.1.4": 2,
+   "2.1.8": 2,
+   "7.2.2": 3,
+   "13.2.7": 3,
+   "8.1.3.4": 2
+  },
+  "document rule conjunction": {
+   "7.6.1.2": 2
+  },
+  "document rule predicate": {
+   "7.6.1.3": 2,
+   "7.6.5.2": 2
+  },
+  "document state": {
+   "7.4.1.4": 8,
+   "7.4.2.2": 2,
+   "7.4.2.3.1": 3,
+   "7.4.2.3.2": 3,
+   "7.4.2.3.3": 2,
+   "7.4.2.4": 2,
+   "7.4.4": 2,
+   "7.4.5": 41,
+   "7.4.6.1": 16,
+   "7.4.6.2": 3,
+   "7.3.1": 3,
+   "7.3.1.3": 3,
+   "7.2.6.6": 2
+  },
+  "document tree child navigables": {
+   "7.2.2.2": 4,
+   "7.2.2.3": 2
+  },
+  "document.write(... text )": {
+   "8.4.1": 2,
+   "13.2.6.4.4": 3,
+   "13.2.6.4.8": 2,
+   "4.12.1": 2
+  },
+  "dom anchor": {
+   "6.6.3": 11,
+   "6.6.4": 5,
+   "6.12": 2
+  },
+  "dom manipulation task source": {
+   "7.5.8": 2,
+   "4.8.3": 3,
+   "4.8.7": 2,
+   "4.8.4.3.5": 6,
+   "2.1.1": 4,
+   "4.8.11.11.3": 2,
+   "13.2.7": 2,
+   "4.12.1.1": 3,
+   "8.1.7.3": 3,
+   "10.2.4": 2,
+   "10.2.6.4": 3
+  },
+  "download the hyperlink": {
+   "4.6.2": 2
+  },
+  "drag data store": {
+   "6.11.3": 18,
+   "6.11.3.1": 13,
+   "6.11.3.2": 5,
+   "6.11.4": 4
+  },
+  "drag data store allowed effects state": {
+   "6.11.4": 2
+  },
+  "drag data store bitmap": {
+   "6.11.3": 2
+  },
+  "drag data store default feedback": {
+   "6.11.5": 2
+  },
+  "drag data store item list": {
+   "6.11.3": 11,
+   "6.11.3.1": 5,
+   "6.11.3.2": 2,
+   "6.11.5": 9
+  },
+  "drag data store mode": {
+   "6.11.3": 7,
+   "6.11.4": 3
+  },
+  "drop down box": {
+   "4.10.7": 3
+  },
+  "during loading navigation id for webdriver bidi": {
+   "7.4.6.2": 2,
+   "7.5.11": 3,
+   "13.2.7": 3
+  },
+  "earliest possible position": {
+   "4.8.11.5": 2,
+   "4.8.11.8": 4,
+   "4.8.11.9": 2
+  },
+  "editing host": {
+   "6.11.5": 5,
+   "6.8.5": 2,
+   "6.8.6": 2,
+   "6.8.7": 3,
+   "6.8.8": 3
+  },
+  "effective domain": {
+   "7.1.1.2": 2
+  },
+  "element queue": {
+   "13.2.6.1": 4
+  },
+  "eligible for autoplay": {
+   "4.8.11.7": 2
+  },
+  "embedded content": {
+   "4.12.5": 8,
+   "4.8.1": 2,
+   "4.8.3": 2,
+   "4.8.5": 2,
+   "4.8.6": 2,
+   "4.8.7": 2,
+   "4.8.8": 2,
+   "4.8.9": 2
+  },
+  "embedder policy": {
+   "7.1.4.1": 2,
+   "7.1.4.2": 4
+  },
+  "embedder policy value": {
+   "7.1.4.1": 2
+  },
+  "encoding declaration state": {
+   "4.2.5": 3
+  },
+  "encoding parse a url": {
+   "4.8.5": 2,
+   "4.6.7": 2,
+   "4.8.11.5": 2,
+   "7.2.4": 3
+  },
+  "encoding parse and serialize a url": {
+   "6.11.5": 2,
+   "4.10.19.6": 2,
+   "4.8.4.3.5": 2,
+   "5.2.4": 3
+  },
+  "encoding sniffing algorithm": {
+   "13.2.3.4": 3
+  },
+  "end tags": {
+   "13.2.2": 6,
+   "13.1.2.4": 21,
+   "4.9.3": 2,
+   "4.9.5": 2
+  },
+  "ended playback": {
+   "4.8.11.5": 2,
+   "4.8.11.7": 3
+  },
+  "enqueue a custom element callback reaction": {
+   "4.13.5": 4,
+   "4.13.7.3": 2
+  },
+  "entry list": {
+   "4.10.22.6": 2,
+   "7.2.6.4": 8,
+   "7.2.6.6": 2,
+   "7.2.6.7": 5,
+   "7.2.6.10.4": 3
+  },
+  "entry settings object": {
+   "7.2.4": 22
+  },
+  "enumerated attributes": {
+   "2.6.1": 3,
+   "4.10.19.6": 2,
+   "4.10.6": 2,
+   "16.3.1": 2,
+   "4.12.3": 2
+  },
+  "environment discarding steps": {
+   "7.4.5": 2
+  },
+  "environment settings object": {
+   "7.1.3.3": 5,
+   "7.1.4.2": 2,
+   "7.2.2.6": 2,
+   "2.4.2": 3,
+   "8.1.2.2": 3,
+   "8.1.3.3": 6,
+   "8.1.3.3.2": 8,
+   "8.1.3.4": 3,
+   "8.1.4.2": 20,
+   "8.1.4.3": 7,
+   "8.1.4.4": 3,
+   "8.1.5.3": 2,
+   "8.1.7.3": 2,
+   "10.2.6.2": 2,
+   "11.3.1.3": 2
+  },
+  "erase all event listeners and handlers": {
+   "8.4.1": 3
+  },
+  "error to rethrow": {
+   "8.1.4.2": 3,
+   "8.1.4.3": 7,
+   "8.1.4.4": 4,
+   "11.3.2": 2
+  },
+  "event handler content attribute": {
+   "4.3.1": 3,
+   "8.1.8.2": 4
+  },
+  "event handler event type": {
+   "4.12.5.3": 2,
+   "6.10.3": 2,
+   "4.8.11.10.1": 2,
+   "4.8.11.11.6": 6,
+   "7.2.6.2": 2,
+   "7.2.6.5": 2,
+   "9.2.2": 2,
+   "9.4.3": 2,
+   "9.4.4": 2,
+   "9.5": 2,
+   "8.1.8.2": 8,
+   "10.2.1.1": 2,
+   "10.2.1.3": 2,
+   "10.2.6.1": 2
+  },
+  "event handler idl attribute": {
+   "4.8.11.11.6": 3,
+   "8.1.8.2": 10,
+   "10.1.3.2": 2
+  },
+  "event handlers": {
+   "4.12.5.3": 2,
+   "6.10.3": 2,
+   "4.8.11.10.1": 2,
+   "4.8.11.11.6": 6,
+   "7.2.6.2": 2,
+   "7.2.6.5": 2,
+   "16.3.2": 3,
+   "4.3.1": 4,
+   "9.2.2": 2,
+   "9.4.3": 2,
+   "9.4.4": 2,
+   "9.5": 2,
+   "8.1.8.2": 10,
+   "10.2.1.1": 2,
+   "10.2.1.3": 2,
+   "10.2.6.1": 2
+  },
+  "event loop": {
+   "7.4.2.4": 2,
+   "4.12.5.3": 2,
+   "7.5.9": 2,
+   "7.5.11": 2,
+   "8.1.7.2": 2,
+   "8.1.7.3": 2
+  },
+  "event loops": {
+   "7.5.9": 3,
+   "4.8.6": 2,
+   "4.8.8": 2,
+   "4.8.11": 2,
+   "4.8.11.5": 2,
+   "4.8.11.8": 3,
+   "4.8.11.9": 2,
+   "4.8.11.11.3": 2,
+   "4.8.11.11.5": 2,
+   "4.2.7": 2,
+   "9.4.4": 4,
+   "8.1.3.3.2": 2,
+   "8.1.7.2": 3,
+   "8.1.7.3": 28,
+   "8.1.7.5": 11,
+   "10.2.4": 2
+  },
+  "eventsource( url eventsourceinitdict )": {
+   "9.2.8": 2
+  },
+  "ever populated": {
+   "7.4.5": 4,
+   "7.4.6.1": 3
+  },
+  "explicit eof character": {
+   "8.4.2": 2
+  },
+  "expose a user interface to the user": {
+   "15.4.1": 4
+  },
+  "extensions to the predefined set of link types": {
+   "4.2.4": 2
+  },
+  "fail the connection": {
+   "9.2.2": 3
+  },
+  "failed to load": {
+   "4.8.10": 2,
+   "4.8.11.11.3": 3
+  },
+  "fake worklet 1": {
+   "11.2.1": 2
+  },
+  "fallback base url": {
+   "4.2.3": 3
+  },
+  "fallback content": {
+   "4.12.5": 5,
+   "4.8.6": 3,
+   "4.8.7": 6
+  },
+  "familiar with": {
+   "7.3.1.7": 4
+  },
+  "fetch a worklet script graph": {
+   "11.3.2": 2
+  },
+  "fetch and process the linked resource": {
+   "4.6.8.5": 2,
+   "4.6.8.11": 2,
+   "4.6.8.12": 2,
+   "4.6.8.18": 2,
+   "4.6.8.19": 2,
+   "4.6.8.20": 2,
+   "4.6.8.23": 3,
+   "4.2.4": 3,
+   "4.2.4.2": 4
+  },
+  "fetch client": {
+   "7.4.5": 2
+  },
+  "fetch controller": {
+   "7.4.5": 2,
+   "7.5.1": 2
+  },
+  "fetch options": {
+   "8.7": 3,
+   "8.1.4.3": 6
+  },
+  "fetch priority attribute": {
+   "4.2.4.4": 3
+  },
+  "fill rule": {
+   "4.12.5.1.13": 6
+  },
+  "fill style": {
+   "4.12.5.1.12": 2
+  },
+  "final sandboxing flag set": {
+   "7.4.5": 4
+  },
+  "find in page": {
+   "6.1": 2,
+   "6.3": 2
+  },
+  "finished promise": {
+   "7.2.6.10.4": 3
+  },
+  "fire a dnd event": {
+   "6.11.5": 9
+  },
+  "firing a click event": {
+   "4.10.4": 2
+  },
+  "flattened tabindex ordered focus navigation scope": {
+   "6.6.5": 2
+  },
+  "flow content": {
+   "3.2.4": 2,
+   "4.8.15": 2,
+   "4.8.16": 2,
+   "4.8.3": 2,
+   "4.10.15": 3,
+   "4.10.3": 3,
+   "4.4.1": 2,
+   "4.4.2": 2,
+   "4.4.3": 2,
+   "4.4.4": 3,
+   "4.4.5": 2,
+   "4.4.6": 2,
+   "4.4.7": 2,
+   "4.4.9": 2,
+   "4.4.12": 6,
+   "4.4.14": 3,
+   "4.4.15": 3,
+   "4.4.16": 3,
+   "4.11.1": 3,
+   "4.11.4": 3,
+   "4.3.2": 2,
+   "4.3.3": 2,
+   "4.3.4": 2,
+   "4.3.5": 2,
+   "4.3.8": 3,
+   "4.3.9": 3,
+   "4.3.10": 3,
+   "4.9.1": 2
+  },
+  "flush code points consumed as a character reference": {
+   "13.2.5.78": 3
+  },
+  "focus changed during ongoing navigation": {
+   "7.2.6.10.5": 2
+  },
+  "focus navigation scope": {
+   "6.6.3": 3
+  },
+  "focusable area": {
+   "6.6.3": 23,
+   "6.6.4": 17,
+   "6.6.5": 9,
+   "6.6.7": 4
+  },
+  "focused area of the document": {
+   "2.1.4": 2,
+   "6.6.4": 3,
+   "4.11.4": 4,
+   "6.12": 2,
+   "8.1.7.3": 2
+  },
+  "focusing steps": {
+   "6.6.6": 2,
+   "4.11.4": 2,
+   "6.12": 2
+  },
+  "follow the hyperlink": {
+   "4.6.2": 3,
+   "4.2.4.6": 2
+  },
+  "font style source object": {
+   "4.12.5.1.20": 2
+  },
+  "force async": {
+   "4.12.1": 2
+  },
+  "force quirks flag": {
+   "13.2.5.54": 2,
+   "13.2.5.56": 2,
+   "13.2.5.57": 3,
+   "13.2.5.58": 3,
+   "13.2.5.59": 2,
+   "13.2.5.60": 2,
+   "13.2.5.61": 2,
+   "13.2.5.62": 2,
+   "13.2.5.63": 3,
+   "13.2.5.64": 3,
+   "13.2.5.65": 2,
+   "13.2.5.66": 2,
+   "13.2.5.67": 2
+  },
+  "foreign elements": {
+   "13.1.2.1": 2,
+   "13.1.2.3": 2
+  },
+  "form associated custom element": {
+   "4.13.6": 4,
+   "4.13.7.3": 13,
+   "4.10.18.3": 3,
+   "4.10.21.1": 11,
+   "4.10.21.3": 4,
+   "4.10.2": 5,
+   "4.10.4": 5,
+   "13.2.6.1": 2
+  },
+  "form associated elements": {
+   "4.10.18.3": 15,
+   "4.10.4": 2,
+   "2.1.4": 6,
+   "4.10.5": 2
+  },
+  "form control maxlength attribute": {
+   "4.10.11": 2
+  },
+  "form control minlength attribute": {
+   "4.10.11": 2
+  },
+  "form element pointer": {
+   "13.2.6.1": 3,
+   "13.2.6.4.7": 4,
+   "13.2.6.4.9": 2,
+   "13.4": 2
+  },
+  "form owner": {
+   "4.13.7.3": 2,
+   "4.10.19.6": 4,
+   "4.10.19.7.1": 2,
+   "4.10.19.7.2": 5,
+   "4.10.22.2": 2,
+   "4.10.22.3": 2,
+   "4.10.6": 4,
+   "4.10.2": 3,
+   "4.10.3": 7,
+   "4.10.4": 2,
+   "2.1.4": 4,
+   "4.10.5": 2,
+   "4.10.5.1.16": 3,
+   "4.10.5.1.18": 2,
+   "4.10.5.1.19": 2,
+   "4.10.5.1.20": 2,
+   "6.8.7": 2,
+   "6.8.8": 2,
+   "4.16.3": 3,
+   "8.1.8.1": 2
+  },
+  "foster parenting": {
+   "13.2.6.4.9": 2,
+   "13.2.10.3": 3
+  },
+  "fragment case": {
+   "13.2.4.1": 4,
+   "13.2.4.2": 3,
+   "13.2.6.4.4": 2,
+   "13.2.6.4.7": 4,
+   "13.2.6.4.11": 2,
+   "13.2.6.4.18": 2
+  },
+  "fragment context element": {
+   "13.2.6.1": 3,
+   "13.2.6.4.7": 2,
+   "13.4": 4
+  },
+  "frameset ok flag": {
+   "13.2.6.4.7": 16
+  },
+  "fully active": {
+   "7.4.1.2": 2,
+   "7.4.6.2": 2,
+   "7.3.1.5": 2,
+   "7.3.2.2": 3,
+   "8.4.1": 2,
+   "4.8.3": 2,
+   "4.8.7": 2,
+   "4.8.4.3.5": 2,
+   "6.6.2": 3,
+   "6.6.7": 2,
+   "6.10.1": 2,
+   "6.10.2": 3,
+   "4.11.4": 5,
+   "4.8.11.8": 2,
+   "7.2.5": 6,
+   "7.2.6.5": 6,
+   "7.2.6.7": 3,
+   "7.2.6.10.4": 5,
+   "15.1": 4,
+   "9.4.4": 3,
+   "12.2.1": 2,
+   "10.2.3": 3
+  },
+  "generate implied end tags": {
+   "13.2.6.4.7": 18,
+   "13.2.6.4.11": 2,
+   "13.2.6.4.15": 2
+  },
+  "generator unable to provide required alt": {
+   "4.8.4.4.15": 3
+  },
+  "generic raw text element parsing algorithm": {
+   "13.2.6.4.7": 3
+  },
+  "get a sanitizer instance from options": {
+   "8.5.2": 2
+  },
+  "get a select enabled selectedcontent": {
+   "4.10.10": 2
+  },
+  "get all used history steps": {
+   "7.4.6.1": 2
+  },
+  "get session history entries for the navigation api": {
+   "7.2.6.4": 2
+  },
+  "get the focusable area": {
+   "6.6.7": 2
+  },
+  "get the navigation api entry index": {
+   "7.2.6.4": 3
+  },
+  "gethtml( options )": {
+   "8.5": 2
+  },
+  "getimagedata( sx sy sw sh settings )": {
+   "4.12.5.1.2": 2
+  },
+  "given name": {
+   "4.10.19.7.2": 2
+  },
+  "global date and time": {
+   "4.7.3": 3
+  },
+  "global identifier": {
+   "5.4.1": 2
+  },
+  "global object": {
+   "8.1.7.5": 3
+  },
+  "global scopes": {
+   "11.3.1.2": 3
+  },
+  "go( delta )": {
+   "7.4.1.3": 2
+  },
+  "hand off to external software": {
+   "7.4.5": 4
+  },
+  "handle as a download": {
+   "7.4.5": 2
+  },
+  "has a style sheet that is blocking scripts": {
+   "4.12.1.1": 2
+  },
+  "has cross site ancestor": {
+   "7.2.2.6": 2,
+   "10.2.6.2": 2
+  },
+  "has entries and events disabled": {
+   "7.2.6.4": 3,
+   "7.2.6.6": 3,
+   "7.2.6.10.4": 3
+  },
+  "has range limitations": {
+   "4.16.3": 2
+  },
+  "has transient activation": {
+   "7.4.2.4": 2,
+   "7.4.5": 4
+  },
+  "have a particular element in button scope": {
+   "13.2.6.4.7": 11
+  },
+  "have a particular element in scope": {
+   "13.2.6.4.7": 23
+  },
+  "have a particular element in table scope": {
+   "13.2.6.4.9": 3,
+   "13.2.6.4.11": 2,
+   "13.2.6.4.13": 2,
+   "13.2.6.4.14": 4,
+   "13.2.6.4.15": 4
+  },
+  "have current data": {
+   "4.8.11.5": 2,
+   "4.8.11.8": 2,
+   "4.8.11.16": 2
+  },
+  "have enough data": {
+   "4.8.11.8": 4
+  },
+  "have future data": {
+   "4.8.11.8": 5,
+   "4.8.11.16": 3
+  },
+  "have metadata": {
+   "4.8.11.5": 2,
+   "4.8.11.8": 4
+  },
+  "have nothing": {
+   "4.8.8": 4,
+   "4.8.11.5": 4,
+   "4.8.11.8": 2
+  },
+  "head element pointer": {
+   "13.2.4.1": 2,
+   "13.2.6.4.3": 2,
+   "13.2.6.4.6": 3
+  },
+  "heading content": {
+   "4.3.6": 2,
+   "4.3.7": 2
+  },
+  "heading level": {
+   "4.3.6": 2,
+   "4.3.11.2": 2,
+   "4.3.11.3": 2
+  },
+  "hidden until found": {
+   "6.9.2": 3
+  },
+  "hide a popover": {
+   "4.10.6": 2
+  },
+  "hide popovers until": {
+   "4.11.4": 2
+  },
+  "historical agent cluster key map": {
+   "8.1.2.2": 3
+  },
+  "history action activation": {
+   "6.10.2": 2,
+   "6.10.3": 2
+  },
+  "history handling behavior": {
+   "7.4.2.3.3": 2,
+   "7.2.6.3": 4
+  },
+  "history object": {
+   "7.4.4": 2,
+   "7.4.6.1": 2,
+   "7.4.6.2": 4
+  },
+  "history policy container": {
+   "7.4.2.3.2": 2,
+   "7.4.5": 6
+  },
+  "html element moving steps": {
+   "4.10.18.3": 2
+  },
+  "html element post connection steps": {
+   "4.12.1.1": 7
+  },
+  "html elements": {
+   "3.2.2": 3,
+   "3.2.5": 3,
+   "3.2.6": 10,
+   "3.2.6.2": 5,
+   "3.2.6.3": 5,
+   "3.2.6.4": 4,
+   "3.2.6.6": 2,
+   "3.2.8.1": 2,
+   "3.2.9": 2,
+   "4.10.6": 3,
+   "6.8.4": 2,
+   "7.2.2.3": 2,
+   "13.2.6.4.7": 17,
+   "13.2.6.4.15": 4,
+   "13.3": 2,
+   "6.12": 26,
+   "6.12.2": 2,
+   "4.3.11.1": 2,
+   "4.16.2": 5,
+   "4.16.3": 2,
+   "8.1.8.2": 2
+  },
+  "html fragment parsing algorithm": {
+   "13.2.4.5": 2
+  },
+  "html fragment serialization algorithm": {
+   "8.5.3": 2
+  },
+  "html parser": {
+   "7.5.2": 4,
+   "7.5.4": 4,
+   "3.1.5": 2,
+   "8.4.3": 2,
+   "4.8.7": 3,
+   "4.6.8.6": 2,
+   "4.8.11.11.1": 2,
+   "13.2.6.4.8": 2,
+   "13.2.9": 5,
+   "13.3": 5,
+   "13.4": 7,
+   "4.12.1.1": 3,
+   "4.12.2": 2,
+   "4.2.6": 3,
+   "14.2": 3
+  },
+  "http equiv": {
+   "4.2.5": 8
+  },
+  "http microformats.org profile hcalendar vevent": {
+   "5.3.2.1": 3
+  },
+  "http microformats.org profile hcard": {
+   "5.3.1.1": 4
+  },
+  "hyperlink annotations": {
+   "4.6.8": 5,
+   "4.6.8.27": 2
+  },
+  "iframe element referrer policy": {
+   "7.4.2.2": 2,
+   "7.4.2.3.2": 2,
+   "7.4.5": 2
+  },
+  "iframe sandboxing flag set": {
+   "4.8.5": 3
+  },
+  "ignore destructive writes counter": {
+   "4.12.1.1": 2
+  },
+  "ignore higher layer caching": {
+   "4.8.4.3.5": 2
+  },
+  "image data": {
+   "4.8.4.3.5": 3,
+   "4.8.4.3.6": 3,
+   "4.8.4.3.13": 2
+  },
+  "image map": {
+   "4.8.3": 2,
+   "4.8.12": 2,
+   "4.8.13": 6,
+   "15.4.4": 2
+  },
+  "image request": {
+   "4.8.4.3.5": 3
+  },
+  "image source": {
+   "4.8.4.3.8": 2,
+   "4.8.4.3.9": 2,
+   "4.8.4.3.12": 7
+  },
+  "immediate user selection": {
+   "6.11.6": 2
+  },
+  "import map": {
+   "4.12.1": 2,
+   "8.1.5.1": 3,
+   "8.1.5.2": 2
+  },
+  "importscripts(... urls )": {
+   "10.2.1.1": 2
+  },
+  "in error reporting mode": {
+   "8.1.4.6": 3
+  },
+  "in parallel": {
+   "7.4.5": 2,
+   "4.8.3": 3,
+   "4.8.4.3.5": 3,
+   "4.6.6": 2,
+   "4.8.11.5": 5,
+   "4.8.11.11.3": 2,
+   "4.12.1": 4,
+   "9.2.3": 2,
+   "8.10.1.4": 2,
+   "8.1.7.3": 8,
+   "8.1.7.5": 14
+  },
+  "inclusive ancestor navigables": {
+   "7.1.3.3": 2
+  },
+  "inclusive descendant navigables": {
+   "7.3.1.7": 2,
+   "6.4.2": 2
+  },
+  "increment the marquee current loop index": {
+   "15.5.13": 3
+  },
+  "incumbent global object": {
+   "7.2.2.1": 2,
+   "7.2.4": 2
+  },
+  "incumbent settings object": {
+   "8.1.6.6": 2
+  },
+  "initial url": {
+   "7.1.3.2": 2,
+   "7.1.3.3": 2
+  },
+  "initialize an imagedata object": {
+   "4.12.5.1.16": 3
+  },
+  "initiator origin": {
+   "7.4.2.2": 2,
+   "7.4.5": 9
+  },
+  "input activation behavior": {
+   "4.10.5.5": 4
+  },
+  "input stream": {
+   "13.2.2": 15,
+   "13.2.3": 2,
+   "13.2.8": 2
+  },
+  "insert a character": {
+   "13.2.6.4.7": 2,
+   "13.2.6.5": 3
+  },
+  "insert a foreign element": {
+   "13.2.6.4.4": 3,
+   "13.2.6.4.7": 2
+  },
+  "insert an element at the adjusted insertion location": {
+   "13.2.6.4.4": 4
+  },
+  "insert an html element": {
+   "13.2.6.4.3": 2,
+   "13.2.6.4.4": 5,
+   "13.2.6.4.6": 3,
+   "13.2.6.4.7": 26,
+   "13.2.6.4.9": 7,
+   "13.2.6.4.13": 2,
+   "13.2.6.4.18": 2
+  },
+  "insertion end marker": {
+   "13.2.6.1": 2,
+   "13.2.6.4.4": 2
+  },
+  "insertion mode": {
+   "13.2.4.2": 2,
+   "13.2.6.2": 2,
+   "13.2.6.4.1": 3,
+   "13.2.6.4.2": 3,
+   "13.2.6.4.3": 4,
+   "13.2.6.4.4": 8,
+   "13.2.6.4.5": 5,
+   "13.2.6.4.6": 7,
+   "13.2.6.4.7": 9,
+   "13.2.6.4.8": 4,
+   "13.2.6.4.9": 11,
+   "13.2.6.4.10": 2,
+   "13.2.6.4.11": 4,
+   "13.2.6.4.12": 6,
+   "13.2.6.4.13": 6,
+   "13.2.6.4.14": 6,
+   "13.2.6.4.15": 4,
+   "13.2.6.4.16": 8,
+   "13.2.6.4.17": 5,
+   "13.2.6.4.18": 4,
+   "13.2.6.4.19": 4,
+   "13.2.6.4.20": 3,
+   "13.2.6.4.21": 3,
+   "13.2.6.5": 2,
+   "13.2.10.3": 5
+  },
+  "insertion point": {
+   "8.4.3": 2,
+   "13.2.6.4.8": 6,
+   "13.2.6.5": 4
+  },
+  "insertion start marker": {
+   "13.2.6.4.4": 2
+  },
+  "insertion target": {
+   "13.2.6.4.4": 2
+  },
+  "integrity metadata": {
+   "4.12.1.1": 2
+  },
+  "inter element whitespace": {
+   "3.2.5.4": 2,
+   "4.8.4.4.11": 2,
+   "4.5.10": 4
+  },
+  "interactive content": {
+   "4.10.6": 2,
+   "4.10.4": 3,
+   "4.5.1": 2
+  },
+  "interactively validate the constraints": {
+   "4.10.3": 3
+  },
+  "intercept( options )": {
+   "7.2.6.7": 8,
+   "7.2.6.8": 6,
+   "7.2.6.10.4": 4
+  },
+  "interception state": {
+   "7.2.6.10.2": 4,
+   "7.2.6.10.4": 6,
+   "7.2.6.10.5": 10
+  },
+  "internal content attribute map": {
+   "2.6.1": 6,
+   "3.2.9": 2
+  },
+  "internal pause steps": {
+   "4.8.11.13": 2
+  },
+  "internal resource links": {
+   "4.6.8.6": 7
+  },
+  "intersect the viewport": {
+   "4.8.11.7": 4
+  },
+  "invalid value default": {
+   "4.10.19.6": 4,
+   "4.10.6": 2,
+   "16.3.1": 2,
+   "4.12.3": 2
+  },
+  "invoke custom element reactions": {
+   "13.2.6.1": 2
+  },
+  "is closing": {
+   "7.2.2.1": 3
+  },
+  "is initial about blank": {
+   "7.4.4": 2,
+   "7.4.6.1": 2,
+   "7.5.1": 3,
+   "7.2.2": 2
+  },
+  "is not origin clean": {
+   "8.11.2": 2
+  },
+  "is popup": {
+   "7.2.2.5": 2
+  },
+  "is same document": {
+   "7.2.6.10.4": 7
+  },
+  "item types": {
+   "5.2.1": 2,
+   "5.3.1.1": 4,
+   "5.4.1": 2
+  },
+  "jake diagram": {
+   "7.4.5": 2
+  },
+  "javascript module script": {
+   "4.12.1": 11
+  },
+  "json module script": {
+   "4.12.1": 2
+  },
+  "labelable elements": {
+   "4.10.4": 7
+  },
+  "labeled control": {
+   "4.11.3.4": 2,
+   "4.11.3.7": 2,
+   "4.16.3": 3
+  },
+  "last activation timestamp": {
+   "6.4.2": 4
+  },
+  "last event id": {
+   "9.2.6": 2
+  },
+  "last event id string": {
+   "9.1": 2,
+   "9.2.3": 2,
+   "9.2.6": 4
+  },
+  "last idle period start time": {
+   "8.1.7.3": 2
+  },
+  "last render opportunity time": {
+   "8.1.7.3": 4
+  },
+  "last selected source": {
+   "4.8.4.3.13": 2
+  },
+  "latest entry": {
+   "7.4.6.2": 6
+  },
+  "lazy load resumption steps": {
+   "4.8.3": 2,
+   "4.8.5": 4,
+   "4.8.11": 3,
+   "4.8.11.5": 4,
+   "4.8.11.8": 2
+  },
+  "lifecycle callbacks": {
+   "4.13.6": 3
+  },
+  "limited to only known values": {
+   "3.2.6.4": 2,
+   "4.8.3": 5,
+   "4.10.19.6": 4,
+   "4.8.5": 2,
+   "4.10.5": 2,
+   "4.12.1": 3,
+   "4.12.3": 2,
+   "4.2.4": 4
+  },
+  "link processing options": {
+   "4.6.8.18": 2,
+   "4.6.8.20": 2
+  },
+  "links to external resources": {
+   "4.6.8": 9,
+   "4.6.8.5": 4,
+   "4.6.8.11": 4,
+   "4.6.8.12": 5,
+   "4.6.8.18": 5,
+   "4.6.8.19": 5,
+   "4.6.8.20": 7,
+   "4.6.8.23": 10,
+   "4.6.8.27": 3,
+   "4.2.4": 8,
+   "4.2.4.2": 5,
+   "4.2.4.3": 5
+  },
+  "list of active formatting elements": {
+   "13.2.6.4.7": 14,
+   "13.2.10.1": 2,
+   "13.2.10.2": 3,
+   "13.2.10.3": 6
+  },
+  "list of available images": {
+   "4.8.4.3.5": 2,
+   "4.8.4.3.13": 2
+  },
+  "list of options": {
+   "4.10.19.7.2": 2,
+   "4.10.10": 3,
+   "15.5.16": 2
+  },
+  "list of scripts that will execute when the document has finished parsing": {
+   "13.2.7": 4
+  },
+  "list of text tracks": {
+   "4.8.11.8": 5,
+   "4.8.11.11.3": 6,
+   "4.8.11.11.5": 8
+  },
+  "listed elements": {
+   "4.10.18.3": 8,
+   "4.10.15": 2,
+   "4.10.3": 3,
+   "4.10.5": 2
+  },
+  "load timing info": {
+   "13.2.7": 4
+  },
+  "local name": {
+   "4.13.4": 2,
+   "3.2.3": 4
+  },
+  "location object navigate": {
+   "8.1.3.3.2": 2
+  },
+  "look up a custom element definition": {
+   "4.13.5": 2
+  },
+  "make document unsalvageable": {
+   "7.5.11": 2
+  },
+  "map of active timers": {
+   "7.5.9": 2
+  },
+  "map of animation frame callbacks": {
+   "8.1.7.3": 2
+  },
+  "map to the aspect ratio property (using dimension rules)": {
+   "15.4.3": 2
+  },
+  "maps to the dimension property": {
+   "15.3.8": 4,
+   "15.4.3": 4,
+   "15.5.13": 3
+  },
+  "maps to the dimension property (ignoring zero)": {
+   "15.3.8": 3
+  },
+  "maps to the pixel length property": {
+   "15.3.8": 3
+  },
+  "marquee current loop index": {
+   "15.5.13": 2
+  },
+  "match opener policy values": {
+   "7.1.3.2": 2
+  },
+  "matches about blank": {
+   "4.8.5": 2
+  },
+  "matches the environment": {
+   "4.2.5.1": 2,
+   "4.2.6": 2
+  },
+  "maximum allowed value length": {
+   "4.10.19.4": 2,
+   "4.10.11": 2,
+   "4.10.5.3.1": 2
+  },
+  "media data": {
+   "4.8.11.5": 17,
+   "4.8.11.6": 5,
+   "4.8.11.11.1": 2,
+   "4.8.11.16": 10
+  },
+  "media element event task source": {
+   "4.8.11.5": 2
+  },
+  "media element load algorithm": {
+   "4.8.11.2": 2
+  },
+  "media elements": {
+   "4.8.2": 8,
+   "4.8.6": 2,
+   "4.8.8": 5,
+   "4.8.9": 3,
+   "4.8.10": 6,
+   "4.8.11.2": 9,
+   "4.8.11.5": 81,
+   "4.8.11.6": 14,
+   "4.8.11.7": 13,
+   "4.8.11.8": 88,
+   "4.8.11.9": 7,
+   "4.8.11.10": 5,
+   "4.8.11.10.1": 2,
+   "4.8.11.11.1": 21,
+   "4.8.11.11.2": 2,
+   "4.8.11.11.3": 19,
+   "4.8.11.11.5": 16,
+   "4.8.11.13": 12,
+   "4.8.11.14": 2,
+   "4.8.11.16": 3,
+   "4.8.11.19": 3,
+   "4.16.3": 7
+  },
+  "media provider object": {
+   "4.8.11.5": 4
+  },
+  "media resource": {
+   "4.8.2": 4,
+   "4.8.8": 11,
+   "4.8.9": 4,
+   "4.8.10": 2,
+   "4.8.11.1": 4,
+   "4.8.11.2": 4,
+   "4.8.11.3": 3,
+   "4.8.11.4": 2,
+   "4.8.11.5": 22,
+   "4.8.11.6": 26,
+   "4.8.11.7": 3,
+   "4.8.11.8": 20,
+   "4.8.11.9": 7,
+   "4.8.11.10": 7,
+   "4.8.11.10.1": 10,
+   "4.8.11.10.2": 2,
+   "4.8.11.11.1": 5,
+   "4.8.11.11.2": 9,
+   "4.8.11.16": 5
+  },
+  "media resource specific text track": {
+   "4.8.11.5": 3
+  },
+  "media timeline": {
+   "4.8.11.5": 2,
+   "4.8.11.8": 2,
+   "4.8.11.10.1": 2
+  },
+  "metadata content": {
+   "4.12.1": 2,
+   "4.12.3": 2,
+   "4.2.1": 2,
+   "4.2.4": 2,
+   "4.2.5": 3,
+   "4.2.6": 2
+  },
+  "microtask queue": {
+   "8.1.7.3": 3
+  },
+  "missing value default": {
+   "4.10.19.6": 4,
+   "4.10.6": 2,
+   "16.3.1": 2,
+   "4.12.3": 2
+  },
+  "missing whitespace after doctype public keyword": {
+   "13.2.5.57": 2
+  },
+  "missing whitespace after doctype system keyword": {
+   "13.2.5.63": 2
+  },
+  "missing whitespace between doctype public and system identifiers": {
+   "13.2.5.61": 2
+  },
+  "module map": {
+   "4.6.8.12": 4,
+   "7.2.2.6": 2,
+   "8.1.4.2": 2,
+   "10.2.6.2": 2,
+   "11.3.1.3": 2
+  },
+  "module preload destination": {
+   "4.2.4": 3
+  },
+  "module responses map": {
+   "11.3.1.2": 3
+  },
+  "module script": {
+   "3.1.7": 2,
+   "4.6.8.12": 2,
+   "4.12.1": 7,
+   "8.1.4.2": 15,
+   "8.1.4.3": 5,
+   "8.1.6.7": 6,
+   "11.3.2": 2
+  },
+  "module specifier map": {
+   "8.1.5.1": 3
+  },
+  "module type allowed": {
+   "8.1.4.2": 2
+  },
+  "module type from module request": {
+   "8.1.4.2": 2
+  },
+  "multipart form data encoding algorithm": {
+   "4.10.22.3": 2
+  },
+  "muted errors": {
+   "8.1.4.4": 2,
+   "8.1.4.6": 2
+  },
+  "navigable containers": {
+   "7.3.1.5": 2,
+   "6.6.2": 5,
+   "6.6.4": 5
+  },
+  "navigable target name": {
+   "7.4.2.2": 2,
+   "7.4.2.3.2": 2,
+   "7.4.5": 2
+  },
+  "navigate to a fragment": {
+   "7.4.2.2": 3,
+   "6.1": 2
+  },
+  "navigate( url options )": {
+   "7.2.6.8": 2,
+   "7.2.6.10.4": 2
+  },
+  "navigation and traversal task source": {
+   "7.4.2.2": 3,
+   "7.4.2.4": 2,
+   "7.4.6.1": 7,
+   "7.5.9": 2,
+   "7.5.10": 2,
+   "7.2.6.7": 4
+  },
+  "navigation api": {
+   "7.4.6.1": 3,
+   "7.4.6.2": 2,
+   "7.2.6.8": 3
+  },
+  "navigation api key": {
+   "7.4.2.3.1": 2,
+   "7.2.6.7": 5
+  },
+  "navigation api method tracker": {
+   "7.2.6.10.4": 5
+  },
+  "navigation api state": {
+   "7.4.2.3.3": 4,
+   "7.2.6.6": 2,
+   "7.2.6.8": 2
+  },
+  "navigation id": {
+   "7.4.5": 3,
+   "3.1.1": 2
+  },
+  "navigation params": {
+   "7.4.5": 7
+  },
+  "navigation precommit handler list": {
+   "7.2.6.10.4": 2
+  },
+  "navigation timing type": {
+   "7.4.5": 6
+  },
+  "nearest ancestor select": {
+   "15.5.16": 3,
+   "4.15": 2
+  },
+  "nested histories": {
+   "7.4.1.4": 3
+  },
+  "network empty": {
+   "4.8.11.5": 3,
+   "4.8.11.7": 2,
+   "4.8.11.8": 2,
+   "4.8.11.16": 4
+  },
+  "network idle": {
+   "4.8.11.5": 8,
+   "4.8.11.16": 3
+  },
+  "network loading": {
+   "4.8.11.5": 6,
+   "4.8.11.16": 3
+  },
+  "network no source": {
+   "4.8.11.5": 3
+  },
+  "networking task source": {
+   "7.5.2": 3,
+   "7.5.4": 3,
+   "4.8.7": 2,
+   "4.8.4.3.5": 6,
+   "4.10.5.1.19": 2,
+   "4.8.11.11.3": 4,
+   "8.10.1.3": 2,
+   "11.3.2": 4
+  },
+  "new password": {
+   "4.10.19.7.2": 4
+  },
+  "new sharedworker( scripturl options )": {
+   "10.1.3.3": 2
+  },
+  "next input character": {
+   "13.2.5": 2,
+   "13.2.6.4.8": 2
+  },
+  "next token": {
+   "13.2.6.4.7": 2
+  },
+  "no popover": {
+   "6.6.7": 2
+  },
+  "node is inserted into a document": {
+   "6.6.7": 2,
+   "4.2.5.1": 3,
+   "4.2.5.3": 2
+  },
+  "node is removed from a document": {
+   "4.2.5.1": 2
+  },
+  "node navigable": {
+   "7.4.6.2": 2,
+   "7.5.9": 3,
+   "7.5.10": 3,
+   "7.3.1.3": 3,
+   "7.3.1.5": 4,
+   "7.3.1.6": 2,
+   "7.3.2.2": 2,
+   "7.3.3": 2,
+   "8.4.1": 3,
+   "6.6.2": 3,
+   "6.6.4": 4,
+   "6.6.7": 3,
+   "4.6.6": 2,
+   "7.2.5": 2,
+   "7.2.6.7": 3,
+   "7.2.8": 5,
+   "15.3.2": 4,
+   "4.2.5.3": 2,
+   "4.2.7": 2,
+   "8.1.7.3": 4,
+   "12.2.1": 2
+  },
+  "non fetch scheme navigation params": {
+   "7.4.5": 6
+  },
+  "noopener allow popups": {
+   "7.1.3.1": 2,
+   "7.1.3.2": 2
+  },
+  "not loaded": {
+   "4.8.10": 2
+  },
+  "not restored reasons": {
+   "7.4.6.2": 3
+  },
+  "notify about playing": {
+   "4.8.11.7": 3
+  },
+  "number of days in month month of year year": {
+   "2.3.5.2": 2,
+   "2.3.5.3": 2
+  },
+  "obtain a physical form": {
+   "8.9.2": 2
+  },
+  "obtain an embedder policy": {
+   "7.1.3.1": 2
+  },
+  "obtain their numeric values": {
+   "4.12.5.1": 3,
+   "4.12.5.2.2": 2
+  },
+  "official playback position": {
+   "4.8.11.5": 3,
+   "4.8.11.8": 2
+  },
+  "old entry": {
+   "7.4.6.2": 2
+  },
+  "old state": {
+   "4.11.1": 2,
+   "4.11.4": 2,
+   "6.12": 2
+  },
+  "on document ready": {
+   "4.2.4.5": 2
+  },
+  "one permitted sandboxed navigator": {
+   "7.3.1.7": 3
+  },
+  "ongoing api method tracker": {
+   "7.2.6.4": 4,
+   "7.2.6.10.4": 3
+  },
+  "ongoing navigate event": {
+   "7.2.6.10.4": 5
+  },
+  "ongoing navigation": {
+   "7.4.2.2": 3,
+   "7.4.5": 2,
+   "7.5.11": 3
+  },
+  "opaque origin": {
+   "7.1.1.1": 6,
+   "7.1.1.3": 2,
+   "7.5.7": 2,
+   "7.3.2.1": 2,
+   "3.1.3": 4,
+   "3.1.4": 2,
+   "4.8.5": 2,
+   "10.2.6.4": 2
+  },
+  "open dialogs list": {
+   "4.11.4": 3,
+   "4.11.5": 2
+  },
+  "open( unused1 unused2 )": {
+   "8.4.3": 2
+  },
+  "opener browsing context": {
+   "7.1.3.3": 4,
+   "7.2.2.4": 8
+  },
+  "opener origin at creation": {
+   "7.1.3.3": 2
+  },
+  "opener policy": {
+   "7.1.3.1": 2,
+   "7.1.3.3": 11,
+   "7.4.2.2": 3,
+   "7.4.2.3.2": 3,
+   "7.4.5": 7,
+   "7.5.1": 2,
+   "7.5.7": 3,
+   "7.3.1.7": 2,
+   "7.3.2.1": 2
+  },
+  "opener policy enforcement result": {
+   "7.4.5": 2
+  },
+  "optional value": {
+   "4.11.4": 2
+  },
+  "origin clean": {
+   "4.12.5.1.2": 2,
+   "4.12.5.1.10": 2,
+   "4.12.5.2.2": 2,
+   "4.12.5.6": 7,
+   "8.11.2": 9
+  },
+  "original insertion mode": {
+   "13.2.6.4.8": 3
+  },
+  "output bitmap": {
+   "4.12.5.1": 6,
+   "4.12.5.1.1": 2,
+   "4.12.5.1.15": 6,
+   "4.12.5.1.16": 5,
+   "4.12.5.1.17": 2,
+   "4.12.5.1.22": 4,
+   "4.12.5.3.1": 2,
+   "4.12.5.7": 2
+  },
+  "outstanding rejected promises weak set": {
+   "8.1.6.4": 2
+  },
+  "owner set": {
+   "7.1.7": 2,
+   "8.12": 2,
+   "7.2.8": 3,
+   "10.2.3": 7,
+   "10.2.4": 2,
+   "10.2.6.4": 2
+  },
+  "page showing": {
+   "7.4.6.2": 2,
+   "13.2.7": 2
+  },
+  "parse a date string": {
+   "4.10.5.1.7": 3
+  },
+  "parse a local date and time string": {
+   "4.10.5.1.11": 2
+  },
+  "parse a month string": {
+   "4.10.5.1.8": 3
+  },
+  "parse a sandboxing directive": {
+   "4.8.5": 2
+  },
+  "parse a time string": {
+   "4.10.5.1.10": 3
+  },
+  "parse a week string": {
+   "4.10.5.1.9": 3
+  },
+  "parse error": {
+   "4.8.4.3.10": 4,
+   "4.8.4.3.11": 3,
+   "8.1.4.3": 11,
+   "8.1.6.7.3": 2
+  },
+  "parse html from a string": {
+   "8.5.2": 2
+  },
+  "parser document": {
+   "4.12.1.5": 3
+  },
+  "parser pause flag": {
+   "13.2.6.4.8": 3,
+   "13.2.6.5": 3
+  },
+  "partially available": {
+   "4.8.4.3.5": 4
+  },
+  "paused for in band content": {
+   "4.8.11.16": 2
+  },
+  "paused for user interaction": {
+   "4.8.11.16": 2
+  },
+  "pending parsing blocking script": {
+   "13.2.6.4.8": 4,
+   "14.2": 4
+  },
+  "pending request": {
+   "4.8.3": 2,
+   "4.8.4.3.5": 23,
+   "4.8.4.3.13": 4
+  },
+  "pending table character tokens": {
+   "13.2.6.4.10": 4
+  },
+  "perform a microtask checkpoint": {
+   "7.2.6.10.4": 2
+  },
+  "perform shared checks": {
+   "7.2.6.10.2": 2
+  },
+  "perform the fetch hook": {
+   "10.3.1": 2
+  },
+  "performing a microtask checkpoint": {
+   "8.1.7.3": 5
+  },
+  "permissions policy": {
+   "4.8.5": 3
+  },
+  "persisted user state": {
+   "7.4.4": 2,
+   "7.4.6.5": 2
+  },
+  "phrasing content": {
+   "4.13.3": 2,
+   "3.2.4": 4,
+   "3.2.5.3": 3,
+   "3.2.5.4": 4,
+   "4.7.1": 3,
+   "4.7.2": 2,
+   "4.8.15": 2,
+   "4.8.16": 2,
+   "4.10.6": 3,
+   "4.10.7": 2,
+   "4.10.8": 3,
+   "4.10.11": 2,
+   "4.10.12": 3,
+   "4.10.13": 3,
+   "4.10.14": 3,
+   "4.10.16": 2,
+   "4.10.4": 3,
+   "4.8.12": 2,
+   "4.8.13": 2,
+   "4.10.5": 2,
+   "4.12.1": 2,
+   "4.12.2": 2,
+   "4.12.3": 2,
+   "4.12.4": 2,
+   "4.2.4": 3,
+   "4.2.5": 2,
+   "4.5.1": 2,
+   "4.5.2": 3,
+   "4.5.3": 3,
+   "4.5.4": 3,
+   "4.5.5": 3,
+   "4.5.6": 3,
+   "4.5.7": 4,
+   "4.5.8": 3,
+   "4.5.9": 3,
+   "4.5.10": 3,
+   "4.5.13": 3,
+   "4.5.14": 3,
+   "4.5.15": 3,
+   "4.5.16": 3,
+   "4.5.17": 3,
+   "4.5.18": 3,
+   "4.5.19": 3,
+   "4.5.20": 3,
+   "4.5.21": 3,
+   "4.5.22": 3,
+   "4.5.23": 3,
+   "4.5.24": 3,
+   "4.5.25": 3,
+   "4.5.26": 3,
+   "4.5.27": 2,
+   "4.5.28": 2
+  },
+  "ping from": {
+   "4.6.7": 2
+  },
+  "ping to": {
+   "4.6.7": 2
+  },
+  "pixel density descriptor": {
+   "4.8.4.3.7": 2,
+   "4.8.4.3.12": 5
+  },
+  "placeholder canvas element": {
+   "4.12.5.3.1": 4
+  },
+  "placeholder label option": {
+   "4.10.10": 2,
+   "15.5.16": 3
+  },
+  "policy container": {
+   "7.1.4.2": 2,
+   "7.4.2.2": 3,
+   "7.4.2.3.2": 2,
+   "7.4.5": 7,
+   "7.5.1": 2,
+   "7.5.7": 2,
+   "7.3.2.1": 2,
+   "7.2.2.6": 2,
+   "10.2.6.2": 2,
+   "11.3.1.3": 2
+  },
+  "polygon state": {
+   "4.8.14.2": 3
+  },
+  "popover pointerdown target": {
+   "6.12.2": 3
+  },
+  "popover target element": {
+   "6.12.2": 2
+  },
+  "popover trigger": {
+   "6.6.2": 3
+  },
+  "popover visibility state": {
+   "6.12.1": 3
+  },
+  "popup sandboxing flag set": {
+   "7.1.3.2": 2
+  },
+  "port message queue": {
+   "10.2.4": 3
+  },
+  "post resource": {
+   "7.4.2.2": 2,
+   "4.10.22.3": 2
+  },
+  "poster lazy load resumption steps": {
+   "4.8.8": 2,
+   "4.8.11": 2
+  },
+  "postmessage( message targetorigin transfer )": {
+   "8.1.3.3.2": 6
+  },
+  "postmessage( message transfer )": {
+   "10.1.3.2": 2
+  },
+  "potentially playing": {
+   "4.8.8": 2
+  },
+  "potentially render blocking": {
+   "4.12.1.1": 2,
+   "4.2.6": 2
+  },
+  "pragma set default language": {
+   "3.2.6.2": 2
+  },
+  "preload destination": {
+   "4.2.4": 3
+  },
+  "prepare an image for presentation": {
+   "4.8.4.3.5": 4
+  },
+  "prepare content patching": {
+   "13.2.6.4.4": 2
+  },
+  "prepare to run a callback": {
+   "2.7.9": 2
+  },
+  "prepare to run script": {
+   "2.7.9": 2
+  },
+  "presentational hints": {
+   "15.3.2": 6,
+   "15.3.3": 5,
+   "15.3.4": 6,
+   "15.3.7": 4,
+   "15.3.8": 9,
+   "15.3.11": 5,
+   "15.4.3": 3
+  },
+  "previously focused element": {
+   "6.12": 4
+  },
+  "process close watchers": {
+   "6.10.1": 3
+  },
+  "proleptic gregorian calendar": {
+   "2.3.5.8": 3
+  },
+  "property names": {
+   "5.4.1": 2
+  },
+  "property value": {
+   "5.2.1": 2,
+   "5.2.2": 2,
+   "5.3.1": 70,
+   "5.3.1.1": 24,
+   "5.3.2": 27,
+   "5.3.2.1": 5,
+   "5.3.3": 3
+  },
+  "protected mode": {
+   "6.11.3": 2,
+   "6.11.6": 5
+  },
+  "push onto the list of active formatting elements": {
+   "13.2.6.4.7": 3
+  },
+  "pushstate( data unused url )": {
+   "7.4.4": 3,
+   "7.2.6.3": 2
+  },
+  "queue a global task": {
+   "7.4.2.2": 3,
+   "7.4.2.4": 2,
+   "7.4.6.1": 7,
+   "7.4.6.2": 2,
+   "7.5.9": 2,
+   "7.5.10": 2,
+   "4.8.3": 3,
+   "8.11.2": 9,
+   "2.1.1": 4,
+   "7.2.6.7": 4,
+   "13.2.7": 2,
+   "8.10.1.3": 2,
+   "8.1.7.5": 7,
+   "10.2.4": 2,
+   "10.2.6.4": 3,
+   "11.3.2": 4
+  },
+  "queue a media element task": {
+   "4.8.11.5": 20,
+   "4.8.11.6": 3,
+   "4.8.11.7": 9,
+   "4.8.11.8": 13,
+   "4.8.11.9": 3,
+   "4.8.11.10.1": 2,
+   "4.8.11.11.3": 3,
+   "4.8.11.13": 2
+  },
+  "queue a microtask": {
+   "4.8.4.3.5": 2,
+   "8.8": 2
+  },
+  "queue a task": {
+   "7.5.11": 2,
+   "4.8.7": 3,
+   "4.8.4.3.5": 7,
+   "4.10.5.1.19": 2,
+   "9.2.3": 5,
+   "8.1.7.3": 5,
+   "8.1.7.5": 3
+  },
+  "queue an element task": {
+   "7.5.8": 2,
+   "4.10.11": 2,
+   "4.8.7": 2,
+   "4.8.4.3.5": 6,
+   "4.10.5.1.19": 2,
+   "4.10.5.5": 6,
+   "4.11.4": 2,
+   "4.8.11.11.3": 4,
+   "4.12.1.1": 4
+  },
+  "radio button group": {
+   "4.10.5": 4,
+   "4.10.5.3.4": 2
+  },
+  "raw value": {
+   "4.10.20": 2
+  },
+  "read only mode": {
+   "6.11.3.2": 2
+  },
+  "read write mode": {
+   "6.11.3": 5,
+   "6.11.3.1": 3,
+   "6.11.3.2": 2
+  },
+  "ready to be parser executed": {
+   "13.2.6.4.8": 2
+  },
+  "realm execution context": {
+   "8.1.3.3.1": 2,
+   "8.1.4.4": 3,
+   "8.1.8.1": 2
+  },
+  "reconstruct the active formatting elements": {
+   "13.2.6.4.7": 18
+  },
+  "rectangle state": {
+   "4.8.14.2": 5
+  },
+  "reestablish the connection": {
+   "9.2.2": 2
+  },
+  "referrer policy": {
+   "8.7": 2
+  },
+  "reflected content attribute name": {
+   "2.6.2": 7
+  },
+  "reflected idl attribute": {
+   "2.6.3": 4
+  },
+  "reflected target": {
+   "2.6.3": 2
+  },
+  "registerprotocolhandler() automation mode": {
+   "8.10.1.4": 2
+  },
+  "reject pending play promises": {
+   "4.8.11.5": 3
+  },
+  "reject the finished promise": {
+   "7.2.6.7": 4
+  },
+  "relevant agent": {
+   "7.4.2.4": 2,
+   "4.12.5.3": 2,
+   "4.13.6": 4,
+   "7.5.9": 2,
+   "7.5.11": 2,
+   "13.2.6.1": 4,
+   "8.1.7.3": 2
+  },
+  "relevant global object": {
+   "7.4.2.4": 5,
+   "7.4.6.1": 3,
+   "7.4.6.2": 9,
+   "4.12.5.3": 2,
+   "7.5.9": 10,
+   "7.5.10": 2,
+   "8.4.1": 2,
+   "8.5.1": 3,
+   "8.5.2": 3,
+   "8.5.4": 2,
+   "4.8.5": 3,
+   "2.1.1": 2,
+   "4.10.5.4": 3,
+   "6.2": 2,
+   "6.4.4": 3,
+   "6.6.4": 4,
+   "6.10.1": 2,
+   "6.10.3": 2,
+   "4.8.11.5": 2,
+   "7.2.4": 4,
+   "7.2.5": 11,
+   "7.2.6.5": 7,
+   "7.2.6.7": 7,
+   "7.2.6.10.4": 12,
+   "7.2.6.10.5": 4,
+   "13.2.7": 5,
+   "4.12.1.1": 3,
+   "8.10.1.6": 13,
+   "8.9.2": 2,
+   "2.4.2": 2,
+   "9.4.4": 4,
+   "9.5": 3,
+   "8.1.4.6": 2,
+   "8.1.7.3": 4,
+   "12.2.1": 3,
+   "10.2.6.4": 3,
+   "11.3.2": 3
+  },
+  "relevant mutations": {
+   "4.8.2": 3,
+   "4.8.3": 3,
+   "4.8.4.3.1": 2
+  },
+  "relevant realm": {
+   "7.4.6.1": 2,
+   "7.4.6.2": 3,
+   "2.1.1": 2,
+   "7.2.6.4": 3,
+   "7.2.6.7": 2,
+   "7.2.6.8": 4,
+   "7.2.6.10.4": 12,
+   "9.4.2": 2,
+   "8.1.3.3": 6
+  },
+  "relevant settings object": {
+   "7.1.4.2": 2,
+   "7.4.5": 4,
+   "7.4.6.3": 2,
+   "7.5.9": 2,
+   "7.3.2.1": 4,
+   "4.10.5.4": 2,
+   "4.8.11.5": 2,
+   "7.2.6.4": 2,
+   "7.2.6.10.4": 2,
+   "4.2.4.4": 2,
+   "8.10.1.1": 2,
+   "8.10.1.2": 2,
+   "8.10.1.4": 2,
+   "9.5": 3,
+   "8.1.3.3.2": 3,
+   "8.2": 5,
+   "12.2.1": 3,
+   "10.2.6.4": 2,
+   "11.3.2": 2
+  },
+  "reload pending": {
+   "7.4.6.1": 9
+  },
+  "reload( options )": {
+   "7.2.6.6": 2,
+   "7.2.6.10.4": 2
+  },
+  "render blocking": {
+   "4.6.8.23": 2,
+   "4.12.1.1": 3
+  },
+  "replacestate( data unused url )": {
+   "7.4.4": 2
+  },
+  "report an exception": {
+   "8.1.4.4": 2,
+   "8.1.4.9": 2,
+   "8.1.8.1": 2
+  },
+  "report only reporting endpoint": {
+   "7.1.4.2": 2
+  },
+  "report only value": {
+   "7.1.3.1": 4,
+   "7.1.3.2": 4,
+   "7.1.3.3": 9,
+   "7.1.4.2": 2
+  },
+  "reporting endpoint": {
+   "7.1.3.3": 14,
+   "7.1.4.2": 2
+  },
+  "request body": {
+   "7.4.5": 2
+  },
+  "request close": {
+   "4.11.4": 2
+  },
+  "request referrer": {
+   "7.4.2.3.2": 2,
+   "7.4.5": 5
+  },
+  "request referrer policy": {
+   "7.4.2.3.2": 2,
+   "7.4.5": 3
+  },
+  "requestanimationframe( callback )": {
+   "8.8": 2
+  },
+  "requires storing the policy container in history": {
+   "7.4.5": 2
+  },
+  "reserved environment": {
+   "7.4.5": 4,
+   "7.5.1": 2
+  },
+  "reset algorithm": {
+   "4.10.11": 2
+  },
+  "reset the form owner": {
+   "2.1.4": 3
+  },
+  "reset the insertion mode appropriately": {
+   "13.2.6.4.9": 2
+  },
+  "reset the rendering context to its default state": {
+   "4.12.5.1": 2
+  },
+  "resettable elements": {
+   "4.10.23": 2,
+   "4.10.5": 2
+  },
+  "resolve a module specifier": {
+   "8.1.4.1": 2,
+   "8.1.6.7": 2,
+   "8.1.6.7.3": 2
+  },
+  "resolve a url like module specifier": {
+   "8.1.5.3": 4
+  },
+  "resolved module set": {
+   "8.1.5.3": 5
+  },
+  "resource fetch algorithm": {
+   "4.8.11.10.1": 2
+  },
+  "resource selection algorithm": {
+   "4.8.2": 2,
+   "4.8.11.2": 2,
+   "4.8.11.4": 3,
+   "4.8.11.8": 2,
+   "4.8.11.16": 2
+  },
+  "restart the animation": {
+   "4.8.4.3.5": 2
+  },
+  "restore persisted state": {
+   "7.4.6.2": 2
+  },
+  "return state": {
+   "13.2.5.78": 2,
+   "13.2.5.79": 2
+  },
+  "root insertion target": {
+   "13.2.6.1": 2
+  },
+  "row group": {
+   "4.9.12.2": 2
+  },
+  "rules for parsing a legacy color value": {
+   "15.3.2": 5,
+   "15.3.8": 2
+  },
+  "rules for parsing a list of dimensions": {
+   "15.6": 2
+  },
+  "rules for parsing dimension values": {
+   "15.2": 2
+  },
+  "rules for parsing floating point number values": {
+   "4.10.13": 2,
+   "4.10.5.1.12": 2,
+   "4.10.5.1.13": 2,
+   "4.10.5.3.8": 3
+  },
+  "rules for parsing integers": {
+   "6.6.3": 2,
+   "15.3.7": 2
+  },
+  "rules for parsing non negative integers": {
+   "2.6.1": 2,
+   "4.10.11": 2,
+   "4.8.4.3.10": 2,
+   "4.6.8.9": 2,
+   "16.3.1": 2,
+   "15.2": 2,
+   "15.3.8": 5,
+   "15.3.11": 2,
+   "4.9.12.1": 4
+  },
+  "rules for updating the text track rendering": {
+   "4.8.11.11.5": 5
+  },
+  "run steps after a timeout": {
+   "8.1.6.6.5": 2
+  },
+  "run the animation frame callbacks": {
+   "8.1.7.3": 3
+  },
+  "running nested apply history step": {
+   "7.4.6.1": 3
+  },
+  "same loop windows": {
+   "8.1.7.3": 2
+  },
+  "same origin": {
+   "7.1.1.1": 2,
+   "7.1.1.3": 2,
+   "7.1.3.1": 4,
+   "7.1.3.3": 12,
+   "7.4.1.4": 2,
+   "7.4.5": 4,
+   "7.4.6.1": 2,
+   "7.4.6.2": 2,
+   "7.5.1": 2,
+   "7.3.1.7": 2,
+   "7.3.2.2": 2,
+   "3.1.3": 4,
+   "7.2.6.4": 2,
+   "7.2.6.6": 3,
+   "8.10.1.4": 2,
+   "8.1.2.1": 2
+  },
+  "same origin allow popups": {
+   "7.1.3.1": 4
+  },
+  "same origin domain": {
+   "7.4.2.2": 2,
+   "7.5.1": 5,
+   "7.2.4": 19,
+   "8.1.2.2": 3
+  },
+  "same origin plus coep": {
+   "7.1.3.1": 3
+  },
+  "same site": {
+   "7.1.1.3": 2
+  },
+  "sandboxed navigation browsing context flag": {
+   "7.4.2.4": 2
+  },
+  "sandboxing flag set": {
+   "7.4.2.1": 4
+  },
+  "sandboxing flags": {
+   "7.4.2.4": 4,
+   "7.4.5": 5
+  },
+  "satisfies its constraints": {
+   "4.10.21.3": 3,
+   "4.16.3": 8
+  },
+  "script blocking style sheet set": {
+   "4.6.8.23": 4,
+   "4.2.6": 3
+  },
+  "script evaluation environment settings object set": {
+   "8.1.7.2": 3
+  },
+  "script fetch options": {
+   "8.1.4.3": 3
+  },
+  "script nesting level": {
+   "13.2.6.4.8": 7,
+   "13.2.6.5": 3
+  },
+  "script supporting elements": {
+   "4.4.9": 2,
+   "4.12.1": 2,
+   "4.12.3": 2
+  },
+  "scripting is disabled": {
+   "4.12.1.1": 2,
+   "4.12.2": 5,
+   "8.1.4.3": 5
+  },
+  "scripting is enabled": {
+   "8.5.2": 2,
+   "4.12.2": 4
+  },
+  "scripting mode": {
+   "13.2.6.4.4": 5,
+   "13.2.6.4.7": 2,
+   "13.4": 2
+  },
+  "scroll position data": {
+   "7.4.6.5": 3
+  },
+  "scroll restoration mode": {
+   "7.4.2.3.3": 2,
+   "7.4.4": 2,
+   "7.2.5": 5
+  },
+  "sectioning content": {
+   "4.3.2": 2,
+   "4.3.3": 2,
+   "4.3.4": 2,
+   "4.3.5": 2,
+   "4.3.8": 2,
+   "4.3.9": 4
+  },
+  "secure context": {
+   "3.1.3": 2,
+   "8.2": 2,
+   "10.2.6.4": 2
+  },
+  "select popover": {
+   "4.10.7": 2
+  },
+  "selected files": {
+   "4.10.22.4": 2,
+   "4.10.5.4": 9
+  },
+  "selectedness setting algorithm": {
+   "4.10.10": 2
+  },
+  "self closing flag": {
+   "13.2.6.4.7": 2
+  },
+  "sequential focus navigation order": {
+   "6.6.2": 2
+  },
+  "sequentially focusable": {
+   "6.6.3": 10,
+   "6.6.4": 2,
+   "6.6.5": 3
+  },
+  "serialization steps": {
+   "2.7.3": 2
+  },
+  "serialized state": {
+   "7.2.6.10.4": 2
+  },
+  "session history entries": {
+   "7.4.1.3": 2,
+   "7.4.1.4": 4,
+   "7.2.5": 4
+  },
+  "session history entry": {
+   "7.4": 3,
+   "7.4.1.2": 7,
+   "7.4.1.4": 2,
+   "7.4.2.3.3": 3,
+   "7.4.4": 2,
+   "7.4.5": 8,
+   "7.4.6.1": 8,
+   "7.4.6.2": 7,
+   "7.4.6.5": 4,
+   "7.3.1": 3,
+   "7.3.1.1": 2,
+   "7.2.6.1": 3,
+   "7.2.6.3": 2,
+   "7.2.6.4": 11,
+   "7.2.6.6": 4,
+   "7.2.6.7": 13,
+   "7.2.6.10.4": 3,
+   "7.2.7.3": 4
+  },
+  "session history traversal queue": {
+   "7.4.1.3": 2,
+   "7.4.1.4": 3,
+   "7.4.2.3.3": 2,
+   "7.4.6.1": 5,
+   "7.3.1": 2
+  },
+  "set and filter html": {
+   "8.5.2": 4
+  },
+  "set of space separated tokens": {
+   "4.10.19.7.1": 2
+  },
+  "set the ongoing navigation": {
+   "7.4.6.1": 4
+  },
+  "set the url": {
+   "4.6.4": 2
+  },
+  "set up a navigate reload api method tracker": {
+   "7.2.6.7": 2
+  },
+  "setcustomvalidity( error )": {
+   "4.10.21.1": 2,
+   "4.10.6": 2,
+   "4.10.7": 2,
+   "4.10.11": 2,
+   "4.10.12": 2,
+   "4.10.15": 2,
+   "4.8.7": 2,
+   "4.10.5": 2
+  },
+  "sethtml( html options )": {
+   "8.5": 2
+  },
+  "sethtmlunsafe( html options )": {
+   "8.5": 2
+  },
+  "setrangetext( replacement start end selectmode )": {
+   "4.10.11": 3,
+   "4.10.5": 7
+  },
+  "setselectionrange( start end direction )": {
+   "4.10.11": 2,
+   "4.10.5": 4
+  },
+  "settimeout( handler timeout ... arguments )": {
+   "8.8": 2,
+   "8.1.3.3.2": 2
+  },
+  "settings object": {
+   "8.1.4.3": 6,
+   "8.1.4.4": 4
+  },
+  "settransform( transform )": {
+   "4.12.5.1": 2
+  },
+  "setvalidity( flags message anchor )": {
+   "4.10.21.1": 11
+  },
+  "shadows are only drawn if": {
+   "4.12.5.1.22": 2
+  },
+  "show modal": {
+   "4.11.4": 2
+  },
+  "show poster flag": {
+   "4.8.8": 2,
+   "4.8.11.5": 4,
+   "4.8.11.8": 4,
+   "4.8.11.11.5": 2
+  },
+  "similar origin window agent": {
+   "4.13.6": 2,
+   "8.1.2.2": 3
+  },
+  "source node": {
+   "6.11.6": 3
+  },
+  "source policy container": {
+   "7.4.5": 2
+  },
+  "source set": {
+   "4.8.2": 4,
+   "4.8.3": 2,
+   "4.8.4.3.7": 3,
+   "4.8.4.3.9": 5,
+   "4.8.4.3.12": 2,
+   "4.6.8.20": 2,
+   "4.2.4": 2
+  },
+  "source size": {
+   "4.8.4.3.12": 2
+  },
+  "source size list": {
+   "4.8.4.3.11": 2
+  },
+  "source size value": {
+   "4.8.4.3.11": 2
+  },
+  "source snapshot has transient activation": {
+   "7.4.5": 2
+  },
+  "source snapshot params": {
+   "7.4.5": 3,
+   "7.4.6.1": 4
+  },
+  "speculation rule eagerness": {
+   "7.6.1.3": 4,
+   "7.6.6.1": 2
+  },
+  "speculation rule set": {
+   "4.12.1": 2,
+   "7.6.1": 3,
+   "7.6.1.3": 2
+  },
+  "speculation rule sets": {
+   "8.1.4.9": 3
+  },
+  "speculation rule tag": {
+   "7.6.1": 2,
+   "7.6.1.2": 3
+  },
+  "speculation rules parse result": {
+   "4.12.1.1": 2
+  },
+  "spin the event loop": {
+   "13.2.6.4.8": 2,
+   "13.2.7": 3
+  },
+  "spoon feed the parser": {
+   "14.4": 3
+  },
+  "stack of open elements": {
+   "4.8.7": 3,
+   "4.6.8.6": 2,
+   "13.2.4.1": 2,
+   "13.2.4.3": 2,
+   "13.2.6.1": 6,
+   "13.2.6.3": 2,
+   "13.2.6.4.2": 2,
+   "13.2.6.4.4": 11,
+   "13.2.6.4.5": 2,
+   "13.2.6.4.6": 2,
+   "13.2.6.4.7": 89,
+   "13.2.6.4.8": 3,
+   "13.2.6.4.9": 6,
+   "13.2.6.4.11": 2,
+   "13.2.6.4.12": 3,
+   "13.2.6.4.13": 5,
+   "13.2.6.4.14": 8,
+   "13.2.6.4.15": 6,
+   "13.2.6.4.16": 2,
+   "13.2.6.4.17": 2,
+   "13.2.6.4.18": 2,
+   "13.2.6.5": 6,
+   "13.2.7": 2,
+   "13.2.10.1": 2,
+   "13.2.10.2": 2,
+   "13.2.10.3": 5,
+   "4.2.6": 3,
+   "14.2": 2
+  },
+  "stack of template insertion modes": {
+   "13.2.6.4.4": 2,
+   "13.2.6.4.16": 11
+  },
+  "start intersection observing a lazy loading element": {
+   "4.8.5": 2
+  },
+  "start tags": {
+   "13.2.2": 4,
+   "13.1.2.4": 7
+  },
+  "step base": {
+   "4.10.5.4": 6
+  },
+  "stepdown( n )": {
+   "4.10.5": 3
+  },
+  "stepup( n )": {
+   "4.10.5": 4
+  },
+  "sticky activation": {
+   "6.4.4": 2
+  },
+  "stop loading": {
+   "7.9": 2
+  },
+  "stop the speculative html parser": {
+   "13.2.7": 2
+  },
+  "stops parsing": {
+   "7.5.7": 2
+  },
+  "street address": {
+   "4.10.19.7.2": 2
+  },
+  "stroke style": {
+   "4.12.5.1.12": 2
+  },
+  "sub deserialization": {
+   "2.7.1": 2
+  },
+  "sub serialization": {
+   "2.7.1": 2
+  },
+  "submit buttons": {
+   "4.10.19.6": 6,
+   "4.10.22.2": 2,
+   "4.10.22.3": 2,
+   "4.10.6": 5,
+   "4.10.3": 2
+  },
+  "submittable elements": {
+   "4.10.5": 2
+  },
+  "suffering from a custom error": {
+   "4.10.21.3": 2
+  },
+  "suffering from a pattern mismatch": {
+   "4.10.5.3.6": 2
+  },
+  "suffering from a step mismatch": {
+   "4.10.5.1.7": 2,
+   "4.10.5.1.8": 2,
+   "4.10.5.1.9": 2,
+   "4.10.5.1.10": 2,
+   "4.10.5.1.11": 2,
+   "4.10.5.1.12": 2,
+   "4.10.5.1.13": 2
+  },
+  "suffering from a type mismatch": {
+   "4.10.5.1.5": 2
+  },
+  "suffering from an overflow": {
+   "4.10.5.3.7": 3,
+   "4.16.3": 2
+  },
+  "suffering from an underflow": {
+   "4.10.5.3.7": 3,
+   "4.16.3": 2
+  },
+  "suffering from bad input": {
+   "4.10.5.1.5": 2
+  },
+  "suffering from being missing": {
+   "4.10.5.1.16": 3
+  },
+  "support a picker": {
+   "4.10.5.4": 2
+  },
+  "suppress normal scroll restoration during ongoing navigation": {
+   "7.4.6.5": 2,
+   "7.2.6.10.4": 2
+  },
+  "suspended timer handles": {
+   "7.4.6.2": 2
+  },
+  "suspension time": {
+   "7.4.6.2": 2
+  },
+  "synchronous navigation steps": {
+   "7.4.6.1": 2
+  },
+  "synchronous section": {
+   "4.8.4.3.13": 4,
+   "4.8.11.5": 20,
+   "4.8.11.8": 2,
+   "4.8.11.9": 3,
+   "4.8.11.11.3": 4
+  },
+  "system focus": {
+   "6.6.4": 4
+  },
+  "system visibility state": {
+   "6.2": 2
+  },
+  "tabindex ordered focus navigation scope": {
+   "6.6.3": 7
+  },
+  "tabindex value": {
+   "6.6.2": 6
+  },
+  "table model": {
+   "4.9.1": 2,
+   "4.9.9": 2,
+   "4.9.11": 3
+  },
+  "table model error": {
+   "4.9.12.1": 3
+  },
+  "tag name": {
+   "13.1.2.1": 2
+  },
+  "take pending play promises": {
+   "4.8.11.5": 3
+  },
+  "target browsing context": {
+   "7.2.2.6": 3
+  },
+  "target element": {
+   "2.6.1": 7,
+   "4.13.7.2": 3,
+   "4.13.7.3": 15,
+   "4.13.7.4": 2,
+   "4.10.21.3": 6,
+   "6.6.7": 2
+  },
+  "target name": {
+   "7.3.1.7": 3,
+   "7.2.2.3": 4
+  },
+  "target navigable": {
+   "7.4.6.1": 2
+  },
+  "target snapshot params": {
+   "7.4.5": 3
+  },
+  "target snapshot sandboxing flags": {
+   "7.4.5": 2
+  },
+  "task queues": {
+   "7.5.2": 2,
+   "7.5.4": 2,
+   "4.8.11.5": 2,
+   "8.1.7.2": 2,
+   "8.1.7.3": 6,
+   "10.2.2": 2
+  },
+  "task source": {
+   "9.4.4": 6,
+   "8.1.7.2": 3,
+   "8.1.7.4": 6,
+   "8.1.7.5": 3
+  },
+  "template contents": {
+   "3.2.1": 2,
+   "8.5.2": 2,
+   "8.5.4": 2,
+   "13.2.6.4.4": 3,
+   "13.2.8": 2,
+   "4.12.3.1": 3,
+   "13.1.2": 3
+  },
+  "temporary buffer": {
+   "13.2.5.11": 3,
+   "13.2.5.14": 3,
+   "13.2.5.17": 3,
+   "13.2.5.23": 2,
+   "13.2.5.25": 3,
+   "13.2.5.26": 3,
+   "13.2.5.31": 3,
+   "13.2.5.73": 2,
+   "13.2.5.77": 3,
+   "13.2.5.78": 3,
+   "13.2.5.84": 2
+  },
+  "terminate a worklet global scope": {
+   "11.3.3": 2
+  },
+  "termination nesting level": {
+   "7.4.2.4": 2
+  },
+  "text entry cursor position": {
+   "4.10.5.4": 2
+  },
+  "text plain": {
+   "4.10.22.3": 2
+  },
+  "text plain encoding algorithm": {
+   "4.10.22.3": 2
+  },
+  "text preparation algorithm": {
+   "4.12.5.1.12": 2
+  },
+  "text track cue": {
+   "4.8.11.8": 27,
+   "4.8.11.11.4": 4,
+   "4.8.11.11.5": 20
+  },
+  "text track cue order": {
+   "4.8.11.8": 2,
+   "4.8.11.11.5": 4
+  },
+  "text tracks": {
+   "4.8.10": 5,
+   "4.8.11.8": 19,
+   "4.8.11.11.2": 12,
+   "4.8.11.11.3": 19,
+   "4.8.11.11.5": 19,
+   "15.4.1": 2
+  },
+  "the body element": {
+   "6.11.5": 3,
+   "6.6.4": 2,
+   "6.6.6": 2,
+   "16.3.3": 3,
+   "4.3.1": 2,
+   "4.3.10": 3
+  },
+  "the document referrer": {
+   "7.5.1": 2
+  },
+  "the drag data item kind": {
+   "6.11.3": 9,
+   "6.11.3.1": 3,
+   "6.11.3.2": 6,
+   "6.11.5": 8
+  },
+  "the drag data item type string": {
+   "6.11.3": 7,
+   "6.11.3.1": 3,
+   "6.11.3.2": 2,
+   "6.11.5": 9
+  },
+  "the environment settings object global object": {
+   "8.1.3.4": 2,
+   "8.1.4.2": 2,
+   "8.1.4.4": 3,
+   "8.1.5.1": 2,
+   "8.1.5.3": 2,
+   "8.1.7.3": 2,
+   "10.2.3": 3
+  },
+  "the environment settings object realm": {
+   "8.1.4.3": 4,
+   "8.1.8.1": 2,
+   "10.2.6.4": 2
+  },
+  "the html element": {
+   "3.2.6.4": 4
+  },
+  "the kind of text track": {
+   "4.8.11.11.2": 2,
+   "4.8.11.11.3": 6,
+   "4.8.11.11.5": 3
+  },
+  "the properties of an item": {
+   "5.2.1": 2,
+   "5.2.2": 2,
+   "5.2.3": 3,
+   "5.4.1": 2
+  },
+  "the title element": {
+   "5.3.1.1": 2
+  },
+  "throw on dynamic markup insertion counter": {
+   "13.2.6.1": 3
+  },
+  "time marches on": {
+   "4.8.11.11.5": 2
+  },
+  "time origin": {
+   "11.3.1.3": 2
+  },
+  "timeline offset": {
+   "4.8.11.5": 3
+  },
+  "top level browsing context": {
+   "7.1.3": 6,
+   "7.1.3.3": 12,
+   "7.1.5": 5,
+   "7.3.2.1": 2,
+   "7.3.2.3": 7
+  },
+  "top level creation url": {
+   "7.4.5": 2
+  },
+  "top level origin": {
+   "7.4.5": 2,
+   "7.3.2.1": 2,
+   "10.2.6.2": 3,
+   "11.3.1.3": 2
+  },
+  "top level traversable": {
+   "7.4.2.3.3": 2,
+   "7.4.2.4": 2,
+   "7.4.5": 5,
+   "7.3.1": 2,
+   "7.3.1.4": 2,
+   "7.3.1.6": 3,
+   "7.3.1.7": 3,
+   "6.4.2": 2,
+   "6.6.2": 4,
+   "6.6.4": 4,
+   "6.6.5": 6,
+   "6.6.7": 2,
+   "4.6.8": 2,
+   "4.6.8.14": 3,
+   "7.2.2.1": 2,
+   "7.2.2.4": 2,
+   "7.9": 7
+  },
+  "top level traversable set": {
+   "7.9": 3
+  },
+  "topmost popover ancestor": {
+   "4.11.4": 2
+  },
+  "trace a path": {
+   "4.12.5.1.11": 2,
+   "4.12.5.1.13": 3
+  },
+  "track url": {
+   "4.8.11.11.3": 5
+  },
+  "transient activation": {
+   "7.1.5": 2,
+   "4.10.5.4": 3,
+   "6.4.3": 2,
+   "6.4.4": 2
+  },
+  "transient activation consuming apis": {
+   "6.4.2": 2
+  },
+  "traversable navigable": {
+   "7.4.1.3": 4,
+   "7.4.1.4": 3,
+   "7.4.2.3.1": 2,
+   "7.4.2.3.3": 2,
+   "7.4.3": 2,
+   "7.4.6.1": 15,
+   "7.3.1": 3,
+   "7.3.1.2": 3,
+   "7.3.1.7": 3,
+   "7.3.2.2": 2,
+   "6.2": 2,
+   "7.2.5": 5,
+   "7.2.6.10.4": 2,
+   "12.2.1": 2
+  },
+  "traverse the history by a delta": {
+   "7.9": 3
+  },
+  "try to upgrade an element": {
+   "4.13.4": 3
+  },
+  "turned on": {
+   "15.5.13": 4
+  },
+  "typed item": {
+   "5.2.3": 2
+  },
+  "unblock rendering": {
+   "4.6.8.6": 2
+  },
+  "unique internal value": {
+   "8.7": 5
+  },
+  "unload a document and its descendants": {
+   "7.4.6.1": 2
+  },
+  "unload counter": {
+   "7.4.2.4": 2,
+   "7.2.6.7": 3
+  },
+  "unordered set of unique space separated tokens": {
+   "5.2.2": 2,
+   "4.2.4": 2
+  },
+  "unsafe none": {
+   "7.1.3.2": 2,
+   "7.1.4.1": 7
+  },
+  "unsafe response": {
+   "4.8.4.3.13": 2,
+   "4.8.11.5": 2,
+   "8.1.4.2": 3
+  },
+  "upcoming traverse api method trackers": {
+   "7.2.6.7": 2,
+   "7.2.6.10.4": 4
+  },
+  "update a select selectedcontent": {
+   "4.10.7": 3
+  },
+  "update document for history step application": {
+   "7.4.1.3": 2,
+   "7.4.2.3.3": 2
+  },
+  "update the current document readiness": {
+   "13.2.7": 4
+  },
+  "update the image data": {
+   "4.8.4.3.1": 2,
+   "4.8.4.3.2": 2
+  },
+  "update the rendering": {
+   "4.12.5.3": 2
+  },
+  "url and history update steps": {
+   "7.2.6.10.4": 2
+  },
+  "url property elements": {
+   "5.3.1.1": 2
+  },
+  "use srcset or picture": {
+   "4.8.4.3.5": 3
+  },
+  "user interaction task source": {
+   "4.10.11": 2,
+   "4.10.5.1.19": 2,
+   "4.10.5.5": 5
+  },
+  "user involvement": {
+   "7.4.5": 6
+  },
+  "user navigation involvement": {
+   "7.4.2.3.2": 2,
+   "7.4.2.3.3": 2,
+   "7.4.5": 3,
+   "7.4.6.1": 6,
+   "7.2.6.10.4": 4
+  },
+  "user validity": {
+   "4.10.7": 2,
+   "4.16.3": 2
+  },
+  "using the rules for": {
+   "13.2.6.4.5": 2,
+   "13.2.6.4.6": 3,
+   "13.2.6.4.7": 2,
+   "13.2.6.4.9": 3,
+   "13.2.6.4.12": 3,
+   "13.2.6.4.16": 2,
+   "13.2.6.4.17": 2,
+   "13.2.6.4.18": 2,
+   "13.2.6.4.19": 2,
+   "13.2.6.4.21": 2
+  },
+  "valid custom element name": {
+   "4.13.4": 5,
+   "3.2.2": 2
+  },
+  "valid date string": {
+   "2.3.5.5": 2,
+   "4.10.5.1.7": 9,
+   "5.3.1": 2,
+   "5.3.2": 5
+  },
+  "valid date string with optional time": {
+   "4.7.3": 2
+  },
+  "valid floating point number": {
+   "4.10.5.1.12": 7,
+   "4.10.5.1.13": 7
+  },
+  "valid global date and time string": {
+   "5.3.2": 9,
+   "4.5.14": 2
+  },
+  "valid integer": {
+   "4.10.19.7.1": 5,
+   "4.10.5.1.19": 2,
+   "1.9.1": 2
+  },
+  "valid local date and time string": {
+   "4.10.5.1.11": 4,
+   "4.5.14": 2
+  },
+  "valid month string": {
+   "4.10.5.1.8": 9
+  },
+  "valid non negative integer": {
+   "4.12.5.1": 2,
+   "4.10.11": 2,
+   "4.8.4.3.10": 2,
+   "5.3.1": 2,
+   "5.3.2": 6,
+   "4.2.5.3": 2,
+   "4.9.11": 2
+  },
+  "valid normalized local date and time string": {
+   "4.10.5.1.11": 5
+  },
+  "valid time string": {
+   "2.3.5.5": 2,
+   "4.10.5.1.10": 9
+  },
+  "valid week string": {
+   "4.10.5.1.9": 9
+  },
+  "validity states": {
+   "4.10.21.3": 2
+  },
+  "value s": {
+   "4.10.5.1.5": 6,
+   "4.10.5.3.6": 2,
+   "4.10.5.3.9": 2
+  },
+  "value sanitization algorithm": {
+   "4.10.5.1.5": 3,
+   "4.10.5.4": 2
+  },
+  "virtual browsing context group id": {
+   "7.1.3.3": 2,
+   "7.3.2.1": 4
+  },
+  "visibility state": {
+   "8.1.7.3": 2
+  },
+  "void elements": {
+   "13.1.2.1": 2
+  },
+  "width descriptor": {
+   "4.8.3": 2,
+   "4.8.4.3.12": 3,
+   "4.2.4": 2
+  },
+  "will lazy load element steps": {
+   "4.8.5": 2
+  },
+  "will read frequently": {
+   "4.12.5.1": 2
+  },
+  "window event loop": {
+   "4.12.5.3.1": 2,
+   "8.1.7.3": 3
+  },
+  "window post message steps": {
+   "8.1.3.3.2": 2
+  },
+  "worker event loop": {
+   "10.2.2": 2
+  },
+  "worklet agent": {
+   "11.3.1.1": 2
+  },
+  "worklet global scopes": {
+   "11.3.1.2": 3
+  },
+  "xml parser": {
+   "7.5.3": 2,
+   "4.8.7": 3,
+   "4.8.11.11.1": 2,
+   "4.12.1.1": 3,
+   "4.12.3.1": 2,
+   "4.2.6": 3
+  }
  }
 }

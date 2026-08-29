@@ -1,0 +1,953 @@
+{
+ "spec": "URL Standard",
+ "key": "url",
+ "base": "https://url.spec.whatwg.org/",
+ "specUpdated": "18 August 2026",
+ "fetched": "2026-08-29",
+ "sections": {
+  "1": {
+   "title": "Infrastructure",
+   "page": "",
+   "id": "infrastructure"
+  },
+  "2": {
+   "title": "Security considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "3": {
+   "title": "Hosts (domains and IP addresses)",
+   "page": "",
+   "id": "hosts-(domains-and-ip-addresses)"
+  },
+  "4": {
+   "title": "URLs",
+   "page": "",
+   "id": "urls"
+  },
+  "5": {
+   "title": "application/x-www-form-urlencoded",
+   "page": "",
+   "id": "application/x-www-form-urlencoded"
+  },
+  "6": {
+   "title": "API",
+   "page": "",
+   "id": "api"
+  },
+  "1.1": {
+   "title": "Writing",
+   "page": "",
+   "id": "writing"
+  },
+  "1.2": {
+   "title": "Parsers",
+   "page": "",
+   "id": "parsers"
+  },
+  "1.3": {
+   "title": "Percent-encoded bytes",
+   "page": "",
+   "id": "percent-encoded-bytes"
+  },
+  "3.1": {
+   "title": "Host representation",
+   "page": "",
+   "id": "host-representation"
+  },
+  "3.2": {
+   "title": "Host miscellaneous",
+   "page": "",
+   "id": "host-miscellaneous"
+  },
+  "3.3": {
+   "title": "IDNA",
+   "page": "",
+   "id": "idna"
+  },
+  "3.4": {
+   "title": "Host writing",
+   "page": "",
+   "id": "host-writing"
+  },
+  "3.5": {
+   "title": "Host parsing",
+   "page": "",
+   "id": "host-parsing"
+  },
+  "3.6": {
+   "title": "Host serializing",
+   "page": "",
+   "id": "host-serializing"
+  },
+  "3.7": {
+   "title": "Host equivalence",
+   "page": "",
+   "id": "host-equivalence"
+  },
+  "4.1": {
+   "title": "URL representation",
+   "page": "",
+   "id": "url-representation"
+  },
+  "4.2": {
+   "title": "URL miscellaneous",
+   "page": "",
+   "id": "url-miscellaneous"
+  },
+  "4.3": {
+   "title": "URL writing",
+   "page": "",
+   "id": "url-writing"
+  },
+  "4.4": {
+   "title": "URL parsing",
+   "page": "",
+   "id": "url-parsing"
+  },
+  "4.5": {
+   "title": "URL serializing",
+   "page": "",
+   "id": "url-serializing"
+  },
+  "4.6": {
+   "title": "URL equivalence",
+   "page": "",
+   "id": "url-equivalence"
+  },
+  "4.7": {
+   "title": "Origin",
+   "page": "",
+   "id": "origin"
+  },
+  "4.8": {
+   "title": "URL rendering",
+   "page": "",
+   "id": "url-rendering"
+  },
+  "4.8.1": {
+   "title": "Simplify non-human-readable or irrelevant components",
+   "page": "",
+   "id": "url-rendering-simplification"
+  },
+  "4.8.2": {
+   "title": "Elision",
+   "page": "",
+   "id": "url-rendering-elision"
+  },
+  "4.8.3": {
+   "title": "Internationalization and special characters",
+   "page": "",
+   "id": "url-rendering-i18n"
+  },
+  "5.1": {
+   "title": "application/x-www-form-urlencoded parsing",
+   "page": "",
+   "id": "urlencoded-parsing"
+  },
+  "5.2": {
+   "title": "application/x-www-form-urlencoded serializing",
+   "page": "",
+   "id": "urlencoded-serializing"
+  },
+  "5.3": {
+   "title": "Hooks",
+   "page": "",
+   "id": "urlencoded-hooks"
+  },
+  "6.1": {
+   "title": "URL class",
+   "page": "",
+   "id": "url-class"
+  },
+  "6.2": {
+   "title": "URLSearchParams class",
+   "page": "",
+   "id": "interface-urlsearchparams"
+  },
+  "6.3": {
+   "title": "URL APIs elsewhere",
+   "page": "",
+   "id": "url-apis-elsewhere"
+  }
+ },
+ "dfns": {
+  "absolute url string": [
+   "4.3"
+  ],
+  "absolute url with fragment string": [
+   "4.3"
+  ],
+  "api url parser": [
+   "6.1"
+  ],
+  "append( name value )": [
+   "6.2"
+  ],
+  "application x www form urlencoded": [
+   "5"
+  ],
+  "application x www form urlencoded parser": [
+   "5.1"
+  ],
+  "application x www form urlencoded percent encode set": [
+   "1.3"
+  ],
+  "application x www form urlencoded serializer": [
+   "5.2"
+  ],
+  "application x www form urlencoded string parser": [
+   "5.3"
+  ],
+  "authority state": [
+   "4.4"
+  ],
+  "base url": [
+   "4.2"
+  ],
+  "basic url parser": [
+   "4.4"
+  ],
+  "blob url entry": [
+   "4.1"
+  ],
+  "c0 control percent encode set": [
+   "1.3"
+  ],
+  "cannot have a username password port": [
+   "4.2"
+  ],
+  "canparse( url base )": [
+   "6.1"
+  ],
+  "canparse(url base)": [
+   "6.1"
+  ],
+  "component percent encode set": [
+   "1.3"
+  ],
+  "constructor(url base)": [
+   "6.1"
+  ],
+  "default port": [
+   "4.2"
+  ],
+  "delete( name value )": [
+   "6.2"
+  ],
+  "delete(name value)": [
+   "6.2"
+  ],
+  "domain label": [
+   "3.1"
+  ],
+  "domain labels": [
+   "3.1"
+  ],
+  "domain parser": [
+   "3.3"
+  ],
+  "domain parser toascii": [
+   "3.3"
+  ],
+  "domain percent encoded": [
+   "1.1"
+  ],
+  "domain to ascii": [
+   "1.1"
+  ],
+  "domain to unicode": [
+   "3.3"
+  ],
+  "double dot url path segment": [
+   "4.1"
+  ],
+  "effective piece length": [
+   "3.4"
+  ],
+  "empty host": [
+   "3.1"
+  ],
+  "ends in a number checker": [
+   "3.5"
+  ],
+  "eof code point": [
+   "1.2"
+  ],
+  "exclude fragment": [
+   "4.5"
+  ],
+  "exclude fragments": [
+   "4.6"
+  ],
+  "file host state": [
+   "4.4"
+  ],
+  "file invalid windows drive letter": [
+   "1.1"
+  ],
+  "file invalid windows drive letter host": [
+   "1.1"
+  ],
+  "file slash state": [
+   "4.4"
+  ],
+  "file state": [
+   "4.4"
+  ],
+  "find the ipv6 address compressed piece index": [
+   "3.6"
+  ],
+  "forbidden domain code point": [
+   "3.2"
+  ],
+  "forbidden host code point": [
+   "3.2"
+  ],
+  "fragment percent encode set": [
+   "1.3"
+  ],
+  "fragment state": [
+   "4.4"
+  ],
+  "get( name )": [
+   "6.2"
+  ],
+  "getall( name )": [
+   "6.2"
+  ],
+  "has( name value )": [
+   "6.2"
+  ],
+  "has(name value)": [
+   "6.2"
+  ],
+  "host invalid code point": [
+   "1.1"
+  ],
+  "host missing": [
+   "1.1"
+  ],
+  "host parser": [
+   "3.5"
+  ],
+  "host parsing": [
+   "3.5"
+  ],
+  "host serializer": [
+   "3.6"
+  ],
+  "host state": [
+   "4.4"
+  ],
+  "hostname state": [
+   "4.4"
+  ],
+  "include credentials": [
+   "4.2"
+  ],
+  "includes credentials": [
+   "4.2"
+  ],
+  "invalid credentials": [
+   "1.1"
+  ],
+  "invalid reverse solidus": [
+   "1.1"
+  ],
+  "invalid url unit": [
+   "1.1"
+  ],
+  "ip address": [
+   "3.1"
+  ],
+  "ipv4 address": [
+   "3.1"
+  ],
+  "ipv4 empty part": [
+   "1.1"
+  ],
+  "ipv4 in ipv6 invalid code point": [
+   "1.1"
+  ],
+  "ipv4 in ipv6 out of range part": [
+   "1.1"
+  ],
+  "ipv4 in ipv6 too few parts": [
+   "1.1"
+  ],
+  "ipv4 in ipv6 too many pieces": [
+   "1.1"
+  ],
+  "ipv4 non ascii input": [
+   "1.1"
+  ],
+  "ipv4 non decimal part": [
+   "1.1"
+  ],
+  "ipv4 non numeric part": [
+   "1.1"
+  ],
+  "ipv4 number parser": [
+   "3.5"
+  ],
+  "ipv4 out of range part": [
+   "1.1"
+  ],
+  "ipv4 parser": [
+   "3.5"
+  ],
+  "ipv4 serializer": [
+   "3.6"
+  ],
+  "ipv4 too few parts": [
+   "1.1"
+  ],
+  "ipv4 too many parts": [
+   "1.1"
+  ],
+  "ipv6 address": [
+   "3.1"
+  ],
+  "ipv6 invalid code point": [
+   "1.1"
+  ],
+  "ipv6 invalid compression": [
+   "1.1"
+  ],
+  "ipv6 multiple compression": [
+   "1.1"
+  ],
+  "ipv6 parser": [
+   "3.5"
+  ],
+  "ipv6 piece leading zero": [
+   "1.1"
+  ],
+  "ipv6 serializer": [
+   "3.6"
+  ],
+  "ipv6 too few pieces": [
+   "1.1"
+  ],
+  "ipv6 too many pieces": [
+   "1.1"
+  ],
+  "ipv6 unclosed": [
+   "1.1"
+  ],
+  "is not special": [
+   "4.2"
+  ],
+  "is special": [
+   "4.2"
+  ],
+  "missing scheme non relative url": [
+   "1.1"
+  ],
+  "new url( url base )": [
+   "6.1"
+  ],
+  "new urlsearchparams( init )": [
+   "6.2"
+  ],
+  "no scheme state": [
+   "4.4"
+  ],
+  "normalized windows drive letter": [
+   "4.2"
+  ],
+  "opaque host": [
+   "3.1"
+  ],
+  "opaque host and port string": [
+   "4.3"
+  ],
+  "opaque host parser": [
+   "3.5"
+  ],
+  "opaque path": [
+   "4.2"
+  ],
+  "opaque path state": [
+   "4.4"
+  ],
+  "opaque path url string": [
+   "4.3"
+  ],
+  "parse( url base )": [
+   "6.1"
+  ],
+  "parse(url base)": [
+   "6.1"
+  ],
+  "path absolute non authority url string": [
+   "4.3"
+  ],
+  "path absolute url string": [
+   "4.3"
+  ],
+  "path or authority state": [
+   "4.4"
+  ],
+  "path percent encode set": [
+   "1.3"
+  ],
+  "path relative scheme less url string": [
+   "4.3"
+  ],
+  "path relative url string": [
+   "4.3"
+  ],
+  "path start state": [
+   "4.4"
+  ],
+  "path state": [
+   "4.4"
+  ],
+  "percent decode": [
+   "1.3"
+  ],
+  "percent encode": [
+   "1.3"
+  ],
+  "percent encode after encoding": [
+   "1.3"
+  ],
+  "percent encode set": [
+   "1.3"
+  ],
+  "percent encoded byte": [
+   "1.3"
+  ],
+  "port invalid": [
+   "1.1"
+  ],
+  "port out of range": [
+   "1.1"
+  ],
+  "port state": [
+   "4.4"
+  ],
+  "public suffix": [
+   "3.2"
+  ],
+  "query object": [
+   "6.1"
+  ],
+  "query percent encode set": [
+   "1.3"
+  ],
+  "query state": [
+   "4.4"
+  ],
+  "registrable domain": [
+   "3.2"
+  ],
+  "relative slash state": [
+   "4.4"
+  ],
+  "relative state": [
+   "4.4"
+  ],
+  "relative url string": [
+   "4.3"
+  ],
+  "relative url with fragment string": [
+   "4.3"
+  ],
+  "scheme relative file url string": [
+   "4.3"
+  ],
+  "scheme relative special url string": [
+   "4.3"
+  ],
+  "scheme relative url string": [
+   "4.3"
+  ],
+  "scheme start state": [
+   "4.4"
+  ],
+  "scheme state": [
+   "4.4"
+  ],
+  "serialize an integer": [
+   "1"
+  ],
+  "set the password": [
+   "4.4"
+  ],
+  "set the username": [
+   "4.4"
+  ],
+  "set( name value )": [
+   "6.2"
+  ],
+  "shorten a url path": [
+   "4.2"
+  ],
+  "single dot url path segment": [
+   "4.1"
+  ],
+  "special authority ignore slashes state": [
+   "4.4"
+  ],
+  "special authority slashes state": [
+   "4.4"
+  ],
+  "special query percent encode set": [
+   "1.3"
+  ],
+  "special relative or authority state": [
+   "4.4"
+  ],
+  "special scheme": [
+   "4.2"
+  ],
+  "special scheme missing following solidus": [
+   "1.1"
+  ],
+  "start with a windows drive letter": [
+   "4.2"
+  ],
+  "starts with a windows drive letter": [
+   "4.2"
+  ],
+  "state override": [
+   "4.4"
+  ],
+  "stringification behavior": [
+   "6.1",
+   "6.2"
+  ],
+  "url code point": [
+   "4.3"
+  ],
+  "url code points": [
+   "4.3"
+  ],
+  "url fragment string": [
+   "4.3"
+  ],
+  "url object": [
+   "6.2"
+  ],
+  "url parser": [
+   "4.4"
+  ],
+  "url path": [
+   "4.1"
+  ],
+  "url path segment": [
+   "4.1"
+  ],
+  "url path segment string": [
+   "4.3"
+  ],
+  "url path serializer": [
+   "4.5"
+  ],
+  "url path serializing": [
+   "4.5"
+  ],
+  "url port string": [
+   "4.3"
+  ],
+  "url query string": [
+   "4.3"
+  ],
+  "url record": [
+   "4.1"
+  ],
+  "url scheme string": [
+   "4.3"
+  ],
+  "url serializer": [
+   "4.5"
+  ],
+  "url units": [
+   "4.3"
+  ],
+  "url(url base)": [
+   "6.1"
+  ],
+  "urlencoded parser": [
+   "5.1"
+  ],
+  "urlencoded serializer": [
+   "5.2"
+  ],
+  "urlencoded string parser": [
+   "5.3"
+  ],
+  "userinfo percent encode set": [
+   "1.3"
+  ],
+  "utf 8 percent encode": [
+   "1.3"
+  ],
+  "valid domain": [
+   "3.4"
+  ],
+  "valid domain string": [
+   "3.4"
+  ],
+  "valid host string": [
+   "3.4"
+  ],
+  "valid ipv4 address string": [
+   "3.4"
+  ],
+  "valid ipv6 address string": [
+   "3.4"
+  ],
+  "valid ipv6 piece string": [
+   "3.4"
+  ],
+  "valid ipv6 pieces and ipv4 string": [
+   "3.4"
+  ],
+  "valid ipv6 pieces string": [
+   "3.4"
+  ],
+  "valid opaque host string": [
+   "3.4"
+  ],
+  "valid url string": [
+   "4.3"
+  ],
+  "validation error": [
+   "1.1"
+  ],
+  "windows drive letter": [
+   "4.2"
+  ]
+ },
+ "uses": {
+  "append( name value )": {
+   "6.3": 2
+  },
+  "application x www form urlencoded percent encode set": {
+   "5.2": 2
+  },
+  "application x www form urlencoded serializer": {
+   "6.2": 2
+  },
+  "application x www form urlencoded string parser": {
+   "6.1": 2
+  },
+  "base url": {
+   "1.1": 6,
+   "4.3": 3,
+   "4.4": 2,
+   "6.1": 3
+  },
+  "basic url parser": {
+   "6.1": 11
+  },
+  "blob url entry": {
+   "4.7": 2
+  },
+  "cannot have a username password port": {
+   "6.1": 3
+  },
+  "canparse( url base )": {
+   "6.3": 3
+  },
+  "default port": {
+   "4.4": 2
+  },
+  "delete( name value )": {
+   "6.3": 3
+  },
+  "domain parser": {
+   "3.5": 2
+  },
+  "double dot url path segment": {
+   "4.3": 2
+  },
+  "eof code point": {
+   "3.5": 4,
+   "4.4": 13
+  },
+  "exclude fragment": {
+   "4.6": 2
+  },
+  "forbidden domain code point": {
+   "3.3": 2
+  },
+  "get( name )": {
+   "6.3": 2
+  },
+  "getall( name )": {
+   "6.3": 2
+  },
+  "has( name value )": {
+   "6.3": 3
+  },
+  "host missing": {
+   "4.4": 3
+  },
+  "host parser": {
+   "3": 6,
+   "4.4": 3,
+   "6.3": 2
+  },
+  "host serializer": {
+   "3": 4,
+   "6.1": 3
+  },
+  "includes credentials": {
+   "4.4": 2,
+   "6.3": 2
+  },
+  "invalid reverse solidus": {
+   "4.4": 6
+  },
+  "invalid url unit": {
+   "3.5": 2,
+   "4.4": 11
+  },
+  "ipv4 address": {
+   "3": 2,
+   "1.1": 11,
+   "3.5": 2,
+   "3.6": 2
+  },
+  "ipv4 in ipv6 invalid code point": {
+   "3.5": 4
+  },
+  "ipv6 address": {
+   "1.1": 11,
+   "3.5": 2,
+   "3.6": 3
+  },
+  "ipv6 invalid code point": {
+   "3.5": 2
+  },
+  "is not special": {
+   "4.4": 4
+  },
+  "is special": {
+   "4.4": 15
+  },
+  "new url( url base )": {
+   "6.3": 5
+  },
+  "new urlsearchparams( init )": {
+   "6.3": 5
+  },
+  "opaque host": {
+   "3": 9
+  },
+  "opaque path": {
+   "1.1": 2,
+   "4.4": 3,
+   "4.5": 2,
+   "6.1": 3
+  },
+  "parse( url base )": {
+   "6.3": 3
+  },
+  "percent decode": {
+   "6.3": 2
+  },
+  "percent encode after encoding": {
+   "5.2": 2
+  },
+  "percent encoded byte": {
+   "4.3": 4
+  },
+  "serialize an integer": {
+   "6.1": 2
+  },
+  "set( name value )": {
+   "6.3": 2
+  },
+  "shorten a url path": {
+   "4.4": 3,
+   "6.3": 2
+  },
+  "single dot url path segment": {
+   "4.3": 2,
+   "4.4": 2
+  },
+  "special scheme": {
+   "1.1": 2,
+   "4.3": 3,
+   "4.4": 4
+  },
+  "special scheme missing following solidus": {
+   "4.4": 4
+  },
+  "starts with a windows drive letter": {
+   "4.4": 2,
+   "6.3": 2
+  },
+  "state override": {
+   "6.1": 7
+  },
+  "stringification behavior": {
+   "6.3": 4
+  },
+  "url code points": {
+   "4.4": 4
+  },
+  "url parser": {
+   "4": 4,
+   "4.1": 2,
+   "4.3": 2
+  },
+  "url path serializer": {
+   "6.3": 2
+  },
+  "url port string": {
+   "6.1": 2
+  },
+  "url record": {
+   "2": 6,
+   "4": 6,
+   "3.1": 2,
+   "4.2": 6,
+   "4.3": 2,
+   "4.4": 4,
+   "4.5": 2,
+   "4.6": 2,
+   "4.7": 2,
+   "4.8.1": 2,
+   "4.8.3": 6,
+   "6.1": 3,
+   "6.2": 2,
+   "6.3": 8
+  },
+  "url serializer": {
+   "4": 5,
+   "4.6": 2,
+   "6.3": 2
+  },
+  "userinfo percent encode set": {
+   "4.4": 3
+  },
+  "utf 8 percent encode": {
+   "4.4": 6,
+   "6.3": 2
+  },
+  "valid host string": {
+   "3": 2,
+   "4.3": 2
+  },
+  "valid url string": {
+   "4": 3,
+   "4.1": 2
+  },
+  "validation error": {
+   "4": 2,
+   "3.3": 2,
+   "3.5": 26,
+   "4.4": 30
+  },
+  "windows drive letter": {
+   "4.4": 2
+  }
+ }
+}
