@@ -8,6 +8,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/events/event_target.h"
 #include "core/events/hash_change_event.h"
@@ -2102,6 +2103,18 @@ void session_history_init(JSContext *ctx)
     DCHECK(g_slot < 0, "session_history_init ran twice — §7.4.1's record is declared once per AGENT");
     g_slot = realm_value_declare(ctx, "HTML §7.4.1 the session history entries, the current session history "
                                       "step, and the History object's state, length and index");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The traversal machine's id is
+       declared HERE although it is registered LAZILY, at the first §7.4.3 traverse-the-history-by-a-delta: the
+       registry's question is what this component's release owes, and a slot that is sometimes set is one the
+       release owes on exactly the runs where it was. A declaration that only existed on those runs would be a
+       release column nothing checks on the others. */
+    agent_state_id("session_history", &g_slot,
+                   "HTML §7.4.1 Session history's realm-value slot for the session history entries, the "
+                   "current session history step and the History object's state, length and index — and this "
+                   "component's declaration latch");
+    agent_state_id("session_history", &g_traverse_stepid,
+                   "HTML §7.4.3 Reloading and traversing's traverse-the-history-by-a-delta step definition, "
+                   "registered with the runtime");
     realm_declare_intrinsic(session_history_install_realm);
 }
 

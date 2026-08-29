@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
@@ -568,6 +569,12 @@ void viewport_init(JSContext *ctx)
 {
     DCHECK(g_resize_slot < 0, "viewport_init ran twice — the §13.1 record's slot is declared once per AGENT");
     g_resize_slot = realm_value_declare(ctx, "CSSOM VIEW §13.1 the viewport as the resize steps last saw it");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It is the slot this init's own
+       latch consults, so a release that kept it would hand a second agent a component reporting itself
+       declared and holding a realm-value id from a runtime that no longer exists. */
+    agent_state_id("viewport", &g_resize_slot,
+                   "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the viewport as the resize steps "
+                   "last saw it, and this component's declaration latch");
     realm_declare_intrinsic(viewport_install);
 }
 

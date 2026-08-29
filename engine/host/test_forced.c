@@ -10340,10 +10340,11 @@ int main(int argc, char **argv) {
        §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
        given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
        the order of that pair exactly backwards; reverse declaration order is what decides it now. */
+    /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too — the pair every host
+       wrote as `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the
+       component whose every member is a derivation over it. Reverse declaration order decides it now. */
     page_reveal_free(ctx);
     media_query_list_free(ctx);
-    viewport_free();
-    visual_viewport_free();
     animation_frame_free(ctx);
     event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     /* §8.1.7.5's rejection list is a row on core/platform.h's release column now, run by the
@@ -10380,9 +10381,12 @@ int main(int argc, char **argv) {
        missing a row of, and nothing reports it but the runtime's own leak walk, after the fact. */
     /* §7.2.4's Location is a ROW on that column too — it holds TWO CLAIMS in solver/concolic.c's source
        registry, whose emptiness concolic_free asserts, and a claim placed by three hand-written lists is a
-       claim placed by nothing. */
-    session_history_free();
-    history_free();
+       claim placed by nothing.
+       AND HTML §7.4.1's state machine WITH §7.2.5's History over it, which used to be the two lines here. Both
+       are ROWS on that column now, and they are what a hand-written list costs when no host is even missing a
+       line: this host and main.c released them HERE while the WPT runner released them a whole teardown
+       earlier, up beside the viewport pair. Within the pair all three had it backwards — §7.2.5 is a VIEW over
+       §7.4.1's record and reads it in every member, so the view goes first. */
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(ctx);
     window_free(ctx);

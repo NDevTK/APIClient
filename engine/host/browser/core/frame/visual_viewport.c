@@ -6,6 +6,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/events/event_target.h"
 #include "core/frame/viewport.h"
 #include "core/frame/visual_viewport.h"
@@ -311,9 +312,33 @@ void visual_viewport_init(JSContext *ctx)
     JS_NewClassID(JS_GetRuntime(ctx), &g_vv_class);
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_vv_class, &d) == 0,
           "VisualViewport: the per-realm prototype slot could not be declared");
-    g_obj_slot = realm_value_declare(ctx, "CSSOM VIEW §2 the document's associated VisualViewport");
+    /* THE NUMBER WAS WRONG AND IS CORRECTED HERE. This slot used to name "CSSOM VIEW §2 the document's
+       associated VisualViewport", and §2 is Terminology — §2.2 Zooming is where that section says anything
+       about a visual viewport at all, and what it says is about the SCALE FACTOR, which is the fact the
+       constant at the top of this file cites it for. The object this slot holds is §4 Extensions to the Window
+       Interface's `[SameObject, Replaceable] readonly attribute VisualViewport? visualViewport`, of the
+       interface §12 VisualViewport declares. A wrong section number reads as authoritative and sends the next
+       reader somewhere that does not say what the code claims, which is worse than no citation. */
+    g_obj_slot = realm_value_declare(ctx, "CSSOM VIEW §4 Extensions to the Window Interface's visualViewport, "
+                                          "of the interface §12 VisualViewport declares");
     g_resize_slot = realm_value_declare(ctx, "CSSOM VIEW §13.1 the VisualViewport as the resize steps last saw "
                                              "it");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The class is on the list because
+       `visual_viewport_free` PUTS IT BACK AT 0, which is that header's pre-init value for a class id, so it is
+       agent state in its sense and the release is now the inverse of a declaration rather than of nothing.
+       RESETTING IT IS SAFE HERE FOR THE REASON THAT HEADER MAKES A RULE OUT OF: nothing this class dispatches
+       runs after the release column. It has no finalizer and no gc_mark — the one object per realm wears it as
+       §3.7.5's BRAND and carries no opaque — so the collection that follows platform_agent_free reaches
+       nothing that would read a class id this call has already zeroed. */
+    agent_state_class("visual_viewport", &g_vv_class,
+                      "CSSOM VIEW §12 VisualViewport's class — its per-realm prototype slot and Web IDL "
+                      "§3.7.5's brand");
+    agent_state_id("visual_viewport", &g_obj_slot,
+                   "CSSOM VIEW §4 Extensions to the Window Interface's realm-value slot for `visualViewport`, "
+                   "and this component's declaration latch");
+    agent_state_id("visual_viewport", &g_resize_slot,
+                   "CSSOM VIEW §13.1 Resizing viewports' realm-value slot for the VisualViewport as the resize "
+                   "steps last saw it");
     realm_declare_intrinsic(visual_viewport_install);
 }
 

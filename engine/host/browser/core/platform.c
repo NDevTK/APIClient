@@ -388,6 +388,25 @@ static void r_fetch(JSRuntime *rt) { fetch_free(rt); }
    order; on this column it is placed by reverse declaration order, and platform_agent_free runs before
    solver_agent_free by construction. */
 static void r_location(JSRuntime *rt) { (void)rt; location_free(); }
+/* HTML §7.4.1's state machine and §7.2.5's History over it, OFF THE THREE HOSTS' HAND-WRITTEN LISTS and onto
+   this column — and this pair is the one that shows what those lists cost even when every one of them has the
+   line. All three hosts DID call both, and they called them in TWO DIFFERENT PLACES: the WPT runner released
+   them immediately after the viewport pair, main.c and test_forced.c a whole teardown later, past the realm
+   intrinsics and the whole streams group. The order WITHIN the pair was also wrong in all three — §7.2.5 is a
+   VIEW over §7.4.1's record and every one of its members reads it, so the view goes first, which is exactly
+   what reverse declaration order gives and what a hand-written `session_history_free(); history_free();` does
+   not. Neither component's release could be checked while they sat there either: a row with an empty release
+   column may declare no agent state (platform_check_agent_state below), so the nine slots these two hold
+   between them — two realm-value ids, §7.2.5's six member declarations and §7.4.3's step definition — were
+   given back by a line this file could not see and asserted by nothing at all. */
+static void r_session_history(JSRuntime *rt) { (void)rt; session_history_free(); }
+static void r_history(JSRuntime *rt) { (void)rt; history_free(); }
+/* CSSOM VIEW §4's viewport and §12's VisualViewport over it, off those same three lists for the same reason.
+   The pair was written `viewport_free(); visual_viewport_free();` in all three hosts, which is again the
+   dependent component released SECOND — §12's members are derivations over §4's layout viewport — and again
+   reverse declaration order is what decides it here instead of three authors agreeing. */
+static void r_viewport(JSRuntime *rt) { (void)rt; viewport_free(); }
+static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free(); }
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
@@ -628,8 +647,8 @@ static const PlatformComponent PLATFORM[] = {
     { "file_reader",         d_file_reader,         i_file_reader, r_file_reader },
     { "location",            d_location,            NULL,        r_location },
     /* §7.4.1's state machine BEFORE §7.2.5's History, whose every member reads the record it builds. */
-    { "session_history",     d_session_history,     NULL },
-    { "history",             d_history,             NULL },
+    { "session_history",     d_session_history,     NULL,        r_session_history },
+    { "history",             d_history,             NULL,        r_history },
     /* HTML §7.2.6's navigation API, AFTER §7.4.1's state machine whose entries it is a view over. */
     { "navigation",          d_navigation,          NULL },
     /* HTML §7.2.6.10.4, which FIRES the navigate event at the Navigation the row above builds — its
@@ -661,8 +680,8 @@ static const PlatformComponent PLATFORM[] = {
     /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame },
     { "page_reveal",         d_page_reveal,         i_page_reveal },
-    { "viewport",            d_viewport,            NULL },
-    { "visual_viewport",     d_visual_viewport,     NULL },
+    { "viewport",            d_viewport,            NULL,        r_viewport },
+    { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },
     { "media_query_list",    d_media_query_list,    i_media_query_list },
     /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },

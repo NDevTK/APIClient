@@ -3359,16 +3359,20 @@ int main(int argc, char **argv)
        §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
        given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
        the order of that pair exactly backwards; reverse declaration order is what decides it now. */
+    /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too — the pair every host
+       wrote as `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the
+       component whose every member is a derivation over it. Reverse declaration order decides it now. */
     page_reveal_free(ctx);
     media_query_list_free(ctx);
-    viewport_free();
-    visual_viewport_free();
     /* §7.2.4's Location is a ROW on core/platform.h's release column now, run by the platform_agent_free
        above. It holds TWO CLAIMS in solver/concolic.c's source registry, and concolic_free asserts that
        registry is empty — an ordering that used to rest on all three hosts writing these two lines the same
-       way round, and that reverse declaration order decides now. */
-    session_history_free();
-    history_free();
+       way round, and that reverse declaration order decides now.
+       AND HTML §7.4.1's state machine WITH §7.2.5's History over it, which used to be the two lines here. Both
+       are ROWS on that column now, and they are what a hand-written list costs when no host is even missing a
+       line: this host released them HERE and the other two released them a whole teardown later, past the
+       realm intrinsics and the streams group. Within the pair all three had it backwards — §7.2.5 is a VIEW
+       over §7.4.1's record and reads it in every member, so the view goes first. */
     navigation_free(ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(ctx);
     animation_frame_free(ctx);

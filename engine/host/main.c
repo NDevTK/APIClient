@@ -1158,10 +1158,12 @@ QJS_EXPORT void qjs_teardown(void)
        §2.9's tree walk and activation behaviour in the events layer — and not one of those claims was ever
        given back. Two of these three hosts also ran event_target_free BEFORE message_port_free, which is
        the order of that pair exactly backwards; reverse declaration order is what decides it now. */
+    /* CSSOM VIEW §4's viewport and §12's VisualViewport are ROWS on that column now too, and this pair is
+       where the drift was visible without any host being MISSING a line: all three wrote
+       `viewport_free(); visual_viewport_free();`, which releases §4's layout viewport before the component
+       whose every member is a derivation over it. Reverse declaration order decides it now. */
     page_reveal_free(g_ctx);
     media_query_list_free(g_ctx);
-    viewport_free();
-    visual_viewport_free();
     animation_frame_free(g_ctx);
     event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
     /* §8.1.7.5's rejection list is NOT freed here any more — it is a row on core/platform.h's release column,
@@ -1228,8 +1230,12 @@ QJS_EXPORT void qjs_teardown(void)
        percent-encode sets — and concolic_free asserts that registry is empty at the solver's release. That
        ordering rested on three hand-written lists agreeing; on the column, reverse declaration order decides
        it and platform_agent_free runs before solver_agent_free by construction. */
-    session_history_free();
-    history_free();
+    /* AND HTML §7.4.1's state machine WITH §7.2.5's History over it, which used to be the two lines here. They
+       are ROWS on that column now, and they are the pair that shows what a hand-written list costs even when
+       no host is missing it: all three hosts had both, and the WPT runner ran them up beside the viewport pair
+       while these two ran them here, a whole teardown later. Within the pair every host had it backwards —
+       §7.2.5 is a VIEW over §7.4.1's record and reads it in every member, so the view is released first, which
+       is what reverse declaration order gives. */
     navigation_free(g_ctx);              /* HTML §7.2.6 the navigation API */
     navigation_history_entry_free(g_ctx);
     window_free(g_ctx);

@@ -287,9 +287,31 @@ static JSValue js_sel_get(JSContext *ctx, JSValueConst this_val, int magic)
 
 /* ---- §3's OPERATIONS -------------------------------------------------------------------------------------- */
 
-enum { SM_GET_RANGE_AT = 0, SM_ADD_RANGE, SM_REMOVE_RANGE, SM_REMOVE_ALL, SM_COLLAPSE, SM_COLLAPSE_TO_START,
-       SM_COLLAPSE_TO_END, SM_EXTEND, SM_SET_BASE_AND_EXTENT, SM_SELECT_ALL_CHILDREN, SM_CONTAINS_NODE,
-       SM_COMPOSED_RANGES, SM_N };
+/* §3's OPERATIONS, EACH BESIDE THE SENTENCE A REPORT ABOUT THIS COMPONENT'S RELEASE PRINTS FOR IT. They are
+   ONE list because they are read together: `g_id` below is twelve pool entries this agent holds, core/
+   agent_state.h asserts each of them is back at -1 once `document`'s release column has run, and the `what` it
+   names one by is read out of a report headed `document` — where an index into an enum would name nothing a
+   reader can go and look at, and where a bare `§3` would be DOM's rather than this standard's. Two lists could
+   drift by one line and the report would then describe the wrong member with nothing to say so. */
+#define SELECTION_OPERATIONS(X)                                                                        \
+    X(SM_GET_RANGE_AT,        "Selection API §3's getRangeAt declaration")                             \
+    X(SM_ADD_RANGE,           "Selection API §3's addRange declaration")                               \
+    X(SM_REMOVE_RANGE,        "Selection API §3's removeRange declaration")                            \
+    X(SM_REMOVE_ALL,          "Selection API §3's removeAllRanges declaration, which `empty` aliases")  \
+    X(SM_COLLAPSE,            "Selection API §3's collapse declaration, which `setPosition` aliases")   \
+    X(SM_COLLAPSE_TO_START,   "Selection API §3's collapseToStart declaration")                        \
+    X(SM_COLLAPSE_TO_END,     "Selection API §3's collapseToEnd declaration")                          \
+    X(SM_EXTEND,              "Selection API §3's extend declaration")                                 \
+    X(SM_SET_BASE_AND_EXTENT, "Selection API §3's setBaseAndExtent declaration")                       \
+    X(SM_SELECT_ALL_CHILDREN, "Selection API §3's selectAllChildren declaration")                      \
+    X(SM_CONTAINS_NODE,       "Selection API §3's containsNode declaration")                           \
+    X(SM_COMPOSED_RANGES,     "Selection API §3's getComposedRanges declaration")
+enum {
+#define X(m, w) m,
+    SELECTION_OPERATIONS(X)
+#undef X
+    SM_N
+};
 
 /* The condition §3's collapse (step 4), extend (step 1) and setBaseAndExtent (step 2) all open with:
    "If document associated with this is not a shadow-including inclusive ancestor of node, abort these steps."
@@ -757,6 +779,12 @@ JSValue selection_new(JSContext *ctx, JSValueConst doc)
 
 static int g_id[SM_N], g_id_delete = -1, g_id_stringifier = -1, g_id_doc_get = -1, g_id_win_get = -1;
 
+static const char *const SM_WHAT[] = {
+#define X(m, w) w,
+    SELECTION_OPERATIONS(X)
+#undef X
+};
+
 /* §3's `dictionary GetComposedRangesOptions`. One member, `sequence<ShadowRoot> shadowRoots = []`, and it is
    the DECLARATION that runs Web IDL §3.2.21's iterator protocol over it — the page's iterator, its `next` and
    every `done`/`value` read park the machine on the element they are on, which a body walking the list
@@ -850,9 +878,17 @@ void selection_init(JSContext *ctx)
        able to say "declared no agent state" about a component that had declared five slots. Beside
        core/dom/document_current_script.c's one slot, which names this same row for this same reason.
        AND THE STANDARD IS NAMED IN EACH `what`, because these are read out of a report headed `document`,
-       where a bare `§3` would be DOM's rather than this one's. */
+       where a bare `§3` would be DOM's rather than this one's.
+       AND §3's TWELVE OPERATIONS ARE DECLARED TOO, WHICH THEY WERE NOT — the loop below, which is the reason
+       SELECTION_OPERATIONS pairs each one with its own sentence. `selection_free` already put every entry of
+       `g_id` back at -1, and nothing asserted that it had: the release column was the inverse of five of this
+       component's seventeen slots, so agent_state_check_released held nothing to check for the other twelve
+       and an entry a future release forgot would be read, by the next agent's `selection_install_proto`, as a
+       pool entry of a pool that no longer exists. A count that is short is not a weaker check of those slots;
+       it is no check of them at all, wearing the same number a component that held nothing would produce. */
     agent_state_class("document", &g_sel_class,
                       "Selection API §3's Selection class, and this component's declaration latch");
+    for (k = 0; k < SM_N; k++) agent_state_id("document", &g_id[k], SM_WHAT[k]);
     agent_state_id("document", &g_id_delete, "Selection API §3's deleteFromDocument step-machine declaration");
     agent_state_id("document", &g_id_stringifier, "Selection API §3's stringifier step-machine declaration");
     agent_state_id("document", &g_id_doc_get, "Selection API §4.1's getSelection declaration");

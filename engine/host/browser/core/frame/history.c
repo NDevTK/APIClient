@@ -46,6 +46,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/dom/document.h"
 #include "core/frame/history.h"
 #include "core/frame/navigate_event_fire.h"
@@ -635,6 +636,35 @@ void history_init(JSContext *ctx)
     g_id_scroll_setter = idl_setter_id(ctx, IDL_ENUM, false, js_hist_set_scroll_restoration, 0);
     idl_enum_values(SCROLL_RESTORATION);
 
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Six member declarations and the
+       realm-value slot this init's own latch consults; a release that kept any of them would hand a second
+       agent a component reporting itself declared and holding pool entries from a declaration pool that is
+       gone.
+       `g_history_class` IS NOT ON THE LIST BECAUSE `history_free` DOES NOT PUT IT BACK, and a declaration
+       whose release is not its inverse fires agent_state_check_released rather than checking anything. The
+       latch is the SLOT, which is why the slot is what the assert at the top of this function reads.
+       THAT IS NOT THE SAME AS SAYING IT IS SETTLED, and this is the honest state of a question two components
+       of this browser answer differently: core/frame/visual_viewport.c zeroes its class at its release and
+       core/dom/selection.c uses its class AS the latch, while this file and core/crypto/crypto.c carry theirs
+       across. Each is self-consistent and the MIXTURE is not, because `JS_NewClassID` hands out ids from
+       `rt->js_class_id_alloc`, which a second agent's runtime starts back at JS_CLASS_INIT_COUNT: a component
+       that zeroed its id then draws a FRESH one from that counter, and the first free number is one a
+       component that carried its id across is about to re-register. `JS_NewClass1` refuses a class id already
+       taken in that runtime, so the `CHECK` on the line above is where that lands. It is unreachable today —
+       `qjs_init` refuses to root a second agent in one instance and every host builds exactly one runtime —
+       which is why this is written down at the site rather than worked around: the fix is ONE policy for a
+       class id across every component, and it belongs in core/agent_state.h beside the kind table that
+       already names 0 as a class id's pre-init value. */
+    agent_state_id("history", &g_obj_slot,
+                   "HTML §7.2.5 The History interface's realm-value slot for the Document's associated "
+                   "History, and this component's declaration latch");
+    agent_state_id("history", &g_id_push, "HTML §7.2.5 The History interface's pushState declaration");
+    agent_state_id("history", &g_id_replace, "HTML §7.2.5 The History interface's replaceState declaration");
+    agent_state_id("history", &g_id_scroll_setter,
+                   "HTML §7.2.5 The History interface's scrollRestoration setter declaration");
+    agent_state_id("history", &g_id_go, "HTML §7.2.5 The History interface's go declaration");
+    agent_state_id("history", &g_id_back, "HTML §7.2.5 The History interface's back declaration");
+    agent_state_id("history", &g_id_forward, "HTML §7.2.5 The History interface's forward declaration");
     realm_declare_intrinsic(history_install_realm);
 }
 
