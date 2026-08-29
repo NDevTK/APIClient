@@ -41,6 +41,7 @@
  * been handled — a question a page asks in code this engine drives whether or not the events exist. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/events/input_device_capabilities.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -186,6 +187,25 @@ void input_device_capabilities_init(JSContext *ctx)
     idl_optional_from(0);   /* `constructor(optional InputDeviceCapabilitiesInit deviceInitDict = {})` */
     g_ready = 1;
     realm_declare_intrinsic(input_device_capabilities_install_protos);
+
+    /* WHAT THIS COMPONENT HOLDS FOR THE WHOLE AGENT — core/agent_state.h, declared beside the lines above that
+       set each slot, and asserted back at its pre-init value by core/platform.c's release column. The NAME is
+       core/platform.c's row name and is matched against it by string, which is what makes the row's release
+       and this list two sides of one fact rather than two lists.
+       IT IS FOUR SLOTS AND THE RELEASE UNDID THREE. `g_idc_class` was set by `JS_NewClassID` here and left set
+       by the release, which is exactly `dom_rect_free`'s defect in agent_state.h's own list: `_init` opens on
+       `DCHECK(!g_ready, …)` and the release clears `g_ready`, so a SECOND agent in one process would mint a
+       second class id while every value the first agent minted still wears the first — a brand test that
+       answers false about an object that is by definition its subject, with nothing to say so. Declaring the
+       slot is what makes that unreachable, because the assert reads the slot rather than the intention.
+       NOTHING READS THESE AFTER THE COLUMN: this interface declares no finalizer and no gc_mark (its instances
+       carry their state in an internal-slot record, not a class opaque), which is the obligation agent_state.h
+       creates in the same breath as the zeroing. */
+    agent_state_flag("input_device_capabilities", &g_ready, "the declaration latch");
+    agent_state_class("input_device_capabilities", &g_idc_class,
+                      "§\"The InputDeviceCapabilities interface\"'s brand and per-realm prototype slot");
+    agent_state_value("input_device_capabilities", &g_key, "the private Symbol its instances' slots hang off");
+    agent_state_id("input_device_capabilities", &g_ctor_stepid, "the constructor declaration");
 }
 
 void input_device_capabilities_install_protos(JSContext *ctx)
@@ -217,11 +237,17 @@ void input_device_capabilities_install_protos(JSContext *ctx)
     JS_FreeValue(ctx, global);
 }
 
+/* EVERY SLOT THIS COMPONENT DECLARED, BACK AT ITS PRE-INIT VALUE — the inverse of the declaration in
+   `_init`, which core/agent_state.h asserts at the end of core/platform.c's release column. The prototypes and
+   interface objects are the REALMS' and are released with their contexts; what is agent-lifetime is these
+   four. `g_idc_class` is one of them: a class id given back but remembered is a handle a second agent reads as
+   its own. */
 void input_device_capabilities_free(JSRuntime *rt)
 {
     if (!g_ready) return;
-    JS_FreeValueRT(rt, g_key);  /* the prototypes are the REALMS' — each is released with its context */
+    JS_FreeValueRT(rt, g_key);
     g_key = JS_UNDEFINED;
+    g_idc_class = 0;
     g_ready = 0;
     g_ctor_stepid = -1;
 }
