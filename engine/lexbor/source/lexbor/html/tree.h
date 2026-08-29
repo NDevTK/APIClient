@@ -101,7 +101,26 @@ lxb_html_tree_insertion_position_t;
  * starts at lexbor's own table and an embedder swaps it whole. A site that could pick between two
  * implementations is a site that silently keeps the old one for whatever it fails to recognise.
  */
+/*
+ * `create` IS NOT ONE OF THE WRITES AND THAT IS WHY IT IS HERE. The four members below are MUTATIONS of a tree
+ * that already exists; this one is the moment 13.2.6 MAKES a node, before it is anywhere. An embedder keeping
+ * per-flow undo state needs both halves and they are not interchangeable: the mutation tells it what to put
+ * back, and the creation tells it what to DESTROY when the flow that built it is thrown away. Without it a
+ * parse into a shared tree leaves every element, comment, Text node and DocumentType it built owned by nobody
+ * -- detached by the undo and freed by no one.
+ *
+ * IT CANNOT BE INFERRED FROM `insert_child`, which is the tempting place to put it. 13.2.6.4.7 'The "in body"
+ * insertion mode's adoption agency algorithm REMOVES a node and INSERTS it again, several times for one node,
+ * so an ownership record taken at the insert is taken more than once for one node -- and two records that each
+ * destroy it is a double free. A creation happens exactly once, which is the property the record needs.
+ *
+ * ONE FACTORY, so one call site: every node 13.2.6 builds comes from `lxb_html_tree_create_node` below --
+ * `create_element_for_token`, the Text node of "insert a character", the comment, the DocumentType, and the
+ * `html` element the "before html" insertion mode makes -- and the hook is called there rather than at those
+ * five, so a sixth cannot forget it.
+ */
 typedef struct {
+    void (*create)(lxb_html_tree_t *tree, lxb_dom_node_t *node);
     void (*insert_child)(lxb_html_tree_t *tree, lxb_dom_node_t *to,
                          lxb_dom_node_t *node);
     void (*insert_before)(lxb_html_tree_t *tree, lxb_dom_node_t *to,
@@ -317,12 +336,24 @@ lxb_html_tree_build(lxb_html_tree_t *tree, lxb_html_document_t *document,
     return lxb_html_tree_end(tree);
 }
 
+/*
+ * 13.2.6's ONE NODE FACTORY -- see `create` in lxb_html_tree_dom_cb_t for why the hook is here and not at the
+ * five callers. The hook runs only on a node that was actually made; a NULL is an allocation failure and there
+ * is nothing to own.
+ */
 lxb_inline lxb_dom_node_t *
 lxb_html_tree_create_node(lxb_html_tree_t *tree,
                           lxb_tag_id_t tag_id, lxb_ns_id_t ns)
 {
-    return (lxb_dom_node_t *) lxb_html_interface_create(tree->document,
+    lxb_dom_node_t *node;
+
+    node = (lxb_dom_node_t *) lxb_html_interface_create(tree->document,
                                                         tag_id, ns);
+    if (node != NULL) {
+        lxb_html_tree_dom()->create(tree, node);
+    }
+
+    return node;
 }
 
 lxb_inline bool

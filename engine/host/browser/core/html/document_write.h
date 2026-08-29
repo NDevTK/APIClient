@@ -26,22 +26,16 @@
  *     element` and restores it after), which is why a real parse-time `document.write` appends. The two are
  *     not interchangeable and §8.4.1 step 5 is where the standard separates them, so document_open.c CRASHES
  *     there rather than serving the first out of the second's algorithm. What that crash asks for is a
- *     document's own parse kept OPEN across script execution, which is two things and neither is in this file:
- *       (1) AN OWNER FOR THE LIVE PARSER'S NODES. The CAPTURE is not the gap and has not been for some time:
- *           html_parse_new_parser calls dom_cow_install_tree_construction and ASSERTS
- *           dom_cow_owns_tree_construction, a document parse declares DOM_PARSE_ROOT_SHARED, and §13.2.6's
- *           inserts and removals each push the delta entry that reverts them. What is owed is who FREES them:
- *           every other parse here is out-of-tree and its result is PLACED through the chokepoint, where
- *           dom_cow_take_private makes the flow the owner, and a parser feeding the document's own tree has no
- *           placement step — so a discarded flow detaches what it wrote and nothing frees it.
- *           core/html/html_parse.c states this at the site that owes it.
- *       (2) OPENING THE ACTIVE DOCUMENT'S PARSE AND CLOSING IT AT §13.2.7's OWN MOMENT, which is
- *           core/loader/document_load.c's, and whose hazard html_parse.c names: lexbor emits the EOF token in
- *           `chunk_end` and §13.2.6 builds `html`/`head`/`body` from it, so a document left open has a NULL
- *           `documentElement` until the close — which is what a browser does too, and which each reader that
- *           assumes otherwise has to be changed for.
- *     THE SITES ARE CROSS-REFERENCED ON PURPOSE. They describe one mechanism from several ends, and a reader
- *     who arrived at only one of them once went off to build a capture primitive that already existed.
+ *     document's own parse kept OPEN across script execution, and its ISOLATION half is now built: §13.2.6's
+ *     writes go through solver/dom_cow.c's table (a document parse declares DOM_PARSE_ROOT_SHARED, so inserts
+ *     and removals push the entries that revert them) AND its `create` member records every node the parse
+ *     makes into the running flow's delta, so a live parser's nodes die with the flow that built them exactly
+ *     as an `appendChild`'s do. What is left is core/loader/document_load.c's: open the active document's
+ *     parse with html_parse_document_open instead of completing it with html_parse_document, and close it at
+ *     §13.2.7's own moment — the lifecycle stage that moves the readiness to "interactive". Its hazard is
+ *     html_parse.c's own: lexbor emits the EOF token in `chunk_end` and §13.2.6 builds `html`/`head`/`body`
+ *     from it, so a document left open has a NULL `documentElement` until the close — which is what a browser
+ *     does too, and which each reader that assumes otherwise has to be changed for.
  *
  * WHAT THE PARSER STILL DOES NOT DO WITH WHAT IS WRITTEN IS RUN ITS SCRIPTS, and that is a CHOICE the standard
  * grants rather than a gap it forbids: §8.4.3's own definition says "User agents are explicitly allowed to

@@ -227,6 +227,12 @@ void dom_cow_parse_release(lxb_html_tree_t *tree);
  * primitives and a `lexbor_str_append` into a Text node's storage, and this installs the implementation.
  * The character merge is the one member that captures whatever the declaration says — see
  * dom_cow_append_text_data.
+ * FOUR OF THE FIVE MEMBERS ARE MUTATIONS AND THE FIFTH IS NOT. `create` is called where §13.2.6 MAKES a node,
+ * before it is anywhere, and it is what makes a SHARED parse safe to run inside a flow: the mutation members
+ * say what to put back when a delta is unapplied, and only the creation record says what to DESTROY when that
+ * delta is discarded. Without it a `document.write()` into the page's own tree left every node it built
+ * detached by the undo and freed by nobody. It cannot be folded into `insert_child` — §13.2.6.4.7's adoption
+ * agency re-inserts one node several times, and two ownership records that each destroy it is a double free.
  *
  * IT DOES NOT FIRE THE TREE HOOK, and that is a statement about §4.2.3's insertion and removing steps rather
  * than about capture. The hook this file fires is THIS ENGINE's §4.2.3 steps and the chokepoint above is the

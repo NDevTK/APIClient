@@ -41,6 +41,18 @@ lxb_tag_append_lower(lexbor_hash_t *hash,
  * why these are the PUBLIC mutators (DOM 4.2.3 "Mutation algorithms"' append/insert/remove, which the spec
  * steps these sites implement name by those words) rather than the `_wo_events` primitives they used to be.
  */
+/*
+ * 13.2.6 MADE a node. lexbor itself has nothing to do with that fact -- a node belongs to the document that
+ * created it and is freed with it -- so the default is empty. It is an interface member because an embedder
+ * with per-flow undo state has to know which nodes a parse it may throw away brought into being.
+ */
+static void
+lxb_html_tree_dom_default_create(lxb_html_tree_t *tree, lxb_dom_node_t *node)
+{
+    (void) tree;
+    (void) node;
+}
+
 static void
 lxb_html_tree_dom_default_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to,
                                        lxb_dom_node_t *node)
@@ -93,6 +105,7 @@ lxb_html_tree_dom_default_append_data(lxb_html_tree_t *tree,
 }
 
 static const lxb_html_tree_dom_cb_t lxb_html_tree_dom_default = {
+    lxb_html_tree_dom_default_create,
     lxb_html_tree_dom_default_insert_child,
     lxb_html_tree_dom_default_insert_before,
     lxb_html_tree_dom_default_remove,

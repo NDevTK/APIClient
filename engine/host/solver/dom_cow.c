@@ -1267,27 +1267,47 @@ static DomParseDecl *cow_tc_decl(lxb_html_tree_t *tree)
     return d;
 }
 
-/* A SHARED PARSE'S WRITES ARE CAPTURED, AND THE NODES IT BUILDS ARE STILL OWNED BY NOBODY. The capture below
-   is the half this file can state on its own: an insert pushes the entry that detaches the node on unapply, a
-   removal pushes the entry that puts it back, so a §8.4.3 `document.write()` into the page's own tree is
-   isolated per flow exactly like an `appendChild` from script.
-   WHAT IS MISSING IS THE CREATION RECORD. §13.4's fragment parse answers ownership at dom_cow_take_private —
-   the node leaves the private tree, and THAT is where the flow becomes its owner — and a shared parse has no
-   such boundary: its nodes go straight into the page's tree, so a discarded flow detaches them and nothing
-   destroys them. It cannot be noted at the insert, because §13.2.6.4.7's adoption agency re-inserts nodes it
-   removed and a second creation entry is a double free at discard. It has to be noted where §13.2.6 MAKES the
-   node, which is a member `lxb_html_tree_dom_cb_t` does not have yet. Until it does, a shared parse may only
-   run with capture off — which is the ACTIVE document's own parse, opened before the first flow is seeded. */
-static void cow_tc_shared_check(void)
+/* §13.2.6 MADE A NODE — THE OTHER HALF OF A SHARED PARSE'S ISOLATION, and the half a mutation interface cannot
+ * express. The three writes below say what to PUT BACK when a flow's delta is unapplied; this says what to
+ * DESTROY when that delta is discarded, and without it a `document.write()` into the page's own tree left every
+ * element, comment, Text node and DocumentType it built owned by nobody: detached by the undo, freed by no one,
+ * and reachable from the wrapper identity map for the rest of the run. That is the leak dom_release_created's
+ * own comment traces to a five-second calloc inside one `createElement`.
+ *
+ * IT IS NOTED AT THE CREATION AND NOT AT THE INSERT, which is the whole reason the hook had to exist rather
+ * than being folded into cow_tc_insert_child. §13.2.6.4.7 'The "in body" insertion mode's adoption agency
+ * removes a node and inserts it again — several times, for one node — so an ownership record taken at the
+ * insert is taken more than once, and two records that each `destroy_deep` it is a double free at discard. A
+ * creation happens exactly once.
+ *
+ * ONLY A SHARED PARSE. §13.4's fragment parse builds a tree no other flow can reach, and §State-isolation's
+ * invariant is that flow-private state is never captured — its ownership is answered at dom_cow_take_private,
+ * where the node LEAVES the private tree for the real one, and a node that never leaves would carry a creation
+ * entry the discard then asserts against.
+ *
+ * A SHARED PARSE'S SUBTREE IS N ENTRIES AND NOT ONE, unlike the created-subtree case dom_release_created
+ * describes: every one of this parse's inserts goes through the capturing chokepoint below, so the unapply
+ * detaches every node from every other before any of them is released, and each is childless by the time its
+ * own entry destroys it. The interior of a subtree built with dom_cow_insert_private is captured by nothing,
+ * which is why that one has a single entry and this one does not.
+ * LEXBOR'S OWN FAILURE PATHS DESTROY A NODE IT HAS ALREADY MADE — `create_element_for_token` on a failed
+ * attribute append, `insert_foreign_element` on a failed open-elements push, `create_document_type_from_token`
+ * on a failed doctype parse — which would leave an entry naming freed memory. All three are ALLOCATION
+ * failures and nothing else, and this engine does not continue past one: the status reaches the parse entry's
+ * own CHECK, which aborts, so no delta holding such an entry can ever be discarded. */
+static void cow_tc_create(lxb_html_tree_t *tree, lxb_dom_node_t *node)
 {
-    DCHECK(!g_dom_capture,
-           "HTML §13.2.6 tree construction wrote the SHARED tree while the running flow's DOM delta was "
-           "recording. The writes below are captured; the nodes are not OWNED — every element, comment and "
-           "Text node this parse builds goes into the page's tree with no creation entry, so a flow that is "
-           "discarded detaches them and nothing frees them. Build the creation record where §13.2.6 makes the "
-           "node (a fifth member on lxb_html_tree_dom_cb_t, calling dom_cow_note_created), NOT at the insert: "
-           "§13.2.6.4.7's adoption agency removes and re-inserts nodes, and a second creation entry for one "
-           "node is a double free when the delta is discarded");
+    DomParseDecl *d = cow_tc_decl(tree);
+
+    DCHECK(node != NULL, "§13.2.6 announced a node it did not make — the factory calls this only on a node it "
+                         "built, so a NULL here is a caller that is not that factory");
+    DCHECK(node->parent == NULL,
+           "§13.2.6 announced a CREATION for a node that is already in a tree — the hook is called by the node "
+           "factory before the node is anywhere, so a parented node here is an ownership record about to be "
+           "taken for the second time, which is a double free at discard");
+    if (d->kind == DOM_PARSE_ROOT_PRIVATE)
+        return;
+    dom_cow_note_created(node);
 }
 
 static void cow_tc_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_dom_node_t *node)
@@ -1316,7 +1336,6 @@ static void cow_tc_insert_child(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_d
         lxb_dom_node_insert_child(to, node);
         return;
     }
-    cow_tc_shared_check();
     dom_insert_capture(node);
     lxb_dom_node_insert_child(to, node);
 }
@@ -1343,7 +1362,6 @@ static void cow_tc_insert_before(lxb_html_tree_t *tree, lxb_dom_node_t *to, lxb_
         lxb_dom_node_insert_before(to, node);
         return;
     }
-    cow_tc_shared_check();
     dom_insert_capture(node);
     lxb_dom_node_insert_before(to, node);
 }
@@ -1371,7 +1389,6 @@ static void cow_tc_remove(lxb_html_tree_t *tree, lxb_dom_node_t *node)
         lxb_dom_node_remove(node);
         return;
     }
-    cow_tc_shared_check();
     dom_remove_capture(node);
     lxb_dom_node_remove(node);
 }
@@ -1398,6 +1415,7 @@ static lxb_status_t cow_tc_append_data(lxb_html_tree_t *tree, lxb_dom_character_
 }
 
 static const lxb_html_tree_dom_cb_t g_cow_tc_ops = {
+    cow_tc_create,
     cow_tc_insert_child,
     cow_tc_insert_before,
     cow_tc_remove,

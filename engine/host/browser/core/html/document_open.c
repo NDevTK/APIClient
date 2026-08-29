@@ -110,8 +110,11 @@ static void erase_listeners_of(JSContext *ctx, lxb_dom_node_t *n)
     if (JS_IsObject(w)) event_target_erase_all(ctx, w);
 }
 
-/* HTML §7.4.4's "is initial about:blank", read the way core/frame/window_proxy.h exposes it — as whether the
-   navigable has EVER been navigated. Two steps of these want it and they want opposite things from it: step 5
+/* HTML §3.1.1 "The Document object"'s "is initial about:blank" — "Each Document has an is initial about:blank,
+   which is a boolean, initially false" — read the way core/frame/window_proxy.h exposes it, as whether the
+   navigable has EVER been navigated. §7.4.4 "Non-fragment synchronous \"navigations\"" is where it is CLEARED
+   and not where it is declared, which is the number this comment carried until engine/citegen.mjs read the
+   standard's own definitions and said so. Two steps of these want it and they want opposite things from it: step 5
    must not mistake an idle `about:blank` for a document mid-parse, and step 13 has to clear it and cannot. A
    realm whose Document has no navigable at all answers false, which is the same answer for both: there is no
    navigable holding an initial about:blank. */
@@ -183,14 +186,16 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
               "`document.write` APPENDS at §13.2.3.5's insertion point and must never replace the document. "
               "This engine reaches here because it parses a document to completion and seeds its scripts as "
               "flows afterwards, so the mid-parse state the standard is describing does not exist. What must "
-              "be built is the document's own parse kept OPEN across script execution: (1) an OWNER for the "
-              "live parser's nodes — every other parse here is out-of-tree and PLACED through the chokepoint, "
-              "where dom_cow_take_private makes the flow the owner, and a parser feeding the document's own "
-              "tree has no placement step, so a discarded flow detaches what it wrote and nothing frees it "
-              "(core/html/html_parse.c owns that); and (2) opening the ACTIVE document's parse with "
-              "html_parse_document_open and closing it at §13.2.7's own moment, which is "
-              "core/loader/document_load.c's. With both, a parse-time script runs with the insertion point "
-              "DEFINED and never reaches §8.4.3 step 9 at all");
+              "be built is the document's own parse kept OPEN across script execution — its OWNERSHIP half is "
+              "DONE (solver/dom_cow.c's cow_tc_create records every node §13.2.6 makes into the running flow's "
+              "delta, so a live parser's nodes die with the flow that built them exactly as an appendChild's "
+              "do), and what is left is core/loader/document_load.c's: open the ACTIVE document's parse with "
+              "html_parse_document_open instead of completing it with html_parse_document, and close it at "
+              "§13.2.7 \"The end\"'s own moment — the lifecycle stage that moves the readiness to "
+              "\"interactive\". Its hazard is html_parse.c's own: lexbor emits the EOF token in `chunk_end` "
+              "and §13.2.6 builds html/head/body from it, so a document left open has a NULL documentElement "
+              "until the close, and each reader that assumes otherwise is what must change. With that, a "
+              "parse-time script runs with the insertion point DEFINED and never reaches §8.4.3 step 9 at all");
         /* STEP 5's OWN ACTION — "return document" — so that a release build, where the DFAIL above is compiled
            out, takes the standard's branch for the state it believes it is in rather than falling through into
            the destructive half of an algorithm the crash exists to keep it out of. */
@@ -275,7 +280,8 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
        newURL."
        IT IS A NO-OP HERE AND THE REASON IS THE SUBSTITUTION AT STEPS 3-4, not an omission: with the RELEVANT
        document standing in for the ENTRY document, entryDocument IS document, so newURL is a copy of the
-       document's own URL and §7.4.4's update writes the address it already has. WHAT THE SUBSTITUTION COSTS IS
+       document's own URL and §7.4.4 "Non-fragment synchronous \"navigations\""'s update writes the address it
+       already has. WHAT THE SUBSTITUTION COSTS IS
        EXACTLY THIS STEP — a same-origin `otherFrame.contentDocument.open()` must move the OTHER document's
        address to the CALLER's, and this engine leaves it where it was. Closing it needs the entry global
        object, which is a fact about the running SCRIPT and not about any realm a C member can reach; the
@@ -285,8 +291,9 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
     if (realm != NULL) {
         DCHECK(open_ever_navigated(realm),
                "§8.4.1 step 13 — the document open steps ran on a navigable that still holds its INITIAL "
-               "about:blank, and this engine cannot clear that flag: core/frame/navigable.c owns §7.4.4's \"is "
-               "initial about:blank\" and window_proxy_ever_navigated is a getter with no setter beside it. "
+               "about:blank, and this engine cannot clear that flag: core/frame/navigable.c owns §3.1.1 \"The "
+               "Document object\"'s \"is initial about:blank\" and window_proxy_ever_navigated is a getter "
+               "with no setter beside it. "
                "Leaving it set makes §7.2.4's location navigate choose \"replace\" for ever after — a page that "
                "opens a window, writes into it and then navigates it loses the history entry the navigation "
                "should have pushed. The setter belongs beside window_proxy_navigate, which is the one site "
