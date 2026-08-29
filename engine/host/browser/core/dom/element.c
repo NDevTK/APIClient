@@ -2200,7 +2200,10 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
                 /* HTML §4.12.1: an inserted `<script>` is PREPARED — and its step 1 is what makes a script the
                    fragment parse produced inert, because §13.4's default scripting mode marked it already
                    started. core/html/html_script.c owns both halves of that pair. */
-                html_script_prepare(ctx, el);
+                /* NOT PARSER-INSERTED: §4.12.1.1's insertion steps are "if insertedNode is parser-inserted,
+                   then return", so a node that reaches this walk has a null parser document. A parser's own
+                   `<script>` is prepared at its end tag instead (html_script_parser_inserted). */
+                html_script_prepare(ctx, el, /*parser_inserted*/false);
                 /* HTML §4.8.12: an inserted `<source>` STARTS its parent media element's resource selection
                    algorithm, which is how a `<video>` with no `src` and only `<source>` children ever loads
                    anything. It is here rather than on node.c's tree-hook list because that list is the DOM's

@@ -9,6 +9,9 @@
 #include "check.h"
 #include "core/dom/node_heap.h"
 #include "core/html/html_parse.h"
+/* HTML §13.2.6.4.8 'The "text" insertion mode' prepares the `script` element it just closed, and that is the
+   component that owns §4.12.1 — this file supplies only the moment. */
+#include "core/html/html_script.h"
 /* §13.2.6's DOM writes are the per-flow delta's — this component owns the one place a parser is made, so it is
    where that implementation is installed. */
 #include "solver/dom_cow.h"
@@ -202,6 +205,7 @@ static lxb_html_token_t *html_parse_token_done(lxb_html_tokenizer_t *tkz, lxb_ht
 {
     lxb_html_tree_t *tree = (lxb_html_tree_t *)ctx;
     lxb_html_token_t *prev, *out;
+    lxb_dom_node_t *script_node;
 
     DCHECK(g_lxb_token_done != NULL,
            "a token reached this component before any parser handed over lexbor's own token-done callback — "
@@ -226,6 +230,30 @@ static lxb_html_token_t *html_parse_token_done(lxb_html_tokenizer_t *tkz, lxb_ht
        leaves it with nothing naming it. A failing inner callback (it returns NULL and sets `tkz->status`) has
        abandoned the token rather than freed it, so the release is right on that path too — the token's
        attributes are still exactly as the tokenizer and the claim left them. */
+    /* §13.2.6.4.8's SUBJECT, TAKEN BEFORE THE POP. "Let script be the current node (which will be a script
+       element). Pop the current node off the stack of open elements." — so the element is reachable as the
+       current node only until tree construction runs, and the step that USES it ("prepare the script element
+       script") comes after. This is the same shape as the token bracket below it and for the same reason: a
+       fact that is true on one side of a call and needed on the other.
+       THE CURRENT NODE BEING A `script` IS WHAT IDENTIFIES THE MODE, which is why `tree->mode` is not compared
+       against anything. A `script` element is on the stack of open elements only between §13.2.6.2's generic
+       raw text element parsing, which switches the insertion mode to "text", and the pop below — so a
+       `</script>` token standing on one IS §13.2.6.4.8, and a stray `</script>` in any other mode is standing
+       on something else and takes that mode's ignore rule. */
+    script_node = NULL;
+    if (token->tag_id == LXB_TAG_SCRIPT || token->tag_id == LXB_TAG__END_OF_FILE) {
+        lxb_dom_node_t *cur = lxb_html_tree_current_node(tree);
+
+        /* THE HTML NAMESPACE, AND THE OTHER ONE IS A DIFFERENT SECTION RATHER THAN AN OMISSION. §13.2.6.5 "The
+           rules for parsing tokens in foreign content" has its own row — "An end tag whose tag name is
+           `script`, if the current node is an SVG script element" — whose last step is "Process the SVG script
+           element according to the SVG rules", not §4.12.1. Routing an SVG `script` through this line would be
+           citing a section that does not say what the code does. */
+        if (cur != NULL && cur->type == LXB_DOM_NODE_TYPE_ELEMENT && cur->local_name == LXB_TAG_SCRIPT &&
+            cur->ns == LXB_NS_HTML &&
+            (token->tag_id == LXB_TAG__END_OF_FILE || (token->type & LXB_HTML_TOKEN_TYPE_CLOSE)))
+            script_node = cur;
+    }
     prev = g_token_in_construction;
     g_token_in_construction = token;
     out = g_lxb_token_done(tkz, token, ctx);
@@ -235,6 +263,44 @@ static lxb_html_token_t *html_parse_token_done(lxb_html_tokenizer_t *tkz, lxb_ht
            "of it and the next claim would clear a field belonging to another parse");
     g_token_in_construction = prev;
     html_parse_release_token(tkz, token, tree);
+    /* …AND NOW §13.2.6.4.8'S REMAINING STEPS, in the section's own order: the pop, the mode restore and the
+     * insertion-point save/restore have all happened inside the call above, and what is left is the one step
+     * this engine has to perform for itself.
+     *
+     * IT IS AFTER THE TOKEN RELEASE and that is not an accident either: the release hands back attribute values
+     * nothing adopted, and `prepare` reads the element's ADOPTED `src` and `type` off the DOM. Doing it the
+     * other way round would have prepare running while the token still owns bytes the release is about to free,
+     * which is a window with no reason to exist.
+     *
+     * WHY A WRITTEN `<script>` MUST REACH THIS AT ALL, given that §8.4.3 "document.write()" explicitly permits
+     * the opposite ("User agents are explicitly allowed to avoid executing script elements inserted via this
+     * method"): CLAUDE.md's §Boot names the case — "Code-loading async ALWAYS executes (`await import(x)`, a
+     * chunk `fetch().then(eval)`, a `document.write`'d `<script>`)". The permission makes the omission
+     * SPEC-LEGAL, which is exactly why nothing in this tree could ever have reported it: no crash, no failing
+     * subtest, no column. A written script is conditionally-loaded JS in its purest form — code that exists
+     * only if a branch reached the write — and it is the solver half that the silence costs. */
+    /* AN INERT PARSE MARKS ITS SCRIPTS AT THE PARSE BOUNDARY AND NOT HERE, WHICH IS WHY THE TEST IS AT THE
+       CALL AND NOT INSIDE EITHER ENTRY. §13.2.4.5 "Other parsing state flags"' parser scripting mode INERT is
+       "Scripts are enabled, however they are marked as already started, essentially preventing them from
+       executing. THIS IS THE DEFAULT MODE OF THE HTML FRAGMENT PARSING ALGORITHM" — §13.4 "Parsing HTML
+       fragments" gives its `scriptingMode` argument that default, and every one of this engine's five markup
+       members (innerHTML, outerHTML, insertAdjacentHTML, setHTML, setHTMLUnsafe) reaches §13.4 without passing
+       one, so `lxb_html_tree_is_fragment` IS the question. The STAMP those scripts need is
+       `html_script_parsed`'s, applied to the finished tree — one writer, and it reaches the SVG `script`
+       elements §13.2.6.5 puts outside this line's namespace as well. What this test buys is the only thing the
+       stamp's timing could not: that the two entries below never run for a tree §13.4 is required to keep
+       inert, and so cannot prepare a fragment's script in the window before that walk.
+       The remaining mode, FRAGMENT ("scripts are executed as soon as they are inserted"), belongs to
+       `createContextualFragment`, which no member here reaches; the day one does it is a parse that is not a
+       §13.4 default and this line is where that shows. */
+    /* AND NOT AT ALL IF TREE CONSTRUCTION FAILED. `lxb_html_tree_token_callback` answers NULL and sets
+       `tkz->status` on an allocation failure, which leaves the element's place in the tree unfinished — the
+       caller CHECKs that status and aborts, so what this test buys is that the abort happens with nothing
+       queued rather than after a program was seeded out of a parse that did not complete. */
+    if (script_node != NULL && out != NULL && !lxb_html_tree_is_fragment(tree)) {
+        if (token->tag_id == LXB_TAG__END_OF_FILE) html_script_end_of_file(script_node);
+        else                                       html_script_parser_inserted(script_node);
+    }
     return out;
 }
 

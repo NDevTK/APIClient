@@ -37,12 +37,20 @@
  *     from it, so a document left open has a NULL `documentElement` until the close — which is what a browser
  *     does too, and which each reader that assumes otherwise has to be changed for.
  *
- * WHAT THE PARSER STILL DOES NOT DO WITH WHAT IS WRITTEN IS RUN ITS SCRIPTS, and that is a CHOICE the standard
- * grants rather than a gap it forbids: §8.4.3's own definition says "User agents are explicitly allowed to
- * avoid executing script elements inserted via this method", and this engine's tree construction prepares no
- * script (§4.12.1's preparation is reached from DOM §4.2.3's insertion steps and from the document scan, and a
- * parser-inserted element takes neither). It is nonetheless where this component's next value is: a written
- * `<script>` is conditionally-loaded code, which is the surface this whole product exists to reach.
+ * WHAT IS WRITTEN RUNS ITS SCRIPTS, AND THE STANDARD DOES NOT REQUIRE THAT — which is why the omission had to
+ * be found by reading rather than by any instrument. §8.4.3's own definition says "User agents are explicitly
+ * allowed to avoid executing script elements inserted via this method", so a written `<script>` that never ran
+ * broke no conformance test, earned no crash and moved no column. CLAUDE.md's §Boot settles it for this
+ * project by name — "Code-loading async ALWAYS executes (`await import(x)`, a chunk `fetch().then(eval)`, a
+ * `document.write`'d `<script>`)" — because a written script is CONDITIONALLY-LOADED JS in its purest form:
+ * code that exists only if a branch reached the write, which is the surface this whole product exists to reach.
+ * The route is §13.2.6.4.8 'The "text" insertion mode' at the written `</script>`, performed in
+ * core/html/html_parse.c's token-done wrapper and prepared by core/html/html_script.c; the program becomes a
+ * row of the writing flow's own script sequence, so it runs under that flow's delta and its pins and a sibling
+ * that never took the branch never sees it. What is still deviating is ORDER WITHIN ONE WRITE: §13.2.6.4.8
+ * blocks the tokenizer on a parser-blocking script, and this engine tokenizes the whole chunk first, so the
+ * markup written after a `<script src>` builds its DOM before that script runs. The scripts themselves keep
+ * their order; closing the rest is the same parser-suspension capability the paragraph above is waiting on.
  *
  * WHAT IT DOES HAVE IS THE WHOLE SINK. §8.4.3 steps 1-9 run, and the value that reaches step 9 is announced to
  * the @S detector on the way — so `document.write(location.hash)` opens a search, and a candidate re-run

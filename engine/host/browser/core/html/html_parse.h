@@ -113,9 +113,13 @@ lxb_html_parser_t *html_parse_new_parser(void);
  *   - WRITE is §8.4.3 "document.write()" step 11's "have the HTML parser process string, one code point at a
  *     time, processing resulting tokens as they are emitted". It is the DOCUMENT's parser and not a fragment
  *     parse, which is the whole difference between this sink and §8.5.4's innerHTML: the tokens go through
- *     §13.2.6 tree construction in the mode the parse is standing in, so §13.2.6.4.4 'The "in head" insertion
- *     mode' PREPARES a written `script` element (its fragment-case "already started" clause does not apply)
- *     and the written script runs.
+ *     §13.2.6 tree construction in the mode the parse is standing in, so a written `script` element reaches
+ *     §13.2.6.4.8 'The "text" insertion mode' — "An end tag whose tag name is `script` … prepare the script
+ *     element script" — and the written script RUNS. That is the section this file's token-done wrapper
+ *     performs, and it is not §13.2.6.4.4 'The "in head" insertion mode', which this line used to name: that
+ *     section handles the START tag (it is where §13.2.4.5's Inert mode marks a fragment's script already
+ *     started, and where a document parse's does not), and the preparation is a step of the END tag's row one
+ *     section later.
  *   - CLOSE is §13.2.7 "The end" step "Set the insertion point to undefined", which is also where lexbor emits
  *     the EOF token — so a document whose source produced no `html` element yet (an empty response) grows one
  *     HERE and not before.
