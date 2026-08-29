@@ -12,6 +12,7 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/text_run.h"
 
@@ -138,6 +139,35 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
        that only the release build reaches. */
     free(d);
     if (inline_box) {
+        /* HTML §15.3.4 "Phrasing content" FIRST, because what it declares changes the PARTITION and not a term
+           in the sum. css-sizing-3 §2.1's max-content inline size is CSS 2.2 §10.3.5's content "formatted
+           without breaking lines OTHER THAN WHERE EXPLICIT LINE BREAKS OCCUR", so a `br` this walk did not see
+           would not be a small error in the answer — it would report a whole paragraph's width as the width of
+           its longest line. core/layout/line_box.c's walk over the same children asks the same component the
+           same question, which is what keeps the two from disagreeing about how many lines a run has. */
+        switch (phrasing_break_of(el)) {
+        case PHRASING_BREAK_FORCED:
+            text_run_measure_add_forced_break(m, el);
+            return;
+        case PHRASING_BREAK_OPPORTUNITY:
+            DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
+                  "break-opportunity`, which puts a SOFT WRAP OPPORTUNITY inside this run — and css-sizing-3 "
+                  "§2.1 defines the MIN-CONTENT inline size as the size \"if ALL soft wrap opportunities "
+                  "within the box were taken\", so an opportunity this walk cannot see reports a `<wbr>`-split "
+                  "word as one unbreakable segment and gives CSS 2.2 §10.3.5's shrink-to-fit a preferred "
+                  "minimum width no line of this run has. It leaves the max-content answer alone, since §2.1 "
+                  "takes NONE of them — which is why this is one absent capability with two different wrong "
+                  "answers rather than one. THE ITEM KIND IS NO LONGER WHAT IS MISSING: text_run.h carries "
+                  "`br`'s FORCED break, collected as the U+000A css-text-3 §4 names so [UAX14] LB5 and LB6 "
+                  "decide its boundaries. An opportunity needs a DIFFERENT code point and a different pair of "
+                  "rules — U+200B ZERO WIDTH SPACE, class ZW, under LB7 `× ZW` and LB8 `ZW SP* ÷` — and it "
+                  "needs §5.5's enabling question answered from the `wbr`'s OWN computed `white-space`, which "
+                  "is neither of the two cases `tr_opportunity_enabled` implements. BUILD both in "
+                  "core/layout/text_run.c, where core/layout/line_box.c's own `wbr` crash names the same two");
+            return;
+        case PHRASING_BREAK_NONE:
+            break;
+        }
         /* CSS 2.2 §9.2.2 makes a REPLACED element an ATOMIC inline-level box wherever its `display` puts it,
            so the `inline` above does not settle which of the two this is. It is asked before the descent
            because an atomic inline has no text of this run inside it to descend to. */
@@ -150,8 +180,12 @@ static void is_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
                   "THE MIN-CONTENT SEGMENT: css-text-3 §5.5 \"Line Breaking Details\" puts \"a soft wrap "
                   "opportunity before and after each replaced element or other atomic inline\", so it is a "
                   "break this accumulator's [UAX14] pass cannot see, since that pass runs over code points and "
-                  "this box is not one. BUILD the item-based run this file's edge crash names — a box item "
-                  "carrying an inline size and its own two break opportunities — then §10.3.2's used width "
+                  "this box is not one. THE RUN IS ALREADY ITEM-BASED and carries three kinds — a character, "
+                  "an inline box EDGE, and HTML §15.3.4's FORCED BREAK — so what is left is a FOURTH: a box "
+                  "item carrying an inline size AND its own two soft wrap opportunities, which no existing "
+                  "kind is (a CHAR is sized by an advance measure, an EDGE introduces no break, and a FORCED "
+                  "BREAK is mandatory and has no width). BUILD it with the `wbr` opportunity above, which "
+                  "needs the same opportunity machinery and none of the width, then §10.3.2's used width "
                   "into it");
         /* §5.5: "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
            flow", and css-text-3 §4.1.1's collapsing crosses the boundary too ("even one outside the boundary

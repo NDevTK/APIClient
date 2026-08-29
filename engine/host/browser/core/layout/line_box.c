@@ -14,6 +14,7 @@
 #include "core/layout/block_flow.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/line_box.h"
+#include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
@@ -199,67 +200,57 @@ static bool lb_has_nonzero_box_edges(lxb_dom_element_t *el)
 /* ---- THE TWO ELEMENTS THAT BREAK THE LINE WITHOUT PUTTING A GLYPH ON IT ------------------------------------
    css-text-3 §5.5 "Line Breaking Details" says "out-of-flow boxes and inline box boundaries do not introduce a
    forced line break or soft wrap opportunity in the flow", and core/layout/text_run.h collects an inline box
-   as exactly that — two EDGE items carrying a width and no code point, invisible to [UAX14]. These two
-   elements are inline boxes for which that is FALSE. HTML §15.3.4 "Phrasing content" names the two
-   elements that are inline boxes and are NOT merely boundaries:
-     `br  { display-outside: newline; }`             a FORCED line break, so there are two line boxes and the
-                                                     first "ends with a preserved newline", which is the
-                                                     conjunct of §9.4.2's zero-height rule that makes the line
-                                                     EXIST even though nothing is on it;
-     `wbr { display-outside: break-opportunity; }`   a SOFT WRAP OPPORTUNITY, so how many line boxes there are
-                                                     becomes a function of the widths on either side of it.
-   THE TEST IS BY LOCAL NAME, AND THE REASON IS A GAP IN THE SPECS THEMSELVES rather than a shortcut taken
-   here. Those two values are declared by HTML and defined by NO CSS module: css-display-4 §2 "Box Layout
-   Modes: the display property" has the term `display-outside` and neither the keyword `newline` nor
-   `break-opportunity` anywhere in it, so there is no `Computed value:` line to derive and no computed value
-   to ask for. What a user agent actually implements is the css-text-3 §5 "Line Breaking and Word Boundaries"
-   behaviour those two names stand for — a FORCED LINE BREAK for one and a SOFT WRAP OPPORTUNITY for the
-   other — and where that fact enters this engine is a decision for whoever builds it. The alternative to
-   asking the name is answering a height of ZERO for `<div><br></div>`, which every user agent renders one
-   line tall. So this function computes nothing and only ever crashes, and it is deleted by whatever mechanism
-   ends up carrying the break: a layout component reading an HTML tag name is reading around the cascade. */
-static void lb_require_no_break_element(lxb_dom_element_t *el)
+   as exactly that — two EDGE items carrying a width and no code point, invisible to [UAX14]. HTML §15.3.4
+   "Phrasing content" declares the two elements that are inline boxes and are NOT merely boundaries, and
+   core/layout/phrasing_break.h is the one place that answers which — the fact is HTML's and no CSS module
+   defines either keyword, so the cascade cannot be asked and a name test inside this walk would be the same
+   fact answered again inside core/layout/intrinsic_size.c's walk over the same children.
+   THE FORCED BREAK IS COLLECTED AND THE OPPORTUNITY IS NOT YET, which is why one arm adds an item and the
+   other crashes. Adding the break to the run is the whole of `br`: text_run.h holds a FORCED-BREAK item kind
+   carrying the U+000A css-text-3 §4 names, so the fill divides the run at it and §10.8 below measures each
+   piece, with the break's own element contributing its `line-height` to the line it ends.
+   IT ANSWERS WHETHER IT PLACED THE ELEMENT, because a `br` is not additionally an inline BOX: it emits no
+   pair of edges and the walk does not descend into it. §15.3.4's declaration replaces what the box would
+   otherwise have been, so a caller that added the break AND then bracketed it with edges would put two
+   zero-width boundaries around a break that has no inside. */
+static bool lb_phrasing_break(TextRunMeasure *m, lxb_dom_element_t *el)
 {
-    size_t n = 0;
-    const lxb_char_t *tag = lxb_dom_element_local_name(el, &n);
-
-    DCHECK(tag != NULL, "an element in an inline formatting context has no local name — every element this "
-                        "engine's parsers mint is created with one");
-    if (tag == NULL) return;
-    if (n == 2 && memcmp(tag, "br", 2) == 0)
-        DFAIL("HTML §15.3.4 \"Phrasing content\" gives `br` the UA declaration `display-outside: newline`, "
-              "which is a FORCED LINE BREAK — css-text-3 §5 \"Line Breaking and Word Boundaries\" calls a break "
-              "\"due to explicit line-breaking controls (such as a preserved newline character)\" forced. "
-              "COLLECTED AS IT STANDS IT WOULD BE A PAIR OF ZERO-WIDTH EDGE ITEMS, which §5.5 says introduces "
-              "no break at all — so CSS 2.2 §9.4.2's fill would run every line of this context together and "
-              "answer a line COUNT that is simply wrong rather than absent, and css-sizing-3 §2.1's "
-              "max-content size would be the whole paragraph on one line. It also makes the line EXIST: "
-              "§9.4.2 exempts a line box only when it \"do[es] not end with a preserved newline\", and this "
-              "one does. THE STACKING IS NO LONGER WHAT IS MISSING — core/layout/text_run.h's fill already "
-              "distributes a run across as many line boxes as its forced breaks and its available width "
-              "produce, and this file already measures §10.8 over each of them. WHAT IS MISSING IS ONE FACT "
-              "REACHING THE RUN: the value is DEFINED BY NO CSS MODULE — css-display-4 §2 \"Box Layout Modes: "
-              "the display property\" does not contain the keyword `newline` at all — so there is no computed "
-              "value to derive and this element arrives as a plain `display: inline` box with nothing to "
-              "distinguish it. BUILD the forced break as what css-text-3 §5 makes it, carried wherever the "
-              "cascade can answer for it, and give text_run.h a way to place one in the collected run beside "
-              "its CHAR and EDGE items — [UAX14] cannot decide it, because there is no code point here for it "
-              "to decide about");
-    if (n == 3 && memcmp(tag, "wbr", 3) == 0)
+    switch (phrasing_break_of(el)) {
+    case PHRASING_BREAK_FORCED:
+        text_run_measure_add_forced_break(m, el);
+        return true;
+    case PHRASING_BREAK_OPPORTUNITY:
         DFAIL("HTML §15.3.4 \"Phrasing content\" gives `wbr` the UA declaration `display-outside: "
               "break-opportunity`, which puts a SOFT WRAP OPPORTUNITY on this line — css-text-3 §5 says "
               "\"wrapping is only performed at an allowed break point, called a soft wrap opportunity\", and "
               "the UA \"must minimize the amount of content overflowing a line by wrapping the line at a soft "
-              "wrap opportunity, if one exists\". THE WIDTH-DRIVEN SEARCH IS BUILT and this is no longer part "
-              "of what this names: core/layout/text_run.h's fill decides every soft wrap opportunity in a run "
-              "against the available width of each line, which is exactly the comparison this element adds one "
-              "more position to. The keyword is defined by no CSS module either (css-display-4 §2 does not "
-              "contain `break-opportunity`), so it arrives as a plain `display: inline` box exactly as `br` "
-              "does, and its opportunity is invisible to [UAX14] for the same reason `br`'s break is — there "
-              "is no code point here to decide about. BUILD it with `br`'s forced break, as a third item kind "
-              "in the collected run; the atomic inline needs the same item carrying a WIDTH as well as an "
-              "opportunity, which is why css-text-3 §5.5's \"soft wrap opportunity before and after each "
+              "wrap opportunity, if one exists\". THE ITEM KIND IS NO LONGER WHAT IS MISSING AND NEITHER IS "
+              "THE BREAK MACHINERY: core/layout/text_run.h now carries a third kind for `br`'s FORCED break, "
+              "collected with the U+000A css-text-3 §4 names as HTML's newline so that [UAX14] LB5 and LB6 "
+              "decide its two boundaries, and the fill already weighs every soft wrap opportunity in a run "
+              "against each line's available width. TWO THINGS ARE LEFT AND BOTH ARE ABOUT THE OPPORTUNITY "
+              "RATHER THAN THE BREAK. (1) The code point: an opportunity item's is U+200B ZERO WIDTH SPACE, "
+              "whose [UAX14] class is ZW, so LB7 `× ZW` forbids a break before it and LB8 `ZW SP* ÷` allows "
+              "one after — a DIFFERENT pair of rules from the forced break's, reached by a different class. "
+              "(2) WHOSE `white-space` DECIDES IT, which is the half a forced break never has to answer "
+              "because §5.5 makes a forced break forced \"regardless of the white-space value\". "
+              "`tr_opportunity_enabled` implements §5.5's two cases — the box DIRECTLY CONTAINING a character "
+              "that disappears at the break, and otherwise the NEAREST COMMON ANCESTOR of the two characters "
+              "— and a `wbr` is neither: the opportunity is created by the ELEMENT, so it is the `wbr`'s own "
+              "computed `white-space` that governs. That is not a refinement, it is the case §15.3.4's own "
+              "`nobr wbr { white-space: normal; }` rule exists to make work, and reading the nearest common "
+              "ancestor instead would answer `nowrap` for exactly the document that rule is written about. "
+              "BUILD both, then the atomic inline is the same item carrying a WIDTH as well as its two "
+              "opportunities — which is why css-text-3 §5.5's \"soft wrap opportunity before and after each "
               "replaced element or other atomic inline\" is the next case and not a separate one");
+        return true;
+    case PHRASING_BREAK_NONE:
+        return false;
+    }
+    DFAIL("HTML §15.3.4's line-breaking classification answered a value this walk has no arm for. "
+          "core/layout/phrasing_break.h enumerates exactly what the section declares — a forced break, a soft "
+          "wrap opportunity, and neither — so a fourth value is a keyword added there and not routed here");
+    return false;
 }
 
 /* ---- the walk over the formatting context's content ------------------------------------------------------- */
@@ -349,8 +340,9 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
               "this names: core/layout/text_run.h's fill already distributes a run against each line's "
               "available width. TWO THINGS ARE LEFT AND THEY ARE BOTH ABOUT THIS BOX. (1) Its used inline "
               "size, from core/layout/used_value.c, carried into the run as an item that has a WIDTH and its "
-              "own two opportunities — which is neither of the two item kinds text_run.h has, since a CHAR is "
-              "sized by an advance measure and an EDGE introduces no break. (2) §10.8's step 1 over its margin "
+              "own two opportunities — which is none of the three item kinds text_run.h has, since a CHAR is "
+              "sized by an advance measure, an EDGE introduces no break, and a FORCED BREAK has no width and "
+              "is mandatory rather than an opportunity. (2) §10.8's step 1 over its margin "
               "box, which `lb_strut_extent` does not compute: that function is §10.8.1's strut for a box "
               "containing no glyphs, and an atomic inline is a box whose own height is a layout");
     /* CSS 2.2 §9.2.1.1's SECOND PARAGRAPH, which is a DIFFERENT box structure from its first and is reached
@@ -402,15 +394,19 @@ static void lb_child(TextRunMeasure *m, lxb_dom_element_t *parent, lxb_dom_node_
               "those dimensions, and the same run item the atomic inline case above names: one carrying a "
               "WIDTH and its own two soft wrap opportunities. BUILD it with that case, since one item kind "
               "serves both");
-    /* THE ELEMENTS THAT CHANGE WHERE THE RUN BREAKS ARE REFUSED BEFORE IT IS COLLECTED, because the fill's
-       whole answer is a function of the break positions and a run collected without one of them is a partition
-       of different text. */
-    lb_require_no_break_element(el);
     /* §10.8's step 2 for this box. It is asked at the WALK and not at the per-line pass below even though the
        height is measured there, because it is a question about the BOX — whether §10.8.1's `A'` and `D'` are
        measured from the same baseline as its neighbours' — and every box in this context is reached exactly
-       once here, while the per-line pass reaches a box once per ITEM it owns. */
+       once here, while the per-line pass reaches a box once per ITEM it owns.
+       IT IS ASKED OF A `br` TOO, and that is §10.8's step 1 rather than a wide net: the break is an
+       inline-level box ON the line it ends, so `lb_line_extent` takes its `A'` and `D'` like any other box's —
+       `<br style="line-height:100px">` makes a line 100px tall — and a box whose extents enter step 3's maxima
+       is a box step 2 has to have aligned. */
     lb_require_baseline_alignment(el);
+    /* THE ELEMENTS THAT CHANGE WHERE THE RUN BREAKS ARE PLACED BEFORE ANYTHING ELSE IS COLLECTED FOR THEM,
+       because the fill's whole answer is a function of the break positions and a run collected without one of
+       them is a partition of different text. A phrasing break is not additionally an inline box. */
+    if (lb_phrasing_break(m, el)) return;
     /* css-text-3 §5.5 places this box's two edges AT ITS BOUNDARIES and not at every break inside it — "inline
        box boundaries do not introduce a forced line break or soft wrap opportunity in the flow" — so they are
        emitted in call order around the descent and it is the run's own break-position mapping that decides
@@ -466,14 +462,23 @@ static void lb_walk(TextRunMeasure *m, lxb_dom_element_t *el)
    surviving collapsible space, and a run consisting only of those never arrives: CSS 2.2 §9.2.2.1 "Anonymous
    inline boxes" removes it before the walk ("white space content that would subsequently be collapsed away …
    does not generate any anonymous inline boxes"), which core/layout/block_flow.h decides at `lb_text`. So a
-   line holding a character item holds a character the document contains. The other three conjuncts crash on
-   the way here — preserved white space in `tr_wraps`, in-flow content at the atomic-inline and replaced arms,
-   the preserved newline at `lb_require_no_break_element` — leaving the box-edges conjunct as the only one this
-   function still decides. */
+   line holding a character item holds a character the document contains. Two of the other three conjuncts
+   crash on the way here — preserved white space in `tr_wraps`, in-flow content at the atomic-inline and
+   replaced arms — leaving the box-edges conjunct and the PRESERVED NEWLINE for this function to decide.
+   "DO NOT END WITH A PRESERVED NEWLINE" IS ANSWERED OVER THE LAST ITEM THAT RENDERS, and the qualification is
+   forced by the fill's own mapping rather than chosen. A forced break closes its line at the boundary
+   immediately after it, so it is the last item on its line everywhere except at [UAX14] LB3's end of text,
+   where the last line runs to the end of the collection and any inline box EDGE collected after the final code
+   point trails it. An edge renders nothing and adds no content — §9.4.2's list already exempts inline elements
+   whose margins, padding and borders are zero — so it is not something a line can be said to END WITH, and
+   scanning past it is what makes `<div>a<br><span></span></div>` one line of text height rather than none.
+   A LINE HOLDS AT MOST ONE FORCED BREAK, and that is a theorem asserted rather than a shape assumed: [UAX14]
+   LB5 `LF !` makes the boundary after every forced break MANDATORY, so the fill closes the line there and a
+   second break cannot join it. */
 static LbExtent lb_line_extent(lxb_dom_element_t *style, const TextRunMeasure *m, TextRunLine line, bool *exists)
 {
     LbExtent out = lb_strut_extent(style);
-    size_t i;
+    size_t i, breaks = 0, last_rendering = line.to;
 
     DCHECK(line.from < line.to,
            "CSS 2.2 §9.4.2's fill reported a line box holding NO items. \"Line boxes are created as needed to "
@@ -482,10 +487,27 @@ static LbExtent lb_line_extent(lxb_dom_element_t *style, const TextRunMeasure *m
     *exists = false;
     for (i = line.from; i < line.to; i++) {
         lxb_dom_element_t *box = text_run_measure_item_style(m, i);
+        bool text = text_run_measure_item_is_text(m, i);
+        bool brk = text_run_measure_item_is_forced_break(m, i);
 
         lb_take(&out, lb_strut_extent(box));
-        if (text_run_measure_item_is_text(m, i) || lb_has_nonzero_box_edges(box)) *exists = true;
+        /* THE BOX-EDGES TEST IS STILL SHORT-CIRCUITED BEHIND THE TEXT ONE, and that is not a saving:
+           `lb_has_nonzero_box_edges` reads used values, which is a derivation that crashes for box types this
+           engine does not lay out, so asking it about a box the first conjunct already answered for would turn
+           a measured line into an abort. */
+        if (text || lb_has_nonzero_box_edges(box)) *exists = true;
+        if (brk) breaks++;
+        if (text || brk) last_rendering = i;
     }
+    DCHECK(breaks <= 1,
+           "CSS 2.2 §9.4.2's fill put TWO forced line breaks on ONE line box. [UAX14] LB5 \"Treat CR followed "
+           "by LF, as well as CR, LF, and NL, as hard line breaks\" ends with `LF !`, which makes the boundary "
+           "after each of them MANDATORY — so the fill closes the line at the first and the second opens the "
+           "next one, and two on a line is the fill and the break pass disagreeing about where a mandatory "
+           "action is");
+    /* §9.4.2's last conjunct. `last_rendering` is `line.to` exactly when the line holds nothing that renders,
+       which is the empty-inline-box case the box-edges test above already answered. */
+    if (last_rendering < line.to && text_run_measure_item_is_forced_break(m, last_rendering)) *exists = true;
     return out;
 }
 

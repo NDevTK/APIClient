@@ -121,8 +121,8 @@
 #include "core/css/css_length.h"
 #include "core/layout/line_break.h"
 
-/* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because two different things occupy positions in it and
- * only one of them is text. css-sizing-3 §2.2 "Intrinsic Contributions" puts an inline box's own horizontal
+/* THE RUN IS A SEQUENCE OF ITEMS AND NOT OF CHARACTERS, because three different things occupy positions in it
+ * and only one of them is text. css-sizing-3 §2.2 "Intrinsic Contributions" puts an inline box's own horizontal
  * margins, borders and padding into what it contributes ("based on the OUTER SIZE of the box"), and css-text-3
  * §5.5 "Line Breaking Details" places them at the box's TWO BOUNDARIES rather than at every break inside it —
  * "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the flow". So an
@@ -133,13 +133,33 @@
  * inline box whose text spans three lines puts its left edge on the first and its right edge on the third, so
  * a sum added to the whole run would report a min-content size no line of that run ever has.
  * THE EDGE IS THEREFORE INVISIBLE TO THE BREAK PASS AND VISIBLE TO THE PER-LINE SUM, which is exactly the split
- * this type encodes: `line_break_actions` is handed the CHAR items' code points alone, and the per-line
- * measurement walks ITEMS. The two index spaces that creates are reconciled at ONE place (`text_run.c`'s
- * `tr_item_boundary_of_char`), because a break position expressed in the wrong one is a fragment of an inline
- * box placed on the wrong line and nothing downstream can contradict it. */
+ * this type encodes: `line_break_actions` is handed the code points of the items that HAVE one, and the
+ * per-line measurement walks ITEMS. The two index spaces that creates are reconciled at ONE place
+ * (`text_run.c`'s `tr_item_boundary_of_cp`), because a break position expressed in the wrong one is a fragment
+ * of an inline box placed on the wrong line and nothing downstream can contradict it.
+ *
+ * THE FORCED BREAK IS THE THIRD THING, AND IT IS THE EXACT COMPLEMENT OF THE EDGE: no width, and a break the
+ * run's own text does not contain. HTML §15.3.4 "Phrasing content" declares `br { display-outside: newline; }`
+ * and no CSS module defines that keyword (core/layout/phrasing_break.h states that in full), so the element
+ * arrives as a plain `display: inline` box carrying a fact the cascade cannot answer for.
+ * WHAT IT IS NOT is an EDGE with a flag, and the two differ in every field that matters: an edge contributes an
+ * inline size and no break, this contributes a break and no size. It is not a CHARACTER either, and that is the
+ * distinction the kind exists to keep — css-values-4 §6.1.1's advance measure would be summed for it, and CSS
+ * 2.2 §9.4.2's zero-height rule asks "line boxes that contain no TEXT" separately from "and do not end with a
+ * preserved newline", so an item answering the first question would answer the wrong one of the two.
+ * WHAT IT DOES CONTRIBUTE IS A CODE POINT, AND [UAX14] DECIDES ITS TWO BOUNDARIES rather than this component
+ * overriding them. §15.3.4's keyword is `newline`, and css-text-3 §4 "White Space Processing & Control
+ * Characters" says which code point HTML's newline is: "in the case of HTML, newlines are normalized to line
+ * feed characters (U+000A) for representation in the DOM, so when an HTML document is represented as a DOM tree
+ * each line feed (U+000A) is treated as a segment break" — and §5.5 makes a PRESERVED segment break a forced
+ * line break. So the declaration supplies the U+000A the document does not contain, and [UAX14] LB6
+ * `× ( BK | CR | LF | NL )` then forbids a break before it while LB5 `LF !` makes the break after it mandatory.
+ * That is why there is ONE [UAX14] pass and no second mechanism deciding where a `br` breaks: an action written
+ * here beside actions the annex computed would be two rule sets over one run. */
 typedef enum {
     TEXT_RUN_ITEM_CHAR = 0,   /* one code point surviving css-text-3 §4.1.1's Phase I */
     TEXT_RUN_ITEM_EDGE,       /* an inline box boundary: an inline size, and no code point at all */
+    TEXT_RUN_ITEM_FORCED_BREAK, /* HTML §15.3.4's `display-outside: newline`: a code point, and no size */
 } TextRunItemKind;
 
 /* ONE ITEM OF THE COLLECTED RUN. The inline it belongs to travels with it because both of the properties this
@@ -155,7 +175,10 @@ typedef enum {
 typedef struct {
     TextRunItemKind kind;
     lxb_dom_element_t *style;
-    /* TEXT_RUN_ITEM_CHAR only. */
+    /* THE CODE POINT [UAX14] DECIDES THIS ITEM'S BOUNDARIES FROM — TEXT_RUN_ITEM_CHAR and
+       TEXT_RUN_ITEM_FORCED_BREAK, which are exactly the kinds that have one. For a character it is the
+       character; for a forced break it is the U+000A css-text-3 §4 names as HTML's newline, supplied by HTML
+       §15.3.4's declaration rather than by the document. An EDGE has none and its slot is never read. */
     uint32_t cp;
     /* css-text-3 §3's `nowrap` "suppresses line breaks (text wrapping) within the source" while leaving white
        space collapsible, so whether an opportunity EXISTS is a second fact about the inline and not derivable
@@ -182,14 +205,16 @@ typedef struct {
        following another collapsible space" taken as a property of the run. It survives between nodes, which is
        what makes a run split across two text nodes collapse as ONE. */
     bool in_white_space_run;
-    /* [UAX14]'s ACTION AT EVERY POSITION of the run's own characters — `actions[k]` is the action at the
-       boundary immediately before character `k`, and `item_of_char[k]` is the ITEM that character is. Both are
-       written by `finish` and RETAINED until `release`, because all three partitions above are walks over this
-       one pass: a second `line_break_actions` call for the fill would be the same rules run twice with two
-       chances to disagree about where this run may break. Owned; NULL exactly while `nchars` is zero. */
+    /* [UAX14]'s ACTION AT EVERY POSITION of the run's own CODE POINTS — `actions[k]` is the action at the
+       boundary immediately before code point `k`, and `item_of_cp[k]` is the ITEM that code point belongs to.
+       The code points are the run's characters AND its forced breaks, which are the two kinds that have one;
+       an inline box edge contributes none, per css-text-3 §5.5. Both arrays are written by `finish` and
+       RETAINED until `release`, because all three partitions above are walks over this one pass: a second
+       `line_break_actions` call for the fill would be the same rules run twice with two chances to disagree
+       about where this run may break. Owned; NULL exactly while `ncps` is zero. */
     LineBreakAction *actions;
-    size_t *item_of_char;
-    size_t nchars;
+    size_t *item_of_cp;
+    size_t ncps;
     /* css-sizing-3 §2.1's two answers, written by `finish` and undefined before it. */
     CssPx max_content;
     CssPx min_content;
@@ -230,6 +255,21 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
    `size` MAY BE ZERO and that is not a call to skip: a zero-width edge still occupies a POSITION, which is what
    decides the line an otherwise-empty inline box is on. */
 void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
+
+/* ADD ONE FORCED LINE BREAK at the current position of the run — HTML §15.3.4 "Phrasing content"'s
+   `br { display-outside: newline; }`, which core/layout/phrasing_break.h is what recognises. `style` is the
+   element the break IS, and it is not a bookkeeping field: CSS 2.2 §10.8's step 1 is over every inline-level
+   box on the line and this one is on it, so its own `line-height` and first available font are two of the
+   operands of the line's height — `<br style="line-height:100px">` makes a line 100px tall in every user
+   agent, and the element is where that number is read from.
+   IT TAKES NO CODE POINT ARGUMENT, because the code point is not the caller's to choose: §15.3.4's keyword is
+   `newline` and css-text-3 §4 says which code point HTML's newline is, so the U+000A is a fact about the
+   declaration and belongs beside the [UAX14] pass that consumes it. A `cp` parameter would let two callers
+   disagree about what a `br` is.
+   IT CONTRIBUTES NO ADVANCE. The break renders nothing, and the U+000A above exists to be given to [UAX14] and
+   to nothing else — measuring css-values-4 §6.1.1's advance for it would put the first available font's
+   .notdef width on the line for a box that draws no glyph. */
+void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *style);
 
 /* RUN [UAX14] OVER EVERYTHING COLLECTED and produce css-sizing-3 §2.1's two answers. Every caller must reach
    this: the measurement does not exist until it runs. Adding a node afterwards is a caller that ran two
@@ -287,8 +327,19 @@ bool text_run_measure_splits(const TextRunMeasure *m);
 lxb_dom_element_t *text_run_measure_item_style(const TextRunMeasure *m, size_t i);
 
 /* IS ITEM `i` A CHARACTER. CSS 2.2 §9.4.2's zero-height rule opens with "line boxes that contain NO TEXT" and
-   a consumer deciding whether one of the fill's lines exists is asking exactly this of each of its items. */
+   a consumer deciding whether one of the fill's lines exists is asking exactly this of each of its items. A
+   forced break is NOT text for that list: it draws nothing, and the section asks about it in a separate
+   conjunct with a separate answer — which is the next entry. */
 bool text_run_measure_item_is_text(const TextRunMeasure *m, size_t i);
+
+/* IS ITEM `i` A FORCED LINE BREAK. CSS 2.2 §9.4.2's zero-height rule ends with "and do not end with a preserved
+   newline", which is the ONE conjunct of that list a line can satisfy while holding nothing that renders — so a
+   consumer asking whether a line of the fill exists asks this of the line's last rendering item as well as
+   asking the question above of all of them. The two are separate entries because the section states them as
+   separate facts, and a consumer that folded them together would report `<div><br></div>` as a box containing
+   no line box at all — which CSS 2.2 §8.3.1's collapse-through note reads as a box whose margins collapse
+   through it, for a document that renders one line of text height. */
+bool text_run_measure_item_is_forced_break(const TextRunMeasure *m, size_t i);
 
 /* css-sizing-3 §2.1's MAX-CONTENT and MIN-CONTENT INLINE SIZES, in CSS pixels — the two answers, read through
    entries rather than off the struct so that the one relation between them is asserted where it is read. */
