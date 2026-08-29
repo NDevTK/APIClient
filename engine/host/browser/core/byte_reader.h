@@ -42,8 +42,10 @@ typedef struct { const char *name; ByteReaderMake make; } ByteReader;
    is a hole nothing can substitute — and solver/endpoint.c's path scan splits a shape on `/` before it looks
    for braces, so such a name is not merely unsubstitutable, it SHREDS the segment it sits in and takes the
    value the run measured with it. A component naming a byte sequence after an address owes that address a
-   slash-free spelling; the two names this engine already mints (`script#__NEXT_DATA__`, `gon.current_user_id`)
-   are what one looks like. */
+   slash-free spelling, and core/fetch/reply_source.h is where an interface whose bytes came off the network
+   discharges that obligation — one spelling for every such interface, because two doors onto one reply that
+   name it twice split every predicate over its bytes in two. `script#__NEXT_DATA__` and `gon.current_user_id`
+   are what a name minted from something other than an address looks like. */
 typedef struct {
     bool (*is)(JSValueConst v);
     int  (*take)(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream);

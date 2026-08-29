@@ -22,6 +22,7 @@
 #include "core/fetch/fetch.h"
 #include "core/fetch/response.h"
 #include "core/fetch/headers.h"
+#include "core/fetch/reply_source.h"   /* the ONE spelling of a reply's source identity — shared with XHR */
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/fetch/body.h"
@@ -222,6 +223,74 @@ static JSValue response_url_of(JSContext *ctx, ResponseData *d, int64_t *psize)
     return JS_GetPropertyUint32(ctx, d->url_list, (uint32_t)(n - 1));
 }
 
+/* §5.5's `url`, AS THE C STRING BOTH ITS READERS NEED: "this's response's URL, serialized with exclude
+   fragment set to true". The exclusion is the URL PARSER'S — the list holds serialized URLs, so the parser is
+   run back over the last one and asked to serialize it again without its fragment, rather than this file
+   deciding where a fragment starts.
+   IT IS ONE ANSWER BECAUSE THERE ARE TWO READERS. The `url` getter is one; the body's SOURCE IDENTITY
+   (core/fetch/reply_source.h) is the other, and a reply NAMED with a fragment the getter reports WITHOUT is
+   one reply wearing two spellings — every predicate over the value read under one of them deciding nothing
+   about the other. A fragment is also never sent, so two addresses differing only there are one reply.
+   Returns MALLOC'D, or NULL for §2.2.6's null URL — which is a statement (this response has no address),
+   never a hole. */
+static char *response_url_serialized(JSContext *ctx, ResponseData *d)
+{
+    int64_t n = 0;
+    JSValue last = response_url_of(ctx, d, &n);
+    const char *s;
+    size_t len = 0;
+    UrlRecord rec;
+    char *ser;
+    bool ok;
+
+    CHECK(!JS_IsException(last), "response: OOM reading the end of a response's URL list");
+    if (JS_IsNull(last))
+        return NULL;                                  /* the response's URL is null */
+    s = JS_ToCStringLen(ctx, &len, last);
+    JS_FreeValue(ctx, last);
+    CHECK(s != NULL, "response: OOM reading a response's URL");
+    url_record_init(&rec);
+    /* NO BASE, because every item of a response's URL list is ABSOLUTE by the time it is in one. */
+    ok = url_parse(&rec, s, len, NULL);
+    JS_FreeCString(ctx, s);
+    DCHECK(ok, "a response's URL list held a string the URL parser refuses — §2.2.6's list is a list of URLs, "
+               "so the host that filled it reported a relative reference, a concolic display shape or an empty "
+               "string where a serialized absolute URL belongs");
+    if (!ok) {
+        /* A response whose address is not a URL has no address, and §5.5 already spells what that answers:
+           the empty string. Saying so is the same statement the null-URL arm above makes. */
+        url_record_free(&rec);
+        return NULL;
+    }
+    ser = url_serialize(&rec, /*exclude_fragment*/ true);
+    url_record_free(&rec);
+    CHECK(ser != NULL, "response: OOM serializing the response's URL");
+    return ser;
+}
+
+/* WHERE A Response'S BYTES CAME FROM — core/byte_reader.h's question, reaching this interface through §5.3's
+   mixin. A Response the HOST fetched carries the address the server answered at; one the PAGE constructed
+   (`new Response(JSON.stringify(x))`) has an empty URL list, so its bytes are the page's own and this answers
+   the NULL that says so. The spelling is core/fetch/reply_source.h's, shared with XMLHttpRequest, because the
+   two are two doors onto one fact. */
+static char *response_body_source(JSContext *ctx, JSValueConst v)
+{
+    ResponseData *d = JS_GetOpaque(v, g_response_class);
+    char *url, *name;
+
+    DCHECK(d != NULL, "a Response was asked where its bytes came from and is not a Response — the mixin's own "
+                      "receiver check has already answered for that, so a NULL here is its `of` and this "
+                      "interface's opaque disagreeing");
+    if (!d)
+        return NULL;
+    url = response_url_serialized(ctx, d);
+    if (!url)
+        return NULL;
+    name = reply_source_name(url, strlen(url));
+    free(url);
+    return name;
+}
+
 /* 6.4 clone(). A caching or interceptor layer is written as `const copy = res.clone()` before it reads the
    body, because reading is single-use — so without this the FIRST thing such a bundle does with a reply is
    throw, and every endpoint, example value and sink behind that request is lost. It is the same failure `json`
@@ -323,41 +392,13 @@ static JSValue js_response_get(JSContext *ctx, JSValueConst this_val, int magic)
     case 1: return JS_NewInt32(ctx, d->status);
     case 2: return JS_NewString(ctx, d->status_text ? d->status_text : "");
     /* §5.5 `url`: "return the empty string if this's response's URL is null; otherwise this's response's URL,
-       serialized with exclude fragment set to true". The exclusion is the URL PARSER'S — the list holds
-       serialized URLs, so the parser is run back over the last one and asked to serialize it again without its
-       fragment, rather than this file deciding where a fragment starts. */
+       serialized with exclude fragment set to true" — response_url_serialized performs the whole of that, and
+       is the SAME answer the body's source identity is named from. */
     case 3: {
-        int64_t n = 0;
-        JSValue last = response_url_of(ctx, d, &n);
-        const char *s;
-        size_t len = 0;
-        UrlRecord rec;
-        char *ser;
+        char *ser = response_url_serialized(ctx, d);
         JSValue out;
-        bool ok;
 
-        if (JS_IsException(last)) return last;
-        if (JS_IsNull(last)) return JS_NewString(ctx, "");   /* the response's URL is null */
-        s = JS_ToCStringLen(ctx, &len, last);
-        JS_FreeValue(ctx, last);
-        if (!s) return JS_EXCEPTION;
-        url_record_init(&rec);
-        ok = url_parse(&rec, s, len, NULL);
-        JS_FreeCString(ctx, s);
-        /* NO BASE, because every item of a response's URL list is ABSOLUTE by the time it is in one. A failure
-           here is a host that reported something that is not a URL, and the honest answer is then to refuse
-           rather than to hand the page back the unparsed string as if this getter had performed its
-           serialization. */
-        DCHECK(ok, "a response's URL list held a string the URL parser refuses — §2.2.6's list is a list of "
-                   "URLs, so the host that filled it reported a relative reference, a concolic display shape "
-                   "or an empty string where a serialized absolute URL belongs");
-        if (!ok) {
-            url_record_free(&rec);
-            return JS_ThrowTypeError(ctx, "the response's URL is not a URL");
-        }
-        ser = url_serialize(&rec, /*exclude_fragment*/ true);
-        url_record_free(&rec);
-        CHECK(ser != NULL, "response: OOM serializing the response's URL");
+        if (!ser) return JS_NewString(ctx, "");   /* the response's URL is null */
         out = JS_NewString(ctx, ser);
         free(ser);
         return out;
@@ -811,7 +852,8 @@ void response_init(JSContext *ctx)
     g_response_rt = rt;
     JS_NewClassID(rt, &g_response_class);
     JS_NewClass(rt, g_response_class, &def);
-    g_body_handle = body_declare(ctx, g_response_class, response_body_of, response_body_mime, "Response");
+    g_body_handle = body_declare(ctx, g_response_class, response_body_of, response_body_mime, response_body_source,
+                                 "Response");
     g_clone_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_response_clone_decl, 0);
     g_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, RESPONSE_INIT, 3, &js_response_ctor_decl,
                                        RESP_ENTRY_CTOR);

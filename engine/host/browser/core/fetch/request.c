@@ -617,7 +617,10 @@ void request_init(JSContext *ctx)
     g_request_rt = rt;
     JS_NewClassID(rt, &g_request_class);
     JS_NewClass(rt, g_request_class, &def);
-    g_request_body_handle = body_declare(ctx, g_request_class, request_body_of, request_body_mime, "Request");
+    /* NO SOURCE: a Request's body is bytes the PAGE composed and handed to fetch(), never a byte sequence a
+       server filled — see core/byte_reader.h for why NULL here is a statement and not a hole. */
+    g_request_body_handle = body_declare(ctx, g_request_class, request_body_of, request_body_mime, NULL,
+                                         "Request");
     g_request_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, REQUEST_INIT,
                                                (int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])),
                                                &js_request_ctor_decl, 0);

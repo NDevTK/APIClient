@@ -54,6 +54,7 @@ second copy of it that goes quiet when the next document lands:
     node site.mjs control-url  http://127.0.0.1:8901/ <pass>  # rungs that fail by aborting
     node site.mjs control-data http://127.0.0.1:8902/ <pass>  # server-injected state, both in-document channels
     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>  # the same state over the NETWORK channel
+    node site.mjs control-xhr  http://127.0.0.1:8904/ <pass>  # the same reply through the OTHER interface
 
 ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
 the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every
@@ -67,6 +68,11 @@ inline `<script>` that writes the record directly, and a §4.12.1 data block a S
 records are byte-identical, so the inline arm is the control on the control — its zero means the document did
 not run, and only then is the block arm's zero unreadable. `loaded-config.html` asks the same question of the
 channel a server has over the NETWORK, which is why it is a fifth origin rather than a rung on the fourth.
+`xhr-config.html` asks it of the OTHER interface that carries that channel — XMLHttpRequest's `response` and
+`responseText` — and is a sixth origin for the same reason. That pair is the one comparison a single row
+cannot make: `fetch`'s Response and XMLHttpRequest are two doors onto one server's bytes, and one door
+carrying provenance while the other does not is one capability wearing two names, which reads as an ordinary
+difference in what two documents happened to learn.
 
 EACH ARM OF ALL THREE READS THE SAME FOUR KINDS OF MEMBER, and the reason is the half a differential cannot supply
 for itself: three rows that are supposed to be ONE FACT cannot be compared through three different questions.

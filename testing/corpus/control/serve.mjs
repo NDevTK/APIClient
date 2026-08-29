@@ -49,12 +49,21 @@
 //     the one dwell, and a row that shared an origin with the data block would report the two channels'
 //     endpoints as one union and could not say which channel produced which.
 //
-// Five rows, and a census wants all five (PORT sets the base; the others follow it):
+//
+//   - AND THE SAME REPLY THROUGH THE OTHER INTERFACE IS A SIXTH ORIGIN, FOR THE SAME REASON AGAIN.
+//     xhr-config.html reads the identical `/cfg.json` through XMLHttpRequest §3.6.9 The response getter and
+//     §3.6.10 The responseText getter. Sharing loaded-config.html's origin would make the two interfaces one
+//     union, which is precisely what this pair exists to tell apart: `fetch`'s Response and XMLHttpRequest are
+//     two doors onto one fact, and a run in which one door's gates fork and the other's do not is one
+//     capability wearing two names — a difference that reads as ordinary variation in a single row.
+//
+// Six rows, and a census wants all six (PORT sets the base; the others follow it):
 //     node site.mjs control      http://127.0.0.1:8899/ <pass>
 //     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
 //     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
 //     node site.mjs control-data http://127.0.0.1:8902/ <pass>
 //     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>
+//     node site.mjs control-xhr  http://127.0.0.1:8904/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -76,6 +85,7 @@ const DOCS = [
   ['url-operands.html', 'control-url'],
   ['injected-state.html', 'control-data'],
   ['loaded-config.html', 'control-cfg'],
+  ['xhr-config.html', 'control-xhr'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the

@@ -33,6 +33,7 @@ typedef struct {
     JSClassID    class_id;
     BodyState *(*of)(JSValueConst v);
     char      *(*mime)(JSContext *ctx, JSValueConst v);
+    char      *(*source)(JSContext *ctx, JSValueConst v);
     const char  *iface;
     int          reader_handle;
 } BodyIface;
@@ -427,13 +428,35 @@ static const ByteReader BODY_READERS[] = {
     { "formData",    body_read_form_data },
 };
 
+/* WHERE A BODY'S BYTES CAME FROM — core/byte_reader.h's question, and the MIXIN's answer to it is to ask the
+   INCLUDING INTERFACE, exactly as `formData()` asks it for the Content-Type. Only that interface knows: a
+   Response was filled by a server at an address it holds, and a Request's body is bytes the PAGE composed and
+   handed to `fetch()`, which is the NULL this returns as a statement rather than a hole.
+   `false` because a reply is server-injected state and NOT a declared attacker delivery — solver/concolic.h's
+   read counter is over deliveries the attacker authors, and counting a reply there would report a page that
+   read no attacker source as one that read many. */
+static char *body_reader_source(JSContext *ctx, JSValueConst v, bool *attacker)
+{
+    const BodyIface *f = body_iface_of(v);
+
+    DCHECK(f != NULL, "a body was asked where its bytes came from with a receiver of no including interface — "
+                      "the reader machine checks the receiver before it calls a reader at all, so a NULL here "
+                      "is this mixin's `is` and its own table disagreeing");
+    if (!f || !f->source)
+        return NULL;
+    *attacker = false;
+    return f->source(ctx, v);
+}
+
 static const ByteReaderIface BODY_READER_IFACE = {
     body_iface_is, body_take, "Body", BODY_READERS,
-    (int)(sizeof BODY_READERS / sizeof BODY_READERS[0])
+    (int)(sizeof BODY_READERS / sizeof BODY_READERS[0]),
+    body_reader_source
 };
 
 int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v),
-                 char *(*mime)(JSContext *ctx, JSValueConst v), const char *iface)
+                 char *(*mime)(JSContext *ctx, JSValueConst v),
+                 char *(*source)(JSContext *ctx, JSValueConst v), const char *iface)
 {
     int handle = g_body_iface_n;
     BodyIface *f;
@@ -445,6 +468,7 @@ int body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueCon
     f->class_id = class_id;
     f->of = of;
     f->mime = mime;
+    f->source = source;
     f->iface = iface;
     g_body_iface_n++;
     /* ONE reader declaration for the mixin, shared by every including interface: the readers find their

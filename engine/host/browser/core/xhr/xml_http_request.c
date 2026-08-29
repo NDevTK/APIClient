@@ -45,6 +45,7 @@
  *     answers a request whole. `loadstart`/`progress`/`load`/`loadend` on the upload object all fire; there are
  *     no intermediate chunk lengths to report because there are no chunks.
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -67,6 +68,7 @@
 #include "core/fetch/fetch.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/port_blocking.h"
+#include "core/fetch/reply_source.h"   /* the ONE spelling of a reply's source identity — shared with Fetch */
 #include "core/fetch/request.h"
 #include "core/file/blob.h"
 #include "core/html/form_data.h"
@@ -748,6 +750,10 @@ static JSValue js_xhr_get_upload(JSContext *ctx, JSValueConst this_val, int magi
 
 /* ---- §3.6.1-§3.6.5, §3.6.7-§3.6.8 the plain response members ------------------------------------------------ */
 
+/* §3.6.1 The responseURL getter: "return the empty string if this's response's URL is null; otherwise its
+   serialization with the exclude fragment flag set". BOTH halves are already in the record — the empty string
+   is what xhr_reset_response leaves, and xhr_take_reply is where the fragment is excluded, so that the source
+   identity this reply's bytes carry and the address the page reads are one answer. */
 static JSValue js_xhr_get_response_url(JSContext *ctx, JSValueConst this_val, int magic)
 {
     XhrData *d = xhr_receiver(ctx, this_val);
@@ -924,6 +930,72 @@ static JSValue js_xhr_set_response_type(JSContext *ctx, JSValueConst this_val, J
 
 /* ---- §3.6.6 the response body ------------------------------------------------------------------------------- */
 
+/* WHERE THESE BYTES CAME FROM, ASKED OF THE TWO MEMBERS WHOSE VALUE **IS** THE CONTENT.
+ *
+ * §3.6.9 The response getter's text arm and §3.6.10 The responseText getter hand the page a STRING it computes
+ * with, and §3.6.9's json arm hands it a RECORD it reads fields off. Those are the values §solver's trust
+ * boundary is written about: "a config/data fetch is ALWAYS loaded so its fields become concrete examples,
+ * while its use in a BRANCH still forks (a loaded `features.admin:false` must NOT concretize the gate, or the
+ * admin endpoint is lost)". Handed over bare, `cfg.region` is right and `if (cfg.admin)` takes exactly one
+ * arm — and a member the server did not send for THIS visitor answers `undefined`, which is the logged-in
+ * surface buried behind a gate that never forked. The triple answers both from one place: the bytes that were
+ * actually sent are the EXAMPLE, and the value is opaque for control flow, so the gate forks either way.
+ *
+ * THE OTHER ARMS DO NOT ASK, and that is a fact about their VALUES rather than an omission here. §3.6.9's
+ * arraybuffer and blob arms answer with a CONTAINER over the same bytes — the page writes
+ * `new Uint8Array(xhr.response)`, and a concolic in the container's place breaks the construction instead of
+ * describing it — and the document arm answers a Document, whose CONTENT is read back through the DOM, where
+ * every string a flow takes out of it is that component's to state.
+ *
+ * THE NAME IS core/fetch/reply_source.h's, NOT THIS FILE'S. `fetch()` and this component are two doors onto
+ * one fact and a name minted at each door is two names for one unknown; the address they name it after is
+ * §3.6.1 The responseURL getter's on this side and `response.url` on the other. */
+static JSValue xhr_reply_content(JSContext *ctx, XhrData *d, JSValue value)
+{
+    const char *url;
+    size_t ulen = 0;
+    char *src, *shape;
+    size_t n;
+    JSValue r;
+
+    if (JS_IsException(value) || !concolic_is_exploring())
+        return value;
+    /* TWO DOORS WRAPPING ONE READ would report a derivation the run never made — the composed shape would name
+       a read of a read. §3.6.9's json arm caches its result in `response_object` and step 4 answers with the
+       cached one, so a second mint over it is this file having wrapped its own value twice. */
+    DCHECK(!concolic_is(value),
+           "an XMLHttpRequest response value reached the provenance question already carrying one — two doors "
+           "have wrapped one read, and the value would report a derivation the run never performed");
+    DCHECK(JS_IsString(d->response_url),
+           "an XMLHttpRequest's response URL is not a string — §3.6.1 The responseURL getter returns a "
+           "USVString and this record spells one at every write, so a non-string here is a write that did not");
+    url = JS_ToCStringLen(ctx, &ulen, d->response_url);
+    CHECK(url != NULL, "XMLHttpRequest: OOM reading the address a reply came from");
+    src = reply_source_name(url, ulen);
+    JS_FreeCString(ctx, url);
+    /* UNLIKE a Response, an XMLHttpRequest cannot be handed bytes the page composed: every byte it holds came
+       out of xhr_take_reply, which writes the address in the same breath. The two members that reach here do
+       so only at LOADING or DONE and only past their own network-error arms, so an address-less reply here is
+       a reply record that arrived without one. */
+    DCHECK(src != NULL,
+           "an XMLHttpRequest reached §3.6.9/§3.6.10 with received bytes and no address — xhr_take_reply "
+           "writes the received bytes and the response's URL together, so bytes without an address are that "
+           "write having happened by halves");
+    if (!src)
+        return value;
+    n = strlen(src) + 3;
+    shape = (char *)malloc(n);
+    CHECK(shape != NULL, "XMLHttpRequest: OOM spelling the provenance of a reply");
+    snprintf(shape, n, "{%s}", src);   /* a declared source's shape IS its provenance in braces — concolic.h */
+    /* concolic_new AND NOT concolic_source_wrap: a server's reply is unknown input the ATTACKER did not
+       author, and minting it through the attacker door would increment the count an empty @S surface is read
+       against — reporting a page that read no attacker source as one that read many. */
+    r = concolic_new(ctx, shape, src, value);   /* consumes `value` as the example */
+    free(shape);
+    free(src);
+    return r;
+}
+
 /* §3.6.6 "get a text response": decode the received bytes with the final encoding, defaulting to UTF-8. */
 static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
 {
@@ -945,7 +1017,7 @@ static JSValue xhr_text_response(JSContext *ctx, XhrData *d)
     CHECK(dec != NULL, "XMLHttpRequest: OOM building the response decoder");
     out = enc_decoder_decode(ctx, dec, bytes, len, /*stream*/ false);
     enc_decoder_free(dec);
-    return out;
+    return xhr_reply_content(ctx, d, out);
 }
 
 /* §3.6.6 "set a document response". The HTML arm is lexbor's parser over a document with NO browsing context —
@@ -1129,7 +1201,11 @@ static int js_xhr_response_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
             return 0;
         }
         JS_FreeValue(ctx, d->response_object);
-        d->response_object = parsed;
+        /* THE PROVENANCE RIDES THE CACHED OBJECT AND NOT THE READ. §3.6.9 step 4 answers with this's response
+           object once it is set, so `xhr.response === xhr.response` — minting per read would hand the page two
+           records where the spec gives it one, and only the first read's would be the one a later gate is
+           deciding about. */
+        d->response_object = xhr_reply_content(ctx, d, parsed);
     }
     *presult = JS_DupValue(ctx, d->response_object);
     return 0;
@@ -1354,9 +1430,37 @@ static void xhr_take_reply(JSContext *ctx, XhrData *d, JSValueConst reply)
     }
     JS_FreeValue(ctx, d->received);
     d->received = JS_DupValue(ctx, bd_v);
-    /* No redirect is modelled here, so the response's URL is the request's — see the file comment. */
+    /* No redirect is modelled here, so the response's URL is the request's — see the file comment.
+       IT IS SERIALIZED WITHOUT ITS FRAGMENT, HERE AND NOT AT THE GETTER. §3.6.1 The responseURL getter says
+       "otherwise its serialization with the exclude fragment flag set", and §3.5.1 The open() method keeps the
+       fragment on the REQUEST's URL, so duplicating `url` reported `…/a#frag` where a browser reports `…/a`.
+       Doing it at the write rather than at the read is what makes the getter and the reply's SOURCE IDENTITY
+       (core/fetch/reply_source.h) one answer: a fragment is never sent, so two addresses differing only there
+       are one reply, and naming it under both would split every predicate over its bytes in two.
+       The exclusion is the URL PARSER'S — the record is run back over the serialization and asked to serialize
+       it again without its fragment, rather than this file deciding where a fragment starts. */
     JS_FreeValue(ctx, d->response_url);
-    d->response_url = JS_DupValue(ctx, d->url);
+    {
+        size_t ulen = 0;
+        const char *u = JS_ToCStringLen(ctx, &ulen, d->url);
+        UrlRecord rec;
+        char *ser;
+        bool ok;
+
+        CHECK(u != NULL, "XMLHttpRequest: OOM reading the request URL a reply answered");
+        url_record_init(&rec);
+        /* NO BASE: §3.5.1 step 6 parsed this against the settings object's API base URL, so what `url` holds
+           is already absolute. */
+        ok = url_parse(&rec, u, ulen, NULL);
+        JS_FreeCString(ctx, u);
+        DCHECK(ok, "an XMLHttpRequest's own URL is a string the URL parser refuses — §3.5.1 The open() method "
+                   "stores the SERIALIZATION of a record its own parse produced, so a refusal here is that "
+                   "serialization and that parser disagreeing");
+        ser = ok ? url_serialize(&rec, /*exclude_fragment*/ true) : NULL;
+        url_record_free(&rec);
+        d->response_url = JS_NewString(ctx, ser ? ser : "");
+        free(ser);
+    }
     d->network_error = 0;
     JS_FreeValue(ctx, st_v); JS_FreeValue(ctx, stx_v); JS_FreeValue(ctx, hs_v); JS_FreeValue(ctx, bd_v);
 }

@@ -51,8 +51,14 @@ int  body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Bod
 /* `mime` is the object's Content-Type as its own header list reports it, or NULL — §5.3's `formData()` reads
    it to decide which parser the body goes through, and only the including interface knows where its headers
    live. Caller frees. */
+/* `source` is core/byte_reader.h's question — where these bytes came from — and it is the including
+   interface's for the same reason `mime` is: a Response was filled by a server at an address it holds, and a
+   Request's body is bytes the PAGE composed. It answers a MALLOC'D name the caller frees, or NULL, which is
+   the POSITIVE statement that these bytes are not a server's and never a hole a default fills. An interface
+   whose bodies are never a server's declares NULL here and says so at the call. */
 int  body_declare(JSContext *ctx, JSClassID class_id, BodyState *(*of)(JSValueConst v),
-                  char *(*mime)(JSContext *ctx, JSValueConst v), const char *iface);
+                  char *(*mime)(JSContext *ctx, JSValueConst v),
+                  char *(*source)(JSContext *ctx, JSValueConst v), const char *iface);
 /* INSTALL text/json/arrayBuffer/bytes and `bodyUsed` on the interface's prototype. */
 void body_install(JSContext *ctx, JSValueConst proto, int handle);
 
