@@ -913,6 +913,45 @@ static JSValue window_proxy_new_remote(JSContext *ctx, uint32_t doc, const Origi
     return obj;
 }
 
+/* THE ROW THAT MAKES A PEER'S NAVIGABLE ONE OBJECT — "this instance's proxy for document `doc`". It exists
+   because identity is what a page tests: without the row the next ask MINTS a second proxy and
+   `w.frames[0] === iframe.contentWindow` is false about one window.
+   ONE CALLER, AND THE ASSERTS ARE WHY THIS IS A FUNCTION. An append that is three statements does not need
+   extracting; two INVARIANTS about the table do, because they hold for every row however it got there. A row
+   for a document this agent HOSTS is a second answer to a question the document's own realm already answers,
+   and a SECOND row for one document makes `w[0] === w[0]` decide by which row the scan reached first — both
+   are properties of the table, so they are asserted where a row is made rather than where a caller happens
+   to be. A future operation that also records a row (moving a proxy this instance held onto a peer's
+   document is the obvious one) inherits them by calling this; it is not described here, because CLAUDE.md
+   §Fix the ROOT is explicit that a comment is not a valid follow-up — such an operation must be built, and
+   until it is, this file must not read as though it exists. */
+static void remote_nav_record(JSValueConst proxy, uint32_t doc)
+{
+    int i;
+
+    DCHECK(!world_doc_hosted(doc),
+           "a remote-navigable row was recorded for a document whose realm this agent HOLDS — the row is what "
+           "window_proxy_of_document answers a peer's identity from, and a hosted document is answered by its "
+           "own realm instead, so a row for one is a second answer to a question that already has one");
+    for (i = 0; i < g_remote_navs_n; i++)
+        DCHECK(g_remote_navs[i].doc != doc,
+               "a SECOND remote-navigable row was recorded for one document — the table is a map from a peer's "
+               "document to the one proxy that resolves it, so two rows make `w[0] === w[0]` decide by which "
+               "row the scan reached first");
+    if (g_remote_navs_n == g_remote_navs_cap) {
+        int cap = g_remote_navs_cap ? g_remote_navs_cap * 2 : 8;
+        RemoteNav *g = realloc(g_remote_navs, (size_t)cap * sizeof *g);
+
+        CHECK(g != NULL, "window proxy: OOM recording a remote navigable's identity — an unrecorded navigable "
+                         "is minted again on the next ask, and `w[0] === w[0]` is then false about one window");
+        g_remote_navs = g;
+        g_remote_navs_cap = cap;
+    }
+    g_remote_navs[g_remote_navs_n].doc = doc;
+    g_remote_navs[g_remote_navs_n].proxy = proxy;   /* BORROWED — proxy_finalizer takes the row out */
+    g_remote_navs_n++;
+}
+
 JSValue window_proxy_of_document(JSContext *ctx, uint32_t doc)
 {
     int i;
@@ -952,18 +991,7 @@ JSValue window_proxy_for_document(JSContext *ctx, uint32_t doc, const Origin *or
            "would give one navigable a second proxy that resolves nothing");
     obj = window_proxy_new_remote(ctx, doc, origin, name, parent, opener);
     if (JS_IsException(obj)) return obj;
-    if (g_remote_navs_n == g_remote_navs_cap) {
-        int cap = g_remote_navs_cap ? g_remote_navs_cap * 2 : 8;
-        RemoteNav *g = realloc(g_remote_navs, (size_t)cap * sizeof *g);
-
-        CHECK(g != NULL, "window proxy: OOM recording a remote navigable's identity — an unrecorded navigable "
-                         "is minted again on the next ask, and `w[0] === w[0]` is then false about one window");
-        g_remote_navs = g;
-        g_remote_navs_cap = cap;
-    }
-    g_remote_navs[g_remote_navs_n].doc = doc;
-    g_remote_navs[g_remote_navs_n].proxy = obj;   /* BORROWED — proxy_finalizer takes the row out */
-    g_remote_navs_n++;
+    remote_nav_record(obj, doc);
     return obj;
 }
 
