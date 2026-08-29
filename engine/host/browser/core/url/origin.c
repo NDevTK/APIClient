@@ -219,8 +219,8 @@ bool origin_same_as_url(const Origin *o, const UrlRecord *u)
         return false;
     }
     /* THE PROBE IS NOT A MINT. It is never handed out, never appended to g_origins and never serialized, so it
-       needs neither an identity nor a lifetime; what it is, is §4.7's tuple origin for `u` — nonce zero, and
-       the three components url_record_free below still owns — so that §7.1.1 is decided by the ONE
+       needs neither an identity nor a lifetime; what it is, is URL §4.7 Origin's tuple origin for `u` —
+       nonce zero, and the three components url_record_free below still owns — so that §7.1.1 is decided by the ONE
        implementation of it rather than by a second comparison written out here. */
     memset(&probe, 0, sizeof probe);
     probe.scheme = (char *)t->scheme;

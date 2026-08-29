@@ -170,6 +170,13 @@ function normTerm(s) {
     .replace(/[-_/]+/g, " ")
     .replace(/'s\b/g, "")
     .replace(/[^a-z0-9 ()[\]@.]+/g, " ")
+    /* A SENTENCE-FINAL PERIOD IS PUNCTUATION; A PERIOD BETWEEN TWO CHARACTERS IS PART OF A NAME. The dot has
+     * to survive `Array.prototype.map`, so it cannot simply be stripped — and while it survived, the citation
+     * `URL §5.2 application/x-www-form-urlencoded serializing.` did not match that section's own title,
+     * because its last word was `serializing.` and the standard's was `serializing`. A correct, fully-titled
+     * citation was reported as a misattribution over one character. The guard is what the two cases differ in:
+     * a period after an alphanumeric and before whitespace ends a sentence; every other period is a name's. */
+    .replace(/(?<=[a-z0-9])\.(?=\s|$)/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -843,9 +850,20 @@ function audit(argv) {
          * `HTML §15.3.3 Flow content` is exactly right, and because the standard ALSO defines `flow content`
          * as a content category over in §3.2.5.2.2, the term check fired and reported the correctly-titled
          * citation as misattributed. A title stated is a claim the standard can confirm outright. */
-        if (c.quoted && normTerm(c.quoted) === wantTitle) verdict = { kind: "OK-TITLED" };
-        else if (wantTitle && c.words.slice(0, wantTitle.split(" ").length).join(" ") === wantTitle) {
-          verdict = { kind: "OK-TITLED" };
+        /* AND IT IS ASKED OF EVERY CANDIDATE STANDARD, not of the one the resolver happened to pick — for the
+         * same reason the term check is. `url.h`'s `§5.1 application/x-www-form-urlencoded parsing` states the
+         * URL Standard's exact title for that number; the term it names is defined by BOTH HTML and URL, so
+         * the multi-standard tie-break fell back to the file's anchor, judged it against HTML §5.1
+         * "Introduction", and reported a citation that had already proved itself. A stated title is evidence
+         * about WHICH standard as much as about which section. */
+        const titleCands = c.anchor && idx.has(c.anchor) ? [c.anchor] : [...idx.keys()];
+        for (const k of titleCands) {
+          const sx = idx.get(k).sections[no];
+          if (!sx) continue;
+          const wt = normTerm(sx.title);
+          if (!wt) continue;
+          if ((c.quoted && normTerm(c.quoted) === wt) ||
+              c.words.slice(0, wt.split(" ").length).join(" ") === wt) { verdict = { kind: "OK-TITLED" }; break; }
         }
 
         /* (3) TERM ATTRIBUTION across every indexed standard. The finding is raised only when NO candidate

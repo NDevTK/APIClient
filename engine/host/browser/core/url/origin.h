@@ -27,9 +27,10 @@
  *
  * SO THE IDENTITY IS A NONCE (Blink's SecurityOrigin carries one for the same reason). It is MINTED by every
  * site where the standard says "return a NEW opaque origin" (URL §4.7's `data:`/`file:`/unknown-scheme case,
- * §7.3.2.1's sandboxed origin browsing context flag and its null-url case) and COPIED — the same record, so the
- * same nonce — by §7.3.2.1's two inheritance cases. After that, `origin_same` decides step 1 by comparing
- * nonces and step 2 by comparing tuples, and nothing anywhere decides anything with a serialization.
+ * HTML §7.3.2.1 Creating browsing contexts' sandboxed-origin case and its null-url case) and COPIED — the
+ * same record, so the same nonce — by §7.3.2.1's two inheritance cases. After that, `origin_same` decides
+ * step 1 by comparing nonces and step 2 by comparing tuples, and nothing anywhere decides anything with a
+ * serialization.
  *
  * THE SERIALIZATION STAYS, AS AN OPERATION AND NOT AS THE TYPE. §7.1.1's serializer is what `event.origin`,
  * `location.origin`, a create notice and a storage key are made of — all of them BYTES leaving this engine —

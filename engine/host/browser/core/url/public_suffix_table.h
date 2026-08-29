@@ -8,7 +8,7 @@
  * leading `!` of an exception rule and the leading `*.` of a wildcard rule are the rule's KIND and
  * are carried by which array it is in, so a lookup never has to re-parse a rule at run time. The
  * bodies are A-labels: the PSL's formal algorithm requires both sides of a comparison to be
- * lower-case Punycode, and the host side arrives that way from URL §4.2's domain-to-ASCII.
+ * lower-case Punycode, and the host side arrives that way from URL §3.3 IDNA's domain parser.
  *
  * Re-pin DELIBERATELY, as a commit of its own — see engine/pslgen.mjs. */
 #ifndef ENGINE_HOST_BROWSER_CORE_URL_PUBLIC_SUFFIX_TABLE_H

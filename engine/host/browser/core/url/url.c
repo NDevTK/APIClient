@@ -17,7 +17,10 @@
  * way a URL parser is wrong, so this file never conflates them — a validation error is not recorded at all,
  * because nothing in the platform surfaces it.
  *
- * §4.2's DOMAIN-TO-ASCII IS ITS OWN COMPONENT, core/url/idna.c, which this file calls. It is Unicode's UTS-46
+ * §3.3 IDNA's DOMAIN PARSER IS ITS OWN COMPONENT, core/url/idna.c, which this file calls. The standard
+ * RENAMED that algorithm from "domain to ASCII" and kept the old anchor, so a citation of the OLD NAME now
+ * resolves to §1.1 Writing's validation-error label of the same spelling — a live section, a real definition,
+ * and the wrong one. It is Unicode's UTS-46
  * table plus RFC 3492's Punycode — one assertable contract with nothing of the state machine in it — and this
  * header used to say instead that it did not exist and that a non-ASCII domain reached a DFAIL naming it. That
  * sentence outlived the DFAIL: idna.c's own header records that this file's crash is why it was written. */
@@ -93,8 +96,8 @@ static int is_ascii_alnum(int c)      { return is_ascii_alpha(c) || is_ascii_dig
 static int lower(int c)               { return (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c; }
 static int hexval(int c)              { return is_ascii_digit(c) ? c - '0' : lower(c) - 'a' + 10; }
 
-/* §4.2 "forbidden host code point" and "forbidden domain code point". The second is the first plus the C0
-   controls, DEL and `%` — a domain may not carry a percent-encoding, an opaque host may. */
+/* §3.2 Host miscellaneous's "forbidden host code point" and "forbidden domain code point". The second is the
+   first plus the C0 controls, DEL and `%` — a domain may not carry a percent-encoding, an opaque host may. */
 static int is_forbidden_host(int c)
 {
     return c == 0x00 || c == 0x09 || c == 0x0a || c == 0x0d || c == ' ' || c == '#' || c == '/' ||
@@ -198,7 +201,8 @@ static void ustr_put_encoded(UStr *out, const char *s, size_t n, int set)
     size_t i;
     for (i = 0; i < n; i++) {
         unsigned char c = (unsigned char)s[i];
-        /* §5.1's urlencoded serializer maps 0x20 to `+` rather than percent-encoding it. It is part of THAT
+        /* §5.2 application/x-www-form-urlencoded serializing's urlencoded serializer maps 0x20 to `+`
+           rather than percent-encoding it. It is part of THAT
            SET's rule, so it is here — doing it in the caller means replacing spaces in an already-encoded
            string, which finds none because the space is already `%20`. */
         if (set == URL_SET_URLENCODED && c == ' ') { ustr_putc(out, '+'); continue; }
@@ -363,7 +367,7 @@ bool url_record_copy(UrlRecord *dst, const UrlRecord *src)
     return true;
 }
 
-/* ---- §4.2's host parser ---------------------------------------------------------------------------------- */
+/* ---- §3.5 Host parsing's host parser -------------------------------------------------------------------- */
 
 /* "ends in a number": what decides whether a domain is really an IPv4 address written in one of the four
    legacy radices. `http://1.2.3.4.5/` is a DOMAIN and `http://0x7f.1/` is 127.0.0.1, and this is the whole of
@@ -385,7 +389,8 @@ static int last_part_is_number(const char *s, size_t n)
     return 1;
 }
 
-/* §4.2's "IPv4 number parser": the radix comes from the prefix, and an empty body after `0x` is zero. */
+/* §3.5 Host parsing's "IPv4 number parser": the radix comes from the prefix, and an empty body after `0x`
+   is zero. */
 static int ipv4_number(const char *b, const char *e, uint64_t *out, int *validation)
 {
     int radix = 10;
@@ -439,7 +444,8 @@ static bool parse_ipv4(const char *s, size_t n, uint32_t *out)
     return true;
 }
 
-/* §4.2's IPv6 parser, written as the spec writes it — the compressed `::` piece index and all. */
+/* §3.5 Host parsing's IPv6 parser, written as the spec writes it — the compressed `::` piece index and
+   all. */
 static bool parse_ipv6(const char *s, size_t n, uint16_t out[8])
 {
     int piece = 0, compress = -1, i;
@@ -492,8 +498,8 @@ static bool parse_ipv6(const char *s, size_t n, uint16_t out[8])
                 if (numbers == 4) break;
             }
             if (numbers != 4) return false;
-            /* §4.2's IPv6 parser RETURNS after the embedded IPv4, so anything still in the input is a
-               FAILURE — `[::127.0.0.1.]`, `[::1.2.3.4x]` and `[::127.0.0.0.1]` all parsed as valid because
+            /* §3.5 Host parsing's IPv6 parser RETURNS after the embedded IPv4, so anything still in the
+               input is a FAILURE — `[::127.0.0.1.]`, `[::1.2.3.4x]` and `[::127.0.0.0.1]` all parsed as valid because
                this loop merely stopped reading rather than refusing what it had not read. */
             if (p != e) return false;
             break;
@@ -521,8 +527,8 @@ static bool parse_ipv6(const char *s, size_t n, uint16_t out[8])
     return true;
 }
 
-/* §4.2's "opaque-host parser": every forbidden HOST code point is a failure, and the rest is percent-encoded
-   with the C0 control set. */
+/* §3.5 Host parsing's "opaque-host parser": every forbidden HOST code point is a failure, and the rest is
+   percent-encoded with the C0 control set. */
 static bool parse_opaque_host(const char *s, size_t n, UrlHost *out)
 {
     UStr o;
@@ -536,8 +542,8 @@ static bool parse_opaque_host(const char *s, size_t n, UrlHost *out)
     return true;
 }
 
-/* §4.2's "domain to ASCII" for the ASCII case, which is a lowercase and the validity tests. A non-ASCII domain
-   is UTS-46 plus Punycode and goes to idna.c: answering with the bytes lowercased would put a domain in the
+/* §3.3 IDNA's domain parser for the ASCII case, which is a lowercase and the validity tests. A non-ASCII
+   domain is UTS-46 plus Punycode and goes to idna.c: answering with the bytes lowercased would put a domain in the
    record that no resolver would agree with, and this comment used to say that case reached a DFAIL — which it
    has not since idna.c was built, and the call to it is in the body this sentence sits on. */
 static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
@@ -608,7 +614,8 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
     return true;
 }
 
-/* §4.2's HOST PARSER, AS ITS OWN ENTRY, because a host is parsed in places that have no URL to parse it into.
+/* §3.5 Host parsing's HOST PARSER, AS ITS OWN ENTRY, because a host is parsed in places that have no URL
+   to parse it into.
    HTML §7.1.1.2's `document.domain` setter is one: its step 2 is "let hostSuffix be the result of PARSING
    hostSuffixString" and there is no scheme, no base and no record anywhere in that algorithm — the answer is a
    HOST and the caller compares it against another host. Routing that through a scratch URL would make the
@@ -618,18 +625,20 @@ static bool parse_host(const char *s, size_t n, bool is_opaque, UrlHost *out)
    whatever the answer was. */
 bool url_parse_host(UrlHost *out, const char *s, size_t len, bool is_opaque)
 {
-    DCHECK(out != NULL && s != NULL, "§4.2's host parser was called with nothing to parse or nowhere to put it");
+    DCHECK(out != NULL && s != NULL,
+           "§3.5 Host parsing's host parser was called with nothing to parse or nowhere to put it");
     if (parse_host(s, len, is_opaque, out)) return true;
     /* ZEROED ON FAILURE, and asserted rather than re-zeroed here: §4.2's parser clears `out` before it starts
        and every failure path of it returns before allocating, so a partially built host arriving here is that
        contract broken — and quietly memsetting it would turn a LEAK into a clean-looking return. */
     DCHECK(out->kind == URL_HOST_NULL && out->domain == NULL,
-           "§4.2's host parser left a partially built host behind on FAILURE — whatever it allocated is now "
-           "unreachable, and the caller is about to free a record that no longer names it");
+           "§3.5 Host parsing's host parser left a partially built host behind on FAILURE — whatever it "
+           "allocated is now unreachable, and the caller is about to free a record that no longer names it");
     return false;
 }
 
-/* §4.3's host serializer. The IPv6 form is the compressed one, which is why the record keeps the pieces. */
+/* §3.6 Host serializing's host serializer. The IPv6 form is the compressed one, which is why the record
+   keeps the pieces. */
 char *url_serialize_host(const UrlHost *h)
 {
     UStr o;
@@ -1378,9 +1387,9 @@ bool url_parse_override(UrlRecord *url, const char *input, size_t len, UrlStateO
 
 
 
-/* ---- §5.1's `application/x-www-form-urlencoded` list ------------------------------------------------------
+/* ---- §5 application/x-www-form-urlencoded's list ------------------------------------------------------
  *
- * It is the URL STANDARD's §5.1, not URLSearchParams' — that interface is one view over it, and `.formData()`
+ * It is the URL STANDARD's §5, not URLSearchParams' — that interface is one view over it, and `.formData()`
  * is the other: a Request or a Response whose Content-Type says urlencoded parses its body with exactly this
  * parser. It lived inside url_search_params.c, which is where it was first needed; a second copy for FormData
  * would have been a second place for `+` decoding, the `%` rules and the code-unit ordering to drift. */
@@ -1485,7 +1494,7 @@ void url_encoded_list_append(UrlEncodedList *l, const char *name, size_t nn, int
     l->n++;
 }
 
-/* ---- §5.1's application/x-www-form-urlencoded ------------------------------------------------------------ */
+/* ---- §5.1 application/x-www-form-urlencoded parsing ------------------------------------------------------------ */
 
 /* THE PARSER. Split on `&`; each sequence splits at its FIRST `=` (and is all-name when it has none); `+`
    becomes a space in BOTH halves and only then is the percent-decoding run. Doing the two in the other order
@@ -1596,9 +1605,9 @@ static JSClassID g_url_class;
 static JSRuntime *g_url_rt;
 static int       g_url_ctor_stepid = -1;
 
-/* The wrapper holds the record AND the [SameObject] `searchParams` — §5.1 declares that attribute SameObject,
-   so the object is built at most once per URL and the two hold each other (the params write §6.1's update
-   steps back onto this record). A real cycle, which is what gc_mark is for. */
+/* The wrapper holds the record AND the [SameObject] `searchParams` — §6.1 URL class declares that attribute
+   SameObject, so the object is built at most once per URL and the two hold each other (the params write
+   §6.2 URLSearchParams class's update steps back onto this record). A real cycle, which is what gc_mark is for. */
 typedef struct { UrlRecord rec; JSValue params; } UrlObj;
 
 static void url_finalizer(JSRuntime *rt, JSValue val)

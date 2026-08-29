@@ -15,7 +15,7 @@
  * and they are precisely the cases the condition exists for.
  *
  * THE TWO SIDES ARE ONE REPRESENTATION. The list ships U-labels in UTF-8; a host arriving here has been through
- * URL §4.2's domain-to-ASCII and is a lowercased A-label. The PSL's formal algorithm requires both sides to be
+ * URL §3.3 IDNA's domain parser and is a lowercased A-label. The PSL's formal algorithm requires both sides to be
  * canonicalized "lower-case, Punycode (RFC 3492) - prior to being compared", so pslgen.mjs punycodes every rule
  * at generation time and STOPS on one it cannot. Matching at run time is therefore plain bytes; a rule left as a
  * U-label would have matched nothing, silently, for exactly the IDN domains this matters most for. */

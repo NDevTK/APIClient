@@ -4,9 +4,10 @@
  * reads them both back, and `get` answers with the first. A map keyed by name would answer `get` and lose
  * every repeat.
  *
- * IT WRITES BACK. §6.1 gives the object an associated URL, and every mutation runs the UPDATE STEPS: serialize
- * the list and set the URL's query to it, or to null when the list is empty. That is what makes
- * `u.searchParams.set("a", "1")` change `u.href`, which is the entire reason the accessor exists rather than
+ * IT WRITES BACK. §6.2 URLSearchParams class gives the object an associated URL, and every mutation runs
+ * the UPDATE STEPS: serialize the list and set the URL's query to it, or to null when the list is empty.
+ * That is what makes `u.searchParams.set("a", "1")` change `u.href`, which is the entire reason the
+ * accessor exists rather than
  * the page building a query string itself. The link is [SameObject] in both directions — one object per URL,
  * held by the URL, and holding the URL back so the update steps have something to write to. */
 #include <stdio.h>
@@ -71,9 +72,9 @@ static UspObj *usp_of(JSContext *ctx, JSValueConst v)
     return u;
 }
 
-/* §6.1's UPDATE STEPS: serialize the list onto the associated URL's query, and set that query to NULL rather
-   than to the empty string when the list is empty — `u.searchParams.delete("a")` on `?a=1` gives `u.href` with
-   no `?` at all, which is exactly the null/empty distinction the record keeps. */
+/* §6.2 URLSearchParams class's UPDATE STEPS: serialize the list onto the associated URL's query, and set
+   that query to NULL rather than to the empty string when the list is empty — `u.searchParams.delete("a")`
+   on `?a=1` gives `u.href` with no `?` at all, which is exactly the null/empty distinction the record keeps. */
 static void usp_update(JSContext *ctx, UspObj *u)
 {
     UrlRecord *rec;
@@ -191,7 +192,8 @@ static JSValue js_usp_member(JSContext *ctx, JSValueConst this_val, int argc, JS
        boundary must not do (quickjs.c's js_force_tostring says so at the crash): a `const char *` cannot carry
        a concolic, and §7.1.19 ToString ( arg ) over an unknown is the identity, so there is nothing to convert.
        NEITHER HALF IS AN OPERATOR — none of the four members reaching this line returns the converted string.
-       `append` and `set` STORE it, and §6.1's update steps then serialize it onto the associated URL, which is
+       `append` and `set` STORE it, and §6.2 URLSearchParams class's update steps then serialize it onto the
+       associated URL, which is
        what `vscode.dev`'s `e.searchParams.set("vscode-lang", navigator.language.toLowerCase())` does one line
        before it assigns `e.href` to `window.location.href`. `delete` and `has` MATCH against it. So each half
        is a NAME in js_force_tostring's sense — an unknown denotes its own display SHAPE, a real string, stable

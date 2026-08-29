@@ -15246,7 +15246,7 @@
   "get map.prototype.size": [
    "24.1.3.12"
   ],
-  "get object.prototype. proto": [
+  "get object.prototype proto": [
    "20.1.3.8.1"
   ],
   "get promise [ @@species ]": [
@@ -17902,31 +17902,31 @@
   "object.preventextensions ( obj )": [
    "20.1.2.20"
   ],
-  "object.prototype. definegetter": [
+  "object.prototype definegetter": [
    "20.1.3.9.1"
   ],
-  "object.prototype. definegetter ( key getter )": [
+  "object.prototype definegetter ( key getter )": [
    "20.1.3.9.1"
   ],
-  "object.prototype. definesetter": [
+  "object.prototype definesetter": [
    "20.1.3.9.2"
   ],
-  "object.prototype. definesetter ( key setter )": [
+  "object.prototype definesetter ( key setter )": [
    "20.1.3.9.2"
   ],
-  "object.prototype. lookupgetter": [
+  "object.prototype lookupgetter": [
    "20.1.3.9.3"
   ],
-  "object.prototype. lookupgetter ( key )": [
+  "object.prototype lookupgetter ( key )": [
    "20.1.3.9.3"
   ],
-  "object.prototype. lookupsetter": [
+  "object.prototype lookupsetter": [
    "20.1.3.9.4"
   ],
-  "object.prototype. lookupsetter ( key )": [
+  "object.prototype lookupsetter ( key )": [
    "20.1.3.9.4"
   ],
-  "object.prototype. proto": [
+  "object.prototype proto": [
    "20.1.3.8"
   ],
   "object.prototype.hasownproperty": [
@@ -19612,7 +19612,7 @@
   "set iterator.prototype.constructor": [
    "27.1.3.3.1.2"
   ],
-  "set object.prototype. proto": [
+  "set object.prototype proto": [
    "20.1.3.8.2"
   ],
   "set objects": [

@@ -16,7 +16,7 @@
  * WHY THE RULES ARE PUNYCODED HERE AND NOT AT LOOKUP TIME. The list is "Unicode, not Punycode ... encoded using
  * UTF-8", and the PSL's own formal algorithm requires that "the domain, as well as all rules from the Public
  * Suffix List, must be canonicalized in the normal way for hostnames - lower-case, Punycode (RFC 3492) - prior
- * to being compared". A host reaching public_suffix.c has already been through URL §4.2's domain-to-ASCII, so it
+ * to being compared". A host reaching public_suffix.c has already been through URL §3.3 IDNA's domain parser, so it
  * is an A-label; a rule left as a U-label would then match NOTHING, and it would fail SILENTLY for exactly the
  * IDN domains the condition matters most for. Canonicalizing at generation time makes the two sides one
  * representation, and a rule this generator cannot canonicalize STOPS it rather than being dropped.
@@ -149,7 +149,7 @@ lines.push(" * §Format's three rule shapes, each as its own SORTED array of the
 lines.push(" * leading `!` of an exception rule and the leading `*.` of a wildcard rule are the rule's KIND and");
 lines.push(" * are carried by which array it is in, so a lookup never has to re-parse a rule at run time. The");
 lines.push(" * bodies are A-labels: the PSL's formal algorithm requires both sides of a comparison to be");
-lines.push(" * lower-case Punycode, and the host side arrives that way from URL §4.2's domain-to-ASCII.");
+lines.push(" * lower-case Punycode, and the host side arrives that way from URL §3.3 IDNA's domain parser.");
 lines.push(" *");
 lines.push(" * Re-pin DELIBERATELY, as a commit of its own — see engine/pslgen.mjs. */");
 lines.push("#ifndef ENGINE_HOST_BROWSER_CORE_URL_PUBLIC_SUFFIX_TABLE_H");
