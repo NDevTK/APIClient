@@ -5,6 +5,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/dom/document.h"
+#include "core/dom/document_current_script.h"   /* §8.4.1 step 5's "active parser whose script nesting level > 0" */
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
@@ -167,18 +168,14 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
      * from a browser's mid-parse moment. Serving such a write out of these steps is not a near-miss: it would
      * ERASE the page the script is running in, in the one case the standard singles out for being left alone.
      * So it crashes, and the crash is what keeps the two halves of this algorithm distinguishable.
-     * THE CONDITION IS THE DOCUMENT'S READINESS AND NOT A GUESS AT WHAT CALLED. §13.2.7 sets the insertion
-     * point to undefined and updates the readiness to "interactive" in consecutive steps (2 and 3), so
-     * "loading" IS "the parse has not ended" — and a stream this flow opened is the one way to be at "loading"
-     * with no loader parse outstanding, which is why the record is asked first.
-     * AND IT IS ASKED ONLY OF A DOCUMENT A NAVIGATION PRODUCED, because the §7.4.6 initial `about:blank` is the
-     * one Document whose readiness says nothing about a parse: it has no response and no loader parse of its
-     * own, so a `w = window.open(); w.document.write(…)` — the commonest destructive write there is — is not
-     * the mid-parse state this crash is about, and reporting it as one would send the reader to build the live
-     * parser for a document that never had a parse. That case has its own answer at step 13. */
+     * THE CONDITION IS THE STANDARD'S OWN AND IT IS ASKED OF THE ELEMENT, NOT OF THE READINESS. §4.12.1.1
+     * parks the running classic script in `currentScript`, and its §4.12.1 SCHEDULE says whether the parser is
+     * standing inside it — core/dom/document_current_script.c states the whole argument, including the three
+     * schedules whose writes ARE destructive in a browser and the cross-document `w.document.open()` that the
+     * readiness alone would have refused. Asked of the TARGET document's realm, because step 5 is about
+     * `document`'s parser and the caller may be another realm's script. */
     if (realm != NULL && !open_record_read(ctx, doc_obj) &&
-        open_ever_navigated(realm) &&
-        strcmp(document_readiness_of(dnode), "loading") == 0) {
+        document_current_script_is_parser_executed(realm)) {
         DFAIL("§8.4.1 step 5 — the document open steps were reached for a Document that is still LOADING, "
               "which in HTML is a Document with an ACTIVE PARSER: §13.2.7 \"The end\" sets the insertion point "
               "to undefined and the readiness to \"interactive\" in consecutive steps, so a script running at "

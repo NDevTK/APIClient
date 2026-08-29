@@ -10,6 +10,7 @@
 #include "core/dom/document_current_script.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
+#include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps and its LAST STEPS, over the element in this slot */
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -82,6 +83,47 @@ bool document_current_script_is_from_external_file(JSContext *ctx)
                                                  (const lxb_char_t *)"src", 3);
     JS_FreeValue(ctx, v);
     return external;
+}
+
+/* HTML §8.4.1 "Opening the input stream" step 5's "if document has an ACTIVE PARSER WHOSE SCRIPT NESTING LEVEL
+ * IS GREATER THAN 0", asked of the element §4.12.1.1 parked here — which is the only place this engine records
+ * which of a document's scripts is running.
+ *
+ * THE QUESTION IS ABOUT THE SCHEDULE AND NOT ABOUT THE READINESS, and getting that wrong is a crash in the
+ * wrong place. "The parser is standing inside this script" is true for exactly two of §4.12.1's five
+ * destinations — an inline classic script and the pending parsing-blocking script — because those are the two
+ * §13.2.6.4.8 'The "text" insertion mode' runs WITH the insertion point defined and the tokenizer stopped. A
+ * `defer` script and a module run from §13.2.7 "The end" step 5, after the parse; the two `as soon as
+ * possible` destinations are not parser-inserted at all. All three of those are destructive writes in a
+ * browser, so answering them with the readiness — which is still "loading" for every one of them — would
+ * refuse a write the standard performs. So would the readiness alone for a write made by ANOTHER document's
+ * script into this one (`w = open(url); w.document.open()` while the popup is still loading), which the corpus
+ * does and for which the answer here is null: no script of THIS document is running.
+ * A MODULE ARM IS ABSENT ON PURPOSE. §4.12.1.1 asserts this slot is null while a module runs, and a module is
+ * never parser-executed, so "null" and "not parser-executed" are the same answer for it. */
+bool document_current_script_is_parser_executed(JSContext *ctx)
+{
+    JSValue v = cs_get(ctx);
+    lxb_dom_node_t *n = node_of(v);
+    bool parser_executed = false;
+
+    if (n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+        lxb_dom_element_t *el = lxb_dom_interface_element(n);
+        ScriptType ty = script_block_type(el);
+
+        /* PARSER-INSERTED WITH `force async` FALSE are facts about the element in this slot rather than
+           defaults: §4.12.1.1's classic arm is what wrote it, and core/loader/document_scripts.c states the
+           same pair for the parse scan that collects these elements. An element a SCRIPT inserted reaches
+           §4.12.1 through core/html/html_script.c, where neither holds — and a document whose own script is
+           not running has a null slot, which never gets here. */
+        if (script_type_executes(ty)) {
+            ScriptSchedule sc = script_block_schedule(el, ty, /*parser_inserted*/true, /*force_async*/false);
+
+            parser_executed = sc == SCRIPT_SCHED_IMMEDIATE || sc == SCRIPT_SCHED_PARSER_BLOCKING;
+        }
+    }
+    JS_FreeValue(ctx, v);
+    return parser_executed;
 }
 
 bool document_current_script_is_null(JSContext *ctx)

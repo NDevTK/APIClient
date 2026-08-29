@@ -90,5 +90,10 @@ bool document_current_script_is_null(JSContext *ctx);
    caller is core/html/document_write.c's step 9.1; the body states which half of §4.12.1.1's condition it
    answers and which half needs the counter's real producer. */
 bool document_current_script_is_from_external_file(JSContext *ctx);
+/* Is the classic script this realm is executing one the PARSER is standing inside — HTML §8.4.1 "Opening the
+   input stream" step 5's "an active parser whose script nesting level is greater than 0", answered from the
+   element's §4.12.1 SCHEDULE. Its caller is core/html/document_open.c; the body states why the schedule is the
+   question and the document's readiness is not. */
+bool document_current_script_is_parser_executed(JSContext *ctx);
 
 #endif
