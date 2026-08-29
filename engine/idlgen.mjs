@@ -48,12 +48,11 @@
  * absent.c's input under another lane's compile is the loaded-machine defect with a generator behind it. A
  * checked-in table that no longer matches the corpus is therefore a FAILING category like any other gap, and
  * `node engine/idlgen.mjs --regen` is the one command that writes it. */
-import { listAll } from "@webref/idl";
-import { parse } from "webidl2";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
+import { loadIdl, windowGlobals, iterationMembers } from "./idl_members.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOST = join(HERE, "host");
@@ -543,108 +542,11 @@ const INTERFACES = {
   ValidityState:        "core/html/element_internals.c",
 };
 
-const all = await listAll();
-const byName = new Map();
-const inheritanceOf = new Map();
-const includes = [];
-for (const spec of Object.values(all)) {
-  let ast;
-  try { ast = parse(await spec.text()); } catch { continue; }
-  for (const n of ast) {
-    /* A CALLBACK INTERFACE IS COLLECTED TOO. Web IDL §3.7.1 gives one a callback interface OBJECT carrying its
-       constants — `NodeFilter.SHOW_ELEMENT` is a real property of a real object a page reads — and only its
-       PROTOTYPE object is absent, which is why it carries no §3.7.3 tag and why it needs a hand-written row.
-       Skipping the type meant DOM's NodeFilter was in webref with seventeen members and in this index with
-       none, so node_filter.c's sixteen constants were diffed against an empty member list and the row read
-       COMPLETE against nothing — the audit minting the false complete it exists to remove. */
-    /* A NAMESPACE IS COLLECTED TOO, and its absence was the same false-complete one level up. Web IDL §3.13
-       gives a namespace a real object on the global whose properties are its operations and attributes —
-       `console.log`, `CSS.supports` — and skipping the type meant the whole definition kind was invisible to
-       this index: a component installing on one would be diffed against an EMPTY member list, so twenty
-       operations would read COMPLETE against nothing at all. It carries no inheritance and no mixins, so the
-       flattening below is a no-op for it; what it needs is to EXIST here. */
-    if ((n.type === "interface" || n.type === "interface mixin" || n.type === "callback interface" ||
-         n.type === "namespace") && n.name) {
-      if (n.inheritance) inheritanceOf.set(n.name, n.inheritance);
-      const prev = byName.get(n.name);
-      if (prev) prev.members.push(...n.members);
-      else byName.set(n.name, n);
-    } else if (n.type === "includes") includes.push(n);
-  }
-}
-for (const inc of includes) {
-  const host = byName.get(inc.target), mixin = byName.get(inc.includes);
-  if (host && mixin) host.members.push(...mixin.members);
-}
-function flatten(name, seen = new Set()) {
-  const node = byName.get(name);
-  if (!node || seen.has(name)) return [];
-  seen.add(name);
-  const base = inheritanceOf.get(name);
-  return [...(base ? flatten(base, seen) : []), ...node.members];
-}
-/* AN `iterable<>` DECLARATION IS MEMBERS. Web IDL §3.7.10 says a pair-iterable interface gets `entries`,
-   `keys`, `values`, `forEach` and @@iterator, and a value-iterable one gets the same minus `entries`/`keys` —
-   they are as real as anything spelled out in the members list, and `for (const [k, v] of headers)` is how
-   half the code that touches one is written. The audit read only the spelled-out members, so it reported
-   Headers as COMPLETE while all five were missing: an interface could declare its iteration and the gap
-   report would never mention it. `maplike`/`setlike` carry the same rule and are expanded for the same
-   reason. @@iterator is left out of the diff because the scan looks for property NAMES in the component and a
-   symbol-keyed one has none — the four named members are what it can honestly check. */
-/* AND `async_iterable<>` IS THE SAME DEFECT ONE DECLARATION OVER. It was not in the list below, so
-   FileSystemDirectoryHandle's `entries`, `keys` and `values` — the whole of §2.4.1's directory iteration, and
-   the only way `for await (const [name, h] of dir)` is written — were invisible to the audit in both
-   directions: absent while nothing implemented them, and uncredited once something did. §3.7.10's member set
-   is NOT §3.7.9's: a pair async declaration defines `entries`, `keys` and `values`, a value one defines
-   `values` alone, and NEITHER defines `forEach` — an async iterable has no synchronous walk to hand a callback
-   to, so expecting one would report a member the spec does not define. */
-function iterationMembers(node) {
-  const out = [];
-  for (const m of node.members) {
-    if (m.type === "async_iterable") {
-      out.push("values");
-      if (m.idlType && m.idlType.length === 2) out.push("entries", "keys");
-      continue;
-    }
-    if (m.type !== "iterable" && m.type !== "maplike" && m.type !== "setlike") continue;
-    const pair = m.type === "maplike" || (m.idlType && m.idlType.length === 2);
-    out.push("forEach", "values");
-    if (pair) out.push("entries", "keys");
-    if (m.type === "maplike" || m.type === "setlike") out.push("has");
-    if (m.type === "maplike") out.push("get");
-  }
-  return out;
-}
-
-function members(name) {
-  const out = [], seen = new Set();
-  const add = (n) => { if (n && !seen.has(n)) { seen.add(n); out.push(n); } };
-  for (const m of flatten(name)) {
-    /* STATIC MEMBERS COUNT. They were skipped, and the audit therefore called Response's member list complete
-       while `redirect` and `json` — two of its five operations — did not exist. A static lives on the
-       interface OBJECT rather than the prototype, which changes where a component installs it and nothing
-       about whether it is missing; the installed-name scan is by property name and reads both alike. */
-    if (m.type === "attribute") add(m.name);
-    else if (m.type === "operation") add(m.name);
-    /* A CONSTANT IS A MEMBER, and skipping the kind meant an entire member kind was audited by nobody —
-       the excluded-check defect inside the checker. `Node.ELEMENT_NODE`, `NodeFilter.SHOW_ELEMENT`,
-       `CSSRule.STYLE_RULE` and `XMLHttpRequest.DONE` are reads a page makes, and Web IDL §3.7.5 defines them
-       on the interface object AND on the prototype, which is why §4.4's own comment in node.c installs both.
-       MEASURED before it was added, because the ordering claim it was landed under was mine and was wrong: I
-       said attribution had to come first or this would inject ~34 false absents at the two unattributed
-       constant sites. It injects TWO, and both are real — COUNTER_STYLE_RULE and FONT_FEATURE_VALUES_RULE, the
-       rule types for @counter-style and @font-feature-values, which this engine does not implement. The
-       unattributed records at those sites are the INTERFACE-OBJECT copies; the prototype copies attribute
-       fine, so 59 constants over the interfaces that declare any were already credited. */
-    else if (m.type === "const") add(m.name);
-  }
-  /* the iteration members of this interface AND of everything it inherits from, which is what flatten walks */
-  for (const m of flatten(name)) {
-    if (m.type === "iterable" || m.type === "maplike" || m.type === "setlike" || m.type === "async_iterable")
-      for (const n of iterationMembers({ members: [m] })) add(n);
-  }
-  return out;
-}
+/* THE IDL, PARSED AND FLATTENED ONCE, in engine/idl_members.mjs — one reader of @webref/idl for every gate
+   that needs to know what the platform provides, so "is `redirected` a member of Response" and "which members
+   of Response does the engine still owe" cannot come back as two different answers. */
+const idl = await loadIdl();
+const { byName, inheritanceOf, flatten, members } = idl;
 
 /* The install constructs of the WHOLE engine, read once. Whole-engine and not per-row because which objects are
    install targets is a fact about the program (a prototype handed from the file that tags it to the file that
@@ -1163,47 +1065,7 @@ for (const c of env.recordContradictions)
  *
  * A name here is the ENGINE's to provide. A name NOT here is the server's to have injected, and reading it
  * yields the concolic unknown whose gate forks. That is the whole distinction absent.c makes. */
-const exposedOnWindow = (node) => {
-  const ext = (node.extAttrs || []).find((a) => a.name === "Exposed");
-  if (!ext) return false;                       // no [Exposed] at all: not a global constructor
-  if (!ext.rhs) return false;
-  const v = ext.rhs.value;
-  if (ext.rhs.type === "*") return true;        // [Exposed=*]
-  if (typeof v === "string") return v === "Window";
-  return Array.isArray(v) && v.some((x) => (x.value || x) === "Window");
-};
-
-/* Walk the DECLARATIONS, not the merged byName map: byName keeps the first node it saw for a name and merges
-   later members into it, so an interface first encountered as a `partial` (which carries no [Exposed]) loses the
-   real declaration's extended attributes — that is why Element and HTMLElement went missing from a table built
-   off the map. A name is a global if ANY of its declarations says [Exposed=Window]. */
-/* …AND THE THIRD SOURCE, WHICH IS ALSO SPEC TEXT AND WAS MISSING. Web IDL §3.7.2 "Legacy factory functions":
-   a `[LegacyFactoryFunction=id(…)]` extended attribute puts `id` on the global as a built-in function object —
-   it is not the interface's name and it is not a member of Window, so neither source above sees it, and the
-   corpus has three: `Image` (HTMLImageElement), `Option` (HTMLOptionElement) and `Audio` (HTMLAudioElement).
-   Every one of them is a name a page reaches for by writing `new Image()`, and absent from this table each was
-   classified as SERVER-INJECTED APP STATE — so the read answered a concolic and the branch on it FORKED,
-   which is the frontier multiplication this table exists to stop, on three of the most common constructors on
-   the platform. The identifier is taken only where the interface it appears on is itself exposed on Window,
-   because that is what decides whether the function object is created in this global at all. */
-const legacyFactoryNames = (node) =>
-  (node.extAttrs || [])
-    .filter((a) => a.name === "LegacyFactoryFunction" && a.rhs && typeof a.rhs.value === "string")
-    .map((a) => a.rhs.value);
-
-const platform = new Set();
-for (const spec of Object.values(all)) {
-  let ast;
-  try { ast = parse(await spec.text()); } catch { continue; }
-  for (const n of ast) {
-    if (!((n.type === "interface" || n.type === "namespace" || n.type === "callback interface")
-          && n.name && exposedOnWindow(n)))
-      continue;
-    platform.add(n.name);
-    for (const f of legacyFactoryNames(n)) platform.add(f);
-  }
-}
-for (const m of members("Window")) platform.add(m);
+const platform = windowGlobals(idl);
 
 const names = [...platform].filter((n) => /^[A-Za-z_$][\w$]*$/.test(n)).sort();
 const header =

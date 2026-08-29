@@ -32,6 +32,15 @@
  *                    so the three categories above see nothing — see §the RETURN-DOMAIN namespace below.
  *                    Beside it, the value a producer DOES answer that an exhaustive construct omits, and the
  *                    producer that never declared what it can answer at all.
+ *   DECIDED PLATFORM a receiver whose OWN DECLARATION names a Web IDL type — `new URL(x)`, `await fetch(u)`,
+ *                    an unshadowed `document`, the `Event` a callback the platform calls is handed. The
+ *                    platform is its producer and idlgen.mjs is its auditor, so it is out of THIS gate's
+ *                    subject. Printed in full with the interface that decided it: a decided negative nobody
+ *                    can see is the concealment this file exists to report, performed on its own output.
+ *   OFF-INTERFACE    that same object, read for a name the spec does not declare on it AND that no producer in
+ *                    the corpus writes either. The interface's member list is the whole member list, so this
+ *                    is READ-NO-WRITER landing on a platform object — the one defect the decided negative
+ *                    could otherwise have swallowed.
  *   AMBIGUOUS        a receiver whose record identity this cannot decide. Counted, never resolved either way.
  *   REFUSED          a construct this scan cannot read. Counted and named with file:line, never guessed past.
  *
@@ -65,7 +74,10 @@
  *   NOT the in-heap Web IDL surface. `JS_SetPropertyStr(ctx, obj, "status", v)` installs a member on an object
  *   a page reaches, and WHICH members those must be is decided by the IDL — idlgen.mjs already audits it, off
  *   the spec rather than off the consumers. Counting those here would drown this report in the other gate's
- *   subject and would answer its question worse.
+ *   subject and would answer its question worse. THAT LINE IS NOW ENFORCED IN BOTH DIRECTIONS: this gate had
+ *   no way to know what the platform PROVIDES, so a read of a browser object's own member arrived looking like
+ *   a read of a record nobody writes, and the same Web IDL that keeps those installs out is what keeps those
+ *   reads out — see §the PLATFORM receiver.
  *   AND THE qjs_* ABI, which is the same seam one layer down and is audited as its own namespace below: an
  *   entry is described by its `QJS_EXPORT` body, by the build's export list, by the renderer document's
  *   binding table and by the mojom method record, and until those four were read together nothing asked
@@ -84,6 +96,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname, relative, basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { loadIdl, windowGlobals } from "./idl_members.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -921,9 +934,85 @@ function functionScopes(struct, code) {
     } else continue;
     const close = matchAt(struct, i);
     if (close < 0) continue;
-    spans.push({ open: i, close, params, binds: new Set() });
+    spans.push({ open: i, close, params, binds: new Set(), head: params ? params[0] : i });
+  }
+  /* AN EXPRESSION-BODIED ARROW IS A FUNCTION BODY TOO, and reading only the braced form made this walk answer
+     one spelling of a construct and not its twin — the asymmetry that hides rather than errs. `arr.map(e =>
+     e.name)` binds `e`, so a walk that does not see the binding calls `e` a FREE name, and a free name is the
+     one thing a scope answer must never invent: a parameter spelled `location` or `event` would then be read as
+     the global of that name, and every read on it credited to Location or Event. The body runs to the end of
+     the expression — the first `,`, `;` or unmatched closer at depth zero — which is exactly what the arrow's
+     body is. */
+  for (let i = 0; i + 1 < struct.length; i++) {
+    if (struct[i] !== "=" || struct[i + 1] !== ">") continue;
+    let a2 = sig(struct, i + 2, struct.length);
+    if (struct[a2] === "{") continue;                        /* the braced form, already taken above */
+    let q = i - 1;
+    while (q >= 0 && /\s/.test(struct[q])) q--;
+    let params = null;
+    if (struct[q] === ")") params = paramsBefore(q);
+    else { const e = q + 1; while (q >= 0 && /[\w$]/.test(struct[q])) q--; if (e > q + 1) params = [q + 1, e]; }
+    if (!params) continue;
+    let e2 = a2, d = 0;
+    for (; e2 < struct.length; e2++) {
+      const ch = struct[e2];
+      if (PAIRS[ch]) d++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+      else if ((ch === "," || ch === ";") && !d) break;
+    }
+    spans.push({ open: i, close: e2, params, binds: new Set(), head: params[0] });
   }
   spans.sort((a, b) => a.open - b.open);
+
+  /* THE CALL A FUNCTION LITERAL IS AN ARGUMENT OF, which is what lets Web IDL type a PARAMETER. `document
+     .addEventListener("submit", function (e) { … })` states `e`'s type in the spec and nowhere in this file:
+     DOM §2.7 declares `addEventListener`'s second argument an `EventListener?`, and that callback interface's
+     one operation takes an `Event`. That is a chain of declarations, not a dataflow — nothing is followed
+     through an assignment, a return or a promise; the call site IS the construct. The callee text and the
+     argument index are all this records; resolving them is the IDL's job, one layer up. */
+  for (const s of spans) {
+    /* back to where the function LITERAL starts: past its parameter list, its optional name, `function`, `*`
+       and `async`. Each step is taken only when the text is exactly that token, so a step not taken leaves the
+       walk where it was and the argument test below simply fails. */
+    let h = s.head, k = h - 1;
+    const ws = () => { while (k >= 0 && /\s/.test(struct[k])) k--; };
+    const word = () => { const w = k + 1; let q2 = k; while (q2 >= 0 && /[\w$]/.test(struct[q2])) q2--; return { text: code.slice(q2 + 1, w), at: q2 }; };
+    ws();
+    /* THE PARAMETER LIST'S OWN PAREN IS PART OF THE LITERAL, and leaving `h` inside it made an arrow its own
+       enclosing call: the search below then found `(e)` rather than the `foo(` it sits in, and every arrow
+       callback in the corpus fell out of this namespace while `function (e)` stayed in — one construct
+       answered, its twin silently not. */
+    if (struct[k] === "(") { h = k; k--; ws(); }
+    let t2 = word();
+    if (t2.text && t2.text !== "function" && t2.text !== "async") { k = t2.at; ws(); t2 = word(); }   /* a named function expression */
+    if (t2.text === "function") {
+      h = t2.at + 1; k = t2.at; ws();
+      if (struct[k] === "*") { k--; ws(); }
+      const a2 = word();
+      if (a2.text === "async") h = a2.at + 1;
+    } else if (t2.text === "async") h = t2.at + 1;                                                   /* an async arrow */
+    let j = h - 1;
+    while (j >= 0 && /\s/.test(struct[j])) j--;
+    if (struct[j] !== "," && struct[j] !== "(") continue;
+    let d = 0, open = -1;
+    for (let x = j; x >= 0; x--) {
+      const c = struct[x];
+      if (c === ")" || c === "]" || c === "}") d++;
+      else if (c === "(" || c === "[" || c === "{") { if (!d) { if (c !== "(") break; open = x; break; } d--; }
+    }
+    if (open < 0) continue;
+    let e2 = open;
+    while (e2 > 0 && /\s/.test(struct[e2 - 1])) e2--;
+    if (!/[\w$)\]]/.test(struct[e2 - 1] || "")) continue;      /* not a call: a grouping or a head */
+    const closeArgs = matchAt(struct, open);
+    if (closeArgs < 0) continue;
+    const parts = splitTop(struct, open + 1, closeArgs - 1);
+    const index = parts.findIndex(([a, b]) => h >= a && h < b);
+    if (index < 0) continue;
+    const callee = receiverBefore(struct, code, e2);
+    if (!callee) continue;
+    s.callee = { text: callee, at: e2, index };
+  }
 
   /* The innermost span containing `off`. Spans are sorted by their opening brace, so the candidates are the
      ones that START before it and the innermost is the LAST of those that also ends after it. */
@@ -946,6 +1035,11 @@ function functionScopes(struct, code) {
       if (/^\s*\(/.test(t.slice(m.index + m[0].length))) continue;           /* a call in a default value */
       s.binds.add(m[0]);
     }
+    /* THE PARAMETERS IN ORDER, which is what an IDL argument list is indexed by. A pattern, a rest and a
+       default all occupy a POSITION whatever they bind, so a slot this cannot name is held as null rather than
+       skipped — dropping it would shift every parameter after it onto the wrong IDL type. */
+    s.paramList = splitTop(struct, s.params[0], s.params[1])
+      .map(([a, b]) => { const p2 = /^\s*([A-Za-z_$][\w$]*)\s*(?:=|$)/.exec(code.slice(a, b)); return p2 ? p2[1] : null; });
   }
   /* `const`/`let`/`var` declarators, and the name a `function`/`class` declaration introduces. Attributed to
      the innermost enclosing FUNCTION body rather than to the innermost block: a `const` in a loop body and a
@@ -973,11 +1067,50 @@ function functionScopes(struct, code) {
     while ((m = ID.exec(t))) if (t[m.index - 1] !== ".") s.binds.add(m[0]);
   }
 
+  /* A BINDING'S OWN INITIALIZER, which is a DECLARATION and not a dataflow. `const url = new URL(x)` states
+     what `url` is in the same construct that creates it, and reading that is the same kind of fact as reading a
+     `#define` body — it is not following a value through a call, a parameter or a promise, which is the flowed
+     identity this file refuses everywhere. It is recorded only where it is UNAMBIGUOUS: a name declared twice
+     in one body, or assigned again after its declaration, has no single initializer and gets none, exactly as
+     the return-domain namespace refuses a re-assigned binding. */
+  const inits = new Map();     // `${scopeKey}\0${name}` -> initializer text, or null once it is doubtful
+  const INIT = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=(?!=)/g;
+  let q;
+  while ((q = INIT.exec(struct))) {
+    const s = innermost(q.index);
+    const key = `${s ? s.open : "file"}\0${q[1]}`;
+    if (inits.has(key)) { inits.set(key, null); continue; }   /* two declarations of one name — doubtful */
+    let e = q.index + q[0].length, d = 0;
+    for (; e < struct.length; e++) {
+      const ch = struct[e];
+      if (PAIRS[ch]) d++;
+      else if (ch === ")" || ch === "]" || ch === "}") { if (!d) break; d--; }
+      else if ((ch === ";" || ch === ",") && !d) break;
+    }
+    const from = q.index + q[0].length;
+    const span = s ? [s.open, s.close] : [0, struct.length];
+    /* One assignment is the declaration itself; a second is a value this cannot name at the read. */
+    if (assignmentsTo(struct, q[1], span[0], span[1]) > 1) { inits.set(key, null); continue; }
+    inits.set(key, code.slice(from, e).replace(/\s+/g, " ").trim());
+  }
+
   /* The binder of `name` at `off`: the innermost enclosing body that binds it, or the file when none does. */
-  return (name, off) => {
+  const binderOf = (name, off) => {
     for (let s = innermost(off); s; s = innermost(s.open)) if (s.binds.has(name)) return String(s.open);
     return "file";
   };
+  /* The IDL slot `name` occupies at `off`, when it is a PARAMETER of a function literal that is itself an
+     argument of a call: the callee's text, that literal's argument index, and the parameter's own position. */
+  const paramSlot = (name, off) => {
+    for (let s = innermost(off); s; s = innermost(s.open)) {
+      if (!s.binds.has(name)) continue;
+      if (!s.callee || !s.paramList) return null;
+      const at = s.paramList.indexOf(name);
+      return at < 0 ? null : { callee: s.callee.text, calleeAt: s.callee.at, arg: s.callee.index, param: at };
+    }
+    return null;
+  };
+  return { binderOf, paramSlot, initOf: (name, off) => inits.get(`${binderOf(name, off)}\0${name}`) ?? null };
 }
 
 function scanJS(file, src) {
@@ -993,7 +1126,7 @@ function scanJS(file, src) {
      text stays the display, because that is what a reader opens the file to find; the key is what decides
      which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
      binder to ask about and keys under its text alone, exactly as before. */
-  const binderOf = functionScopes(struct, code);
+  const { binderOf, initOf, paramSlot } = functionScopes(struct, code);
   const keyOf = (recv, off) => {
     const base = /^[A-Za-z_$][\w$]*/.exec(recv);
     return base ? `${recv}@${binderOf(base[0], off)}` : recv;
@@ -1210,7 +1343,7 @@ function scanJS(file, src) {
   collectDomainsJS(file, src, code, struct);
   collectAbiJS(file, src, code, struct);
 
-  return { file, src, localReads, localWrites, wholeDefaults, site };
+  return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot };
 }
 
 /* ---- the RETURN-DOMAIN namespace: the one place a plausible datum is a VALUE rather than a NAME ------------ */
@@ -1907,6 +2040,275 @@ for (const s of jsScans)
 
 const ambiguous = [];   // a receiver that reads exactly ONE field of some emitted shape — undecidable, counted
 
+/* ---- the PLATFORM receiver: a DECIDED negative, from the IDL rather than from a list ---------------------- */
+
+/* THIS GATE HAD NO WAY TO KNOW WHAT THE PLATFORM PROVIDES, so every read of a browser object's own member
+ * looked like a read of a record nobody writes. `resp.redirected` beside `resp.url` is Fetch §4.4's Response
+ * read exactly as the spec defines it, and it arrived here as a question about the engine's own emissions;
+ * `new URL(x).searchParams` is URL §6.1; `form.action` is HTML §4.10.3. The gate's subject is stated in its own
+ * header — the SERIALIZED seam, NOT the in-heap Web IDL surface, which idlgen.mjs audits off the spec — so a
+ * receiver that is a platform object is not a record this gate is the auditor of, and saying so is not a
+ * softening. It is the subject line being enforced in the one direction it never was.
+ *
+ * THE AUTHORITY IS @webref/idl, WHICH IS WHY THIS IS NOT A NAME LIST. A hand-written set of platform names
+ * would work on the day it was written and would rot exactly as CLAUDE.md says a per-file ledger rots: it is
+ * unfalsifiable, it grows one entry per false red, and every entry is somebody's recollection of a spec. The
+ * W3C-curated corpus is the same authority idlgen already diffs the components against, read through the same
+ * flattening (inheritance, mixins, partials, §3.7.9's iteration members) — one source, two consumers.
+ *
+ * AND THE IDENTITY COMES FROM A CONSTRUCT, NEVER FROM THE NAME SET — WHICH IS THE WHOLE DIFFERENCE BETWEEN
+ * THIS AND A COINCIDENCE, AND IT WAS MEASURED BEFORE IT WAS WRITTEN. The first form of this rule asked whether
+ * the receiver's whole read set is a subset of exactly one interface, which sounds decisive and is not: the
+ * platform declares some thirty thousand members over fifteen hundred interfaces, so two ordinary English words
+ * land uniquely somewhere by accident. That run decided 58 receivers and SIX of them were wrong — a font-table
+ * directory entry `{offset, length}` came out a GPUCompilationMessage, a request-log row `{id, timestamp}` a
+ * Gamepad, a JSON-schema property `{type, format}` a Summarizer. None was a wrong ANSWER (none of those is a
+ * record of this engine's either), and that is exactly what made it intolerable: a wrong REASON, printed with
+ * an authority behind it, is CLAUDE.md's wrong section number — it reads as checked and sends the next reader
+ * somewhere the spec does not go.
+ *
+ * SO THE RECEIVER'S TYPE IS READ OFF THE DECLARATION THAT CREATED IT, and Web IDL supplies the type at every
+ * step: `new URL(x)` is §6.1's constructor; an unshadowed `document` is Window's `document` attribute, whose
+ * IDL type is Document; `await fetch(u)` is WindowOrWorkerGlobalScope's `fetch`, whose IDL return type is
+ * `Promise<Response>`; `resp.clone()` is Response's own operation, returning Response. A binding's `= <expr>`
+ * is a DECLARATION in the same sense a `#define` body is, so reading it is not the flowed identity this file
+ * refuses — and it is taken only where it is unambiguous, never for a name declared twice or assigned again.
+ * A receiver whose declaration this cannot resolve is not a platform object as far as this gate is concerned,
+ * and it goes back to the shape anchor and to AMBIGUOUS exactly as before.
+ *
+ * AN IDL RETURN TYPE IS AN UPPER BOUND, WHICH IS WHY THE INTERFACE IS THEN NARROWED. `getElementById` returns
+ * `Element?` and the object is an HTMLSelectElement; a strict member diff against Element would report
+ * `selectedIndex` as a member the platform does not have, which is a finding manufactured out of the spec being
+ * read too literally. So the construct fixes a BASE and the read set picks among that base and its descendants
+ * — exactly one, after collapsing a chain to its most general matching member. Here the name set is doing work
+ * it is entitled to do, because the construct has already cut the fifteen hundred candidates down to one
+ * inheritance subtree.
+ *
+ * AND A NAME NO CANDIDATE DECLARES IS THE OTHER HALF OF THE DIFF, not a decided negative: the construct says
+ * the object is a platform object and the spec says the object has no such member. That is reported, with the
+ * interface the construct named — the same shape as idlgen's gap report, from the same authority, in the
+ * opposite direction. */
+const idl = await loadIdl();
+const IFACE_MEMBERS = new Map();   // an interface a receiver could BE -> its flattened member names
+for (const [name, node] of idl.byName) {
+  /* A mixin is not an object a receiver can be — Web IDL §2.3 gives an interface mixin no interface object and
+     no prototype — so it is never an identity. Its members are folded into every interface that includes it,
+     which is where they are reachable from. */
+  if (node.type === "interface mixin") continue;
+  IFACE_MEMBERS.set(name, new Set(idl.members(name)));
+}
+/* WINDOW'S MEMBER LIST IS NOT WINDOW'S MEMBERS. Web IDL §3.7 puts every `[Exposed=Window]` interface's own
+   interface OBJECT on the global, so `window.WebSocket` and `window.EventSource` are properties of Window that
+   the Window interface's member list does not mention — and a diff that reads only that list reports two of the
+   most ordinary reads in a page as names the platform does not declare. It is the same fact absent.c is
+   generated from, so it is the same function that answers it. */
+IFACE_MEMBERS.set("Window", new Set([...IFACE_MEMBERS.get("Window"), ...windowGlobals(idl)]));
+
+/* AN INTERFACE OBJECT IS NOT AN INSTANCE, and conflating them is a member list that is wrong in both
+   directions. Web IDL §3.7.3 gives the interface object a `prototype` property and §3.7.5/§3.7.7 put the
+   CONSTANTS and the STATIC operations on it — while `open`, `send` and every other prototype member are
+   reachable only through `.prototype` or an instance. So a bare exposed name resolves to a distinct identity,
+   spelled `ctor:X`, whose `.prototype` is X. */
+const CTOR = "ctor:";
+const ctorMembers = (iface) => {
+  const out = new Set(["prototype", "name", "length"]);
+  for (const m of idl.flatten(iface)) if (m.name && (m.type === "const" || (m.type === "operation" && m.special === "static") || m.static)) out.add(m.name);
+  return out;
+};
+const identityMembers = (id) => (id.startsWith(CTOR) ? ctorMembers(id.slice(CTOR.length)) : IFACE_MEMBERS.get(id));
+const ifaceLabel = (id) => (id.startsWith(CTOR) ? `the ${id.slice(CTOR.length)} interface object` : id);
+/* An interface name beginning with an ACRONYM is read letter by letter, so the article follows the sound of the
+   LETTER's name and not of the letter: "a URL" and "an XMLHttpRequest", never "an URL" and "a XMLHttpRequest". */
+const anIface = (id) => id.startsWith(CTOR) ? ifaceLabel(id)
+  : `${(/^[A-Z]{2}/.test(id) ? /^[AEFHILMNORSX]/ : /^[AEIOU]/).test(id) ? "an" : "a"} ${id}`;
+const childrenOf = new Map();
+for (const [n, base] of idl.inheritanceOf) { if (!childrenOf.has(base)) childrenOf.set(base, []); childrenOf.get(base).push(n); }
+const subtreeCache = new Map();
+const subtreeOf = (n) => {
+  let hit = subtreeCache.get(n);
+  if (hit) return hit;
+  const out = [], seen = new Set();
+  (function walk(x) { if (seen.has(x)) return; seen.add(x); out.push(x); for (const c of childrenOf.get(x) || []) walk(c); })(n);
+  subtreeCache.set(n, out);
+  return out;
+};
+
+/* WHAT A BARE GLOBAL NAME IS, taken from the spec's two declarations of that fact and from nowhere else: an
+   interface `[Exposed=Window]` puts its own interface OBJECT on the global (§3.7), and an attribute of Window
+   whose IDL type is an interface puts an instance there (`document`, `location`, `navigator`, `history`). Both
+   are read out of the parsed corpus, so a global this engine has never heard of is still answered correctly. */
+const GLOBAL_IFACE = new Map();
+for (const n of idl.declarations) {
+  if (!((n.type === "interface" || n.type === "namespace" || n.type === "callback interface") && n.name)) continue;
+  const ex = (n.extAttrs || []).find((a) => a.name === "Exposed");
+  const v = ex && ex.rhs ? ex.rhs.value : null;
+  const onWindow = ex && ex.rhs && (ex.rhs.type === "*" || (typeof v === "string" ? v === "Window"
+                    : Array.isArray(v) && v.some((x) => (x.value || x) === "Window")));
+  if (onWindow && IFACE_MEMBERS.has(n.name)) GLOBAL_IFACE.set(n.name, CTOR + n.name);
+}
+/* An IDL type expression down to the interface it names, or null. `Promise<Response>` is a Response to every
+   reader that awaits it; a union or a sequence names no single interface and is answered as none. */
+function ifaceOfType(t) {
+  if (!t) return null;
+  if (Array.isArray(t)) return t.length === 1 ? ifaceOfType(t[0]) : null;
+  if (t.union) return null;
+  if (t.generic === "Promise") return ifaceOfType(t.idlType);
+  if (t.generic) return null;
+  const n = typeof t.idlType === "string" ? t.idlType : null;
+  return n && IFACE_MEMBERS.has(n) ? n : null;
+}
+/* §2.4's callback FUNCTIONS, which are a declaration kind of their own and are not in the interface map. A
+   callback INTERFACE is (EventListener lives in byName with its one `handleEvent` operation), so the two
+   spellings of "a function the platform will call" are looked up in the two places the parse put them. */
+const CALLBACKS = new Map();
+for (const n of idl.declarations) if (n.type === "callback" && n.name) CALLBACKS.set(n.name, n);
+
+/* The argument list a callback TYPE declares, or null. */
+function callbackArgs(typeName) {
+  const cb = CALLBACKS.get(typeName);
+  if (cb) return cb.arguments || null;
+  const node = idl.byName.get(typeName);
+  if (!node || node.type !== "callback interface") return null;
+  const op = (node.members || []).filter((m) => m.type === "operation");
+  return op.length === 1 ? op[0].arguments || null : null;
+}
+
+/* The declared type NAME at argument `i` of the operation `name` on `iface` — the one step that turns
+   `addEventListener`'s second argument into `EventListener`. A nullable or optional argument declares the same
+   type; a union declares none. */
+function argTypeName(iface, name, i) {
+  for (const m of idl.flatten(iface)) {
+    if (m.type !== "operation" || m.name !== name || !m.arguments) continue;
+    const a = m.arguments[i];
+    if (!a || !a.idlType || a.idlType.union || a.idlType.generic) continue;
+    if (typeof a.idlType.idlType === "string") return a.idlType.idlType;
+  }
+  return null;
+}
+
+/* AN OPERATION IS NOT ITS RESULT. Web IDL §3.7.7 puts a Function on the prototype, so `document.getElementById`
+   is a function object and `document.getElementById(x)` is an Element — reading one member kind for both makes
+   a bare `window.fetch` a Response, which is the plausible wrong answer this file is built against. The KIND is
+   therefore part of the question, and the call branch and the member branch ask different ones. */
+const memberTypeCache = new Map();
+function memberIface(iface, name, kind) {
+  const k = `${iface}\0${name}\0${kind}`;
+  if (memberTypeCache.has(k)) return memberTypeCache.get(k);
+  let out = null;
+  for (const m of idl.flatten(iface))
+    if (m.type === kind && m.name === name) { out = ifaceOfType(m.idlType); if (out) break; }
+  memberTypeCache.set(k, out);
+  return out;
+}
+/* A BARE GLOBAL NAME IS A VALUE, so only Window's ATTRIBUTES put an object there — `document`, `location`,
+   `navigator`, `history`. Window's OPERATIONS put function objects there, and `fetch` is not a Response. */
+for (const m of idl.flatten("Window"))
+  if (m.type === "attribute" && m.name && !GLOBAL_IFACE.has(m.name)) {
+    const t = ifaceOfType(m.idlType);
+    if (t) GLOBAL_IFACE.set(m.name, t);
+  }
+GLOBAL_IFACE.set("window", "Window");
+GLOBAL_IFACE.set("globalThis", "Window");
+
+const platformDecided = [];   // {file,line,recv,iface,names} — a receiver a construct says is a platform object
+const offInterface = [];      // {file,line,recv,iface,missing} — that object, read for a member the spec denies
+
+/* The interface a receiver EXPRESSION evaluates to, or null. Every arm is a construct that names a type; the
+   `seen` set is a cycle guard for `const a = b, const b = a`, not a depth bound. */
+function ifaceOfExpr(text, off, scan, seen) {
+  let t = (text || "").trim();
+  if (!t) return null;
+  for (;;) {
+    if (/^await\s/.test(t)) { t = t.slice(6).trim(); continue; }
+    if (t[0] === "(" && matchAt(t, 0) === t.length) { t = t.slice(1, -1).trim(); continue; }
+    break;
+  }
+  let m = /^new\s+([A-Za-z_$][\w$]*)\s*\(/.exec(t);
+  if (m && matchAt(t, t.indexOf("(", m[0].length - 1)) === t.length) return IFACE_MEMBERS.has(m[1]) ? m[1] : null;
+  if (/^[A-Za-z_$][\w$]*$/.test(t)) {
+    const s = seen || new Set();
+    const key = `${scan.file}\0${t}\0${scan.binderOf(t, off)}`;
+    if (s.has(key)) return null;
+    s.add(key);
+    const init = scan.initOf(t, off);
+    if (init !== null && init !== "") return ifaceOfExpr(init, off, scan, s);
+    if (scan.binderOf(t, off) === "file") return GLOBAL_IFACE.get(t) || null;
+    /* A PARAMETER OF A CALLBACK THE PLATFORM CALLS IS TYPED BY THE IDL, and by nothing else in this file. The
+       chain is three declarations long and every link is spec text: the callee's operation declares its
+       argument a callback type, that callback declares its own argument list, and the parameter's POSITION
+       picks one. Nothing is followed through an assignment or a return — a call site is a construct, and this
+       is the same kind of fact as a binding's initializer, read at the other end of the call. */
+    const slot = scan.paramSlot(t, off);
+    if (!slot) return null;
+    const m2 = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(slot.callee);
+    if (!m2) return null;
+    const on = ifaceOfExpr(m2[1], slot.calleeAt, scan, s);
+    if (!on || on.startsWith(CTOR)) return null;
+    const cbType = argTypeName(on, m2[2], slot.arg);
+    const args = cbType && callbackArgs(cbType);
+    const a2 = args && args[slot.param];
+    return a2 ? ifaceOfType(a2.idlType) : null;
+  }
+  /* A trailing `(…)` is a CALL and a trailing `.name` is a member; both are stripped right to left, so
+     `document.getElementById(i)` is Document's `getElementById` and nothing has to be parsed forward. */
+  if (t.endsWith(")")) {
+    let d = 0, open = -1;
+    for (let i = t.length - 1; i >= 0; i--) {
+      const c = t[i];
+      if (c === ")" || c === "]" || c === "}") d++;
+      else if (c === "(" || c === "[" || c === "{") { d--; if (!d) { open = i; break; } }
+    }
+    if (open <= 0) return null;
+    t = t.slice(0, open).trim();
+    const mm = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(t);
+    if (!mm) return /^[A-Za-z_$][\w$]*$/.test(t) && scan.binderOf(t, off) === "file"
+      ? memberIface("Window", t, "operation") : null;
+    const base = ifaceOfExpr(mm[1], off, scan, seen);
+    return base && !base.startsWith(CTOR) ? memberIface(base, mm[2], "operation") : null;
+  }
+  m = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(t);
+  if (m) {
+    const base = ifaceOfExpr(m[1], off, scan, seen);
+    if (!base) return null;
+    /* Web IDL §3.7.3: an interface object's `prototype` is the interface PROTOTYPE OBJECT, whose members are
+       the interface's — which is the one step from the constructor identity back to the instance one. */
+    if (base.startsWith(CTOR)) return m[2] === "prototype" ? base.slice(CTOR.length) : null;
+    return memberIface(base, m[2], "attribute");
+  }
+  return null;
+}
+
+/* WHICH INTERFACE IN `base`'s SUBTREE THE READ SET FITS. An IDL return type is an upper bound — `getElementById`
+   answers `Element?` and the object is an HTMLSelectElement — so the construct fixes the subtree and the names
+   pick within it: the candidate covering the MOST of them wins, an inheritance chain collapses to its most
+   general matching member, and a tie between unrelated candidates is undecided like every other tie here. */
+function narrowIdentity(base, names) {
+  const cands = base.startsWith(CTOR) ? [base] : subtreeOf(base);
+  let bestN = -1;
+  for (const i of cands) {
+    const ms = identityMembers(i);
+    if (!ms) continue;
+    let hit = 0;
+    for (const n of names) if (ms.has(n)) hit++;
+    if (hit > bestN) bestN = hit;
+  }
+  const hits = cands.filter((i) => { const ms = identityMembers(i); if (!ms) return false; let h = 0; for (const n of names) if (ms.has(n)) h++; return h === bestN; });
+  const set = new Set(hits);
+  const general = hits.filter((h) => { for (let x = idl.inheritanceOf.get(h); x; x = idl.inheritanceOf.get(x)) if (set.has(x)) return false; return true; });
+  if (general.length !== 1) return null;
+  const iface = general[0];
+  const ms = identityMembers(iface);
+  /* AN EXPANDO IS NOT AN OFF-INTERFACE READ, and telling them apart is the difference between this category and
+     a listing of every property the extension installs on a page. `window.apiclientsink` is not in any IDL and
+     never will be — it is the PoC's own fire marker, written by intercept.js on the line above — so the read
+     has a producer and the seam it belongs to is the one this gate already audits. A name off the interface
+     with NO producer anywhere in the corpus is the other thing entirely: nobody writes it and the spec denies
+     it, which is this gate's own defect class landing on a platform object. */
+  const outside = [...names].filter((n) => !ms.has(n));
+  const unwritten = outside.filter((n) => !(fields.get(n)?.writes.length));
+  return unwritten.length ? { iface, missing: unwritten } : { iface };
+}
+
 /* The C matcher literals, anchored now that both producer sides — the C emissions and the JS record
    constructions — are in. */
 for (const cm of cMatched) {
@@ -1931,6 +2333,20 @@ for (const s of jsScans) {
   for (const [, rs] of byRecv) {
     const recv = rs[0].recv;
     const names = new Set(rs.map((r) => r.name));
+    /* ASKED BEFORE THE SHAPE ANCHOR, because a platform object whose members happen to collide with two of an
+       emitted record's names is exactly the receiver the shape rule anchors CONFIDENTLY and wrongly — and it
+       then reports the rest of that object's own IDL members as fields nobody writes, and every default over
+       one of them as a concealment. Deciding identity first is what makes the two categories disjoint. */
+    const base = ifaceOfExpr(recv, rs[0].off, s, null);
+    if (base) {
+      const narrowed = narrowIdentity(base, names);
+      if (narrowed) {
+        const site = { ...s.site(rs[0].off), recv, iface: narrowed.iface, base, names: [...names] };
+        if (narrowed.missing) offInterface.push({ ...site, missing: narrowed.missing });
+        else platformDecided.push(site);
+        continue;
+      }
+    }
     let best = null, bestN = 0;
     for (const [id, shp] of shapes) {
       let hit = 0;
@@ -2220,6 +2636,32 @@ if (ambiguous.length) {
   if (ambiguous.length > 15) log(`  … and ${ambiguous.length - 15} more`);
 }
 
+/* PRINTED IN FULL, AND NOT A DEFECT — a decided negative nobody can see is the concealment this file reports.
+   Every row is a claim about the tree made on @webref/idl's authority, so every row is somewhere a reader can
+   disagree with it; the alternative is a count that shrank for reasons nobody can check. */
+if (platformDecided.length) {
+  const byIface = new Map();
+  for (const p of platformDecided) byIface.set(p.iface, (byIface.get(p.iface) || 0) + 1);
+  log(`── DECIDED PLATFORM — ${platformDecided.length} receiver(s) whose own declaration names a Web IDL type. ` +
+      `The platform is their producer and idlgen.mjs is their auditor; this gate's subject is the serialized ` +
+      `seam, so they are out of it — decided, not passed ──`);
+  for (const p of platformDecided.slice(0, 20))
+    log(`  ${place(p)}  \`${p.recv}\` is ${anIface(p.iface)}${p.base === p.iface ? "" : ` (${anIface(p.base)}, narrowed)`} — ` +
+        `${p.names.slice(0, 6).map((n) => `\`${n}\``).join(", ")}${p.names.length > 6 ? " …" : ""}`);
+  if (platformDecided.length > 20) log(`  … and ${platformDecided.length - 20} more`);
+  log(`  by interface: ${[...byIface].sort((a, b) => b[1] - a[1]).map(([i, n]) => `${ifaceLabel(i)}×${n}`).join(", ")}`);
+}
+
+if (offInterface.length) {
+  log(`── OFF-INTERFACE — ${offInterface.length} read(s) of a name the spec does not declare on the object the ` +
+      `receiver's own declaration says it is. Web IDL is the whole member list, so an expando on a platform ` +
+      `object is a name whose only producer is the line that wrote it ──`);
+  for (const o of offInterface.slice(0, 20))
+    log(`  ${place(o)}  \`${o.recv}\` is ${anIface(o.iface)}, and ${o.missing.map((n) => `\`${n}\``).join(", ")} ` +
+        `${o.missing.length > 1 ? "are members it does not declare" : "is a member it does not declare"}`);
+  if (offInterface.length > 20) log(`  … and ${offInterface.length - 20} more`);
+}
+
 /* THE NAMESPACE'S OWN COVERAGE, PRINTED WHETHER OR NOT IT FOUND ANYTHING. A namespace that resolved NO
    consumer and one that resolved a dozen and liked every one of them print the same empty sections, and
    "nothing found" against "nothing asked" is the pair this whole file exists to keep apart — the same reason
@@ -2278,13 +2720,14 @@ show(`A REPLY FIELD THE BOUNDARY DOES NOT DECLARE — ${replyFieldDefects.length
 {
   const areaOf = new Map(files.map((f) => [relative(ROOT, f.path), f.area]));
   const tally = new Map();
-  const bump = (f, k) => { const a = areaOf.get(f) || "?"; if (!tally.has(a)) tally.set(a, { rnw: 0, wnr: 0, def: 0, amb: 0, dom: 0, ref: 0 }); tally.get(a)[k]++; };
+  const bump = (f, k) => { const a = areaOf.get(f) || "?"; if (!tally.has(a)) tally.set(a, { rnw: 0, wnr: 0, def: 0, amb: 0, dom: 0, off: 0, ref: 0 }); tally.get(a)[k]++; };
   for (const d of outsideDomain) bump(d.file, "dom");
   for (const d of unenumerated) bump(d.file, "dom");
   for (const d of undeclaredDomain) bump(d.file, "dom");
   for (const [, e] of readNoWriter) for (const r of e.reads) bump(r.file, "rnw");
   for (const [, e] of writeNoReader) for (const w of e.writes) bump(w.file, "wnr");
   for (const d of defaulted) bump(d.file, "def");
+  for (const o of offInterface) bump(o.file, "off");
   for (const a of ambiguous) bump(a.file, "amb");
   for (const r of refusals) bump(r.file, "ref");
   log("── per area ──");
@@ -2292,7 +2735,8 @@ show(`A REPLY FIELD THE BOUNDARY DOES NOT DECLARE — ${replyFieldDefects.length
   for (const [a, t] of [...tally].sort((x, y) => (y[1].rnw + y[1].wnr + y[1].def) - (x[1].rnw + x[1].wnr + x[1].def)))
     log(`  ${a.padEnd(w)}  read-no-writer ${String(t.rnw).padStart(4)}   write-no-reader ${String(t.wnr).padStart(4)}` +
         `   defaulted ${String(t.def).padStart(4)}   domain ${String(t.dom).padStart(3)}` +
-        `   ambiguous ${String(t.amb).padStart(3)}   refused ${String(t.ref).padStart(4)}`);
+        `   off-iface ${String(t.off).padStart(3)}   ambiguous ${String(t.amb).padStart(3)}` +
+        `   refused ${String(t.ref).padStart(4)}`);
 }
 
 const rByReason = new Map();
@@ -2335,6 +2779,8 @@ const cats = [
   ["producers whose RETURN DOMAIN is undeclared while a consumer enumerates constants", undeclaredDomain.length],
   ["qjs_* ABI descriptions that DISAGREE — an entry, its export, its binding, its declared method", abiDefects.length],
   ["mojo reply fields a CALLER reads that the boundary does not declare", replyFieldDefects.length],
+  ["reads OFF the interface a platform receiver's own declaration names, that nothing else writes either",
+   offInterface.length],
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
 ].filter(([, n]) => n);
