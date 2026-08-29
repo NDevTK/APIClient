@@ -1,0 +1,40 @@
+<!doctype html><html><head><title>instrument control — a config the bundle LOADS</title></head><body>
+<!--
+  INSTRUMENT CONTROL, LOADED-CONFIG HALF. One question: does a record the bundle FETCHED answer as the
+  server-injected state it is — its held members carrying the bytes that were actually sent, and a gate over
+  ANY of them forking, whether the payload holds the member or not?
+
+  IT IS THE THIRD CHANNEL AND THE ONE THE OTHER TWO ARE THE CONTROL ON. injected-state.html holds the two
+  channels a server has INSIDE the document — an inline `<script>` and a §4.12.1 data block — and this holds
+  the one it has over the NETWORK. All three deliver one thing: a record rendered against this visitor's
+  credentials, read by a bundle that is byte-identical for every visitor. §solver's trust boundary states what
+  that must produce, and states it about this channel by name: "a config/data fetch is ALWAYS loaded so its
+  fields become concrete examples, while its use in a BRANCH still forks (a loaded `features.admin:false` must
+  NOT concretize the gate, or the admin endpoint is lost — config is opaque-for-control-flow yet carries its
+  loaded value as the example)". So a run in which this document's arms disagree with injected-state.html's is
+  measuring the CHANNEL and not the page, exactly as a disagreement between that document's own two arms is.
+
+  THE PAYLOAD IS WRITTEN SO THE TWO HALVES OF THE ASYMMETRY CANNOT BE CONFUSED, because they fail for
+  different reasons and a rung that cannot tell them apart names neither. `admin` and `nested.beta` are members
+  the payload HOLDS, as `false`: concretizing them takes exactly one arm and buries the endpoint behind it, and
+  nothing about the run says a gate went unexplored. `user` is a member the payload does NOT hold: answering it
+  `undefined` buries a second endpoint, and the two are one capability wearing two shapes.
+
+  IT IS ITS OWN DOCUMENT AND ITS OWN ORIGIN for the reason serve.mjs states about the other four: a reply this
+  record is parsed out of puts flows on the frontier that compete with index.html's orphan drive, and a row is
+  isolated by ORIGIN, so a document sharing a port would put these endpoints in another row's union.
+
+  WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable:
+      /api/us-east-1/cfg-value       the HELD member, as the bytes the server actually sent
+      /api/{…region}/cfg-value       the same call site's SHAPE, carrying the reply's own provenance
+      /api/cfg-admin                 a member HELD as `false`, gate forked
+      /api/cfg-beta                  the same, one record deeper
+      /api/cfg-user                  a member the payload does NOT hold, gate forked
+      runOutcomesMine {complete:1}
+  THE FIRST FLOOR ALONE IS THE DEFECT THIS RUNG EXISTS FOR, and it reads as a pass on its own: a run that
+  emits the concrete address and none of the three gated ones is a run in which `json()` handed the bundle a
+  PLAIN record, so every member of it — held or not — answered concretely and three endpoints were never
+  learned. That is the whole logged-in surface of this document, lost with nothing to say so.
+-->
+<script src="/cfg.js"></script>
+</body></html>

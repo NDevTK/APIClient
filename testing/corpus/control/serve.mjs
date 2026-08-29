@@ -42,11 +42,19 @@
 //     index.html's orphan drive exactly as security.html's candidates do — the split is the same measurement
 //     and not a second convention.
 //
-// Four rows, and a census wants all four (PORT sets the base; the others follow it):
+//
+//   - AND A LOADED CONFIG IS THE SAME CHANNEL OVER THE NETWORK, WHICH IS WHY IT IS A FIFTH ORIGIN AND NOT A
+//     SECOND RUNG ON THE FOURTH. loaded-config.html's record arrives in a REPLY, so the flows it forks are
+//     seeded when that reply is provided rather than when the document parses — a different competition for
+//     the one dwell, and a row that shared an origin with the data block would report the two channels'
+//     endpoints as one union and could not say which channel produced which.
+//
+// Five rows, and a census wants all five (PORT sets the base; the others follow it):
 //     node site.mjs control      http://127.0.0.1:8899/ <pass>
 //     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
 //     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
 //     node site.mjs control-data http://127.0.0.1:8902/ <pass>
+//     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -67,7 +75,16 @@ const DOCS = [
   ['security.html', 'control-sec'],
   ['url-operands.html', 'control-url'],
   ['injected-state.html', 'control-data'],
+  ['loaded-config.html', 'control-cfg'],
 ];
+
+/* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
+   `.js` bundles are: which document asks for it is stated by that document. It is NOT under `/api/`, because
+   an `/api/` path is what this control's endpoint rungs are COUNTING and a config the bundle loads would then
+   be indistinguishable from an endpoint the bundle learned. WHICH MEMBERS IT HOLDS IS THE RUNG: two the bundle
+   gates on are present and `false`, and one it gates on is absent — see loaded-config.html, which names what
+   each one is for and why answering either of them concretely loses an endpoint. */
+const CONFIG = '{"region":"us-east-1","tier":"gold","admin":false,"nested":{"beta":false}}';
 
 let bound = 0;
 DOCS.forEach(([doc, name], i) => {
@@ -77,6 +94,10 @@ DOCS.forEach(([doc, name], i) => {
     if (p.startsWith('/api/')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{"ok":true}');
+    }
+    if (p === '/cfg.json') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(CONFIG);
     }
     const f = p === '/' ? join(D, doc)
             : /^\/[a-z0-9_-]+\.js$/.test(p) ? join(D, p.slice(1))

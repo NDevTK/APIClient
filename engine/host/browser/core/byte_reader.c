@@ -27,6 +27,7 @@
 #include "core/byte_reader.h"
 #include "core/encoding/encoding.h"   /* §6's UTF-8 decode — what BOTH specs' `text()` and `json()` name */
 #include "core/streams/readable_stream.h"
+#include "solver/concolic.h"          /* the triple a byte sequence somebody else filled arrives as */
 
 /* HOW MANY READERS ONE INTERFACE CAN DECLARE. Fetch declares five and File API three, so the ceiling is a
    DCHECK on a fixed platform rather than a growth path nobody exercises.
@@ -249,6 +250,74 @@ void byte_reader_install(JSContext *ctx, JSValueConst proto, int handle)
 
 /* ---- the readers both specs declare in the same words ------------------------------------------------------ */
 
+/* A BYTE SEQUENCE SOMEBODY ELSE FILLED BECOMES §solver's TRIPLE, AND ONLY THE TWO CONTENT READERS ASK.
+ *
+ * §solver's trust boundary states the whole rule and states it about this exact case: "a config/data fetch is
+ * ALWAYS loaded so its fields become concrete examples, while its use in a BRANCH still forks (a loaded
+ * `features.admin:false` must NOT concretize the gate, or the admin endpoint is lost — config is
+ * opaque-for-control-flow yet carries its loaded value as the example)". A record handed back as a PLAIN
+ * object answers both halves wrong at once: `cfg.region` is concrete, which is right, but `if (cfg.admin)`
+ * over a member the payload holds as `false` takes one arm, and `cfg.admin` over a member it does NOT hold
+ * answers `undefined` — and the admin surface behind either gate is never reached. Wrapping the value in the
+ * triple fixes both from one place, because solver/concolic.c's exotic [[Get]] then reads each member THROUGH
+ * the example: a member the record holds arrives with the bytes that were actually sent, a member it does not
+ * hold arrives with none, and both are opaque for control flow so the gate forks either way.
+ *
+ * IT IS NOT A SECOND JSON IMPLEMENTATION AND NOT A TAINT TRACKER. The value being wrapped is what the REAL
+ * codec produced — §6's UTF-8 decode and 25.5.1's own parser, run on the real bytes — and nothing here derives
+ * a transform expression from it or predicts what an operation would have made of it. The wrap states one
+ * fact, provenance, and hands the computed value over as the example; every later operation over it runs for
+ * real, which is what §Re-execution requires and what a recorded expression cannot do.
+ *
+ * THE OTHER READERS DO NOT ASK, and that is a fact about their VALUES rather than an omission. `arrayBuffer()`,
+ * `bytes()` and `blob()` answer with a CONTAINER over the same bytes, not with the content: the page writes
+ * `new Uint8Array(await r.arrayBuffer())`, and a concolic in the container's place breaks the construction
+ * instead of describing it. `formData()`'s entries are values the page reads, and they are a separate reader's
+ * to state when its parser is taught to carry them — recorded here rather than silently included, because a
+ * wrap applied to a container is a defect and an unasked question is a gap.
+ *
+ * `value` is CONSUMED. A host that is not exploring gets exactly what its spec says to return. */
+static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue value)
+{
+    const ByteReaderIface *f;
+    bool attacker = false;
+    char *src, *shape;
+    size_t n;
+    JSValue r;
+
+    if (JS_IsException(value) || !concolic_is_exploring())
+        return value;
+    f = iface_of(recv);
+    /* The reader machine's own receiver check has already answered for this, so a NULL here is an interface's
+       `is` and the machine that dispatched to its reader disagreeing about what the receiver is. */
+    DCHECK(f != NULL, "a byte reader's value reached the provenance question with a receiver of no interface "
+                      "that has readers — the machine checks the receiver before it calls a reader at all");
+    if (!f || !f->source)
+        return value;
+    src = f->source(ctx, recv, &attacker);
+    if (!src)
+        return value;   /* these bytes are the page's own — a positive statement, see ByteReaderIface.source */
+    /* TWO DOORS WRAPPING ONE READ would report a derivation the run never made: the composed shape would name
+       a read of a read. The readers below are the only callers and each calls this once, so an arrival that is
+       already the triple is a reader having wrapped its own value before handing it here. */
+    DCHECK(!concolic_is(value),
+           "a byte reader's value reached the provenance question already carrying one — two doors have "
+           "wrapped one read, and the value would report a derivation the run never performed");
+    n = strlen(src) + 3;
+    shape = (char *)malloc(n);
+    CHECK(shape != NULL, "byte reader: OOM spelling the provenance of a byte sequence");
+    snprintf(shape, n, "{%s}", src);   /* a declared source's shape IS its provenance in braces — concolic.h */
+    /* THE TWO KINDS ARE MINTED THROUGH DIFFERENT DOORS BECAUSE ONE OF THEM IS COUNTED. concolic_source_wrap is
+       "the one point at which this document's run acquires attacker-controlled input" and increments the count
+       an empty @S surface is read against; server-injected state is unknown input the attacker did not author,
+       so minting it there would report a page that read no attacker source as one that read many. */
+    r = attacker ? concolic_source_wrap(ctx, shape, src, value)
+                 : concolic_new(ctx, shape, src, value);
+    free(shape);
+    free(src);
+    return r;
+}
+
 JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
     /* Fetch §5.2 / File API §3.3.3: "run consume body with this and UTF-8 decode" — ENCODING §6's UTF-8 decode,
@@ -263,12 +332,11 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
     size_t n = 0;
     JSValue out;
 
-    (void)recv;
     text = encoding_utf8_decode(bytes, len, &n);
     CHECK(text != NULL, "byte reader: OOM running §6's UTF-8 decode over a body");
     out = JS_NewStringLen(ctx, text, n);
     free(text);
-    return out;
+    return byte_reader_content(ctx, recv, out);
 }
 
 JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
@@ -283,12 +351,14 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
     size_t n = 0;
     JSValue out;
 
-    (void)recv;
     text = encoding_utf8_decode(bytes, len, &n);
     CHECK(text != NULL, "byte reader: OOM running §6's UTF-8 decode over a body before parsing it");
     out = JS_ParseJSON(ctx, text, n, "<body>");
     free(text);
-    return out;
+    /* THE PARSE ARM ONLY. A body that is not a JSON text left a SyntaxError standing and `out` is the
+       exception, which byte_reader_content hands straight back so §5.2 rejects with the throw the page
+       catches — a record this reader never built has no provenance to carry. */
+    return byte_reader_content(ctx, recv, out);
 }
 
 /* A COPY, for both of these, because what the page gets is ITS OWN to detach, transfer or write through —

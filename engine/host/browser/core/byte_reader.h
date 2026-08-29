@@ -25,12 +25,32 @@ typedef struct { const char *name; ByteReaderMake make; } ByteReader;
    byte. Draining is a loop of reads, each one the page's code, so it cannot happen inside `take`: `take`
    reports the stream (DUP'd) and the reader machine drains it. JS_UNDEFINED means the bytes are here, which is
    every Blob and every body built from anything but a stream. */
+/* `source` IS WHERE THESE BYTES CAME FROM, and only the including interface knows — the same rule, and the
+   same reason, as the Body mixin's `mime`: the machine reads a byte sequence and has no way to ask who handed
+   it one. It matters because the two readers below whose value IS the content — `text()` and `json()` — hand
+   the page a value it computes with, and §solver's trust boundary decides what that value must be: a byte
+   sequence a SERVER filled is unknown per-visitor input, so the value carries those bytes as its EXAMPLE while
+   staying opaque for control flow, and the gate over a member the payload does not hold FORKS instead of
+   answering `undefined`. A byte sequence the PAGE built (`new Response(JSON.stringify(x))`, `new Blob(["x"])`)
+   is none of that, and NULL is the positive statement that it is not — never a hole a default fills.
+   `*attacker` splits the two KINDS of unknown, because they are counted differently and only the interface can
+   say which it holds: true for a DECLARED attacker delivery (solver/concolic.h's source registry — a file the
+   user chose), which is one of the values `concolic_source_reads` exists to count, and false for
+   server-injected state, which is unknown input the attacker does not author and must not be counted as one.
+   The name is MALLOC'D and the caller frees it, and it is SPELLED SO THE @H SURFACE CAN PRINT IT: a hole is
+   written between braces and the consumer reads one back with `/\{([^}\/]+)\}/`, so a name carrying `/` or `}`
+   is a hole nothing can substitute — and solver/endpoint.c's path scan splits a shape on `/` before it looks
+   for braces, so such a name is not merely unsubstitutable, it SHREDS the segment it sits in and takes the
+   value the run measured with it. A component naming a byte sequence after an address owes that address a
+   slash-free spelling; the two names this engine already mints (`script#__NEXT_DATA__`, `gon.current_user_id`)
+   are what one looks like. */
 typedef struct {
     bool (*is)(JSValueConst v);
     int  (*take)(JSContext *ctx, JSValueConst v, const char **bytes, size_t *len, JSValue *pstream);
     const char      *iface;
     const ByteReader *readers;
     int               nreaders;
+    char *(*source)(JSContext *ctx, JSValueConst v, bool *attacker);
 } ByteReaderIface;
 
 /* DECLARE an interface's readers. Returns a handle; `d` and its reader table must outlive it. */

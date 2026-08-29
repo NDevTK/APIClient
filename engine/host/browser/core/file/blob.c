@@ -21,7 +21,6 @@
 #include "quickjs-step.h"
 #include "cutils.h"
 #include "core/byte_reader.h"
-#include "solver/concolic.h"
 #include "core/file/blob.h"
 #include "core/file/file_list.h"
 #include "core/idl_args.h"
@@ -442,34 +441,53 @@ static JSValue js_blob_stream(JSContext *ctx, JSValueConst this_val, int argc, J
     return readable_stream_from_bytes(ctx, bytes, len);
 }
 
-/* §3.3's `text()`, THROUGH THE SOURCE THE BYTE SEQUENCE CARRIES. This is the reader that turns a byte sequence
-   into a VALUE the page computes with — a string it concatenates, tests, and hands to a sink — so it is where a
-   file's contents become the attacker input they are. The three byte-shaped readers below it answer with the
-   real bytes: an ArrayBuffer is a buffer of bytes and not a value the solver's domain is over, and handing back
-   a concolic in its place would break `new Uint8Array(await f.arrayBuffer())`, which is the ordinary way a page
-   reads one.
-   THE SEAM IS concolic_source_wrap, so a host with no source overlay (a conformance run) gets exactly the
-   string File API §3.3 says to return and nothing forks. */
-static JSValue blob_read_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
+/* WHERE A BLOB'S BYTES CAME FROM — the question the shared reader machine asks of every interface that holds
+   a byte sequence, and this is Blob's answer. A READER OF THIS INTERFACE'S OWN THAT CALLED THE SHARED ONE AND
+   WRAPPED WHAT CAME BACK IS ONE DOOR TOO MANY, and the cost is not this interface's: `text()` and `json()` are
+   both readers whose value IS the content, File API declares only the first, and an interface that declares
+   both then has to remember to wrap at two of its own copies — an interface that forgets hands the page a
+   plain record, and `if (cfg.admin)` over a member the server did not send answers `undefined` with nothing to
+   say a gate went unexplored. One question, asked at both content readers by the machine that owns them; each
+   interface states its own answer and writes no reader for it.
+ *
+ * `true` because THESE bytes are attacker input: blob_set_source's only caller is the File System Access
+ * component, whose source rows are declared deliveries (a file the user chose), and those are exactly the
+ * values solver/concolic.h's read counter exists to count. A Blob the page BUILT carries no source, and NULL
+ * says so — see ByteReaderIface.source for why that is a statement and not a hole. */
+static char *blob_reader_source(JSContext *ctx, JSValueConst recv, bool *attacker)
 {
     BlobObj *b = g_blob_class ? JS_GetOpaque(recv, g_blob_class) : NULL;
-    JSValue text = byte_reader_text(ctx, recv, bytes, len);
+    char *src;
 
-    DCHECK(b != NULL, "File API §3.3's `text()` ran on something that is not a Blob — the reader machine's own "
+    (void)ctx;
+    DCHECK(b != NULL, "a Blob was asked where its bytes came from and is not a Blob — the reader machine's own "
                       "receiver check has already answered for that, so a NULL here is this interface's `is` "
                       "and its opaque disagreeing");
-    if (!b || !b->src || JS_IsException(text)) return text;
-    return concolic_source_wrap(ctx, b->shape, b->src, text);
+    if (!b || !b->src)
+        return NULL;
+    DCHECK(b->shape != NULL,
+           "a Blob carries a source identity with no display shape — blob_set_source records the pair or "
+           "neither, so one without the other is that pair having come apart");
+    *attacker = true;
+    src = strdup(b->src);
+    CHECK(src != NULL, "blob: OOM stating where a byte sequence came from");
+    return src;
 }
 
+/* §3.3's THREE READERS. `text()` is the one that turns a byte sequence into a VALUE the page computes with — a
+   string it concatenates, tests, and hands to a sink — so it is the one the provenance above rides, and the
+   shared implementation is what asks for it. The two below answer with the real bytes: an ArrayBuffer is a
+   buffer of bytes and not a value the solver's domain is over, and handing back a concolic in its place would
+   break `new Uint8Array(await f.arrayBuffer())`, which is the ordinary way a page reads one. */
 static const ByteReader BLOB_READERS[] = {
-    { "text",        blob_read_text },
+    { "text",        byte_reader_text },
     { "arrayBuffer", byte_reader_array_buffer },
     { "bytes",       byte_reader_bytes },
 };
 
 static const ByteReaderIface BLOB_READER_IFACE = {
-    blob_is, blob_take, "Blob", BLOB_READERS, (int)(sizeof BLOB_READERS / sizeof BLOB_READERS[0])
+    blob_is, blob_take, "Blob", BLOB_READERS, (int)(sizeof BLOB_READERS / sizeof BLOB_READERS[0]),
+    blob_reader_source
 };
 
 /* ---- §3.1's attributes and slice() ------------------------------------------------------------------------ */
