@@ -17,6 +17,9 @@
 #include "core/xml/xml_tag.h"    /* XML §3.1's [40] STag, [42] ETag, [44] EmptyElemTag and §3.3.3's values */
 #include "core/xml/xml_element.h" /* XML §3's [39] element over §3.1's [43] content — the element stack */
 #include "core/xml/xml_document.h"/* XML §2.1's [1] document with §2.8's [22] prolog and [27] Misc */
+#include "core/xml/xml_tree.h"   /* Namespaces §6 expansion INTO a tree, and §6.3 over expanded names */
+#include "core/xml/xml_parse.h"  /* the entry §7.5.3, §8.5.1 and XHR §3.6.6 share, and §8.5.1's parsererror */
+#include "core/dom/attr_list.h"  /* dom_attr_get_ns — the §6.3 rows read back the EXPANDED name */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
 #include "core/timing/event_loop.h"
@@ -9081,6 +9084,182 @@ static void xml_document_selftest(void)
                   "sentence for one of them");
 }
 
+/* THE JOIN — core/xml/xml_tree.h and core/xml/xml_parse.h, AFTER every grammar fixture above, because what it
+ * adds is exactly what none of them can see: a NODE. Every component above decides a production over BYTES and
+ * builds no tree, so the two rules this exercises are the two that only exist once there is a DOM to put the
+ * answer in — Namespaces in XML 1.0 3e §6 "Applying Namespaces to Elements and Attributes" applied at the
+ * depth an element stands at, and §6.3 "Uniqueness of Attributes" over a whole tag's EXPANDED names.
+ *
+ * THE §6.3 ROWS ARE THE STANDARD'S OWN WORKED EXAMPLES, copied from §6.3's text rather than invented, and they
+ * are a PAIR ON PURPOSE. `<bad n1:a n2:a/>` with both prefixes bound to one namespace name is ILLEGAL, and
+ * `<good a n1:a/>` with the DEFAULT bound to that same name is LEGAL — "the second because the default
+ * namespace does not apply to attribute names" (§6.2). A check that only had the illegal row would pass just
+ * as well against a builder that rejected every repeated local part, which is the wrong rule and would break
+ * ordinary documents; the legal row is what distinguishes the two, and it is the row an implementation gets
+ * wrong by expanding attribute names with XML_NS_NAME_ELEMENT. */
+static void xml_tree_selftest(void)
+{
+    static const char *SRC =
+        "<?xml version='1.0'?><!--m--><r xmlns='urn:d' xmlns:p='urn:p' p:k='1' k='2'>"
+        "x&amp;y<![CDATA[z]]>w<p:c/><?t d?></r>";
+    lxb_html_document_t *dom = dom_document_create();
+    lxb_dom_document_t  *doc;
+    lxb_dom_node_t      *root, *r_el, *n;
+    lxb_dom_element_t   *el;
+    lxb_dom_attr_t      *a;
+    XmlParseReport       rep;
+    const char          *ns, *local;
+    char                 nsbuf[128], lobuf[64];
+
+    CHECK(dom != NULL, "the XML tree fixture could not create a document");
+    doc  = lxb_dom_interface_document(dom);
+    root = lxb_dom_interface_node(dom);
+    CHECK(xml_parse_document(doc, root, DOM_PARSE_ROOT_PRIVATE, SRC, strlen(SRC), &rep),
+          "a well-formed namespace-well-formed XML document did not parse");
+    CHECK(rep.tree == XML_TREE_OK && rep.character == XML_CHAR_OK && rep.detail.ns == XML_NS_OK,
+          "a successful XML parse carries a layer's error report — every field is written on every parse, so "
+          "an OK here is a POSITIVE statement and not a field nobody set");
+
+    /* [27] Misc BEFORE THE ROOT IS A NODE, and [23] XMLDecl IS NOT — the declaration is about the entity and
+       becomes no node in any tree, which is why xml_document.h hands it over by name instead. */
+    n = root->first_child;
+    CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_COMMENT,
+          "XML §2.8's [22] prolog Misc comment did not become a Comment node before the root element — a "
+          "declaration becoming a node, or the comment being dropped, would both show up here");
+    r_el = n->next;
+    CHECK(r_el != NULL && r_el->type == LXB_DOM_NODE_TYPE_ELEMENT && r_el->next == NULL,
+          "XML §2.1's [1] document did not produce exactly one root element after its prolog");
+
+    /* §6.2: A DEFAULT DECLARATION APPLIES TO AN UNPREFIXED ELEMENT NAME. */
+    el = lxb_dom_interface_element(r_el);
+    element_ns_and_local(el, &ns, &local, nsbuf, sizeof nsbuf, lobuf, sizeof lobuf);
+    CHECK(ns != NULL && strcmp(ns, "urn:d") == 0 && strcmp(local, "r") == 0,
+          "Namespaces in XML §6.2: the default declaration on this start-tag did not apply to its own "
+          "unprefixed element name — §6.1 puts a declaration in scope \"from the beginning of the start-tag in "
+          "which it appears\", so a builder that expanded the name before recording the tag's own declarations "
+          "answers with no namespace here");
+
+    /* §6.2 FROM THE OTHER SIDE: "The namespace name for an unprefixed attribute name always has no value."
+       The two rules meet on ONE tag, which is the only place their difference is observable. */
+    a = dom_attr_get_ns(el, "urn:p", "k");
+    CHECK(a != NULL, "Namespaces in XML §6.2: the prefixed attribute p:k was not expanded to its bound "
+                     "namespace name");
+    a = dom_attr_get_ns(el, NULL, "k");
+    CHECK(a != NULL, "Namespaces in XML §6.2: an UNPREFIXED attribute name was given the default namespace — "
+                     "\"the namespace name for an unprefixed attribute name always has no value\", and a "
+                     "builder that expands attribute names with the element rule makes p:k and k the SAME "
+                     "expanded name, which would also make this tag wrongly violate §6.3");
+
+    /* DOM §1.4's rule about a node it constructs, which xml_ns.h states is NOT its own and routes here. */
+    a = dom_attr_get_ns(el, "http://www.w3.org/2000/xmlns/", "xmlns");
+    CHECK(a != NULL, "DOM §1.4 \"Namespaces\": the `xmlns` declaration attribute is not in the XMLNS namespace "
+                     "on the Attr this build constructed — §6.2 gives its EXPANSION no namespace name and the "
+                     "DOM requires one on the node, so this is the one place the two standards differ and the "
+                     "difference is applied where the Attr is built");
+    a = dom_attr_get_ns(el, "http://www.w3.org/2000/xmlns/", "p");
+    CHECK(a != NULL, "DOM §1.4: `xmlns:p` must become (XMLNS, prefix `xmlns`, local `p`) — the DECLARED prefix "
+                     "is the LOCAL part, and a builder that took it from the QName's prefix half names every "
+                     "declaration `xmlns`");
+
+    /* §2.4's runs AND §4.1's references COALESCE (DOM §4.10), and §2.7's [18] CDSect ENDS the run rather than
+       joining it, because DOM keeps a CDATASection a page can tell apart with nodeType. */
+    n = r_el->first_child;
+    CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT
+              && lxb_dom_interface_character_data(n)->data.length == 3
+              && !memcmp(lxb_dom_interface_character_data(n)->data.data, "x&y", 3),
+          "XML §2.4's [14] CharData and §4.1's [67] Reference did not coalesce into ONE Text node — three "
+          "items are one run, and a node per item makes firstChild.data answer `x` for an element whose "
+          "content is `x&y`");
+    n = n->next;
+    CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION,
+          "XML §2.7's [18] CDSect did not become a CDATASection node — joining it to the surrounding run "
+          "would be a tree a page can tell apart with nodeType");
+    n = n->next;
+    CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_TEXT
+              && lxb_dom_interface_character_data(n)->data.length == 1,
+          "a CDATA section did not END the character run around it — the `w` after it belongs to a NEW Text "
+          "node, and a builder that kept appending would have merged `z` and `w`");
+    n = n->next;
+    CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT,
+          "the empty-element tag inside [43] content did not become an element");
+    element_ns_and_local(lxb_dom_interface_element(n), &ns, &local, nsbuf, sizeof nsbuf, lobuf, sizeof lobuf);
+    CHECK(ns != NULL && strcmp(ns, "urn:p") == 0 && strcmp(local, "c") == 0,
+          "Namespaces in XML §6.1: a prefix declared on an ANCESTOR is not in scope on this descendant — the "
+          "scope stack is pushed at the start-tag and popped at the end-tag, and an empty-element tag must "
+          "pop its own scope without popping its parent's");
+    n = n->next;
+    CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION && n->next == NULL,
+          "XML §2.6's [16] PI did not become a ProcessingInstruction node as the last child");
+    dom_document_destroy(dom);
+
+    /* §6.3's TWO WORKED EXAMPLES, the illegal one and the legal one — see this fixture's head comment. */
+    {
+        static const char *BAD =
+            "<x xmlns:n1='http://www.w3.org' xmlns:n2='http://www.w3.org'><bad n1:a='1' n2:a='2'/></x>";
+        static const char *GOOD =
+            "<x xmlns:n1='http://www.w3.org' xmlns='http://www.w3.org'><good a='1' n1:a='2'/></x>";
+        lxb_html_document_t *d2 = dom_document_create();
+        CHECK(d2 != NULL, "the §6.3 fixture could not create a document");
+        CHECK(!xml_parse_document(lxb_dom_interface_document(d2), lxb_dom_interface_node(d2),
+                                  DOM_PARSE_ROOT_PRIVATE, BAD, strlen(BAD), &rep),
+              "Namespaces in XML §6.3's own illegal example parsed — two prefixes bound to ONE namespace name "
+              "give `n1:a` and `n2:a` the same expanded name, which §3.1's [WFC: Unique Att Spec] cannot see "
+              "because the literal Names differ");
+        CHECK(rep.tree == XML_TREE_ERR_ATTRIBUTES_UNIQUE,
+              "§6.3's illegal example was rejected for the wrong sentence — a report names the constraint the "
+              "author violated, and any other value sends them to a rule they did not break");
+        dom_document_destroy(d2);
+
+        d2 = dom_document_create();
+        CHECK(d2 != NULL, "the §6.3 fixture could not create a second document");
+        CHECK(xml_parse_document(lxb_dom_interface_document(d2), lxb_dom_interface_node(d2),
+                                 DOM_PARSE_ROOT_PRIVATE, GOOD, strlen(GOOD), &rep),
+              "Namespaces in XML §6.3's own LEGAL example was rejected — `a` and `n1:a` differ because §6.2 "
+              "gives an unprefixed attribute name no namespace name even when a default is declared, so a "
+              "builder that expands attribute names with the ELEMENT rule fails exactly here while still "
+              "passing the illegal row above");
+        dom_document_destroy(d2);
+    }
+
+    /* THE FAILURE PATH, AND HTML §8.5.1 STEP 3's CONSEQUENCE OVER IT. */
+    {
+        static const char BOM_ILL[] = "\xEF\xBB\xBF<a></b>";
+        lxb_html_document_t *d3 = dom_document_create();
+        lxb_dom_node_t *p3;
+        CHECK(d3 != NULL, "the parsererror fixture could not create a document");
+        p3 = lxb_dom_interface_node(d3);
+        /* §4.3.3's UTF-8 signature is CONSUMED — if it reached the character layer it would be reported as a
+           §2.2 [2] Char violation at offset zero and this row would name the wrong sentence entirely. */
+        CHECK(!xml_parse_document(lxb_dom_interface_document(d3), p3, DOM_PARSE_ROOT_PRIVATE,
+                                  BOM_ILL, sizeof BOM_ILL - 1, &rep),
+              "an ill-formed document parsed");
+        CHECK(rep.tree == XML_TREE_ERR_DOCUMENT
+                  && rep.detail.within.element == XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH,
+              "XML §3's [WFC: Element Type Match] did not come back through the chain — a `parsererror` "
+              "describes the violation by asking the layer that owns the sentence, and a signature that "
+              "reached the reader instead would report §2.2's [2] Char at the first byte");
+        CHECK(strcmp(xml_parse_report_message(&rep), xml_parse_report_message(&rep)) == 0
+                  && xml_parse_report_message(&rep) != NULL,
+              "a parse report has no message");
+        for (n = p3->first_child; n != NULL; n = p3->first_child) dom_cow_remove_child(n);
+        xml_parse_error_document(lxb_dom_interface_document(d3), p3, DOM_PARSE_ROOT_PRIVATE, &rep);
+        n = p3->first_child;
+        CHECK(n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT && n->next == NULL,
+              "HTML §8.5.1 step 3 did not append exactly one parsererror element");
+        element_ns_and_local(lxb_dom_interface_element(n), &ns, &local, nsbuf, sizeof nsbuf, lobuf, sizeof lobuf);
+        CHECK(ns != NULL && strcmp(ns, "http://www.mozilla.org/newlayout/xml/parsererror.xml") == 0
+                  && strcmp(local, "parsererror") == 0,
+              "HTML §8.5.1 step 3 names the element `parsererror` in the "
+              "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace, and this is neither");
+        CHECK(n->first_child != NULL && n->first_child->type == LXB_DOM_NODE_TYPE_TEXT
+                  && lxb_dom_interface_character_data(n->first_child)->data.length > 0,
+              "the parsererror element describes nothing — §8.5.1's \"add attributes or children to root to "
+              "describe the nature of the parsing error\" is optional to the standard and NOT optional here, "
+              "because a shape a page can see and learn nothing from is the stub §NO STUBS forbids");
+        dom_document_destroy(d3);
+    }
+}
+
 /* CSS Properties and Values API 1 §3's `@property` GRAMMARS — its `<custom-property-name>#` prelude, its two
  * descriptors that have a grammar of their own, and §5.4's consume-a-syntax-definition that §3.1's validity is
  * stated by reference to.
@@ -9904,6 +10083,10 @@ int main(int argc, char **argv) {
     xml_document_selftest();/* XML §2.1's [1] document with §2.8's [22] prolog — AFTER the element fixture,
                               because it delegates §3's [39] whole and a failure there must be read as that
                               component's rather than as this one's */
+    xml_tree_selftest();   /* core/xml/xml_tree.h and core/xml/xml_parse.h — the JOIN, AFTER every
+                              grammar fixture above, because what it adds is the two rules that need a NODE:
+                              Namespaces §6 expansion at the depth an element stands at, and §6.3 over a whole
+                              tag's expanded names. Both of §6.3's worked examples, the illegal and the legal. */
     rt = JS_NewRuntime();
     JS_SetMaxStackSize(rt, 4 * 1024 * 1024);   /* align quickjs's overflow check with the emcc 8MB wasm stack */
     JSContext *ctx = JS_NewContext(rt);
