@@ -215,10 +215,10 @@ function mergeASTResultsIntoVDD(tab, results) {
        action/data-* scan the comment describes is a capability the engine does not have, and the `|| []` is
        what made its absence look like a page with no such markup.
 
-       (testing/test-spec.js asserts `result.domEndpoints` is populated, in two tests. They are assertions
-       about the same absent capability and they are not this file's to change; they are the record that the
-       scan was intended, and the place to build it is the engine's Lexbor tree, where the attribute values
-       are.) */
+       (The place to build it is the engine's Lexbor tree, where the attribute values are. This used to point
+       at two driver assertions as "the record that the scan was intended" — the drivers are deleted, and a
+       pointer to a file that is not there is worse than none, so the intent is stated here instead of being
+       filed against something a reader would have to find first.) */
 
     /* THE ONE SECURITY MERGE. `!analysis._securityMerged` guarded this, and the flag's other writer was
        lib/analyze.js pre-empting this block to do its own per-script split — a split over `sink.location`,

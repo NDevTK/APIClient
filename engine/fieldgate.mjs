@@ -364,6 +364,13 @@ function maskJS(src) {
 
 const PAIRS = { "(": ")", "[": "]", "{": "}" };
 
+/* THE KEYWORDS AFTER WHICH A BRACE IS A VALUE, not a body. `return { … }` was the only one read as a literal,
+   so `yield { lo, hi, value }` — a generator handing back a record, which is the same construct with a
+   different verb — was a brace this could not place. One list, used by both arms of the classifier, is why the
+   two can no longer disagree: a word in it is never a block, and a word outside it never a literal. `do` and
+   `else` are deliberately absent — their brace IS a body. */
+const VALUE_POSITION = new Set(["return", "yield", "await", "typeof", "case", "in", "of", "void", "delete"]);
+
 /* One past the closer matching the opener at `open`, or -1 when the text ends first or a closer of the WRONG
    KIND arrives. Counting one depth across the three kinds does not return -1 on a mismatch, it returns a SPAN,
    and a plausible wrong span is the failure mode this whole file is built against. */
@@ -471,8 +478,28 @@ const keysIn = (text) => { const out = []; let m; JSON_KEY.lastIndex = 0; while 
 /* A stream marker is `@TAG` at the very start of an emission — `printf("@COLD {...")`. Unlike a member name,
    `@COLD` in a string literal cannot mean anything else in this tree, so for THIS namespace a literal is the
    construct. The asymmetry is deliberate and is why the two namespaces are kept apart. */
-const MARKER_ANY = /(^|[^A-Za-z0-9_@])(@[A-Z][A-Z0-9_]*)/g;
-const markersIn = (text) => { const out = []; let m; MARKER_ANY.lastIndex = 0; while ((m = MARKER_ANY.exec(text))) out.push(m[2]); return out; };
+/* THE TOKEN RUNS TO THE END OF THE MARKER, HYPHENS INCLUDED, and stopping at the first `-` is not a smaller
+   answer — it is a DIFFERENT NAME, which then has a writer and a reader that are two spellings of nothing.
+   A marker whose two sides are `@BUDGET-NOT-INSTALLED` reads on both sides as `@BUDGET`, and a contract whose
+   halves agree perfectly is reported as a half nobody writes: this file's own defect class, manufactured by
+   its own tokenizer, and the loudest possible reminder that a scan reports the name it READ and not the name
+   that is there. A hyphenated segment is part of the marker exactly as an underscored one is. */
+const MARKER_ANY = /(^|[^A-Za-z0-9_@])(@[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)*)/g;
+const markersIn = (text) => {
+  const out = [];
+  let m;
+  MARKER_ANY.lastIndex = 0;
+  while ((m = MARKER_ANY.exec(text))) out.push({ name: m[2], at: m.index + m[1].length });
+  return out;
+};
+
+/* `echo` IS THE SHELL'S EMISSION VERB, exactly as `console.log` is JavaScript's, and a string this corpus
+   hands to `/bin/sh -c` is a PROGRAM rather than a datum. A marker printed by that program is written, and
+   reading it as a reference instead put the printing half and the matching half of one contract on the same
+   side — so the marker had two readers, no writer, and a category fired on a seam that is whole. The
+   construct is the verb immediately in front of the marker inside the literal, with the shell quote that
+   belongs to the shell rather than to JavaScript. */
+const SHELL_ECHO = /\becho\s+(?:-[neE]+\s+)*(?:\\?["'])?$/;
 
 /* ---- C side ---------------------------------------------------------------------------------------------- */
 
@@ -509,6 +536,35 @@ function cLiteral(code, struct, from, to) {
   return any && i >= to ? out : null;
 }
 
+/* A CONDITIONAL BETWEEN TWO LITERAL FORMATS RESOLVES TO BOTH, and refusing it hid field names that are as
+   static as any other. `cond ? "\"minimum\":" : "\"exclusiveMinimum\":"` is a producer that emits one key or
+   the other and never anything else, so both are declared — while a format that is a VARIABLE stays a refusal,
+   because resolving that one means following an assignment and this file follows nothing. The arms are taken
+   at depth zero so a `[j]` subscript or a nested `?:` inside an arm does not split the wrong operator. */
+function cTernaryArms(code, struct, from, to) {
+  let d = 0, q = -1;
+  for (let i = from; i < to; i++) {
+    const c = struct[i];
+    if (PAIRS[c]) d++;
+    else if (c === ")" || c === "]" || c === "}") d--;
+    else if (!d && c === "?") { q = i; break; }
+  }
+  if (q < 0) return null;
+  let d2 = 0, nested = 0, colon = -1;
+  for (let i = q + 1; i < to; i++) {
+    const c = struct[i];
+    if (PAIRS[c]) d2++;
+    else if (c === ")" || c === "]" || c === "}") d2--;
+    else if (d2) continue;
+    else if (c === "?") nested++;
+    else if (c === ":") { if (!nested) { colon = i; break; } nested--; }
+  }
+  if (colon < 0) return null;
+  const a = cLiteral(code, struct, q + 1, colon);
+  const b = cLiteral(code, struct, colon + 1, to);
+  return a !== null && b !== null ? [a, b] : null;
+}
+
 /* Whether an identifier is handed to a matcher anywhere in the file — the one structural fact that separates a
    buffer BUILT to be emitted from a PATTERN built to be looked for. test_forced.c's
    `snprintf(pat, sizeof pat, "\"url\":\"%s\"", url)` then `strstr(hay, pat)` is a READ of the seam; result.c's
@@ -532,6 +588,22 @@ function scanC(file, src) {
   const fault = bracketFault(struct);
   if (fault) { refuse(file, lineOf(src, fault.off), "a C file whose brackets do not balance — every span answer about it would be a guess", fault.why); return; }
   const patterns = matcherOperands(struct, code);
+  /* THE BUFFERS THIS SCAN HAS ALREADY READ. `snprintf(t, sizeof t, ",\"searched\":%d", n)` then
+     `json_buf_puts(&b, t)` is ONE emission written in two statements, and refusing over the second was this
+     file counting its own resolved answer as a hole — the largest single group in the refusal list was a
+     destination whose format had been read three lines above it. A `json_buf_puts` of a plain identifier that
+     is a resolved build destination in this file therefore carries text already accounted for, which is a
+     DECIDED negative on exactly the rule the build side already uses: nothing but the destination's other use
+     in the file tells these apart, and that use is a construct rather than a dataflow. */
+  const builtDests = new Set();
+  for (const [fn, fmtIdx] of Object.entries(C_BUILD))
+    for (const c of callSites(struct, fn)) {
+      if (!c.args || !c.args[fmtIdx] || !c.args[0]) continue;
+      const f = c.args[fmtIdx];
+      if (cLiteral(code, struct, f[0], f[1]) === null && !cTernaryArms(code, struct, f[0], f[1])) continue;
+      const dst = code.slice(c.args[0][0], c.args[0][1]).trim();
+      if (/^[A-Za-z_]\w*$/.test(dst)) builtDests.add(dst);
+    }
   const site = (off) => ({ file, line: lineOf(src, off) });
 
   /* ONE C FUNCTION'S EMISSIONS ARE ONE RECORD. endpoint_json_array writes its object one `json_buf_puts` at a
@@ -572,14 +644,14 @@ function scanC(file, src) {
         if (!c.args) continue;
         for (const [a, b] of c.args) {
           const lit = cLiteral(code, struct, a, b);
-          if (lit) for (const t of markersIn(lit)) { matched.add(t); rec(markers, t).reads.push(site(a)); }
+          if (lit) for (const t of markersIn(lit)) { matched.add(t.name); rec(markers, t.name).reads.push(site(a)); }
         }
       }
     const LIT = /"(?:[^"\\\n]|\\.)*"/g;
     let m;
     while ((m = LIT.exec(code))) {
       if (struct[m.index] !== '"') continue;
-      for (const t of markersIn(m[0])) if (!matched.has(t)) rec(markers, t).writes.push(site(m.index));
+      for (const t of markersIn(m[0])) if (!matched.has(t.name)) rec(markers, t.name).writes.push(site(m.index));
     }
   }
 
@@ -590,6 +662,9 @@ function scanC(file, src) {
       if (!a) { refuse(file, lineOf(src, c.at), `a ${fn}( with too few arguments to hold a format`); continue; }
       const lit = cLiteral(code, struct, a[0], a[1]);
       if (lit === null) {
+        const arms = cTernaryArms(code, struct, a[0], a[1]);
+        if (arms) { for (const t of arms) emit(t, a[0], true); continue; }
+        if (builtDests.has(code.slice(a[0], a[1]).trim())) continue;
         /* An unresolvable format is only a refusal where a key could be hiding: a call whose format is a
            variable in a file that emits no JSON at all is a log line, and counting it would bury the report
            in the noise idl_installed.mjs's UNATTRIBUTED list drowned in. The file-level test is stated so it
@@ -605,8 +680,12 @@ function scanC(file, src) {
       if (!c.args) { refuse(file, lineOf(src, c.at), `an unbalanced ${fn}( — the built text cannot be delimited`); continue; }
       const a = c.args[fmtIdx], d = c.args[0];
       if (!a || !d) { refuse(file, lineOf(src, c.at), `a ${fn}( with too few arguments to hold a destination and a format`); continue; }
-      const lit = cLiteral(code, struct, a[0], a[1]);
-      if (lit === null) { pendingUnresolved.push({ file, line: lineOf(src, c.at), fn, text: code.slice(a[0], Math.min(a[1], a[0] + 60)) }); continue; }
+      let lit = cLiteral(code, struct, a[0], a[1]);
+      if (lit === null) {
+        const arms = cTernaryArms(code, struct, a[0], a[1]);
+        if (!arms) { pendingUnresolved.push({ file, line: lineOf(src, c.at), fn, text: code.slice(a[0], Math.min(a[1], a[0] + 60)) }); continue; }
+        lit = arms.join("");
+      }
       if (!keysIn(lit).length) continue;
       const dst = code.slice(d[0], d[1]).trim();
       if (!/^[A-Za-z_]\w*$/.test(dst)) {
@@ -616,13 +695,16 @@ function scanC(file, src) {
       emit(lit, a[0], !patterns.has(dst));
     }
 
-  /* The read side of the seam in C: a JSON key literal handed to a matcher. */
+  /* The read side of the seam in C: a JSON key literal handed to a matcher. HELD, not credited here, because
+     it must ANCHOR the same way a JS read does and the producer set is not complete until the corpus is. */
   for (const fn of C_MATCH)
     for (const c of callSites(struct, fn)) {
       if (!c.args) continue;
       for (const [a, b] of c.args) {
         const lit = cLiteral(code, struct, a, b);
-        if (lit) emit(lit, a, false);
+        if (!lit) continue;
+        const ks = keysIn(lit);
+        if (ks.length) cMatched.push({ file, line: lineOf(src, a), keys: ks });
       }
     }
 
@@ -647,6 +729,23 @@ function scanC(file, src) {
 /* Unresolvable formats are held until the whole C corpus is read, because whether one is a hiding place for a
    field depends on whether its FILE emits fields at all — and that is not known until the file is done. */
 const pendingUnresolved = [];
+
+/* THE C READ SIDE ANCHORS BY SHAPE TOO, and until it did it was the one namespace here allowed to name a
+ * record out of a single word. `strstr(js, "\"authorization\":\"Bearer …\"")` is a matcher pattern whose ONE
+ * key is a HEADER NAME — the engine serializes its headers as a record keyed by the header, `json_buf_str`
+ * writing each key from the runtime string — so no static producer emits it and none ever can. Demanding one
+ * is the demand-that-cannot-be-met this file already refuses to make of an IDL `magic`, and it fired here as a
+ * finding rather than as a question.
+ *
+ * THE SPELLING IS WHAT MADE IT LOOK LIKE A CONTRACT, which is the whole argument for the shape rule. The same
+ * pattern also matches `"x-api-version":` and `"content-type":`, and neither was reported — not because they
+ * are different in kind but because a hyphen is not an identifier character. A category whose membership turns
+ * on whether a header name happens to be spellable as a JS identifier is reporting the tokenizer.
+ *
+ * So a matcher literal is a read OF A RECORD when it names TWO of one producer's fields, or when the name it
+ * carries is one a producer emits. One unwritten name alone is undecidable — a field of a record nobody writes,
+ * or a key of a map whose keys are data — and it goes to AMBIGUOUS with its place, never to a finding. */
+const cMatched = [];
 
 /* ---- JS side --------------------------------------------------------------------------------------------- */
 
@@ -701,13 +800,37 @@ function receiverBefore(struct, code, dotAt) {
     if (c === '"' || c === "'" || c === "`" || c === "/") return "";
     return null;
   }
-  const t = code.slice(i, end).replace(/\s+/g, "");
+  const raw = code.slice(i, end).trim();
+  const t = raw.replace(/\s+/g, "");
   if (/^[A-Za-z_$]/.test(t)) return /^[^\s;]*$/.test(t) ? t : null;
   /* An ARRAY LITERAL head — `[...m.values()].filter(f).length` — is a computed collection and no record ever
-     crossed a seam as one: a decided negative. A PARENTHESIZED head is not decided (`(await f()).field` could
-     be anything), so it stays a refusal rather than a quiet pass. */
-  return t[0] === "[" ? "" : null;
+     crossed a seam as one: a decided negative. */
+  if (t[0] === "[") return "";
+  if (t[0] !== "(") return null;
+  /* A `new` HEAD IS DECIDED, not unreadable. `(new Error()).stack` CONSTRUCTS an object in this realm, and a
+     record on this seam is JSON text that crossed one — so nothing is hiding here, exactly as nothing is
+     hiding behind a string-literal head. */
+  if (/^\(\s*new\s/.test(raw)) return "";
+  /* A `|| <literal>` HEAD IS DECIDED BY ITS OWN ALTERNATIVE. `(resp.body || "").length` and
+     `(m.match(re) || []).length` must accommodate the substituted string or array whatever the left side is,
+     so the member read off them is that literal's member and not a field of any record. */
+  if (/(\|\||\?\?)(\[\]|\{\}|""|''|``)\)$/.test(t)) return "";
+  /* AN AWAITED CALL IS A RECEIVER WHOSE RECORD IDENTITY IS THE CALLED METHOD'S REPLY — the construct this
+     file's closing paragraph named as the one thing still outside every namespace here, and it is where the
+     shipped bridge lives: `(await eng.r.renderer.step()).code` reads the mojo boundary this gate already has
+     BOTH descriptions of. The call NAMES the method and §the qjs_* ABI namespace has the method's own reply
+     record, so the diff is construct against construct and nothing is followed through a promise. Only a
+     no-argument call is read: an argument list is a span this normalizer would have to resolve to keep the
+     receiver's text a fact, and the boundary's own methods take none. */
+  return /^\((?:await)?[\w$.]*?\.[A-Za-z_$][\w$]*\(\)\)$/.test(t) ? t : null;
 }
+
+/* The method an awaited-call receiver names, or null — read back off the normalized text so the one place
+   that decides the shape is the one place that reads it. */
+const awaitedMethod = (recv) => {
+  const m = /^\((?:await)?[\w$.]*?\.([A-Za-z_$][\w$]*)\(\)\)$/.exec(recv || "");
+  return m ? m[1] : null;
+};
 
 /* A swallowing try: its catch body neither rethrows nor asserts, so every read inside the try is a read whose
    absence the consumer has already decided to survive. §Architecture names `a catch {} around a read` in the
@@ -741,6 +864,122 @@ function swallowingTrySpans(struct) {
 
 const inSpan = (spans, off) => spans.some(([a, b]) => off >= a && off < b);
 
+/* ---- receiver scope: TWO BINDINGS OF ONE SPELLING ARE TWO RECEIVERS, NOT ONE ------------------------------- */
+
+/* A RECEIVER IS ANCHORED BY ITS TEXT, AND TEXT IS ONLY A FACT INSIDE ONE SCOPE. Normalizing to source text is
+ * what keeps this file off the flowed identity idl_installed.mjs was wrong for — but the text `r` in one
+ * function body and the text `r` in another are two facts, and merging them is not conservative, it is the
+ * INVENTION this whole file is built against, performed on the anchor itself. It produced exactly the defect
+ * class the gate exists to report, in the gate's own output: a driver whose `r` holds a child-process result in
+ * one function and its own reply record in another had the two unioned, so the reply record's fields ANCHORED
+ * the union and the child-process fields came out as names no producer emits. Two confident false reds, on a
+ * seam that is whole, pointing at platform members whose producer is the platform.
+ *
+ * SCOPE IS A CONSTRUCT AND NOT AN INFERENCE, which is why this is the fix rather than a list of platform names.
+ * A `{` whose preceding significant text is a parameter list — or an arrow's `=>` — is a FUNCTION BODY, and the
+ * names that body BINDS are its parameters and the declarations directly inside it. A read of `x` belongs to
+ * the innermost enclosing body that binds `x`, and to the file when none does; a closure reading an outer name
+ * therefore still anchors with its siblings, which a per-block split would have broken.
+ *
+ * WHICH DIRECTION THIS ERRS IN, STATED. Over-collecting a binder (an identifier inside a parameter default)
+ * SPLITS reads that belonged together — the split lands in AMBIGUOUS, which is counted and named. Under-
+ * collecting one MERGES two objects, which is the false red above. So every doubtful token is read as a
+ * binder: this file's discipline is that the unanswerable question is reported, never resolved toward the
+ * answer that produces a finding. */
+const NOT_A_FUNCTION_HEAD = new Set(["if", "for", "while", "switch", "catch", "with", "do"]);
+
+function functionScopes(struct, code) {
+  const spans = [];
+  /* the parameter span of the `(…)` whose `)` sits at `p`, or null */
+  const paramsBefore = (p) => {
+    let d = 0;
+    for (let j = p; j >= 0; j--) {
+      if (struct[j] === ")") d++;
+      else if (struct[j] === "(") { d--; if (!d) return [j + 1, p]; }
+    }
+    return null;
+  };
+  for (let i = 0; i < struct.length; i++) {
+    if (struct[i] !== "{") continue;
+    let p = i - 1;
+    while (p >= 0 && /\s/.test(struct[p])) p--;
+    let params = null;
+    if (struct[p] === ">" && struct[p - 1] === "=") {
+      let q = p - 2;
+      while (q >= 0 && /\s/.test(struct[q])) q--;
+      if (struct[q] === ")") params = paramsBefore(q);
+      else { const e = q + 1; while (q >= 0 && /[\w$]/.test(struct[q])) q--; if (e > q + 1) params = [q + 1, e]; }
+    } else if (struct[p] === ")") {
+      params = paramsBefore(p);
+      if (!params) continue;
+      let k = params[0] - 1;
+      while (k > 0 && /\s/.test(struct[k - 1])) k--;
+      const e = k;
+      while (k > 0 && /[\w$]/.test(struct[k - 1])) k--;
+      /* `if (…) {` and `for (…) {` carry a parenthesized head and bind nothing a receiver can be spelled as */
+      if (NOT_A_FUNCTION_HEAD.has(code.slice(k, e))) continue;
+    } else continue;
+    const close = matchAt(struct, i);
+    if (close < 0) continue;
+    spans.push({ open: i, close, params, binds: new Set() });
+  }
+  spans.sort((a, b) => a.open - b.open);
+
+  /* The innermost span containing `off`. Spans are sorted by their opening brace, so the candidates are the
+     ones that START before it and the innermost is the LAST of those that also ends after it. */
+  const starts = spans.map((s) => s.open);
+  const innermost = (off) => {
+    let lo = 0, hi = starts.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (starts[mid] < off) lo = mid + 1; else hi = mid; }
+    for (let k = lo - 1; k >= 0; k--) if (spans[k].close > off) return spans[k];
+    return null;
+  };
+
+  const ID = /[A-Za-z_$][\w$]*/g;
+  for (const s of spans) {
+    if (!s.params) continue;
+    const t = code.slice(s.params[0], s.params[1]);
+    let m;
+    ID.lastIndex = 0;
+    while ((m = ID.exec(t))) {
+      if (t[m.index - 1] === ".") continue;                                  /* a member of a default's operand */
+      if (/^\s*\(/.test(t.slice(m.index + m[0].length))) continue;           /* a call in a default value */
+      s.binds.add(m[0]);
+    }
+  }
+  /* `const`/`let`/`var` declarators, and the name a `function`/`class` declaration introduces. Attributed to
+     the innermost enclosing FUNCTION body rather than to the innermost block: a `const` in a loop body and a
+     read of it after the loop are one binding by any reading, and splitting them would cost an anchor for
+     nothing. Two same-named declarations inside ONE function body still merge, which is the residue. */
+  const DECL = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)|\bfunction\s*\*?\s*([A-Za-z_$][\w$]*)|\bclass\s+([A-Za-z_$][\w$]*)|\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g;
+  let d;
+  while ((d = DECL.exec(struct))) {
+    const name = d[1] || d[2] || d[3] || d[4];
+    const s = innermost(d.index);
+    if (s) s.binds.add(name);
+  }
+  /* A destructuring declarator binds every name in its pattern — `const { ok, out } = f()` binds both, and
+     missing them merges those receivers with any same-named binding elsewhere in the file. */
+  const PAT = /\b(?:const|let|var)\s*(?=[[{])/g;
+  while ((d = PAT.exec(struct))) {
+    const open = sig(struct, d.index + d[0].length, struct.length);
+    const close = matchAt(struct, open);
+    if (close < 0) continue;
+    const s = innermost(d.index);
+    if (!s) continue;
+    const t = code.slice(open + 1, close - 1);
+    let m;
+    ID.lastIndex = 0;
+    while ((m = ID.exec(t))) if (t[m.index - 1] !== ".") s.binds.add(m[0]);
+  }
+
+  /* The binder of `name` at `off`: the innermost enclosing body that binds it, or the file when none does. */
+  return (name, off) => {
+    for (let s = innermost(off); s; s = innermost(s.open)) if (s.binds.has(name)) return String(s.open);
+    return "file";
+  };
+}
+
 function scanJS(file, src) {
   const masked = maskJS(src);
   if (masked.fault) { refuse(file, lineOf(src, masked.fault.off), "a JS file this masker could not tokenize", masked.fault.why); return null; }
@@ -750,7 +989,16 @@ function scanJS(file, src) {
 
   const site = (off) => ({ file, line: lineOf(src, off) });
   const swallow = swallowingTrySpans(struct);
-  const localReads = [];   // {name, recv, off, form}
+  /* THE KEY A READ ANCHORS UNDER: the receiver's text, qualified by the scope its BASE NAME is bound in. The
+     text stays the display, because that is what a reader opens the file to find; the key is what decides
+     which reads are reads of one object. A receiver whose base is not a bare identifier (`a().b`) has no
+     binder to ask about and keys under its text alone, exactly as before. */
+  const binderOf = functionScopes(struct, code);
+  const keyOf = (recv, off) => {
+    const base = /^[A-Za-z_$][\w$]*/.exec(recv);
+    return base ? `${recv}@${binderOf(base[0], off)}` : recv;
+  };
+  const localReads = [];   // {name, recv, key, off, form}
   const localWrites = [];  // {name, off}
   const wholeDefaults = [];// {off, keys, left, op} — a `|| { … }` substituting an entire record
 
@@ -778,13 +1026,18 @@ function scanJS(file, src) {
       continue;
     }
     if (isWrite) { localWrites.push({ name: m[2], off: nameAt }); continue; }
+    /* An awaited mojo call has a BETTER anchor than the shape rule — the method's own declared reply — so it
+       is routed to that diff instead of into the record namespace, where one field read off one call could
+       only ever have been ambiguous. */
+    const meth = awaitedMethod(recv);
+    if (meth) { mojoReplyReads.push({ file, line: lineOf(src, m.index), method: meth, name: m[2] }); continue; }
     let form = null;
     if (optional) form = "?.";
     else if (/^\?\./.test(nxt)) form = "?. on the value";
     else if (/^\|\|/.test(nxt)) form = "|| default";
     else if (/^\?\?/.test(nxt)) form = "?? default";
     else if (inSpan(swallow, m.index)) form = "inside a swallowing try/catch";
-    localReads.push({ name: m[2], recv, off: nameAt, form });
+    localReads.push({ name: m[2], recv, key: keyOf(recv, m.index), off: nameAt, form });
     if (isRMW) localWrites.push({ name: m[2], off: nameAt });
   }
 
@@ -805,7 +1058,7 @@ function scanJS(file, src) {
     else if (/^\|\|/.test(nxt)) form = "|| default";
     else if (/^\?\?/.test(nxt)) form = "?? default";
     else if (inSpan(swallow, at)) form = "inside a swallowing try/catch";
-    localReads.push({ name, recv, off: at, form });
+    localReads.push({ name, recv, key: keyOf(recv, at), off: at, form });
   }
 
   /* --- braces: object literal (writes), destructuring pattern (reads), or a block ------------------------- */
@@ -825,7 +1078,7 @@ function scanJS(file, src) {
     let kind = null;
     if (["const", "let", "var"].includes(prevWord)) kind = "pattern";
     else if (assignedTo) kind = "pattern";
-    else if (prevWord && !["return", "typeof", "of", "in", "do", "else", "await", "yield", "case"].includes(prevWord)) kind = "block";
+    else if (prevWord && !VALUE_POSITION.has(prevWord)) kind = "block";
     /* AN ARROW'S `=> {` IS ITS BODY, NOT A RECORD. Reading it as an object literal made every statement in
        every arrow function an entry with an unreadable key — two hundred and sixty-two refusals that were the
        language, not the corpus. The literal form is `=> ({…})`, whose preceding character is `(`. */
@@ -834,7 +1087,7 @@ function scanJS(file, src) {
        those blocks as object literals made every statement in every switch arm an entry with an unreadable
        key. The label is what tells them apart. */
     else if (prevCh === ":" && /\b(case|default)\b[^;{}]*$/.test(struct.slice(Math.max(0, p - 120), p))) kind = "block";
-    else if ("=(,:[?|&".includes(prevCh) || prevWord === "return") kind = "literal";
+    else if ("=(,:[?|&".includes(prevCh) || VALUE_POSITION.has(prevWord)) kind = "literal";
     else if (");}{".includes(prevCh) || prevCh === "") kind = "block";
     else kind = null;
 
@@ -900,7 +1153,7 @@ function scanJS(file, src) {
       const name = km[2] !== undefined ? km[2] : km[3];
       if (!/^[A-Za-z_$][\w$]*$/.test(name)) continue;
       if (kind === "literal") { localWrites.push({ name, off: a + t.indexOf(name) }); litKeys.push(name); }
-      else localReads.push({ name, recv, off: a + t.indexOf(name), form: km[4] === "=" ? "= default in a destructuring pattern" : null });
+      else localReads.push({ name, recv, key: keyOf(recv, i), off: a + t.indexOf(name), form: km[4] === "=" ? "= default in a destructuring pattern" : null });
     }
 
     /* THE WHOLE RECORD DEFAULTED, which is the coarsest form of this defect and the one §Architecture opens
@@ -933,16 +1186,25 @@ function scanJS(file, src) {
   const STRLIT = /(["'`])((?:[^\\]|\\.)*?)\1/g;
   while ((m = STRLIT.exec(code))) {
     if (struct[m.index] !== m[1]) continue;
-    for (const t of markersIn(m[2]))
-      (emitting(m.index) ? rec(markers, t).writes : rec(markers, t).reads).push(site(m.index));
+    for (const t of markersIn(m[2])) {
+      const printed = emitting(m.index) || SHELL_ECHO.test(m[2].slice(0, t.at));
+      (printed ? rec(markers, t.name).writes : rec(markers, t.name).reads).push(site(m.index));
+    }
   }
   /* A regex literal matching a marker is the same reference — `/^@RESUMED (\d+)$/` is how solvergate reads
      one. It is found in `code` at an offset the mask blanked, which is exactly how a regex is told from a
      division here: the masker already decided, and this only reads what it decided. */
   const RXLIT = /\/(?:[^/\\\n[]|\\.|\[(?:[^\]\\]|\\.)*\])+\/[a-z]*/g;
   while ((m = RXLIT.exec(code))) {
-    if (!/^\s*$/.test(struct.slice(m.index + 1, m.index + m[0].length - 1).replace(/[a-z]+$/, ""))) continue;
-    for (const t of markersIn(m[0])) rec(markers, t).reads.push(site(m.index));
+    /* THE FLAGS COME OFF BEFORE THE SLICE, NOT AFTER IT. Slicing to `length - 1` keeps the CLOSING SLASH,
+       and a trailing `/` is not a lowercase letter — so stripping flags from that string stripped nothing,
+       the interior test saw a non-blank character and every FLAGGED regex in the corpus was silently dropped.
+       A marker matched by `/^@TAG (.*)$/m` therefore had no reader this could see, which put two whole and
+       working stream contracts in the report as halves nobody reads: the same false red as a truncated marker
+       token, from the same place — an off-by-one in the instrument rather than a gap in the tree. */
+    const flags = /[a-z]*$/.exec(m[0])[0];
+    if (!/^\s*$/.test(struct.slice(m.index + 1, m.index + m[0].length - 1 - flags.length))) continue;
+    for (const t of markersIn(m[0])) rec(markers, t.name).reads.push(site(m.index));
   }
 
   collectDomainsJS(file, src, code, struct);
@@ -1402,6 +1664,7 @@ const abiBindings = new Map();  // method -> {fn, ret, out, file, line}
 const mojomMethods = new Map(); // "<iface>#Step" -> {file, line, iface, reply:[names], unresolved:[…]}
 const servedInterfaces = [];    // {iface, file, line} — the interface a binding table's own document names
 const abiCcalls = new Map();    // qjs_x -> [{file,line}]        a driver reaching the entry directly
+const mojoReplyReads = [];      // {file,line,method,name}       `(await x.m()).f` — the CALLER'S read of a reply
 
 /* The C side: the marker the entry source puts on every ABI body, with the type in front of the name. */
 function collectAbiC(file, src, code, struct) {
@@ -1643,13 +1906,30 @@ for (const s of jsScans)
   }
 
 const ambiguous = [];   // a receiver that reads exactly ONE field of some emitted shape — undecidable, counted
+
+/* The C matcher literals, anchored now that both producer sides — the C emissions and the JS record
+   constructions — are in. */
+for (const cm of cMatched) {
+  let bestN = 0;
+  for (const [, shp] of shapes) { let h = 0; for (const k of cm.keys) if (shp.has(k)) h++; if (h > bestN) bestN = h; }
+  const unwritten = cm.keys.filter((k) => !(fields.get(k)?.writes.length));
+  if (bestN >= 2 || !unwritten.length) {
+    for (const k of cm.keys) rec(fields, k).reads.push({ file: cm.file, line: cm.line });
+    continue;
+  }
+  for (const k of cm.keys) if (!unwritten.includes(k)) rec(fields, k).reads.push({ file: cm.file, line: cm.line });
+  ambiguous.push({ file: cm.file, line: cm.line, recv: "a matcher pattern", shared: cm.keys.find((k) => !unwritten.includes(k)),
+                   unwritten });
+}
+
 for (const s of jsScans) {
   const byRecv = new Map();
   for (const r of s.localReads) {
-    if (!byRecv.has(r.recv)) byRecv.set(r.recv, []);
-    byRecv.get(r.recv).push(r);
+    if (!byRecv.has(r.key)) byRecv.set(r.key, []);
+    byRecv.get(r.key).push(r);
   }
-  for (const [recv, rs] of byRecv) {
+  for (const [, rs] of byRecv) {
+    const recv = rs[0].recv;
     const names = new Set(rs.map((r) => r.name));
     let best = null, bestN = 0;
     for (const [id, shp] of shapes) {
@@ -1822,6 +2102,37 @@ let abiServed = null;    // the interface the binding table's own document is im
   }
 }
 
+/* ---- the caller's read of a mojo reply --------------------------------------------------------------------- */
+
+/* THE HALF THAT WAS ONE-SIDED. The ABI diff above asks whether the RENDERER places its answer under the field
+ * the boundary declares; this asks whether the CALLER takes it back out under that same field. They are the
+ * two ends of one wire and only both together close it: an `out:` that agrees with the mojom and a bridge that
+ * reads a third spelling is `cspBlocks`/`cspBlocked` with a validated boundary in between, where the caller
+ * gets `undefined` from a call that succeeded and every downstream number is a plausible datum.
+ *
+ * A method the boundary does not declare stays a REFUSAL rather than becoming a finding: which record that
+ * call answers with is then not something this can read, and guessing it is the invention this file is against.
+ */
+const replyFieldDefects = [];
+for (const r of mojoReplyReads) {
+  const mm = abiServed ? mojomMethods.get(abiServed + "#" + upperFirst(r.method)) : null;
+  if (!mm) {
+    refuse(r.file, r.line, "an awaited call whose method the typed boundary does not declare — the record its " +
+           "answer arrives as cannot be named, so the field read off it cannot be diffed against anything",
+           `${r.method}() -> .${r.name}`);
+    continue;
+  }
+  if (mm.unresolved.length || !mm.reply.length) {
+    refuse(r.file, r.line, "an awaited call on a method whose declared reply this could not read whole — a " +
+           "field read off it cannot be said to be absent from a list that is itself incomplete",
+           `${r.method}() -> .${r.name}`);
+    continue;
+  }
+  if (!mm.reply.includes(r.name))
+    replyFieldDefects.push({ file: r.file, line: r.line, method: r.method, name: r.name,
+                             reply: mm.reply, at: `${mm.file}:${mm.line}` });
+}
+
 /* ---- verdict --------------------------------------------------------------------------------------------- */
 
 const readNoWriter =[...fields].filter(([, e]) => e.reads.length && !e.writes.length);
@@ -1904,7 +2215,8 @@ if (ambiguous.length) {
       `name(s) no producer writes. Whether the object is that record is not decidable here, so neither is whether ` +
       `those names are the defect; this is the report on itself, not a pass ──`);
   for (const a of ambiguous.slice(0, 15))
-    log(`  ${place(a)}  \`${a.recv}\` shares \`${a.shared}\`, also reads ${a.unwritten.slice(0, 4).map((n) => `\`${n}\``).join(", ")}${a.unwritten.length > 4 ? " …" : ""}`);
+    log(`  ${place(a)}  \`${a.recv}\` ${a.shared ? `shares \`${a.shared}\`, also names` : "names only"} ` +
+        `${a.unwritten.slice(0, 4).map((n) => `\`${n}\``).join(", ")}${a.unwritten.length > 4 ? " …" : ""}`);
   if (ambiguous.length > 15) log(`  … and ${ambiguous.length - 15} more`);
 }
 
@@ -1955,6 +2267,12 @@ log(`── qjs_* ABI ── ${abiEntries.size} QJS_EXPORT entr(ies), ${abiExpor
 show(`ABI DESCRIPTIONS THAT DISAGREE — ${abiDefects.length}`, abiDefects,
      (d) => `${d.place}  ${d.kind}: ${d.name} — ${d.text}`, 30);
 
+log(`── mojo reply reads ── ${mojoReplyReads.length} awaited call(s) whose answer a field is read off` +
+    (mojoReplyReads.length ? "" : " — NOTHING WAS CHECKED, so the row below is silent because nothing was asked"));
+show(`A REPLY FIELD THE BOUNDARY DOES NOT DECLARE — ${replyFieldDefects.length} caller read(s)`, replyFieldDefects,
+     (d) => `${place(d)}  \`(await …${d.method}()).${d.name}\` — ${abiServed}'s reply declares ` +
+            `{${d.reply.join(", ")}} at ${d.at}, so this read is undefined from a call that succeeded`);
+
 /* PER AREA AS WELL AS IN TOTAL, for §Testing's reason: one number in which the widest surface answers most of
    the count makes every other component invisible. */
 {
@@ -1984,7 +2302,15 @@ if (refusals.length) {
       `place a field name could be hiding, and a scan that guessed past it would report a plausible answer ──`);
   for (const [reason, n] of [...rByReason].sort((a, b) => b[1] - a[1])) {
     log(`  ${String(n).padStart(5)}  ${reason}`);
-    for (const r of refusals.filter((x) => x.reason === reason).slice(0, 4)) log(`         ${place(r)}  ${r.text}`);
+    /* EVERY PLACE, not the first four. The only useful thing to do with a refusal is OPEN it, and a listing
+       that showed four of twenty-eight made the largest group in this report unactionable — a reader could
+       not tell one unreadable construct repeated across a file from twenty-eight distinct ones, which is the
+       difference between one piece of work and twenty-eight. A group that grows makes the report grow, which
+       is the correct pressure; the cap that remains is only there so a masker regression cannot bury the
+       verdict under its own output. */
+    const rs = refusals.filter((x) => x.reason === reason);
+    for (const r of rs.slice(0, 60)) log(`         ${place(r)}  ${r.text}`);
+    if (rs.length > 60) log(`         … and ${rs.length - 60} more in this group`);
   }
 }
 
@@ -2008,6 +2334,7 @@ const cats = [
   ["values a producer returns that an exhaustive construct does NOT enumerate", unenumerated.length],
   ["producers whose RETURN DOMAIN is undeclared while a consumer enumerates constants", undeclaredDomain.length],
   ["qjs_* ABI descriptions that DISAGREE — an entry, its export, its binding, its declared method", abiDefects.length],
+  ["mojo reply fields a CALLER reads that the boundary does not declare", replyFieldDefects.length],
   ["receivers whose record identity is AMBIGUOUS — unanswerable, so unaudited", ambiguous.length],
   ["constructs REFUSED — unreadable, so unaudited", refusals.length],
 ].filter(([, n]) => n);

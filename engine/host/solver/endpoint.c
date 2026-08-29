@@ -391,10 +391,10 @@ static void body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     /* `text/plain;charset=UTF-8` IS AN UNDECLARED BODY, NOT A BODY DECLARED AS TEXT, and reading it as one is
        what makes this capability fire on real code rather than on fixtures that spell the header out. Fetch
        §5.2 "BodyInit unions" gives a USVString body exactly that type, so `fetch(u, {method:"POST", body:
-       JSON.stringify(x)})` — the commonest POST in any bundle, and the shape testing/test-spec.js asserts
-       against — arrives carrying a type the PAGE never chose. So its bytes go through the real JSON parser and
-       either are a name -> value document or are not; a plain-text body that is not one simply fails to parse
-       and records nothing, which is the same answer as before. This is not sniffing: nothing branches on a
+       JSON.stringify(x)})` — the commonest POST in any bundle — arrives carrying a type the PAGE never chose.
+       So its bytes go through the real JSON parser and either are a name -> value document or are not; a
+       plain-text body that is not one simply fails to parse and records nothing, which is the same answer as
+       before. This is not sniffing: nothing branches on a
        PATTERN in the bytes, the engine runs the real codec and uses what it returns (§A JS-engine encoding
        builtin is modeled faithfully). A type the page DID declare is still the only thing consulted for it. */
     if (mime_type_is_json(&mt) || (mt.type && mt.subtype && !strcmp(mt.type, "text") && !strcmp(mt.subtype, "plain"))) {
