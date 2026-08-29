@@ -1,8 +1,9 @@
 <!doctype html><html><head><title>instrument control — server-injected state</title></head><body>
 <!--
   INSTRUMENT CONTROL, SERVER-INJECTED-STATE HALF. One question: does a record the SERVER filled answer as
-  server-injected state — its present members carrying the bytes that were actually sent, its ABSENT members
-  unknown so the gate over one FORKS — no matter which of the two channels the server used to inject it.
+  server-injected state — its held members carrying the bytes that were actually sent, and a gate over ANY of
+  them forking whether the record holds the member or not — no matter which of the two channels the server
+  used to inject it.
 
   THE TWO CHANNELS ARE ONE FACT AND THAT IS THE WHOLE RUNG. Both records below are byte-identical and both
   arrive inside the document's own response, rendered against this visitor's credentials. They differ only in
@@ -21,17 +22,37 @@
   frontier — which is exactly the competition index.html's orphan rung loses. And a row is isolated by ORIGIN,
   so a fourth document sharing a port would put these endpoints in another row's union.
 
-  WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable:
-      /api/200/inline-value            the inline record's PRESENT member, as the bytes the server sent
-      /api/inline-gated                the inline record's ABSENT member, gate forked
-      /api/200/block-value             the data block's PRESENT member, as the bytes the server sent
+  THE PAYLOAD IS WRITTEN SO THE TWO HALVES OF THE ASYMMETRY CANNOT BE CONFUSED, which is loaded-config.html's
+  rule applied to the two channels a server has INSIDE the document, and it is the half this rung used to be
+  missing. `admin` and `props.pageProps.beta` are members the record HOLDS, as `false`; `statusCode` is one it
+  holds as a value a URL is built out of; `user` is one it does NOT hold. A member the record HOLDS carries the
+  server's real bytes as its EXAMPLE — that is a fact the run observed and concretising it loses nothing, so
+  the concrete address must appear — and it is opaque for CONTROL FLOW all the same, so the same call site must
+  ALSO report its shape and the gate over it must still fork. A member the record does NOT hold is unknown
+  injected input: no example, and the gate over it forks to the logged-in arm. Inverting either half buries the
+  gated code or fabricates a value the server never sent.
+
+  WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable. The two arms
+  owe the SAME five lines and the list says so line for line, because a list that asked less of one arm would
+  render the disagreement it exists to catch as the expectation:
+      /api/200/inline-value            the inline record's HELD member, as the bytes the server sent
+      /api/{…statusCode}/inline-value  the same call site's SHAPE, carrying the record's published path
+      /api/inline-admin                a member HELD as `false`, gate forked
+      /api/inline-beta                 the same, two records deeper
+      /api/inline-gated                a member the record does NOT hold, gate forked
+      /api/200/block-value             the data block's HELD member, as the bytes the server sent
       /api/{…statusCode}/block-value   the same call site's SHAPE, carrying the block's provenance
-      /api/block-gated                 the data block's ABSENT member, gate forked
+      /api/block-admin                 a member HELD as `false`, gate forked
+      /api/block-beta                  the same, two records deeper
+      /api/block-gated                 a member the record does NOT hold, gate forked
       runOutcomesMine {complete:1}
-  A run with the first two and not the last three is the data-block channel missing while the inline one
-  works, which is one missing capability and not a flaky number.
+  AN ARM THAT EMITS ITS CONCRETE LINE AND ITS NOT-HELD LINE AND NEITHER OF THE OTHER THREE READS AS A PASS ON
+  ITS OWN, and it is the defect this rung exists for: it is a channel that answers a HELD member as a plain
+  value, so every gate over one took a single arm and every call site built out of one reported an address with
+  no hole in it. Nothing about such a run says a gate went unexplored — the two endpoints it did learn are
+  real — and what is lost is the logged-in surface, which is the whole point of the tool.
 -->
-<script>window.__CTL_INLINE__ = {"region":"us-east-1","props":{"pageProps":{"statusCode":200}}};</script>
-<script id="__CTL_BLOCK__" type="application/json">{"region":"us-east-1","props":{"pageProps":{"statusCode":200}}}</script>
+<script>window.__CTL_INLINE__ = {"region":"us-east-1","admin":false,"props":{"pageProps":{"statusCode":200,"beta":false}}};</script>
+<script id="__CTL_BLOCK__" type="application/json">{"region":"us-east-1","admin":false,"props":{"pageProps":{"statusCode":200,"beta":false}}}</script>
 <script src="/state.js"></script>
 </body></html>
