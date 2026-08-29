@@ -28,10 +28,13 @@
  * is no `if` here about any of them — `withCredentials` is recorded and sent as part of the request, never
  * enforced.
  *
+ * THE XML ARM of "set a document response" runs core/xml/xml_parse.h, which is the ONE XML parse in this
+ * engine and is shared with HTML §8.5.1 `parseFromString` and §7.5.3's loader. What is THIS section's own is
+ * the CONSEQUENCE of a failure: step 6 says to return null, so an ill-formed document leaves `responseXML`
+ * null — where §8.5.1 instead builds a `parsererror` document over the identical report. The two must not be
+ * made to agree; they are two standards answering for two different callers.
+ *
  * WHAT IS ABSENT AND WHY, stated rather than stubbed:
- *   - THE XML ARM of "set a document response". lexbor ships no XML parser, so an XML MIME type reaches a
- *     DFAIL naming it rather than a silent null — a null there would be the spec's "the XML parser failed",
- *     which is a claim about a parse that never ran.
  *   - `timed out` is a real flag with the whole request-error path behind it, and nothing sets it: under this
  *     engine's virtual clock (timer.h) time moves only when the event loop has nothing runnable, so a placed
  *     request is always answered before the clock can reach the timeout. That is the honest consequence of the
@@ -78,6 +81,7 @@
 #include "solver/endpoint.h"   /* the @H surface — every request host-edge funnels one endpoint into it */
 #include "solver/engine.h"
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
+#include "core/xml/xml_parse.h"        /* the ONE place an XML document is parsed — shared with §8.5.1 and §7.5.3 */
 
 /* §3's five states, in the order the constants number them. */
 enum { XHR_UNSENT = 0, XHR_OPENED, XHR_HEADERS_RECEIVED, XHR_LOADING, XHR_DONE };
@@ -967,11 +971,37 @@ static void xhr_set_document_response(JSContext *ctx, XhrData *d)
         return;
     }
     if (!mime_type_is_html(&final_mime)) {
-        /* Step 6's XML arm. lexbor ships no XML parser, so there is nothing here to run — and answering with
-           the spec's "the XML parser failed" null would be a claim about a parse that never happened. */
+        /* STEP 6's XML ARM: "Otherwise, let document be a document that represents the result of running the
+           XML parser with XML scripting support disabled on xhr's received bytes. If that fails (unsupported
+           character encoding, namespace well-formedness error, etc.), then return null."
+           THE FAILURE IS THE SPEC'S NULL AND NOT A `parsererror`, which is where this differs from HTML
+           §8.5.1's XML arm over the same parser: the `parsererror` document is that section's own consequence,
+           and this section's is that `responseXML` stays null. So the report is READ and discarded — the
+           partial tree with it, since `d->response_object` is only written on the success path below. */
+        XmlParseReport report;
+        lxb_dom_node_t *xroot;
+        content_type = mime_type_essence(&final_mime);
         mime_type_free(&final_mime);
-        DFAIL("XMLHttpRequest §3.6.6 'set a document response' reached its XML arm — build an XML parser "
-              "(lexbor has no xml module; the HTML arm is html_parse_document) and route this branch to it");
+        bytes = fetch_body_bytes(ctx, d->received, &len);
+        dom = dom_document_create();
+        CHECK(dom != NULL, "XMLHttpRequest: OOM building the response document");
+        xroot = lxb_dom_interface_node(dom);
+        /* FLOW-PRIVATE: the response Document is this operation's own, made immediately above. */
+        if (!xml_parse_document(lxb_dom_interface_document(dom), xroot, DOM_PARSE_ROOT_PRIVATE,
+                                (const char *)bytes, len, &report)) {
+            free(content_type);
+            /* core/dom/node_interface.h's destroy and NOT lexbor's: a document's nodes come out of the AGENT's
+               heap, so `lxb_html_document_destroy` would hand back arenas every other document in this
+               instance is still allocating out of. */
+            dom_document_destroy(dom);
+            return;                                                                             /* null */
+        }
+        url = JS_ToCString(ctx, d->response_url);
+        JS_FreeValue(ctx, d->response_object);
+        /* Steps 8-11, as on the HTML arm below and for its reasons. */
+        d->response_object = document_new(ctx, dom, url ? url : "", content_type);
+        if (url) JS_FreeCString(ctx, url);
+        free(content_type);
         return;
     }
     /* Step 10's content type. DOM §4.5 gives a document a content type that is a STRING, and every other place

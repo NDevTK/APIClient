@@ -25,6 +25,7 @@
 #include "core/loader/document_load_type.h"
 #include "core/loader/html_document.h"
 #include "core/loader/text_document.h"
+#include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
 #include "check.h"
 
@@ -48,6 +49,7 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
     case DOC_LOAD_TEXT:
         return text_document_load(document, root_kind, scripting, type, text, size);
     case DOC_LOAD_XML:
+        return xml_document_load(document, root_kind, scripting, type, text, size);
     case DOC_LOAD_MULTIPART:
     case DOC_LOAD_MEDIA:
     case DOC_LOAD_EXTERNAL:
@@ -57,37 +59,8 @@ lxb_status_t document_load(lxb_html_document_t *document, DomParseRootKind root_
        named and adding one to core/loader/document_load_type.h makes THIS not compile rather than fall into a
        generic crash. What reaches here is an arm with no loader, and the §7.5 subsection to build is the
        message. CLAUDE.md §Offensive programming: a capability that does not exist is honestly ABSENT and the
-       crash is what names it — and the alternative here is not "no XML support", it is the silent wrong tree
-       the file comment describes.
-       §7.5.3 IS THE ONE WHOSE LEXICAL LAYERS ARE ALREADY IN THE TREE — `core/xml/` holds XML §2.2 [2] `Char`,
-       §2.3 [3] `S` and §2.11's end-of-line normalization as the reader every production reads its input
-       through; §2.3 [5] `Name` with Namespaces in XML §3 [4] `NCName` and §4 [7] `QName`; §4.1 [66] `CharRef`
-       and [68] `EntityRef` over §4.6's five predefined entities, which is the layer §3.3.3's normalization is
-       written on; §2.5 [15] `Comment`, §2.6 [16] `PI` with [17] `PITarget` and §2.7 [18] `CDSect`, the three
-       constructs §2.4 names as the places a literal `<` or `&` may stand; §2.8 [23] `XMLDecl` with §2.9 [32]
-       `SDDecl` and §4.3.1 [77] `TextDecl`; §2.3 [11] `SystemLiteral`, [12] `PubidLiteral` and [13] `PubidChar`;
-       and §6's namespace scope stack with every §3 and §5 namespace constraint as a returned error. Read that
-       directory rather than a list here, which is a census and goes stale.
-       WHAT IS MISSING IS THE GRAMMAR BETWEEN THEM: XML §2.8 [22] `prolog` around the declaration and around
-       [28] `doctypedecl` with [28b] `intSubset`, §4.2 [70] `EntityDecl` with §4.5's replacement text,
-       [39] `element` with [40] `STag` / [42] `ETag` / [44] `EmptyElemTag`, [43] `content`, and §3.3.3
-       attribute-value normalization over [10] `AttValue` — producing a Lexbor tree through element_create_ns
-       (core/dom/element.h, which does NOT case-fold, unlike lexbor's own entry) and dom_attr_write
-       (core/dom/attr_list.h), and reporting well-formedness errors for §8.5.1's `parsererror`. Lexbor ships no
-       `xml` module, so CLAUDE.md's bind-before-build order has nothing at the "existing Lexbor module" rung and
-       this is a faithful spec port; `ls source/lexbor` in the vendored checkout is the whole of that check,
-       which is why no version number is written here — one was, it named a release this build no longer uses,
-       and a sentence that stays true about the standard while going wrong about this tree is the stale
-       citation CLAUDE.md warns about.
-       AND THE SCRIPTS IN THAT DOCUMENT ARE NOT HTML'S: HTML §14.2 "Parsing XML documents" runs an XML parser
-       with XML scripting support enabled, which sets a `script` element's parser document and clears its force
-       async, and then — at the element's END TAG, after a microtask checkpoint — prepares it. There is no
-       raw-text tokenizer state, so a `<script>` body is ordinary [43] `content` and a `<![CDATA[` inside one
-       is §2.7's CDSect rather than program text.
-       core/html/domparser.c's XML arm of HTML §8.5.1 `parseFromString`, and core/xhr/xml_http_request.c's XML
-       arm of XHR's "set a document response", stand at this same wall and say so at their own sites — checked
-       before this comment claimed it. ONE component serves all three; when it lands, every one of those sites
-       is deleted along with the prose that agreed with them. */
+       crash is what names it — and the alternative here is not "no support for this arm", it is the silent
+       wrong tree the file comment describes. */
     DFAIL(document_load_type_section(arm));
     /* THE RELEASE HALF. `DFAIL` is compiled out at APICLIENT_DEV=0 and the caller's own always-fatal CHECK on
        this status is what stops the response there — CLAUDE.md §Offensive programming: in release the same

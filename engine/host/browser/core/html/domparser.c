@@ -12,22 +12,14 @@
  * but the four PARSE-BOUNDARY seams a lexbor tree needs afterwards, and WHICH of them §8.5.1 asks for is
  * decided by the standard rather than by symmetry — see the seams at the end of `parse_html_from_a_string`.
  *
- * THE XML ARM CRASHES AND NAMES WHAT TO BUILD, because no component here yet parses a DOCUMENT — core/xml/
- * holds the character, name, reference, markup, declaration, literal and namespace layers, §3.1's three tags,
- * §3's [39] element walk over §3.1's [43] content, and §2.1's [1] document over §2.8's [22] prolog — so what
- * stands between them and a Document is a TREE BUILDER and the report it fails into, which is the crash's own
- * list, in spec order. Lexbor ships no
- * `xml` module — `engine/build.mjs` states which release this tree pins and `ls source/lexbor` in the vendored
- * checkout is the whole of the check — so CLAUDE.md's bind-before-build order has nothing at the "existing
- * Lexbor module" rung and what is owed is a faithful spec port. THE RELEASE NUMBER THAT STOOD IN THIS SENTENCE
- * IS GONE ON PURPOSE: it was a version this build no longer uses, and a citation that stays true about the
- * standard while going wrong about this tree is precisely the stale `DFAIL` CLAUDE.md describes — the claim to
- * make is the one a reader can re-run, not the one that was measured once.
- * XMLHttpRequest §3.6.6 already stands at the same wall and says so in the same words
- * (core/xhr/xml_http_request.c, "set a document response" step 6) — checked, not assumed, before this DFAIL was
- * written to point at it. Answering the XML arm with an empty document, or with §8.5.1's `parsererror`
- * document, would be a claim about a parse that never happened: `parsererror` is what a WELL-FORMEDNESS ERROR
- * produces, and a build with no parser has not found one.
+ * THE XML ARM IS A DIFFERENT PARSER AND A DIFFERENT SET OF SEAMS — core/xml/xml_parse.h, which the two other
+ * entries that parse XML in this engine share (XMLHttpRequest §3.6.6 "set a document response" step 6, and
+ * HTML §7.5.3 "Loading XML documents" through core/loader/xml_document.h). What is specific to §8.5.1 is the
+ * SCRIPTING answer — this parser is created "with XML scripting support disabled", so HTML §14.2's script
+ * steps are not owed here and ARE owed at §7.5.3, which is why the two entries differ rather than sharing a
+ * flag — and the `parsererror` document, which is §8.5.1's own consequence for a well-formedness error and not
+ * something the parser decides. See `parse_xml_from_a_string` for which of the HTML arm's parse-boundary seams
+ * do not run and for each one's own reason.
  *
  * "THIS'S RELEVANT GLOBAL OBJECT'S ASSOCIATED DOCUMENT" IS HELD BY THE OBJECT, and that is why this interface
  * has a record at all when the standard gives it no state. §8.5.1 step 2 takes the new Document's URL from the
@@ -67,6 +59,8 @@
 #include "core/html/trusted_types.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
+#include "core/xml/xml_parse.h"        /* the ONE place an XML document is parsed — shared with §3.6.6 and §7.5.3 */
+#include "solver/dom_cow.h"
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* PER REALM — §3.7. The class is the AGENT's; the prototype lives in quickjs's per-context class-proto slot. */
@@ -230,6 +224,55 @@ static JSValue parse_html_from_a_string(JSContext *ctx, const char *url, const c
     return doc;
 }
 
+/* §8.5.1 step 3's OTHERWISE arm: "Create an XML parser parser, associated with document, and with XML
+ * scripting support disabled. Parse compliantString using parser." — then its next step, which builds a
+ * `parsererror` document when that parse reported "an XML well-formedness or XML namespace well-formedness
+ * error". core/xml/xml_parse.h owns both halves and the three consumers of an XML parse share it.
+ *
+ * NONE OF THE HTML ARM'S PARSE-BOUNDARY SEAMS RUN HERE, and each is a different standard's answer rather than
+ * one blanket "XML is different":
+ *  - `dom_attr_normalize_parsed` must NOT run. It exists because HTML tree construction produces attributes in
+ *    the null namespace while lexbor stamps each with its element's, and the difference is only knowable at
+ *    the boundary (core/dom/attr_list.h). An XML attribute's namespace is Namespaces in XML §6.2's EXPANSION,
+ *    computed from the bindings in scope and written straight through `dom_attr_write` — so there is nothing
+ *    to correct, and running the correction would rewrite names the standard just decided.
+ *  - The `<script>` stamps do not run because §8.5.1 names the reason itself: this parser has XML SCRIPTING
+ *    SUPPORT DISABLED, so HTML §14.2's steps — the parser document, the force-async clear, the prepare at the
+ *    end tag — are not owed for THIS entry. §7.5.3's loader is the entry that IS owed them, and
+ *    core/loader/xml_document.c is where that crashes by name.
+ *  - `<style>`, media and image are HTML §4.2.6, §4.8.11.2 and §4.8.4.3.2 element-parsed seams, whose triggers
+ *    are stated over an HTML parser's stack of open elements. An `svg` or arbitrary-namespace element that
+ *    happens to be spelled `style` in an XML document is not that element.
+ *
+ * `document has no child nodes` IS ASSERTED, which is §8.5.1's own first step for this branch — the Document
+ * was created a statement ago and nothing between the two runs the page's code. */
+static JSValue parse_xml_from_a_string(JSContext *ctx, const char *url, const char *type,
+                                       const char *xml, size_t len)
+{
+    lxb_html_document_t *dom = dom_document_create();
+    lxb_dom_node_t      *root;
+    XmlParseReport       report;
+
+    CHECK(dom != NULL, "DOMParser: OOM building the parsed Document");
+    root = lxb_dom_interface_node(dom);
+    /* FLOW-PRIVATE, for `parse_html_from_a_string`'s reason and with its argument: the Document was created a
+       statement ago and no sibling flow can hold it (solver/dom_cow.h). */
+    if (!xml_parse_document(lxb_dom_interface_document(dom), root, DOM_PARSE_ROOT_PRIVATE, xml, len, &report)) {
+        lxb_dom_node_t *c, *next;
+        /* The partial tree is discarded so that §8.5.1's "Assert: document has no child nodes" holds where the
+           standard writes it — one line below, over the document this branch is about to describe. */
+        for (c = root->first_child; c != NULL; c = next) { next = c->next; dom_cow_remove_child(c); }
+        DCHECK(root->first_child == NULL,
+               "HTML §8.5.1 step 3's parsererror branch begins \"Assert: document has no child nodes\" and "
+               "this document still has one — the partial tree an ill-formed parse left is what was just "
+               "discarded, so a survivor is a node nothing in this build put there");
+        xml_parse_error_document(lxb_dom_interface_document(dom), root, DOM_PARSE_ROOT_PRIVATE, &report);
+    }
+    /* §8.5.1 step 2: the URL is the relevant global's associated Document's, and the content type is `type` —
+       which for this arm is whichever XML DOMParserSupportedType the caller passed, unchanged. */
+    return document_new(ctx, dom, url, type);
+}
+
 /* §8.5.1 `parseFromString(string, type)`.
  *
  * 1. `compliantString` ← get trusted type compliant string with TrustedHTML, this's relevant global object,
@@ -280,78 +323,21 @@ static JSValue js_domparser_parse_from_string(JSContext *ctx, JSValueConst this_
                         "are the only two ways a Document exists here and both take one");
 
     if (strcmp(type, "text/html") != 0) {
-        JS_FreeCString(ctx, type);
+        /* STEP 3's OTHERWISE arm — the XML parser, with XML scripting support disabled. */
+        JSValue xdoc;
+        concrete = domparser_concrete(ctx, compliant);
         JS_FreeValue(ctx, compliant);
-        /* STEP 3's OTHERWISE arm. Building the parsererror document here would be a claim about a parse that
-           never ran: §8.5.1 produces one for an XML WELL-FORMEDNESS ERROR, which a build with no parser has not
-           found. The release build throws for the same reason — a capability that is not supportable outside
-           development fails rather than fabricating a Document the moat would then report on. */
-        DFAIL("HTML §8.5.1 parseFromString reached its XML arm and this build has no XML DOCUMENT parser. "
-              "Lexbor ships no xml module — `ls engine/lexbor/source/lexbor` is the whole of that check and it "
-              "is the same answer upstream, so CLAUDE.md's bind-before-build order has nothing at the "
-              "existing-module rung and what is owed is a faithful spec port. XMLHttpRequest §3.6.6 step 6 "
-              "stands at the same wall in core/xhr/xml_http_request.c. BUILD ONE COMPONENT FOR BOTH: a "
-              "namespace-aware XML parser producing a Lexbor tree and reporting XML and XML-namespace "
-              "well-formedness errors. MOST OF IT IS ALREADY IN core/xml/ AND MUST NOT BE REBUILT — read those "
-              "headers before writing a line. The LEAVES: xml_char.h is XML 1.0 5e §2.2's [2] Char, §2.3's [3] "
-              "S and §2.11's end-of-line normalization as the reader every production reads through, plus the "
-              "§4.3.3 encode §3.3.3 needs; xml_name.h is §2.3's [5] Name with Namespaces in XML's NCName and "
-              "QName; xml_ref.h is §4.1's [66] CharRef and [68] EntityRef with §4.6's five predefined "
-              "entities; xml_markup.h is §2.5's [15] Comment, §2.6's [16] PI and §2.7's [18] CDSect — the "
-              "three constructs §2.4 names as the places a literal < or & may stand, so none of their content "
-              "ever reaches xml_ref.h; xml_decl.h is §2.8's [23] XMLDecl with §2.9's [32] SDDecl and §4.3.1's "
-              "[77] TextDecl; xml_literal.h is §2.3's [11] SystemLiteral, [12] PubidLiteral and [13] "
-              "PubidChar; xml_ns.h is that standard's §6 scope stack with every §3 and §5 constraint as a "
-              "returned error. AND THE FIRST GRAMMAR RULE IS BUILT TOO: xml_tag.h is §3.1's [40] STag, [42] "
-              "ETag and [44] EmptyElemTag over [41] Attribute, [25] Eq and [10] AttValue, with §3.3.3 "
-              "Attribute-Value Normalization and with [WFC: Unique Att Spec], [WFC: No < in Attribute Values] "
-              "and [WFC: Entity Declared] decided — so DO NOT WRITE A SECOND TAG SCANNER. AND SO IS THE "
-              "PRODUCTION THAT PUTS ONE TAG INSIDE ANOTHER: xml_element.h is §3's [39] element ::= "
-              "EmptyElemTag | STag content ETag over §3.1's [43] content, the ELEMENT STACK, and it owns "
-              "[WFC: Element Type Match] — the constraint xml_tag.c does not check because §3 writes it on "
-              "[39] and it is about a PAIR of tags. It is a PULL walk over an explicit heap stack (§C-stack: "
-              "[43] contains [39], so C recursion would put a page's own nesting depth on the C stack) and it "
-              "reports [43]'s five alternatives plus the two boundaries of [39] as items — so DO NOT WRITE A "
-              "SECOND CONTENT WALK EITHER. AND SO IS THE WHOLE OF WHAT AN ENTITY IS: xml_document.h is "
-              "§2.1's [1] document ::= prolog element Misc* with §2.8's [22] prolog ::= XMLDecl? Misc* "
-              "(doctypedecl Misc*)? and its [27] Misc ::= Comment | PI | S, delegating [39] whole, holding "
-              "the [23] XMLDecl for a caller to ask by name, consuming the white space that becomes no node, "
-              "and deciding §2.1's `there is exactly one element, called the root`. "
-              "WHAT IS STILL OWED, IN SPEC ORDER: (1) THE DOM "
-              "CONSTRUCTION: each [39] element becomes a Lexbor node, its attributes are expanded through "
-              "xml_ns.h's scope (push at the STag, pop at the ETag) and Namespaces in XML 1.0 3e §6.3 "
-              "Uniqueness of Attributes' expanded-name half is checked there, since xml_tag.c can only answer "
-              "§3.1's literal-Name half. THAT is the component that must be a STEP MACHINE — a parse over "
-              "attacker-length input is unbounded, and the walks beneath it are re-enterable at every "
-              "construct because their whole state is the caller's POD reader plus stacks whose owner they "
-              "assert. It drives xml_document.h's pull walk: one item per call, until xml_document_ended. (2) "
-              "§8.5.1 step 3's parsererror element in the "
-              "http://www.mozilla.org/newlayout/xml/parsererror.xml namespace, built from the error record — "
-              "every component in core/xml/ already reports its sentence as a message, so nothing new has to "
-              "be worded — xml_document_error_message and the layers its detail chains down to already word "
-              "every sentence. (3) Route this arm to it, and route §3.6.6's arm to it too. "
-              "THE DOCTYPE IS A SECURITY DECISION AND MUST CRASH RATHER THAN BE SKIPPED. Nothing here reads "
-              "§2.8's [28] doctypedecl, which is why an [68] EntityRef outside §4.6's five is answered "
-              "[WFC: Entity Declared] — in a document without any DTD that IS the standard's answer, and it is "
-              "answered at TWO sites on purpose: xml_tag.c for §3.1's [10] AttValue and xml_element.c for "
-              "§3.1's [43] content. Those two must stay two, because §4.4 Entity Type Table gives 'Reference "
-              "in Content' and 'Reference in Attribute Value' different rows and §4.4.4 Forbidden's third "
-              "bullet makes a reference to an EXTERNAL entity fatal in a value while content includes it — one "
-              "site cannot answer for both the moment declarations exist. "
-              "The moment [28] is read that stops being true, so whoever builds it owes §4.2's [70] EntityDecl "
-              "WITH §3.1's [WFC: No External Entity References] and §4.4.4 Forbidden's third bullet in the "
-              "same diff: an attribute value MUST NOT reference an external entity, and a parser that resolves "
-              "one has put an XXE inside a security tool. Until then a [28] doctypedecl is an unbuilt "
-              "capability, and the prolog walk is where it crashes: xml_document.c holds the `'<!DOCTYPE'` "
-              "delimiter and the CHECK_FAIL beside it, so building [28] moves the peek and the crash together "
-              "and cannot leave one behind. It is a CHECK and not a DCHECK because a release build with the "
-              "crash compiled out would report the declaration as [22]'s `matches none of these constructs`, "
-              "which is a plausible diagnosis of the wrong thing about a document that matches [22] exactly. "
-              "This is also why xml_element.c reports a `<!DOCTYPE` standing in [43] "
-              "content as a fatal error rather than reading one: §2.8 says the document type declaration MUST "
-              "appear before the first element, so in content it is a document's mistake and not this build's "
-              "missing capability");
-        return JS_ThrowInternalError(ctx, "parseFromString: this build has no XML parser");
+        DCHECK(JS_IsString(concrete),
+               "parseFromString reached its XML parse with markup that is neither a string nor unknown "
+               "external input — the IDL declaration is what converts the argument, and running the page's "
+               "toString from here is the drive-to-completion the flow machinery exists to avoid");
+        markup = JS_ToCStringLen(ctx, &len, concrete);
+        JS_FreeValue(ctx, concrete);
+        if (!markup) { JS_FreeCString(ctx, type); return JS_EXCEPTION; }
+        xdoc = parse_xml_from_a_string(ctx, url, type, markup, len);
+        JS_FreeCString(ctx, markup);
+        JS_FreeCString(ctx, type);
+        return xdoc;                                 /* step 4 */
     }
 
     concrete = domparser_concrete(ctx, compliant);
