@@ -284,6 +284,23 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       the total except the four files that can now run. */
                    "html/browsers/browsing-the-web/remote-context-helper/resources",
                    "html/browsers/browsing-the-web/back-forward-cache/resources",
+                   /* AND THE THIRD ONE, WHOSE ABSENCE THIS GATE HAD BEEN REPORTING AS AN ABORT.
+                      `back-forward-cache/weblocks-worker.https.window.js` names
+                      `/html/browsers/browsing-the-web/remote-context-helper-tests/resources/test-helper.js`,
+                      which is a REAL FILE at the pinned revision in a directory NO entry above reaches —
+                      `remote-context-helper` and `remote-context-helper-tests` are two directories, and having
+                      the first is not having the second. That is the excluded-test failure with a reason
+                      attached, which this file calls the hardest kind to notice.
+                      IT COSTS 27 TEST FILES AND THAT IS THE DECISION, NOT A SIDE EFFECT. Cone mode materializes
+                      every directory ON THE PATH, so naming this `resources` puts
+                      `remote-context-helper-tests`'s own level on disk — 27 `.window.js` files that test the
+                      RemoteContextHelper itself (addWindow, addIframe, addWorker, navigation, bfcache), 32 RUNS
+                      because `addIframe-urlType` declares four variants and `addWindow-urlType` three. They are
+                      claimed by WPT_OWN_LEVEL below, because a test file on disk that neither list accounts for
+                      fails this gate, and because leaving them out to keep one helper cheap would be buying a
+                      smaller number with an excluded directory. Expect bad first numbers: every one of them
+                      opens a window or a worker. */
+                   "html/browsers/browsing-the-web/remote-context-helper-tests/resources",
                    /* `/html/resources/common.js` is named by a `<script src>` in dom/ranges, and a document
                       whose script 404s runs a test nobody wrote. Its last segment is `resources`, so it is
                       checked out to BE USED and contributes no test of its own. */
@@ -328,6 +345,11 @@ const WPT_OWN_LEVEL = [
      five files under IndexedDB, fs and webmessaging name its helpers. Its unlisted sibling directories are
      broadcastchannel/ and eligibility/. */
   "html/browsers/browsing-the-web/back-forward-cache",
+  /* The 27 files at remote-context-helper-tests's own level, on disk because its own `resources` is now listed
+     above for the one helper `weblocks-worker.https.window.js` names. It has no subdirectory but that
+     `resources`, so this entry and that one together account for the whole directory — 26 of the 27 name
+     `./resources/test-helper.js`, which the WPT_PATHS entry supplies. */
+  "html/browsers/browsing-the-web/remote-context-helper-tests",
   /* `accessibility_properties_basic.tentative.html` and `idlharness.window.js`, on disk because
      `wai-aria/scripts` is listed for shadow-dom/reference-target. */
   "wai-aria",
@@ -852,6 +874,55 @@ const cc = spawnSync("clang", ["-O1", "-Wno-unknown-warning-option", "-Wno-unuse
 if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr || "")); process.exit(1); }
 
 
+/* WHAT AN ABORT *IS*, WHICH THIS COLUMN USED TO REFUSE TO SAY.
+ *
+ * `aborted` counted three unrelated diagnoses under one number and a reader had to hand-cluster the log to
+ * separate them: `html/browsers` reported `aborted-runs 25`, and 21 of those were DCHECKs naming capabilities to
+ * build, 2 were a META helper the CHECKOUT does not have, and 2 were the CPU budget doing its job. Those ask for
+ * work in three different files from three different people, and the sum is what two runs get compared on — so
+ * "the abort column did not move" was read as "the same aborts fired", which it does not mean and cannot. It is
+ * the identical defect this file already fixed for `errored` and for the CPU-vs-wall kill, stopping one step
+ * short: the kill was given its own SIGNAL and then reported in the same COLUMN as the thing it is not.
+ *
+ * THE KIND IS A FACT THIS DRIVER HOLDS, NOT A PATTERN OVER ITS OWN OUTPUT. It knows whether IT installed the
+ * limit that fired (SIGXCPU is the kernel naming this driver's own rlimit), whether ITS kill timer fired (node
+ * reports `ETIMEDOUT` on the result — see the cascade for why that is not the same question as "was the signal
+ * SIGTERM"), whether IT could resolve a META script, and whether the corpus HAS the file at the pinned
+ * revision. Classifying by regex over an abort MESSAGE would be a recognizer that goes stale the day someone
+ * rewords an assert — per-spelling plumbing, with every omission a silent reclassification.
+ * ONE EXCEPTION, NAMED RATHER THAN HIDDEN: `gap` and the two `nodone`/`driver` kinds are read from the CHILD's
+ * output, because a subprocess has no other channel. What is read there is a PROTOCOL MARKER this project owns
+ * at both ends — check.h's `@WHY`, the runner's `@WPTDONE`/`@WPTERR` — never the prose inside it. The message
+ * text is DISPLAYED and never classified on, which is the whole difference: a reworded assert changes what the
+ * reader sees and cannot change which column it lands in.
+ *
+ * A KIND THIS DRIVER CANNOT NAME IS `UNKNOWN` AND IS LOUD. It is never folded into the largest bucket, because a
+ * fourth kind arriving later would then land silently in the number that drives attention — the defaulted-field
+ * defect performed in the instrument built to end it. The split is ASSERTED to sum to the count it decomposes
+ * (see `abortSplit`), so a site that forgets to name its kind breaks the gate instead of shrinking a column. */
+/* THE TEXT IS ONE LINE PER KIND, ON PURPOSE. It is printed as a table and a table whose rows wrap is a table
+   nobody reads across; the argument for each kind is the paragraph above, where it can be as long as it needs. */
+const ABORT_KINDS = {
+  gap:     "the ENGINE named a capability it lacks (@WHY) — THE WORK QUEUE.        build it at the root",
+  crash:   "the ENGINE died on an unasked-for signal, naming NOTHING.              debug the frame",
+  corpus:  "THE CORPUS could not present the test as written.                      each line says which; fix here",
+  killed:  "a RESOURCE BACKSTOP fired (CPU rlimit / wall) — a cost, not a gap.     read the CPU on the line",
+  nodone:  "the file RAN and testharness never completed.                          the line names the cause",
+  driver:  "THIS GATE's own contract broke (report line, or the spawn).            fix engine/wpt.mjs",
+  UNKNOWN: "NO fact this driver holds classifies it — a kind it does not model.    model it before reading it",
+};
+/* THE DECOMPOSITION, AND THE ASSERT THAT MAKES OMITTING A ZERO SAFE. A kind absent from the bracket is zero and
+   PROVABLY zero, because the printed parts are checked to sum to the total they sit beside — which is also what
+   catches an abort site that increments the total and names no kind. */
+function abortSplit(m, n) {
+  const sum = [...m.values()].reduce((a, b) => a + b, 0);
+  if (sum !== n)
+    throw new Error(`[wpt] ${n} abort(s) counted and ${sum} classified — an abort site incremented the total ` +
+                    "without naming its kind, so this split is not a decomposition of anything");
+  const parts = Object.keys(ABORT_KINDS).filter((k) => m.get(k)).map((k) => `${k} ${m.get(k)}`);
+  return parts.length ? `  [${parts.join("  ")}]` : "";
+}
+
 /* The AREA a file belongs to: the checked-out path it lives under, which is what the two lists name — the LONGEST
    such path, so that a standard listed alongside its components reports at the component.
    BOTH LISTS, because an own-level area is an area: `service-workers/service-worker`'s 247 files would otherwise
@@ -865,7 +936,10 @@ function byArea(rel) {
   let a = areas.get(p);
   if (!a) areas.set(p, (a = { name: p, expected: 0, done: 0, runs: 0, pass: 0, fail: 0, notrun: 0, aborted: 0,
                               unread: 0, errored: 0, abPass: 0, abFail: 0, abNotrun: 0, abFiles: 0,
-                              lines: [] }));
+                              /* PER AREA, for the reason every other column is: an area whose aborts are all
+                                 capability gaps and an area whose aborts are all missing helpers are the same
+                                 number in a total, and they are not the same work. */
+                              abKind: new Map(), lines: [] }));
   return a;
 }
 
@@ -899,7 +973,10 @@ function areaRow(a) {
   console.log(`  ${a.name.padEnd(AREA_W)}  runs ${String(a.runs).padStart(5)}  pass ${String(a.pass).padStart(7)}` +
               `  fail ${String(a.fail).padStart(7)}  notrun ${String(a.notrun).padStart(6)}` +
               `  aborted ${String(a.aborted).padStart(3)}` +
-              `  errored ${String(a.errored).padStart(3)}  unread ${String(a.unread).padStart(3)}`);
+              `  errored ${String(a.errored).padStart(3)}  unread ${String(a.unread).padStart(3)}` +
+              /* TRAILING, so the fixed columns stay aligned down the table and the ragged part is the part a
+                 reader scans rather than reads across. */
+              abortSplit(a.abKind, a.aborted));
   /* WHICH PART OF THE ROW ABOVE IS WORK THAT DID NOT FINISH — see the accumulation for the incident. Printed
      only when there IS such a part, because a row where every counted subtest came from a file that ran to
      completion is a row with nothing extra to say, and a line that reads `0` every time is a line nobody reads
@@ -1028,6 +1105,24 @@ async function substituted(dep) {
 }
 
 let pass = 0, fail = 0, notrun = 0, aborted = 0, unread = 0, errored = 0;
+const g_abKind = new Map();
+/* THE ONE PLACE AN ABORT IS COUNTED, so that naming its kind is not a thing a site can forget: there is no
+   `aborted++` left to write. The kind is checked against the table rather than trusted, because a typo at a call
+   site would otherwise invent a bucket that the summary silently drops — and the split's own sum assert would
+   then be the only thing to notice, one screen and several thousand runs later.
+   THE KIND RIDES THE ABORT LINE TOO. A 1079-line log is read with grep, and `grep 'ABORT.*\[gap\]'` is the
+   clustering a reader had to do by hand; putting the kind in the line is what makes the per-area numbers and the
+   lines behind them the same fact rather than two things to reconcile. */
+function abortRun(area, kind, rel, detail) {
+  if (!Object.hasOwn(ABORT_KINDS, kind))
+    throw new Error(`[wpt] an abort was raised with the kind ${JSON.stringify(kind)}, which is not one of ` +
+                    `${Object.keys(ABORT_KINDS).join("/")} — an abort this driver cannot name arrives as ` +
+                    "UNKNOWN, never as a bucket invented at a call site");
+  aborted++; area.aborted++;
+  g_abKind.set(kind, (g_abKind.get(kind) || 0) + 1);
+  area.abKind.set(kind, (area.abKind.get(kind) || 0) + 1);
+  area.lines.push(`  ABORT   ${rel}  [${kind}]\n         ${detail}`);
+}
 /* THE CENSUS BELOW IS A VERDICT, so it needs a home outside its own block: a test file on disk that neither list
    accounts for is an excluded test, and an excluded test is a failure — not a row a reader may skip. */
 let g_undecided = 0;
@@ -1083,6 +1178,10 @@ function harnessCause(h, started, settled) {
 }
 
 console.log("\n==================== web-platform-tests ====================");
+/* THE LEGEND GOES FIRST BECAUSE THE ROWS STREAM. Every ABORT line and every area row below carries a kind, and a
+   reader watching a long run must be able to decode one without waiting for the block at the end. */
+console.log("  an ABORT carries its KIND, and the kinds ask for work in different files: " +
+            Object.keys(ABORT_KINDS).join(" / ") + " — see the breakdown at the foot of this run");
 for (const { file: f, kind, variant } of runs) {
   /* THE RUN'S NAME CARRIES ITS VARIANT, because that is what distinguishes it from its siblings — four lines
      reading `url/url-constructor.any.js` with four different failures name nothing a reader can act on. The
@@ -1121,19 +1220,54 @@ for (const { file: f, kind, variant } of runs) {
     const unserved = deps.map((d, i) => (d === null ? meta[i] : null)).filter(Boolean)
                          .map((d) => "/" + relative(WPT, d).split(sep).join("/"));
     if (unserved.length) {
-      aborted++; area.aborted++;
-      failures.push(`  ABORT   ${rel}\n         a .sub META script the corpus server would not serve: ` +
-                    unserved.map((p) => `${p} (HTTP ${g_unserved.get(p)})`).join(", ") +
-                    "\n         it is a TEMPLATE, so its bytes on disk are not the file this test is written " +
-                    "against — see the wptserve log named above for the traceback");
+      abortRun(area, "corpus", rel,
+               "a .sub META script the corpus server would not serve: " +
+               unserved.map((p) => `${p} (HTTP ${g_unserved.get(p)})`).join(", ") +
+               "\n         it is a TEMPLATE, so its bytes on disk are not the file this test is written " +
+               "against — see the wptserve log named above for the traceback");
       continue;
     }
     const missing = deps.filter((d) => !existsSync(d));
     if (missing.length) {
-      /* A META script the sparse checkout does not have is a GATE defect, not a test result: the file would run
-         against a corpus it was not written for. Name the paths so WPT_PATHS can be widened. */
-      aborted++; area.aborted++;
-      failures.push(`  ABORT   ${rel}\n         META script not checked out: ${missing.map((d) => relative(WPT, d)).join(", ")}`);
+      /* A META script this driver cannot hand over is a CORPUS fact, never a test result — the file would run
+         against a corpus it was not written for. But it is TWO corpus facts and only ONE of them is this gate's
+         to fix, and reporting them alike sent a reader to widen a list that cannot help.
+         MEASURED, on the two `html/browsers` runs that reported "META script not checked out":
+         `back-forward-cache/weblocks-worker.https.window.js` names a helper that EXISTS at the pinned revision
+         under `remote-context-helper-tests/resources`, in a directory WPT_PATHS did not reach — a checkout gap,
+         now closed above. `back-forward-cache/pagehide-event-handler-microtasks.window.js` names
+         `./resources/test-helper.js`, and NO SUCH FILE EXISTS AT THE PINNED REVISION: wptserve's own
+         `_script_replacement` emits `<script src="./resources/test-helper.js">` into the wrapper it serves at the
+         test's address, so the browser resolves it beside the test and 404s. That file is broken UPSTREAM at
+         bf4714d and no sparse-checkout entry can supply it. One message for both would have been true of neither.
+         ASKED OF GIT, WHICH IS WHERE THE ANSWER LIVES — the corpus is a checkout of a PINNED revision, so
+         "checked out" and "exists at all" are two different questions, and the second is a fact about the TREE
+         that this driver can simply look up. `ls-tree` is what asks it: it walks TREE objects only, so it costs
+         four milliseconds and — unlike `cat-file -e` — cannot trip the lazy blob fetch this `--filter=blob:none`
+         clone would otherwise make over the network to answer a question about a path. Its exit status is 0 for
+         present and absent alike, so the answer is the OUTPUT; a non-zero status is git declining to answer and is
+         reported as that third thing, never as a confident "the corpus does not have it".
+         AT THE REVISION THIS RUN'S NUMBERS BELONG TO, which is CORPUS_AT_START's head and not the WPT_REV
+         constant: those two agreeing is what the provisioning instructions ask for and not something this line may
+         assume, and an answer quoted against a revision the corpus is not at is the stale-measurement defect. */
+      const revOf = /^[0-9a-f]{40}$/.test(CORPUS_AT_START.head) ? CORPUS_AT_START.head : null;
+      const said = missing.map((d) => {
+        const p = relative(WPT, d).split(sep).join("/");
+        if (revOf === null)
+          return `${p} — and this driver could not ask git whether the corpus HAS it: the corpus identity read ` +
+                 `as ${JSON.stringify(CORPUS_AT_START.head)}`;
+        const at = revOf.slice(0, 10);
+        const ls = spawnSync("git", ["ls-tree", revOf, "--", p], { cwd: WPT, encoding: "utf8" });
+        if (ls.status !== 0)
+          return `${p} — and git declined to say whether the corpus has it: ${(ls.stderr || "").trim()}`;
+        return ls.stdout.trim()
+          ? `${p} — it EXISTS at ${at} and this checkout does not have it, so WPT_PATHS is short of ` +
+            `${dirname(p)}: add that entry and the file runs`
+          : `${p} — it does NOT EXIST at ${at} at all, so no WPT_PATHS entry can supply it. The test names a ` +
+            "helper the pinned corpus does not contain and cannot run as written at this revision";
+      });
+      abortRun(area, "corpus", rel, "a META script this driver could not hand over:\n         " +
+                                    said.join("\n         "));
       continue;
     }
     /* WHETHER THE TEST IS A DOCUMENT IS DECIDED HERE AND NOWHERE ELSE. The runner used to re-derive it from the
@@ -1195,23 +1329,75 @@ for (const { file: f, kind, variant } of runs) {
        "signal SIGABRT" — an abort with the name thrown away, which is the one thing an abort is FOR. It cost a
        round trip per diagnosis and taught nothing on its own. */
     const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
-    const abortedHere = Boolean(why || r.signal);
+    /* WHAT *THIS DRIVER* DID, ASKED OF THE RESULT RATHER THAN GUESSED FROM THE SIGNAL. node's `spawnSync` reports
+       its own interventions as an errno on `result.error`, and the signal alone cannot tell them apart:
+       MEASURED — a `timeout:` kill is `ETIMEDOUT` **with SIGTERM**, and a `maxBuffer` overflow is `ENOBUFS`
+       **also with SIGTERM**. This cascade used to read SIGTERM as "the wall backstop" and would therefore have
+       reported a test that printed more than 256 MB — exactly the runaway `css/css-values` files that
+       re-registered one subtest 7663 times — as a 600-second block, complete with an invitation to attach gdb to
+       a process that had in fact exited on its own output. A spawn that never started (ENOENT) came out the other
+       end as "testharness.js itself never ran", which is a claim about the CORPUS made from a fact about this
+       driver's own `/bin/sh`. Both are the same mistake: reading a downstream symptom instead of the thing that
+       caused it, when the causing thing is right there on the result object. */
+    const timedOut = Boolean(r.error) && r.error.code === "ETIMEDOUT";
+    const spawnBroke = Boolean(r.error) && !timedOut;
+    const abortedHere = Boolean(why || r.signal || r.error);
     if (abortedHere) {
-      aborted++; area.aborted++;
-      /* NAME WHICH OF THE THREE THIS IS. A DCHECK abort is a missing capability and is work; a CPU-budget kill
-         is a real statement about this test's cost and is also work; a wall-backstop kill is a fact about the
-         BOX, and reporting it as either of the others sends the next reader hunting a phantom. The load average
-         rides along with the third because it is the number that explains it. */
-      const cause = why ? why[1].slice(0, 160)
-                  : (r.signal === "SIGXCPU" || r.signal === "SIGKILL") ? `exceeded the ${CPU_BUDGET_S}s CPU budget (not wall time — this test really is that expensive)`
-                  : r.signal === "SIGTERM"
-                      ? (cpuUsed < 1
-                          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of CPU — ` +
-                            `that is a BLOCK, not load: the process was asleep waiting for something that never came. ` +
-                            `Attach to it (gdb -p, /proc/PID/syscall) and look at the OTHER end`
-                          : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
-                            `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`)
-                  : "signal " + r.signal;
+      /* WHICH KIND, FROM FACTS THIS DRIVER HOLDS. Every arm below is something it KNOWS: whether its own spawn
+         failed, whether its own kill timer fired, whether the kernel raised the rlimit IT installed, and how much
+         CPU the child actually consumed. Nothing here reads an abort message to decide a column.
+         `gap` is the one arm read from the child, and it reads a MARKER (check.h's `@WHY`), never the prose in
+         it — the message is displayed and cannot move a run between columns. */
+      let kind, cause;
+      if (spawnBroke) {
+        kind = "driver";
+        cause = `this driver could not run the test at all: spawnSync failed with ${r.error.code || r.error.message}` +
+                (r.error.code === "ENOBUFS"
+                  ? ` — the child printed more than the ${1 << 28} bytes this driver will hold, so its output ` +
+                    "was truncated and NOTHING it reported can be trusted. That is a runaway in the test or in " +
+                    "the engine, and it is this driver's limit that stopped it"
+                  : " — the child may never have started, so nothing about the engine was measured");
+      } else if (why && timedOut) {
+        /* BOTH CANNOT BE TRUE OF ONE PROCESS: a @WHY aborts immediately, so a child that emitted one was gone
+           long before a 600 s timer could fire. Arriving here means this driver's own model of the run is wrong,
+           and that is precisely what must not be quietly filed under the biggest bucket. */
+        kind = "UNKNOWN";
+        cause = `the child emitted a @WHY (${why[1].slice(0, 120)}) AND this driver's kill timer fired — a ` +
+                "DCHECK aborts at once, so a process cannot do both, and this driver's accounting of the run " +
+                "is therefore wrong";
+      } else if (why) {
+        kind = "gap";
+        cause = why[1].slice(0, 160);
+      } else if (timedOut) {
+        kind = "killed";
+        cause = cpuUsed < 1
+          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of CPU — ` +
+            `that is a BLOCK, not load: the process was asleep waiting for something that never came. ` +
+            `Attach to it (gdb -p, /proc/PID/syscall) and look at the OTHER end`
+          : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
+            `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`;
+      } else if (r.signal === "SIGXCPU") {
+        kind = "killed";
+        cause = `exceeded the ${CPU_BUDGET_S}s CPU budget — SIGXCPU is the kernel raising the SOFT rlimit this ` +
+                `driver installed, so it is not wall time and not load: this test consumed ${cpuUsed.toFixed(1)}s ` +
+                "of CPU and really is that expensive";
+      } else if (r.signal === "SIGKILL" && cpuUsed >= CPU_BUDGET_S) {
+        kind = "killed";
+        cause = `exceeded the ${CPU_BUDGET_S}s CPU budget and did not die of SIGXCPU, so the kernel escalated to ` +
+                `SIGKILL at the ${CPU_BUDGET_S + 10}s HARD rlimit — ${cpuUsed.toFixed(1)}s of CPU consumed`;
+      } else if (r.signal === "SIGKILL") {
+        /* NOT THE BUDGET, AND SAYING SO IS THE POINT. This used to read `SIGXCPU || SIGKILL` and reported every
+           SIGKILL as "this test really is that expensive" — a sentence about the test, asserted for a signal
+           that is the OOM killer's usual one. The CPU consumed is the discriminator and this driver has it. */
+        kind = "UNKNOWN";
+        cause = `SIGKILL after only ${cpuUsed.toFixed(2)}s of CPU, which is far below the ${CPU_BUDGET_S}s budget ` +
+                "— so it is NOT a limit this driver installed. Something outside this run killed the process; " +
+                "the OOM killer is the usual one (dmesg names it)";
+      } else {
+        kind = "crash";
+        cause = `died on ${r.signal} and named NOTHING — no @WHY, and no limit this driver installed. That is a ` +
+                "crash to debug at its own frame, not a capability to build";
+      }
       /* AND WHAT THE WALK ACTUALLY FOUND, because "the runtime went down holding live objects" without saying
          WHICH is a number about nothing — the one abort cause in this gate that names a defect and then throws
          away its own evidence. quickjs's JS_FreeRuntime already prints its censuses and this driver already has
@@ -1229,7 +1415,7 @@ for (const { file: f, kind, variant } of runs) {
          could see that it is a per-FILE boolean over SEVERAL universal leaks, so fixing one of them could not
          move it at all. This is what tells the difference. */
       const census = out.split("\n").filter((l) => /^\[(gcleak|gcroot|stepleak|atomleak)\]/.test(l));
-      failures.push(`  ABORT   ${rel}\n         ${cause}` + census.map((l) => `\n         ${l}`).join(""));
+      abortRun(area, kind, rel, cause + census.map((l) => `\n         ${l}`).join(""));
     }
     /* THE `@WPTHANDLER` BRANCH IS GONE, not disabled. It excused a test that asks for a wptserve `.py` handler
        back when this driver served the corpus off disk — and engine/wptserve.py now runs WPT'S OWN server, which
@@ -1249,8 +1435,7 @@ for (const { file: f, kind, variant } of runs) {
        abort already names the file and its cause; the missing path rides that row rather than opening a second. */
     const noscript = out.match(/^@WPTERR .*<script src> did not load: (.*)$/m);
     if (noscript && !abortedHere) {
-      aborted++; area.aborted++;
-      failures.push(`  ABORT   ${rel}\n         a <script src> the corpus does not serve: ${noscript[1]}`);
+      abortRun(area, "corpus", rel, `a <script src> the corpus does not serve: ${noscript[1]}`);
       continue;
     }
     /* WHAT THE RUNNER STREAMED, AND IT IS TWO POPULATIONS BECAUSE THE DIFFERENCE BETWEEN THEM IS THE DIAGNOSIS.
@@ -1329,22 +1514,28 @@ for (const { file: f, kind, variant } of runs) {
        all with a throw on the way is the FILE failing before it had a test, and the throw is the report. The
        fourth — a queued completion callback that never got a turn — cannot arrive here silently: the scheduler
        DCHECKs that no flow holds a job when it declares the frontier exhausted, so it aborts by name instead. */
+    /* AND THE KIND FOLLOWS THAT SPLIT RATHER THAN SITTING ABOVE IT. The four causes are not four flavours of one
+       finding: the second is described here, in this file's own words, as THIS GATE'S BUG, so it is counted as
+       `driver` and not among the file's own unfinished work. Leaving it in with the others would put a defect in
+       the driver into the column a reader mines for engine work. */
     if (!abortedHere && !/^@WPTDONE /m.test(out)) {
-      aborted++; area.aborted++;
       const hanging = [...started.keys()].filter((k) => !settled.has(k)).map((k) => started.get(k));
-      const cause =
+      const [kind, cause] =
         hanging.length
-          ? `${settled.size} of ${started.size} subtest(s) reached a result; ${hanging.length} never did, so ` +
-            `something they await never settled: ${hanging.slice(0, 8).map((n) => JSON.stringify(n)).join(", ")}` +
-            (hanging.length > 8 ? `, +${hanging.length - 8} more` : "")
+          ? ["nodone",
+             `${settled.size} of ${started.size} subtest(s) reached a result; ${hanging.length} never did, so ` +
+             `something they await never settled: ${hanging.slice(0, 8).map((n) => JSON.stringify(n)).join(", ")}` +
+             (hanging.length > 8 ? `, +${hanging.length - 8} more` : "")]
         : started.size
-          ? `all ${started.size} of its subtest(s) reached a result and the harness STILL never completed — ` +
-            "testharness's completion path did not reach this runner's report hook, which is this gate's own bug"
+          ? ["driver",
+             `all ${started.size} of its subtest(s) reached a result and the harness STILL never completed — ` +
+             "testharness's completion path did not reach this runner's report hook, which is this gate's own bug"]
         : err
-          ? `it registered no subtest at all and threw on the way: ${err[1].slice(0, 200)}`
-          : "it registered no subtest and never completed — testharness.js itself never ran, or the report hook " +
-            "is not installed in this run's programs";
-      failures.push(`  ABORT   ${rel}\n         the harness never completed — no @WPTDONE. ${cause}`);
+          ? ["nodone", `it registered no subtest at all and threw on the way: ${err[1].slice(0, 200)}`]
+          : ["nodone",
+             "it registered no subtest and never completed — testharness.js itself never ran, or the report hook " +
+             "is not installed in this run's programs"];
+      abortRun(area, kind, rel, `the harness never completed — no @WPTDONE. ${cause}`);
       continue;
     }
     /* THE FILE-LEVEL VERDICT, WHICH THIS DRIVER USED TO PARSE AND THROW AWAY. @WPTDONE carries testharness's own
@@ -1360,8 +1551,9 @@ for (const { file: f, kind, variant } of runs) {
       let h = null;
       if (d) { try { h = JSON.parse(d[1]); } catch { h = null; } }
       if (d && !h) {
-        aborted++; area.aborted++;
-        failures.push(`  ABORT   ${rel}\n         @WPTDONE carried no readable JSON: ${d[1].slice(0, 200)}`);
+        /* THE RUNNER'S OWN REPORT LINE, MALFORMED — a break in the contract between this driver and the program
+           it built, so it is this gate's work and never the engine's. */
+        abortRun(area, "driver", rel, `@WPTDONE carried no readable JSON: ${d[1].slice(0, 200)}`);
         continue;
       }
       const NAME = { 0: "OK", 1: "ERROR", 2: "TIMEOUT", 3: "PRECONDITION_FAILED" };
@@ -1526,6 +1718,36 @@ console.log("  ---- summary");
     for (const [k, why] of [...g_unreadable.entries()].sort()) console.log(`       ${why.padEnd(8)} ${k}`);
   }
 }
+/* AND WHAT THE ABORTS WERE, WHICH IS THE QUESTION THIS COLUMN USED TO ANSWER BY MAKING THE READER CLUSTER THE
+   LOG. `aborted-runs 25` was 21 capability gaps, 2 missing corpus helpers and 2 CPU-budget kills, and finding
+   that out took a hand pass over a thousand lines — for a number whose whole purpose is to say how much engine
+   work is waiting. Each row here is a decomposition of the total printed below, asserted to sum to it, so a kind
+   that does not appear is zero and provably zero.
+   A POSITIVE STATEMENT WHEN THERE ARE NONE, for the reason the UNDECIDED census carries one: "no run aborted" is
+   a finding, and a block that simply vanishes reads the same as a block that was never written. */
+{
+  const total = [...g_abKind.values()].reduce((a, b) => a + b, 0);
+  if (total !== aborted)
+    throw new Error(`[wpt] ${aborted} abort(s) counted and ${total} classified — abortRun is the only site that ` +
+                    "may count one, so this driver's own accounting is broken");
+  if (!aborted) {
+    console.log("  ---- no run aborted");
+  } else {
+    console.log(`  ---- ${aborted} aborted run(s), classified by what THIS DRIVER KNOWS about each — never by ` +
+                "matching the text of an abort message:");
+    for (const k of Object.keys(ABORT_KINDS)) {
+      const n = g_abKind.get(k);
+      if (!n) continue;
+      console.log(`       ${k.padEnd(7)} ${String(n).padStart(4)}  ${ABORT_KINDS[k]}`);
+    }
+    /* THE ONE THAT MUST NEVER BE READ AS A ROW AMONG ROWS. An unclassifiable abort means a kind this driver does
+       not model has arrived, and the whole point of the split is that it did not land silently in `gap`. */
+    if (g_abKind.get("UNKNOWN"))
+      console.log(`       ^^^^ ${g_abKind.get("UNKNOWN")} ABORT(S) THIS DRIVER COULD NOT CLASSIFY. Each names ` +
+                  "what it observed; a kind this gate does not model is a hole in the instrument and is fixed " +
+                  "here, in engine/wpt.mjs, before its number is read as anything else.");
+  }
+}
 /* THE REVISION, AGAIN, IN THE TAIL. The head of a corpus run scrolls out of every terminal and out of every
    paste — the block a reader quotes is this one — so the identity is emitted where the numbers are and not
    only where the run began. Re-asked rather than reprinted, because the answer can have CHANGED: this checkout
@@ -1545,8 +1767,13 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
    already fails this gate — the timeout, abort or harness error that ended the file first — so failing on it
    again would report one defect twice and make the count of failing areas depend on how many siblings each
    defect happened to strand. */
+/* AND `aborted-runs` CARRIES ITS SPLIT ON THE LINE ITSELF, because this is the line that gets quoted. The block
+   above scrolls with everything else; what ends up in a report, a commit message or a message to another agent is
+   this one, and a bare sum there re-creates the defect one line below the fix — two runs whose 25 are 21/2/2 and
+   4/19/2 compare equal on it. Same order as the block, same assert. */
 console.log(`  files ${files.length}   runs ${runs.length}   subtests ${pass + fail}   pass ${pass}` +
-            `   fail ${fail}   notrun ${notrun}   aborted-runs ${aborted}   errored-runs ${errored}` +
+            `   fail ${fail}   notrun ${notrun}   aborted-runs ${aborted}${abortSplit(g_abKind, aborted)}` +
+            `   errored-runs ${errored}` +
             `   unreadable-runs ${unread}   undecided-files ${g_undecided}`);
 console.log("===========================================================");
 process.exit(fail || aborted || unread || g_undecided ? 1 : 0);
