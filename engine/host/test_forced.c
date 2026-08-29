@@ -5130,16 +5130,9 @@ static int s_num(const char *js, const char *sink, const char *src, const char *
                      "establishes the record exists before asking it anything");
     for (p = e; p + (size_t)w <= e + span; p++)
         if (!memcmp(p, k, (size_t)w)) return atoi(p + w);
-#if APICLIENT_DEV
-    {
-        static char why[384];
-        snprintf(why, sizeof why,
-                 "a parked @S entry carries no `%s` — solve.h declares the parked shape and every count in it "
-                 "is emitted unconditionally, so an absent one is the producer's shape having moved under this "
-                 "reader, and reading it as 0 would state a measurement the run never took", key);
-        DFAIL(why);
-    }
-#endif
+    DFAILF("a parked @S entry carries no `%s` — solve.h declares the parked shape and every count in it "
+           "is emitted unconditionally, so an absent one is the producer's shape having moved under this "
+           "reader, and reading it as 0 would state a measurement the run never took", key);
     return 0;
 }
 
@@ -6475,19 +6468,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         /* A KEY NO DOCUMENT CONTAINS IS A PROBE ABOUT A PROGRAM THAT DOES NOT EXIST, and it CRASHES rather than
            being quietly dropped from every run — which is the one failure mode a derived selector introduces and
            the same defect as a corpus file the collector does not collect: the total looks complete. The message
-           NAMES the row, so the whole block is dev-only: a release build would otherwise still format it. */
-#if APICLIENT_DEV
-        {
-            char why[256];
-
-            snprintf(why, sizeof why,
-                     "the probe `%s` names a statement no document in this fixture makes — its key `%s` is in "
-                     "none of the three, so the row would be selected by no run and assert nothing, while the "
-                     "table it sits in reads as complete", probes[pi].name, probes[pi].key);
-            DCHECK(strstr(HTML, probes[pi].key) || strstr(HTML_MIN, probes[pi].key) ||
-                   strstr(HTML_COLD, probes[pi].key), why);
-        }
-#endif
+           NAMES the row, and DCHECKF formats it only on the arm that aborts. */
+        DCHECKF(strstr(HTML, probes[pi].key) || strstr(HTML_MIN, probes[pi].key) ||
+                strstr(HTML_COLD, probes[pi].key),
+                "the probe `%s` names a statement no document in this fixture makes — its key `%s` is in "
+                "none of the three, so the row would be selected by no run and assert nothing, while the "
+                "table it sits in reads as complete", probes[pi].name, probes[pi].key);
         if (probes[pi].sess != g_sess) continue;
         if (!strstr(g_doc, probes[pi].key)) continue;
         DCHECK(n < cap, "more probes were selected than the caller has room for — the report would state a "
@@ -10072,10 +10058,14 @@ int main(int argc, char **argv) {
            with the frontier it belongs to, so a store written after it would be written from freed memory —
            and the residue is the only remaining copy of every flow in it. */
         if (cold_park_path) tf_park_store(cold_park_path, recipes);
+        /* AND THE FOREIGN SEGMENTS BESIDE THE KINDS, because the 'w' arm of the grammar is the one this
+           fixture's own census could not otherwise say anything about — ColdParked counts it and, until this
+           column existed, only cold_park's internal preview check ever read the number. A kind that is written
+           and never reported is a kind whose absence and whose zero read alike. */
         printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
-               "\"bytes\":%zu,\"store\":\"%s\"}\n",
-               cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, strlen(recipes),
-               cold_park_path ? cold_park_path : "-");
+               "\"worlds\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
+               cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, g_cp.worlds,
+               strlen(recipes), cold_park_path ? cold_park_path : "-");
     }
     if (cold_resume_path) {
         long met = 0, unmet = 0;
@@ -10085,9 +10075,14 @@ int main(int argc, char **argv) {
            of those waits a take satisfied and `unmet` how many finished with nothing — the pair says whether
            the locator found anything, which the rebuild count alone cannot. */
         engine_orphan_claims(&met, &unmet);
-        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
+        /* AND `worlds` BESIDE THEM, which is the OTHER half of the column added to @COLDPARK above and the
+           reason both were added at once: a 'w' record is written by one end of this round trip and rebuilt by
+           the other, so a residue that carried peers' segments and a resume that re-materialized none of them
+           were the same two numbers — absent — and nothing in the run could tell that apart from a residue
+           that carried none. ColdResumed counted it and no host had ever read it. */
+        printf("@COLDRESUME {\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,\"worlds\":%ld,"
                "\"orphansMet\":%ld,\"orphansUnmet\":%ld}\n",
-               g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, met, unmet);
+               g_cr.segs, g_cr.flows, g_cr.cands, g_cr.orphans, g_cr.worlds, met, unmet);
     }
 
     /* ONE result document — both surfaces and the scheduler's interleave count, serialized DIRECTLY from the

@@ -65,8 +65,15 @@ typedef struct {
        report the sharing as if it did not exist — the mistake this block's own sentence names. The count
        beside the bytes is what says whether a growing number is more programs or bigger ones. */
     long dyn_bytes, dyn_count;
-    long seg_count, seg_entries, seg_bytes;              /* cow.c's frozen heap chain */
-    long dom_seg_count, dom_seg_entries, dom_seg_bytes;  /* dom_cow.c's frozen document chain */
+    /* THE TWO HEAP/DOM CHAINS CONTRIBUTE ONLY THEIR BYTES, and the count and entry rows that stood beside them
+       are DELETED rather than left unread. They were a second copy of `heapSegs`/`heapSegEntries` and
+       `domSegs`/`domSegEntries`, which the @SWAP line prints from cow_chain_stats and dom_cow_chain_stats
+       directly — so this census computed them, asserted nothing about them, and no consumer has ever read one.
+       A computed writer with no reader is the mirror of the read-with-no-writer defect and is harder to see
+       precisely because the number is real: it looks like a measurement right up until someone quotes it. The
+       two rows that remain here are the ones the @COLD line reads. */
+    long seg_bytes;                                      /* cow.c's frozen heap chain */
+    long dom_seg_bytes;                                  /* dom_cow.c's frozen document chain */
     long pin_seg_count, pin_seg_entries, pin_seg_bytes;  /* concolic.c's frozen path constraint */
     long dec_seg_count, dec_seg_entries, dec_seg_bytes;  /* decide.c's frozen decision vector */
 } ColdCensus;
@@ -239,7 +246,16 @@ void cold_park_flow(Flow *f);
    eviction §scheduler describes: the host ranks DOCUMENTS' engines, asks the lowest-value one to give up its
    residue, and the RAM comes back when that instance is torn down. Called with no flow switched in, which the
    primitive asserts per flow. It is deliberately not the TAIL SELECTION a lone over-budget engine needs — which
-   flows go and how far down the frontier to go — see the OOM CHECK in engine.c's flow-compile path. */
+   flows go and how far down the frontier to go — see the OOM CHECK in engine.c's flow-compile path.
+   A FRONTIER WITH NO MEMBERS WRITES NO BYTES AT ALL, which is the positive answer cold_park_recipes describes
+   and not a refusal. The host decides WHEN it wants the residue and the engine decides what the residue IS, so
+   a park asked for over an empty registry is ANSWERED rather than rejected — and an engine reaches that state
+   honestly: a peer holding a reference into this document keeps the session live past its own last flow, and
+   an engine that met the RAM floor may have sold every flow it had through the primitive above. What a park
+   may NOT do is write a PREAMBLE with no flow under it — the generation, a peer's segment — because that is a
+   non-empty recipe string the host stores like any residue, and the next session then takes it over its boot
+   flow and opens on an empty frontier, which is a document nothing will ever explore again. Both ends assert
+   it: this writer refuses to leave a document naming no flow, and cold_resume refuses to read one. */
 void cold_park(void);
 
 /* THE PARK DOCUMENT AS THIS FILE HOLDS IT — the ';'-joined records, which is exactly the string cold_resume
@@ -320,7 +336,11 @@ typedef struct {
        instance holds. It is here because the preview's contract is "the residue the host is about to be
        shown", and a host that evicted on a description missing them would be storing a document larger than
        the one it was told about. It is also the only row a whole-frontier park writes and a partial one does
-       not, which is what makes cold_park's two-sided check able to say so. */
+       not, which is what makes cold_park's two-sided check able to say so.
+       ZERO WHERE THERE IS NO DOCUMENT TO CARRY THEM IN, because a park that names no flow writes no bytes at
+       all (see cold_park). The two answers come from one predicate rather than from a rule restated at each
+       end — a preview promising a segment the park then leaves out is exactly the disagreement the two-sided
+       check exists to catch, and it would be a disagreement this file wrote into itself. */
     long worlds;
     /* AND THE DRIVES AMONG THE MEMBERS — the 'o' records a park taken now would write. It is here for the
        preview's whole contract: the host decides to evict on the strength of this description, so a row the

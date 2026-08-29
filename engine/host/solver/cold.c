@@ -95,9 +95,10 @@ void cold_census(ColdCensus *out)
        deriving it means walking the rows again and the rows do not know which of them share a buffer. */
     out->dyn_bytes = dyn_body_total_bytes();
     out->dyn_count = dyn_body_live_count();
-    cow_chain_stats(&out->seg_count, &out->seg_entries);
+    /* THE TWO CHAINS THAT ALREADY REPORT THEMSELVES CONTRIBUTE ONLY THEIR BYTES — see cold.h. Their segment
+       and entry counts reach the @SWAP line from cow_chain_stats and dom_cow_chain_stats directly, so a second
+       copy of them here was a number this walk computed and nothing ever read. */
     out->seg_bytes = cow_chain_bytes();
-    dom_cow_chain_stats(&out->dom_seg_count, &out->dom_seg_entries);
     out->dom_seg_bytes = dom_cow_chain_bytes();
     concolic_chain_stats(&out->pin_seg_count, &out->pin_seg_entries, &out->pin_seg_bytes);
     decide_chain_stats(&out->dec_seg_count, &out->dec_seg_entries, &out->dec_seg_bytes);
@@ -584,6 +585,28 @@ static int park_flow_deep(const Flow *f)
     return 0;   /* a flow that has not run, or ran and froze an empty chain: its record carries `-` */
 }
 
+/* DOES A PARK TAKEN NOW PRODUCE A DOCUMENT AT ALL — the one question both ends of this tier have to answer the
+   same way, so it is asked in one place like the record-kind selection beside it.
+   A PARK DOCUMENT NAMES A FLOW OR IT DOES NOT EXIST. Everything else in it — the generation, a peer's segment,
+   a frozen decision chain — is there to SERVE the flows named in it, so a document holding only those is one
+   the reader refuses (cold_resume: "a parked frontier rebuilt no flows at all") and, worse, one the host has no
+   way to tell from a residue: a non-empty recipe string is stored, and the next session then takes the residue
+   branch over the boot flow (engine_sched_begin) and opens on an EMPTY frontier. The origin is then dead for
+   every session after it, and each of those parks the same nothing back over it. So the emptiness cold.h calls
+   the positive answer has to be REACHABLE: an engine with no members writes no bytes at all, the host's own
+   "delete this origin's entry" rule reads that, and the frontier re-seeds from boot next visit.
+   A FRONTIER WITH NO MEMBERS IS NOT THE SAME CLAIM AS A FULLY-EXPLORED DOCUMENT, and this predicate
+   deliberately does not make the second one. The pick seeds @S candidates before it declares anything
+   exhausted, so zero members at a slice boundary is a transient state that a park may legitimately be taken
+   over — a peer holding a reference into this document keeps the session live across exactly that state, and
+   an engine that sold its whole tail at the RAM floor reaches it with a document already full of records. What
+   this asks is only what the WRITER has: whether anything it is about to write, or has already written, names
+   a flow. */
+static int park_writes_document(void)
+{
+    return g_park_recs > 0 || flow_count() > 0;
+}
+
 void cold_park_preview(ColdPreview *out)
 {
     const Flow *f;
@@ -607,8 +630,12 @@ void cold_park_preview(ColdPreview *out)
     /* AND THE ROW THAT IS NOT A MEMBER OF THE FRONTIER. A foreign segment belongs to a PEER's flow, so no walk
        of this registry can find it and the host would otherwise be shown a residue smaller than the one it is
        about to be handed. Asked of the LIVE table (world.h's world_segments_held), never of the
-       materialization history beside it — the two agree only until a world dies. */
-    out->worlds = world_segments_held();
+       materialization history beside it — the two agree only until a world dies.
+       ZERO WHEN THERE IS NO DOCUMENT TO CARRY THEM IN, which is the same answer the park gives and is why the
+       question is asked through the one predicate rather than restated: a segment written into a document that
+       names no flow is a record nothing will ever read back, and the preview promising one the park does not
+       write is precisely the disagreement cold_park's two-sided check exists to catch. */
+    out->worlds = park_writes_document() ? world_segments_held() : 0;
 }
 
 /* PARK ONE FLOW — the primitive, and the whole-frontier park below is the loop over it. See cold.h. */
@@ -835,14 +862,19 @@ void cold_park(void)
     ColdParked before, after;
     long deep_written = 0;
 
-    /* AN EMPTY FRONTIER WRITES NOTHING, AND NOTHING IS A POSITIVE ANSWER — "[]" tells the host this document is
-       fully explored and DELETES its cold entry. That is the right answer for a frontier that drained and the
-       wrong one for a park the host asked for, so the two are separated where they differ rather than where
-       they are read. */
-    DCHECK(flow_count() > 0,
-           "the host asked this engine to page out a frontier with no members — an empty park document is how a "
-           "fully-explored document deletes its cold entry, so this stores 'nothing left to do' over whatever "
-           "residue the origin had");
+    /* AN EMPTY FRONTIER WRITES NOTHING, AND NOTHING IS A POSITIVE ANSWER — see park_writes_document. This
+       REFUSED such a park, on the reasoning that an empty document would store "nothing left to do" over the
+       residue the origin had; both halves of that were wrong. The residue the origin had is what
+       engine_sched_begin resumed INTO this frontier, so a frontier that is empty now is one that consumed it
+       and deleting the entry is the honest report — and the refusal was standing in front of a writer that
+       could not produce an empty document anyway, because the generation record below was written before
+       anything was counted. What the park OWED was the emptiness, not the refusal.
+       AND THE STATE IT REFUSED IS ONE THE DESIGN REQUIRES, in two shapes that have nothing exotic about them: a
+       document a peer holds a reference into keeps its session live after its own last flow finishes
+       (engine_sched_slice answers STALLED for it), and an engine that met the RAM floor may have sold every
+       flow it had through cold_park_flow — which reaches here with a document already full of records and a
+       registry with none. A park is a seam whose answer is the HOST's; what it writes is the engine's, and
+       "nothing" is one of the things it writes. */
     cold_park_preview(&would);
     cold_parked(&before);
     /* ANOTHER INSTANCE'S FLOW STATE LIVES HERE, AND IT CROSSES BY NAME. A foreign world's segment is a peer
@@ -859,8 +891,14 @@ void cold_park(void)
        segments exactly as it did before. That is also what the preview's `worlds` row is for — it is the one
        row the two parks answer differently.
        FIRST IN THE DOCUMENT AFTER THE GENERATION, and in MATERIALIZATION order, so the resume's forward pass
-       has every ancestor in place before it rebuilds anything forked from one. */
-    {
+       has every ancestor in place before it rebuilds anything forked from one.
+       AND ONLY INTO A DOCUMENT THAT EXISTS. The generation and the peers' segments are both preamble — they
+       name the namespace the flows below them resume into, and the timelines those flows may still be answered
+       from — so writing either into a document that names no flow produces bytes whose only effect is to make
+       an empty residue look like a residue. That is the whole of what park_writes_document decides, and it is
+       decided here rather than at each record because this is the one block that can run with nothing after
+       it. */
+    if (park_writes_document()) {
         const char *const *carried;
         int n_carried = world_segments_park(&carried), k;
 
@@ -887,6 +925,18 @@ void cold_park(void)
            "the park wrote a different residue from the one its own preview described — the host evicted this "
            "engine on the strength of that description, so whatever it is storing is not what it was told it "
            "was storing, and the difference is per record KIND rather than a count it could notice");
+    /* AND THE DOCUMENT NAMES A FLOW OR IT DOES NOT EXIST — the writer's half of the invariant cold_resume
+       states from the other end ("a parked frontier rebuilt no flows at all"). Asserted HERE because this is
+       the only writer that can run with nothing after it: cold_park_flow writes a flow record every time it is
+       called, so a document made only of partial parks cannot fail this. The failure it catches has no symptom
+       of its own — a preamble with no flows under it is a NON-EMPTY recipe string, which the host stores like
+       any residue and the next session takes over its boot flow, opening on an empty frontier and re-parking
+       the same nothing for every session after it. */
+    DCHECK(g_park_recs == 0 || g_parked_census.flows + g_parked_census.cands > 0,
+           "the park wrote a document that names no flow — every other record in it (the generation, a peer's "
+           "segment, a frozen decision chain) exists to serve the flows named beside it, so this residue "
+           "resumes nothing while still reading as a residue: the host stores it, the next session chooses it "
+           "over a boot flow, and that document is never explored again");
 }
 
 const char *cold_park_recipes(void)
