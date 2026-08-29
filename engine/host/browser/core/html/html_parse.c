@@ -390,8 +390,32 @@ lxb_status_t html_parse_document_open(lxb_html_document_t *document, DomParseRoo
        reached only when it is Disabled — so an Enabled document no longer enters that mode at all. Both have
        been running their Disabled arms for every document this engine has ever parsed, so the first Enabled
        run is the FIRST HONEST MEASUREMENT of them rather than a regression, and a failure there is the work
-       queue (CLAUDE.md §a directory that ABORTS is not better than one reporting errors). */
-    document->scripting = (scripting == HTML_SCRIPTING_ENABLED);
+       queue (CLAUDE.md §a directory that ABORTS is not better than one reporting errors).
+
+       THERE ARE THREE PLACES CALLED `scripting` AND ONLY THIS ONE IS READ BY TREE CONSTRUCTION. The other two
+       have public setters, compile clean, and do NOTHING — which is a write with no reader, the same defect
+       this line exists to end, one layer down. Traced rather than assumed, in this checkout's own lexbor:
+         - `document->dom_document.scripting` (what `lxb_html_document_scripting_set` writes) is read at
+           tree/insertion_mode/in_body.c's `tree->document->dom_document.scripting == false` — §13.2.6.4.7's
+           `noscript` rule — and at tree/insertion_mode/in_head.c's for §13.2.6.4.4. This is the flag.
+         - `tree->scripting` (`lxb_html_tree_scripting_set`) is declared in tree.h and NOTHING under tree/
+           reads it. Setting it changes no insertion mode.
+         - `parser->tree->scripting` (`lxb_html_parser_scripting_set`) is that same field by another route,
+           so it is the same nothing.
+       AND TWO PLACES COPY TREE→DOCUMENT, NEITHER ON THIS PATH — both would silently overwrite what is set
+       here if it were. `lxb_html_parse_chunk_begin(parser)` does it for the document IT creates, and this
+       engine calls `lxb_html_document_parse_chunk_begin(document)` instead, which takes an existing document
+       and reaches `lxb_html_parse_chunk_prepare` → `lxb_html_tree_begin`, whose whole body is
+       `tree->document = document` plus the tokenizer begin. `lxb_html_parse_fragment_chunk_begin` does it for
+       §13.4's temporary document — which is why the FRAGMENT path is Inert without anything here saying so,
+       and core/dom/element.c already states that it wants exactly that. So a future switch to the
+       parser-flavoured entry, or a fragment parse that starts wanting a real flag, must set
+       `parser->tree->scripting` and not this — and would be silently wrong if it copied this line.
+       `lxb_dom_document_clean` does not touch the field, and the ready-state DCHECK above means chunk_begin
+       does not clean this document anyway.
+       WRITTEN THROUGH LEXBOR'S OWN SETTER rather than by reaching into the struct: it is the established
+       spelling, and it is the one that stops this line naming a member path that can move under it. */
+    lxb_html_document_scripting_set(document, scripting == HTML_SCRIPTING_ENABLED);
     /* THE `opt` BRACKET IS LEXBOR'S OWN AND IS KEPT BYTE-FOR-BYTE. `lxb_html_document_parse` saves
        `document->opt` across the prepare and the chunk and writes it back on BOTH its exits, while
        `lxb_html_document_parse_chunk_begin` — the entry this pair is built out of — does not. Dropping it
