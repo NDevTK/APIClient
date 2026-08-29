@@ -129,18 +129,36 @@ XmlNsScope *xml_ns_scope_create(void)
     return s;
 }
 
+/* THE TEARDOWN, SHARED BY THE TWO ANSWERS BELOW — they differ in what they assert and in nothing else. */
+static void ns_scope_free(XmlNsScope *s)
+{
+    lexbor_array_obj_destroy(s->bindings, true);
+    lexbor_array_obj_destroy(s->frames, true);
+    lexbor_mraw_destroy(s->arena, true);
+    lexbor_free(s);
+}
+
 void xml_ns_scope_destroy(XmlNsScope *s)
 {
     if (!s) return;
     assert_owner(s);
     DCHECK(lexbor_array_obj_length(s->frames) == 0,
-           "an XML namespace scope stack was destroyed with element scopes still open — every start-tag's push "
+           "an XML namespace scope stack was DESTROYED with element scopes still open — every start-tag's push "
            "is matched by its end-tag's pop, so a residue here is a tree builder that lost an end-tag and a "
-           "tree whose later elements resolved against namespaces that had gone out of scope");
-    lexbor_array_obj_destroy(s->bindings, true);
-    lexbor_array_obj_destroy(s->frames, true);
-    lexbor_mraw_destroy(s->arena, true);
-    lexbor_free(s);
+           "tree whose later elements resolved against namespaces that had gone out of scope. A parse that "
+           "STOPPED with elements open has a residue that is not that defect, and it says so by calling "
+           "xml_ns_scope_abandon");
+    ns_scope_free(s);
+}
+
+void xml_ns_scope_abandon(XmlNsScope *s)
+{
+    if (!s) return;
+    assert_owner(s);
+    /* NO RESIDUE ASSERTION: the open scopes ARE what abandonment means. The frames array is POD (one `size_t`
+       per open element) and the bindings it indexes live in this stack's own arena, so an abandoned stack
+       frees exactly what a finished one does — there is no per-frame release to skip. */
+    ns_scope_free(s);
 }
 
 void xml_ns_push(XmlNsScope *s)

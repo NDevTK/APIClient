@@ -103,7 +103,25 @@ void xml_document_walk_destroy(XmlDocumentWalk *w)
 {
     if (!w) return;
     assert_owner(w);
+    DCHECK(w->ended,
+           "an XML document walk was DESTROYED before [1] document matched to the last byte of the entity — "
+           "see xml_document.h on the two teardowns. `ended` and not `stopped` is the question, because a walk "
+           "STOPPED by §1.2 Terminology's fatal error is one that will answer no more items and whose partial "
+           "tree its caller discards, which is exactly what abandonment is");
+    /* THE ELEMENT WALK BELOW IS DESTROYED RATHER THAN ABANDONED, AND THAT PAIRING IS AN ARGUMENT AND NOT AN
+       ASSUMPTION: while [39] is open this walk's only route is xml_element_next, so every error it can report
+       from DOC_ELEMENT is that walk's own and stops it — and in DOC_PROLOG and DOC_TRAILING the element stack
+       is empty because the root has not opened or has already closed. So `w->ended` implies the stack below
+       is empty, which is precisely what xml_element_walk_destroy asserts for itself. */
     xml_element_walk_destroy(w->element);
+    free(w);
+}
+
+void xml_document_walk_abandon(XmlDocumentWalk *w)
+{
+    if (!w) return;
+    assert_owner(w);
+    xml_element_walk_abandon(w->element);
     free(w);
 }
 

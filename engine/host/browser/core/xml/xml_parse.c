@@ -166,7 +166,15 @@ bool xml_parse_finish(XmlParse *p, XmlParseReport *report)
            "an XML parse reported a well-formed document while the character layer's §1.2 latch is set — that "
            "latch is a FATAL error, after which XML §1.2 \"Terminology\" says a processor MUST NOT continue "
            "normal processing, so the two cannot both be true");
-    xml_tree_build_destroy(p->b);
+    /* THE ONE PLACE THAT KNOWS WHICH TEARDOWN THIS IS, which is why the fact is pushed DOWN from here rather
+       than re-derived at each layer: `ok` is `tree == XML_TREE_OK`, and the DCHECK above has already
+       established that this build ended — so `ok` is exactly "[1] document matched to the last byte with no
+       error at any of the three layers", which is the one shape core/xml/xml_tree.h lets `destroy` assert.
+       AN ILL-FORMED DOCUMENT TAKES THE ABANDON PATH AND THAT IS NOT AN ERROR PATH: HTML §8.5.1 and §7.5.3
+       both answer one with a `parsererror` Document, so this is an ordinary outcome whose partial tree the
+       caller discards — the same thing abandonment means everywhere else in this component set. */
+    if (p->report.ok) xml_tree_build_destroy(p->b);
+    else              xml_tree_build_abandon(p->b);
     *report = p->report;
     ok = p->report.ok;
     free(p);
@@ -176,7 +184,12 @@ bool xml_parse_finish(XmlParse *p, XmlParseReport *report)
 void xml_parse_abort(XmlParse *p)
 {
     DCHECK(p != NULL, "xml_parse_abort was asked of no parse");
-    xml_tree_build_destroy(p->b);
+    /* ALWAYS THE ABANDON PATH, INCLUDING WHEN THE PARSE HAPPENS TO HAVE ENDED. A parse is stepped one item at
+       a time precisely so a flow can be torn down between two of them, and the step that makes
+       `xml_parse_ended` true RETURNS before its caller asks for the finish — so an abort legitimately arrives
+       over a completed [1] document, and asserting that something was still open here would crash on the very
+       interleaving the per-item drive exists to allow. */
+    xml_tree_build_abandon(p->b);
     free(p);
 }
 

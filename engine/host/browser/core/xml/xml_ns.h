@@ -167,7 +167,15 @@ typedef struct XmlNsScope XmlNsScope;
 
 /* One stack per parse. Records the running flow — see the head comment's last paragraph. */
 XmlNsScope *xml_ns_scope_create(void);
+
+/* THE TWO TEARDOWNS, core/xml/xml_element.h'S SPLIT AGAIN AND FOR THE SAME REASON. `destroy` is the stack
+   every push of which was popped by its element's end-tag, which is the only shape a FINISHED parse leaves;
+   it DCHECKs that. `abandon` is the stack a parse that stopped mid-element leaves — XML §1.2 Terminology's
+   fatal error at any layer, or the flow driving the parse being gone — where open scopes are the expected
+   residue and not a lost end-tag. Which one it is belongs to the caller: this stack is pushed and popped by
+   the tree builder and has no way to tell a document that ended from one that was stopped. */
 void        xml_ns_scope_destroy(XmlNsScope *s);
+void        xml_ns_scope_abandon(XmlNsScope *s);
 
 /* §6.1's scope, entered at the beginning of a start-tag and left at the end of the corresponding end-tag; "in
    the case of an empty tag, the scope is the tag itself", so an empty-element tag pushes and pops around its

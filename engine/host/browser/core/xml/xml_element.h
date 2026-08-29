@@ -168,7 +168,21 @@ typedef struct XmlElementWalk XmlElementWalk;
 
 /* One walk per [39] `element`. Records the running flow — see the head comment's last paragraph. */
 XmlElementWalk *xml_element_walk_create(void);
+
+/* THE TWO WAYS A WALK'S LIFE ENDS, AND THE CALLER SAYS WHICH — never the walk, which cannot know.
+   `destroy` is the walk that FINISHED: [39] element closed and its stack is empty, which is the only shape
+   this component may be torn down in without somebody stating otherwise. It DCHECKs that.
+   `abandon` is every other shape: no further item will be asked for and the partial tree below this point is
+   discarded with the walk. THREE THINGS REACH IT and they are one fact, not three cases — (a) this walk
+   reported XML §1.2 Terminology's fatal error, after which "a processor MUST NOT continue normal
+   processing"; (b) a layer ABOVE it reported one over an item this walk answered successfully (Namespaces in
+   XML §6.3 Uniqueness of Attributes' [NSC: Attributes Unique] is decided on the expanded names of a
+   start-tag this walk had already pushed); (c) the flow driving the parse is gone. In all three nobody will
+   ask for another item, which is the whole of what this component needs to be told.
+   THE WORD IS `abandon` AND NOT `abort` BECAUSE (b) IS AN ORDINARY OUTCOME: an ill-formed document is a
+   document with a `parsererror` in it, not a caller giving up. */
 void            xml_element_walk_destroy(XmlElementWalk *w);
+void            xml_element_walk_abandon(XmlElementWalk *w);
 
 /* HOW MANY ELEMENTS ARE OPEN, WHICH IS ALSO HOW A CALLER KNOWS THE [39] IT ASKED FOR IS FINISHED. Zero before
    the first item and zero again after the last, and the walk asserts that nobody asks for an item after that —

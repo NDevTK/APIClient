@@ -108,7 +108,16 @@ typedef struct XmlDocumentWalk XmlDocumentWalk;
 /* One walk per [1] `document`. Records the running flow, on core/xml/xml_element.h's argument and with its
    assertion — the walk is flow-private C memory that no COW delta captures. */
 XmlDocumentWalk *xml_document_walk_create(void);
+
+/* THE TWO TEARDOWNS, WITH core/xml/xml_element.h'S SPLIT CARRIED THROUGH WHOLE — the caller states which,
+   because neither this walk nor the one below it can know.
+   `destroy` is the walk that MATCHED [1] `document` to the last byte of the entity; it DCHECKs that and
+   destroys the [39] walk under it.
+   `abandon` is every other end: §1.2 Terminology's fatal error reported at this layer, at the one below it or
+   at the one ABOVE it (Namespaces in XML §6 is decided by the tree builder over items this walk answered
+   successfully), and the flow driving the parse being gone. */
 void             xml_document_walk_destroy(XmlDocumentWalk *w);
+void             xml_document_walk_abandon(XmlDocumentWalk *w);
 
 /* HAS [1] MATCHED TO THE LAST BYTE OF THE ENTITY? False until the root element has closed AND the `Misc*`
    after it has been read to the end. It is what a caller's loop tests, exactly as `xml_element_depth(w) == 0`

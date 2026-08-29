@@ -53,6 +53,19 @@ const _workerErrors = [];
    carrying a half-built precondition into an assertion about something else produces a verdict about nothing. */
 const fail = (why) => { console.error(`${TAG} FAILED: ` + why); shutdown(); process.exit(1); };
 
+/* A REFUSAL IS NOT A VERDICT, AND A ONE-LINE STAGE TABLE IS EXACTLY WHERE THE TWO COLLAPSE INTO ONE. `fail`
+   says this gate asked its question and the browser-process layer answered it wrongly; `refuse` says the gate
+   DECLINED TO ASK, because the program in front of it is one no revision of this tree names. Both exit
+   non-zero — a stage that did not ask its question must never read like one that asked and liked the answer —
+   but a reader who cannot tell them apart goes hunting a defect in render-process-host.js when what happened
+   is that some other lane had a file open while the artifact was linked. That is §Testing's own defect twice
+   over: a harness condition reported as a property of the thing measured, and two states behind one number.
+   THE MARKER IS A LINE OF OUTPUT AND NOT A BARE EXIT CODE, on the argument build.mjs already makes for its
+   RLIMIT install: an exit status is a value a program may legitimately produce for some entirely other
+   reason, so the statement has to be one this file WROTE. */
+const REFUSED_MARK = 'REFUSED TO MEASURE:';
+const refuse = (why) => { console.error(`${TAG} ${REFUSED_MARK} ` + why); shutdown(); process.exit(1); };
+
 /* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
    THE OFFSCREEN DOCUMENT'S REALM. Everything below installs the browser surface renderer-host.js reads, and
    nothing else — the extension's own files are then loaded into it unmodified.
@@ -80,9 +93,9 @@ const BUILT = (() => {
     /* ENOENT IS "NOBODY HAS BUILT THIS" AND EVERY OTHER ERRNO IS NOT — the same split this file's `fetch` shim
        makes, and for the same reason: a permission error reported as a missing build accuses the wrong thing. */
     if (e.code !== 'ENOENT') throw e;
-    fail('the artifact this gate was pointed at carries no `lib/qjs/qjs.mjs.build.json` — that record is what ' +
-         'says WHICH revision the program under test was linked from, and a browser-process verdict with no ' +
-         'revision beside it is not a measurement of anything (§Testing)');
+    refuse('the artifact this gate was pointed at carries no `lib/qjs/qjs.mjs.build.json` — that record is ' +
+           'what says WHICH revision the program under test was linked from, and a browser-process verdict ' +
+           'with no revision beside it is not a measurement of anything (§Testing)');
   }
   const b = JSON.parse(raw);
   /* NO DEFAULTS ON THE PRODUCER'S FIELDS. build.mjs writes all three on every build, so an absent `head` is
@@ -93,9 +106,11 @@ const BUILT = (() => {
          '`dirty`) — a field defaulted here would turn "this program came from nowhere nameable" into a ' +
          'plausible revision, which is indistinguishable afterwards from a real one');
   if (b.dirty.length)
-    fail(`the program under test was linked from an EDITED tree (${b.dirty.length} dirty path(s): ` +
-         `${b.dirty.join(' ')}), so it is a program no revision of this tree contains and every verdict this ` +
-         'gate could reach would be about nothing (§Testing)');
+    refuse(`the program under test was linked from an EDITED tree (${b.dirty.length} dirty path(s): ` +
+           `${b.dirty.join(' ')}), so it is a program no revision of this tree contains and every verdict this ` +
+           'gate could reach would be about nothing. NOTHING BELOW THIS LINE RAN, so this says nothing ' +
+           'whatever about the browser-process layer: rebuild on a tree no lane is mid-edit in, and the ' +
+           'stage after that one is the first real verdict (§Testing)');
   return b;
 })();
 const REV = `host ${BUILT.head.slice(0, 12)} qjs ${BUILT.qjsHead.slice(0, 12)}`;

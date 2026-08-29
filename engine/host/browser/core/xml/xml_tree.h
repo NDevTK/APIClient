@@ -108,7 +108,18 @@ typedef struct XmlTreeBuild XmlTreeBuild;
  * would go on to read as empty. */
 XmlTreeBuild *xml_tree_build_create(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,
                                     const char *text, size_t len);
+
+/* THE TWO TEARDOWNS, AND THE CALLER STATES WHICH — core/xml/xml_element.h's split, carried up to the layer
+   that holds the answer. THIS BUILD'S OWN `failed` CANNOT ROUTE IT, which is the whole reason the fact has to
+   come from above: `failed` is set by two errors that leave the walks in OPPOSITE states — an
+   XML_TREE_ERR_DOCUMENT is the document walk's own report and stops it, while a Namespaces in XML §6 error is
+   reported HERE, over a start-tag item both walks answered successfully and are still standing inside.
+   `destroy` is the build that matched [1] `document` to the last byte with no error at any layer; it DCHECKs
+   that, and every component under it then asserts its own completion invariant with nothing to except.
+   `abandon` is every other end: a fatal error at any of the three layers, and the flow driving the parse being
+   gone. It asserts no residue, because the residue is what those ends mean. */
 void          xml_tree_build_destroy(XmlTreeBuild *b);
+void          xml_tree_build_abandon(XmlTreeBuild *b);
 
 /* HAS [1] MATCHED TO THE LAST BYTE OF THE ENTITY? False until the root element has closed AND the `Misc*`
    after it has been read to the end — core/xml/xml_document.h's own answer, carried through. It is what a

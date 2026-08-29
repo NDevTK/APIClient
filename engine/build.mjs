@@ -232,6 +232,16 @@ const standingText = (s) =>
    comment cannot manufacture one. */
 const ABORT_WITNESS = /^@(?:WHY|E) (?:\{"phase":"assert"|.*\([^()]*:\d+\)$)/m;
 const EMSCRIPTEN_ABORT = "Aborted(native code called abort())";
+
+/* AND THE STAGE THAT DECLINED TO ASK ITS QUESTION AT ALL, which `skipped` below already reports for the cases
+   THIS file can see — a program that did not link — and which was invisible for the cases only the CHILD can
+   see. A gate whose first act is to establish that the artifact in front of it belongs to a nameable revision
+   (§Testing) exits non-zero when it does not, and that arrived here as `FAILED rc=1`: indistinguishable from
+   the layer under test being broken, and read as exactly that. The witness is a line the child WROTE, not its
+   exit status, on the same argument BUDGET_NOT_INSTALLED is read that way — a status is a value a program may
+   produce for some other reason entirely. The tag is left open (`[<gate>] REFUSED TO MEASURE: …`) so any gate
+   can state it in its own name rather than this file keeping a list of which ones can. */
+const REFUSED_WITNESS = /^\[[^\]\n]+\] REFUSED TO MEASURE: (.+)$/m;
 function abortRecord(out) {
   const m = out.match(ABORT_WITNESS);
   if (m) return m[0];
@@ -487,6 +497,15 @@ function runOutcome(label, t, hint) {
       `RuntimeError rather than a signal, so this is the same event the native targets report as SIGABRT. ` +
       `The line below names what to fix or build; it is the RESULT of this run.\n` +
       `[build]   ${aborted}`);
+  /* THE STAGE THAT DECLINED TO MEASURE — `skipped` for a condition only the child could see. It keeps a
+     non-zero code by construction like every other non-pass, and it says NOT MEASURED rather than FAILED
+     because the two send a reader to opposite places: one to the layer under test, the other to the tree the
+     artifact was linked from. */
+  const refused = t.captured.match(REFUSED_WITNESS);
+  if (t.status !== 0 && refused)
+    return bad("NOT MEASURED — " + causeName(refused[1]), 7,
+      `REFUSED TO MEASURE and exited rc=${t.status} — it declined to ask its question, so this is NOT a ` +
+      `verdict on what it measures and nothing below its first check ran.\n[build]   ${refused[1]}`);
   /* AND THE PROGRAM'S OWN VERDICT CARRIES WHERE IT GOT TO. This is the arm the smoke reaches when its
      frontier DRAINS and its probe table is merely incomplete — the one outcome for which "how much of the
      fixture was answered" is the entire content of the result, and it read `FAILED rc=1` with the number

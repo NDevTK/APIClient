@@ -8751,7 +8751,13 @@ static void xml_element_selftest(void)
                       "caller reporting the mistake would quote a position inside the failed construct");
             }
         }
-        xml_element_walk_destroy(w);
+        /* THE TEARDOWN IS THE FIXTURE'S OWN STATEMENT ABOUT WHICH ROW THIS WAS, and the two entries are
+           exercised by the SAME table because the table already holds both shapes — the OK rows broke out of
+           the loop at depth 0, and every error row above stopped somewhere inside [39] element. A fixture
+           that sent both through one entry would be the caller reading the operation off the object, which is
+           the defect core/xml/xml_element.c's destroy assertion names. */
+        if (e == XML_ELEMENT_OK) xml_element_walk_destroy(w);
+        else                     xml_element_walk_abandon(w);
     }
 
     /* THE DETAIL IS CHECKED ON A SECOND PASS so that the loop above can stop at the first item that fails,
@@ -8769,7 +8775,8 @@ static void xml_element_selftest(void)
             e = xml_element_next(w, &r, &it, &d);
         } while (e == XML_ELEMENT_OK && xml_element_depth(w) > 0);
         CHECK(d.tag == DOC[i].tag && d.markup == DOC[i].markup && d.ref == DOC[i].ref, DOC[i].why);
-        xml_element_walk_destroy(w);
+        if (e == XML_ELEMENT_OK) xml_element_walk_destroy(w);
+        else                     xml_element_walk_abandon(w);
     }
 
     /* ONE MESSAGE PER SENTENCE — a report that merged two would send an author to the wrong one. */
@@ -8814,7 +8821,9 @@ static void xml_element_selftest(void)
         CHECK(xml_element_next(w, &r, &it, &d) == XML_ELEMENT_ERR_ELEMENT_TYPE_MATCH,
               "and the duplicated push is what [WFC: Element Type Match] then reports, which is the "
               "constraint doing its job on a stack this probe deliberately unbalanced");
-        xml_element_walk_destroy(w);
+        /* This probe ends INSIDE [39] by construction — the duplicated push is what [WFC: Element Type Match]
+           reported on — so its teardown is an abandonment and says so. */
+        xml_element_walk_abandon(w);
     }
 }
 
@@ -9088,7 +9097,10 @@ static void xml_document_selftest(void)
                       "a caller reporting the mistake would quote a position inside the failed construct");
             }
         }
-        xml_document_walk_destroy(w);
+        /* The OK rows broke out of the loop on `xml_document_ended`; every error row stopped somewhere short
+           of the last byte, which is what abandonment is (core/xml/xml_document.h on the two teardowns). */
+        if (e == XML_DOCUMENT_OK) xml_document_walk_destroy(w);
+        else                      xml_document_walk_abandon(w);
     }
 
     /* ONE MESSAGE PER SENTENCE. */

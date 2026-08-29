@@ -109,21 +109,42 @@ XmlElementWalk *xml_element_walk_create(void)
     return w;
 }
 
-void xml_element_walk_destroy(XmlElementWalk *w)
+/* THE TEARDOWN, WHICH THE TWO ANSWERS BELOW SHARE. They differ in what they ASSERT and in nothing else, so
+   `open` and the last start-tag's §3.3.3 values still have exactly one free site each. */
+static void element_walk_free(XmlElementWalk *w)
 {
-    if (!w) return;
-    assert_owner(w);
-    DCHECK(w->stopped || lexbor_array_obj_length(w->open) == 0,
-           "an XML element walk was destroyed with elements still open and neither a fatal error nor a "
-           "completed [39] element behind it — the stack empties exactly when the element ends and §1.2 "
-           "Terminology ends the walk when an error is reported, so a residue with neither is a caller that "
-           "stopped reading items in the middle of a WELL-FORMED document and a tree missing every node below "
-           "that point");
     lexbor_array_obj_destroy(w->open, true);
     /* The last start-tag's §3.3.3 values, whose one free site this is (xml_element.h on the item's lifetime).
        A record no scan filled is zeroed, and xml_tag_free on one is a no-op. */
     xml_tag_free(&w->tag);
     free(w);
+}
+
+void xml_element_walk_destroy(XmlElementWalk *w)
+{
+    if (!w) return;
+    assert_owner(w);
+    DCHECK(lexbor_array_obj_length(w->open) == 0,
+           "an XML element walk was DESTROYED with elements still open — the stack empties exactly when [39] "
+           "element ends, so a residue here is a caller that stopped reading items in the middle of one and a "
+           "tree missing every node below that point. THE WALK'S OWN `stopped` FLAG CANNOT ANSWER THIS AND "
+           "MUST NOT BE ADMITTED AS A DISJUNCT HERE: it records a fatal error THIS walk reported and nothing "
+           "else, while Namespaces in XML §6.3 Uniqueness of Attributes' [NSC: Attributes Unique] is decided "
+           "one layer up over a start-tag item this walk answered successfully — so `stopped ||` admits one "
+           "kind of unfinished [39] and crashes on the others, which is a fact about the OPERATION read off "
+           "the OBJECT. xml_element_walk_abandon is that fact stated by the caller that holds it");
+    element_walk_free(w);
+}
+
+void xml_element_walk_abandon(XmlElementWalk *w)
+{
+    if (!w) return;
+    assert_owner(w);
+    /* NO RESIDUE ASSERTION, AND ITS ABSENCE IS THE POSITIVE STATEMENT — open elements ARE what abandonment
+       means, and this entry exists so that `destroy` above can be the pure one. Nor may the MIRROR be
+       asserted: a parse is abandoned between two items, and the item before the teardown can perfectly well
+       have been the root's end-tag, so "something must still be open" is false of a legitimate abandonment. */
+    element_walk_free(w);
 }
 
 size_t xml_element_depth(const XmlElementWalk *w)

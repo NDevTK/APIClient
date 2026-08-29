@@ -156,7 +156,12 @@ XmlTreeBuild *xml_tree_build_create(lxb_dom_document_t *doc, lxb_dom_node_t *par
 void xml_tree_build_destroy(XmlTreeBuild *b)
 {
     if (b == NULL) return;
-    DCHECK(b->failed || !xml_document_ended(b->walk) || b->text_len == 0,
+    DCHECK(!b->failed && xml_document_ended(b->walk),
+           "an XML tree build that did not match [1] `document` to the last byte of the entity with no error "
+           "at any layer was DESTROYED rather than abandoned — see core/xml/xml_tree.h on the two teardowns. "
+           "A build whose own step reported a Namespaces in XML §6 constraint is one of these: the walks under "
+           "it answered that start-tag successfully and are still standing inside [39] element");
+    DCHECK(b->text_len == 0,
            "a completed XML parse left a character run that never became a Text node — §2.1's [1] `document` "
            "is `prolog element Misc*` and §2.8's [27] `Misc` has no [14] CharData, so every run this build can "
            "open is inside an element and is flushed by that element's end-tag item. A survivor means a run "
@@ -164,6 +169,19 @@ void xml_tree_build_destroy(XmlTreeBuild *b)
            "the tree");
     xml_document_walk_destroy(b->walk);
     xml_ns_scope_destroy(b->scope);
+    free(b->text);
+    free(b);
+}
+
+void xml_tree_build_abandon(XmlTreeBuild *b)
+{
+    if (b == NULL) return;
+    /* NEITHER RESIDUE IS ASSERTED HERE AND BOTH ARE EXPECTED: an unflushed run is a [14] CharData whose
+       element never closed, and the open element and namespace scopes below are what stopping mid-[39]
+       leaves. `text` is freed exactly as it is above — the run is this build's own buffer and no node names
+       it, so there is nothing an abandoned build leaks that a finished one does not. */
+    xml_document_walk_abandon(b->walk);
+    xml_ns_scope_abandon(b->scope);
     free(b->text);
     free(b);
 }
