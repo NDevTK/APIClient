@@ -305,6 +305,36 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       whose script 404s runs a test nobody wrote. Its last segment is `resources`, so it is
                       checked out to BE USED and contributes no test of its own. */
                    "html/resources",
+                   /* HTML §8.4 DYNAMIC MARKUP INSERTION — `document.open()`, `document.write()`,
+                      `document.writeln()`, `document.close()` and the HTML-unsafe markup members. Every one of
+                      those algorithms is a built component here (core/html/document_open.c,
+                      core/html/document_write.c, core/dom/element.c) and NOT ONE of their tests was checked
+                      out, so the standard's own suite could not fail: the excluded-test defect with the total
+                      still looking complete, which is the shape this list exists to make impossible.
+                      THE STANDARD IS LISTED AND SO ARE ITS SEVEN SUBDIRECTORIES, the same two-level shape as
+                      `dom` and `FileAPI` above and for both of their reasons. The standard-level entry is what
+                      CHECKS OUT the subtree, so a subdirectory upstream adds later is collected rather than
+                      silently missed — it holds no test file of its own at the pinned revision, which is a fact
+                      about that revision and not a reason to leave it unlisted. The seven are REPORTING
+                      refinements over subjects that fail in different places: opening-the-input-stream is
+                      §8.4.1's document-replacing arm, document-write is §8.4.3's parser feed, html-unsafe-
+                      methods is `setHTMLUnsafe`/`parseHTMLUnsafe`, and the innerHTML/outerHTML pair is the
+                      §8.5.4 serializer reached through a different member. One row for all of them would be one
+                      number in which none of them is visible.
+                      NOTHING IS PREDICTED ABOUT WHAT THEY SCORE. Not one of these files has ever run in this
+                      tree. What each abort NAMES is the work queue, and it is read off the run — expect the
+                      §8.4.1 arm this engine CRASHES on by design to be well represented, because
+                      core/html/document_open.c's step 5 DFAIL is what stands between a parse-time write and the
+                      destructive half of an algorithm it must not reach. Its ancestor `html/webappapis` holds
+                      no file at its own level, so this costs no own-level entry below. */
+                   "html/webappapis/dynamic-markup-insertion",
+                   "html/webappapis/dynamic-markup-insertion/closing-the-input-stream",
+                   "html/webappapis/dynamic-markup-insertion/document-write",
+                   "html/webappapis/dynamic-markup-insertion/document-writeln",
+                   "html/webappapis/dynamic-markup-insertion/html-unsafe-methods",
+                   "html/webappapis/dynamic-markup-insertion/opening-the-input-stream",
+                   "html/webappapis/dynamic-markup-insertion/the-innerhtml-property",
+                   "html/webappapis/dynamic-markup-insertion/the-outerhtml-property",
                    /* The same, for `shadow-dom/reference-target/`: ten of its files name
                       `/wai-aria/scripts/aria-utils.js`, and the gate reported all ten as ABORTED with "a
                       <script src> the corpus does not serve" — which is an EXCLUDED TEST wearing a reason.
