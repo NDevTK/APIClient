@@ -59,6 +59,7 @@
 #include "core/dom/document.h"
 #include "core/dom/element.h"   /* element_prefix — §4.4's three namespace lookups read the name §4.5 stored */
 #include "core/dom/attr_list.h"    /* dom_attr_clone / dom_attr_attach — §4.4 step 2's attribute half */
+#include "core/loader/data_block.h"   /* HTML §4.12.1: the two doors a data block's own text leaves by */
 #include "core/dom/name_intern.h"  /* §4.4's names in the COPY's document — see clone_element_into */
 #include "core/dom/node_heap.h"    /* …and whose arenas the node's BYTES are in, which §4.5 also decides */
 #include "core/dom/node_interface.h" /* …and which C struct those names mean, on create AND on destroy */
@@ -1327,6 +1328,19 @@ static JSValue js_cd_get_data(JSContext *ctx, JSValueConst this_val, int magic)
         return JS_ThrowTypeError(ctx, "CharacterData.data read on a node that holds no character data");
     }
     cd = lxb_dom_interface_character_data(n);
+    /* …AND THE SECOND DOOR OUT OF A §4.12.1 DATA BLOCK. `el.firstChild.data` and `el.firstChild.nodeValue`
+       deliver the same bytes `el.textContent` does, so they ask the same question — an entry that skipped it
+       would report a record the SERVER filled as one the bundle composed (HTML §4.12.1 The script element,
+       and core/loader/data_block.h).
+       ONLY WHEN THIS NODE IS THE WHOLE CONTENT, which is what makes the two doors deliver ONE value under one
+       provenance. What an author's code reads out of a data block is DOM §4.11 Interface Text's CHILD TEXT
+       CONTENT of the element — "the concatenation of the data of all the Text node children" — so a `script`
+       with several Text children (`el.appendChild(document.createTextNode(…))` after a parse) has more of it
+       than this node holds, and naming a fragment after the block would give two different values one identity — which is
+       one name for several unknowns, and every predicate over either would then decide both. */
+    if (n->parent && n->parent->first_child == n && n->next == NULL)
+        return data_block_wrap_text(ctx, lxb_dom_interface_element(n->parent),
+                                    JS_NewStringLen(ctx, (const char *)cd->data.data, cd->data.length));
     return JS_NewStringLen(ctx, (const char *)cd->data.data, cd->data.length);
 }
 
@@ -3265,7 +3279,13 @@ static int js_node_get_text_content(JSContext *ctx, JSStepHdr *hdr, void *st, in
 
     DCHECK(hdr->stage == NODE_TEXT_DESCENDANTS, "textContent resumed into a stage §4.4 does not have");
     if (!s->cursor) {
-        *presult = JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len);
+        /* §4.4's answer, and then the one question a data block's content owes — HTML §4.12.1 The script
+           element: the concatenated Text data under a `<script>` the user agent does not process is the
+           DOCUMENT'S OWN bytes, so what leaves here is the solver triple carrying them rather than a bare
+           string (core/loader/data_block.h).
+           `s->root` is the node whose descendants were walked, which is the element these bytes belong to. */
+        *presult = data_block_wrap_text(ctx, lxb_dom_interface_element(s->root),
+                                        JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len));
         return JS_STEP_DONE;
     }
     if (s->cursor->type == LXB_DOM_NODE_TYPE_TEXT) {

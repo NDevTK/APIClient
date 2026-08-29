@@ -1157,10 +1157,59 @@ void concolic_set_candidate(const char *src, const char *payload) {
     }
 }
 
+/* THE MEMBER'S OWN EXAMPLE — the third of §Solver's triple, computed by RUNNING THE REAL READ on the parent's
+   example rather than by deriving anything from a recorded expression.
+ *
+ * A concolic whose example is a RECORD is what the real codec hands back: 25.5.1 over an unknown text runs the
+ * engine's own `JSON.parse` on the source's example and the completion carries that parsed value. Until this
+ * existed, every field read off it minted example-free, so a loaded config's `region` — a value the run had
+ * concretely in hand — reached an @H parameter as a hole with no value under it, which is §@H's "a shape
+ * states two facts" with one of them thrown away. Absence stays absence: a member the record does NOT hold
+ * yields no example, which is the honest statement that the payload this visitor was served does not carry
+ * that field, and is exactly what keeps the gate over it forking instead of inventing a value for it.
+ *
+ * NOT [[Get]] — JS_GetOwnSlotDesc, which runs NONE of the page's code. Three reasons and each is load-bearing:
+ * a prototype walk would answer `hasOwnProperty` and `toString` for members no server ever wrote; a getter is
+ * the page's own function and calling it from this C activation is the drive-to-completion with no flow base
+ * the whole flow machinery exists to avoid; and the question being asked is whether the RECORD holds the
+ * member, which is [[GetOwnProperty]]'s question and not [[Get]]'s.
+ *
+ * AN ACCESSOR ON AN EXAMPLE IS ANSWERED WITH NO EXAMPLE, and that is a positive statement rather than a
+ * default: its value is whatever the page's getter would compute, this read may not run it, so there is no
+ * concrete value here to report — the same answer as a member the record does not hold, for a different and
+ * equally honest reason. `JSON.parse` builds only data properties, so the only route to one is a 25.5.1 step 9
+ * reviver that defined one, which is the page's own choice. */
+static JSValue example_member(JSContext *ctx, JSValueConst parent_example, JSAtom atom)
+{
+    JSPropertyDescriptor pd;
+    int has;
+
+    /* A primitive example has no members to read: `{hash}.length` off a concrete fragment is a DERIVATION and
+       not a slot, and answering it from this object-shaped read would be this file inventing the operation. */
+    if (!JS_IsObject(parent_example))
+        return JS_UNDEFINED;
+    has = JS_GetOwnSlotDesc(ctx, &pd, parent_example, atom);
+    DCHECK(has >= 0,
+           "reading a member off a concolic's own example threw — JS_GetOwnSlotDesc runs none of the page's "
+           "code and aborts on a Proxy rather than trapping, so the only completion it has is a value, and an "
+           "exception raised here would be left on a context with no flow base to hand it to");
+    if (has <= 0)
+        return JS_UNDEFINED;
+    if (pd.flags & JS_PROP_GETSET) {
+        JS_FreeValue(ctx, pd.getter);
+        JS_FreeValue(ctx, pd.setter);
+        return JS_UNDEFINED;
+    }
+    return pd.value;
+}
+
 /* Exotic [[Get]]: reading ANY field of a concolic value yields a DERIVED concolic — unknown injected/attacker
    state is unknown per-field, carrying the FIELD-PATH identity ("{state}.admin"), which doubles as the source
    identity for @S injection. This is what lets a gated `if (state.admin)` fork AND lets an @S candidate inject
-   at a precise source. */
+   at a precise source. The derived value carries the parent's example READ THROUGH, so a field the record
+   holds arrives with the bytes the server sent and a field it does not hold arrives with none — opaque for
+   control flow either way, which is what §solver's trust boundary requires of a loaded config: "a loaded
+   `features.admin:false` must NOT concretize the gate, or the admin endpoint is lost". */
 static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom, JSValueConst receiver) {
     (void)receiver;
     Concolic *c = JS_GetOpaque(obj, g_concolic_class);
@@ -1189,7 +1238,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        unknown object is a datum the attacker controls SEPARATELY — which is why this mints a new injection
        identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
        bytes in carried this field's, and a report has to say so. */
-    r = concolic_alloc(ctx, shape, shape, c->root, ident, JS_UNDEFINED);
+    r = concolic_alloc(ctx, shape, shape, c->root, ident, example_member(ctx, c->example, atom));
     free(shape);
     return r;
 }
@@ -2255,6 +2304,11 @@ void concolic_install_hooks(void)
    host still adds, compares and coerces. This decides only whether one is MINTED. */
 static int g_source_overlay;
 long concolic_source_reads(void) { return g_source_reads; }
+/* The same answer, for a component that mints a source of its OWN — see the header. Not folded into
+   concolic_source_wrap, because that seam ALSO files the value in the attacker-delivery registry and counts it
+   as attacker input acquired: a §4.12.1 data block is neither, and counting one there would report a page that
+   read no attacker source as one that did, which is the direction that manufactures a measurement. */
+int concolic_is_exploring(void) { return g_source_overlay; }
 
 void concolic_install_source_overlay(void)
 {

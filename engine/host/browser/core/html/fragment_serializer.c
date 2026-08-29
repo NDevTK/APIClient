@@ -54,6 +54,7 @@
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/html/fragment_serializer.h"
+#include "core/loader/data_block.h"   /* HTML §4.12.1: §13.3 over a data block's children IS its text */
 #include "core/idl_args.h"
 
 static int g_ready;
@@ -452,7 +453,15 @@ static int js_frag_ser_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
     default:
         DFAIL("the fragment serializer resumed into a stage §13.3 does not have");
     }
+    /* …AND THE THIRD DOOR OUT OF A §4.12.1 The script element DATA BLOCK. §13.3 Serializing HTML fragments appends a
+       character-data child's value LITERALLY when its parent is a `script` element, so the serialization of a data block's CHILDREN is
+       that block's child text content byte for byte — the same value §8.5.4 The innerHTML property's own
+       consumers parse, reached by a third spelling. `s->top` is the node whose children were serialized and is
+       NULL for §8.5.5 The outerHTML property, whose output is the element's own tags AROUND that text and is
+       therefore not it (core/loader/data_block.h). */
     *presult = JS_NewStringLen(ctx, s->out ? s->out : "", s->out_len);
+    if (s->top)
+        *presult = data_block_wrap_text(ctx, lxb_dom_interface_element(s->top), *presult);
     return JS_STEP_DONE;
 }
 

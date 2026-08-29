@@ -1,0 +1,37 @@
+<!doctype html><html><head><title>instrument control — server-injected state</title></head><body>
+<!--
+  INSTRUMENT CONTROL, SERVER-INJECTED-STATE HALF. One question: does a record the SERVER filled answer as
+  server-injected state — its present members carrying the bytes that were actually sent, its ABSENT members
+  unknown so the gate over one FORKS — no matter which of the two channels the server used to inject it.
+
+  THE TWO CHANNELS ARE ONE FACT AND THAT IS THE WHOLE RUNG. Both records below are byte-identical and both
+  arrive inside the document's own response, rendered against this visitor's credentials. They differ only in
+  WHO turns the bytes into a record: an inline `<script>` writes one directly, and for the other — HTML §4.12.1
+  "The script element": "Setting the attribute to any other value means that the script is a data block, which
+  is not processed by the user agent, but instead by author script or other tools" — the BUNDLE parses it. So
+  the inline arm is the control on the control: if it reads zero, the document did not run and the block arm's
+  zero says nothing. A run in which the two arms disagree is measuring the channel and not the page.
+
+  THE PARSE IS IN A SUBRESOURCE ON PURPOSE. `/state.js` is a bundle — the same bytes for every visitor — and
+  that is the shape this rung exists to hold: a data block read and parsed by code that is not the document's.
+  Moving the parse inline would make the arm pass for a reason the real case never has.
+
+  IT IS ITS OWN DOCUMENT AND ITS OWN ORIGIN for the reason serve.mjs states about the other three: a data
+  block's text is unknown input, so 25.5.1 forks its two completions and each block puts another flow on the
+  frontier — which is exactly the competition index.html's orphan rung loses. And a row is isolated by ORIGIN,
+  so a fourth document sharing a port would put these endpoints in another row's union.
+
+  WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable:
+      /api/200/inline-value            the inline record's PRESENT member, as the bytes the server sent
+      /api/inline-gated                the inline record's ABSENT member, gate forked
+      /api/200/block-value             the data block's PRESENT member, as the bytes the server sent
+      /api/{…statusCode}/block-value   the same call site's SHAPE, carrying the block's provenance
+      /api/block-gated                 the data block's ABSENT member, gate forked
+      runOutcomesMine {complete:1}
+  A run with the first two and not the last three is the data-block channel missing while the inline one
+  works, which is one missing capability and not a flaky number.
+-->
+<script>window.__CTL_INLINE__ = {"region":"us-east-1","props":{"pageProps":{"statusCode":200}}};</script>
+<script id="__CTL_BLOCK__" type="application/json">{"region":"us-east-1","props":{"pageProps":{"statusCode":200}}}</script>
+<script src="/state.js"></script>
+</body></html>

@@ -105,6 +105,12 @@ void concolic_install_hooks(void);
    wants the spec's answers and declines this; it still gets the value semantics above. Install after
    concolic_install_hooks. */
 void concolic_install_source_overlay(void);
+/* …AND THE SAME QUESTION, ASKED. A component that mints a source of its OWN — one that is not an attacker
+   delivery, so concolic_source_wrap's registry and its read counter would both be a wrong answer about it —
+   still owes the gate above, because a conformance host must get the spec's value and not an unknown. This is
+   that gate as a predicate, so the decision lives in one place rather than being re-derived from whether some
+   hook happens to be installed. */
+int concolic_is_exploring(void);
 /* HOW MANY ATTACKER-SOURCE VALUES THIS DOCUMENT'S RUN MINTED — the first of the facts an EMPTY @S surface
    collapses, and the one that is not about sinks at all. "No finding" has at least four readings and they take
    opposite actions: the page never read an attacker source (a driving gap — the code that reads one was never

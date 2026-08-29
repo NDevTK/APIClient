@@ -78,7 +78,7 @@ void html_script_free(JSRuntime *rt)
    SVG's are both script elements, and lexbor's own `lxb_html_tree_node_is` answers only for the first because
    it hardcodes the HTML namespace. It replaces a memcmp over the QUALIFIED name, which is the same set by
    accident (a prefixed `foo:script` does not match six bytes) and says nothing about why. */
-static bool script_is(const lxb_dom_node_t *n)
+bool html_script_is(const lxb_dom_node_t *n)
 {
     return n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT &&
            n->local_name == LXB_TAG_SCRIPT && (n->ns == LXB_NS_HTML || n->ns == LXB_NS_SVG);
@@ -115,7 +115,7 @@ static void script_set_already_started(JSContext *ctx, lxb_dom_node_t *n)
 
     DCHECK(g_atom_started != JS_ATOM_NULL,
            "a script's `already started` was written before html_script_init minted its slot key");
-    DCHECK(script_is(n), "`already started` was written onto a node that is not an HTML `script` element");
+    DCHECK(html_script_is(n), "`already started` was written onto a node that is not an HTML `script` element");
     wrap = node_wrap(ctx, n);
     CHECK(JS_IsObject(wrap), "a script element could not be wrapped to carry its `already started` — an "
                              "unmarked script is one §4.12.1 step 1 lets run, so failing quietly here would "
@@ -157,7 +157,7 @@ static void script_set_force_async(JSContext *ctx, lxb_dom_node_t *n, bool on)
 
     DCHECK(g_atom_force_async != JS_ATOM_NULL,
            "a script's `force async` was written before html_script_init minted its slot key");
-    DCHECK(script_is(n), "`force async` was written onto a node that is not an HTML `script` element");
+    DCHECK(html_script_is(n), "`force async` was written onto a node that is not an HTML `script` element");
     wrap = node_wrap(ctx, n);
     CHECK(JS_IsObject(wrap), "a script element could not be wrapped to carry its `force async` — the flag "
                              "decides whether §4.12.1 puts the element in the ASAP SET or in the ordered list, "
@@ -172,7 +172,7 @@ static lxb_dom_node_t *script_receiver(JSContext *ctx, JSValueConst this_val, co
 {
     lxb_dom_node_t *n = node_of(this_val);
 
-    if (script_is(n)) return n;
+    if (html_script_is(n)) return n;
     JS_ThrowTypeError(ctx, "HTMLScriptElement.%s was reached on something that is not a <script> element",
                       member);
     return NULL;
@@ -256,14 +256,14 @@ static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el)
    element whose text was written. */
 static void script_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
 {
-    if (!script_is(parent)) return;
+    if (!html_script_is(parent)) return;
     script_post_connection(ctx, lxb_dom_interface_element(parent));
 }
 
 void html_script_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local,
                               const char *val)
 {
-    if (!script_is(lxb_dom_interface_node(el))) return;
+    if (!html_script_is(lxb_dom_interface_node(el))) return;
     if (ns != NULL || !local) return;   /* "If namespace is not null, then return." */
     /* §4.12.1.1's attribute change steps: "If localName is `src`, value is not null, and element is connected,
        then run the script HTML element post-connection steps, given element." REMOVING `src` is not one of
@@ -305,7 +305,7 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert)
        climbs; a template can hold BOTH lists (only the parser and `t.content` reach the fragment, while
        `t.appendChild(x)` reaches the element), so coming back visits the ordinary children next. */
     for (;;) {
-        if (script_is(n)) {
+        if (html_script_is(n)) {
             /* §4.12.1.1: `force async` "is set to false by the HTML parser and the XML parser on script
                elements they insert" — EVERY parse, not only the inert one, which is why this walk is no longer
                the Inert marking alone. Without it a parsed `<script>` kept the boolean's initial TRUE and its
@@ -338,8 +338,8 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert)
 
 void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *copy)
 {
-    if (!script_is(src)) return;
-    DCHECK(script_is(copy),
+    if (!html_script_is(src)) return;
+    DCHECK(html_script_is(copy),
            "DOM §4.4 clone a node produced a copy of a `script` element that is not one — the cloning steps "
            "HTML defines for `script` are stated over a copy of the same element, and a pair that disagrees "
            "means step 2's `clone a single node` built the wrong interface");
@@ -379,7 +379,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     ScriptType st;
     JSValue t;
 
-    if (!script_is(n)) return;
+    if (!html_script_is(n)) return;
     /* STEP 1: "If el's already started is true, then return." This is the whole of what makes §13.4's fragment
        parse inert — the parsed script is in the tree, is queryable, serialises back out, and does not run. */
     if (script_already_started(ctx, n)) return;
@@ -576,7 +576,7 @@ void html_script_end_of_file(lxb_dom_node_t *script)
     JSContext *ctx = document_realm_of(script);
 
     DCHECK(script != NULL, "§13.2.6.4.8's end-of-file step was reached with no current node");
-    DCHECK(script_is(script),
+    DCHECK(html_script_is(script),
            "§13.2.6.4.8's end-of-file step was handed a node that is not a `script` element — the step is "
            "\"if the current node is a script element\", so the test belongs to the caller and a node that "
            "failed it should never have arrived");
@@ -593,7 +593,7 @@ void html_script_parser_inserted(lxb_dom_node_t *script)
     JSContext *ctx;
 
     DCHECK(script != NULL, "§13.2.6.4.8's `script` end tag was reached with no current node");
-    DCHECK(script_is(script),
+    DCHECK(html_script_is(script),
            "§13.2.6.4.8's `script` end tag was handed a node that is not a `script` element — the section says "
            "\"let script be the current node (which will be a script element)\", so a node that is not one "
            "means the caller took the current node at a moment other than before the pop");

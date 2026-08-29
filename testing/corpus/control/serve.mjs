@@ -9,7 +9,7 @@
 // sites, so that zero had no control behind it; each document below says what its rungs prove and which
 // counter carries each one.
 //
-// THREE DOCUMENTS, ONE QUESTION EACH, AND EVERY SPLIT HERE IS MEASURED RATHER THAN TIDY:
+// FOUR DOCUMENTS, ONE QUESTION EACH, AND EVERY SPLIT HERE IS MEASURED RATHER THAN TIDY:
 //
 //   - AN ABORT BLINDS EVERY COLUMN OF THE DOCUMENT IT HAPPENS IN. site.mjs reads the engine's result
 //     document, so a run that produced none reports `endpoints: null, sinks: null, sinkReached: null`. A
@@ -37,10 +37,16 @@
 //     one, which the shared 8899 already needed: two lanes ran the control at once and one lost its pass to
 //     EADDRINUSE.
 //
-// Three rows, and a census wants all three (PORT sets the base; the other two follow it):
-//     node site.mjs control     http://127.0.0.1:8899/ <pass>
-//     node site.mjs control-sec http://127.0.0.1:8900/ <pass>
-//     node site.mjs control-url http://127.0.0.1:8901/ <pass>
+//   - AND A DATA BLOCK PUTS A FLOW ON THE FRONTIER FOR THE SAME REASON THE SECURITY RUNGS DO. 25.5.1 over a
+//     text this engine does not have forks its two completions, so injected-state.html's rung competes with
+//     index.html's orphan drive exactly as security.html's candidates do — the split is the same measurement
+//     and not a second convention.
+//
+// Four rows, and a census wants all four (PORT sets the base; the others follow it):
+//     node site.mjs control      http://127.0.0.1:8899/ <pass>
+//     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
+//     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
+//     node site.mjs control-data http://127.0.0.1:8902/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -53,11 +59,14 @@ const BASE = Number(process.env.PORT || 8899);
    root would put it back in that row's union, which is the whole defect this replaces — so each server
    answers its own document and 404s every other one. `/ext.js` and `/api/*` are per-origin too: a
    subresource fetched cross-origin is a different request with a different principal, and the endpoint half
-   is measuring what the engine learns from a SAME-origin subresource. */
+   is measuring what the engine learns from a SAME-origin subresource. A document names its OWN subresource
+   (`/ext.js`, `/state.js`) and every origin answers for it out of this directory, so which bundle a row loads
+   is stated by that row's document rather than by a name every origin has to share. */
 const DOCS = [
   ['index.html', 'control'],
   ['security.html', 'control-sec'],
   ['url-operands.html', 'control-url'],
+  ['injected-state.html', 'control-data'],
 ];
 
 let bound = 0;
@@ -69,7 +78,9 @@ DOCS.forEach(([doc, name], i) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end('{"ok":true}');
     }
-    const f = p === '/' ? join(D, doc) : p === '/ext.js' ? join(D, 'ext.js') : null;
+    const f = p === '/' ? join(D, doc)
+            : /^\/[a-z0-9_-]+\.js$/.test(p) ? join(D, p.slice(1))
+            : null;
     if (!f || !existsSync(f)) { res.writeHead(404); return res.end(''); }
     res.writeHead(200, { 'content-type': f.endsWith('.js') ? 'application/javascript' : 'text/html; charset=utf-8' });
     res.end(readFileSync(f));

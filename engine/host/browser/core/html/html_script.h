@@ -58,6 +58,14 @@
 #include <lexbor/dom/dom.h>
 #include "quickjs.h"
 
+/* IS THIS NODE A `script` ELEMENT? The INTERNED TAG ID and the pair of namespaces a `script` can be in —
+   HTML's `script` and SVG's are both script elements, and lexbor's own `lxb_html_tree_node_is` answers only
+   for the first because it hardcodes the HTML namespace. It is exported because §4.12.1 is asked of an
+   element by more than this file — core/loader/data_block.c has to know it is looking at a `script` before
+   the section's type-string steps mean anything, and a private copy of the test there would be two answers to
+   one question, differing on SVG the first time either changed. */
+bool html_script_is(const lxb_dom_node_t *n);
+
 /* The slot key. Once per runtime, beside the other per-element slot declarations, and released with them —
    the key is a Symbol and its atom is an interned reference, so an agent torn down without this leaves both
    for the runtime's own leak walk to count. */
