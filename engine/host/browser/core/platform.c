@@ -16,6 +16,7 @@
 #include "core/events/broadcast_channel.h"
 #include "core/events/error_event.h"
 #include "core/events/event.h"
+#include "core/events/input_device_capabilities.h"
 #include "core/events/event_target.h"
 #include "core/events/message_event.h"
 #include "core/events/message_port.h"
@@ -179,6 +180,8 @@ static void d_idb_get_all(JSContext *c, const PlatformAgent *a) { (void)a; idb_g
 static void d_idb_vce(JSContext *c, const PlatformAgent *a) { (void)a; idb_version_change_event_init(c); }
 static void d_idb_open(JSContext *c, const PlatformAgent *a) { (void)a; idb_open_init(c); }
 static void d_hr_time(JSContext *c, const PlatformAgent *a) { (void)a; hr_time_init(c); }
+static void d_input_device_capabilities(JSContext *c, const PlatformAgent *a)
+{ (void)a; input_device_capabilities_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
 static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
@@ -226,6 +229,7 @@ static void d_module_loader(JSContext *c, const PlatformAgent *a) { (void)a; mod
 
 /* ---- the agent half, undone ----------------------------------------------------------------------------- */
 
+static void r_input_device_capabilities(JSRuntime *rt) { input_device_capabilities_free(rt); }
 static void r_console(JSRuntime *rt) { (void)rt; console_free(); }
 static void r_hr_time(JSRuntime *rt) { (void)rt; hr_time_free(); }
 static void r_cookie_jar(JSRuntime *rt) { (void)rt; cookie_jar_free(); }
@@ -592,6 +596,15 @@ static const PlatformComponent PLATFORM[] = {
        and §2.6.1's handles because §4.5's and §4.6's members are what reach it, and after §2.12's IDBRecord
        row because its "record" arm mints one. */
     { "idb_get_all",         d_idb_get_all,         NULL,        r_idb_get_all },
+    /* INPUT DEVICE CAPABILITIES §"The InputDeviceCapabilities interface", and it is HERE — one row
+       AHEAD of `event` — for the reason that decides every position in this list. §"Extensions to the
+       UIEvent interface and UIEventInit dictionary" makes it the TYPE of UIEventInit's
+       `sourceCapabilities`, and the row below declares UIEvent and its three subclasses, each of
+       which brands that member against this class AT ITS DECLARATION. A row after `event` would hand
+       all four a class id of zero. It depends on nothing itself: its prototype chains to
+       Object.prototype and its two attributes read its own slot record. */
+    { "input_device_capabilities", d_input_device_capabilities, NULL,
+                                                          r_input_device_capabilities },
     { "event",               d_event,               i_event },
     /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
        one reason that decides every position in this list: its prototype chains to Event.prototype, which the
@@ -653,8 +666,14 @@ static const PlatformComponent PLATFORM[] = {
     { "media_query_list",    d_media_query_list,    i_media_query_list },
     /* AFTER the three whose algorithms update-the-rendering's steps 8 and 10 are. */
     { "rendering",           d_rendering,           NULL,        r_rendering },
-    { "fetch",               d_fetch,               i_fetch,     r_fetch },
+    /* DOM §3.2 Interface AbortSignal, MOVED AHEAD OF `fetch` and not tidied there. Fetch §5.4's
+       RequestInit declares `AbortSignal? signal`, and a DECLARED interface type states the class it
+       brands against AT THE DECLARATION — which `fetch` makes, since fetch_init declares Request. A row
+       after `fetch` handed that declaration a class id of zero. It depends on nothing this list has not
+       already built: abort_init allocates a symbol and two classes, and its per-realm install chains
+       AbortSignal.prototype to EventTarget.prototype, whose row is far above both of these. */
     { "abort",               d_abort,               i_abort },
+    { "fetch",               d_fetch,               i_fetch,     r_fetch },
     { "observable",          d_observable,          i_observable },
     /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
        — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
@@ -730,6 +749,7 @@ static const struct { const char *name, *component; } PLATFORM_WITNESS[] = {
     { "WritableStream",        "writable_stream" },
     { "TransformStream",       "transform_stream" },
     { "CountQueuingStrategy",  "queuing_strategy" },
+    { "InputDeviceCapabilities", "input_device_capabilities" },
     { "Event",                 "event" },
     { "MessageEvent",          "message_event" },
     { "ErrorEvent",            "error_event" },

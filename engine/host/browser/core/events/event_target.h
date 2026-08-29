@@ -173,7 +173,12 @@ enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 1
        EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024, EH_NAVIGATION = 2048,
        EH_NAVIGATION_HISTORY_ENTRY = 4096, EH_IDB_REQUEST = 8192, EH_IDB_TRANSACTION = 16384,
        EH_IDB_OPEN_REQUEST = 32768, EH_IDB_DATABASE = 65536, EH_FILE_READER = 131072,
-       EH_WINDOW_REFLECTING = 262144 };
+       EH_WINDOW_REFLECTING = 262144,
+       /* HTML §9.4.4 Message ports' OWN `onclose`, which is not the MessageEventTarget mixin's set:
+          EH_PORT is `onmessage`/`onmessageerror`, which §9.5 Broadcasting to other browsing contexts
+          includes on BroadcastChannel too, and no BroadcastChannel declares an `onclose`. A membership
+          bit of its own is what keeps one name off a prototype whose IDL does not declare it. */
+       EH_MESSAGE_PORT = 524288 };
 /* HTML §3.2.2 click() — "fire a synthetic pointer event named click", which IS §2.9 dispatch, so it is the same
    machine under a second entry rather than a second implementation of it. */
 void event_target_install_click(JSContext *ctx, JSValueConst target);

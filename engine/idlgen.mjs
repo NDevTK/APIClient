@@ -124,6 +124,11 @@ const INTERFACES = {
      They had no row at all, which is the audit lying by OMISSION: an interface nobody audits is an interface
      whose gaps are not zero but unreported. ui_event.c carries the four modifier attributes and
      getModifierState that MouseEvent and KeyboardEvent declare over its shared key modifier state. */
+  /* INPUT DEVICE CAPABILITIES §"The InputDeviceCapabilities interface" — the TYPE of the one member that
+     specification adds to UIEvent, and therefore the reason FOUR rows below it reported `sourceCapabilities`
+     absent from one gap. It names only its own file: its prototype chains to Object.prototype, so it inherits
+     nothing an audited component installs. */
+  InputDeviceCapabilities: "core/events/input_device_capabilities.c",
   UIEvent:             ["core/events/ui_event.c", "core/events/event.c"],
   FocusEvent:          ["core/events/focus_event.c", "core/events/ui_event.c", "core/events/event.c"],
   MouseEvent:          ["core/events/mouse_event.c", "core/events/ui_event.c", "core/events/event.c"],

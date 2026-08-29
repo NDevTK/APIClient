@@ -27,23 +27,28 @@
  * property write is captured by the COW delta, so the event's state time-travels with the flow that made it,
  * and the symbol is a brand a page cannot forge.
  *
- * `sourceCapabilities` IS NOT UI EVENTS' AND LOOKING FOR IT HERE IS WHY THIS PARAGRAPH EXISTS. The flattened
- * IDL files it under UIEvent, and the UI Events draft contains neither that name nor `InputDeviceCapabilities`
- * anywhere in its text. It is the INPUT DEVICE CAPABILITIES specification's, whose editor's draft numbers no
- * sections and whose §"Extensions to the UIEvent interface and UIEventInit dictionary" states the whole of it:
+ * `sourceCapabilities` IS NOT UI EVENTS' AND LOOKING FOR ITS SPEC HERE IS WHY THIS PARAGRAPH EXISTS. The
+ * flattened IDL files it under UIEvent, and the UI Events draft contains neither that name nor
+ * `InputDeviceCapabilities` anywhere in its text. It is the INPUT DEVICE CAPABILITIES specification's, whose
+ * editor's draft numbers no sections and whose §"Extensions to the UIEvent interface and UIEventInit
+ * dictionary" states the whole of it:
  *
  *     partial interface UIEvent   { readonly attribute InputDeviceCapabilities? sourceCapabilities; };
  *     partial dictionary UIEventInit { InputDeviceCapabilities? sourceCapabilities = null; };
  *
- * SO IT IS NOT A MEMBER TO ADD HERE, IT IS AN INTERFACE TO BUILD ELSEWHERE FIRST. §"The InputDeviceCapabilities
- * interface" declares a CONSTRUCTIBLE interface with two boolean attributes filled from a dictionary
- * (`firesTouchEvents`, `pointerMovementScrolls`), which is a real component with real state and no device
- * behind it — `input_device_capabilities.c`, beside this file, with its own per-realm prototype and interface
- * object. Only once that type exists can this slot hold anything, because the member's TYPE is that interface
- * and a `[NewObject]`-less nullable interface member has exactly two values a page can tell apart: an instance
- * of it and null. Installing the attribute before the interface would make `null` the only answer it could
- * ever give, and the spec's own null means "no input device was responsible" — a POSITIVE statement about a
- * resize event, indistinguishable from an engine that cannot express anything else.
+ * THE TYPE IS ITS OWN COMPONENT — core/events/input_device_capabilities.c, which had to exist before this slot
+ * could hold anything: a `[NewObject]`-less nullable interface member has exactly two values a page can tell
+ * apart, an instance of the interface and null, so installing the attribute over an interface that did not
+ * exist would have made `null` the only answer it could ever give — and the spec's own null means "no input
+ * device was responsible", a POSITIVE statement about a resize event that must not be indistinguishable from
+ * an engine that cannot express anything else. The slot below is one of the four this interface writes, and
+ * every subclass gets it from the same write, which is why one component cleared four audited rows.
+ *
+ * AN EVENT THIS ENGINE CREATES CARRIES `null`, AND THAT IS THE SPEC'S ANSWER RATHER THAN A HEADLESS ONE.
+ * §"sourceCapabilities" says "the InputDeviceCapabilities responsible for the generation of this event, or
+ * null if no input device was responsible", and DOM §2.5 Constructing events' create-an-event has no device
+ * in it — exactly as a browser's own `new UIEvent('x')` and its `resize` both answer null. What a page
+ * CONSTRUCTS with the member is carried unchanged, which is the whole of what the IDL defines.
  *
  * WHY EventModifierInit IS HERE AND NOT IN EITHER SUBCLASS. It is a `dictionary EventModifierInit : UIEventInit`
  * that MouseEvent and KeyboardEvent BOTH derive from, and both declare `getModifierState()` and
@@ -60,6 +65,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/events/event.h"
+#include "core/events/input_device_capabilities.h"
 #include "core/events/ui_event.h"
 #include "core/frame/window_proxy.h"
 #include "core/idl_args.h"
@@ -249,7 +255,7 @@ static JSValue ui_modifiers_of(JSContext *ctx, JSValueConst init)
 /* The four own slots, placed on an event whose Event half is already built. Returns -1 with the throw live. */
 static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
 {
-    JSValue slots, given, view, mods;
+    JSValue slots, given, view, mods, source;
     JSAtom k;
 
     DCHECK(g_ready, "a UIEvent was minted before ui_event_init declared the interface — the slot key it hangs "
@@ -276,9 +282,14 @@ static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         JS_FreeAtom(ctx, k);
         return -1;
     }
+    /* INPUT DEVICE CAPABILITIES §"Extensions to the UIEvent interface and UIEventInit dictionary". The
+       declaration has already branded it, so this read runs none of the page's code and cannot throw — which
+       is why it comes after the two conversions that can. */
+    source = input_device_capabilities_of_dict(ctx, init, "sourceCapabilities");
     JS_SetPropertyStr(ctx, slots, "view", view);
     JS_SetPropertyStr(ctx, slots, "detail", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "detail")));
     JS_SetPropertyStr(ctx, slots, "which", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "which")));
+    JS_SetPropertyStr(ctx, slots, "sourceCapabilities", source);
     JS_SetPropertyStr(ctx, slots, "modifiers", mods);
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
     JS_FreeAtom(ctx, k);
@@ -320,8 +331,8 @@ JSValue ui_event_new(JSContext *ctx)
 
 /* ---- the attributes ----------------------------------------------------------------------------------------- */
 
-enum { UE_VIEW = 0, UE_DETAIL, UE_WHICH };
-static const char *const UE_SLOT[] = { "view", "detail", "which" };
+enum { UE_VIEW = 0, UE_DETAIL, UE_WHICH, UE_SOURCE_CAPABILITIES };
+static const char *const UE_SLOT[] = { "view", "detail", "which", "sourceCapabilities" };
 
 static JSValue js_ue_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -498,6 +509,9 @@ static const JSCFunctionListEntry js_ue_proto[] = {
     JS_CGETSET_MAGIC_DEF("view", js_ue_get, NULL, UE_VIEW),
     JS_CGETSET_MAGIC_DEF("detail", js_ue_get, NULL, UE_DETAIL),
     JS_CGETSET_MAGIC_DEF("which", js_ue_get, NULL, UE_WHICH),
+    /* INPUT DEVICE CAPABILITIES §"Extensions to the UIEvent interface and UIEventInit dictionary" — declared
+       on UIEvent, so FocusEvent, MouseEvent and KeyboardEvent inherit it from this one install. */
+    JS_CGETSET_MAGIC_DEF("sourceCapabilities", js_ue_get, NULL, UE_SOURCE_CAPABILITIES),
 };
 
 void ui_event_init(JSContext *ctx)
@@ -514,6 +528,7 @@ void ui_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, UE_CTOR_ARGS, 2, UE_INIT,
                                        (int)(sizeof(UE_INIT) / sizeof(UE_INIT[0])), js_ue_ctor, 0);
     idl_optional_from(1);   /* §3.2.1: `constructor(DOMString type, optional UIEventInit init = {})` */
+    idl_iface_brand(input_device_capabilities_class());   /* UIEventInit's one interface-typed member */
     g_ready = 1;
     realm_declare_intrinsic(ui_event_install_protos);
 }

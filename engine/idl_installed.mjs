@@ -531,13 +531,15 @@ function collectEnums(masked, into, macros) {
 }
 
 class Resolver {
-  constructor(macros, typedefs, tablesByFile, headerTables, constsByFile, headerConsts, file = null, fn = null) {
+  constructor(macros, typedefs, tablesByFile, headerTables, constsByFile, headerConsts, ints,
+              file = null, fn = null) {
     this.macros = macros;
     this.typedefs = typedefs;
     this.tablesByFile = tablesByFile;
     this.headerTables = headerTables;
     this.constsByFile = constsByFile;
     this.headerConsts = headerConsts;
+    this.ints = ints;
     this.file = file;
     this.fn = fn;
   }
@@ -546,7 +548,34 @@ class Resolver {
      is what C scoping already says, and the only reason two files may each spell a table `NAMES[]`. */
   for(file, fn = null) {
     return new Resolver(this.macros, this.typedefs, this.tablesByFile, this.headerTables, this.constsByFile,
-                        this.headerConsts, file, fn);
+                        this.headerConsts, this.ints, file, fn);
+  }
+
+  /* WHICH CELL A SUBSCRIPT NAMES — an integer, or null when it names every cell. Reading `T[…]` as the whole
+     column is right for a LOOP variable (`EH_NAME[i]`, the shape this was written for: the loop installs every
+     cell) and is not merely over-generous for a CONSTANT (`LOCATION_CROSS_ORIGIN[LOCATION_XO_HREF]`) — it
+     FABRICATES. Every other cell is attributed to a line that never names it, carrying THAT line's install
+     FORM, so one accessor install and one method install over a two-cell table each report the other's member
+     as the wrong kind of property: two defects in a component that installs both exactly as §3.7.6 and §3.7.7
+     say. C's own rule decides which one a subscript is — a name the enum and macro tables evaluate is a
+     constant expression, a name the enclosing function declares is a variable — so a local shadowing an
+     enumerator stays a variable and the answer stays the whole column. */
+  constSubscript(expr, locals) {
+    const s = String(expr).trim();
+    if (!s) return null;
+    if (locals && /^[A-Za-z_]\w*$/.test(s) && locals.has(s)) return null;
+    return evalInt(s, this.ints, this.macros);
+  }
+
+  /* The cells an indexed read can evaluate to: one for a constant subscript, the whole column for a variable
+     one, and null where the constant names a cell the table does not have — a read whose answer no revision of
+     this table contains, which is the reader's UNDECIDED and never a neighbouring cell. */
+  cellsAt(tableName, field, subscript, locals) {
+    const cells = this.column(tableName, field);
+    if (!cells) return null;
+    const at = this.constSubscript(subscript, locals);
+    if (at === null) return cells;
+    return at < 0 || at >= cells.length ? null : [cells[at]];
   }
 
   charConst(name) {
@@ -645,9 +674,9 @@ class Resolver {
         return a && b ? [...a, ...b] : null;
       }
     }
-    const idx = e.match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*(?:\.\s*([A-Za-z_]\w*))?$/);
+    const idx = e.match(/^([A-Za-z_]\w*)\s*\[([^\]]*)\]\s*(?:\.\s*([A-Za-z_]\w*))?$/);
     if (idx) {
-      const cells = this.column(idx[1], idx[2] === undefined ? null : idx[2]);
+      const cells = this.cellsAt(idx[1], idx[3] === undefined ? null : idx[3], idx[2], locals);
       if (!cells) return null;
       const out = [];
       for (const c of cells) {
@@ -693,9 +722,11 @@ class Resolver {
       const nm = e.replace(/^&\s*/, "");
       return this.table(nm) ? [nm] : null;
     }
-    const idx = e.match(/^([A-Za-z_]\w*)\s*\[[^\]]*\]\s*\.\s*([A-Za-z_]\w*)$/);
+    const idx = e.match(/^([A-Za-z_]\w*)\s*\[([^\]]*)\]\s*\.\s*([A-Za-z_]\w*)$/);
     if (idx) {
-      const cells = this.column(idx[1], idx[2]);
+      /* the SAME subscript question as `strings`, asked from the one primitive, so a constant index here
+         cannot start naming every reflection table while a constant index there names one member */
+      const cells = this.cellsAt(idx[1], idx[3], idx[2], null);
       if (!cells) return null;
       const out = [];
       for (const c of cells) {
@@ -1410,7 +1441,7 @@ export function loadEnvironment(root) {
     constsByFile.set(p, c);
     if (extname(p) === ".h") for (const [k, v] of c) headerConsts.set(k, headerConsts.has(k) ? null : v);
   }
-  const resolver = new Resolver(macros, typedefs, tablesByFile, headerTables, constsByFile, headerConsts);
+  const resolver = new Resolver(macros, typedefs, tablesByFile, headerTables, constsByFile, headerConsts, ints);
   /* THE SHARED INSTALL HELPERS. A function that forwards one of its own PARAMETERS into a member-name position
      IS an install form, at that parameter's position — navigator.c's `nav_env(ctx, nav, "userAgent", …)`
      installs a member and spells the name only at the call site, and node.c's `mixin_install(ctx, proto,

@@ -585,23 +585,118 @@ static JSValue js_port_start(JSContext *ctx, JSValueConst this_val, int argc, JS
     return JS_UNDEFINED;
 }
 
-/* §9.4.4's `close()`: detach, and disentangle the pair — BOTH sides, because entanglement is symmetric and a
-   port left pointing at a closed one would keep queueing messages nobody will ever read. */
-static JSValue js_port_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* §9.4.4's `close()` AND THE DISENTANGLE STEPS IT RUNS — and it is a STEP MACHINE because its last step fires
+ * an event. "Set this's [[Detached]] internal slot value to true. If this is entangled, disentangle it", and
+ * the disentangle steps end "Fire an event named close at otherPort" — a §2.9 dispatch, which runs the other
+ * end's `onclose` and its `close` listeners. §2.9 is SYNCHRONOUS, so the fire is the REQUEST reach
+ * (event_target_fire_run) from a machine that can park, and never a C call into the page's code.
+ *
+ * ONLY THE OTHER PORT IS TOLD, WHICH IS THE SPEC'S OWN NOTE AND NOT AN OPTIMISATION: "we only dispatch the
+ * event on otherPort because initiatorPort explicitly triggered the close, its Document no longer exists, or
+ * it was already garbage collected". The three cases §9.4.4 lists for the event — close() was called, the
+ * Document was destroyed, the port was garbage collected — are three CALLERS of these steps; this is the
+ * first, and the other two reach the same disentangle rather than a second copy of it.
+ *
+ * THE PAIR IS DISENTANGLED BEFORE THE FIRE, in the order the steps are written: a listener that reads
+ * `otherPort` during its own `close` event must already see a port entangled with nothing, and a listener that
+ * posts through it must find no target rather than a queue nobody will read. */
+#define PORT_CLOSE_STAGES(X) \
+    X(PC_BEGIN, "HTML §9.4.4 Message ports, the close() method steps (set [[Detached]]; if entangled, run the " \
+                "disentangle steps: take otherPort, then disentangle both sides of the pair)") \
+    X(PC_FIRE, "HTML §9.4.4 Message ports, the disentangle steps' last step (fire an event named close at " \
+               "otherPort)")
+enum { IDL_STEP_STAGE_BASE(PORT_CLOSE_STAGES) PORT_CLOSE_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const PORT_CLOSE_STEPS[] = { PORT_CLOSE_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    uint8_t     phase;
+    JSValue     other;   /* the disentangled otherPort, held across the suspension — the fire's TARGET */
+    JSValue     ev;
+    EventFireCb cb;
+} PortCloseState;
+
+static void js_port_close_visit(JSContext *ctx, void *st, JSStepVisit *v)
 {
-    PortData *d = port_of(this_val);
-    (void)argc; (void)argv; (void)magic;
-    if (!d) return JS_ThrowTypeError(ctx, "not a MessagePort");
-    d->detached = 1;
-    if (!JS_IsUndefined(d->entangled)) {
-        PortData *o = port_of(d->entangled);
-        JSValue other = d->entangled;
-        d->entangled = JS_UNDEFINED;
-        if (o) { JS_FreeValue(ctx, o->entangled); o->entangled = JS_UNDEFINED; }
-        JS_FreeValue(ctx, other);
-    }
-    return JS_UNDEFINED;
+    PortCloseState *s = st;
+    int i;
+
+    v->val(ctx, &s->other);
+    v->val(ctx, &s->ev);
+    STEP_CB_FOREACH(s->cb, i) v->val(ctx, &s->cb[i]);
 }
+
+static int js_port_close_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                              JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    PortCloseState *s = st;
+    JSValue in = cb_result;
+    int r;
+
+    (void)argc; (void)argv;
+
+    STEP_DISPATCH(PORT_CLOSE_STAGES, hdr->stage, hdr->def->algorithm, -1);
+
+    STEP_ARM(PC_BEGIN);
+    {
+        PortData *d = port_of(hdr->this_val);
+        int i;
+
+        JS_FreeValue(ctx, in);
+        in = JS_UNDEFINED;   /* CONSUMED — the fire below takes ownership of whatever `in` then holds */
+        /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST STEP THAT CAN FAIL, so the teardown frees exactly what
+           the state holds and never reads a slot this arm had not reached yet. */
+        s->other = JS_UNDEFINED;
+        s->ev = JS_UNDEFINED;
+        STEP_CB_FOREACH(s->cb, i) s->cb[i] = JS_UNDEFINED;
+        s->phase = 0;
+        if (!d)
+            return JS_ThrowTypeError(ctx, "close called on something that is not a MessagePort"), -1;
+        d->detached = 1;
+        /* "If this is entangled, disentangle it" — and a port that is not entangled has no otherPort, so
+           there is nothing to fire at and the method is done. */
+        if (JS_IsUndefined(d->entangled)) {
+            *presult = JS_UNDEFINED;
+            return 0;
+        }
+        {
+            /* The disentangle steps' 1-3: take otherPort, assert it exists, and make the two no longer
+               entangled or associated with each other. Entanglement is symmetric, so BOTH sides are cleared
+               here — a port left pointing at a closed one would keep queueing messages nobody will read. */
+            PortData *o = port_of(d->entangled);
+
+            s->other = d->entangled;
+            d->entangled = JS_UNDEFINED;
+            DCHECK(o != NULL, "HTML §9.4.4's disentangle steps assert otherPort exists, and this port was "
+                              "entangled with something that is not a MessagePort — entanglement is written "
+                              "in exactly two places and both write a port");
+            if (o) { JS_FreeValue(ctx, o->entangled); o->entangled = JS_UNDEFINED; }
+        }
+        /* The disentangle steps' step 4. A `close` event bubbles no further than its target and is not
+           cancelable: §9.4.4 fires it with no initialisation, which is DOM §2.5's un-initialized event. */
+        s->ev = event_new(ctx, "close", false, false);
+        if (JS_IsException(s->ev)) { s->ev = JS_UNDEFINED; return -1; }
+        STEP_GOTO(hdr->stage, PC_FIRE, &s->phase, NULL);
+        return JS_STEP_YIELD;
+    }
+
+    STEP_ARM(PC_FIRE);
+    DCHECK(JS_IsObject(s->ev), "HTML §9.4.4's disentangle steps resumed with no close event to fire");
+    DCHECK(message_port_is(s->other), "HTML §9.4.4's disentangle steps resumed with no otherPort to fire at");
+    r = event_target_fire_run(ctx, &s->phase, STEP_CB(s->cb), s->other, s->ev, JS_UNDEFINED, in, NULL,
+                              out_cb, out_argc);
+    in = JS_UNDEFINED;   /* CONSUMED by the request, on both of its legs */
+    if (r > 0) return r;
+    if (r < 0) return -1;
+    JS_FreeValue(ctx, s->ev);
+    s->ev = JS_UNDEFINED;
+    *presult = JS_UNDEFINED;
+    return 0;
+}
+
+static const IdlStepDecl PORT_CLOSE_DECL = {
+    js_port_close_step, sizeof(PortCloseState), js_port_close_visit, NULL,
+    "HTML §9.4.4 Message ports, close()", PORT_CLOSE_STEPS
+};
 
 /* §9.4.4: setting `onmessage` ENABLES the port message queue. It is the platform's one event handler attribute
    whose setter has a side effect, and it is why a page that assigns onmessage never has to call start() while
@@ -865,7 +960,7 @@ void message_port_init(JSContext *ctx)
         idl_optional_from(1);   /* the dictionary entry's `optional … options = {}` — §3.6 step 12's first
                                    clause reads it, which is what makes `postMessage(m, undefined)` that arm */
         g_id_start = idl_method_id(ctx, NULL, 0, js_port_start, 0);
-        g_id_close = idl_method_id(ctx, NULL, 0, js_port_close, 0);
+        g_id_close = idl_method_id_step(ctx, NULL, 0, NULL, 0, &PORT_CLOSE_DECL, 0);
     }
     g_chan_ctor_stepid = idl_method_id_step(ctx, NULL, 0, NULL, 0, &js_chan_ctor_decl, 0);
     realm_declare_intrinsic(message_port_install_protos);
@@ -887,7 +982,7 @@ void message_port_init(JSContext *ctx)
     agent_state_id("message_port", &g_deliver_stepid, "§9.4.4's port delivery task machine");
     agent_state_id("message_port", &g_id_post, "§9.4.4's postMessage declaration");
     agent_state_id("message_port", &g_id_start, "§9.4.4's start declaration");
-    agent_state_id("message_port", &g_id_close, "§9.4.4's close declaration");
+    agent_state_id("message_port", &g_id_close, "§9.4.4's close machine");
     /* THE LIVE-PORT TABLE IS NOT DECLARED HERE, and that is the point rather than an omission. Every slot on
        this registry is asserted back at its pre-init value at the END of the release column, and this one is
        legitimately non-empty at that instant — a page holding a MessagePort has not done anything wrong, and
@@ -913,7 +1008,9 @@ void message_port_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, port_p, "MessagePort");
     /* §9.4.4: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
     event_target_chain(ctx, port_p);   /* §9.4.4: `MessagePort : EventTarget` */
-    event_target_install_handlers(ctx, port_p, EH_PORT);
+    /* §9.4.4's own `onclose` is EH_MESSAGE_PORT and not EH_PORT: EH_PORT is the MessageEventTarget mixin's
+       two names, which BroadcastChannel includes as well, and §9.5 declares no `onclose` on one. */
+    event_target_install_handlers(ctx, port_p, EH_PORT | EH_MESSAGE_PORT);
     idl_install_method(ctx, port_p, "postMessage", 1, g_id_post);
     idl_install_method(ctx, port_p, "start", 0, g_id_start);
     idl_install_method(ctx, port_p, "close", 0, g_id_close);

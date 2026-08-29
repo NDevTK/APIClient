@@ -1013,7 +1013,11 @@ static const IdlStepDecl AEL_DECL = { ael_step, sizeof(AelState), ael_visit, NUL
        content-attribute test) would then see a member that does not exist twice over. */                        \
     X("onchange", "change", EH_GLOBAL | EH_MEDIA_QUERY_LIST | EH_PERMISSION_STATUS)                              \
     X("onclick", "click", EH_GLOBAL)                                                                             \
-    X("onclose", "close", EH_GLOBAL)                                                                             \
+    /* `onclose` is a GlobalEventHandlers name AND HTML §9.4.4 Message ports' own event handler IDL       \
+       attribute, over the SAME event type — one row with two memberships, exactly as `onmessage` is    \
+       WindowEventHandlers' and the MessageEventTarget mixin's. A second row would be a second name.    \
+    */                                                                                                  \
+    X("onclose", "close", EH_GLOBAL | EH_MESSAGE_PORT)                                                   \
     X("oncommand", "command", EH_GLOBAL)                                                                         \
     X("oncontextlost", "contextlost", EH_GLOBAL)                                                                 \
     X("oncontextmenu", "contextmenu", EH_GLOBAL)                                                                 \

@@ -9,15 +9,26 @@
  * THE CONSTRUCTOR IS A MACHINE because every one of its inputs is the page's: `input` may be a string whose
  * `toString` the page wrote, `init` is a dictionary of [[Get]]s, and `init.headers` is the whole fill.
  *
- * WHAT IS HONESTLY ABSENT: `signal` (there is an AbortSignal component but no fetch to abort yet), `body` as a
- * ReadableStream, and `formData()`/`blob()`. Each is absent rather than answered wrongly — a `signal` that
- * returned null would be indistinguishable from one the page passed. */
+ * §5.4's `signal` IS DOM §3.2 Interface AbortSignal's DEPENDENT ABORT SIGNAL AND NOT A STORED REFERENCE, which is the
+ * whole reason it is this interface's own state rather than a member read back off `init`. The constructor's steps
+ * are "let signals be « signal » if signal is non-null; otherwise « »" and "set this's signal to the result of
+ * creating a dependent abort signal from signals" — so EVERY Request has one, a Request built with no `init.signal`
+ * has a fresh never-aborting signal rather than null, and one built with a signal has a NEW signal that aborts when
+ * that one does. §5.4 states the invariant in the getter's own prose ("this's signal is always initialized in the
+ * constructor and when cloning"), which is why the getter asserts it instead of admitting an absence. The dependency
+ * is core/dom/abort.h's `abort_signal_dependent_new`, which is DOM §3.2 Interface AbortSignal's one algorithm — an
+ * imitation that added an abort ALGORITHM to the source would abort one turn late and the page can see the
+ * difference.
+ *
+ * WHAT IS HONESTLY ABSENT: `body` as a ReadableStream, and `formData()`/`blob()`. Each is absent rather than
+ * answered wrongly. */
 #include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/dom/abort.h"
 #include "core/fetch/fetch.h"
 #include "core/file/blob.h"
 #include "core/fetch/request.h"
@@ -48,6 +59,11 @@ typedef struct {
        does not stop that request — the entry is the Request's, not the store's. Without it, the ordinary
        `new Request(u); URL.revokeObjectURL(u); fetch(req)` sequence a page uses to clean up eagerly failed. */
     JSValue blob_entry;
+    /* §5.4's signal — §3.2's dependent abort signal, built at construction and at clone. It is OWNED, so it is
+       freed by the finalizer, MARKED by the gc_mark (the collector cannot see through a class opaque) and
+       DUP'd by every clone: a field added to this struct is an obligation at all three sites, and the three
+       are read together for exactly that reason. */
+    JSValue signal;
 } RequestData;
 
 static JSClassID g_request_class;
@@ -61,6 +77,7 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
     if (!d) return;
     JS_FreeValueRT(rt, d->headers);
     JS_FreeValueRT(rt, d->blob_entry);
+    JS_FreeValueRT(rt, d->signal);
     js_free_rt(rt, d->url); js_free_rt(rt, d->method); js_free_rt(rt, d->mode);
     js_free_rt(rt, d->credentials); js_free_rt(rt, d->cache); js_free_rt(rt, d->redirect);
     js_free_rt(rt, d->referrer); js_free_rt(rt, d->referrer_policy); js_free_rt(rt, d->integrity);
@@ -72,7 +89,11 @@ static void request_finalizer(JSRuntime *rt, JSValue val)
 static void request_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func)
 {
     RequestData *d = JS_GetOpaque(val, g_request_class);
-    if (d) { JS_MarkValue(rt, d->headers, mark_func); JS_MarkValue(rt, d->blob_entry, mark_func); }
+    if (d) {
+        JS_MarkValue(rt, d->headers, mark_func);
+        JS_MarkValue(rt, d->blob_entry, mark_func);
+        JS_MarkValue(rt, d->signal, mark_func);
+    }
     if (d) body_state_mark(rt, &d->body, mark_func);
 }
 
@@ -163,7 +184,7 @@ char *request_method_check(JSContext *ctx, const char *m)
 
 enum { REQ_METHOD = 0, REQ_URL, REQ_HEADERS, REQ_DESTINATION, REQ_REFERRER, REQ_REFERRER_POLICY,
        REQ_MODE, REQ_CREDENTIALS, REQ_CACHE, REQ_REDIRECT, REQ_INTEGRITY, REQ_KEEPALIVE,
-       REQ_IS_RELOAD_NAV, REQ_IS_HISTORY_NAV, REQ_DUPLEX };
+       REQ_IS_RELOAD_NAV, REQ_IS_HISTORY_NAV, REQ_DUPLEX, REQ_SIGNAL };
 
 static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -183,6 +204,14 @@ static JSValue js_request_get(JSContext *ctx, JSValueConst this_val, int magic)
     case REQ_REDIRECT:        return JS_NewString(ctx, d->redirect);
     case REQ_INTEGRITY:       return JS_NewString(ctx, d->integrity);
     case REQ_KEEPALIVE:       return JS_NewBool(ctx, d->keepalive != 0);
+    case REQ_SIGNAL:
+        /* §5.4: "this's signal is always initialized in the constructor and when cloning" — the member is a
+           non-nullable `AbortSignal`, so an absence here is an engine defect and never a value to report. */
+        DCHECK(abort_signal_is(ctx, d->signal),
+               "a Request answered `signal` with something that is not an AbortSignal — §5.4 builds one in the "
+               "constructor and one in clone(), so a Request that reached a page without one was minted by a "
+               "third path that owes itself the dependent signal both of those create");
+        return JS_DupValue(ctx, d->signal);
     /* §5.4: both are false for a request a script constructed — only a navigation sets them, and there is no
        navigation here to set them from. This is a computed answer, not a placeholder. */
     case REQ_IS_RELOAD_NAV:
@@ -218,6 +247,7 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     c = js_mallocz(ctx, sizeof(*c));
     if (!c) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     c->headers = JS_UNDEFINED;
+    c->signal  = JS_UNDEFINED;   /* placed before the first step that can fail — see the constructor's */
     JS_SetOpaque(obj, c);
     /* §5.4 clone copies the request, and its blob URL ENTRY is part of what it is — a clone of a request built
        from a since-revoked URL fetches exactly as the original does. */
@@ -241,6 +271,18 @@ static JSValue js_request_clone(JSContext *ctx, JSValueConst this_val, int argc,
     }
     c->headers = headers_new(ctx, headers_list_of(d->headers), headers_guard_of(d->headers));
     if (JS_IsException(c->headers)) { c->headers = JS_UNDEFINED; JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
+    /* §5.4 clone(): "assert: this's signal is non-null", then "let clonedSignal be the result of creating a
+       dependent abort signal from « this's signal »". The clone does NOT share the signal object — aborting
+       the original's signal aborts the clone's through the dependency, and the two are still `!==`. */
+    DCHECK(abort_signal_is(ctx, d->signal),
+           "a Request being cloned carried no AbortSignal — §5.4's clone steps assert this's signal is "
+           "non-null, and every path that mints a Request builds one");
+    {
+        JSValueConst source[1];
+        source[0] = d->signal;
+        c->signal = abort_signal_dependent_new(ctx, source, 1);
+    }
+    if (JS_IsException(c->signal)) { c->signal = JS_UNDEFINED; JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
     return obj;
 }
 
@@ -329,6 +371,10 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         if (!d) { JS_FreeValue(ctx, obj); JS_FreeValue(ctx, cb_result); return -1; }
         d->headers = JS_UNDEFINED;
         d->blob_entry = JS_UNDEFINED;
+        /* EVERY OWNED FIELD IS PLACED BEFORE THE FIRST STEP THAT CAN THROW — the failure path frees exactly
+           what the record holds, so a field handed over late is one the teardown reads uninitialised. The
+           signal is BUILT at the end of this stage, where §5.4 builds it. */
+        d->signal = JS_UNDEFINED;
         JS_SetOpaque(obj, d);
         s->result = obj;
 
@@ -426,6 +472,30 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
         d->destination     = js_strdup(ctx, "");   /* §5.4: a script-constructed request has no destination */
         CHECK(d->url && d->method && d->mode && d->credentials && d->cache && d->redirect && d->referrer &&
               d->referrer_policy && d->integrity && d->destination, "request: OOM building a Request");
+        /* §5.4 steps 4 / 6.3 / 26 and then "let signals be « signal » if signal is non-null; otherwise « »"
+           and "set this's signal to the result of creating a dependent abort signal from signals". The two
+           sources are the Request `input` (a `new Request(other)` inherits other's signal) and init["signal"],
+           and init WINS because step 26 runs after step 6.3. It is built HERE — after every step of this stage
+           that can throw and before the header fill, which is where §5.4 puts it — so a construction that
+           refuses has registered no dependency on a signal the page still holds. */
+        {
+            JSValueConst sources[1];
+            int n = 0;
+            RequestData *from = request_of(input);
+            JSValue given = idl_dict_get(ctx, init, "signal");
+
+            if (abort_signal_is(ctx, given))
+                sources[n++] = given;
+            else if (from) {
+                DCHECK(abort_signal_is(ctx, from->signal),
+                       "a Request used as `input` carried no AbortSignal — §5.4 gives every Request one, so a "
+                       "source without one was built by a path that skipped the dependent signal");
+                sources[n++] = from->signal;
+            }
+            d->signal = abort_signal_dependent_new(ctx, sources, n);
+            JS_FreeValue(ctx, given);
+            if (JS_IsException(d->signal)) { d->signal = JS_UNDEFINED; return -1; }
+        }
         headers_fill_init(&s->fill);
         hdr->stage = REQ_CTOR_HEADERS;
     }
@@ -465,12 +535,11 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 JS_ThrowTypeError(ctx, "a Request with a GET or HEAD method cannot have a body");
                 return -1;
             }
-            /* §5.4 step 40 extracts "with keepalive set to request's keepalive", and this Request has none:
-               `keepalive` is a member of RequestInit and of this interface, and neither is installed — which
-               the IDL gap audit reports as ABSENT rather than this line asserting it. `false` is therefore the
-               value every request this constructor builds actually has, and the day the member lands this
-               argument reads it. */
-            if (body_extract(ctx, &d->body, bv, /*keepalive*/ false, &mime) < 0) {
+            /* §5.4 extracts "with keepalive set to request's keepalive", and that is the value step 24 read
+               out of init a stage ago — not a constant. §5.2's ReadableStream arm begins "If keepalive is
+               true, then throw a TypeError", so a hardcoded false made `new Request(u, {method: "POST",
+               keepalive: true, body: stream})` build a request a browser refuses. */
+            if (body_extract(ctx, &d->body, bv, d->keepalive != 0, &mime) < 0) {
                 free(mime);
                 JS_FreeValue(ctx, bv);
                 return -1;
@@ -513,6 +582,7 @@ static const JSCFunctionListEntry js_request_proto_funcs[] = {
     JS_CGETSET_MAGIC_DEF("isReloadNavigation", js_request_get, NULL, REQ_IS_RELOAD_NAV),
     JS_CGETSET_MAGIC_DEF("isHistoryNavigation", js_request_get, NULL, REQ_IS_HISTORY_NAV),
     JS_CGETSET_MAGIC_DEF("duplex", js_request_get, NULL, REQ_DUPLEX),
+    JS_CGETSET_MAGIC_DEF("signal", js_request_get, NULL, REQ_SIGNAL),
 };
 
 void request_init(JSContext *ctx)
@@ -534,6 +604,9 @@ void request_init(JSContext *ctx)
         { "redirect",       IDL_DOMSTRING,         false },
         { "referrer",       IDL_USVSTRING,         false },
         { "referrerPolicy", IDL_DOMSTRING,         false },
+        /* `AbortSignal? signal` — a DECLARED interface type, so `new Request(u, {signal: 5})` is Web IDL's
+           own TypeError thrown before this constructor's first step rather than a check the body makes. */
+        { "signal",         IDL_INTERFACE_NULLABLE, false, NULL, 0, NULL, IDL_DEFAULT_NULL },
     };
 
     DCHECK(g_request_rt == NULL || g_request_rt == rt,
@@ -549,6 +622,7 @@ void request_init(JSContext *ctx)
                                                (int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])),
                                                &js_request_ctor_decl, 0);
     idl_optional_from(1);   /* §5.4: `optional RequestInit init = {}` */
+    idl_iface_brand(abort_signal_class());   /* RequestInit's one interface-typed member */
     realm_declare_intrinsic(request_install_proto);
 }
 

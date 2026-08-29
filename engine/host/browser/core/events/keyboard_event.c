@@ -44,6 +44,7 @@
  * initialized flag on an event §4.5 produced. */
 #include "check.h"
 #include "quickjs.h"
+#include "core/events/input_device_capabilities.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/ui_event.h"
 #include "core/idl_args.h"
@@ -376,6 +377,8 @@ void keyboard_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, KE_CTOR_ARGS, 2, KE_INIT,
                                        (int)(sizeof(KE_INIT) / sizeof(KE_INIT[0])), js_ke_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional KeyboardEventInit eventInitDict = {})` */
+    idl_iface_brand(input_device_capabilities_class());   /* KeyboardEventInit's one interface-typed member,
+                                                             UIEventInit's `sourceCapabilities` */
     g_ready = 1;
     realm_declare_intrinsic(keyboard_event_install_protos);
 }

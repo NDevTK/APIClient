@@ -54,8 +54,10 @@
  *   them exactly as a browser with a mouse does for a constructed event — the deltas a real pointer would have
  *   produced are the ones the constructor was given, and there is no device in the derivation either way.
  *
- *   INPUT DEVICE CAPABILITIES adds `sourceCapabilities` to UIEvent, not to this interface, and it is ABSENT.
- *   See ui_event.c.
+ *   INPUT DEVICE CAPABILITIES adds `sourceCapabilities` to UIEvent, not to this interface, so a MouseEvent
+ *   answers it out of ui_event.c's slot and MouseEventInit carries the member because it INHERITS
+ *   UIEventInit. What this file owes it is the BRAND: the class an `InputDeviceCapabilities?` member tests
+ *   against is stated once per DECLARATION, so MouseEventInit's declaration states it too.
  *
  * WHY `pageX` HAS ONE EXPRESSION AND NOT TWO BRANCHES. §10 writes it as three steps: with the dispatch flag
  * set, the coordinate of the position where the event occurred "relative to the origin of the INITIAL
@@ -105,6 +107,7 @@
 #include "quickjs.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/events/input_device_capabilities.h"
 #include "core/events/mouse_event.h"
 #include "core/events/ui_event.h"
 #include "core/frame/viewport.h"
@@ -546,6 +549,8 @@ void mouse_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, MD_CTOR_ARGS, 2, MD_INIT,
                                        (int)(sizeof(MD_INIT) / sizeof(MD_INIT[0])), js_md_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional MouseEventInit eventInitDict = {})` */
+    idl_iface_brand(input_device_capabilities_class());   /* MouseEventInit's one interface-typed member,
+                                                             UIEventInit's `sourceCapabilities` */
     g_ready = 1;
     realm_declare_intrinsic(mouse_event_install_protos);
 }

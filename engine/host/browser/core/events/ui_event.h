@@ -90,10 +90,19 @@ JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueCons
    member's LEVEL is its inheritance depth — and both dictionaries that derive from EventModifierInit derive
    through the same chain (`MouseEventInit : EventModifierInit : UIEventInit : EventInit`, and KeyboardEventInit
    likewise), which is why the levels below are the same numbers in both. A derived dictionary appends its own
-   members at level 3, lexicographically. */
-#define UI_EVENT_INIT_MEMBERS                                                              \
-    { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN }, \
-    { "detail", IDL_LONG, false, NULL, 1 }, { "view", IDL_ANY, false, NULL, 1 },            \
+   members at level 3, lexicographically.
+
+   INPUT DEVICE CAPABILITIES' `InputDeviceCapabilities? sourceCapabilities = null` IS ONE OF UIEventInit's OWN
+   MEMBERS AND SORTS AMONG THEM, between `detail` and `view` — §3.2.17's lexicographic order is over the
+   dictionary's members and knows nothing about which specification wrote each one. It is the ONE member here
+   with a declared INTERFACE type, so the class it brands against is stated once per DECLARATION with
+   `idl_iface_brand(input_device_capabilities_class())` — which every constructor that splices this macro in
+   must state, and a declaration that forgets brands against class zero, which the conversion asserts on. */
+#define UI_EVENT_INIT_MEMBERS                                                                             \
+    { "bubbles", IDL_BOOLEAN }, { "cancelable", IDL_BOOLEAN }, { "composed", IDL_BOOLEAN },                \
+    { "detail", IDL_LONG, false, NULL, 1 },                                                               \
+    { "sourceCapabilities", IDL_INTERFACE_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NULL },             \
+    { "view", IDL_ANY, false, NULL, 1 },                                                                  \
     { "which", IDL_UNSIGNED_LONG, false, NULL, 1 }
 /* §3.5.3's fourteen: the four named for the attribute they also initialize, and the ten `modifier<Name>` ones
    whose key modifier name is the member's name minus that prefix. */

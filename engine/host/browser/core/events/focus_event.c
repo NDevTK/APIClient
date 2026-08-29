@@ -39,6 +39,7 @@
 #include "quickjs.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
+#include "core/events/input_device_capabilities.h"
 #include "core/events/focus_event.h"
 #include "core/events/ui_event.h"
 #include "core/frame/window_proxy.h"
@@ -242,6 +243,8 @@ void focus_event_init(JSContext *ctx)
     g_ctor_stepid = idl_method_id_dict(ctx, FE_CTOR_ARGS, 2, FE_INIT,
                                        (int)(sizeof(FE_INIT) / sizeof(FE_INIT[0])), js_fe_ctor, 0);
     idl_optional_from(1);   /* `constructor(DOMString type, optional FocusEventInit eventInitDict = {})` */
+    idl_iface_brand(input_device_capabilities_class());   /* FocusEventInit's one interface-typed member,
+                                                             UIEventInit's `sourceCapabilities` */
     g_ready = 1;
     realm_declare_intrinsic(focus_event_install_protos);
 }
