@@ -88,6 +88,7 @@
 #include "core/dom/document.h"   /* this realm's address — the one place a document's URL lives */
 #include "core/encoding/encoding.h"      /* §7.2.4's search setter parses in the DOCUMENT's encoding */
 #include "core/frame/navigable.h"        /* §7.4.2.2's navigate — what "Location-object navigate" performs */
+#include "core/frame/remote_location.h"   /* §7.2.1.3.1's CrossOriginProperties(Location), spelled once */
 #include "core/frame/session_history.h"  /* §7.4.2.2's same-document test, and §7.4.2.3.3's own machine */
 #include "core/frame/window_proxy.h"     /* §7.5.10 step 8's null browsing context — the relevant Document */
 #include "core/html/dom_string_list.h"   /* §2.6.5's DOMStringList — `ancestorOrigins` answers with one */
@@ -139,18 +140,15 @@ static const bool LOC_READONLY[] = { LOC_MEMBERS(LOC_RO_ONE) };
    list stops being readable. */
 enum { LOC_ASSIGN, LOC_REPLACE };
 
-/* §7.2.1's CrossOriginProperties(Location), verbatim: « { [[Property]]: "href", [[NeedsSetter]]: true },
-   { [[Property]]: "replace" } ». Those two are what a document of ANOTHER origin may reach; §7.2.4.5 through
-   §7.2.4.10 make everything else a SecurityError.
-   BOTH OF THEM NAVIGATE, AND NAVIGATION FROM A LOCATION IS NOT BUILT, so this object has no cross-origin
-   surface at all — which is exactly why window_proxy.c's `location` stops at an assert rather than handing a
-   Location across an origin boundary. Declared BESIDE THE MEMBERS rather than asked at the read, for the reason
-   window_proxy.c gives for the Window half: the failure mode of a per-read check is silence, and a member added
-   without one leaks a cross-origin document with nothing to say so.
-   ASSERTED PER REALM against the object itself — the operation entry must be absent, and the attribute entry
-   must have no setter. The day either capability lands, the assert fires AT the install and names what the
-   object then needs. */
-static const char *const LOC_CROSS_ORIGIN_OPERATIONS[] = { "replace" };
+/* §7.2.1.3.1's CrossOriginProperties(Location) IS core/frame/remote_location.h's LOCATION_CROSS_ORIGIN, and it
+   is read from there rather than written out again here. THAT FILE IS THE OBJECT THE LIST DESCRIBES — a
+   Location whose Document is in another instance, which §7.2.4.5 through §7.2.4.10's cross-origin arms filter
+   down to exactly these two names — so this component is the list's OTHER reader: the assert below is that
+   §7.2.4's IDL still declares both members, which is the one way the two sections can drift.
+   THE LIST USED TO BE A SECOND COPY, and the paragraph that stood here said this Location "has no cross-origin
+   surface at all" because "navigation from a Location is not built". Both halves are gone: the surface exists
+   (remote_location.c) and the assert that matters is no longer "the entries are absent" but "the interface
+   declares them", which is what a filter needs in order to have something to expose. */
 
 /* THE CLASS IS THE BRAND. Web IDL §3.7.5's check is "does esValue implement the interface", and the one object
    per realm WEARS the class, so the check is a class-id comparison a page cannot forge. Its members are OWN
@@ -1034,46 +1032,45 @@ static void loc_pin_to_primitive(JSContext *ctx, JSValueConst loc)
     JS_FreeValue(ctx, global);
 }
 
-/* §7.2.1's list, asserted against the object this realm just built — see LOC_CROSS_ORIGIN_OPERATIONS.
+/* §7.2.1.3.1's list, asserted against the object this realm just built — see the paragraph where the list is
+ * cited above.
  *
  * WHAT IT ASSERTS TURNED OVER, and the old direction was the wrong one. It used to require the two entries on
  * CrossOriginProperties(Location) to be ABSENT, so that no cross-origin document could reach an unfiltered
  * Location — and the effect was that §7.2.4's `href` setter and `replace` could not be implemented at all,
  * which is a mitigation that deletes the interface it protects. The filter is a property of the object that
- * CROSSES an origin boundary, and no Location crosses one here: window_proxy.c's WP_LOCATION answers out of
- * proxy_realm, whose first DCHECK is that the navigable's active document belongs to this agent, so a
- * cross-origin read aborts at the boundary and never reaches a member of this object.
+ * CROSSES an origin boundary, and that object is core/frame/remote_location.c's: a Location for a Document a
+ * PEER holds, which exposes these two names and answers every other read with §7.2.1.3.2's SecurityError.
  *
- * SO THE LIST IS NOW ASSERTED AS A LIST OF THINGS THAT EXIST, which is what makes it live rather than
- * decorative: §7.2.1 says a cross-origin document may reach exactly `href`'s setter and `replace`, and the
- * day a filtered Location is built it needs both to be there to expose. An entry that is MISSING is the
- * failure now — a §7.2.1 list naming a member this interface does not have is a list that has drifted from
- * §7.2.4's IDL, which is the one way these two sections can disagree. */
+ * SO THE LIST IS ASSERTED AS A LIST OF THINGS THAT EXIST, which is what makes it live rather than decorative:
+ * the filtered object needs both members to be there to expose. An entry that is MISSING is the failure — a
+ * §7.2.1.3.1 list naming a member this interface does not have is a list that has drifted from §7.2.4's IDL,
+ * which is the one way these two sections can disagree. BOTH ENTRIES ARE CHECKED, not just the operation:
+ * `href` is a member of this object exactly as `replace` is, and the half that was left out is the half the
+ * filter's one WRITE goes through. */
 static void loc_assert_cross_origin_surface(JSContext *ctx, JSValueConst loc)
 {
-    size_t i;
+    int i;
 
-    for (i = 0; i < sizeof LOC_CROSS_ORIGIN_OPERATIONS / sizeof LOC_CROSS_ORIGIN_OPERATIONS[0]; i++) {
-        JSAtom a = JS_NewAtom(ctx, LOC_CROSS_ORIGIN_OPERATIONS[i]);
+    for (i = 0; i < LOCATION_XO_N; i++) {
+        JSAtom a = JS_NewAtom(ctx, LOCATION_CROSS_ORIGIN[i]);
         int has;
 
-        DCHECK(a != JS_ATOM_NULL, "a §7.2.1 cross-origin property name could not be interned");
+        DCHECK(a != JS_ATOM_NULL, "a §7.2.1.3.1 cross-origin property name could not be interned");
         has = JS_HasProperty(ctx, loc, a);
         JS_FreeAtom(ctx, a);
         CHECK(has >= 0, "[[HasProperty]] over an engine-built Location runs none of the page's code and has "
                         "nothing to throw with");
-        /* An entry with neither [[NeedsGetter]] nor [[NeedsSetter]] is an OPERATION: §7.2.1.3.4 exposes the
-           whole property, so what a filtered Location would hand across is that property itself. */
         DCHECK(has,
-               "HTML §7.2.1's CrossOriginProperties(Location) names an OPERATION this Location does not have "
+               "HTML §7.2.1.3.1's CrossOriginProperties(Location) names a member this Location does not have "
                "— the two sections have drifted, because §7.2.4's IDL is what declares the member and §7.2.1 "
-               "only says which of them survive a cross-origin filter. Add the operation to §7.2.4's install "
-               "below, or take the entry off the list if §7.2.1 no longer names it");
+               "only says which of them survive a cross-origin filter. Add the member to §7.2.4's install "
+               "below, or take the entry off core/frame/remote_location.h's list if §7.2.1 no longer names it");
     }
-    /* THE ATTRIBUTE HALF, which has no list of its own because it has exactly one entry: §7.2.1's
-       « { [[Property]]: "href", [[NeedsSetter]]: true } ». The member table's third column carries it, so what
-       is checked here is that the column and the install agree — a cross-origin entry marked [[NeedsSetter]]
-       whose member ships no setter would be a filtered Location with nothing behind its one write. */
+    /* THE ATTRIBUTE HALF'S SECOND FACT, which the presence check above cannot see: §7.2.1.3.1 gives `href`
+       [[NeedsSetter]] true, and the member table's third column carries that. What is checked here is that the
+       column and the install agree — a cross-origin entry marked [[NeedsSetter]] whose member ships no setter
+       would be a filtered Location with nothing behind its one write. */
     for (i = 0; i < LOC_N; i++)
         DCHECK(LOC_XO[i] != LOC_XO_SETTER || !LOC_READONLY[i],
                "a Location member is on §7.2.1's cross-origin list with [[NeedsSetter]] and is declared "

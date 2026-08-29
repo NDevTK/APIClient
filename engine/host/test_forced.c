@@ -26,6 +26,7 @@
 #include "core/timing/timer.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/remote_location.h"
 #include "core/frame/window_message.h"   /* §9.3.3's two attacker sources, spelled once by their owner */
 #include "core/frame/remote_object.h"
 #include "core/html/html_iframe.h"
@@ -10375,6 +10376,7 @@ int main(int argc, char **argv) {
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);   /* the shared §7.2.5.1 prototype every proxy is chained to */
+    remote_location_free(ctx);   /* §7.2.4's cross-origin Location: its interned names and its live table */
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(ctx);

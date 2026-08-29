@@ -72,6 +72,7 @@
 #include "core/events/broadcast_channel.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
+#include "core/frame/remote_location.h"
 #include "core/frame/remote_object.h"
 #include "core/frame/remote_op.h"
 #include "core/html/html_iframe.h"
@@ -3402,6 +3403,7 @@ int main(int argc, char **argv)
     window_free(ctx);
     remote_object_free(ctx);
     window_proxy_free(ctx);
+    remote_location_free(ctx);   /* §7.2.4's cross-origin Location: its interned names and its live table */
     report_exception_free(ctx);
     event_free(ctx);
     realm_intrinsics_free();   /* the DECLARATIONS are the agent's; each realm's prototypes went with it */

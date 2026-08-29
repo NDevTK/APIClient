@@ -41,6 +41,7 @@
 #include "core/frame/navigator.h"
 #include "core/frame/remote_object.h"
 #include "core/frame/remote_op.h"
+#include "core/frame/remote_location.h"
 #include "core/frame/screen.h"
 #include "core/frame/session_history.h"
 #include "core/frame/viewport.h"
@@ -196,6 +197,7 @@ static void d_timer(JSContext *c, const PlatformAgent *a) { (void)a; timer_init(
 static void d_window_proxy(JSContext *c, const PlatformAgent *a) { (void)a; window_proxy_init(c); }
 static void d_remote_object(JSContext *c, const PlatformAgent *a) { (void)a; remote_object_init(c); }
 static void d_remote_op(JSContext *c, const PlatformAgent *a) { (void)a; remote_op_init(c); }
+static void d_remote_location(JSContext *c, const PlatformAgent *a) { (void)a; remote_location_init(c); }
 static void d_window_message(JSContext *c, const PlatformAgent *a) { (void)a; window_message_init(c); }
 static void d_broadcast_channel(JSContext *c, const PlatformAgent *a) { (void)a; broadcast_channel_init(c); }
 static void d_unhandled_rejection(JSContext *c, const PlatformAgent *a) { (void)a; unhandled_rejection_init(c); }
@@ -635,6 +637,9 @@ static const PlatformComponent PLATFORM[] = {
        install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could
        run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
     { "remote_op",           d_remote_op,           NULL },
+    /* HTML §7.2.4's CROSS-ORIGIN Location, AFTER window_proxy: §7.2.2's `location` member is what answers
+       with one, and this row builds the per-realm surface that member hands across an origin boundary. */
+    { "remote_location",     d_remote_location,     NULL },
     /* AFTER window_proxy: §9.4.4's `postMessage` is installed on the WindowProxy PROTOTYPE. */
     { "window_message",      d_window_message,      i_window_message, r_window_message },
     { "broadcast_channel",   d_broadcast_channel,   i_broadcast_channel, r_broadcast_channel },

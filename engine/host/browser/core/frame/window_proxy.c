@@ -49,6 +49,7 @@
 #include "core/frame/navigable.h"
 #include "core/frame/window.h"
 #include "core/frame/location.h"
+#include "core/frame/remote_location.h"   /* §7.2.4's cross-origin arms — `location` of a PEER's document */
 #include "core/frame/document_lifecycle.h"
 #include "core/dom/document.h"
 #include <stdio.h>
@@ -2503,12 +2504,32 @@ static JSValue proxy_member_get(JSContext *ctx, JSValueConst this_val, int magic
            document's realm, exactly as `document` is. A destroyed navigable has no active document and so no
            Location; the spec files read `closed` before touching one, and answering with the address it used
            to have would be a document that no longer exists.
-           SAME-ORIGIN ONLY, SO FAR. The cross-origin half is REAL — §7.2.1 puts `location` on the list
-           precisely so a cross-origin document can be navigated through it — but it needs a Location whose own
-           members are filtered to `href`'s setter and `replace`, over an object in another instance. Handing
-           back THIS document's Location instead would be a cross-origin read that silently succeeded, which is
-           the one failure the check exists to prevent, so proxy_realm's assert stops here and names it. */
+           THE CROSS-ORIGIN HALF IS A DIFFERENT OBJECT, AND IT IS A COMPONENT RATHER THAN A BRANCH. §7.2.1.3.1
+           CrossOriginProperties ( O ) lists `location` precisely so a cross-origin document can be navigated
+           through it, and what §7.2.4.5 through §7.2.4.10 hand across is a Location filtered to `href`'s setter
+           and `replace` over a Document ANOTHER INSTANCE holds — core/frame/remote_location.h. Handing back
+           THIS document's Location instead would be a cross-origin read that silently succeeded, which is the
+           one failure §7.2.1 Security infrastructure for Window, WindowProxy, and Location objects exists to
+           prevent, so the two answers are told apart HERE and neither arm can reach the other's object. */
         if (wp_closed(p)) return JS_NULL;
+        if (window_proxy_is_remote(nav)) {
+            /* §7.2.1.3.3 IsPlatformObjectSameOrigin AND "this agent holds the active document" ARE ONE
+               CONDITION, which is what makes this test the standard's rather than an implementation detail:
+               SECURITY.md keys an instance on `(browsing context group, origin)`, so a Document this agent
+               hosts is same origin with every realm that could be asking. The one shape that breaks the
+               pairing is a SAME-ORIGIN document in ANOTHER browsing context group — a separate instance by
+               that same key — for which §7.2.4's arms take the ORDINARY branch over a Document this heap does
+               not contain. Answering that with the filtered object would refuse reads the origins PERMIT, so
+               it is asserted rather than silently taken. */
+            DCHECK(!proxy_same_origin(p),
+                   "§7.2.2's `location` was read on a navigable whose active document is SAME ORIGIN and in "
+                   "ANOTHER INSTANCE — §7.2.1.3.3 answers TRUE for it, so §7.2.4 wants that document's "
+                   "ORDINARY Location, every member of which reads state this heap does not hold. That is a "
+                   "cross-instance read of §7.2.4's members, suspended and answered by the peer exactly as "
+                   "proxy_get_step answers `length`; the filtered object below is §7.2.4.5 [[GetOwnProperty]]'s "
+                   "CROSS-origin arm and would refuse reads the origins permit");
+            return remote_location_of_document(ctx, p->doc);
+        }
         /* READ OFF THE REALM, not off its global. `location` is an IDL accessor now — §7.2.2 declares it
            `[LegacyUnforgeable] readonly attribute Location`, so it is a non-configurable accessor on the
            global — and a JS_GetPropertyStr that reaches a getter aborts, because a C activation has no flow

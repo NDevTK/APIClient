@@ -28,6 +28,7 @@
 #include "browser/core/url/url.h"
 #include "browser/core/url/origin.h"   /* §7.1.1's same origin: the one check that decides what may JOIN this agent */
 #include "browser/core/frame/window_proxy.h"
+#include "browser/core/frame/remote_location.h"
 #include "browser/core/events/broadcast_channel.h"
 #include "browser/core/frame/window_message.h"
 #include "browser/core/frame/remote_object.h"
@@ -1234,6 +1235,7 @@ QJS_EXPORT void qjs_teardown(void)
     window_free(g_ctx);
     remote_object_free(g_ctx);
     window_proxy_free(g_ctx);   /* the shared §7.2.3 prototype every proxy is chained to */
+    remote_location_free(g_ctx);   /* §7.2.4's cross-origin Location: its names and its live table */
     /* THE SOLVER'S OWN LIST, UNDONE — one call, in solver/engine.h, for the reason the platform's is one call:
        these six lines were hand-copied into three hosts and had already drifted three ways. See that header. */
     solver_agent_free(g_ctx);
