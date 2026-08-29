@@ -259,6 +259,12 @@ void event_target_remove_listener(JSContext *ctx, JSValueConst target, const cha
    own count would answer no for exactly the way most pages write it. */
 bool event_target_has_any_listener(JSContext *ctx, JSValueConst target);
 
+/* DOM §2.7 Interface EventTarget's "ERASE ALL EVENT LISTENERS AND HANDLERS, given an EventTarget eventTarget" —
+   both maps, in one call, because §8.1.8.1's handler lives in both of them. HTML §8.4.1 "Opening the input
+   stream" steps 9 and 10 are the caller: every shadow-including inclusive descendant of the document, and then
+   the relevant global object. See the body for why it replaces the maps rather than deleting the slots. */
+void event_target_erase_all(JSContext *ctx, JSValueConst target);
+
 /* DOM §2.9's ACTIVATION BEHAVIOUR — what makes a click on an `<a href>` FOLLOW the link, on a `<form>`'s submit
    button submit, on a checkbox toggle it. It is not a listener and a page cannot register one: the dispatch
    picks an ACTIVATION TARGET while it builds the propagation path — the nearest entry, target first, that HAS

@@ -54,6 +54,36 @@ static void cs_set(JSContext *ctx, JSValue v)
     JS_FreeValue(ctx, rec);
 }
 
+/* HTML §4.12.1.1 "Processing model"'s "If el's FROM AN EXTERNAL FILE is true, or el's type is 'module', then
+ * increment document's ignore-destructive-writes counter", asked of the element the SAME algorithm recorded.
+ *
+ * WHY THE QUESTION IS ASKED HERE AND NOT COUNTED. §8.4.3's counter is what stops an external script from
+ * blowing the document away by implicitly calling `document.open()` — the standard says so where it declares
+ * it — and its producer is the bracket around "execute the script element", which in this engine is a WORK
+ * ITEM (solver/engine.c compiles the program and the flow runs it across scheduler steps). A counter raised by
+ * a C bracket around that would be the wrong flow's, which is the defect this file's header records for the
+ * slot itself. So the CLASSIC arm's condition is read off the element §4.12.1.1 already parked here for the
+ * duration of the same program: `currentScript` is that element for a classic script and is restored to null
+ * the moment it finishes, so a timer callback or an event handler scheduled by it answers false.
+ * WHAT IT DOES NOT COVER IS THE MODULE ARM, and that is not a hole this can close: §4.12.1.1 asserts
+ * `currentScript` is NULL while a module runs, so a module and an event handler are the same answer here. The
+ * module half needs the counter's real producer, at the site that creates the program's frame. */
+bool document_current_script_is_from_external_file(JSContext *ctx)
+{
+    JSValue v = cs_get(ctx);
+    lxb_dom_node_t *n = node_of(v);
+    bool external = false;
+
+    /* "FROM AN EXTERNAL FILE" is set when the script's source text came from a fetch, which for an element
+       that is EXECUTING is exactly its having a `src`: §4.12.1's own steps take the src branch on the
+       ATTRIBUTE's presence, and an element whose src did not fetch never reaches execution at all. */
+    if (n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT)
+        external = lxb_dom_element_has_attribute(lxb_dom_interface_element(n),
+                                                 (const lxb_char_t *)"src", 3);
+    JS_FreeValue(ctx, v);
+    return external;
+}
+
 bool document_current_script_is_null(JSContext *ctx)
 {
     JSValue v = cs_get(ctx);

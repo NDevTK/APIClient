@@ -14,41 +14,41 @@
  * to that detector (solver/solve.h's solve_html_sink) is the SAME one core/dom/element.c's innerHTML,
  * outerHTML and insertAdjacentHTML take; there is deliberately no second seam.
  *
- * WHAT THIS COMPONENT DOES NOT HAVE, AND THE ONE MECHANISM BOTH GAPS ARE WAITING ON.
- *   - `open()` is ABSENT (§NO STUBS: a web API not yet built is honestly absent, and the page's own throw on a
- *     missing member is the forcing function). §8.4.1's document open steps need three primitives this engine
- *     does not have — "erase all event listeners and handlers" over a document's shadow-including inclusive
- *     descendants, "replace all with null" as an exported operation, and the ENTRY global object's Document for
- *     the same-origin check in step 4 — and inventing any of them here would put them in the wrong file.
- *   - Steps 10 and 11 — the insert into the input stream and the parse — reach html_parse_document_write, which
- *     CRASHES today, naming what to build. Two things stand between here and a `document.write` that actually
- *     inserts, and neither is in this file:
- *       (1) THE ACTIVE DOCUMENT'S PARSE IS ALREADY CLOSED before any of its scripts run. This engine parses a
- *           document to completion and then seeds its scripts as flows, so §13.2.7 "The end" has already set
- *           the insertion point to undefined for every document by the time a page can call anything. In a
- *           browser an inline script runs with the insertion point DEFINED (§13.2.6.4.8 'The "text" insertion
- *           mode' sets it around `prepare the script element` and restores it after), which is why a real
- *           `document.write` appends to the document instead of replacing it.
- *       (2) THE LIVE PARSER'S NODES BELONG TO NO FLOW — which is an OWNERSHIP gap and no longer a CAPTURE one.
- *           This entry used to read "lexbor's tree construction BYPASSES the per-flow DOM delta … a live
- *           parser inserts through Lexbor's own mutators, which nothing captures", and called that the deeper
- *           of the two because "the first without the second would make one flow's `document.write` visible to
- *           every sibling". That is no longer true and has not been for some time: html_parse_new_parser calls
- *           dom_cow_install_tree_construction and ASSERTS dom_cow_owns_tree_construction, a document parse
- *           declares DOM_PARSE_ROOT_SHARED, and §13.2.6's inserts and removals each push the delta entry that
- *           reverts them. The writes ARE captured and a sibling would see nothing.
- *           What is still owed is who FREES them. Every other parse here is out-of-tree and its result is
- *           PLACED through the chokepoint, where dom_cow_take_private makes the flow the owner of what it
- *           placed; a parser feeding the document's own tree has no placement step, so a discarded flow
- *           detaches its written nodes and nothing frees them. core/html/html_parse.c states this at the site
- *           that owes it, together with the other hazard of (1) — lexbor emits the EOF token in `chunk_end`
- *           and §13.2.6 builds `html`/`head`/`body` from it, so a document left open has a NULL
- *           `documentElement` until the close, which is what a browser does too and which each reader that
+ * THE TWO WRITES A PAGE CAN MAKE ARE DIFFERENT ALGORITHMS AND THIS ENGINE SERVES ONE OF THEM.
+ *   - A write from a POST-LOAD task — a `load` handler, a timer, an event — finds §13.2.3.5's insertion point
+ *     undefined and takes step 9's other arm: §8.4.1's DOCUMENT OPEN STEPS, which replace the document in
+ *     place. Those are built (core/html/document_open.c), so is §8.4.2's close, and so is the `open()` member
+ *     that shares them.
+ *   - A write from a PARSE-TIME script must APPEND at the insertion point instead, and it CANNOT here: this
+ *     engine parses a document to completion and then seeds its scripts as flows, so by the time any of them
+ *     runs, §13.2.7 "The end" has set the insertion point to undefined. In a browser that script runs with the
+ *     insertion point DEFINED (§13.2.6.4.8 'The "text" insertion mode' sets it around `prepare the script
+ *     element` and restores it after), which is why a real parse-time `document.write` appends. The two are
+ *     not interchangeable and §8.4.1 step 5 is where the standard separates them, so document_open.c CRASHES
+ *     there rather than serving the first out of the second's algorithm. What that crash asks for is a
+ *     document's own parse kept OPEN across script execution, which is two things and neither is in this file:
+ *       (1) AN OWNER FOR THE LIVE PARSER'S NODES. The CAPTURE is not the gap and has not been for some time:
+ *           html_parse_new_parser calls dom_cow_install_tree_construction and ASSERTS
+ *           dom_cow_owns_tree_construction, a document parse declares DOM_PARSE_ROOT_SHARED, and §13.2.6's
+ *           inserts and removals each push the delta entry that reverts them. What is owed is who FREES them:
+ *           every other parse here is out-of-tree and its result is PLACED through the chokepoint, where
+ *           dom_cow_take_private makes the flow the owner, and a parser feeding the document's own tree has no
+ *           placement step — so a discarded flow detaches what it wrote and nothing frees it.
+ *           core/html/html_parse.c states this at the site that owes it.
+ *       (2) OPENING THE ACTIVE DOCUMENT'S PARSE AND CLOSING IT AT §13.2.7's OWN MOMENT, which is
+ *           core/loader/document_load.c's, and whose hazard html_parse.c names: lexbor emits the EOF token in
+ *           `chunk_end` and §13.2.6 builds `html`/`head`/`body` from it, so a document left open has a NULL
+ *           `documentElement` until the close — which is what a browser does too, and which each reader that
  *           assumes otherwise has to be changed for.
- *     THE TWO SITES ARE CROSS-REFERENCED ON PURPOSE. They describe one mechanism from two ends, html_parse.c
- *     was kept current and this was not, and a reader who arrived here first would have gone off to build a
- *     capture primitive that already exists — which is the stale-`DFAIL` failure mode in prose, and cost
- *     nothing only because nobody had taken it yet.
+ *     THE SITES ARE CROSS-REFERENCED ON PURPOSE. They describe one mechanism from several ends, and a reader
+ *     who arrived at only one of them once went off to build a capture primitive that already existed.
+ *
+ * WHAT THE PARSER STILL DOES NOT DO WITH WHAT IS WRITTEN IS RUN ITS SCRIPTS, and that is a CHOICE the standard
+ * grants rather than a gap it forbids: §8.4.3's own definition says "User agents are explicitly allowed to
+ * avoid executing script elements inserted via this method", and this engine's tree construction prepares no
+ * script (§4.12.1's preparation is reached from DOM §4.2.3's insertion steps and from the document scan, and a
+ * parser-inserted element takes neither). It is nonetheless where this component's next value is: a written
+ * `<script>` is conditionally-loaded code, which is the surface this whole product exists to reach.
  *
  * WHAT IT DOES HAVE IS THE WHOLE SINK. §8.4.3 steps 1-9 run, and the value that reaches step 9 is announced to
  * the @S detector on the way — so `document.write(location.hash)` opens a search, and a candidate re-run
@@ -67,7 +67,9 @@
 void document_write_init(JSContext *ctx);
 /* The REALM's half: `write`, `writeln` and `close` on Document.prototype. */
 void document_write_install(JSContext *ctx, JSValueConst proto);
-/* Reached from document_agent_free — declared by document_init, so released by its declarer. */
-void document_write_free(void);
+/* Reached from document_agent_free — declared by document_init, so released by its declarer. It takes the
+   RUNTIME because §8.4.1's script-created-parser key (core/html/document_open.h), minted by the init above, is
+   a Symbol that outlives every realm. */
+void document_write_free(JSRuntime *rt);
 
 #endif

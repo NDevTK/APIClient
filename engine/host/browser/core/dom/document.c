@@ -59,6 +59,7 @@
 #include "core/dom/document_domain.h"
 #include "core/dom/document_metadata.h"
 #include "core/html/document_write.h"   /* §8.4's three members drive the PARSER, not the tree — see its header */
+#include "core/html/html_parse.h"       /* §13.2.7's premise: the lifecycle advances when the PARSE has ended */
 #include "solver/world.h"
 #include "core/frame/window_proxy.h"
 #include "core/frame/navigable.h"
@@ -1622,6 +1623,20 @@ static void document_set_ready(JSContext *ctx, int stage)
                       event_new(ctx, "readystatechange", /*bubbles*/ false, /*cancelable*/ false), JS_UNDEFINED);
 }
 
+/* HTML §8.4.1 "Opening the input stream" step 18 — "Update the current document readiness of document to
+   'loading'" — as the ONE readiness transition another algorithm may ask for.
+ *
+ * IT IS A NAMED ENTRY AND NOT AN EXPORTED SETTER. Every other move of the readiness belongs to §13.2.7 "The
+ * end" and is driven by the lifecycle below, so a general `document_set_readiness(ctx, stage)` would be a way
+ * for any component to tell a page its document had finished loading; §8.4.1's step is the single case where a
+ * Document that HAS finished goes back to loading, and it is the algorithm that re-opened the input stream
+ * that says so. The `readystatechange` this fires is unobservable at its one call site — §8.4.1's own note
+ * says why: step 10 erased every listener and handler that could have heard it. */
+void document_set_readiness_loading(JSContext *ctx)
+{
+    document_set_ready(ctx, 0);
+}
+
 /* This document's readiness: 0 loading, 1 interactive, 2 complete. */
 static int document_readiness(JSContext *ctx)
 {
@@ -1838,14 +1853,24 @@ static int document_done_stage(JSContext *ctx, int stage)
     /* STEPS 9.9-9.11: the document is now SHOWING, and `pageshow` says so with `persisted` false — this
        document was loaded rather than restored from a session history entry. §7.5.9's `pagehide` is the other
        end of that pair and fires only because this ran. */
-    DCHECK(!document_page_showing(ctx),
-           "§13.2.7 \"The end\" step 9.9 asserts a document's page showing is false when its load completes — "
-           "a document that reached the end twice would fire two pageshows with no pagehide between them, "
-           "which is the exact inconsistency the flag exists to prevent");
-    document_page_showing_set(ctx, true);
-    event_target_fire(ctx, doc_here(ctx)->win_obj,
-                      page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
-                      doc_here(ctx)->doc_obj);
+    /* STEPS 9.9-9.11 ARE A TRANSITION, AND §8.4.1 IS WHY THAT SENTENCE HAD TO BE WRITTEN DOWN. What stood here
+       was §13.2.7 step 9.9's assert, taken literally — "Assert: Document's page showing is false" — with the
+       reasoning that a document reaching the end twice would fire two pageshows with no pagehide between them.
+       THE INVARIANT IS RIGHT AND THE ASSERT IS NOT, because reaching the end twice is a state the standard
+       itself creates: §8.4.1 "Opening the input stream" replaces a Document IN PLACE, mints a new parser and
+       sets the readiness back to "loading", so `document.open(); document.write(…); document.close()` runs
+       §13.2.7 again on a Document that is already showing — and §8.4.1 never unloads it, so nothing has fired
+       `pagehide`. §7.5.9 "Unloading documents" is the only algorithm that clears the flag, and it is the one
+       the pair is defined against. So the flag stays the CONDITION on 9.10 and 9.11 (which is what §7.5.9's
+       own `pagehide` does with it) rather than an assertion about how many times an end can be reached. The
+       `load` fire above is deliberately NOT under this test: a browser fires `load` again after a
+       document.close(), which is what an `iframe`'s `onload` after a written document depends on. */
+    if (!document_page_showing(ctx)) {
+        document_page_showing_set(ctx, true);
+        event_target_fire(ctx, doc_here(ctx)->win_obj,
+                          page_transition_event_new(ctx, "pageshow", /*persisted*/ false),
+                          doc_here(ctx)->doc_obj);
+    }
     completely_finish_loading(ctx);                                              /* step 9.12 */
     return 1;
 }
@@ -1948,6 +1973,22 @@ static bool document_load_event_delayed(JSContext *ctx, JSValueConst docs, uint3
  * ONE DOCUMENT PER CALL, then return, because this is a work item on the one frontier like everything else the
  * scheduler asks for — each fire queues listener tasks the loop picks up before the next document's stage.
  * Returns 1 when it advanced one, 0 when every document of this agent is complete. */
+/* §13.2.7 "The end"'s OWN PREMISE, asked of one document: "Once the user agent stops parsing the document, the
+ * user agent must run the following steps." The readiness alone used to stand for it, and it stopped standing
+ * for it the moment §8.4.1 "Opening the input stream" existed: those steps set the readiness back to "loading"
+ * and open an input stream that only §8.4.2's `close()` ends, so a `document.open()` with no close would have
+ * had this walk fire DOMContentLoaded and `load` on a document whose parse had not begun to finish — which a
+ * browser never does, and which would then have fired them a second time when the close finally came.
+ * §13.2.3.5's insertion point IS "the parse has not ended" (§13.2.7's step 2 is what makes it undefined), so
+ * this asks the parser rather than inferring from the readiness. A realm with no Document record cannot be
+ * mid-parse: there is no tree for a parser to be building. */
+static bool document_parse_ended(JSContext *realm)
+{
+    const Document *d = doc_of(realm);
+
+    return d == NULL || !html_parse_insertion_point_defined(lxb_dom_interface_document(d->dom));
+}
+
 int document_lifecycle_step(JSContext *ctx)
 {
     JSValue docs = navigable_tree_order(ctx), len;
@@ -1960,7 +2001,7 @@ int document_lifecycle_step(JSContext *ctx)
     for (i = 0; i < n && !did; i++) {          /* pass one: DOMContentLoaded, in tree order */
         JSValue proxy = JS_GetPropertyUint32(ctx, docs, i);
         JSContext *realm = window_proxy_realm(ctx, proxy);
-        if (document_readiness(realm) == 0) {
+        if (document_readiness(realm) == 0 && document_parse_ended(realm)) {
             document_done_stage(realm, 0);
             DCHECK(document_readiness(realm) == 1,
                    "a document's DOMContentLoaded stage ran and left its readiness where it was — this walk "
@@ -4072,7 +4113,7 @@ void document_agent_free(JSRuntime *rt)
     document_fragment_free();
     document_current_script_free();
     document_domain_free();
-    document_write_free();
+    document_write_free(rt);
     document_metadata_free();
     /* THE PROTOTYPES ARE THE REALMS' — each is in its own class-proto slot and released with its context. What
        this component itself holds is the class, the pool entries and the two realm-value slot ids. */

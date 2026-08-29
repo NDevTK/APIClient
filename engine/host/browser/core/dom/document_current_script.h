@@ -85,5 +85,10 @@ void document_current_script_set(JSContext *ctx, lxb_dom_element_t *el);
 void document_current_script_restore(JSContext *ctx, lxb_dom_element_t *el);
 /* Is this realm's slot null? The standard's own assertion in §4.12.1.1's MODULE arm, asked where that arm runs. */
 bool document_current_script_is_null(JSContext *ctx);
+/* Is the classic script this realm is executing one whose source came FROM AN EXTERNAL FILE — §4.12.1.1's own
+   condition for raising §8.4.3's ignore-destructive-writes counter, asked of the element this slot holds. Its
+   caller is core/html/document_write.c's step 9.1; the body states which half of §4.12.1.1's condition it
+   answers and which half needs the counter's real producer. */
+bool document_current_script_is_from_external_file(JSContext *ctx);
 
 #endif

@@ -654,6 +654,43 @@ bool event_target_has_any_listener(JSContext *ctx, JSValueConst target)
     return any;
 }
 
+/* DOM §2.7 Interface EventTarget's "ERASE ALL EVENT LISTENERS AND HANDLERS, given an EventTarget eventTarget":
+ * "1. Remove all of eventTarget's event listeners. 2. Set eventTarget's event handler map's entries to null."
+ * HTML §8.4.1 "Opening the input stream" is the caller — it erases the whole document tree's and the Window's,
+ * which is what stops a `load` handler that wrote the document from running again the moment the write closes.
+ *
+ * IT REPLACES EACH MAP RATHER THAN DELETING THE SLOT, and the reason is the per-flow delta rather than style:
+ * a fresh empty map is a property WRITE, which the heap COW captures and a context switch unapplies, so one
+ * flow's `document.open()` does not erase a sibling's listeners. A delete would have to be a capture of a
+ * different shape, and one that is silently absent leaves the erase permanent for every flow.
+ * ONE CALL CLEARS BOTH, because a handler is in BOTH maps: §8.1.8.1 "Event handlers" stores the handler in the
+ * handler map and registers `g_handler_marker` in the listener list to hold its position, so clearing either
+ * alone leaves half a handler — a marker that resolves to nothing, or a handler nothing dispatches to. */
+void event_target_erase_all(JSContext *ctx, JSValueConst target)
+{
+    JSValue k[2];
+    int i;
+
+    DCHECK(g_ready, "event listeners were erased before the keys existed");
+    DCHECK(JS_IsObject(target),
+           "erase all event listeners and handlers was given something that is not an object — §2.7's "
+           "algorithm is stated over an EventTarget, and the maps it clears are OWN SLOTS on one");
+    k[0] = g_key;
+    k[1] = g_handler_key;
+    for (i = 0; i < 2; i++) {
+        JSAtom a = JS_ValueToAtom(ctx, k[i]);
+        JSValue empty;
+
+        if (a == JS_ATOM_NULL) continue;
+        empty = idl_slots_new(ctx);
+        CHECK(!JS_IsException(empty),
+              "erase all event listeners and handlers could not allocate the empty map that replaces the old "
+              "one — leaving the page's listeners standing on a document §8.4.1 has already emptied");
+        JS_SetProperty(ctx, (JSValue)target, a, empty);
+        JS_FreeAtom(ctx, a);
+    }
+}
+
 /* add/removeEventListener's `type` is a Web IDL DOMString, so it is ToString on whatever the page passed and
    cannot be a JS_ToCString from C. They use the SHARED coerce-then-call machine rather than one of their own:
    what they have in common with getAttribute and createElement is exactly the thing that needs a machine, and a

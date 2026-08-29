@@ -74,6 +74,11 @@ bool document_render_blocked(JSContext *ctx);
    DOMParser parse, an XHR responseXML — is "complete", which is §3.1.5's own initial value. BORROWED. */
 const char *document_readiness_of(const lxb_dom_node_t *doc);
 
+/* HTML §8.4.1 "Opening the input stream" step 18's readiness transition, and ONLY that one — see the body for
+   why the entry is named after its algorithm rather than being a general setter. Its caller is
+   core/html/document_open.c. */
+void document_set_readiness_loading(JSContext *ctx);
+
 /* HTML §7.5.9's PAGE SHOWING for THIS realm's Document — "initially false", set true by §13.2.7's "the end"
    when it fires `pageshow`, and read-then-cleared by §7.5.9 step 9, which fires `pagehide` only if it is true.
    The pair is what stops a page seeing two pagehides with no pageshow between them, so the flag is the

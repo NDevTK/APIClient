@@ -7,7 +7,9 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/dom/document.h"
+#include "core/dom/document_current_script.h"   /* §8.4.3 step 9.1's ignore-destructive-writes condition */
 #include "core/dom/node.h"
+#include "core/html/document_open.h"            /* §8.4.1's document open steps — step 9.2, and close()'s 3-6 */
 #include "core/html/document_write.h"
 #include "core/html/html_parse.h"
 #include "core/html/trusted_types.h"
@@ -23,6 +25,7 @@ enum { DW_WRITE = 0, DW_WRITELN = 1 };
 static int g_id_write   = -1;
 static int g_id_writeln = -1;
 static int g_id_close   = -1;
+static int g_id_open    = -1;
 
 /* §8.4.3 step 4 and §8.4.4's own — the standard's SINK NAME, which is what a Trusted Types violation report
    names and what makes two sinks distinguishable in one report. Indexed by the magic above so the pair cannot
@@ -239,45 +242,37 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            "the document write steps reached step 9 with a `string` that is neither a String nor unknown "
            "external input — steps 1-5 build it out of the declaration's converted arguments, so a third kind "
            "of value means one of those steps produced something §8.4.3 cannot insert into an input stream");
-    if (!html_parse_insertion_point_defined(dom)) {                               /* STEP 9 */
-        /* §8.4.3 step 9.1 is the pair of counters that make an undefined insertion point a silent return, and
-           step 9.2 is "run the document open steps with document". Neither exists here yet, and the reason is
-           ONE mechanism rather than three unrelated gaps — see document_write.h: this engine finishes a
-           document's parse before running any of its scripts, so §13.2.7 "The end" has already set the
-           insertion point to undefined for EVERY document by the time a page can call this.
-           WHAT THAT MECHANISM STILL NEEDS IS NOT WHAT THIS BLOCK USED TO SAY. It said the fix was "a live
-           document parser whose tree construction routes through the per-flow DOM delta", and that routing
-           EXISTS: html_parse_new_parser calls dom_cow_install_tree_construction and asserts
-           dom_cow_owns_tree_construction, a document parse declares DOM_PARSE_ROOT_SHARED, and §13.2.6's
-           inserts and removals each push the delta entry that reverts them — so a `document.write` run inside a
-           slice is already isolated per flow exactly like an `appendChild` from script. core/html/html_parse.c
-           states the real remainder at the site that owes it, and it is OWNERSHIP rather than capture: every
-           other parse in this engine is out-of-tree and its result is PLACED through the chokepoint, where
-           dom_cow_take_private makes the flow the owner of what it placed, and a live parser feeding the
-           document's own tree has no placement step — so a discarded flow detaches its written nodes and
-           nothing frees them. The two sites are cross-referenced deliberately: they were describing one
-           mechanism from two ends and only one of them had been kept up to date. */
-        DFAIL("§8.4.3 \"document.write()\" step 9 was reached with a CONCRETE string and §13.2.3.5's insertion "
-              "point undefined — this document's parse ran to §13.2.7 \"The end\" before its scripts were "
-              "seeded, so there is no input stream to insert into. THE §13.2.6 TREE-CONSTRUCTION ROUTING THIS "
-              "CRASH USED TO ASK FOR FIRST ALREADY EXISTS — html_parse_new_parser installs it and asserts "
-              "dom_cow_owns_tree_construction, and a document parse declares DOM_PARSE_ROOT_SHARED, so a live "
-              "parser's inserts ARE captured per flow; core/html/html_parse.c says so at the site that owns "
-              "it. Build it in this order instead: (1) give the live parser's nodes an OWNER — every other "
-              "parse here is out-of-tree and PLACED through the chokepoint, where dom_cow_take_private makes "
-              "the flow the owner, and a parser feeding the document's own tree has no placement step, so a "
-              "discarded flow detaches what it wrote and nothing frees it; (2) open the ACTIVE document's "
-              "parse with html_parse_document_open (it exists, and core/loader/text_document.c already uses "
-              "it) and close it at §13.2.7's own moment, the lifecycle stage that moves the readiness to "
-              "\"interactive\" — whose own hazard html_parse.c names, that lexbor emits the EOF token in "
-              "chunk_end and builds html/head/body from it, so a zero-length response left open has a NULL "
-              "documentElement until the close and each reader assuming otherwise is what must change; "
-              "(3) build §8.4.1's document open steps here — they "
-              "need \"erase all event listeners and handlers\", an exported \"replace all\", and the ENTRY "
-              "global object's Document for step 4's same-origin check — and with them §8.4.3 step 9.1's "
-              "unload and ignore-destructive-writes counters, the second of which §4.12.1 \"execute the "
-              "script element\" raises around an external or module script");
-        return JS_STEP_DONE;
+    /* STEP 9 — "if the insertion point is undefined". ASKED THROUGH THE RECORD THAT SAYS WHOSE PARSER IT IS,
+       which is §13.2.3.5's own question plus the assertion that this flow and the document's one Lexbor parser
+       agree about whether a stream is open; document_open.h states the single case where they do not and why
+       it must crash rather than resolve to either answer. */
+    if (!document_open_stream_is_ours(ctx, hdr->this_val, dom)) {                 /* STEP 9 */
+        /* STEP 9.1 — "If document's unload counter is greater than 0 or document's ignore-destructive-writes
+           counter is greater than 0, then return."
+           THE SECOND COUNTER IS WHAT KEEPS A REAL PAGE'S DOCUMENT ALIVE, and its absence would not have looked
+           like a gap: §8.4.3 declares it "to prevent external scripts from being able to use document.write()
+           to blow away the document by implicitly calling document.open()", and a tag manager or an ad slot
+           reaching this line from a `<script src>` after the parse has ended is the commonest `document.write`
+           on the web. Performed here it would replace the page a browser leaves untouched — silently, and with
+           the whole document as the collateral. It is asked of the TARGET document's realm rather than of this
+           member's, because step 9.1 is about `document`'s counter and a member pulled off another realm's
+           prototype runs in that other realm.
+           THE UNLOAD COUNTER IS AN ABSENCE WITH A PRODUCER and is named rather than guessed: §7.5.9 "Unloading
+           documents" is the only algorithm that raises it, core/frame/document_lifecycle.c HAS those steps as a
+           machine, and the counter has to be raised and lowered by that machine's own stages — a C bracket
+           around a work item reads the wrong flow's state (core/dom/document_current_script.h records that
+           defect). Until it is there, a `document.write` from a `pagehide` or `unload` handler is performed
+           here where a browser ignores it. */
+        JSContext *target = document_active_realm_of(lxb_dom_interface_node(dom));
+
+        if (target != NULL && document_current_script_is_from_external_file(target))
+            return JS_STEP_DONE;
+        /* STEP 9.2 — "Run the document open steps with document." */
+        if (!document_open_steps(ctx, hdr->this_val, dom)) return JS_STEP_ABRUPT;
+        DCHECK(html_parse_insertion_point_defined(dom),
+               "§8.4.3 step 9.2's document open steps returned with no input stream open — every arm of "
+               "§8.4.1 that declines to open one RETURNS DOCUMENT at a step this engine has established it "
+               "cannot be standing at, so step 10 is about to insert into a stream that is not there");
     }
     {
         /* STEPS 10 AND 11 — one call, because in lexbor the input stream is the tokenizer's own cursor rather
@@ -303,14 +298,9 @@ static const IdlStepDecl DW_DECL = {
 /* ---- §8.4.2 close() ------------------------------------------------------------------------------------- */
 
 /* HTML §8.4.2 "Closing the input stream". A PLAIN body and not a machine: its six steps run no page code that
-   this engine can reach. Steps 1 and 2 are the same two throws §8.4.3 opens with; step 3 — "if there is no
-   script-created parser associated with this, then return" — is where every call currently ends, because a
-   script-created parser is created by §8.4.1's document open steps and by nothing else, and those do not
-   exist here. Steps 4-6 (the explicit "EOF" character, the pending-parsing-blocking-script return, and running
-   the tokenizer) arrive with them.
-   IT IS NOT A NO-OP MEMBER. §8.4.2's throws are observable, and a page that calls `document.close()` at the
-   end of a write sequence must find a function there — an absent one takes the whole flow down at a call the
-   bundle believed it had covered, which is the same defect as the absent `write` this component is here for. */
+   this engine can reach. Steps 1 and 2 are the same two throws §8.4.3 opens with and stay here beside them;
+   steps 3-6 are the input stream's own lifetime and live with the steps that created it
+   (core/html/document_open.c), which is where the script-created-parser record is kept. */
 static JSValue js_doc_close(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_document_t *dom;
@@ -320,17 +310,47 @@ static JSValue js_doc_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
     if (dw_is_xml_document(dom))                                                  /* STEP 1 */
         return JS_ThrowDOMException(ctx, "InvalidStateError", "document.close on an XML document");
     /* STEP 2's throw-on-dynamic-markup-insertion counter is decided for the reason §8.4.3's step 7 is. */
-    /* STEP 3 — and it is asserted rather than assumed, because the assertion is what will fail on the day a
-       script-created parser first exists and steps 4-6 have still not been written. §13.2.3.5: a parser
-       standing in its PROCESS window has a defined insertion point, and the only parser that reaches this
-       member with one open is one §8.4.1 created. */
-    DCHECK(!html_parse_insertion_point_defined(dom),
-           "§8.4.2 close() step 3 found a document with a LIVE input stream — this engine creates a parser "
-           "only through core/html/html_parse.c's document parse, which closes it at §13.2.7 \"The end\", so "
-           "an open one here is §8.4.1's script-created parser having come into existence without steps 4-6 "
-           "of this algorithm: insert the explicit \"EOF\" character, return if the pending parsing-blocking "
-           "script is non-null, and run the tokenizer to it");
-    return JS_UNDEFINED;                                                          /* STEP 3 */
+    document_close_input_stream(ctx, this_val, dom);                              /* STEPS 3-6 */
+    return JS_UNDEFINED;
+}
+
+/* ---- §8.4.1 open() -------------------------------------------------------------------------------------- */
+
+/* HTML §8.4.1 "Opening the input stream" declares TWO overloads, and Web IDL §3.6 "Overload resolution" tells
+ * them apart by ARGUMENT COUNT alone — their type lists are two and three long, so an `argcount` of three
+ * removes the first entry outright and anything less removes the second:
+ *
+ *     [CEReactions] Document open(optional DOMString unused1, optional DOMString unused2);
+ *     [CEReactions] WindowProxy? open(USVString url, DOMString name, DOMString features);
+ *
+ * "The unused1 and unused2 arguments are ignored, but kept in the IDL to allow code that calls the function
+ * with one or two arguments to continue working" — so the first overload's whole body is the document open
+ * steps and its arguments are read by nothing. The second IS §7.2.2's window open steps and belongs to the
+ * Window component; it is a different algorithm with a different return type reached through the same name,
+ * which is why the arity test is the member's own step and not a guess. */
+static JSValue js_doc_open(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_document_t *dom;
+
+    (void)argv; (void)magic;
+    if (argc >= 3) {
+        /* §3.6 step 4 has removed the two-argument entry, so this call IS `open(url, name, features)`. */
+        DFAIL("§8.4.1's THREE-ARGUMENT `open` was called — Web IDL §3.6 \"Overload resolution\" selects the "
+              "second entry by argument count, and that entry's method steps are \"if this is not fully "
+              "active, throw an \\\"InvalidAccessError\\\" DOMException; return the result of running the "
+              "WINDOW OPEN STEPS with url, name and features\", which is HTML §7.2.2.1 \"Opening and closing "
+              "windows\" and belongs to the Window component beside `window.open` (core/frame/navigable.c's "
+              "navigable_open is what it reaches). It is not this algorithm with extra arguments: it returns a "
+              "WindowProxy, it opens no input stream, and it never touches this document");
+        return JS_UNDEFINED;
+    }
+    if (!(dom = dw_receiver(ctx, this_val))) return JS_EXCEPTION;
+    if (dw_is_xml_document(dom))                                                  /* STEP 1 */
+        return JS_ThrowDOMException(ctx, "InvalidStateError", "document.open on an XML document");
+    /* STEP 2's throw-on-dynamic-markup-insertion counter is decided for the reason §8.4.3's step 7 is. */
+    if (!document_open_steps(ctx, this_val, dom)) return JS_EXCEPTION;
+    /* "Return document" — the RECEIVER, which is what the page compares against its own `document`. */
+    return JS_DupValue(ctx, this_val);
 }
 
 /* ---- declaration and install ----------------------------------------------------------------------------- */
@@ -342,8 +362,15 @@ void document_write_init(JSContext *ctx)
        the type exists this becomes a union row and nothing else about the member moves. */
     static const IdlArgType TEXT_TAIL[] = { IDL_DOMSTRING };
 
-    DCHECK(g_id_write < 0 && g_id_writeln < 0 && g_id_close < 0,
-           "document_write_init ran twice — the three declarations are the AGENT's and are made once in it");
+    /* §8.4.1's first overload is `optional DOMString unused1, optional DOMString unused2` and its second is
+       three REQUIRED strings; declared as three optional DOMStrings, the arity the page called with reaches
+       the body, which is where Web IDL §3.6's count-based choice between the two entries is made. The third
+       entry's `USVString url` is not written here because that entry's algorithm is not this one — the body
+       hands it back rather than converting for a member it does not implement. */
+    static const IdlArgType OPEN_ARGS[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
+
+    DCHECK(g_id_write < 0 && g_id_writeln < 0 && g_id_close < 0 && g_id_open < 0,
+           "document_write_init ran twice — the four declarations are the AGENT's and are made once in it");
     g_id_write = idl_method_id_step(ctx, TEXT_TAIL, 1, NULL, 0, &DW_DECL, DW_WRITE);
     idl_variadic();
     idl_optional_from(0);
@@ -351,27 +378,33 @@ void document_write_init(JSContext *ctx)
     idl_variadic();
     idl_optional_from(0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_doc_close, 0);
+    g_id_open = idl_method_id(ctx, OPEN_ARGS, 3, js_doc_open, 0);
+    idl_optional_from(0);
+    /* §8.4.1's record of which parser a `close()` may end — the AGENT's key, minted beside these
+       declarations because it is the same one-per-agent statement. */
+    document_open_init(ctx);
 }
 
 void document_write_install(JSContext *ctx, JSValueConst proto)
 {
-    DCHECK(g_id_write >= 0 && g_id_writeln >= 0 && g_id_close >= 0,
+    DCHECK(g_id_write >= 0 && g_id_writeln >= 0 && g_id_close >= 0 && g_id_open >= 0,
            "HTML §8.4's members were installed before they were declared — the declaration is the AGENT's and "
            "the install is the REALM's");
     /* Web IDL §3.7.7: an operation whose only argument is variadic has `length` 0. */
     idl_install_method(ctx, proto, "write", 0, g_id_write);
     idl_install_method(ctx, proto, "writeln", 0, g_id_writeln);
     idl_install_method(ctx, proto, "close", 0, g_id_close);
-    /* `open()` IS DELIBERATELY NOT HERE. §8.4.1's two overloads are `Document open(optional DOMString unused1,
-       optional DOMString unused2)` and `WindowProxy? open(USVString url, DOMString name, DOMString features)`;
-       the first needs the document open steps' three missing primitives (document_write.h names them) and the
-       second IS §7.2.2's window open steps, which belong to the Window component. An honestly absent member is
-       the forcing function — and engine/idlgen.mjs's audit reports it by name every build, which is the one
-       place a reader should learn it rather than from a comment that can go stale. */
+    /* §3.7.7 again: `length` is the number of REQUIRED arguments of the shortest overload, and §8.4.1's first
+       entry declares both of its own optional — so `document.open.length` is 0 even though the second entry
+       has three required arguments. */
+    idl_install_method(ctx, proto, "open", 0, g_id_open);
 }
 
-void document_write_free(void)
+void document_write_free(JSRuntime *rt)
 {
     DCHECK(g_id_write >= 0, "HTML §8.4's members were released in an agent that never declared them");
-    g_id_write = g_id_writeln = g_id_close = -1;
+    g_id_write = g_id_writeln = g_id_close = g_id_open = -1;
+    /* The key document_write_init minted, given back by its declarer — `rt` and not a context, because the
+       Symbol outlives every realm and is freed with the runtime. */
+    document_open_free(rt);
 }
