@@ -76,6 +76,19 @@ int agent_state_count(const char *component)
     return n;
 }
 
+bool agent_state_slot(int i, const char **component, const char **what)
+{
+    DCHECK(component != NULL && what != NULL,
+           "the agent-state registry was walked with nowhere to put the declaration it was asked for");
+    DCHECK(i >= 0, "the agent-state registry was walked from before its first declaration");
+    /* NOT A BOUND. The end of the list is a FACT the caller reads to stop, which is what makes the walk
+       unwritable as a fixed count the caller would have to keep in step with the registry. */
+    if (i >= g_n) return false;
+    *component = g_slots[i].component;
+    *what = g_slots[i].what;
+    return true;
+}
+
 /* IS THIS SLOT WHERE A FRESH PROCESS WOULD HAVE FOUND IT? Each read goes through the slot's own declared type,
    which is why there is a function per kind rather than a cast per read — except the pointer, whose bytes are
    compared against a null pointer's because no object pointer may be read through a `void *` lvalue. */

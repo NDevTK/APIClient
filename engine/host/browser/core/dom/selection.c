@@ -840,12 +840,23 @@ void selection_init(JSContext *ctx)
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The class is the declaration
        latch this init consults, so a release that kept it would hand a second agent a class registered in a
        runtime that no longer exists; declaring it here is what makes a forgotten release fire instead of going
-       silent. The two entry-point ids are declared for the same reason. */
-    agent_state_class("selection", &g_sel_class, "§3's Selection class, and the declaration latch");
-    agent_state_id("selection", &g_id_delete, "§3's deleteFromDocument step-machine declaration");
-    agent_state_id("selection", &g_id_stringifier, "§3's stringifier step-machine declaration");
-    agent_state_id("selection", &g_id_doc_get, "§4.1's getSelection declaration");
-    agent_state_id("selection", &g_id_win_get, "§4.2's getSelection declaration");
+       silent. The two entry-point ids are declared for the same reason.
+       DECLARED UNDER `document`, BECAUSE THE NAME IS THE ROW'S AND NOT THE FILE'S. core/platform.c's list has
+       no `selection` row and must not grow one: nothing declares this component but document_init (which is
+       also what makes the Range assert above true) and nothing releases it but document_agent_free, so
+       `document` is the row whose release column this declaration is the inverse of. Declaring it under its
+       own file's name did not make a smaller check, it made an ABSENT one — the row pairing can only ask
+       "does anybody release this?" about a name a row carries — and it made `document`'s side of that pairing
+       able to say "declared no agent state" about a component that had declared five slots. Beside
+       core/dom/document_current_script.c's one slot, which names this same row for this same reason.
+       AND THE STANDARD IS NAMED IN EACH `what`, because these are read out of a report headed `document`,
+       where a bare `§3` would be DOM's rather than this one's. */
+    agent_state_class("document", &g_sel_class,
+                      "Selection API §3's Selection class, and this component's declaration latch");
+    agent_state_id("document", &g_id_delete, "Selection API §3's deleteFromDocument step-machine declaration");
+    agent_state_id("document", &g_id_stringifier, "Selection API §3's stringifier step-machine declaration");
+    agent_state_id("document", &g_id_doc_get, "Selection API §4.1's getSelection declaration");
+    agent_state_id("document", &g_id_win_get, "Selection API §4.2's getSelection declaration");
     realm_declare_intrinsic(selection_install_proto);
 }
 

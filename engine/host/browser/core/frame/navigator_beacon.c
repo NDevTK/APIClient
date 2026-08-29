@@ -330,7 +330,15 @@ void navigator_beacon_init(JSContext *ctx)
        the IDL's value instead of inventing one from a hole. */
     idl_optional_from(1);
     idl_arg_default(1, IDL_DEFAULT_NULL, NULL);
-    agent_state_id("navigator_beacon", &g_id_send_beacon, "Beacon §2.1's sendBeacon declaration");
+    /* DECLARED UNDER `navigator`, BECAUSE THE NAME IS THE ROW'S AND NOT THE FILE'S — core/agent_state.h.
+       core/platform.c's list has no `navigator_beacon` row and must not grow one: §2.1's member is a partial
+       interface of §8.10.1's Navigator, so navigator_init is what declares this component and navigator_free
+       is what releases it, exactly as it is for Permissions §6 beside it. `navigator` is therefore the row
+       whose release column this declaration is the inverse of. Declared under this file's own name it was not
+       a smaller check but an ABSENT one — the row pairing can only ask "does anybody release this?" about a
+       name a row carries — and it left `navigator` able to report "declared no agent state" in exactly the
+       words a component that had declared nothing would use. */
+    agent_state_id("navigator", &g_id_send_beacon, "Beacon §2.1's sendBeacon declaration");
 }
 
 void navigator_beacon_free(void)

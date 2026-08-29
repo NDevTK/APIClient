@@ -37,6 +37,27 @@
  * a component holding what nobody frees — the exact shape of every leak that file's comments record. Both are
  * asserted the moment the declaration pass ends, so neither can be reached by adding a component.
  *
+ * AND THERE IS A THIRD DIRECTION, WHICH NEITHER OF THOSE CAN ASK, BECAUSE BOTH ARE QUESTIONS ABOUT A ROW.
+ * `component` here and `name` on that row are TWO INDEPENDENTLY WRITTEN SPELLINGS of one thing, so a
+ * declaration can name a row that does not exist — and that is not a weaker pairing, it is an ABSENT one with
+ * a LIE beside it. The slots go unpaired, so the arm the pairing exists for (does anybody RELEASE this?) is
+ * never asked about them at all; and the row that really owns them then answers "declared no agent state" in
+ * character-for-character the words a component that truly declared nothing produces. THREE STATES BEHIND ONE
+ * ANSWER, which is the defect this whole file was written against, arriving through the NAME instead of
+ * through a value. So the registry is also walked the other way — every declaration must name a row — and it
+ * is walked FIRST, so that the two row-directions can state in their own messages that a misspelling has
+ * already been ruled out.
+ *
+ * A SUB-COMPONENT NAMES THE ROW THAT RELEASES IT, NOT ITS OWN FILE, and that is why this cannot be a macro
+ * emitting both halves at the declaration. core/platform.c's list is not a list of FILES: a component reached
+ * only through another one's init and given back only by that one's release (Selection and currentScript under
+ * `document`, sendBeacon under `navigator`, SubtleCrypto under `crypto`, IntersectionObserverEntry under
+ * `intersection_observer`) has no row of its own and must not be given one, because a row is precisely a
+ * DECLARE and a RELEASE that platform.c itself calls. The name written here is therefore a CLAIM about which
+ * release undoes this — "document_agent_free reaches selection_free" — and no spelling scheme can check a
+ * claim of that shape. What checks it is agent_state_check_released below, at the one instant it is decidable:
+ * a name that is merely SPELLED right and belongs to a release that does not reach this slot fires there.
+ *
  * AND WHAT THIS COSTS: A FINALIZER AND A gc_mark RUN AFTER THE RELEASE COLUMN, SO NEITHER MAY READ A SLOT
  * DECLARED HERE. This is the obligation the zeroing above creates, and it is stated here because here is where
  * it is created. The collection that finalizes the PAGE'S object graph is not the release: a document's
@@ -64,11 +85,15 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_AGENT_STATE_H
 #define ENGINE_HOST_BROWSER_CORE_AGENT_STATE_H
 
+#include <stdbool.h>
+
 #include "quickjs.h"
 
-/* DECLARED ONCE PER AGENT, by the component, beside the line of its own `_init` that sets the slot. `what` is
-   what the slot IS — it is the second half of the assert a forgotten release fires, so it names the state and
-   not the variable. */
+/* DECLARED ONCE PER AGENT, by the component, beside the line of its own `_init` that sets the slot.
+   `component` is A ROW OF core/platform.c's LIST — the row whose RELEASE gives this slot back, which for a
+   sub-component is the row that reaches it and never its own file's name. `what` is what the slot IS — it is
+   the second half of the assert a forgotten release fires, so it names the state and not the variable, and
+   for a sub-component it names its own STANDARD too, since it is read out of a report headed by the row. */
 void agent_state_id(const char *component, const int *slot, const char *what);        /* pre-init: -1 */
 void agent_state_flag(const char *component, const int *slot, const char *what);      /* pre-init: 0 */
 void agent_state_class(const char *component, const JSClassID *slot, const char *what);/* pre-init: 0 */
@@ -80,8 +105,18 @@ void agent_state_value(const char *component, const JSValue *slot, const char *w
    was written about; memcmp reads unsigned chars and is legal for every object there is. */
 void agent_state_ptr(const char *component, const void *slot, const char *what);
 
-/* How many slots this component declared — core/platform.c's two-sided row check, and nothing else. */
+/* How many slots this component declared — core/platform.c's row check, and nothing else. IT CANNOT ANSWER
+   THE THIRD DIRECTION: a caller can only ask it about a name the caller already has, so 0 is returned both
+   for a component that declared nothing and for a component whose slots were declared under a name that
+   caller's list does not carry. Those are two different repairs, so they are two different questions. */
 int  agent_state_count(const char *component);
+
+/* THE REGISTRY, READ THE OTHER WAY: the `i`th declaration in declaration order, false past the end. This is
+   the ONLY way to ask "is every declaration's component a real one?", because that question is asked of the
+   REGISTRY and not of any list a caller holds. The two strings are the ones the declaration was made with, so
+   the assert that fires can name the exact line by its `what` rather than by an index into a table nobody
+   can see. */
+bool agent_state_slot(int i, const char **component, const char **what);
 
 /* EVERY DECLARED SLOT IS BACK AT ITS PRE-INIT VALUE. Run once, at the end of the release column. */
 void agent_state_check_released(void);

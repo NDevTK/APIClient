@@ -807,6 +807,24 @@ static const int PLATFORM_WITNESS_N = (int)(sizeof PLATFORM_WITNESS / sizeof PLA
    component happened to be first. */
 static JSRuntime *g_declared_in;
 
+/* IS THIS NAME A ROW? THE ONE ANSWER TO A QUESTION THREE OTHER LISTS ASK, and it exists because a row's name
+   is written down in more than one place and every one of those places can be MISSPELLED. The witness table
+   above names a component per global; core/agent_state.h's registry names a component per declared slot,
+   twice over (a component naming its own row, and a SUB-component naming the row that releases it). None of
+   those spellings is checked by the compiler, so each of them is one keystroke from naming a component this
+   browser does not have — and in every case the damage is the same shape: the check that name was supposed to
+   reach is not weakened, it is never run, while some OTHER row reports a failure whose words describe a
+   different repair entirely. */
+static int platform_has_row(const char *name)
+{
+    int i;
+
+    DCHECK(name != NULL && *name, "the platform list was asked about a component with no name");
+    for (i = 0; i < PLATFORM_N; i++)
+        if (strcmp(PLATFORM[i].name, name) == 0) return 1;
+    return 0;
+}
+
 static void platform_check_table(void)
 {
     int i, k;
@@ -830,42 +848,74 @@ static void platform_check_table(void)
                    "second pool entry, and everything already chained to the first would answer out of an "
                    "object the realm has thrown away");
     }
-    for (i = 0; i < PLATFORM_WITNESS_N; i++) {
-        int found = 0;
-        for (k = 0; k < PLATFORM_N; k++)
-            if (strcmp(PLATFORM[k].name, PLATFORM_WITNESS[i].component) == 0) { found = 1; break; }
-        DCHECK(found, "a platform witness names a component this list does not have — the component was "
-                      "renamed or removed and the name it used to install is now owed by nobody, which is the "
-                      "state a stale exclusion rots into");
-    }
+    for (i = 0; i < PLATFORM_WITNESS_N; i++)
+        DCHECKF(platform_has_row(PLATFORM_WITNESS[i].component),
+                "the platform witness for `%s` names the component `%s`, and this list does not have it — the "
+                "component was renamed or removed and the name it used to install is now owed by nobody, "
+                "which is the state a stale exclusion rots into",
+                PLATFORM_WITNESS[i].name, PLATFORM_WITNESS[i].component);
 }
 
 /* THE THIRD COLUMN'S OWN OTHER SIDE. The witness table above asserts what a component INSTALLS; this asserts
    what a component HOLDS, and it is the same argument: a release column that is only ever RUN is unfalsifiable,
    because a release that frees a value and keeps its handle looks exactly like one that works.
  *
- * BOTH DIRECTIONS ARE THE SAME MISTAKE SEEN FROM ITS TWO ENDS. A row with a release that declared no agent
- * state is a release nothing can check — and the four defects core/agent_state.h names were all found by
- * reading rather than by any detector, which is what "cannot be checked" costs. A row with NO release that
+ * TWO OF THE THREE DIRECTIONS ARE THE SAME MISTAKE SEEN FROM ITS TWO ENDS. A row with a release that declared
+ * no agent state is a release nothing can check — and the four defects core/agent_state.h names were all found
+ * by reading rather than by any detector, which is what "cannot be checked" costs. A row with NO release that
  * declared agent state is the other one, and it is the shape of every leak this file's comments record: a C
  * static held for the whole agent with an empty third column, reported eventually as an anonymous Function or
- * a directory entry with nothing naming its owner. */
+ * a directory entry with nothing naming its owner.
+ *
+ * THE THIRD IS THE ONE NEITHER OF THOSE CAN ASK, AND IT RUNS FIRST BECAUSE THE OTHER TWO ARE ONLY HONEST
+ * AFTER IT. Both of them start from a ROW and ask the registry about the name on it, so both are structurally
+ * blind to a declaration that names no row at all — and a component's name is written TWICE, once at each
+ * `agent_state_*` call and once in the row above, with nothing but two authors' spelling between them. The
+ * cost of a mismatch is not a check that got weaker. It is a check that is NOT RUN (nothing ever asks whether
+ * anybody releases those slots) sitting behind a message that is WRONG (the row that does own them reports
+ * "declared no agent state", which is character-for-character what a component that really declared nothing
+ * produces). One answer, three states — the defect core/agent_state.h exists to refuse, arriving through the
+ * NAME rather than through a value.
+ * SO THE ORDER IS THE MECHANISM AND NOT A PREFERENCE: with the registry walk first, reaching the row loop at
+ * all is a PROOF that every declaration in this agent names a row, and the row loop's two messages can say so
+ * in their own words. Ambiguity is removed by making the ambiguous state unreachable before the ambiguous
+ * sentence can be printed, never by adding an adjective to the sentence. */
 static void platform_check_agent_state(void)
 {
 #if APICLIENT_DEV
+    const char *component, *what;
     int i;
 
+    for (i = 0; agent_state_slot(i, &component, &what); i++) {
+        if (platform_has_row(component)) continue;
+        DFAILF("`%s` declared %d slot(s) of agent state and THIS LIST HAS NO ROW OF THAT NAME; the first is "
+               "%s. Nothing about those slots is checked less carefully — the question is never ASKED. The "
+               "row pairing below can only ask \"does anybody RELEASE this?\" about a name a row carries, so "
+               "for these it is not run at all, and the row that really owns them is left reporting "
+               "\"declared no agent state\" in the exact words a component that declared nothing would use. "
+               "A SUB-COMPONENT NAMES THE ROW THAT RELEASES IT, NEVER ITS OWN FILE: core/dom/selection.c "
+               "declares under `document` and core/crypto/subtle_crypto.c under `crypto`, because that is "
+               "whose release column their release is reached from. So this is one of two repairs, and they "
+               "are not alike — either the owning row is misspelled at the declaration, or this component is "
+               "declared and released by nobody and owes a row here (core/agent_state.h)",
+               component, agent_state_count(component), what);
+    }
     for (i = 0; i < PLATFORM_N; i++) {
         int n = agent_state_count(PLATFORM[i].name);
 
         if (PLATFORM[i].release != NULL && n == 0)
-            DFAILF("%s is on the release column and declared no agent state — the release column is the "
-                   "inverse of the declaration, and a release with nothing declared against it cannot be "
-                   "asserted to have undone anything (core/agent_state.h)", PLATFORM[i].name);
+            DFAILF("`%s` is on the release column and NOTHING IN THIS AGENT DECLARED agent state under that "
+                   "name — and it is not a misspelling somewhere else, because the walk above has already "
+                   "proved that every declaration this agent made names a row. So the release column really "
+                   "is the inverse of nothing: agent_state_check_released holds no slot of this component's "
+                   "to assert, and a release that frees a value and keeps its handle is indistinguishable "
+                   "from one that works (core/agent_state.h)", PLATFORM[i].name);
         if (PLATFORM[i].release == NULL && n > 0)
-            DFAILF("%s declared agent state and has no release — what a C static holds for the whole agent "
-                   "is freed by nothing when the agent goes, which is what every leak this file's comments "
-                   "record already was", PLATFORM[i].name);
+            DFAILF("`%s` declared %d slot(s) of agent state and its row's release column is EMPTY — what a C "
+                   "static holds for the whole agent is freed by nothing when the agent goes, which is what "
+                   "every leak this file's comments record already was. If another component's release "
+                   "already reaches this one's, the declarations belong under THAT row's name, which is how "
+                   "a sub-component is declared (core/agent_state.h)", PLATFORM[i].name, n);
     }
 #endif
 }
