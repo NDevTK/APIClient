@@ -719,10 +719,20 @@ static int js_xhr_open_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
             return JS_ThrowDOMException(ctx, "InvalidAccessError",
                                         "a synchronous open() with a timeout or a responseType set"), -1;
         }
-        /* Step 10 terminates the fetch controller. There is nothing to cancel with the host — a placed request
-           is answered whether or not anybody still wants it — so what "terminate" means observably is that the
-           response is discarded, which step 11's `send() invoked = false` already decides: the lifecycle
-           machine's own "handle errors" returns immediately for an object that is not sending. */
+        /* Step 10 terminates the fetch controller ("A fetch can be ongoing at this point"). What "terminate"
+           means for the RESPONSE is that it is discarded, which step 11's `send() invoked = false` already
+           decides: §3.5.6's "handle errors" step 1 returns for an object that is not sending, and the
+           lifecycle machine's XR_RESPONSE reads that and finishes without firing anything.
+           NAMED RESIDUAL — that is correct for the response and NARROWER than step 10, which also stops the
+           TRANSFER. NOT COVERED: the rendezvous the in-flight send parked on is left outstanding, so the
+           trusted zone finishes a fetch whose reply nothing will read (§3.5.7 "The abort() method" calls that
+           "any network activity"). WHAT THE NEXT DIFF BUILDS: the fetch controller reachable from the OBJECT
+           rather than from the lifecycle machine's step state — this method and §3.5.7's are different
+           machines and neither can see the other's `s->req` — so both can call solver/engine.h's
+           `engine_host_terminate`, which js_xhr_run_fini already calls for §3.2 Garbage collection. HOW ITS
+           ABSENCE SHOWS: `open()` during a send leaves one entry in the frontier's outstanding join and the
+           census reports the ask unpaid and unwithdrawn (hostAsked − hostAnswered − hostTerminated) until the
+           zone's own reply lands and is refused by engine_host_answer as naming no register. */
         /* Step 11. */
         xhr_reset_request(ctx, d);
         xhr_set(ctx, d, &d->method, JS_NewString(ctx, norm));
@@ -2057,12 +2067,20 @@ error_steps:
  * Nothing takes that entry afterwards: it is a register slot whose only reader has been freed, which is
  * precisely the leak §COW names — malloc'd platform state the runtime's own GC walk cannot see.
  *
- * IT CANNOT BE DISCHARGED YET AND THAT IS WHAT THIS SAYS. engine.h has engine_host_request /
- * engine_host_answered / engine_host_take and NO terminate: an outstanding id can be waited on or taken, never
- * withdrawn, so there is no operation here that means "terminate". Taking an already-arrived answer and
- * dropping it is not the same act and must not stand in for it — it would leave an unanswered request
- * outstanding for ever while reporting success for the answered one. The next diff builds
- * `engine_host_terminate(uint32_t req)` beside those three, and this becomes its call.
+ * AND IT IS DISCHARGED BY WITHDRAWING THE RENDEZVOUS, which is what `engine_host_terminate` is: Fetch §2
+ * Infrastructure's "To terminate a fetch controller controller, set controller's state to 'terminated'" —
+ * the entry leaves whichever register holds it, the flow that was BLOCKED on it (pending_blocked) is made
+ * askable again, and the trusted zone is asked to stop the transfer. Terminate and not ABORT: §2
+ * Infrastructure's abort carries an "AbortError" DOMException to deliver, and §3.2's object has been collected,
+ * so there is no continuation left standing at the read for one to be raised at.
+ *
+ * A REPLY THAT HAS ALREADY LANDED ON THE ENTRY GOES WITH IT, and that is this paragraph's correction rather
+ * than a loss: it used to say taking an already-arrived answer and dropping it "is not the same act and must
+ * not stand in for it". The act it warned about was taking through `engine_host_take`, which is a machine
+ * consuming its answer and would leave an UNANSWERED sibling entry outstanding for ever. Withdrawal asks the
+ * register a different question — it removes the entry whatever state it is in — and a value whose only reader
+ * has been freed is a reply, never a work item. §3.5.1 "The open() method" step 10 says the same thing from the
+ * other end: "Terminate this's fetch controller. A fetch can be ongoing at this point."
  *
  * `take_result` is not read because this machine's completion is undefined on every path — the driver's own
  * `fini ? fini(…) : JS_UNDEFINED` is what it returned before this existed, and the return is unchanged. */
@@ -2070,13 +2088,15 @@ static JSValue js_xhr_run_fini(JSContext *ctx, void *st, bool take_result)
 {
     JSXhrRunState *s = st;
 
-    (void)ctx; (void)take_result;
-    DCHECK(s->req == 0,
-           "an XMLHttpRequest's lifecycle machine was torn down while its request was still outstanding with "
-           "the trusted zone — XHR §3.2 Garbage collection requires the fetch controller to be TERMINATED when "
-           "the object goes away with its connection open, and engine.h has no terminate for a host request "
-           "(only request/answered/take), so this register entry now has no reader at all: build "
-           "engine_host_terminate(req) and call it here");
+    (void)take_result;
+    if (s->req) {
+        engine_host_terminate(ctx, s->req);
+        /* AND THE CONTROLLER IS SPENT. `fini` is called once per state, so a second read of this field is
+           unreachable through the driver — which is exactly why it is cleared here rather than left: the field
+           is this component's fetch controller and a torn-down machine has none, so anything that could still
+           see the state must see that. */
+        s->req = 0;
+    }
     return JS_UNDEFINED;
 }
 

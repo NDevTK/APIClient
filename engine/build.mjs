@@ -205,7 +205,8 @@ const loadNow = () => {
 const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "finished", "deepest", "completed", "sold", "forks",
                      "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
-                     "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "pagedReqs",
+                     "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "hostTerminated",
+                     "pagedReqs",
                      "decEntries", "decKiB", "headEntries", "headKiB",
                      "domHeadEntries", "domHeadKiB", "jobs", "pend", "pendKiB",
                      "miscKiB", "perFlowKiB",
@@ -709,6 +710,11 @@ function censusReading(out) {
                   payments for one ask, and the ratio this line exists to show was three times the truth. */
                (c.b.hostAnswersExtra ? `, +${c.b.hostAnswersExtra} extra peer-timeline answer(s)` : ``) +
                (c.b.hostAnswersLate ? `, ${c.b.hostAnswersLate} refused after close` : ``) +
+               /* AND HOW MANY ASKS THE ENGINE TOOK BACK. A withdrawn rendezvous (Fetch §2 Infrastructure's
+                  terminate a fetch controller) is an ask that will never be paid and is not a failure to pay,
+                  so without this row the ratio above reads as a host falling behind by exactly the number of
+                  fetches the page itself cancelled. */
+               (c.b.hostTerminated ? `, ${c.b.hostTerminated} withdrawn` : ``) +
                (c.b.pagedReqs ? `, ${c.b.pagedReqs} taken by a sale` : ``) +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
                `; forks ${c.b.forks}` +

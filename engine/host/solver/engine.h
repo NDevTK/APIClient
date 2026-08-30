@@ -565,6 +565,66 @@ JSValue  engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion);
    the machine is ABRUPT. Returns JS_STEP_DONE or JS_STEP_ABRUPT (quickjs-step.h) — one place that knows a
    peer's throw comes back as a throw, rather than that knowledge copied into each machine. */
 int      engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult);
+
+/* WITHDRAW THE RENDEZVOUS — Fetch §2 Infrastructure's "To terminate a fetch controller controller, set
+ * controller's state to 'terminated'", which is the THIRD thing that can happen to an outstanding id and the
+ * only one this seam did not have. It could be waited on (engine_host_answered) or taken (engine_host_take);
+ * it could not be given back, and the two callers that must give one back are named in the spec: XHR §3.5.1
+ * "The open() method" step 10 ("Terminate this's fetch controller. A fetch can be ongoing at this point.") and
+ * XHR §3.2 "Garbage collection" ("If an XMLHttpRequest object is garbage collected while its connection is
+ * still open, the user agent must terminate the XMLHttpRequest object's fetch controller").
+ *
+ * WHAT IT IS FOR IS A FLOW THAT WOULD OTHERWISE BE BLOCKED BY NOBODY. An unanswered synchronous request is what
+ * makes a flow blocked (pending_blocked, and engine_host_request asserts it at the ask), and the mark comes off
+ * only at a HOST EVENT — so when the machine standing at the call site is DESTROYED, its entry stays on the
+ * register with no reader and the flow is never picked again. That is not a slow flow, it is a flow removed
+ * from the frontier with nothing anywhere to say so, and §scheduler's razor calls a resume that forgets a flow
+ * a CAP. This is the host event that ends it: the entry leaves and flow_clear_host_owed runs, so the flow is
+ * askable again on the very next pick, with its snapshot and its remaining work untouched.
+ *
+ * IT IS `terminate` AND NOT `abort`, WHICH FETCH MAKES TWO OPERATIONS AND NOT TWO SPELLINGS. §2 Infrastructure
+ * defines both over the same struct: "To abort a fetch controller controller with an optional error" sets the
+ * state to "aborted" and records an "AbortError" DOMException as the serialized abort reason, while terminate
+ * sets the state to "terminated" and carries NO error at all. A fetch params is "canceled" under either. The
+ * difference is whether an ERROR IS DELIVERED SOMEWHERE, and at a terminate there is by construction nowhere
+ * to deliver one — §3.2's XMLHttpRequest object has been collected and §3.5.1's has been re-`open`ed, so the
+ * continuation that would have caught it no longer exists. Delivering an "AbortError" here anyway would be a
+ * throw raised at a call site nobody is standing at, and a value freed by the unwind is the drop this entry
+ * exists to prevent wearing the costume of preventing it.
+ *
+ * NAMED RESIDUAL — this is CORRECT for terminate and NARROWER than §2 Infrastructure's pair.
+ *   NOT COVERED: "abort a fetch controller", whose error IS delivered — XHR §3.5.7 "The abort() method" step 1,
+ *     and Fetch §5.6 "Fetch methods"' "To abort a fetch() call … Reject promise with error".
+ *   WHAT THE NEXT DIFF BUILDS: `engine_host_abort(ctx, req, reason)` beside this, answering the rendezvous with
+ *     ENGINE_COMPLETION_THROW so engine_host_take_completion re-raises the reason at the parked call site —
+ *     which needs the id to be reachable from the object the page aborts (XHR's controller lives in the
+ *     lifecycle machine's step state, and §3.5.7 is a different machine), and needs `fetch()` to carry a
+ *     `signal` at all.
+ *   HOW ITS ABSENCE WOULD SHOW: a page that calls `xhr.abort()` mid-flight fires §3.5.7's own abort/loadend
+ *     and then fires them A SECOND TIME when the reply the zone was never told to stop finally lands and the
+ *     parked machine reaches §3.5.6's "handle errors" with the aborted flag set.
+ *
+ * THE ZONE IS ASKED, NEVER TOLD BY THE REGISTER. §3.5.7 says abort() "Cancels any network activity", and the
+ * network is the trusted zone's alone (SECURITY.md: all of it through the one chokepoint) — so stopping the
+ * transfer is a REQUEST that leaves on the one-way notice line as `hostreq.terminate<TAB><id>`, exactly as
+ * `remoteop.retracted` hands back a cross-agent question. The engine decides nothing about it and does not
+ * wait for it: withdrawal of the ENGINE'S half is complete when the entry is gone.
+ *
+ * A LATE ANSWER TO A WITHDRAWN ID IS ALREADY HANDLED and is not this function's problem to prevent: a value the
+ * trusted zone computed names no register once the entry has left, which engine_host_answer's ENGINE_ANSWER_HOST
+ * arm returns 0 for — "nobody is waiting" — so a transfer already in flight when the notice was written lands
+ * harmlessly. That is why the notice is an optimisation of the NETWORK and never of the register.
+ *
+ * IT ANSWERS NOTHING, AND THAT IS A STATEMENT RATHER THAN AN OMISSION. The one fact it could hand back —
+ * whether a register still named the id — is not one any caller can act on: the flow that asked may have
+ * finished or been freed with its document (HTML §7.5.10 "Destroying documents"), and from a call site that is
+ * itself a teardown that is indistinguishable from a machine holding an id its own take had already spent. A
+ * value computed for nobody to read is the mirror of the field nobody writes, so the boolean arrives on the day
+ * a caller can assert on it — §3.5.1's step 10 is that caller, because a re-`open`ed object's flow is alive by
+ * construction — and not before. The withdrawal is COUNTED instead (EngineFrontierCensus's host_terminated),
+ * which is the reading a session genuinely has a use for. */
+void     engine_host_terminate(JSContext *ctx, uint32_t req);
+
 /* WHO COMPUTED THE ANSWER, and it is a parameter because the two have different MULTIPLICITIES — the one thing
  * about a delivery that only the caller can state.
  * A HOST answer is a value the trusted zone computed ITSELF (§7.4 step 14's load, XHR §3.5.6's fetch): there is
@@ -854,6 +914,13 @@ typedef struct {
                               * each of which forks an arm. Not a payment: it unblocks nothing, and adding it
                               * into `host_answered` is what made one ask read as four. */
     long host_answers_late;  /* answers refused because the session had already closed */
+    /* …AND ASKS THIS INSTANCE WITHDREW (engine_host_terminate), WHICH IS THE ONE POPULATION THE PAYMENT RATE
+     * CANNOT SEE. `asked` counts mints and `answered` counts settlements, so a terminated id is an ask that
+     * will never be paid and a widening gap is the rate's own signature for "the host is not paying" — the
+     * diagnosis that pair exists to make in a glance, read backwards. A terminate is the engine RETRACTING the
+     * question, so it belongs beside the two rather than inside either: `hostAsked - hostAnswered -
+     * hostTerminated` is what is genuinely outstanding. */
+    long host_terminated;    /* rendezvous ids WITHDRAWN — Fetch §2 Infrastructure's terminate-a-fetch-controller */
     long paged_reqs;         /* synchronous requests a sale took with it */
 } EngineFrontierCensus;
 void engine_frontier_census(EngineFrontierCensus *out);

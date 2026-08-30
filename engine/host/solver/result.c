@@ -378,7 +378,7 @@ char *result_cold_json(void) {
                  "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"sold\":%ld,\"forks\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
                  "\"hostAsked\":%ld,\"hostAnswered\":%ld,\"hostAnswersExtra\":%ld,"
-                 "\"hostAnswersLate\":%ld,\"pagedReqs\":%ld,"
+                 "\"hostAnswersLate\":%ld,\"hostTerminated\":%ld,\"pagedReqs\":%ld,"
                  "\"decEntries\":%ld,\"decKiB\":%ld,\"headEntries\":%ld,\"headKiB\":%ld,"
                  "\"domHeadEntries\":%ld,\"domHeadKiB\":%ld,\"jobs\":%ld,\"pend\":%ld,\"pendKiB\":%ld,"
                  "\"miscKiB\":%ld,\"perFlowKiB\":%ld,"
@@ -388,7 +388,8 @@ char *result_cold_json(void) {
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.deepest, e.completed, e.sold, e.forks,
                  resumed.orphans, e.claims_met, e.claims_unmet,
-                 e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.paged_reqs,
+                 e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,
+                 e.paged_reqs,
                  c.dec_entries, c.dec_bytes / 1024, c.head_entries, c.head_bytes / 1024,
                  c.dom_head_entries, c.dom_head_bytes / 1024, c.job_count, c.pend_count,
                  c.pend_bytes / 1024, c.misc_bytes / 1024,

@@ -444,6 +444,14 @@ static long g_host_answers_extra;
  * because a refusal nobody can see is a drop: `hostAnswersLate` climbing while `hostAnswered` does not is a
  * host paying an instance that has already stopped listening. */
 static long g_host_answers_late;
+/* …AND HOW MANY THIS ENGINE WITHDREW BEFORE ANYBODY ANSWERED THEM. It is the fourth member of the family above
+ * and it exists for the family's own reason: the pair is a RATE, and a rate whose numerator can never reach its
+ * denominator reports a host that is not paying. A terminated id is an ask the engine took BACK (Fetch §2
+ * Infrastructure's terminate a fetch controller — see engine_host_terminate), so it is neither a payment nor an
+ * unpaid ask, and folding it into either is the same defect as folding an extra peer TIMELINE's answer into
+ * `g_host_answered`: one number describing two populations, with only the ORDER of the two to say so.
+ * NOT RESET at a session boundary, with the other four and for their reason. */
+static long g_host_terminated;
 
 /* THE ONE PLACE A RENDEZVOUS ID IS MINTED, and therefore the one place an ASK is counted. There are two callers
    — a machine issuing a request, and a blocked flow's fork re-issuing the one record it may not share — and
@@ -687,6 +695,82 @@ int engine_host_take_completion(JSContext *ctx, uint32_t req, JSValue *presult) 
            "operation completes normally or throws, and `return`/`break`/`continue` do not cross a call site");
     *presult = v;
     return JS_STEP_DONE;
+}
+
+/* WITHDRAW THE RENDEZVOUS — see engine.h for which of Fetch §2 Infrastructure's two controller operations this
+ * is and why the other one is a different function rather than a parameter.
+ *
+ * IT WALKS THE FRONTIER AND NOT THE RUNNING FLOW, and that is not defensiveness. The two call sites this exists
+ * for are both TEARDOWNS — a step machine's `fini` under an exception unwind, and a document being destroyed
+ * (HTML §7.5.10 "Destroying documents") — and neither of those is a point at which `flow_running()` is
+ * guaranteed to be the flow whose register holds the id. The walk is engine_host_answer's exactly, for the
+ * identical reason it gives: an unanswered synchronous request is the ONE record a fork does not share
+ * (engine_sibling_assemble calls pending_unshare and mints a fresh id, because its answer is computed under the
+ * asking flow's world), so exactly one register can name this id and the first hit is the only hit.
+ *
+ * AN ANSWER ALREADY ON THE ENTRY IS DISCARDED, WHICH IS THE SPEC'S OWN WORD AND NOT A DROP THIS FILE IS
+ * TAKING. A terminate can race a delivery: the zone answers between two steps and the machine that would have
+ * taken the value is torn down before the flow runs again. The value's only reader is gone, so what is freed
+ * here is a reply and never a work item — the flow keeps its snapshot, its remaining programs and its place in
+ * the order, and it is UNBLOCKED by this line rather than by anything it could still have read. §3.5.1's step
+ * 10 makes the same statement from the other end ("A fetch can be ongoing at this point") and §3.5.6's response
+ * is set to a network error by the steps that follow it, which is a reply being thrown away by name.
+ *
+ * A SESSION THAT IS OVER IS REFUSED BEFORE THE WALK, exactly as a late answer is (see g_host_answers_late).
+ * There is no scheduler left to pick the flow this would unblock, the flows are held only for the teardown to
+ * free, and the notice would be appended to a buffer nothing will drain again — so touching either would be
+ * bookkeeping about a frontier that has stopped existing. It is still COUNTED, because a refusal nobody can
+ * see is a drop. */
+void engine_host_terminate(JSContext *ctx, uint32_t req) {
+    int held = 0;
+
+    DCHECK(ctx != NULL, "a host request was withdrawn with no context to free its register entry through");
+    DCHECK(req != 0, "a host request with no id was withdrawn — the id is the only thing that names which "
+                     "rendezvous is being given back, so a 0 withdraws nothing and leaves its flow blocked");
+    if (!g_sess_live) {
+        g_host_terminated++;
+        return;
+    }
+    for (int k = 0; ; k++) { Flow *f = flow_at(k); if (!f) break;
+        for (int i = 0, n = pending_count(f->pending); i < n; i++) {
+            JSValue p = pending_entry(f->pending, i);
+            if (pending_get_int(p, PEND_KIND) != FLOW_PENDING_HOSTREQ ||
+                (uint32_t)pending_get_int(p, PEND_REQ) != req) { JS_FreeValue(ctx, p); continue; }
+            /* AN ARM'S ENTRY IS NOT THE ISSUER'S AND MUST NOT BE WITHDRAWN THROUGH ITS ID. An answer fork
+               leaves the arm holding the SAME rendezvous id (the id lives in the step state inside the frame
+               the arm is a clone of) with its answer FIXED — engine_host_answer skips exactly those — so a
+               terminate that took the first hit could unblock an arm while leaving the issuer parked, which is
+               the reverse of what it was asked to do and is silent at both ends. */
+            DCHECK(!pending_get_int(p, PEND_ANSWER_FIXED),
+                   "a rendezvous was withdrawn through the register of an ARM rather than the ISSUER — the arm "
+                   "carries the issuer's id with its answer already FIXED, so this would unblock a flow that "
+                   "was never waiting and leave the one that is");
+            JS_FreeValue(ctx, p);
+            pending_remove(&f->pending, i);
+            /* AND THE FLOW IS ASKABLE AGAIN. This is the host event flow_set_host_owed's mark waits for, and
+               it is the whole point of the call: the mark lives until the host does something that could have
+               answered it, and a withdrawal is the host being told it never will. Without this line the entry
+               would be gone and the flow would still be skipped at every pick, which is the blocked-forever
+               state one indirection further in and harder to see. */
+            flow_clear_host_owed(f);
+            held = 1;
+            break;
+        }
+        if (held) break;
+    }
+    g_host_terminated++;
+    /* AND THE ZONE IS ASKED TO STOP THE TRANSFER — §3.5.7 "The abort() method"'s "Cancels any network
+       activity", which is the half only the trusted zone can perform because the network is its alone. A
+       one-way notice and not a request: nothing here waits for it, the engine's own withdrawal is already
+       complete, and a transfer that lands anyway is refused harmlessly at engine_host_answer's
+       ENGINE_ANSWER_HOST arm. Sent whether or not a register held the id, because the transfer is the zone's
+       state and not this register's — a machine whose flow was already freed leaves exactly the same fetch
+       running. */
+    {
+        char rec[48];
+        snprintf(rec, sizeof rec, "hostreq.terminate\t%u", req);
+        engine_host_notify(ctx, rec);
+    }
 }
 
 /* Deliver an answer. Routed by id to the call site that asked — never broadcast the way a fetched body is,
@@ -6608,14 +6692,14 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
            "the HOST that was shown the requests, so it crosses a session boundary with them; it must be "
            "carried into this session, never zeroed, or the first reply that arrives for a sold flow is "
            "reported as the host's pairing being off");
-    /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late are the INSTANCE's
-       totals, not a session's — an instance opens one session, and a rate that restarted would be a level
-       again (see g_host_asked).
+    /* NOT RESET: g_host_asked/g_host_answered/g_host_answers_extra/g_host_answers_late/g_host_terminated are
+       the INSTANCE's totals, not a session's — an instance opens one session, and a rate that restarted would
+       be a level again (see g_host_asked).
        AND THIS LINE IS WHY "A COUNTER SURVIVED A SESSION BOUNDARY" IS NOT A HYPOTHESIS THE CENSUS'S PAIRING
-       ASSERT CAN BE ANSWERED WITH. All four are on this list together, so a total carried into a second session
-       carries every term of the inequality and preserves its ORDER; there is no reading of a survival that
-       makes `answered` overtake `asked`. A reader standing at that abort is looking at a mint or a credit, not
-       at a lifetime — which is what its message now says, and what it used to send them away from. */
+       ASSERT CAN BE ANSWERED WITH. All of them are on this list together, so a total carried into a second
+       session carries every term of the inequality and preserves its ORDER; there is no reading of a survival
+       that makes `answered` overtake `asked`. A reader standing at that abort is looking at a mint or a credit,
+       not at a lifetime — which is what its message now says, and what it used to send them away from. */
     /* WHAT AN UNCANCELLED REJECTION MEANS is this half's answer: the browser half fires the event and honours
        preventDefault, and a reason that survives that is a page error exactly like a script that threw. */
     unhandled_rejection_set_report_hook(result_page_error_value);
@@ -7692,6 +7776,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->host_answered      = g_host_answered;
     out->host_answers_extra = g_host_answers_extra;
     out->host_answers_late  = g_host_answers_late;
+    out->host_terminated    = g_host_terminated;
     out->paged_reqs         = g_paged_reqs;
     /* THE PAYMENT PAIR IS AN INEQUALITY AND IT IS ASSERTED HERE, at the one place both halves are read
        together. `answered` counts the asks this session SETTLED; `asked` counts the ids it minted. A settled
