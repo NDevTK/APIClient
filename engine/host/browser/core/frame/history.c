@@ -251,6 +251,14 @@ bool history_document_can_have_url_rewritten(JSContext *ctx, const char *target_
  * so `if (hdr->stage == HPR_UPDATE) goto update;` fired on the first entry and jumped past the serialization,
  * the URL parse and both SecurityError refusals into a §7.4.4 work record nobody had begun. The member holds
  * only that work record, which is why the head had nothing of its own to leave behind and the jump was silent. */
+/* THE OPERATION STEP 5 PERFORMS, NAMED ONCE — solver/concolic.h's builtin derivation composes it into the
+   result's SHAPE and into its IDENTITY, so it is what tells this derivation from every other one over the same
+   operand and what a report prints beside the route. It names the standard's own algorithm ("set newURL to the
+   result of ENCODING-PARSING A URL given url, relative to the relevant settings object of history") rather
+   than the member, because §7.4.4's opening sentence is that pushState and replaceState are merely its
+   best-known callers and a caller added later performs the same parse. */
+#define HPR_ENCODING_PARSE "encodingParseURL"
+
 #define HPR_STAGES(X)                                                                                     \
     X(HPR_CHECKS,   "HTML §7.2.5 shared history push/replace state steps 1-6 (the fully-active check, "    \
                     "StructuredSerializeForStorage(data), encoding-parsing url, "                          \
@@ -267,12 +275,17 @@ static const char *const HPR_STEPS[] = { HPR_STAGES(JS_STEP_STAGE_LABEL) NULL };
    5 compute serializedData and newURL; step 10 uses both; and the navigate event fires BETWEEN them, running
    every `navigate` listener the page has. A listener can push its own entry, replace the address, or navigate
    away — so newURL re-derived after the dispatch would be a different URL, and the serialization would be of a
-   value the page has since mutated. The two ride the machine's state as a string and an ArrayBuffer, which is
-   what parks; §7.2.6.10.4's own work record takes its copy of both for exactly the same reason. */
+   value the page has since mutated. The two ride the machine's state as a VALUE and an ArrayBuffer, which is
+   what parks; §7.2.6.10.4's own work record takes its copy of both for exactly the same reason.
+   AND newURL PARKS AS A VALUE RATHER THAN AS ITS BYTES, which is what makes the address primitive survive a
+   suspension at all: the navigate event is a rest point, so between step 5 and step 8 this flow can be
+   outranked, snapshotted and resumed — and an address reduced to a string at the park would come back
+   concrete, with the arm a later `location.pathname` branch would have forked already gone. The slot is walked
+   by hpr_visit like every other, so it is a reference the delta and the collector both see. */
 typedef struct {
     SessionHistoryUrlUpdate w;
     NavigateEventFireWork   fire;
-    JSValue                 new_url;   /* step 5's newURL, serialized (owned string) */
+    JSValue                 new_url;   /* step 5's newURL — the ADDRESS VALUE, owned (see core/dom/document.h) */
     JSValue                 classic;   /* step 3's serializedData, as the bytes (owned ArrayBuffer) */
 } HprState;
 
@@ -348,67 +361,34 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
            position is declared IDL_USVSTRING_NULLABLE and core/idl_args.h's IDL_CONCOLIC_CROSSES rule hands
            this body a concolic UNCONVERTED on purpose — opacity has to SURVIVE a coercion or the value stops
            forking control flow — so "the USVString the IDL conversion produced" is a claim this position
-           cannot make, and the JS_ToCString below dies one frame on, in js_force_tostring, naming this line
+           cannot make, and a JS_ToCString here would die one frame on, in js_force_tostring, naming this line
            as a byte consumer and nothing else.
-           IT IS ASKED HERE RATHER THAN LEFT TO THAT BOUNDARY BECAUSE THAT BOUNDARY'S REMEDY IS WRONG FOR THIS
-           SITE, and wrong in the direction that ships. It tells a site that wants a NAME to ask the unknown
-           for its display SHAPE, which is the right answer for a selector and for Fetch §5.4 `fetch(input,
-           init)`, where core/fetch/fetch.c reads the shape and then holds `url_is_real` false so nothing is
-           ever requested at it. There is no such second fact here. This string becomes the DOCUMENT'S OWN
-           ADDRESS at HTML §7.4.4 "Non-fragment synchronous \"navigations\"" step 8, and on the line before
-           that it is DECLARED A PAGE OF THIS APPLICATION (solver/route_seed.h) — a declaration the trusted
-           zone LOADS, same-origin, over the person's own session. So a shape taken here seeds
-           `…/admin/%7Bstate%7D.id`: an address no server has, fetched under the person's name, and then the
-           reply's fields are examples that shape the next endpoint. That is §@H's never-invent one navigation
-           further out than §@H usually has to say it.
-           WHAT TO BUILD, AND THE TWO ARMS ARE DIFFERENT CAPABILITIES RATHER THAN TWO SPELLINGS OF ONE.
-           WITH AN EXAMPLE, the run COMPUTED this address by running the real operations on real concretes
-           (`"/u/" + {reply}.id` ⇒ `/u/8812`), and that is exactly the surface solver/route_seed.h exists for:
-           a page the bundle NAMES out of a value it learned, which no link exposes and no session reached.
-           What is missing is not the string — it is a Document ADDRESS THAT CARRIES AN EXAMPLE AND A DOMAIN.
-           Writing the bare example into the UrlRecord below would collapse a value that is
-           opaque-for-control-flow to bare-concrete, so a later `location.pathname.startsWith("/admin")` would
-           be DECIDED instead of forking and that arm would be lost with nothing to say so. That is the
-           shortcut, not the fix, and it is why this arm is not answered by reading the example here.
-           WITH NO EXAMPLE, the run does not know where this Document went. A Document whose address is
-           unknown is the thing that does not exist yet, and until it does there is no newURL for step 5 to
-           produce and no page for route_seed to declare. Neither arm is answerable by a coercion. */
-#if APICLIENT_DEV
-        if (concolic_is(argv[2])) {
-            const char *sh = concolic_shape_c(argv[2]);
-            JSValue ex = concolic_example(ctx, argv[2]);
-            int has_example = !JS_IsUndefined(ex);
-
-            JS_FreeValue(ctx, ex);
-            DCHECK(sh != NULL,
-                   "an unknown reached §7.2.5's step 5 with no display shape — the shape is the only thing "
-                   "this site can say about an address it cannot know, and a value that has lost it names "
-                   "neither the route that was declared nor the source it was built from");
-            DFAILF("HTML §7.2.5 \"The History interface\"'s shared history push/replace state steps step 5 "
-                   "was handed UNKNOWN EXTERNAL INPUT `%s` as its `url`, and %s. This is the routing member "
-                   "every client-side router uses to say \"this address is a page of my application\", so "
-                   "this is the ONE gate the whole route-seeding surface passes through (§7.4.4's URL and "
-                   "history update steps have exactly this one caller). DO NOT COERCE IT AND DO NOT TAKE ITS "
-                   "SHAPE: the string becomes the Document's address at §7.4.4 step 8 and is declared a page "
-                   "of this application at the line before it (solver/route_seed.h), and the trusted zone "
-                   "LOADS a declared page over the person's own session — a shape would seed an address no "
-                   "server has and learn examples from the reply. %s",
-                   sh,
-                   has_example ? "IT CARRIES A CONCRETE EXAMPLE, so the run computed a real address"
-                               : "IT CARRIES NO EXAMPLE, so the run does not know this Document's address",
-                   has_example
-                     ? "BUILD: a Document address that carries an EXAMPLE AND A DOMAIN, so §7.4.4 step 8 and "
-                       "route_seed_declare take the computed address while a later `location.pathname` read "
-                       "still forks. Writing the bare example into the UrlRecord instead collapses an "
-                       "opaque-for-control-flow value to bare-concrete and silently deletes that arm."
-                     : "BUILD: the Document whose address is UNKNOWN. Until it exists there is no newURL for "
-                       "step 5 to produce, and inventing one from the shape is the false page this assert "
-                       "exists to refuse.");
-        }
-#endif
-        url_arg = JS_ToCString(ctx, argv[2]);
-        CHECK(url_arg != NULL, "history: the USVString the IDL conversion produced could not be read");
+           THE REMEDY THAT BOUNDARY OFFERS IS WRONG FOR THIS SITE, and wrong in the direction that ships. It
+           tells a site that wants a NAME to ask the unknown for its display SHAPE, which is the right answer
+           for a selector and for Fetch §5.4 `fetch(input, init)`, where core/fetch/fetch.c reads the shape and
+           then holds `url_is_real` false so nothing is ever requested at it. There is no such second fact
+           here: this string becomes the DOCUMENT'S OWN ADDRESS at HTML §7.4.4 "Non-fragment synchronous
+           \"navigations\"" step 8, and on the line before that it is DECLARED A PAGE OF THIS APPLICATION
+           (solver/route_seed.h) — a declaration the trusted zone LOADS, same-origin, over the person's own
+           session. A shape taken here seeds `…/admin/%7Bstate%7D.id`: an address no server has, fetched under
+           the person's name, whose reply's fields are then examples that shape the next endpoint.
+           SO THE ADDRESS IS A VALUE, AND THIS TAKES ITS EXAMPLE FOR THE PARSE AND CARRIES THE VALUE ITSELF TO
+           STEP 8. core/dom/document.h's document_url_value is the primitive; `document_address_example` is the
+           one place a value is spent for its bytes, and it is where the OTHER arm — a concolic carrying no
+           example, which is a Document whose address this run does not know — crashes by name for all three
+           of the arrivals that make a computed value an address. */
+        url_arg = document_address_example(ctx, argv[2]);
     }
+    /* STEP 5's EMPTINESS TEST IS DECIDED BY THE EXAMPLE, WHICH IS NARROWER THAN THE SPEC AND IS NOT WRONG.
+       This is the engine running the real predicate on the real concrete, which is how every example in this
+       solver propagates — a computed route whose example is `/routes/us-east-1/admin` is not empty, and one
+       whose example is "" left the address alone on this path exactly as the standard says. WHAT IS NOT
+       COVERED: the DOMAIN of an unpinned address permits both, so a browser could take the other arm and this
+       flow does not fork one. WHAT THE NEXT DIFF BUILDS: the test becomes a predicate over the value
+       (concolic_new_rel + solver_decide, the seam every JavaScript-level branch on an unknown already goes
+       through), so the sibling arm keeps the document's own address. HOW ITS ABSENCE SHOWS: a bundle whose
+       route builder can return "" declares one page where a forked engine would declare that page AND leave a
+       sibling flow standing on the unchanged address. */
     if (url_arg && *url_arg) {
         /* "Set newURL to the result of ENCODING-PARSING A URL given url, relative to the relevant settings
            object of history" — whose API base URL is this document's address, already parsed above. */
@@ -452,8 +432,30 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        made. */
     new_url = have_target ? url_serialize(&target, false) : url_serialize(&doc_url, false);
     CHECK(new_url != NULL, "history: the new address could not be serialized");
-    s->new_url = JS_NewString(ctx, new_url);
-    CHECK(!JS_IsException(s->new_url), "history: the new address could not be held across the navigate event");
+    /* newURL IS A VALUE, AND STEP 5'S ENCODING-PARSE IS THE OPERATION THAT PRODUCED IT. Where the argument was
+       unknown external input the parse is a DERIVATION of it: the bytes above are what the REAL parser and the
+       REAL serializer computed from that value's own example, which is the only way an example is ever filled
+       in this engine, and the derived value keeps the domain and the root the argument entered the program
+       with. So §7.4.4 step 8 installs an address a `location.pathname` branch still forks on, while
+       route_seed_declare one line earlier takes `/routes/us-east-1/admin` and not a shape.
+       AND ONLY WHERE STEP 5 ACTUALLY PARSED IT. With no target the standard's step 4 default stands — the
+       Document's OWN address — and that is a fact about this Document rather than about the argument, so
+       deriving it from the argument would name a dependence the algorithm does not have. */
+    {
+        JSValue serialized_url = JS_NewString(ctx, new_url);
+
+        CHECK(!JS_IsException(serialized_url),
+              "history: the new address could not be held across the navigate event");
+        if (have_target && concolic_is(argv[2])) {
+            s->new_url = concolic_builtin_hook(ctx, argv[2], HPR_ENCODING_PARSE, serialized_url);
+            DCHECK(concolic_is(s->new_url),
+                   "§7.2.5 step 5's encoding-parse over unknown input answered with something that is not a "
+                   "derivation — the operand is unknown, so the result is, and a plain string here is the "
+                   "collapse to bare-concrete that deletes the arm §7.4.4 step 8 installs this value for");
+        } else {
+            s->new_url = serialized_url;
+        }
+    }
     s->classic = JS_NewArrayBufferCopy(ctx, serialized.buf, serialized.len);
     CHECK(!JS_IsException(s->classic),
           "history: the serialized state could not be held across the navigate event");
@@ -509,15 +511,15 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        BORROWED view of the ArrayBuffer's storage, so it is not freed through structured_data_free — the buffer
        owns those bytes and the machine's declaration frees the buffer. */
     {
-        const char *url = JS_ToCString(ctx, s->new_url);
         StructuredData held;
 
-        CHECK(url != NULL, "history: the new address could not be read back after the navigate event");
         held.buf = JS_GetArrayBuffer(ctx, &held.len, s->classic);
         DCHECK(held.buf != NULL, "history: the serialized state held across the navigate event is not the "
                                  "bytes — this machine's own stage above is the only writer of that slot");
-        session_history_url_update_begin(ctx, &s->w, url, &held, magic == HIST_PUSH);
-        JS_FreeCString(ctx, url);
+        /* newURL GOES OVER AS THE VALUE IT IS. It used to be read back through JS_ToCString here, which was
+           the last place the address was still a value and the first place it stopped being one — and §7.4.4
+           step 8 is precisely the consumer that needs the half a C string cannot carry. */
+        session_history_url_update_begin(ctx, &s->w, s->new_url, &held, magic == HIST_PUSH);
     }
     STEP_GOTO(hdr->stage, HPR_UPDATE, &s->fire.phase, &s->fire.abort.phase,
               &s->fire.abort.sig.phase, &s->w.nav.phase, NULL);

@@ -1,9 +1,12 @@
 /* THE LOCATION INTERFACE — HTML §7.2.4 "The Location interface", Blink core/frame, and the place the two halves meet.
  *
- * Half of it is the PRINCIPAL and is CONCRETE: origin, protocol, host, hostname, port, pathname. A bundle
- * builds its request URLs out of these (`location.origin + "/api/x"`), so a concolic origin would turn every
- * endpoint into a shape and lose the very values this tool reports. CLAUDE.md says so directly: the principal
- * is concrete for URL building.
+ * Half of it is the PRINCIPAL and is CONCRETE: origin, protocol, host, hostname, port. A bundle builds its
+ * request URLs out of these (`location.origin + "/api/x"`), so a concolic origin would turn every endpoint
+ * into a shape and lose the very values this tool reports. CLAUDE.md says so directly: the principal is
+ * concrete for URL building. What makes that a THEOREM rather than a preference is §7.2.5's
+ * can-have-its-URL-rewritten step 2 — a router may not change any of those five — which is also why `pathname`
+ * is NOT among them: it is exactly what a router does change, so it answers concretely for an address a
+ * response was fetched from and as a DERIVATION for one the bundle computed. See loc_of_address.
  *
  * The other half is ATTACKER INPUT and is CONCOLIC: `search` and `hash` are whatever the attacker puts in the
  * URL they get someone to click, so they are domain-carrying, they must never force a branch, and they are the
@@ -314,6 +317,49 @@ static char *loc_concat(const char *a, const char *b)
     return r;
 }
 
+/* A MEMBER'S ANSWER, DERIVED FROM THE ADDRESS IT WAS COMPUTED OUT OF — the solver half of §7.2.4, and the
+ * reason `location.pathname` on a route the bundle BUILT still forks.
+ *
+ * WHAT REACHES IT. A client-side router calls §7.2.5's `pushState` with `"/routes/" + cfg.region + "/admin"`
+ * over a config the run fetched, and §7.4.4 "Non-fragment synchronous \"navigations\"" step 8 makes that this
+ * Document's address. core/dom/document.h's document_url_value keeps the address as the VALUE it was computed
+ * out of, so it carries a concrete EXAMPLE and an unconstrained DOMAIN — and a member of it is then a
+ * derivation of that value and not a fresh string. `location.pathname.startsWith("/admin")` runs BOTH arms,
+ * which is exactly the gated code this engine exists to reach; writing the bare example in would DECIDE that
+ * branch and lose the arm with nothing to say so.
+ *
+ * THE EXAMPLE IS THE REAL PARSE. `owned` is what url_parse and URL §4.5 "URL serializing"'s own serializers
+ * computed from the address's example — this engine never predicts an example, it runs the operation — and
+ * `op` names WHICH member's serialization it is, so `pathname` and `href` over one address are two
+ * derivations with two identities rather than one predicate deciding the other.
+ *
+ * ONLY THE MEMBERS A §7.4.4 UPDATE CAN MOVE COME THROUGH HERE. §7.2.5's can-have-its-URL-rewritten step 2
+ * requires the target's scheme, username, password, host and port to EQUAL the document's, so `origin`,
+ * `protocol`, `host`, `hostname` and `port` are invariant under every address change a router can make — the
+ * PRINCIPAL, which CLAUDE.md keeps concrete because a bundle builds its request URLs out of it and a concolic
+ * origin would turn every endpoint into a shape. `search` and `hash` do not come through here either: they are
+ * already this component's declared attacker SOURCES, minted per read with their own percent-encode sets, and
+ * a second derivation over them would be a second identity for one datum.
+ *
+ * CONSUMES `owned` (through loc_string). §7.2.4's about:blank arm is a CONSTANT OF THE STANDARD — "and
+ * about:blank otherwise" — so it is nothing's derivation and returns concrete. */
+static JSValue loc_of_address(JSContext *ctx, char *owned, const char *op)
+{
+    JSValue computed = loc_string(ctx, owned);
+    JSValue addr, derived;
+
+    if (loc_document_is_null(ctx)) return computed;
+    addr = document_url_value(ctx);
+    if (!concolic_is(addr)) { JS_FreeValue(ctx, addr); return computed; }
+    derived = concolic_builtin_hook(ctx, addr, op, computed);   /* consumes `computed` */
+    JS_FreeValue(ctx, addr);
+    DCHECK(concolic_is(derived),
+           "a Location member over a COMPUTED address answered with something that is not a derivation — the "
+           "address is unknown external input, so every serialization of it is, and a plain string here is the "
+           "collapse to bare-concrete that deletes the arm a later branch on this member would have forked");
+    return derived;
+}
+
 /* THE COMPONENT PART OF THIS REALM'S ADDRESS, prefixed as §7.2.4 serializes it ("?x=1", "#frag") and empty when
    the address has none — the `search` and `hash` getter steps, which differ from each other only in which
    component and which prefix. */
@@ -361,14 +407,17 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
        exist at all. Nothing here pretends otherwise: this answers what the SPEC says the member is, which is
        what §CLAUDE assigns the browser half, and it is the step the solver half's version is built ON. */
     case LOC_HREF:
-        v = loc_string(ctx, url_serialize(&rec, /*exclude_fragment*/ false));
+        v = loc_of_address(ctx, url_serialize(&rec, /*exclude_fragment*/ false), "href");
         break;
     case LOC_ORIGIN:   v = loc_string(ctx, url_serialize_origin(&rec)); break;
     case LOC_PROTOCOL: v = loc_string(ctx, loc_concat(rec.scheme, ":")); break;
     case LOC_HOST:     v = loc_string(ctx, url_serialize_host_port(&rec)); break;
     case LOC_HOSTNAME: v = loc_string(ctx, url_serialize_host(&rec.host)); break;
     case LOC_PORT:     v = loc_string(ctx, url_serialize_port(&rec)); break;
-    case LOC_PATHNAME: v = loc_string(ctx, url_serialize_path(&rec)); break;
+    /* §7.2.4's pathname getter steps: "Return the result of URL PATH SERIALIZING this Location object's url"
+       (URL §4.5 "URL serializing"). It is the one member of the address a router MOVES, so it is the one this
+       whole primitive exists for — see loc_of_address. */
+    case LOC_PATHNAME: v = loc_of_address(ctx, url_serialize_path(&rec), "pathname"); break;
     /* THE TWO ATTACKER SOURCES, AND THEY CARRY THE EXAMPLE THE ADDRESS ACTUALLY HAS. §solver's rule is that a
        value is a domain plus an example when the code pins, computes or LEARNS one, and this one is learned
        from the address the host supplied — the document was LOADED from it, so its query and fragment are

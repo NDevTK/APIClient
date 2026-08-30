@@ -94,8 +94,8 @@ void session_history_install_document(JSContext *ctx);
  * best-guess length and index, the history object state, the Document's URL, its latest entry and the
  * navigable's active entry — every one of which is engine state and none of which can park. It therefore takes
  * the arguments and the CALLER MAY RELEASE THEM the moment it returns, which is the whole reason it exists:
- * `serialized` is malloc'd bytes and `new_url` a serialized URL, and neither is a JSValue a parked machine
- * could carry. _run is steps 11-13 and is a request.
+ * `serialized` is malloc'd bytes the entry copies, and `new_url` is a value this takes its own reference to.
+ * _run is steps 11-13 and is a request.
  *   JS_STEP_CALL = return it, 0 = the steps have finished, -1 = they threw.
  *
  * `serialized` is the entry's new CLASSIC HISTORY API STATE — StructuredSerializeForStorage(data), already
@@ -117,7 +117,13 @@ typedef struct {
 void session_history_url_update_start(SessionHistoryUrlUpdate *w);
 void session_history_url_update_visit(JSContext *ctx, SessionHistoryUrlUpdate *w, JSStepVisit *v);
 void session_history_url_update_release(JSContext *ctx, SessionHistoryUrlUpdate *w);
-void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, const char *new_url,
+/* `new_url` IS A VALUE AND NOT BYTES — step 8's "set the URL given document to newURL" makes it this
+   Document's ADDRESS, and core/dom/document.h's document_url_value states why an address that the page
+   COMPUTED has to arrive here carrying both its example and its domain: the example is what
+   solver/route_seed.h declares and the trusted zone loads, the domain is what a later `location.pathname`
+   branch forks on, and a `const char *` here can carry only the first. BORROWED — _begin takes its own
+   references. */
+void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValueConst new_url,
                                       const StructuredData *serialized, bool push);
 int  session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValue in,
                                     JSValue **out_cb, int *out_argc);

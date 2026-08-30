@@ -196,11 +196,48 @@ int document_encoding_of(const lxb_dom_document_t *dom);
    its `Content-Type` are the navigation's, not the Document's — so the answer is written here. Per flow, like
    the address. */
 void document_set_encoding(JSContext *ctx, int encoding);
-/* HTML's SET THE URL — what HTML §7.4.4's URL and history update steps step 8 performs, and the only way a
-   Document's address changes without a new Document being installed. PER FLOW: the address rides the running
-   flow's COW delta, so the arm that called `history.pushState(s, "", "/b")` is the only one whose
-   `location.pathname` is `/b`. See the definition for why the capture is the POD one. */
-void document_set_url(JSContext *ctx, const char *url);
+/* HTML's SET THE URL — what HTML §7.4.4 "Non-fragment synchronous \"navigations\""'s URL and history update
+   steps step 8 performs ("set the URL given document to newURL"), and the only way a Document's address
+   changes without a new Document being installed. PER FLOW: the address rides the running flow's COW delta, so
+   the arm that called `history.pushState(s, "", "/b")` is the only one whose `location.pathname` is `/b`.
+   IT TAKES A VALUE AND NOT BYTES — see document_url_value below, which is the whole of why. CONSUMES
+   `address`; a caller holding only bytes says so by handing over a JS string, which is a POSITIVE statement
+   that this address is a concrete fact and not a shorthand for one. */
+void document_set_url(JSContext *ctx, JSValue address);
+
+/* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS AS A VALUE — the SAME address `document_url` answers in bytes, as the
+ * thing the run computed those bytes out of. OWNED: the caller frees.
+ *
+ * WHY AN ADDRESS IS NOT A STRING. A client-side router computes where it is going — `"/routes/" + cfg.region +
+ * "/admin"`, where `cfg` is a JSON config this run FETCHED — and HTML §7.2.5 "The History interface"'s
+ * `pushState` then makes that computed string this Document's address. CLAUDE.md §Solver-half's rule about
+ * EVERY value applies to it exactly as it applies to every other: it is a triple, and two of the three are
+ * wanted by DIFFERENT consumers, which is why neither may stand in for the other.
+ *   The EXAMPLE is what solver/route_seed.h declares a page of this application and what the trusted zone
+ *   LOADS over the person's own session, so it must be the real `/routes/us-east-1/admin` and never a display
+ *   shape — a shape seeds an address no server has, and the reply's fields are then examples that shape the
+ *   next endpoint, which is §@H's never-invent one network hop out.
+ *   The DOMAIN is what a later `location.pathname.startsWith("/admin")` branches on, and the domain of a
+ *   computed address is unconstrained even where its example is known — so BOTH arms must still run. Writing
+ *   the bare example into the address instead DECIDES that branch and deletes the arm this engine exists to
+ *   reach, with nothing to say so. That is the shortcut, and it is the one this primitive refuses.
+ * So `document_url` answers the example (every consumer that wants BYTES is asking for exactly that and is
+ * unchanged by this) and this answers the value the example came out of.
+ *
+ * A PLAIN STRING IS A POSITIVE STATEMENT AND NEVER A HOLE — it says this address is a CONCRETE FACT, which is
+ * what a Document loaded from a response has, and `concolic_is` on the result is the ONE test that tells the
+ * two apart. There is no third state: the record ALWAYS holds a value, asserted at both of its writers. */
+JSValue document_url_value(JSContext *ctx);
+
+/* THE BYTES AN ADDRESS VALUE STANDS FOR — its EXAMPLE where the run computed it from unknown input, and the
+   string itself where it is a concrete fact. It is the ONE place that conversion is spelled, because it is the
+   step at which an address stops carrying its domain and every caller performing it is SPENDING that fact:
+   §7.4.4's session history entry, solver/route_seed.h's declaration and §7.2.5 step 5's own URL parse all take
+   these bytes. One place is also what makes the missing half of the capability crash ONCE for every arrival
+   site rather than being asked at some of them and not others.
+   OWNED — free with JS_FreeCString. Never NULL: an address value carrying no example is a Document whose
+   address is UNKNOWN, which is a capability this engine does not have, and the crash naming it is here. */
+const char *document_address_example(JSContext *ctx, JSValueConst address);
 
 /* §4.2.3's STEPS RUN IN THE NODE'S DOCUMENT'S REALM — see document.c. `document_realm_of` answers NULL for a
    document no record was ever built for (a solver scratch parse), which is a caller's business to assert. */

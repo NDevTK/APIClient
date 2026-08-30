@@ -739,8 +739,11 @@ static void sh_activate_history_entry(JSContext *ctx, JSValueConst entry)
     rec = sh_record(ctx);
     JS_SetPropertyStr(ctx, rec, SH_R_ACTIVE, JS_DupValue(ctx, entry));
     JS_FreeValue(ctx, rec);
+    /* THE ENTRY'S URL IS BYTES, SO THIS SAYS SO — a JS string handed to document_set_url is the positive
+       statement that this address is a concrete fact, which is what §7.4.1.1's stored URL is today. The
+       residual that makes it one for an address the page COMPUTED is named at §7.4.4's own entry build. */
     url = sh_entry_url(ctx, entry);
-    document_set_url(ctx, url);
+    document_set_url(ctx, JS_NewString(ctx, url));
     JS_FreeCString(ctx, url);
 }
 
@@ -1304,18 +1307,24 @@ void session_history_url_update_release(JSContext *ctx, SessionHistoryUrlUpdate 
     navigation_update_work_release(ctx, &w->nav);
 }
 
-void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, const char *new_url,
+void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValueConst new_url,
                                       const StructuredData *serialized, bool push)
 {
     JSValue active, doc_state, classic, nav_state, rec;
     const char *scroll;
+    const char *new_url_bytes;
     JSValue scroll_v;
     StructuredData undef;
 
     DCHECK(g_slot >= 0, "§7.4.4's URL and history update steps ran before session_history_init declared the "
                         "record");
-    DCHECK(new_url != NULL, "§7.4.4 runs with a URL — its step 2 defaults it to the document's own address, so "
-                            "the caller always has one");
+    DCHECK(!JS_IsUndefined(new_url) && !JS_IsNull(new_url),
+           "§7.4.4 runs with a URL — its step 2 defaults newURL to the document's own address, so the caller "
+           "always has one");
+    /* THE ADDRESS'S BYTES, TAKEN ONCE. Two of this algorithm's own steps are byte consumers — step 3's entry
+       and the route declaration folded into step 8 — and this is the point at which a COMPUTED address stops
+       carrying its domain, so it is spent deliberately and in one place rather than at each of them. */
+    new_url_bytes = document_address_example(ctx, new_url);
     DCHECK(JS_IsUndefined(w->new_entry),
            "§7.4.4's _begin ran twice over one work record — the algorithm builds ONE entry and the second "
            "would leave the first as the navigable's active entry and in no list");
@@ -1339,7 +1348,16 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
     sh_serialize_primitive(ctx, JS_UNDEFINED, &undef);
     nav_state = sh_state_buffer(ctx, &undef);
     structured_data_free(ctx, &undef);
-    w->new_entry = sh_entry_new(ctx, new_url, doc_state, classic, nav_state, scroll);
+    /* THE ENTRY'S URL IS THE ADDRESS'S BYTES, WHICH IS NARROWER THAN THE ADDRESS AND IS NOT WRONG. §7.4.1.1
+       gives a session history entry a URL and every reader of this one wants bytes: the entry is what a
+       traversal RE-INSTALLS, what sh_entry_url serializes for a comparison, and what a cross-document load
+       fetches. WHAT IS NOT COVERED: an entry whose URL the page COMPUTED loses the domain, so a traversal back
+       to it installs a concrete address. WHAT THE NEXT DIFF BUILDS: SH_E_URL holds the address VALUE — the
+       property already is a JSValue, so what has to change with it is sh_entry_url and its five readers, each
+       of which asks for bytes today. HOW ITS ABSENCE SHOWS: a flow that pushes a computed route, calls
+       `history.back()` and then `history.forward()` reads a `location.pathname` that no longer forks, where
+       the same flow without the round trip forks. */
+    w->new_entry = sh_entry_new(ctx, new_url_bytes, doc_state, classic, nav_state, scroll);
     JS_FreeCString(ctx, scroll);
     JS_FreeValue(ctx, scroll_v);
 
@@ -1378,15 +1396,24 @@ void session_history_url_update_begin(JSContext *ctx, SessionHistoryUrlUpdate *w
        why running the page's own call to a routing member is not the string-matching §RUN-DON'T-MATCH forbids,
        and why the address leaves as a one-way notice rather than as a park.
        BEFORE THE SET, because the declaration is that the address CHANGED and the comparison needs both sides
-       — the same "an operation takes its inputs with it" the loader's own job already turns on. */
-    route_seed_declare(ctx, document_url(ctx), new_url);
-    document_set_url(ctx, new_url);
+       — the same "an operation takes its inputs with it" the loader's own job already turns on.
+       THE DECLARATION TAKES THE COMPUTED ADDRESS AND NOT A SHAPE, which is the whole reason this algorithm is
+       handed a value: `"/routes/" + cfg.region + "/admin"` over a config the run fetched declares
+       `/routes/us-east-1/admin`, a page a person can be served, and a shape here would declare
+       `/routes/{…}.region/admin`, which no server has. */
+    route_seed_declare(ctx, document_url(ctx), new_url_bytes);
+    /* STEP 8 ITSELF, WITH THE VALUE. The Document's address keeps the domain that the entry above does not, so
+       a `location.pathname` read on the next line still forks both arms while the seed already went out
+       carrying the real bytes — the two facts §Solver-half says an address is, each reaching the consumer that
+       needs it. */
+    document_set_url(ctx, JS_DupValue(ctx, new_url));
     /* STEPS 9 AND 10 — the Document's latest entry and the NAVIGABLE's active session history entry. Both are
        set before the finalize below, which is what makes its step 2 hold. */
     JS_SetPropertyStr(ctx, rec, SH_R_LATEST, JS_DupValue(ctx, w->new_entry));
     JS_SetPropertyStr(ctx, rec, SH_R_ACTIVE, JS_DupValue(ctx, w->new_entry));
     JS_FreeValue(ctx, rec);
     JS_FreeValue(ctx, active);
+    JS_FreeCString(ctx, new_url_bytes);
 }
 
 int session_history_url_update_run(JSContext *ctx, SessionHistoryUrlUpdate *w, JSValue in,
@@ -1652,14 +1679,12 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
         }
         /* STEP 12: "set navigable's active document's URL to url". It moves BEFORE step 14 fires anything, so
            a `popstate` listener reading `location.href` sees the new address — which is the whole reason a
-           router listens for it. */
-        {
-            const char *dest = JS_ToCString(ctx, w->url);
-
-            CHECK(dest != NULL, "session history: §7.4.2.3.3's destination could not be read for step 12");
-            document_set_url(ctx, dest);
-            JS_FreeCString(ctx, dest);
-        }
+           router listens for it.
+           AND IT HANDS OVER THE VALUE. §7.4.2.3.3's destination is whatever the page assigned — `location.hash
+           = route` puts an attacker source or a computed string straight into it — so reading it back as bytes
+           here would be the same collapse §7.4.4 step 8 refuses one algorithm over, at the one other place a
+           Document's address moves without a load. */
+        document_set_url(ctx, JS_DupValue(ctx, w->url));
         /* STEP 13: "set navigable's ACTIVE session history entry to historyEntry" — and NOT its current entry
            and not the entries list, which is the standard's own worked example: "note that this does not yet
            update the current session history entry, current session history step, or the session history

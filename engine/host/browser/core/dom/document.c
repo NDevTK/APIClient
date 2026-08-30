@@ -12,13 +12,15 @@
  * an element the document HAS is a lie the page cannot detect and this engine would report a surface it never
  * reached; a ReferenceError names the component to write. The DOM is parsed and sitting in `dom` — this
  * component holds it precisely so Element can be grown against it. */
+#include <stddef.h>   /* offsetof — DocAddress's CowRecord layout names its owned value by it */
 #include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "core/agent_state.h"
 #include "solver/dom_cow.h"   /* dom_cow_note_created — a created node belongs to the flow's delta */
-#include "solver/cow.h"       /* cow_capture_host_state — the document's ADDRESS is per-flow state */
+#include "solver/cow.h"       /* cow_capture_host_record — a Document's ADDRESS is per-flow state, and
+                                 it OWNS a value, so it goes through the record arm and not the byte one */
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "solver/engine.h"
@@ -132,6 +134,45 @@ static const IdlArgType IDL_NSSTR_STR[2] = { IDL_DOMSTRING_NULLABLE, IDL_DOMSTRI
  * WHAT IS PER NAVIGABLE stays on the active document's record and is UNDEFINED on every other: a document with
  * no browsing context has no Window and no WindowProxy, which is exactly what §3.1.1's `location` returning
  * null for one means. */
+
+/* A DOCUMENT'S ADDRESS — DOM §4.5 Interface Document's `URL`, and NOT its base URL.
+ *
+ * TWO FIELDS BECAUSE AN ADDRESS IS A VALUE AND NOT A STRING, and core/dom/document.h's document_url_value
+ * states the whole of why: a router COMPUTES where it is going out of a value the run learned, so the address
+ * carries a concrete EXAMPLE that solver/route_seed.h's declaration must take verbatim AND an unconstrained
+ * DOMAIN that a later `location.pathname` branch must still fork on. One without the other is a wrong report
+ * in one direction or a deleted arm in the other.
+ *
+ * `bytes` IS THE EXAMPLE, INTERNED (doc_addr_intern), never a buffer: DOM §4.5 states "Each document has an
+ * associated encoding …, content type …, URL (a URL) …" and "The URL and documentURI getter steps are to
+ * return this's URL, serialized", and a URL record's serialization has no length a fixed array could be sized
+ * against. It was `char[2048]`, so a longer address was snprintf'd to a PREFIX and every base-URL resolution
+ * in the page then resolved against that prefix with nothing able to notice.
+ * NEVER NULL, and the empty string is this engine's "no address": a realm whose install returned before it had
+ * one, which several readers below test for by exactly that.
+ *
+ * `value` IS WHAT THOSE BYTES CAME OUT OF — a plain JS string where the address is a concrete fact (a response
+ * was fetched from it), the CONCOLIC the run computed where it is not. NEVER JS_UNDEFINED: both writers assert
+ * it, so an absent value is never a state a reader has to guess about, and `concolic_is` is the one test that
+ * separates the two.
+ *
+ * THEY ARE ONE STRUCT BECAUSE THEY ARE ONE CAPTURE, which is the strongest form of "they cannot drift": a
+ * delta unapplies WHOLLY, so a context switch puts both back or neither, and there is no window in which one
+ * flow's bytes sit beside another flow's value. That is also why this cannot go through the byte arm the
+ * encoding and the base URLs use — solver/cow.h reserves that for a POD SCALAR LATCH, and a memcpy of a
+ * JSValue makes a reference nothing counts, so the next restore would free a value the blob still names. */
+typedef struct DocAddress {
+    const char *bytes;
+    JSValue     value;
+} DocAddress;
+
+/* …AND THE LAYOUT THAT SAYS WHICH OF ITS FIELDS IS COUNTED — solver/cow.h's CowRecord, the same statement of
+   what a record OWNS that doc_rec_refs below is for the collector. One entry, because one field is a JSValue;
+   the capture DUPs it and the delta frees it, and cow.c asserts the offset is in range, aligned and not
+   repeated so a field added by copying the line above it cannot be freed twice. */
+static const uint16_t DOC_ADDR_VALS[] = { (uint16_t)offsetof(DocAddress, value) };
+static const CowRecord DOC_ADDR_REC = { sizeof(DocAddress), DOC_ADDR_VALS, 1 };
+
 typedef struct Document {
     JSContext           *realm;    /* the realm this document belongs to — every document has exactly one */
     uint32_t             doc;      /* this document's handle in the world registry — its NAME is what crosses */
@@ -190,15 +231,10 @@ typedef struct Document {
        an entry that is not the parent's whenever the parent is itself opaque. */
     JSValue              ancestor_origins;          /* §7.2.4's DOMStringList — [SameObject], UNDEFINED with no browsing context */
     JSValue              ancestor_origin_strings;   /* the internal list, as an Array of serialized origins */
-    /* THE DOCUMENT'S ADDRESS — DOM §4.5 Interface Document's `URL`, and NOT its base URL. An INTERNED string
-       this record owns (doc_addr_intern), never a buffer: DOM §4.5 states "Each document has an associated
-       encoding …, content type …, URL (a URL) …" and "The URL and documentURI getter steps are to return
-       this's URL, serialized", and a URL record's serialization has no length a fixed array could be sized
-       against. It was `char[2048]`, so a longer address was snprintf'd to a PREFIX and every base-URL
-       resolution in the page then resolved against that prefix with nothing able to notice.
-       NEVER NULL, and the empty string is this engine's "no address": a realm whose install returned before
-       it had one, which several readers below test for by exactly that. */
-    const char          *url;
+    /* THE DOCUMENT'S ADDRESS — DOM §4.5 Interface Document's `URL`, and NOT its base URL. See DocAddress
+       above: the bytes and the value they are the example of are ONE field because they are one fact, and
+       because one capture is what makes them unable to disagree across a context switch. */
+    DocAddress           addr;
     /* HTML §2.4.3's DOCUMENT BASE URL IS NOT THE ADDRESS, and this record used to hold only the address and
      * answer both questions with it — so every relative URL in a page shipping `<base href="/app/v2/">`
      * resolved against the wrong path, silently, with nothing in the engine able to notice.
@@ -278,13 +314,15 @@ static Document *doc_here(JSContext *ctx)
  * A Document's URL, its frozen base URL and its about base URL are each a URL record's SERIALIZATION, so none
  * of them has a length a fixed buffer could be sized against. Each is an allocated string this record owns.
  *
- * AND AN ADDRESS IS NEVER FREED ON A CHANGE, WHICH IS WHAT MAKES THE POINTER A LEGAL COW LATCH. The address is
+ * AND AN ADDRESS IS NEVER FREED ON A CHANGE, WHICH IS WHAT MAKES THE POINTER A LEGAL COW FIELD. The address is
  * per-flow state: a flow that ran `history.pushState(s, "", "/b")` captured the OLD pointer as its baseline,
  * and a context switch writes those eight bytes straight back. Freeing on the change would leave that entry
  * naming storage something else now occupies — so a change NEVER FREES, and the old string stays reachable
- * from this list for as long as the record does. That is also why the capture may be the pointer at all: the
- * entry's target (`&d->url`) already points INTO the record, so the entry is only valid while the record
- * lives, and every string this list holds lives exactly that long.
+ * from this list for as long as the record does. That is also why the capture may hold the pointer at all: the
+ * entry's target (`&d->addr`) already points INTO the record, so the entry is only valid while the record
+ * lives, and every string this list holds lives exactly that long. The VALUE beside it in that same entry is
+ * counted rather than borrowed — solver/cow.h's record arm dups it — which is the difference between a field
+ * whose lifetime this list guarantees and one whose lifetime the runtime does.
  *
  * WHAT BOUNDS IT is the record's life, not a cap: a Document holds one string per DISTINCT address it has ever
  * had, and doc_rec_release frees all of them, once each, because this is the only producer and every slot it
@@ -344,7 +382,7 @@ static void doc_addrs_free(Document *d)
     int i;
 
     DCHECK(d->n_addrs <= d->cap_addrs, "a Document's address list counts more entries than it has room for");
-    DCHECK(d->url == NULL || doc_addr_owned(d, d->url),
+    DCHECK(d->addr.bytes == NULL || doc_addr_owned(d, d->addr.bytes),
            "a Document's ADDRESS was not one this record interned — the release is about to free the list and "
            "not this pointer, so the field named storage with a second owner or no owner at all");
     DCHECK(d->base.frozen == NULL || doc_addr_owned(d, d->base.frozen),
@@ -361,7 +399,7 @@ static void doc_addrs_free(Document *d)
     free(d->addrs);
     d->addrs = NULL;
     d->n_addrs = d->cap_addrs = 0;
-    d->url = d->base.frozen = d->base.about = NULL;
+    d->addr.bytes = d->base.frozen = d->base.about = NULL;
 }
 
 /* ---- THE RECORD'S COUNTED REFERENCES: ONE LIST, TWO CONSUMERS ------------------------------------------- */
@@ -393,6 +431,12 @@ static void doc_rec_refs(Document *d, DocRefFn *fn, void *arg)
     fn(d->realm, &d->proxy, arg);
     fn(d->realm, &d->win_obj, arg);
     fn(d->realm, &d->doc_obj, arg);
+    /* THE ADDRESS'S VALUE — the half of DocAddress that is counted. It is here for the reason every other
+       field is, and for one more: the COW record arm DUPS it into a parked flow's delta, so a value this list
+       forgot would be over-released at the record's death while a delta still names it, and one this list
+       reported without owning would be subtracted twice. DOC_ADDR_VALS is the SAME statement for the delta
+       that this line is for the collector, and the two are read together for exactly that reason. */
+    fn(d->realm, &d->addr.value, arg);
 }
 
 static void doc_ref_release(JSContext *ctx, JSValue *pv, void *arg)
@@ -1339,7 +1383,7 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
         bool about;
 
         url_record_init(&u);
-        CHECK(url_parse(&u, d->url, strlen(d->url), NULL),
+        CHECK(url_parse(&u, d->addr.bytes, strlen(d->addr.bytes), NULL),
               "a document's own address is not a URL — §2.4.3 asks whether it MATCHES about:blank, which is a "
               "question about a URL record, and this record's address never parsed");
         /* HTML §2.4.1's two match relations, asked in §2.4.3's order. A document created AT about:blank whose
@@ -1354,13 +1398,13 @@ const char *document_fallback_base_url_of(const lxb_dom_document_t *dom)
         /* STEP 1's ASSERT, stated where the standard states it: "assert: document's about base URL is
            non-null" for an iframe srcdoc document. The cheap prefix test rather than a parse, because this is
            the branch taken by every document in the engine and the assert must not cost one. */
-        DCHECK(strncmp(d->url, "about:srcdoc", 12) != 0,
+        DCHECK(strncmp(d->addr.bytes, "about:srcdoc", 12) != 0,
                "§2.4.3 step 1's assert failed: an iframe srcdoc Document has a NULL about base URL. A srcdoc "
                "document has no address of its own to fall back to — every relative URL in it, and every "
                "`<base href>` it carries, would resolve against `about:srcdoc` — so whoever created this "
                "Document must give it §7.4's about base URL (the srcdoc iframe's node document's base URL)");
     }
-    return d->url;   /* STEP 3: "return document's URL" */
+    return d->addr.bytes;   /* STEP 3: "return document's URL" */
 }
 
 /* §2.4.3's DOCUMENT BASE URL of one Document — the answer DOM §4.4's `baseURI`, HTML §2.4.2's parse-a-URL and
@@ -1386,7 +1430,7 @@ const char *document_base_url_of(const lxb_dom_document_t *dom)
 const char *document_base_url(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
-    DCHECK(d->url[0] != '\0', "this realm's API base URL was read before its document was installed");
+    DCHECK(d->addr.bytes[0] != '\0', "this realm's API base URL was read before its document was installed");
     return document_base_url_of(lxb_dom_interface_document(d->dom));
 }
 
@@ -1401,8 +1445,8 @@ const char *document_url(JSContext *ctx)
 {
     Document *d = doc_here(ctx);
 
-    DCHECK(d->url[0] != '\0', "this realm's document address was read before its document was installed");
-    return d->url;
+    DCHECK(d->addr.bytes[0] != '\0', "this realm's document address was read before its document was installed");
+    return d->addr.bytes;
 }
 
 lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom)
@@ -1534,25 +1578,117 @@ void document_set_encoding(JSContext *ctx, int encoding)
     d->encoding = encoding;
 }
 
-/* HTML §2.4.3 "Document base URLs" — SET THE URL, step 1: "Set document's URL to url". It is the only way a
- * Document's address changes without a new Document, and §7.4.4's URL and history update steps perform it.
+/* THE BYTES AN ADDRESS VALUE STANDS FOR — see core/dom/document.h.
  *
- * IT IS PER-FLOW, AND WHAT IS CAPTURED IS THE POINTER. A flow that called `history.pushState(s, "", "/b")` is
+ * IT IS ONE FUNCTION AND NOT AN `if` AT EACH ARRIVAL, which is the rule CLAUDE.md states for every dispatch
+ * that decides what a set of bytes IS: §7.2.5's `pushState`, §4.8.5's `<iframe src>` and §7.2.2.1's
+ * `window.open` all turn a value the page computed into a Document address, and a question asked at some of
+ * them and not the others does not report an absent capability — it reports an unrelated subsystem failing on
+ * input it should never have been shown. The concolic's own ToString is exactly that failure: it names the
+ * JavaScript coercion boundary for a value that is a perfectly good address and merely has a domain.
+ *
+ * THE MISSING HALF CRASHES HERE, ONCE. A concolic with NO example is a Document whose address this run does
+ * not know, and there is nothing to take: taking its display SHAPE would seed `…/admin/%7Bstate%7D.id` — an
+ * address no server has, fetched over the person's own session by solver/route_seed.h's declaration, whose
+ * reply's fields would then be examples shaping the next endpoint. */
+const char *document_address_example(JSContext *ctx, JSValueConst address)
+{
+    const char *bytes;
+
+    DCHECK(!JS_IsUndefined(address) && !JS_IsNull(address),
+           "a Document address value was asked for its bytes and there is no value — an address is a VALUE in "
+           "this engine and every producer of one states it, so an absent value is a caller that built an "
+           "address out of a slot it never wrote rather than a Document that has no address (which is the "
+           "EMPTY STRING here, and a string is a value)");
+    if (concolic_is(address)) {
+        JSValue ex = concolic_example(ctx, address);
+        int has_example = !JS_IsUndefined(ex);
+
+        if (has_example) {
+            bytes = JS_ToCString(ctx, ex);
+            JS_FreeValue(ctx, ex);
+            CHECK(bytes != NULL, "document: an address value's example could not be read as bytes");
+            return bytes;
+        }
+        JS_FreeValue(ctx, ex);
+        DFAILF("a Document's address is UNKNOWN EXTERNAL INPUT `%s` CARRYING NO EXAMPLE, so this run does not "
+               "know where this Document went. Every arrival that makes a computed value a Document's address "
+               "reaches this one line — HTML §7.2.5 \"The History interface\"'s shared history push/replace "
+               "state steps step 5, HTML §4.8.5 \"The `iframe` element\"'s `src`, HTML §7.2.2.1 \"Opening and "
+               "closing windows\"'s window open steps — and none of them may answer it by coercion or by "
+               "shape: the bytes become the Document's address at HTML §7.4.4 \"Non-fragment synchronous "
+               "\\\"navigations\\\"\" step 8 and are declared a page of this application at the line before it "
+               "(solver/route_seed.h), and the trusted zone LOADS a declared page over the person's own "
+               "session. BUILD: the Document whose ADDRESS IS UNKNOWN — a Document state whose address has a "
+               "DOMAIN and no example, so §7.4.4 step 8 can install it, `location.href` can answer with it, "
+               "and route_seed declares NOTHING because there is no address to load. Until that exists there "
+               "is no newURL for §7.2.5 step 5 to produce, and inventing one from the shape is the false page "
+               "this crash refuses",
+               concolic_shape_c(address) ? concolic_shape_c(address) : "{}");
+    }
+    bytes = JS_ToCString(ctx, address);
+    /* FATAL AND NOT "THE ADDRESS IS ABSENT". Two things reach it — OOM, and a RELEASE build where the arm
+       above is compiled out and a concolic's ToString throws — and the second is precisely the one that must
+       not be swallowed into a Document silently left where it was. */
+    CHECK(bytes != NULL,
+          "a Document address value would not convert to bytes: either the allocation failed, or this is a "
+          "release build and the address is unknown external input, whose ToString has no concolic semantics — "
+          "a dev build names the capability to build at the arm above this line");
+    return bytes;
+}
+
+/* THE TWO HALVES OF AN ADDRESS SAY THE SAME THING — asserted at EVERY writer, because it is the only thing
+   standing between this record and the two-answers-to-one-question defect that made a Document answer its own
+   base URL with somebody else's. `bytes` is what every byte consumer resolves against and what the trusted
+   zone loads; `value` is what a branch forks on. They are written by one call each time, so a disagreement is
+   not a race — it is a writer that computed one of them from something other than the other. */
+static void doc_addr_assert_agrees(JSContext *ctx, const Document *d)
+{
+#if APICLIENT_DEV
+    const char *ex = document_address_example(ctx, d->addr.value);
+    int same = strcmp(ex, d->addr.bytes) == 0;
+
+    JS_FreeCString(ctx, ex);
+    DCHECK(same,
+           "a Document's ADDRESS and the VALUE it was computed out of disagree — the bytes are what "
+           "solver/route_seed.h declares and what every base-URL resolution in the page resolves against, and "
+           "the value is what a `location.pathname` branch forks on, so a record holding two different "
+           "addresses reports one page to the trusted zone and explores another");
+#else
+    (void)ctx; (void)d;
+#endif
+}
+
+/* HTML §2.4.3 "Document base URLs" — SET THE URL, step 1: "Set document's URL to url". It is the only way a
+ * Document's address changes without a new Document, and HTML §7.4.4 "Non-fragment synchronous
+ * \"navigations\""'s URL and history update steps step 8 performs it.
+ *
+ * IT TAKES A VALUE, WHICH IS WHERE THE ADDRESS PRIMITIVE ACTUALLY LIVES. core/dom/document.h's
+ * document_url_value states why an address is a triple and not a string; this is the ONE door through which a
+ * Document acquires one, so the bytes and the value can never be written by two callers that disagree — the
+ * bytes are DERIVED from the value here rather than passed beside it.
+ *
+ * IT IS PER-FLOW, AND THE CAPTURE IS THE RECORD ARM. A flow that called `history.pushState(s, "", "/b")` is
  * the only flow whose `location.pathname` is `/b`; a sibling arm that never pushed still reads the address it
- * forked at, and a parked flow resumes onto its own. Eight bytes is a POD SCALAR, which is exactly what
- * solver/cow.h reserves the byte arm for — a memcpy of a JSValue makes a reference nothing counts, and this
- * record holds four of them, so the record itself may never go through that arm. The 2 KB array that used to
- * sit here went through it whole and tripped that arm's own assert.
+ * forked at, and a parked flow resumes onto its own. It is the record arm and not the byte one because the
+ * pair now holds a JSValue: solver/cow.h reserves the byte arm for a POD SCALAR LATCH, and a memcpy of a
+ * JSValue makes a reference nothing counts, so the next restore would free a value the blob still names.
+ * CAPTURING THE PAIR IN ONE ENTRY IS THE POINT, not an economy: a delta unapplies wholly, so a context switch
+ * puts the bytes and the value back together or puts neither back, and there is no window in which a
+ * `location.pathname` derived from one flow's value serializes another flow's address.
  *
  * THE UNAPPLY IS SOUND BECAUSE NOTHING FREES THE OLD STRING: the entry writes the old pointer back and the
- * string it names is still on this record's address list. THE OWNER IS THE `document` OBJECT, which is what
- * holds the record's storage alive for a parked flow that still names it — the same contract every other
- * host-record capture in this engine states. */
-void document_set_url(JSContext *ctx, const char *url)
+ * string it names is still on this record's address list. The old VALUE is not borrowed that way — the capture
+ * dup'd it, so this releases the record's own reference here and the delta keeps its. THE OWNER IS THE
+ * `document` OBJECT, which is what holds the record's storage alive for a parked flow that still names it. */
+void document_set_url(JSContext *ctx, JSValue address)
 {
     Document *d = doc_here(ctx);
+    const char *url;
 
-    DCHECK(url != NULL && url[0] != '\0',
+    CHECK(!JS_IsException(address), "document: a Document's address could not be built");
+    url = document_address_example(ctx, address);
+    DCHECK(url[0] != '\0',
            "a Document's URL was set to nothing — every caller of this has already parsed and serialized a URL "
            "record, and an empty address is what a document with no browsing context has rather than something "
            "an algorithm assigns");
@@ -1560,11 +1696,39 @@ void document_set_url(JSContext *ctx, const char *url)
            "a Document's URL was set before its `document` object existed — the object is what owns the "
            "storage the flow's delta captures, so there would be nothing to keep the address alive for a "
            "parked flow");
-    cow_capture_host_state(ctx, d->doc_obj, &d->url, sizeof d->url);
-    d->url = doc_addr_intern(d, url);
-    DCHECK(doc_addr_owned(d, d->url),
+    cow_capture_host_record(d->doc_obj, &d->addr, &DOC_ADDR_REC);
+    d->addr.bytes = doc_addr_intern(d, url);
+    /* PUBLISHED BEFORE THE OLD ONE IS RELEASED, and the order is the whole of it. doc_rec_refs walks this
+       slot for the collector, and releasing a concolic address runs that class's finalizer, which is platform
+       code that may allocate — and an allocation IS a collection. Freeing first would leave the slot naming
+       storage already on the free list for the whole of that call, and the walk would decref a JSObject that
+       no longer exists. */
+    {
+        JSValue prev = d->addr.value;
+
+        d->addr.value = address;                   /* consumed */
+        JS_FreeValue(ctx, prev);
+    }
+    JS_FreeCString(ctx, url);
+    DCHECK(doc_addr_owned(d, d->addr.bytes),
            "a Document's address is not one this record interned — the delta captured the POINTER, so the "
            "field may only ever name storage this record owns and releases");
+    doc_addr_assert_agrees(ctx, d);
+}
+
+/* THIS REALM'S ACTIVE DOCUMENT'S ADDRESS AS A VALUE — see core/dom/document.h. It is the accessor
+   core/frame/location.c derives §7.2.4's members through and the reason `location.pathname` on a COMPUTED
+   address still forks. */
+JSValue document_url_value(JSContext *ctx)
+{
+    Document *d = doc_here(ctx);
+
+    DCHECK(!JS_IsUndefined(d->addr.value),
+           "a Document's address was read as a value and the record holds none — doc_rec_new writes a string "
+           "at the record's birth and document_set_url writes one at every change, so an absent value is a "
+           "record some other path built, and a reader defaulting past it would report a COMPUTED address as "
+           "a concrete fact");
+    return JS_DupValue(ctx, d->addr.value);
 }
 
 /* HTML §3.1.5's CURRENT DOCUMENT READINESS, which is the internal slot and NOT the member. `readyState` is a
@@ -2177,8 +2341,18 @@ static JSValue js_doc_strings(JSContext *ctx, JSValueConst this_val, int magic)
 
     if (!d) return JS_EXCEPTION;
     switch (magic) {
+    /* §4.5: "The URL and documentURI getter steps are to return this's URL, SERIALIZED" — so this member IS
+       the address, and it answers with the address VALUE rather than with a fresh string of its bytes. That is
+       not a derivation and needs no operation name: the value's example IS that serialization, which
+       doc_addr_assert_agrees checks at both writers. A page that computed its own route and then branches on
+       `document.URL.includes("/admin")` therefore forks, exactly as the same branch through
+       `location.href` does — one address, one answer, and no member of it that quietly reads as concrete. */
     case 0:
-        return JS_NewString(ctx, d->url);
+        DCHECK(!JS_IsUndefined(d->addr.value),
+               "§4.5's `URL` was read off a record holding no address value — doc_rec_new writes one at the "
+               "record's birth, so this is a record some other path built and the member would report a "
+               "COMPUTED address as `undefined` rather than as the address it is");
+        return JS_DupValue(ctx, d->addr.value);
     case 1:
         return JS_NewString(ctx, d->content_type);
     case 2:
@@ -3577,9 +3751,20 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
        Location's own empty list, so an absent list here is never read as an empty ancestry. */
     d->ancestor_origins = JS_UNDEFINED;
     d->ancestor_origin_strings = JS_UNDEFINED;
+    /* THE ADDRESS'S VALUE IS UNDEFINED BEFORE IT IS ANYTHING ELSE. A zeroed JSValue is the INTEGER 0 (JS_TAG_INT
+       is 0), so a field doc_rec_refs walks before the line below has written it would hand the collector — and
+       document_url_value's own assert — a real value nothing produced. */
+    d->addr.value = JS_UNDEFINED;
     /* THE RECORD'S FIRST ADDRESS. A NULL one is a Document install that has no address to give — the empty
-       string is what this engine's readers test for, so it is stored as one rather than left NULL. */
-    d->url = doc_addr_intern(d, url ? url : "");
+       string is what this engine's readers test for, so it is stored as one rather than left NULL.
+       AND ITS VALUE IS A PLAIN STRING, WHICH IS A POSITIVE STATEMENT AND NOT AN INITIAL VALUE WAITING TO BE
+       OVERWRITTEN: a Document is created FROM a response, so the address it is created with is a concrete fact
+       — bytes a server answered at — and `concolic_is` on it is false for exactly that reason. A Document
+       whose address the run COMPUTED acquires it through document_set_url, which is §7.4.4 step 8. */
+    d->addr.bytes = doc_addr_intern(d, url ? url : "");
+    d->addr.value = JS_NewString(ctx, url ? url : "");
+    CHECK(!JS_IsException(d->addr.value), "document: OOM naming a document's address");
+    doc_addr_assert_agrees(ctx, d);
     snprintf(d->content_type, sizeof d->content_type, "%s", type);
     /* §3.1.1's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
        and one decode of them — so this is the real answer rather than an initial value waiting to be
@@ -3749,7 +3934,7 @@ const char *document_url_of(const lxb_dom_document_t *dom)
 
     DCHECK(d != NULL, "a document's ADDRESS was read in a document with no record — a tree that came from "
                       "neither document_install nor document_new has none");
-    return d->url;
+    return d->addr.bytes;
 }
 
 const char *document_content_type_of(const lxb_dom_document_t *dom)
