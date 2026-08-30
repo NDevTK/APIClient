@@ -3722,6 +3722,54 @@ static void document_policy_selftest(void)
         dom_document_destroy(strip_dom);
     }
 
+    {
+        /* HTML §4.2.5.3 "Pragma directives"' STEP 5 AFTER THE DOCUMENT EXISTS — the delivery the batch walk
+           above structurally cannot see. HTML puts it in its own words beside the steps ("prior to dynamically
+           inserting a meta element with an http-equiv attribute in the Content security policy state"), and
+           its cost is one-directional: a policy dropped here judges the page under a MORE PERMISSIVE list than
+           it has, which is a breakout the real policy kills reported as a working exploit.
+           THE PAIR OF POLICIES IS CSP §8.1 "The effect of multiple policies"' OWN EXAMPLE, one policy per
+           delivery: "Enforcing both policies means that a potential connection would have to pass through both
+           unscathed." So the container built from a permissive header must come out of the append REFUSING
+           what the appended policy refuses — which a REPLACE would get backwards in one direction and a DROP
+           in the other, and only running both catches both. */
+        PolicyContainer *grown = document_policy_new(plain, "script-src 'unsafe-inline'", self_origin,
+                                                     serialized_embedder_policy_new());
+        const CspList *list;
+
+        CHECK(csp_ok(grown, CSP_INLINE_SCRIPT_ATTRIBUTE),
+              "the header-delivered 'unsafe-inline' must permit an inline handler BEFORE anything is appended "
+              "— a fixture that starts blocked cannot tell an append from a no-op");
+        policy_container_enforce_policy(grown, "script-src 'self'");
+        list = policy_container_csp_list(grown);
+        CHECK(list != NULL && list->n_policies == 2,
+              "enforcing a policy on a container that already held one did not leave TWO — CSP §2.2 makes the "
+              "list a LIST, and a count of one is the second delivery replacing the first or being dropped");
+        CHECK(list->self_origin == self_origin,
+              "the appended list lost CSP §2.2's SELF-ORIGIN — §2.2.2 states it from outside the bytes, so a "
+              "re-parse cannot recover one and every `'self'` on the page would afterwards match nothing");
+        CHECK(!csp_ok(grown, CSP_INLINE_SCRIPT_ATTRIBUTE),
+              "an appended `script-src 'self'` did not narrow a list whose first policy says 'unsafe-inline' "
+              "— CSP §8.1 makes content run only if EVERY policy permits it, so this page's inline handler is "
+              "dead in every browser and would be reported here as a live XSS");
+
+        /* AND ONTO A CONTAINER THAT HELD NONE, which is the common shape: a page with no `Content-Security-
+           Policy` header and no parsed `<meta>` whose script installs one. The empty container is a real
+           container holding zero policies, so the append is the same operation and not a construction. */
+        policy_container_enforce_policy(empty, "script-src 'self'");
+        CHECK(policy_container_csp_list(empty)->n_policies == 1,
+              "enforcing the FIRST policy of a document's life left no policy — an empty list is a list, and a "
+              "container that cannot take its first append is one no scripted policy ever reaches");
+        CHECK(!csp_ok(empty, CSP_INLINE_SCRIPT_ATTRIBUTE),
+              "a policy installed by script on a page that shipped none was not enforced — that page's inline "
+              "handlers are dead in every browser");
+        CHECK(policy_container_csp(empty) != NULL && strstr(policy_container_csp(empty), "script-src") != NULL,
+              "the grown container reports no policy TEXT — it is what a report quotes as `cspBlocks` and what "
+              "§7.1.7's clone travels as, so a list that grew without its text is a finding that names the "
+              "policy blocking it as nothing at all");
+        policy_container_free(grown);
+    }
+
     policy_container_free(p);
     policy_container_free(empty);
     dom_document_destroy(dom);

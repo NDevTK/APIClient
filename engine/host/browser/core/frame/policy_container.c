@@ -36,9 +36,19 @@
  *
  * IT IS NOT YET PER-FLOW, and the place that will make it so is asserted rather than described. A flow that
  * NAVIGATES a frame replaces its policy container while a sibling that did not still holds the old one, so the
- * binding is per-flow state for the same reason the WindowProxy binding is. Navigation is not built, so today
- * a document's container is installed once on the baseline before any flow runs — and document_install CRASHES
- * on a second install rather than carrying a comment promising to handle it.
+ * binding is per-flow state for the same reason the WindowProxy binding is. document_install CRASHES on a
+ * second install rather than carrying a comment promising to handle it, and its `@WHY` names the record to
+ * build (a COW record like ProxyData's PROXY_REC, captured in the accessor).
+ *
+ * AND THE INSTALL IS NO LONGER THE ONLY WRITE, WHICH IS WHAT MAKES THAT RECORD LOAD-BEARING RATHER THAN
+ * HYPOTHETICAL. HTML §4.2.5.3 "Pragma directives" runs at a `<meta>` element's INSERTION, so a flow that
+ * inserts one APPENDS a policy to a container the baseline built (policy_container_enforce_policy). That
+ * append grows the container IN PLACE — there is one pointer, held by the Document, and a replacement would
+ * leave that Document naming one container while the appending flow named another — so a sibling flow that
+ * never ran the inserting script reads the grown list. That is the SAFE half of the two ways to be wrong:
+ * §2.2's "a second policy can only narrow" makes the sibling's verdict STRICTER than its own path earned, so
+ * it suppresses a finding rather than fabricating one, which is why the append lands ahead of the record
+ * instead of behind it. The residual is stated at the function, with what would show if it fired.
  *
  * THERE IS NO CSP PARSER IN THIS FILE ANY MORE, AND THAT IS THE POINT. It used to carry one: a `Directive`
  * struct of six booleans, a source-list scan that set them, and a `DCHECK` that ABORTED on any source
@@ -139,6 +149,84 @@ PolicyContainer *policy_container_clone(const PolicyContainer *src)
            "policy_container_new, and the clone would carry an item the source does not have");
     return policy_container_new(src->csp_text, src->csp.self_origin, src->referrer_policy,
                                 serialized_embedder_policy_of(&src->embedder));
+}
+
+void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_policy)
+{
+    /* HTML §4.2.5.3 "Pragma directives"' content security policy state step 5 — see policy_container.h for why
+       an append is the whole of "enforce", and for the residual this shares with document_install's DCHECK. */
+    const Origin *self_origin;
+    size_t old_len, add_len, n_before;
+    char *grown;
+
+    DCHECK(p != NULL,
+           "a policy was enforced upon a container that does not exist — CSP §2.2 \"Policies\" gives the list "
+           "it would be appended to no home, so the policy would be delivered and silently unenforced; the "
+           "caller that has no container is looking at a Document this engine gave none");
+    DCHECK(serialized_policy != NULL && *serialized_policy,
+           "an EMPTY policy was enforced — CSP §2.2.2 \"Parse response's Content Security Policies\" appends a "
+           "policy only when its directive set is not empty, and joining nothing into the list here would emit "
+           "a stray U+002C that re-parses the list as one policy longer than it is");
+    /* U+002C IS §2.2's LIST DELIMITER AND §2.2.1 GIVES IT NO MEANING INSIDE A POLICY, so a comma here would be
+       appended as TWO policies enforced independently — narrowing the Document by a directive it never
+       declared. §2.3 "Directives"' grammar already excludes it (`directive-value = *( required-ascii-whitespace
+       / ( %x21-%x2B / %x2D-%x3A / %x3C-%x7E ) )` — %x2C is not among them), so a comma arriving here is a
+       producer that composed a LIST where this entry takes one policy. */
+    DCHECK(strchr(serialized_policy, ',') == NULL,
+           "a serialized CSP LIST reached the entry that appends ONE policy — CSP §2.2 makes U+002C the list "
+           "delimiter and §2.3's `directive-value` grammar excludes it from a policy, so this would be "
+           "appended as several policies enforced independently and the Document would be narrowed by a "
+           "directive its own markup never declared");
+    add_len = strlen(serialized_policy);
+    /* §7.1.5 "Sandboxing"'s CSP-DERIVED SANDBOXING FLAGS ARE ALREADY SPENT BY THE TIME ANYTHING GETS HERE.
+       §7.1.5 says a Document's active sandboxing flag set "is populated by the navigation algorithm", and
+       §7.4.5 "Populating a session history entry" is where that happens — finalSandboxFlags is the union of
+       the target's snapshot flags and the CSP list's CSP-derived ones, taken ONCE, before the Document exists.
+       A `sandbox` directive appended afterwards is therefore a flag set with nothing left to recompute it, and
+       the Document keeps running unsandboxed under a policy that sandboxes it. §4.2.5.3 step 4 REMOVES the
+       directive from every meta-delivered policy, which is what makes this state unreachable rather than
+       merely detected; the assert is here because this is now the only road a policy can take after creation. */
+    DCHECK(policy_csp_derived_sandboxing_flags(serialized_policy, add_len) == 0,
+           "a policy carrying a `sandbox` directive was enforced upon a Document that already exists — HTML "
+           "§7.1.5 \"Sandboxing\" populates a Document's active sandboxing flag set from the navigation "
+           "algorithm, which §7.4.5 \"Populating a session history entry\" runs ONCE before the Document is "
+           "created, so this Document would keep running unsandboxed under a policy that sandboxes it; "
+           "§4.2.5.3 \"Pragma directives\" step 4 strips the directive from every meta-delivered policy, so "
+           "this one reached the list without going through that step");
+
+    /* THE SELF-ORIGIN SURVIVES THE RE-PARSE BECAUSE IT IS THE LIST'S AND NOT THE TEXT'S. §2.2.2 states it from
+       OUTSIDE the bytes, so it cannot be recovered by parsing them again — it is carried across by hand, which
+       is the same reason csp_list_parse takes it as an argument at every other site. */
+    self_origin = p->csp.self_origin;
+    n_before = p->csp.n_policies;
+    old_len = p->csp_text ? strlen(p->csp_text) : 0;
+    /* THE PARSE GOES FIRST BECAUSE THE REALLOC BELOW MOVES THE BYTES IT POINTS INTO. Every name and value token
+       of the old list is a SLICE of `csp_text` (csp_directive_list.h: "the parse borrows its text"), so the
+       list is dropped while those slices are still valid rather than left naming a buffer that has moved. */
+    csp_list_free(&p->csp);
+    grown = realloc(p->csp_text, old_len + (old_len ? 1 : 0) + add_len + 1);
+    CHECK(grown != NULL, "policy container: OOM enforcing a policy");
+    p->csp_text = grown;
+    /* §2.2's serialization of a policy LIST: comma-delimited. The existing bytes are left exactly where they
+       are, which is what makes this an APPEND at the level of the text as well as of the list. */
+    if (old_len) p->csp_text[old_len++] = ',';
+    memcpy(p->csp_text + old_len, serialized_policy, add_len + 1);
+    csp_list_parse(&p->csp, p->csp_text, old_len + add_len, self_origin);
+    /* THE INVARIANT, AT ITS ORIGIN: the list GREW BY ONE. It is the whole of "every delivery appends and none
+       replaces" made mechanical — a replace lands on `n_before`, a drop lands below it, and a policy that
+       re-parsed as several lands above it. §2.2.2's "if policy's directive set is not empty, append policy"
+       is what makes +1 exact: the caller's policy has at least one directive (an empty one serializes as NULL
+       and never reaches here) and re-parsing the same bytes yields the same policies it did before. */
+    DCHECK(p->csp.n_policies == n_before + 1,
+           "enforcing a policy did not GROW this Document's CSP list by exactly one — CSP §2.2 makes the list "
+           "a LIST and §2.2.2 appends to it, so a count that stood still is a delivery that replaced or was "
+           "dropped and a count that jumped is one policy re-parsed as several; either way the Document is now "
+           "judged under a policy set no delivery produced, which is the one input §@S measures every breakout "
+           "against");
+    DCHECK(p->csp.self_origin == self_origin,
+           "a CSP list lost its §2.2 SELF-ORIGIN across an append — §2.2.2 states that origin from outside the "
+           "bytes, so a re-parse cannot recover one and `'self'` would afterwards match nothing this Document "
+           "could ever load");
 }
 
 void policy_container_free(PolicyContainer *p)

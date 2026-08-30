@@ -16,8 +16,12 @@
  * enforced is the caller's fact: a Document's CSP list is what holds it, and which Document that is follows
  * from the operation that reached this element. Answering the POLICY and leaving the enforcement to the
  * caller is also the seam this engine's document creation order needs — see the note in html_meta_csp.c on
- * §7.5.1 — so that the same one call serves a walk over an already-parsed tree and, once the Document record
- * exists before its parse does, the parser's own insertion step. */
+ * §7.5.1 — so that the same one call serves a walk over an already-parsed tree, DOM §4.2.3's insertion steps
+ * for a `<meta>` a SCRIPT installs, and, once the Document record exists before its parse does, the parser's
+ * own insertion step. The first two are both live callers and neither is a special case of the other: a
+ * Document is judged under the union of what its bytes delivered and what its own scripts have delivered
+ * since, which is what makes step 5 an APPEND to a list rather than a second way of building one
+ * (core/frame/policy_container.h's policy_container_enforce_policy). */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_HTML_META_CSP_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_META_CSP_H
 

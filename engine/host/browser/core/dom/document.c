@@ -2910,7 +2910,12 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    Document and §7.5.2 "Loading HTML documents" then feeds a parser into it, so in the standard step 5's
    "enforce the policy" appends to a list that already exists; this engine parses first and builds the record
    afterwards, so the append is this batch instead. The question each `<meta>` is asked is identical either
-   way, which is why only the CALLER moves when the record is created before the parse. */
+   way, which is why only the CALLER moves when the record is created before the parse.
+   THIS BATCH IS THE PARSER'S HALF AND NOT THE WHOLE ALGORITHM. §4.2.5.3 runs at every INSERTION, and a
+   `<meta>` a script installs afterwards is one this walk cannot reach — that one goes through DOM §4.2.3's
+   insertion steps to document_meta_csp_inserted below, which performs step 5 as CSP §2.2's own APPEND to the
+   list this function built. Reading the batch as the whole delivery is what left the scripted policy
+   unenforced, and a Document judged under a more permissive list than the real page has. */
 PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
                                      SerializedEmbedderPolicy embedder)
 {
@@ -2997,6 +3002,74 @@ const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom)
 
     DCHECK(d != NULL, "a document's policy container was asked of a tree with no record");
     return d->policy;
+}
+
+/* HTML §4.2.5.3 "Pragma directives"' content security policy state, FOR AN ELEMENT A FLOW INSERTED — the
+ * second caller of a component that always had two, and the one that was missing.
+ *
+ * WHY IT EXISTS: A `<meta>` THIS DOCUMENT WAS NOT PARSED WITH STILL DELIVERS A POLICY. The walk in
+ * document_policy_new above collects the `<meta>` elements the parser already put in the tree, once, while the
+ * Document is being built. §4.2.5.3 is not a parse-time algorithm — HTML runs it at the INSERTION and says so
+ * in its own words beside the steps: "At the time of inserting the meta element to the document, it is
+ * possible that some resources have already been fetched. For example, images might be stored in the list of
+ * available images prior to dynamically inserting a meta element with an http-equiv attribute in the Content
+ * security policy state." A policy a script inserts is enforced by every browser, and the batch walk cannot
+ * see it because the batch ran before the script did. What that cost is exactly the report §@S must not
+ * produce: the Document was judged under a MORE PERMISSIVE list than the real page has, so a breakout the real
+ * policy kills came back as a working exploit, with the policy that kills it never quoted anywhere.
+ *
+ * IT IS THE ELEMENT'S OWN NODE DOCUMENT AND NEVER THE RUNNING REALM'S ACTIVE ONE. A realm holds several
+ * Documents — `createHTMLDocument`, a `DOMParser` parse, an XHR `responseXML` — and a script that inserts a
+ * `<meta http-equiv=Content-Security-Policy>` into one of those has said nothing whatever about the page. §4.2.5.3
+ * enforces "upon the current document", which DOM §4.4 makes the element's node document; reading `doc_here`
+ * here would put a scratch tree's markup in charge of the real page's CSP list, which is the direction that
+ * SUPPRESSES every finding on the page at once.
+ *
+ * `el` IS EVERY INSERTED ELEMENT AND NOT A PRE-SELECTED `meta`, because §4.2.5.3's first act is the pragma
+ * SELECTION and core/html/html_meta_csp.h owns it — a filter here would be a second reading of the same three
+ * refusals (is this a `meta`, is it in the content security policy state, is it a child of `head`). */
+void document_meta_csp_inserted(lxb_dom_element_t *el)
+{
+    const lxb_dom_node_t *n;
+    Document *d;
+    char *delivered;
+
+    DCHECK(el != NULL, "§4.2.5.3's content security policy state ran for no element — DOM §4.2.3's insertion "
+                       "steps are given a node, so an absent one is a walk that reached past its own tree");
+    n = lxb_dom_interface_node(el);
+    d = doc_rec(n->owner_document);
+    DCHECK(d != NULL,
+           "§4.2.5.3's content security policy state ran in a document with no record — the insertion seam has "
+           "already asserted a realm for this node's document, and a realm is a record, so an absence here is "
+           "a node inserted into a tree nothing owns");
+    /* STEPS 1-4, plus the pragma selection. NULL is the answer for every node that delivers no policy, which is
+       nearly all of them, and for a `<meta>` whose whole content step 4 removed. */
+    delivered = html_meta_csp_policy(n);
+    if (!delivered)
+        return;
+    if (!d->policy) {
+        /* A DOCUMENT THIS ENGINE GAVE NO §7.1.7 CONTAINER, WHICH IS A POSITIVE STATEMENT AND NOT A HOLE.
+           document_install builds one for every Document with a browsing context; the second-document family
+           built by document_new (DOMParser, createHTMLDocument, responseXML) gets none, and every CSP question
+           asked of one already answers "allowed" because document_policy_of returns NULL for it. So there is no
+           list here for step 5 to append to, IN EITHER DIRECTION — what is missing is the container itself,
+           which HTML §7.1.7 "Policy containers" gives EVERY Document, and not this step. The DCHECK is
+           what keeps the two apart: a Document that IS some realm's active document has a container, so if one
+           ever reaches here the absence is a creation path that skipped document_install rather than this
+           family. */
+        DCHECK(document_active_realm_of((const lxb_dom_node_t *)n->owner_document) == NULL,
+               "a `<meta>` delivered a policy to a Document that is a realm's ACTIVE document and holds no "
+               "§7.1.7 policy container — every such Document gets one at document_install, so this is a "
+               "creation path that did not run it, and the policy the page just installed would be enforced "
+               "nowhere while every breakout was measured against a list that does not exist");
+        free(delivered);
+        return;
+    }
+    /* STEP 5, "Enforce the policy policy" — CSP §2.2's list GROWS BY ONE. The container asserts that at its
+       origin (core/frame/policy_container.h), which is where "every delivery appends and none replaces" is
+       checkable rather than described. */
+    policy_container_enforce_policy(d->policy, delivered);
+    free(delivered);
 }
 
 SandboxFlags document_active_sandbox_flags(JSContext *ctx) { return doc_here(ctx)->sandbox_flags; }

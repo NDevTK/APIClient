@@ -1908,6 +1908,24 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h)
         lxb_dom_element_t *el = lxb_dom_interface_element(n);
         if (e->inserted) {
             if (b->nphase == TS_NODE_EFFECTS) {
+                /* HTML §4.2.5.3 "Pragma directives"' CONTENT SECURITY POLICY STATE. Its five steps are written
+                   over a `<meta>` that is IN a Document, and HTML says which moment that is in its own words
+                   beside them: "At the time of inserting the meta element to the document, it is possible that
+                   some resources have already been fetched. For example, images might be stored in the list of
+                   available images prior to dynamically inserting a meta element with an http-equiv attribute
+                   in the Content security policy state." So a policy a SCRIPT installs is enforced exactly like
+                   one the parser found, and this seam is where the scripted one arrives. Without it the batch
+                   walk over the parsed tree (core/dom/document.c's document_policy_new) was the only delivery
+                   there was, and it necessarily ran BEFORE the script did — so the Document was judged under a
+                   more permissive CSP list than the real page has, which for this engine is a breakout the real
+                   policy kills reported as a working exploit.
+                   IT IS FIRST IN THIS BLOCK because it is the one entry that changes the POLICY every other
+                   one is judged under: `<link>`'s fetch below goes through CSP §4.1.2, and a list this same
+                   batch is still growing must be grown before it is asked. It is here rather than on node.c's
+                   tree-hook list for the reason its neighbours are: an HTML ELEMENT INSERTION STEPS entry needs
+                   this seam's position, and it reads the inserted node's OWN document rather than the mutating
+                   realm's active one. */
+                document_meta_csp_inserted(el);
                 /* HTML §4.8.2 "The source element": "The source HTML element INSERTION steps, given
                    insertedNode, are: Let parent be insertedNode's parent. If parent is a media element that
                    has no src attribute…" — which is how a `<video>` with no `src` and only `<source>` children

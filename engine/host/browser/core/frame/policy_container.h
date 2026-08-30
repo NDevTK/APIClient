@@ -64,6 +64,51 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
 PolicyContainer *policy_container_clone(const PolicyContainer *src);
 void policy_container_free(PolicyContainer *p);
 
+/* CSP §2.2.1 "Parse a serialized CSP"'s RESULT, APPENDED TO THIS CONTAINER'S CSP LIST — HTML §4.2.5.3 "Pragma
+ * directives"' content security policy state step 5, "Enforce the policy policy".
+ *
+ * THE LIST IS A LIST AND EVERY DELIVERY APPENDS. CSP §2.2 "Policies" makes a CSP list "a struct consisting of
+ * policies (a list of policies) and a self-origin", §2.2.2 "Parse response's Content Security Policies"
+ * APPENDS each header-delivered policy to it, and §8.1 "The effect of multiple policies" states what that
+ * buys: "adding additional policies to the list of policies to enforce can only further restrict the
+ * capabilities of the protected resource". So a second delivery neither replaces the first nor merges into it
+ * — it stands beside it, is enforced independently, and the content runs only if EVERY policy permits it.
+ * Both directions of getting that wrong are wrong in this engine specifically: a REPLACE reports a breakout
+ * the first policy kills, and a DROP reports one the second policy kills, and §@S measures every breakout
+ * against exactly this list.
+ *
+ * WHY THIS EXISTS AT ALL, WHICH IS THE PART THAT IS NOT PEDANTIC. A container had no way to GROW: the only
+ * road into its list was the constructor, so the two deliveries this engine sees had to be composed into one
+ * string before a container existed. That is fine for the two the DOCUMENT CREATION knows about (the
+ * response's `Content-Security-Policy` and the `<meta>` elements the parser already put in the tree) and it
+ * has no answer at all for the third, which HTML names in its own words: "At the time of inserting the meta
+ * element to the document, it is possible that some resources have already been fetched", and its worked
+ * example is "dynamically inserting a meta element with an http-equiv attribute in the Content security
+ * policy state". A policy a script inserts is enforced by every browser and had nowhere to go here.
+ *
+ * IT GROWS THE CONTAINER IN PLACE rather than building a replacement, and that is an ownership statement:
+ * everything a container holds is reachable only through the pointer its Document keeps, so a replacement
+ * would leave that Document naming one container while the flow that made the second one named the other.
+ * The text is re-composed and the §2.2 list is RE-PARSED WHOLE, because every name and value token of the old
+ * parse is a SLICE of the text this append moves.
+ *
+ * `serialized_policy` is ONE POLICY in §2.2 "Policies"' serialization — the string §2.2.1 "Parse a serialized
+ * CSP" takes, not the comma-delimited list §2.2.2 splits — and is BORROWED. It must carry no U+002C
+ * (§2.3's `directive-value` grammar excludes it and §2.2 makes it the LIST delimiter, so a comma inside would
+ * append TWO policies) and no `sandbox` directive (§4.2.5.3 step 4 removes it, and §7.1.5's CSP-derived
+ * sandboxing flags were unioned into the Document's active sandboxing flag set at its CREATION, where nothing
+ * can recompute them). Both are asserted here, at the one place a policy can now arrive after that point.
+ *
+ * NAMED RESIDUAL — the grown list is the DOCUMENT's and not the appending FLOW's. policy_container.c already
+ * states that a container is installed once on the pre-boot baseline and is not yet per-flow; an append made
+ * by a flow is therefore visible to that flow's siblings, which is the same gap document_install's own DCHECK
+ * names ("build it as a COW record, like ProxyData's PROXY_REC, captured in its accessor"). The next diff is
+ * that record, and the append is what makes it load-bearing rather than hypothetical. Its absence shows as a
+ * finding emitted by a flow that never ran the inserting script carrying a `cspBlocks` naming a policy that
+ * flow's own path never delivered — a SUPPRESSED real finding, which is the safe half of the two directions
+ * above and is why this lands ahead of the record rather than behind it. */
+void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_policy);
+
 /* THE CONTAINER EXPORTS ITS CSP TWICE, and the two are for two different things.
    The TEXT is what the container TRAVELS as and what a report has to quote — §7.4's clone across an instance
    or a session is this string, re-parsed. BORROWED; NULL for no policy. */

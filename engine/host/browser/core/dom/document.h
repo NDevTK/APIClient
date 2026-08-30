@@ -401,6 +401,20 @@ const PolicyContainer *document_policy(JSContext *ctx);
    routinely not the running realm's active one. BORROWED; NULL for a document with no browsing context. */
 const PolicyContainer *document_policy_of(const lxb_dom_document_t *dom);
 
+/* HTML §4.2.5.3 "Pragma directives"' content security policy state FOR AN INSERTED ELEMENT — DOM §4.2.3's
+   insertion steps' half of the algorithm document_policy_new above runs over a PARSED tree.
+   TWO CALLERS BECAUSE THERE ARE TWO WAYS A `<meta>` REACHES A DOCUMENT, and the standard treats them alike:
+   §4.2.5.3 runs at the insertion, and HTML's own note beside the steps is about the scripted one ("prior to
+   dynamically inserting a meta element with an http-equiv attribute in the Content security policy state").
+   The batch walk cannot see that one, because it ran before the script did — so its policy used to be dropped
+   and the Document judged under a MORE PERMISSIVE list than the real page has, which is a breakout the real
+   policy kills reported as a working exploit.
+   `el` IS EVERY INSERTED ELEMENT: §4.2.5.3's own first act is the pragma selection, so a caller that filtered
+   first would be a second reading of it (core/html/html_meta_csp.h states this from the component's side). The
+   policy is enforced upon the ELEMENT'S NODE DOCUMENT, never the running realm's active one — a `<meta>`
+   inserted into a DOMParser tree says nothing whatever about the page. */
+void document_meta_csp_inserted(lxb_dom_element_t *el);
+
 /* HTML §4.8.5 "The `iframe` element"'s ALLOWED TO USE, which is where the standard defines the phrase every
  * other section asks with: "To determine whether a Document object document is allowed to use the
  * policy-controlled-feature feature, run these steps: 1. If document's browsing context is null, then return

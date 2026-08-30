@@ -9,7 +9,16 @@
  * there is no list to append to while the parse runs and the `<meta>` policies are instead collected by a walk
  * afterwards. That inversion is what this file's interface is shaped around rather than against: the walk and
  * the insertion step ask the identical question of one element and differ only in WHO enforces the answer, so
- * the day the record is created before the parse, this file does not change and its caller moves. */
+ * the day the record is created before the parse, this file does not change and its caller moves.
+ *
+ * AND THE INSERTION STEP IS NOT ONLY THE PARSER'S — that reading is what left this algorithm with one caller
+ * for as long as it had one. §4.2.5.3 is written over the moment a `<meta>` is INSERTED, and HTML's own note
+ * beside the steps is about the SCRIPTED insertion ("prior to dynamically inserting a meta element with an
+ * http-equiv attribute in the Content security policy state"), which no walk over a parsed tree can ever see
+ * because the walk runs before the script does. DOM §4.2.3's insertion steps are therefore a caller of this
+ * file today (core/dom/document.c's document_meta_csp_inserted), and step 5 there APPENDS to a CSP list that
+ * already exists rather than composing one — which is the shape §2.2 gives a list and the shape the batch
+ * above only looks like an exception to. */
 #include <stdlib.h>
 #include <string.h>
 
