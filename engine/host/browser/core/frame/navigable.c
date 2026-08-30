@@ -2965,12 +2965,34 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                "no CSP §2.2 SELF-ORIGIN — every container this engine builds has one (policy_container_new "
                "requires it), so an absent one is a creator whose container was built somewhere that did not "
                "state it, and the peer would resolve `'self'` against its own address instead");
+        /* AND §7.1.5's SET IS THE ONE THING ON THIS SIDE OF THE LINE THAT DOES NOT CROSS YET, WHICH IS WHY THE
+           ASSERT BELOW REFUSES RATHER THAN SENDING AN INCOMPLETE RECORD. Its DESTINATION already exists and is
+           not part of what has to be built: document_install, platform_document_install and the RealmBuilder
+           typedef all take a `SandboxFlags sandbox_flags` today, and it is the value §7.2's create-a-new-
+           browsing-context-and-document hands the initial Document as its ACTIVE SANDBOXING FLAG SET, which is
+           what the LOCAL arm above already carries into window_proxy_new. What is missing is the carriage ACROSS
+           AN INSTANCE and nothing else: a FIELD on this record, a text vocabulary for it, and every reader
+           taught the new position in the same diff. */
         DCHECK(creation_flags == 0,
                "a CROSS-INSTANCE child navigable was created with a non-empty §7.1.5 CREATION SANDBOXING FLAG "
                "SET, and the `navigable.create` notice carries the creator's policy but not the flag set — so "
-               "the peer instance would build this Document unsandboxed. Add the set to the notice beside the "
-               "policy (it is one word, and it crosses as text like everything else on this record), and hand "
-               "it to that instance's document_install as its active sandboxing flag set");
+               "the peer instance would build this Document with an EMPTY active sandboxing flag set and run "
+               "the scripts, form submissions and document.domain relaxation the `sandbox` attribute forbids. "
+               "Three things build it and no more. (1) A FIELD ON THIS RECORD, placed BEFORE the policy for the "
+               "reason every other field is: the policy is the record's REMAINDER. It is a SET and not one "
+               "word — up to SANDBOX_FLAG_COUNT_ flags — so it crosses joined by SPACE like §3.1.3's ancestor "
+               "origins and §9.5's container answer beside it, which is tab-safe for the same reason they are. "
+               "(2) A TEXT VOCABULARY, which is §7.1.5's OWN FLAG NAMES and never this build's bit numbers: "
+               "core/frame/sandboxing.h's SANDBOX_FLAG_LIST already pairs every bit with the standard's name "
+               "for it, and the reason to spell them out is the reason §7.1.4's values cross as the standard's "
+               "three strings rather than as an enum's integers — a peer reading a bit index is reading this "
+               "build's declaration order. (3) EVERY READER, IN THE SAME DIFF, because this record is POSITIONAL "
+               "and they read it by INDEX — a field inserted before the policy shifts every index past it, and "
+               "only wpt_runner.c (which spawns the child process for a peer) tests the count exactly and would "
+               "REFUSE; engine/trusted.mjs, engine/route.mjs and engine/renderer_host_gate.mjs test a MINIMUM "
+               "and would accept the longer record with the creator's policy read off the wrong field, which is "
+               "silent and is worse than the refusal. Then hand the parsed set to that instance's "
+               "document_install as its active sandboxing flag set");
         /* §7.1.4'S ITEM CROSSES THE NOTICE TOO, AND ITS FOUR FIELDS SIT WITH THE SELF-ORIGIN FOR THE SAME
            REASON: the policy is the record's REMAINDER, so everything that is not the policy comes before it.
            A `report-to` ENDPOINT IS SAFE IN A SPLIT FIELD and that is the standard's own guarantee rather than
