@@ -290,9 +290,16 @@ static lxb_html_token_t *html_parse_token_done(lxb_html_tokenizer_t *tkz, lxb_ht
        elements §13.2.6.5 puts outside this line's namespace as well. What this test buys is the only thing the
        stamp's timing could not: that the two entries below never run for a tree §13.4 is required to keep
        inert, and so cannot prepare a fragment's script in the window before that walk.
-       The remaining mode, FRAGMENT ("scripts are executed as soon as they are inserted"), belongs to
-       `createContextualFragment`, which no member here reaches; the day one does it is a parse that is not a
-       §13.4 default and this line is where that shows. */
+       The remaining mode, FRAGMENT ("scripts are executed as soon as they are inserted"), belongs to EXACTLY
+       ONE call site in the platform and this sentence used to name the wrong one. It said
+       `createContextualFragment`, and HTML §8.5.7 "The createContextualFragment() method"'s last step is
+       "Return the result of invoking the fragment parsing algorithm steps with element and compliantString" —
+       no scriptingMode argument at all, so §13.4 "Parsing HTML fragments"' own default INERT applies to it
+       exactly as it does to the five members above. The site that really passes Fragment is §8.6.4
+       "Sanitization algorithms"' set and filter HTML step 5: "Let scriptingMode be Inert. If
+       options["runScripts"] is true: Assert: safe is false. Set scriptingMode to Fragment." — which is the
+       DFAIL core/dom/element.c already carries. A wrong section behind a right-sounding sentence is worse than
+       no citation, because the next reader looks up §8.5.7 and builds a mode it does not ask for. */
     /* AND NOT AT ALL IF TREE CONSTRUCTION FAILED. `lxb_html_tree_token_callback` answers NULL and sets
        `tkz->status` on an allocation failure, which leaves the element's place in the tree unfinished — the
        caller CHECKs that status and aborts, so what this test buys is that the abort happens with nothing

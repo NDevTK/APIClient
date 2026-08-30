@@ -604,19 +604,19 @@ enum { PLACE_CHILDREN = 0, PLACE_BEFORE, PLACE_AFTER, PLACE_FIRST_CHILD, PLACE_R
                     "compliant string with TrustedHTML and this sink), which is where Trusted Types §4.2's " \
                     "default-policy callback runs") \
     X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
-                  "insertAdjacentHTML steps 2-4 / §8.5.2 setHTMLUnsafe step 2 and §8.6.4 set and filter HTML set and filter HTML " \
+                  "insertAdjacentHTML steps 2-4 / §8.5.2 setHTMLUnsafe step 2 and §8.6.4 \"Sanitization algorithms\"' set and filter HTML " \
                   "steps 1-5 (the target the fragment is parsed against)") \
-    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.6.4 set and filter HTML set and filter HTML step 6 " \
+    X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 6 " \
                   "(the fragment parsing algorithm), one byte per step") \
-    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML set and filter HTML step 8 " \
+    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 8 " \
                   "(insert one node of the fragment at the position the member names)") \
-    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 set and filter HTML set and filter HTML step 8 " \
+    X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 8 " \
                   "(the fragment is placed)")
 /* FOUR STAGES, NOT FIVE, for insertAdjacentHTML: it never replaces its target's children, so FRAG_CLEAR is past
    the end of what it declares and the driver says so if the shared machine ever reaches it from there. It is
    its own list for that reason — the setter's declaration is the shared four followed by this one. */
 #define EL_SET_HTML_EXTRA(X) \
-    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 set and filter HTML set and filter HTML step 8 (replace all within target: remove " \
+    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 8 (replace all within target: remove " \
                   "one existing child per step)")
 /* AND §8.6.4 set and filter HTML's FILTER, whose stages are sanitizer.h's own X-list. They belong to the members that FILTER —
    §8.5.2's setHTML and setHTMLUnsafe — and are numbered after this machine's because the walk runs between the

@@ -669,12 +669,20 @@ const UNBUILT = {
      through a namespace prefix map copied per element, and emits an empty-element tag for a childless element
      outside the HTML namespace. Nothing in fragment_serializer.c answers either question, so this is a
      component and not a magic on that one.
-     IT IS BLOCKED ON THE XML PARSER, and that is a measured fact rather than a preference: every subtest in
+     IT WAS BLOCKED ON THE XML PARSER AND IT IS NOT ANY MORE, which is the half of this entry that had to be
+     rewritten rather than kept. The reason recorded here was that every subtest in
      wpt/domparsing/XMLSerializer-serializeToString.html builds its input with
-     `new DOMParser().parseFromString(…, 'text/xml')`, which core/html/domparser.c crashes for by name. A
-     serializer landed first would be a component no gate could exercise. */
-  XMLSerializer:        "DOM-Parsing §3.2.1's XML serialization; its only corpus builds every fixture through "
-                        + "parseFromString(…, 'text/xml'), which domparser.c's DFAIL names the parser for",
+     `new DOMParser().parseFromString(…, 'text/xml')` and that core/html/domparser.c "crashes for by name" —
+     and core/xml/ landed, so that call now returns a real tree (and a `parsererror` document for an ill-formed
+     one) and domparser.c holds no DFAIL at all. A reason kept alive after it stopped being true is the
+     stale-DFAIL failure CLAUDE.md names: it reads as authoritative and tells the next reader NOT to build
+     something whose stated obstacle is gone.
+     SO WHAT REMAINS IS ONLY THAT NOBODY HAS WRITTEN IT, and the corpus that would judge it is ready: that one
+     file is a `text/html` document whose every fixture goes through the `text/xml` arm, so a component landed
+     tomorrow is exercised by 29 subtests on the day it lands. */
+  XMLSerializer:        "DOM-Parsing §3.2.1's XML serialization — a walk fragment_serializer.c does not have "
+                        + "(a per-element namespace prefix map, and an empty-element tag outside the HTML "
+                        + "namespace); unwritten, not blocked",
 };
 const unbuiltSeen = [], unmapped = [], stale = [];
 

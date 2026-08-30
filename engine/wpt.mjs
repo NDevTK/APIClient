@@ -106,17 +106,29 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       which is a different statement from "passes". */
                    "dom", "dom/abort", "dom/collections", "dom/events", "dom/lists", "dom/nodes",
                    "dom/observable", "dom/ranges", "dom/traversal",
-                   /* HTML §8.5.4/§8.5.5 — innerHTML, outerHTML, insertAdjacentHTML and the fragment parsing
-                      algorithm, which element.c implements and which SPEC_STEPS.md §4 is the conversion target
-                      for. THIS ROW USED TO SAY DOMParser AND XMLSerializer "live here too and are absent",
-                      and half of it has stopped being true: §8.5.1's DOMParser is core/html/domparser.c, whose
-                      `text/html` arm is the engine's own document parse and whose XML arm CRASHES by name.
-                      So what this directory measures now is three different things and the row says which:
-                      the `text/html` files are a real number where they were a missing global, §8.5.8's
-                      XMLSerializer is still honestly absent (engine/idlgen.mjs's UNBUILT names why), and every
-                      file that reaches an XML type ABORTS on a capability neither interface can have until an
-                      XML parser exists — including the two that do both, which abort partway. A count is not
-                      quoted here on purpose: this row says what is measured, not what it measures. */
+                   /* HTML §8.5.4 "The innerHTML property" / §8.5.5 "The outerHTML property" — innerHTML,
+                      outerHTML, insertAdjacentHTML and §13.4 "Parsing HTML fragments", which element.c
+                      implements and which SPEC_STEPS.md §4 is the conversion target for.
+                      THIS ROW HAS NOW BEEN WRONG TWICE, EACH TIME BY OUTLIVING THE ABSENCE IT DESCRIBED. First
+                      it said DOMParser and XMLSerializer "live here too and are absent"; then, when §8.5.1's
+                      DOMParser landed, it said DOMParser's "XML arm CRASHES by name" and that "every file that
+                      reaches an XML type ABORTS on a capability neither interface can have until an XML parser
+                      exists". core/xml/ IS that parser and it exists — `parseFromString(…, "text/xml")` returns
+                      a Document — so the sentence sent its reader to build what was already built, which is
+                      exactly the stale-DFAIL failure this file names one row up.
+                      SO THE ROW STOPS NAMING WHICH CAPABILITY IS MISSING, because that is the sentence that
+                      keeps going stale, and names instead what the directory IS — which does not change. It is
+                      FOUR subjects that fail in four different places: §8.5.1's DOMParser over five
+                      DOMParserSupportedTypes; §8.5.8's XMLSerializer, whose absence engine/idlgen.mjs's UNBUILT
+                      row states from the other side; the §8.5.4/§8.5.5/§8.5.6 markup members over documents
+                      served as `application/xhtml+xml`, which reach HTML §7.5.3 "Loading XML documents" and not
+                      the HTML parser; and `tentative/`, which is the WICG declarative-partial-updates proposal
+                      (`streamHTML`, `appendHTML` and their positional siblings) and is in no standard — WPT's
+                      own sourcefile.py collects a tentative file as an ordinary test, so it is run and counted
+                      here like any other, and it is the majority of this directory's subtests.
+                      NO COUNT AND NO PREDICTION IS QUOTED HERE ON PURPOSE, for the reason the `dom` row above
+                      gives: a row that pre-declares its own numbers is a row nobody reads a regression out of.
+                      What each abort NAMES is the work queue, and it is read off the run. */
                    "domparsing",
                    /* THE CSS STANDARDS THIS ENGINE HAS COMPONENTS FOR, and until now `grep '"css'` over this
                       file answered ZERO. That is the excluded-test failure at its largest here: core/css holds
@@ -935,11 +947,26 @@ if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr 
  * SIGTERM"), whether IT could resolve a META script, and whether the corpus HAS the file at the pinned
  * revision. Classifying by regex over an abort MESSAGE would be a recognizer that goes stale the day someone
  * rewords an assert — per-spelling plumbing, with every omission a silent reclassification.
- * ONE EXCEPTION, NAMED RATHER THAN HIDDEN: `gap` and the two `nodone`/`driver` kinds are read from the CHILD's
- * output, because a subprocess has no other channel. What is read there is a PROTOCOL MARKER this project owns
- * at both ends — check.h's `@WHY`, the runner's `@WPTDONE`/`@WPTERR` — never the prose inside it. The message
- * text is DISPLAYED and never classified on, which is the whole difference: a reworded assert changes what the
- * reader sees and cannot change which column it lands in.
+ * ONE EXCEPTION, NAMED RATHER THAN HIDDEN: `gap`, `fatal` and the two `nodone`/`driver` kinds are read from the
+ * CHILD's output, because a subprocess has no other channel. What is read there is a PROTOCOL MARKER this
+ * project owns at both ends — check.h's `@WHY` and `@E`, the runner's `@WPTDONE`/`@WPTERR` — never the prose
+ * inside it. The message text is DISPLAYED and never classified on, which is the whole difference: a reworded
+ * assert changes what the reader sees and cannot change which column it lands in.
+ *
+ * CHECK.H OWNS TWO MARKERS AND THIS DRIVER READ ONE, WHICH IS HOW AN ABORT THAT NAMED A CAPABILITY IN FULL CAME
+ * TO BE REPORTED AS ONE THAT "named NOTHING". `DCHECK`/`DFAIL`/`DCHECKF`/`DFAILF` emit `@WHY`; `CHECK`/
+ * `CHECK_FAIL`/`CHECKF`/`CHECK_FAILF` emit `@E` — the SAME machine-readable `{"reason":…}` payload, and
+ * quickjs-check.h emits the same pair in its plain-text shape. Matching only `@WHY` sent every always-fatal
+ * assert down the final `else` and printed "died on SIGABRT and named NOTHING — no @WHY", which is a FALSE
+ * statement about a child that had just written its reason on stdout, and it filed the work under "debug the
+ * frame" instead of the work queue. MEASURED: all three of `domparsing`'s `crash` aborts were ONE `@E` at
+ * core/xml/xml_document.c naming XML 1.0 §2.8's [28] doctypedecl and the DTD subsystem it asks for, so that
+ * area's `crash` column was 3 and its true value is 0.
+ * THEY STAY TWO COLUMNS RATHER THAN BECOMING ONE, because the two macros are a DECISION this project makes per
+ * site and the columns are what make that decision legible: a `@WHY` is compiled out of a release build, so the
+ * capability it names is missing only in dev, while an `@E` is fatal in RELEASE TOO — it is the site saying we
+ * must not PROCEED even in production. Folding them would put three states behind one answer, which is the
+ * defect this file's own `notrun` split exists to refuse.
  *
  * A KIND THIS DRIVER CANNOT NAME IS `UNKNOWN` AND IS LOUD. It is never folded into the largest bucket, because a
  * fourth kind arriving later would then land silently in the number that drives attention — the defaulted-field
@@ -949,6 +976,7 @@ if (cc.status !== 0) { console.error("[wpt] runner build FAILED\n" + (cc.stderr 
    nobody reads across; the argument for each kind is the paragraph above, where it can be as long as it needs. */
 const ABORT_KINDS = {
   gap:     "the ENGINE named a capability it lacks (@WHY) — THE WORK QUEUE.        build it at the root",
+  fatal:   "the ENGINE named an invariant it must not PROCEED past (@E).           build it; it is fatal in RELEASE too",
   crash:   "the ENGINE died on an unasked-for signal, naming NOTHING.              debug the frame",
   corpus:  "THE CORPUS could not present the test as written.                      each line says which; fix here",
   killed:  "a RESOURCE BACKSTOP fired (CPU rlimit / wall) — a cost, not a gap.     read the CPU on the line",
@@ -1368,12 +1396,17 @@ for (const { file: f, kind, variant } of runs) {
        leaked as a file that produced NOTHING, which is the "same failures with the count hidden" shape this gate
        exists to avoid. It hid them from me, too: I diagnosed that file as ending with no results and went looking
        for what it was waiting on. The abort is reported AND the subtests are counted; they are different facts. */
-    /* THE TWO @WHY SHAPES, because there are two emitters and losing one loses the name. The HOST's check.h
-       prints a machine-readable JSON line whose `reason` carries the message; the ENGINE's quickjs-check.h prints
-       `@WHY <msg> (file:line)` as plain text. Matching only the first reported the second as a bare
-       "signal SIGABRT" — an abort with the name thrown away, which is the one thing an abort is FOR. It cost a
-       round trip per diagnosis and taught nothing on its own. */
-    const why = out.match(/@WHY .*"reason":"([^"]*)/) || out.match(/^@WHY (.+)$/m);
+    /* THE TWO SHAPES *AND* THE TWO MARKERS — four spellings of one fact, because there are two emitters and two
+       severities and losing any of them loses the name. The HOST's check.h prints a machine-readable JSON line
+       whose `reason` carries the message; the ENGINE's quickjs-check.h prints `<marker> <msg> (file:line)` as
+       plain text. Matching only the JSON shape reported the plain one as a bare "signal SIGABRT"; matching only
+       `@WHY` did the same to every always-fatal `@E`, and that is the larger of the two losses because `@E`'s
+       sites are the ones a release build still hits — see the kind table above for what it cost here. An abort
+       with the name thrown away is the one thing an abort is FOR. `marker` is the SEVERITY and decides the
+       column; `reason` is prose and is only ever DISPLAYED. */
+    const named = out.match(/@(WHY|E) .*"reason":"([^"]*)/) || out.match(/^@(WHY|E) (.+)$/m);
+    const marker = named ? named[1] : null;
+    const reason = named ? named[2] : null;
     /* WHAT *THIS DRIVER* DID, ASKED OF THE RESULT RATHER THAN GUESSED FROM THE SIGNAL. node's `spawnSync` reports
        its own interventions as an errno on `result.error`, and the signal alone cannot tell them apart:
        MEASURED — a `timeout:` kill is `ETIMEDOUT` **with SIGTERM**, and a `maxBuffer` overflow is `ENOBUFS`
@@ -1386,13 +1419,13 @@ for (const { file: f, kind, variant } of runs) {
        caused it, when the causing thing is right there on the result object. */
     const timedOut = Boolean(r.error) && r.error.code === "ETIMEDOUT";
     const spawnBroke = Boolean(r.error) && !timedOut;
-    const abortedHere = Boolean(why || r.signal || r.error);
+    const abortedHere = Boolean(named || r.signal || r.error);
     if (abortedHere) {
       /* WHICH KIND, FROM FACTS THIS DRIVER HOLDS. Every arm below is something it KNOWS: whether its own spawn
          failed, whether its own kill timer fired, whether the kernel raised the rlimit IT installed, and how much
          CPU the child actually consumed. Nothing here reads an abort message to decide a column.
-         `gap` is the one arm read from the child, and it reads a MARKER (check.h's `@WHY`), never the prose in
-         it — the message is displayed and cannot move a run between columns. */
+         `gap` and `fatal` are the arms read from the child, and they read a MARKER (check.h's `@WHY` and `@E`),
+         never the prose in it — the message is displayed and cannot move a run between columns. */
       let kind, cause;
       if (spawnBroke) {
         kind = "driver";
@@ -1402,17 +1435,23 @@ for (const { file: f, kind, variant } of runs) {
                     "was truncated and NOTHING it reported can be trusted. That is a runaway in the test or in " +
                     "the engine, and it is this driver's limit that stopped it"
                   : " — the child may never have started, so nothing about the engine was measured");
-      } else if (why && timedOut) {
-        /* BOTH CANNOT BE TRUE OF ONE PROCESS: a @WHY aborts immediately, so a child that emitted one was gone
-           long before a 600 s timer could fire. Arriving here means this driver's own model of the run is wrong,
-           and that is precisely what must not be quietly filed under the biggest bucket. */
+      } else if (named && timedOut) {
+        /* BOTH CANNOT BE TRUE OF ONE PROCESS: a @WHY and an @E both `abort()` on the line that emits them, so a
+           child that wrote one was gone long before a 600 s timer could fire. Arriving here means this driver's
+           own model of the run is wrong, and that is precisely what must not be quietly filed under the biggest
+           bucket. */
         kind = "UNKNOWN";
-        cause = `the child emitted a @WHY (${why[1].slice(0, 120)}) AND this driver's kill timer fired — a ` +
-                "DCHECK aborts at once, so a process cannot do both, and this driver's accounting of the run " +
-                "is therefore wrong";
-      } else if (why) {
+        cause = `the child emitted a @${marker} (${reason.slice(0, 120)}) AND this driver's kill timer fired — ` +
+                "both markers abort at once, so a process cannot do both, and this driver's accounting of the " +
+                "run is therefore wrong";
+      } else if (marker === "WHY") {
         kind = "gap";
-        cause = why[1].slice(0, 160);
+        cause = reason.slice(0, 160);
+      } else if (marker === "E") {
+        /* THE SAME READ, A DIFFERENT COLUMN — see the kind table. `@E` is CHECK/CHECK_FAIL, which is not
+           compiled out, so this file's absence is one a release build hits too. */
+        kind = "fatal";
+        cause = reason.slice(0, 160);
       } else if (timedOut) {
         kind = "killed";
         cause = cpuUsed < 1
@@ -1440,8 +1479,8 @@ for (const { file: f, kind, variant } of runs) {
                 "the OOM killer is the usual one (dmesg names it)";
       } else {
         kind = "crash";
-        cause = `died on ${r.signal} and named NOTHING — no @WHY, and no limit this driver installed. That is a ` +
-                "crash to debug at its own frame, not a capability to build";
+        cause = `died on ${r.signal} and named NOTHING — no @WHY, no @E, and no limit this driver installed. ` +
+                "That is a crash to debug at its own frame, not a capability to build";
       }
       /* AND WHAT THE WALK ACTUALLY FOUND, because "the runtime went down holding live objects" without saying
          WHICH is a number about nothing — the one abort cause in this gate that names a defect and then throws
