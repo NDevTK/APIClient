@@ -119,10 +119,12 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       SO THE ROW STOPS NAMING WHICH CAPABILITY IS MISSING, because that is the sentence that
                       keeps going stale, and names instead what the directory IS — which does not change. It is
                       FOUR subjects that fail in four different places: §8.5.1's DOMParser over five
-                      DOMParserSupportedTypes; §8.5.8's XMLSerializer, whose absence engine/idlgen.mjs's UNBUILT
-                      row states from the other side; the §8.5.4/§8.5.5/§8.5.6 markup members over documents
-                      served as `application/xhtml+xml`, which reach HTML §7.5.3 "Loading XML documents" and not
-                      the HTML parser; and `tentative/`, which is the WICG declarative-partial-updates proposal
+                      DOMParserSupportedTypes; §8.5.8's XMLSerializer, which is DOM Parsing and Serialization
+                      §3.2.1's XML serialization algorithm and NOT §13.3's, so it fails where a namespace
+                      prefix map or an empty-element tag does; the §8.5.4/§8.5.5/§8.5.6 markup members over
+                      documents served as `application/xhtml+xml`, which reach HTML §7.5.3 "Loading XML
+                      documents" and not the HTML parser; and `tentative/`, which is the WICG
+                      declarative-partial-updates proposal
                       (`streamHTML`, `appendHTML` and their positional siblings) and is in no standard — WPT's
                       own sourcefile.py collects a tentative file as an ordinary test, so it is run and counted
                       here like any other, and it is the majority of this directory's subtests.

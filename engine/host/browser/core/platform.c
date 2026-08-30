@@ -58,6 +58,7 @@
 #include "core/html/form_data.h"
 #include "core/html/html_iframe.h"
 #include "core/html/unhandled_rejection.h"
+#include "core/html/xml_serializer.h"
 #include "core/indexeddb/idb_connection.h"
 #include "core/indexeddb/idb_cursor.h"
 #include "core/indexeddb/idb_database.h"
@@ -222,6 +223,7 @@ static void d_iframe(JSContext *c, const PlatformAgent *a) { (void)a; iframe_ini
 static void d_document(JSContext *c, const PlatformAgent *a) { (void)a; document_init(c); }
 static void d_cookie_jar(JSContext *c, const PlatformAgent *a) { (void)a; cookie_jar_init(c); }
 static void d_domparser(JSContext *c, const PlatformAgent *a) { (void)a; domparser_init(c); }
+static void d_xml_serializer(JSContext *c, const PlatformAgent *a) { (void)a; xml_serializer_init(c); }
 /* ECMAScript §16.2.1.10 HostLoadImportedModule is the RUNTIME's hook, which is what an agent is.
    `import(specifier)` with none installed resolved to nothing at all — no module, no error, no record — and a
    page that asks to load code and is answered silently is the one shape an unbuilt capability must not
@@ -445,6 +447,7 @@ static void r_idb_key_range(JSRuntime *rt) { (void)rt; idb_key_range_free(); }
 static void r_idb_record(JSRuntime *rt) { (void)rt; idb_record_free(); }
 static void r_indexed_db(JSRuntime *rt) { (void)rt; indexed_db_free(); }
 static void r_domparser(JSRuntime *rt) { (void)rt; domparser_free(); }
+static void r_xml_serializer(JSRuntime *rt) { (void)rt; xml_serializer_free(); }
 static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
 /* THE CROSS-AGENT SEAM, AS A GROUP OF FOUR, and the group is what makes it one entry rather than three. All
    three hosts wrote `remote_object_free; window_proxy_free; remote_location_free;` by hand — and that is the
@@ -596,6 +599,7 @@ static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
     document_install(c, g, d->dom, d->url, d->policy, d->sandbox_flags, d->doc_id, d->nav_proxy);
 }
 static void i_domparser(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; domparser_install(c, g); }
+static void i_xml_serializer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xml_serializer_install(c, g); }
 
 /* THE LIST. ORDER IS DEPENDENCY ORDER and it is ONE order for both halves, which is what keeps a component to
    one row: a declaration that has to precede another's (EventTarget before Window, because Window.prototype
@@ -855,6 +859,13 @@ static const PlatformComponent PLATFORM[] = {
        that owns Documents is what it is declared against. Its own prototype chains to Object.prototype, so no
        earlier row is required for that half. */
     { "domparser",           d_domparser,           i_domparser, r_domparser },
+    /* HTML §8.5.8's XMLSerializer, AFTER `element` and beside §8.5.1's DOMParser. After element because its
+       declaration brands `serializeToString(Node root)` against the Node class, which element_init is what
+       creates (through node_init) — a row above that one would hand the declaration a class id of zero. It
+       reads nothing of any Document's: DOM Parsing and Serialization §3.2.1's algorithm walks the tree it is
+       handed, so unlike DOMParser it does not depend on the component that MAKES documents. Its own prototype
+       chains to Object.prototype, so no earlier row is required for that half. */
+    { "xml_serializer",      d_xml_serializer,      i_xml_serializer, r_xml_serializer },
     { "module_loader",       d_module_loader,       NULL,        r_module_loader },
 };
 static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);

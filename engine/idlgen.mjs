@@ -515,9 +515,12 @@ const INTERFACES = {
      ChildNode mixin it INCLUDES is installed. DOMImplementation inherits nothing, so it names only its own. */
   DOMImplementation:    "core/dom/dom_implementation.c",
   /* HTML §8.5's two DOM-parsing-and-serialization interfaces. Neither inherits anything, so each names only
-     its own file. XMLSerializer's row names a file that does not exist yet, which is what makes its absence
-     CHECKABLE from both sides: the UNBUILT entry below says the absence is intended, and the moment
-     xml_serializer.c lands the `stale` half of that pair fires and forces the entry out. */
+     the file that INSTALLS its members — which for XMLSerializer is not where its algorithm lives: DOM Parsing
+     and Serialization §3.2.1's XML serialization is core/xml/xml_serialize.c, embedded by this member the way
+     core/dom/node.c's `clone a node` is embedded by its callers, because HTML §8.5.4's fragment serializing
+     algorithm steps reach the same algorithm with require well-formed TRUE. The row is a CROSS-CHECK over
+     where members LAND, so it names the interface file alone and the algorithm file appears in no row at
+     all. */
   DOMParser:            "core/html/domparser.c",
   XMLSerializer:        "core/html/xml_serializer.c",
   DocumentType:        ["core/dom/document_type.c", "core/dom/node.c", "core/events/event_target.c"],
@@ -664,25 +667,6 @@ const UNBUILT = {
   NavigationTransition: "reports an ONGOING navigation, which only an INTERCEPTED navigate event creates",
   NavigationActivation: "written by §7.4.6.2 step 7, whose branch is unreachable without a cross-document "
                         + "traversal or a reload — session_history.c's DCHECK names it",
-  /* HTML §8.5.8. `serializeToString` IS DOM-Parsing §3.2.1's XML serialization algorithm — a different walk
-     from HTML §13.3's, which core/html/fragment_serializer.c implements: §3.2.1 preserves every namespaceURI
-     through a namespace prefix map copied per element, and emits an empty-element tag for a childless element
-     outside the HTML namespace. Nothing in fragment_serializer.c answers either question, so this is a
-     component and not a magic on that one.
-     IT WAS BLOCKED ON THE XML PARSER AND IT IS NOT ANY MORE, which is the half of this entry that had to be
-     rewritten rather than kept. The reason recorded here was that every subtest in
-     wpt/domparsing/XMLSerializer-serializeToString.html builds its input with
-     `new DOMParser().parseFromString(…, 'text/xml')` and that core/html/domparser.c "crashes for by name" —
-     and core/xml/ landed, so that call now returns a real tree (and a `parsererror` document for an ill-formed
-     one) and domparser.c holds no DFAIL at all. A reason kept alive after it stopped being true is the
-     stale-DFAIL failure CLAUDE.md names: it reads as authoritative and tells the next reader NOT to build
-     something whose stated obstacle is gone.
-     SO WHAT REMAINS IS ONLY THAT NOBODY HAS WRITTEN IT, and the corpus that would judge it is ready: that one
-     file is a `text/html` document whose every fixture goes through the `text/xml` arm, so a component landed
-     tomorrow is exercised by 29 subtests on the day it lands. */
-  XMLSerializer:        "DOM-Parsing §3.2.1's XML serialization — a walk fragment_serializer.c does not have "
-                        + "(a per-element namespace prefix map, and an empty-element tag outside the HTML "
-                        + "namespace); unwritten, not blocked",
 };
 const unbuiltSeen = [], unmapped = [], stale = [];
 
