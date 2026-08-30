@@ -420,6 +420,17 @@ const char *concolic_cmp_subject(JSValueConst v);
    is exactly the recorded transform-expression §Re-execution forbids, arriving as a convenience. The
    constraint on the transformed value is observed the only way it can be: by the flow branching on IT. */
 void        concolic_exclude(const char *hole, const char *tok);
+/* THIS FLOW TOOK AN ARM THE VALUE'S OWN EXAMPLE CONTRADICTS, so the value answers with no example on this
+   path — §Learning-from-replies' "the forced sibling drops the contradicted example, so only gate-DEPENDENT
+   values degrade to a shape while gate-independent values stay concrete". `ident` is the VALUE's identity
+   (concolic_ident_c), never its source: a derived value carries its OPERAND's `src`, so keying by source would
+   silence the operand too, which is the chain-inversion §Re-execution forbids arrived at by accident. The fact
+   is per-flow and rides the same constraint chain as a pin — inherited by a fork, carried across a freeze, and
+   re-derived by a replay, because a resumed flow re-reaches the branch that proved it.
+   IT DOES NOT REACH BACK. A value computed BEFORE the branch baked its example in on a prefix both arms share
+   and keeps it; only reads TAKEN AFTER the gate degrade, which is what makes the sentence above true of
+   gate-dependent values and false of gate-independent ones. */
+void        concolic_contradict_example(const char *ident);
 /* What this flow has proven `hole` is NOT — borrowed, valid until the running flow's constraint next grows,
    and `*n` is 0 with a NULL return when the flow proved nothing about it. That is a POSITIVE statement (no
    equality gate over this value took its false arm on the path that built this request), never a hole. */

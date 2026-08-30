@@ -991,12 +991,32 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * sibling re-executes this branch when it resumes, replays that arm out of its own vector, and reaches this
  * line with itself switched in. Marking the sibling from here — at the fork, on the parent's behalf — would be
  * writing a fact about one flow while another is running, which is the same error one level down as reading a
- * park's provenance off the flow at join time. */
-static void decide_note_forced_arm(int real_arm, int arm) {
+ * park's provenance off the flow at join time.
+ *
+ * AND IT IS TWO STATEMENTS, WHICH ARE THE TWO CLAUSES OF ONE SENTENCE. §Learning-from-replies: "at a branch
+ * the example marks the real arm PRIMARY; the forced sibling DROPS THE CONTRADICTED EXAMPLE, so only
+ * gate-DEPENDENT values degrade to a shape while gate-independent values stay concrete." The first clause is
+ * dec_fork_here's. This is the second, and it is not the same fact as the FORCED mark even though ONE
+ * observation produces both: the mark is about the REQUEST this flow goes on to build (its provenance), and
+ * the drop is about the VALUE this flow goes on to read (its example). A run that recorded only the mark would
+ * report FORCED and still emit the contradicted bytes as a computed value; one that recorded only the drop
+ * would degrade the value and still call the request DERIVED. They are made together, here, out of one
+ * comparison, so neither can be added later and forgotten at the other's site.
+ *
+ * THE DROP IS KEYED BY THE VALUE'S IDENTITY AND SKIPPED WHERE THERE IS NONE. A concolic whose identity this
+ * engine cannot spell has nowhere per-flow to file the fact, and filing it under anything shared would silence
+ * that value in flows that proved nothing about it. The MARK still fires there — it needs no key — so the
+ * request still states what it is, and only the degrade is missed. */
+static void decide_note_forced_arm(JSValueConst cond, int real_arm, int arm) {
+    const char *ident;
+
     DCHECK(arm == 0 || arm == 1,
            "an arm that is neither taken nor not-taken was compared against an example — the contradiction is "
            "between TWO booleans, so a third value here is a decision seam that answered something else");
-    if (real_arm != REAL_ARM_UNOBSERVED && arm != real_arm) flow_mark_forced_arm();
+    if (real_arm == REAL_ARM_UNOBSERVED || arm == real_arm) return;
+    flow_mark_forced_arm();
+    ident = concolic_ident_c(cond);
+    if (ident) concolic_contradict_example(ident);
 }
 
 /* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
@@ -1020,7 +1040,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     arm = decide_arm(ctx, key, restartable, nonforking, real, &forked);
     free(key);
 
-    decide_note_forced_arm(real, arm);
+    decide_note_forced_arm(cond, real, arm);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     /* THE ROOT TRAVELS WITH THE PIN, and it is read off the COMPARISON RESULT rather than re-derived: pred_new

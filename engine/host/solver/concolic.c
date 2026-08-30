@@ -273,7 +273,7 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
 typedef struct { double num; char *txt; signed char present; signed char inclusive; } BoundSide;
 typedef struct { BoundSide lo, hi; } Bound;
 typedef struct { char *key; char *val; char **excl; int nexcl; Bound *bnd;
-                 signed char truth; signed char pinned_root; } Cons;
+                 signed char truth; signed char pinned_root; signed char ex_contra; } Cons;
 
 static void bound_side_free(BoundSide *s) { free(s->txt); s->txt = NULL; s->present = 0; }
 /* THE ONE COPY OF ONE SIDE, because a bound is copied at the fork's copy-up and nowhere else, and a field
@@ -348,6 +348,19 @@ void concolic_chain_stats(long *segs, long *entries, long *bytes) {
 static Cons    *g_pins = NULL;  static int g_pins_n = 0, g_pins_cap = 0;   /* the running flow's HEAD */
 static int     *g_pins_hash = NULL; static int g_pins_hash_cap = 0;        /* …and its index (key -> idx+1) */
 static ConsSeg *g_pins_base = NULL;                                        /* the frozen chain under it */
+/* HAS ANY FLOW IN THIS AGENT EVER CONTRADICTED AN EXAMPLE — a one-directional LATCH, never cleared while the
+   agent lives, and it is a performance fast path that cannot become a correctness one.
+   WHY IT IS SAFE IN THE ONLY DIRECTION THAT MATTERS: it can only cause the lookup below to run when it need
+   not, never to be skipped when it is needed. A per-flow answer would be the tempting version and is the
+   dangerous one — it would have to be inherited at every fork, carried across a freeze and rebuilt by the cold
+   tier, and any one of those forgotten is a flow silently answering with an example it proved wrong. This
+   asks a question nothing has to maintain: has the mechanism fired at all, ever. On a document with no
+   example-carrying gate the whole of it costs one predicate.
+   THE COST IT AVOIDS IS REAL AND IS THE CHAIN'S. cons_lookup probes the head and then EVERY frozen segment
+   under it, so a flow that has forked a thousand times pays a thousand hash probes — which `pin_of` already
+   pays at every source-member read, and which this would otherwise add to every example read in the engine
+   (each `+` over an unknown asks for two). */
+static int g_ex_contra_any;
 
 static uint32_t cons_hash(const char *k) {   /* FNV-1a over the constraint key */
     uint32_t h = 2166136261u;
@@ -444,6 +457,12 @@ static Cons *cons_entry(const char *key) {
        this flow's demand, and a copy-up that dropped it would make the very same path answer "unpinned" the
        moment a context switch happened to fall between the pin and the sink. */
     g_pins[g_pins_n].pinned_root = below ? below->pinned_root : 0;
+    /* …AND THE CONTRADICTED EXAMPLE, for the reason every field above it copies up. It is a fact this flow
+       PROVED — it took an arm the value's own example says a real session does not take — so a copy-up that
+       dropped it would make the very same path start answering with that example again the moment a context
+       switch happened to fall between the gate and the request that carries the value, which is the defect
+       this whole entry is a list of. */
+    g_pins[g_pins_n].ex_contra = below ? below->ex_contra : 0;
     g_pins_n++;
     if (!g_pins_hash || g_pins_hash_cap < g_pins_n * 2) cons_hash_rebuild();
     else cons_hash_put(g_pins_n - 1);
@@ -2265,6 +2284,11 @@ void concolic_free(void)
     /* AND THE PUBLISHED-NAMESPACE PATHS, for the same reason the source rows above are given back here: a path
        names a record of a document that is gone, and the addresses it is keyed by are about to be reused. */
     absent_free();
+    /* AND THE CONTRADICTED-EXAMPLE LATCH, which is agent state exactly as the two above are. It is a
+       one-directional fast path over a constraint chain that dies with this agent, so a latch left set makes
+       the NEXT agent probe a chain in which nothing has been contradicted — not a wrong answer, but a cost
+       carried by a document that never earned it, and a fact about a session that is gone. */
+    g_ex_contra_any = 0;
     /* §Solver's VALUE CLASS IS DELIBERATELY NOT GIVEN BACK HERE, and that is asserted rather than commented —
        the same statement core/dom/document.c makes about §gc's realm-mark hook, for the same reason. Every live
        Concolic OUTLIVES this call: the objects are freed by JS_FreeRuntime, whose finalizer reaches each
@@ -2427,10 +2451,57 @@ const char *concolic_ident_c(JSValueConst v) {
     return c ? c->ident : NULL;
 }
 
+
+/* THE EXAMPLE THIS FLOW MAY STILL BELIEVE — §Learning-from-replies' "the forced sibling drops the contradicted
+ * example, so only gate-DEPENDENT values degrade to a shape while gate-independent values stay concrete", and
+ * this accessor is where "drops" happens because it is where an example flows into everything downstream.
+ *
+ * WHAT IS DROPPED IS THE VALUE THE BRANCH TESTED, AND NOTHING BEHIND IT. `if (cfg.admin)` over a loaded
+ * `false`, taken TRUE, proves the example wrong about THIS path and about that value; it says nothing about
+ * whatever `cfg.admin` was computed from, and deriving one from the other would be the chain-inversion
+ * §Re-execution forbids by name. So the fact is keyed by the value's own IDENTITY (`ident`) rather than by its
+ * source: a derived value carries its operand's `src`, so keying by source would silence the operand too —
+ * an inversion arrived at by accident.
+ *
+ * TIME IS WHY THE CHECK IS HERE AND NOT AT THE MINT. A value built BEFORE the branch baked its example in on
+ * a prefix both arms share, and that example is correct for both — nothing was contradicted when it was
+ * computed. A value built AFTER reads through this accessor, on the arm that did the contradicting, and gets
+ * nothing: `"/api/" + cfg.admin` composed past the gate degrades to a shape, which is exactly the sentence
+ * above. Reaching back to rewrite what was already computed would be re-deciding the past from a constraint.
+ *
+ * A VALUE WHOSE IDENTITY THIS ENGINE CANNOT SPELL KEEPS ITS EXAMPLE, and that is the sound direction rather
+ * than a gap: with no key there is nowhere to file a per-flow fact, and filing it anywhere else would make one
+ * flow's proof silence another flow's value. Such a value's arm is still marked FORCED (decide.c does not need
+ * a key for that), so the request it builds still says what it is. */
 JSValue concolic_example(JSContext *ctx, JSValueConst v) {
     Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
     if (!c || JS_IsUndefined(c->example)) return JS_UNDEFINED;
+    if (g_ex_contra_any && c->ident) {
+        const Cons *e = cons_lookup(c->ident);
+        if (e && e->ex_contra) return JS_UNDEFINED;
+    }
     return JS_DupValue(ctx, c->example);
+}
+
+/* THIS FLOW TOOK AN ARM THE VALUE'S OWN EXAMPLE SAYS A REAL SESSION DOES NOT TAKE — see the accessor above for
+   what it costs the value, and decide.c for who says so and when.
+   IT SHARES THIS MAP WITH THE PINS AND KEYS ITSELF DIFFERENTLY, WHICH IS STATED RATHER THAN ASSUMED SAFE. A
+   pin, an exclusion and a bound are keyed by a plain source path; this is keyed by a concolic_ident_compose
+   output, whose encoding is `<len>:<bytes>` per field — so the two are disjoint in every spelling this engine
+   produces, but by an encoding that uses ASCII digits rather than by any byte a path cannot contain, and a
+   claim of impossibility here would be stronger than the format supports. WHAT MAKES THAT ACCEPTABLE IS THE
+   DIRECTION OF THE FAILURE: a collision would set `ex_contra` on the entry some other name reads, so a value
+   would answer with NO example and degrade to a shape. It could never fabricate one, and it cannot touch
+   `val`, `excl` or `bnd`, which this function does not write. A weaker report, never a wrong one.
+   IDEMPOTENT, because a path cannot un-take an arm: a second contradiction of one value on one path says
+   nothing the first did not, and there is no reading to merge. */
+void concolic_contradict_example(const char *ident) {
+    DCHECK(ident != NULL,
+           "a contradicted example was recorded against a value with no identity — there would be nowhere to "
+           "file a PER-FLOW fact, and filing it under anything else would silence a value in flows that never "
+           "proved anything about it. The caller checks for the identity and leaves the example alone");
+    cons_entry(ident)->ex_contra = 1;
+    g_ex_contra_any = 1;
 }
 
 void concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example) {
