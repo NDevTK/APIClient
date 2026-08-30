@@ -134,4 +134,42 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
 double event_loop_task_seq(JSContext *ctx);
 double event_loop_task_seq_peek(JSContext *ctx);
 
+/* HTML §8.7 Timers's TIMER NESTING LEVEL OF THE CURRENTLY RUNNING TASK — the timer initialization steps'
+ * step 3, "If the surrounding agent's event loop's currently running task is a task that was created by this
+ * algorithm, then let nestingLevel be the task's timer nesting level. Otherwise, let nestingLevel be 0."
+ *
+ * IT IS THE EVENT LOOP'S AND NOT §8.7 Timers's MAP'S, and step 3's own sentence is why: the question names the
+ * SURROUNDING AGENT's event loop, never the global whose `setTimeout` was called. An iframe's timer callback
+ * calling `parent.setTimeout(f, 0)` IS nested — one invocation of this algorithm from inside another's task,
+ * which step 3's note says is what the level counts ("it represents nested invocations of this algorithm, not
+ * of a particular method") — and a per-realm home would answer it out of the parent's record, which is a
+ * different question with a different answer. §8.1.7 Event loops states the carrier in the same words: "Each
+ * event loop has a currently running task, which is either a task or null." That is one fact per agent, and
+ * this record is where this engine keeps the agent's event-loop facts; §8.7 Timers's map of active timers is
+ * per-global for the opposite reason and lives in core/timing/timer.c.
+ *
+ * 0 IS A POSITIVE STATEMENT, NOT A DEFAULT FILLING A HOLE. Step 10 ("Increment nestingLevel by one") runs
+ * before step 11 hangs it on the task, so EVERY task the timer initialization steps create carries a level of
+ * at least ONE — which makes 0 exactly step 3's "Otherwise" and never a value a reader has to guess the
+ * provenance of. A task queued by any other algorithm publishes 0 for the same reason it reads 0: it was not
+ * created by this algorithm. §8.7's own `run steps after a timeout`, reached by this engine's internal
+ * callers, is one of those — it is a different algorithm and its task is not this one's.
+ *
+ * §8.1.7.3 Processing model DECIDES THE BRACKET, AND IT IS NARROWER THAN "WHILE THE CALLBACK'S CODE RUNS":
+ * step 2.5 is "Set the event loop's currently running task to oldestTask", 2.6 is "Perform oldestTask's
+ * steps", 2.7 is "Set the event loop's currently running task back to null" and only THEN does 2.8 "Perform a
+ * microtask checkpoint". So a promise reaction the handler queued runs with NO currently running task and its
+ * own `setTimeout` is at level 0 — a `setTimeout(f,0)` chain routed through `await` is therefore NOT clamped,
+ * which is a real difference a page can see and not a corner this engine may round off. It falls out
+ * structurally here rather than being arranged for: a microtask is a separate job of the flow's queue, so it
+ * is never inside the task's own bracket.
+ *
+ * IT TIME-TRAVELS like every other field of this record, which is what makes it answerable at all: two flows
+ * are two timelines of one event loop, so "which task is running" has one answer PER FLOW and a C static
+ * would hand flow B the level of a task only flow A ever ran. */
+int event_loop_timer_nesting(JSContext *ctx);
+/* §8.1.7.3 Processing model steps 2.5 and 2.7, performed by §8.7 Timers's own task and by nothing else — the
+   task is the only thing that knows the level it was given, and the level is meaningless outside its steps. */
+void event_loop_set_timer_nesting(JSContext *ctx, int level);
+
 #endif

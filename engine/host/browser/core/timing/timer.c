@@ -93,11 +93,21 @@
    captures it and the snapshot machinery parks it. A hole in the map is `undefined` — a free slot, which the
    next timer set in this realm reuses, so a page that sets and clears a million timeouts does not grow the
    array. The extra arguments HTML passes the callback are the entry's tail rather than a second allocation. */
-enum { TE_HANDLE = 0, TE_WHEN, TE_EVERY, TE_SEQ, TE_FN, TE_ARG0 };
+/* TE_NEST IS §8.7 Timers's TIMER NESTING LEVEL, HELD ON THE ENTRY BECAUSE THE ENTRY IS WHAT QUEUES THE TASK.
+   Step 11 is "Set task's timer nesting level to nestingLevel" and the level is therefore the TASK's, not the
+   entry's — but this engine does not build the task at the set, it builds it at the EXPIRY, out of this
+   entry. §scheduler's rule for exactly that shape is that an operation which becomes a work item takes its
+   INPUTS WITH IT rather than reading them back later off whatever it acts on, and the level is an input: it
+   was computed at the SET, from the task that was running THEN, and re-deriving it at the fire would read the
+   level of whichever task happens to be firing this one. So it rides the entry from step 11 to the moment
+   timer_run_due hands it to the task it queues, and nothing else ever reads it. */
+enum { TE_HANDLE = 0, TE_WHEN, TE_EVERY, TE_NEST, TE_SEQ, TE_FN, TE_ARG0 };
 
 static int      g_slot = -1;
 static JSAtom   g_atom_map = JS_ATOM_NULL, g_atom_next = JS_ATOM_NULL;
 static int      g_ready;
+/* §8.7 Timers's timer initialization steps step 9's TASK, declared once per agent — see js_timer_task_step. */
+static int      g_task_stepid = -1;
 /* §8.7's FOUR MEMBER DECLARATIONS, EACH A POOL ID, AND THE `= -1` IS PART OF THE DECLARATION. Written bare,
    their pre-init value is `0` — which core/agent_state.h's table reserves for a FLAG or a CLASS ID and which
    the id pool hands out as a real entry, so the failure of carrying one is not that the next agent's install
@@ -342,8 +352,11 @@ static uint32_t timer_next_handle(JSContext *ctx)
  * delta, which is why two arms of a fork mint the SAME handle for the same source line. */
 /* `delay` IS A VALUE AND NOT A DOUBLE, because §8.7's `timeout` can be unknown external input and the expiry
    this writes is then unknown too — see event_loop_moment_plus. `every` is still a double: an unknown PERIOD is a
-   different question and js_set_timer refuses it at the door, naming why. */
-static int timer_set(JSContext *ctx, JSValueConst delay, double every, JSValueConst fn, int argc,
+   different question and js_set_timer refuses it at the door, naming why.
+   `nest` IS §8.7's step 11, "Set task's timer nesting level to nestingLevel" — the level the task this entry
+   will queue must publish while it runs. It is 0 for a caller that is not the timer initialization steps,
+   which is step 3's "Otherwise" read from the other end. */
+static int timer_set(JSContext *ctx, JSValueConst delay, double every, int nest, JSValueConst fn, int argc,
                      JSValueConst *argv)
 {
     JSValue q, entry;
@@ -364,6 +377,11 @@ static int timer_set(JSContext *ctx, JSValueConst delay, double every, JSValueCo
         JS_FreeValue(ctx, start);
     }
     JS_SetPropertyUint32(ctx, entry, TE_EVERY, JS_NewFloat64(ctx, every));
+    DCHECK(nest >= 0,
+           "§8.7 Timers's step 11 was handed a NEGATIVE timer nesting level to set on the task this entry "
+           "queues — step 10 increments from a level that is 0 at worst, so every value it can produce is "
+           "1 or above and every other caller of this passes step 3's own 0");
+    JS_SetPropertyUint32(ctx, entry, TE_NEST, JS_NewInt32(ctx, nest));
     JS_SetPropertyUint32(ctx, entry, TE_SEQ, JS_NewFloat64(ctx, event_loop_task_seq(ctx)));
     JS_SetPropertyUint32(ctx, entry, TE_FN, JS_DupValue(ctx, fn));
     for (i = 0; i < (uint32_t)argc; i++)
@@ -421,6 +439,128 @@ void timer_clear_map(JSContext *ctx)
     JS_FreeValue(ctx, q);
 }
 
+/* HTML §8.7 Timers's timer initialization steps STEP 9's TASK — "Let task be a task that runs the following
+ * substeps" — as a step machine, and it exists because §8.7's step 11 has to have somewhere to put the TIMER
+ * NESTING LEVEL.
+ *
+ * WHY THE TASK HAD TO BECOME A THING. This component used to queue the page's HANDLER as the task, which is
+ * the right observable behaviour and the wrong object: step 11 is "Set task's timer nesting level to
+ * nestingLevel" and step 3 reads that level back off "the surrounding agent's event loop's currently running
+ * task", so with no task object there was no carrier for the one fact those two steps exchange. What that
+ * cost is not pedantic — it is the ORDER a virtual clock exists to model. Step 5 ("If nestingLevel is greater
+ * than 5, and timeout is less than 4, then set timeout to 4") is the only thing that ever moves a
+ * `setTimeout(f, 0)` chain off the moment it is standing on; without it the chain re-arms at the same virtual
+ * moment for ever, timer_earliest picks it at every turn, and a `setTimeout(g, 1)` set beside it NEVER RUNS.
+ * A poll loop or a chunked worker written as a self-re-arming zero timeout is one of the most common shapes
+ * in a real bundle, and it starved everything the page had queued behind it.
+ *
+ * A MACHINE, BECAUSE THE BRACKET HAS TO SURVIVE A PARK. The level must be readable at EVERY point while the
+ * task's steps run, and the handler is the page's code: it forks, it awaits, it is preempted at a loop
+ * back-edge and parks. A bracket taken around the drainer's call would therefore cover only the FIRST slice
+ * of the callback — the flow resumes through the parked-continuation path, not through the drainer — and a
+ * nested `setTimeout` after the first preempt would read level 0 and go unclamped, which is the same
+ * livelock arriving one preempt later and much harder to see. A step machine is the engine's one vehicle for
+ * "a C algorithm that runs page code and continues afterwards": its state parks and resumes with the flow and
+ * is cloned at a fork, so substep 9.7's invocation is bracketed by the two writes below however many times
+ * the flow suspends inside it.
+ *
+ * WHAT IT PUBLISHES INTO IS THE EVENT LOOP'S RECORD (core/timing/event_loop.h), which time-travels with the
+ * flow — so two timelines' timer tasks do not see each other's level, and neither does a sibling that forked
+ * before this task started. */
+enum { TT_ARG_HANDLER = 0, TT_ARG_NEST, TT_ARG_N };
+
+#define TT_STAGES(X)                                                                                          \
+    X(TT_INVOKE,                                                                                              \
+      "HTML §8.7 Timers timer initialization steps step 9.7 (if handler is a Function, then invoke handler "   \
+      "given arguments and \"report\")")
+enum { TT_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const TT_STEPS[] = { TT_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    JSStepHdr hdr;
+    /* HAVE I STARTED — a machine cannot answer that from its stage, because the first stage IS the entry
+       stage, and the call buffer below must hold JS_UNDEFINEDs before anything that can fail. */
+    uint8_t   started;
+    uint8_t   cphase;   /* the handler call's own phase */
+    /* [this, handler] AND NOTHING MORE, which is timer_init's declaration read at the far end: §8.7's
+       `any... arguments` tail is not declared, so no entry of the map carries extra arguments and
+       timer_run_due asserts that where it would have to copy them. */
+    JSValue   cb[2];
+} TimerTask;
+
+static void tt_visit(JSContext *ctx, void *stp, JSStepVisit *v)
+{
+    TimerTask *s = stp;
+    int k;
+
+    STEP_CB_FOREACH(s->cb, k) v->val(ctx, &s->cb[k]);
+}
+
+static int js_timer_task_step(JSContext *ctx, void *stp, JSValue cb_result, JSValue **out_cb, int *out_argc)
+{
+    TimerTask *s = stp;
+    JSValueConst handler = step_arg(&s->hdr, TT_ARG_HANDLER);
+    JSValue out = JS_UNDEFINED;
+    int32_t nest = 0;
+    int r, threw;
+
+    JS_ToInt32(ctx, &nest, step_arg(&s->hdr, TT_ARG_NEST));
+
+    STEP_DISPATCH(TT_STAGES, s->hdr.stage, s->hdr.def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(TT_INVOKE);
+        if (!s->started) {
+            int k;
+
+            s->started = 1;
+            s->cphase = 0;
+            STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
+            DCHECK(s->hdr.argc == TT_ARG_N,
+                   "§8.7 Timers's step 9 task was queued with an argument count timer_run_due does not "
+                   "produce — the handler and its task's timer nesting level are placed together at the one "
+                   "site that queues it, so a different count means a second queuer exists");
+            /* §8.1.7.3 Processing model step 2.5: "Set the event loop's currently running task to
+               oldestTask." The level rode the map entry to here (see TE_NEST) precisely so this write can be
+               made from what the SET decided rather than from what is firing.
+               THE ZERO IT REPLACES IS ASSERTED AND NOT RESTORED, because §8.1.7.3 says a task is over before
+               the next one begins: step 2.7 sets the currently running task back to null and only then does
+               2.8 run the microtask checkpoint. Reading a nonzero level here would mean two tasks are inside
+               one another on this flow's timeline — which the driver's own ladder forbids by resuming a
+               parked continuation ahead of any job — and restoring it instead of asserting would make that
+               state survive silently as a level nobody can account for. */
+            DCHECK(event_loop_timer_nesting(ctx) == 0,
+                   "§8.7 Timers's step 9 task began while the event loop already had a timer task as its "
+                   "currently running task — §8.1.7.3 Processing model step 2.7 sets that back to null "
+                   "before step 2.8's checkpoint, so two of them overlapping means a task started inside "
+                   "another's steps and the inner one's level is about to be attributed to the outer");
+            event_loop_set_timer_nesting(ctx, nest);
+        }
+        /* §8.7 step 9.7's invocation. `argc` is 0 for the reason the buffer is two slots — see TimerTask. */
+        r = step_call_run(ctx, &s->cphase, STEP_CB(s->cb), handler, JS_UNDEFINED, 0, NULL, cb_result, &out,
+                          out_cb, out_argc);
+        if (r > 0)
+            return r;   /* PARKED ON THE PAGE'S CODE: the level stays published, which is the whole point */
+        /* "and \"report\"" — §8.7 hands an abrupt completion to §8.1.4.6 Runtime script errors' report an
+           exception rather than propagating it, and this engine's job machinery is where that already
+           happens for every task (solver/engine.c reports a job's throw as a page error). So the throw
+           leaves here as the task's own abrupt completion and is reported there; what must not happen is
+           that it leaves with the level still published. */
+        threw = (r < 0) || JS_IsException(out);
+        JS_FreeValue(ctx, out);
+        /* §8.1.7.3 Processing model step 2.7: "Set the event loop's currently running task back to null." */
+        event_loop_set_timer_nesting(ctx, 0);
+        return threw ? JS_STEP_ABRUPT : JS_STEP_DONE;
+}
+
+/* NO `fini`. §8.7's task has no completion value — step 9 states substeps and returns nothing — and the two
+   ownership lists a teardown needs are `visit` (the call buffer) and nothing else. */
+static const JSTrampStepDef TT_DEF = {
+    sizeof(TimerTask), js_timer_task_step, NULL, 0,
+    .visit = tt_visit,
+    .algorithm = "HTML §8.7 Timers timer initialization steps step 9's task",
+    .steps = TT_STEPS
+};
+
 /* FIRE THE EARLIEST DUE TIMER — the event loop's own step, and the reason it is not a queued task.
  *
  * IT USED TO BE ONE, AND THAT WAS THE BUG. Setting a timer enqueued a "step" task immediately, so a timer
@@ -456,10 +596,10 @@ int timer_run_due(JSContext *ctx)
 {
     JSValue whenv = JS_UNDEFINED;
     double seq = 0, every;
-    int idx = -1;
+    int idx = -1, nest = 0;
     JSContext *docctx = timer_earliest(ctx, &idx, &whenv, &seq);
-    JSValue q, e, fn, *args = NULL;
-    uint32_t i, n;
+    JSValue q, e, fn;
+    uint32_t n;
 
     if (!docctx)
         return 0;
@@ -495,8 +635,8 @@ int timer_run_due(JSContext *ctx)
     e = JS_GetPropertyUint32(docctx, q, (uint32_t)idx);
     DCHECK(JS_IsObject(e), "the timer the event loop selected is no longer in its global's map — nothing runs "
                            "between the selection and this read");
-    /* Take what the callback needs BEFORE the entry can be reused: an interval re-arms in place and a one-shot
-       frees its slot, so neither the function nor the arguments may still be read out of the entry after. */
+    /* Take what the task needs BEFORE the entry can be reused: an interval re-arms in place and a one-shot
+       frees its slot, so neither the handler nor the level may still be read out of the entry after. */
     fn = JS_GetPropertyUint32(docctx, e, TE_FN);
     DCHECK(JS_IsFunction(docctx, fn),
            "§8.7 Timers's map held an entry whose handler is not callable — the string form became a script instead "
@@ -504,15 +644,24 @@ int timer_run_due(JSContext *ctx)
     n = arr_len(docctx, e);
     DCHECK(n >= TE_ARG0,
            "an entry of §8.7 Timers's map of active timers is shorter than its own fixed head — the handle, expiry, "
-           "period, insertion order and handler are all written at the set, and the extra arguments HTML "
-           "passes the callback are what follows them");
+           "period, timer nesting level, insertion order and handler are all written at the set, and the extra "
+           "arguments HTML passes the callback are what follows them");
     n -= TE_ARG0;
-    if (n > 0) {
-        args = js_malloc(docctx, sizeof(*args) * (size_t)n);
-        CHECK(args != NULL, "timer: the callback argument copy failed");
-        for (i = 0; i < n; i++)
-            args[i] = JS_GetPropertyUint32(docctx, e, TE_ARG0 + i);
-    }
+    /* THE EXTRA ARGUMENTS ARE NOT THERE TO TAKE, and that is the declaration's statement rather than this
+       one's: timer_init does not declare §8.7's `any... arguments` tail, so a non-variadic member's argument
+       count is min(passed, declared) and no writer of this map has ever placed one. The task machine below
+       invokes the handler with none and its call buffer is sized for none, so this fires on the same day
+       js_set_timer's `argc == 2` does — and names the buffer that has to grow with the declaration. */
+    DCHECK(n == 0,
+           "an entry of §8.7 Timers's map of active timers carries the EXTRA ARGUMENTS its task must invoke "
+           "the handler with, and §8.7 Timers's task machine here has no room for them — its call buffer is "
+           "[this, handler] because timer_init declares no `any... arguments` tail. Declaring the tail (see "
+           "timer_init, which names what it costs) means this entry's tail travels as the task's own "
+           "arguments and TimerTask::cb grows with it");
+    /* §8.7 Timers's step 3 FOR THE RE-ARM BELOW, read off this entry: the task about to run is the one this
+       entry queues, so ITS level is what "the surrounding agent's event loop's currently running task" answers
+       at the moment step 9.11 re-performs the algorithm. */
+    nest = (int)timer_entry_num(docctx, e, TE_NEST);
     every = timer_entry_num(docctx, e, TE_EVERY);
     if (every >= 0) {
         /* setInterval: the same entry is scheduled again at now + period. UNBOUNDED by design — a page's
@@ -520,44 +669,36 @@ int timer_run_due(JSContext *ctx)
            counter cutting it off. It needs no re-enqueue now: it is simply the earliest entry again when the
            driver next has nothing to do. Its insertion order is REFRESHED, because the re-arm is a new task on
            the source and a timer set in the meantime for the same moment was set first.
-           §8.7 Timers does not re-arm by adding a period: the task's last step "perform the timer initialization steps
-           AGAIN, given global, handler, timeout, arguments, true, and id" — the SAME algorithm, so step 5 runs
-           on the re-arm exactly as it ran on the `setInterval` call. */
-        DCHECK(every >= 4,
-               "§8.7 Timers's TIMER NESTING LEVEL is not built, and a repeating timer whose `timeout` is under 4ms is "
-               "the case whose answer it decides. Step 3 reads the level off the currently running task ("
-               "\"if the surrounding agent's event loop's currently running task is a task that was created by "
-               "this algorithm, then let nesting level be the task's timer nesting level; otherwise 0\"), the "
-               "task's last step re-runs the WHOLE algorithm for a repeat, and steps 10 and 11 (\"Increment "
-               "nestingLevel by one\" / \"Set task's timer nesting level to nestingLevel\") carry it onto the "
-               "task it queues — so an interval's re-arms walk 1,2,3,... and step 5 (\"if nesting level is "
-               "greater than 5, and timeout is less than 4, then set timeout to 4\") takes over from the sixth. "
-               "The same three steps govern a RECURSIVE `setTimeout(f,0)`, which is the more common spelling and "
-               "which this component gets wrong in the same way and cannot assert here: with no clamp its chain "
-               "re-arms at the same virtual moment for ever, so `timer_earliest` picks it every time and a "
-               "`setTimeout(g,1)` set beside it NEVER RUNS — a livelock real Chrome does not have, on the "
-               "ordering that is the whole point of a virtual clock. THE LEVEL BELONGS TO THE TASK, which is why "
-               "it cannot be a field of this component: Blink keeps it on the DOMTimer and sets the context's "
-               "current level around the fire, and this engine's timer task is a FlowJob (solver/flow.h) that "
-               "runs after this function has returned. So carry it there — JS_EnqueueCallTask takes the level, "
-               "the drainer publishes it as the running task's, `js_set_timer` reads it (0 when the running job "
-               "is not a timer task) and applies steps 4-5, and this re-arm passes its own plus one. Then the "
-               "substitute below deletes with this assert.");
-        /* THE RE-ARM USES §8.7 Timers's OWN NUMBER, not a number of this component's. `1` stood here and appears
-           nowhere in §8.7 Timers — it was doing the job step 5 does, badly: it is wrong for every re-arm of a
-           zero-period interval, where the spec says 0 for the first five and 4 for every one after. 4 is the
-           steady state of an interval that outlives its nesting level, so a release build (where the assert
-           above is compiled out) is the spec for the unbounded tail rather than for a finite prefix. */
+           §8.7 Timers does not re-arm by adding a period: step 9.11 is "perform the timer initialization
+           steps again, given global, handler, timeout, arguments, true, and id" — the SAME algorithm. */
+        /* §8.7 Timers's STEP 5, ON THE RE-ARM'S OWN NESTING LEVEL — "If nestingLevel is greater than 5, and
+           timeout is less than 4, then set timeout to 4." `nest` above is step 3's answer for this re-run
+           (the running task is the one this entry queues), so an interval's re-arms walk 1, 2, 3, … and the
+           clamp takes over once the level passes 5.
+           IT IS COMPUTED FROM THE ORIGINAL `timeout` EVERY TIME AND NEVER WRITTEN BACK. Step 9.11 re-performs
+           the algorithm "given global, handler, TIMEOUT, arguments, true, and id" — the timeout the page
+           passed, not the one step 5 produced last round — so TE_EVERY keeps the page's number and the clamp
+           is re-derived per fire. Folding the 4 back into the entry would make step 5 idempotent-looking and
+           would be a different program the moment anything else read the period.
+           AND IT IS NOT A BOUND. §NO BOUNDS forbids a cap because a cap decides work will not HAPPEN; this
+           decides only WHEN, and every re-arm still runs. What it actually buys is the opposite of a
+           truncation: with no clamp a zero-period interval re-arms at the same virtual moment for ever, so
+           timer_earliest picks it at every turn and a `setTimeout(g, 1)` set beside it never runs at all —
+           the livelock is what starves work, and §8.7's own number is what ends it. */
+        double per_ms = (nest > 5 && every < 4) ? 4 : every;
         /* THE RE-ARM'S START TIME IS THE CLOCK AND NOT THIS ENTRY'S OLD EXPIRY, which is the same sentence
            §8.7 already writes: the task's last step performs the timer initialization steps AGAIN, and their
            step 2 is "Let startTime be the current high resolution time given global". The two agreed for as
            long as firing always moved the clock TO the expiry; they part on the arm above where the expiry
            was already behind the clock, and there the old expiry would re-arm the interval into the past. */
-        JSValue base = event_loop_now(docctx), per = JS_NewFloat64(docctx, every >= 4 ? every : 4);
+        JSValue base = event_loop_now(docctx), per = JS_NewFloat64(docctx, per_ms);
 
         JS_SetPropertyUint32(docctx, e, TE_WHEN, event_loop_moment_plus(docctx, base, per));
         JS_FreeValue(docctx, per);
         JS_FreeValue(docctx, base);
+        /* §8.7 Timers's STEP 10, "Increment nestingLevel by one", and STEP 11, "Set task's timer nesting
+           level to nestingLevel" — for the task this re-armed entry will queue at its next expiry. */
+        JS_SetPropertyUint32(docctx, e, TE_NEST, JS_NewInt32(docctx, nest + 1));
         JS_SetPropertyUint32(docctx, e, TE_SEQ, JS_NewFloat64(docctx, event_loop_task_seq(docctx)));
     } else {
         JS_SetPropertyUint32(docctx, q, (uint32_t)idx, JS_UNDEFINED);
@@ -565,15 +706,35 @@ int timer_run_due(JSContext *ctx)
     JS_FreeValue(docctx, e);
     JS_FreeValue(docctx, q);
 
-    /* THE CALLBACK IS STILL A TASK, and still the page's own code — so it goes through the flow machinery
-       exactly as before. Only the decision of WHEN moved. It is queued in the realm whose map held it, which
-       is §8.7 Timers's "queue a GLOBAL task": the global is the one the timer was set on, never whichever realm the
-       driver happens to be stepping. */
-    JS_EnqueueCallTask(docctx, fn, (int)n, (JSValueConst *)args);
+    /* §8.7 Timers's STEP 12's COMPLETION STEP — "queues a global task on the timer task source given global
+       to run TASK". What is queued is step 9's TASK and not the page's handler: the task is the thing step 11
+       hangs the timer nesting level on, so a queue of the bare handler had nowhere to put it and step 3 had
+       nothing to read. It is still the page's own code that ends up running, through the same flow machinery
+       as before — the task's own substep 9.7 invokes the handler, and a step machine is how a C algorithm
+       runs page code without the drive-to-completion this engine aborts on.
+       IN THE REALM WHOSE MAP HELD IT, which is the GLOBAL half of the operation §8.1.7.2 Queuing tasks
+       defines and step 12 invokes: the global is the one the timer was set on, never whichever realm the
+       driver happens to be stepping. Minting the callee in `docctx` is the same statement one level down —
+       a C function answers out of the realm that DEFINED it. */
+    {
+        JSValueConst targ[TT_ARG_N];
+        JSValue task, lvl;
+
+        DCHECK(g_task_stepid >= 0,
+               "§8.7 Timers's step 9 task was queued before timer_init registered its machine — the machine "
+               "is declared once per agent and every expiry goes through it");
+        lvl = JS_NewInt32(docctx, nest);
+        targ[TT_ARG_HANDLER] = fn;
+        targ[TT_ARG_NEST] = lvl;
+        task = JS_NewCFunction2(docctx, NULL, "timerTask", TT_ARG_N, JS_CFUNC_step, g_task_stepid);
+        CHECK(!JS_IsException(task),
+              "timer: §8.7 Timers's step 9 task could not be allocated — a dropped task is a callback the "
+              "page asked for and never gets, which is invisible from outside");
+        JS_EnqueueCallTask(docctx, task, TT_ARG_N, targ);
+        JS_FreeValue(docctx, task);
+        JS_FreeValue(docctx, lvl);
+    }
     JS_FreeValue(docctx, fn);
-    for (i = 0; i < n; i++)
-        JS_FreeValue(docctx, args[i]);
-    js_free(docctx, args);
     return 1;
 }
 
@@ -599,8 +760,15 @@ int timer_run_due(JSContext *ctx)
  * IT IS A DECLARATION AND NOT A DISPATCH. Nothing asks at a call site which implementation to run — the member
  * is declared `idl_method_id_step` at timer_init and there is no other body for anything to select against. */
 #define TI_STAGES(X)                                                                                          \
+    X(TI_NESTING,                                                                                             \
+      "HTML §8.7 Timers timer initialization steps step 3 (if the surrounding agent's event loop's currently " \
+      "running task is a task that was created by this algorithm, then let nestingLevel be the task's timer "  \
+      "nesting level; otherwise let nestingLevel be 0)")                                                      \
     X(TI_TIMEOUT,                                                                                             \
       "HTML §8.7 Timers timer initialization steps step 4 (if timeout is less than 0, then set timeout to 0)") \
+    X(TI_CLAMP,                                                                                               \
+      "HTML §8.7 Timers timer initialization steps step 5 (if nestingLevel is greater than 5, and timeout is " \
+      "less than 4, then set timeout to 4)")                                                                  \
     X(TI_SCHEDULE,                                                                                            \
       "HTML §8.7 Timers timer initialization steps steps 12-15 (the completion step that queues a global "     \
       "task on the timer task source, run steps after a timeout given that timeout, and return id)")
@@ -613,16 +781,29 @@ static const char *const TI_STEPS[] = { TI_STAGES(JS_STEP_STAGE_LABEL) NULL };
    this file, because decide.c keys a predicate by (source identity, operation) and two spellings of one
    question must compose to one key. */
 static const char TI_STEP4_OP[] = "HTML §8.7 timer initialization steps step 4 (timeout < 0)";
+/* AND STEP 5'S, WHICH IS A SECOND PREDICATE OVER THE SAME VALUE AND MUST NOT SHARE STEP 4'S KEY. `timeout < 0`
+   and `timeout < 4` are different questions with different answer sets — a flow that answered the first FALSE
+   has said nothing at all about the second — so folding them onto one name would let one arm's record decide
+   its neighbour, which is exactly the "the flow's record of one predicate decides that predicate and never its
+   neighbour" rule the constraint is keyed by (operation, operands) to keep. */
+static const char TI_STEP5_OP[] = "HTML §8.7 timer initialization steps step 5 (timeout < 4)";
 
 /* WHAT THE MACHINE HOLDS ACROSS THE FORK: step 4's RESULT, which is the only thing the stage below needs and
    the one thing it must not recompute — recomputing it would re-ask a question this flow has already answered.
    `placed` is the byte a machine needs and its stage cannot give it (the first stage IS the entry stage, so
-   `stage == TI_TIMEOUT` is true before anything has run): a zeroed JSValue is the INTEGER 0, not undefined
+   `stage == TI_NESTING` is true before anything has run): a zeroed JSValue is the INTEGER 0, not undefined
    (JS_TAG_INT is 0), so a visit walking `timeout` before its stage has written it would hand the fork a real
-   value the page can see. */
+   value the page can see.
+   `nest` IS STEP 3'S ANSWER AND `nested` IS ITS OWN `placed`, for the same reason and not for a weaker one: a
+   zeroed `nest` is 0, which is a LEGITIMATE level (step 3's "Otherwise"), so a stage reading it before step 3
+   ran would read a real answer to a question nobody asked and step 5 would silently never clamp. The two
+   bytes are separate because the two stages are, and a machine re-entered at TI_CLAMP by a sibling must be
+   able to say which of them its own arm has written. */
 typedef struct {
     JSValue timeout;
+    int     nest;
     uint8_t placed;
+    uint8_t nested;
 } TimerInitState;
 
 static void ti_visit(JSContext *ctx, void *st, JSStepVisit *v)
@@ -665,9 +846,27 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
 
     STEP_DISPATCH(TI_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
 
+    STEP_ARM(TI_NESTING);
+    /* §8.7 step 3: "If the surrounding agent's event loop's currently running task is a task that was created
+       by this algorithm, then let nestingLevel be the task's timer nesting level. Otherwise, let nestingLevel
+       be 0." Both halves of that are ONE read here, because the level a task publishes IS 0 when it is not one
+       of this algorithm's — see core/timing/event_loop.h on why 0 is the positive statement and not a default.
+       IT IS ITS OWN STAGE BECAUSE IT IS ITS OWN STEP. Nothing here can fork or suspend, so the rest point it
+       offers is declined at once; what it buys is that a parked machine can SAY it is standing at step 3, and
+       that the arm below cannot quietly become "steps 3 and 4" the next time either of them grows. */
+    s->nest = event_loop_timer_nesting(ctx);
+    s->nested = 1;
+    STEP_GOTO(hdr->stage, TI_TIMEOUT, NULL);
+    return JS_STEP_YIELD;
+
     STEP_ARM(TI_TIMEOUT);
     {
         double delay = 0;
+
+        DCHECK(s->nested,
+               "§8.7's timer initialization steps reached step 4 with no `nestingLevel` — step 3 is the only "
+               "writer of it and the stage before this one is step 3, so an unwritten value means this "
+               "machine was entered at a stage it did not leave");
 
         /* `timeout` is a Web IDL `long`, so §3.2.4.5's ConvertToInt(V, 32, "signed") already ran in the
            declaration — UNLESS the page passed unknown external input, which crosses an IDL boundary as itself
@@ -753,15 +952,79 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             s->timeout = JS_NewFloat64(ctx, delay);
         }
         s->placed = 1;
-        STEP_GOTO(hdr->stage, TI_SCHEDULE, NULL);
+        STEP_GOTO(hdr->stage, TI_CLAMP, NULL);
         return JS_STEP_YIELD;
     }
 
+    STEP_ARM(TI_CLAMP);
+    /* §8.7 step 5: "If nestingLevel is greater than 5, and timeout is less than 4, then set timeout to 4."
+     *
+     * THE TWO CONJUNCTS ARE NOT ALIKE AND THE ORDER MATTERS. `nestingLevel` is a count this engine performed —
+     * step 3 read it off a task this engine queued — so it is always a real integer and its half of the `and`
+     * is DECIDED, never forked. `timeout` is the page's, and after step 4's false arm it can still be unknown
+     * external input; so the second conjunct is a second predicate over that unknown, with its own key (see
+     * TI_STEP5_OP) and its own two feasible arms. Asking it FIRST would mint a fork for every `setTimeout`
+     * over an unknown delay whatever the nesting level, and five sixths of those arms would be worlds step 5
+     * cannot enter — the short-circuit is the spec's own `and`, not an optimisation.
+     *
+     * AND WHAT THIS IS NOT IS A BOUND. §NO BOUNDS forbids a cap because a cap decides that work will not
+     * HAPPEN; this decides only WHEN a timer becomes due. Every callback still runs, no flow is dropped,
+     * starved, skipped, reordered or forgotten, and the frontier is the same set of work items either way.
+     * What it removes is a STARVATION: with no clamp a `setTimeout(f, 0)` chain re-arms at the same virtual
+     * moment for ever, timer_earliest picks it at every turn, and a `setTimeout(g, 1)` set beside it is never
+     * reached at all. The clamp is what lets the other timer run — it is the opposite of a truncation. */
+    DCHECK(s->nested && s->placed,
+           "§8.7's timer initialization steps reached step 5 without both of the values it compares — step 3 "
+           "writes `nestingLevel` and step 4 writes `timeout`, and both stages precede this one");
+    if (s->nest > 5) {
+        if (concolic_is(s->timeout)) {
+            /* Step 5's second conjunct over an unknown: both completions are feasible over §3.2.4.5's whole
+               `long`, so BOTH arms run — this flow takes one and the driver snapshots the machine for the
+               other. Outcome 0 is the FALSE arm for the reason step 4's is: the ordinary completion of "is
+               this timeout under 4" is that it is not, and a candidate re-fire (which has no forking policy
+               and takes outcome 0) must not be diverted onto the spec's assignment. */
+            double delay = 0;
+            int have = idl_number_of(ctx, IDL_LONG, s->timeout, &delay);
+            int real = have ? (delay < 4) : JS_OUTCOME_REAL_UNSTATED;
+            int arm = 0, rc = step_fork_run(ctx, hdr, s->timeout, TI_STEP5_OP, 2, real, &arm);
+
+            if (rc)
+                return rc;
+            DCHECK(arm == 0 || arm == 1,
+                   "a two-armed outcome fork answered with an arm that is neither of them");
+            if (arm == 1) {
+                /* Step 5's own assignment, on its own arm — concretize-on-pin with the ALGORITHM doing the
+                   pinning, exactly as step 4's true arm does. The unknown it replaces is released here
+                   because ti_visit's ONE list names this field: the state keeps owning whatever stands in
+                   it, so an overwrite that did not free would leak the value the sibling still holds a
+                   reference to. */
+                JS_FreeValue(ctx, s->timeout);
+                s->timeout = JS_NewFloat64(ctx, 4);
+            }
+        } else {
+            double delay = 0;
+            /* OUTSIDE the assert, because a DCHECK's condition is compiled out in release and this one WRITES
+               the number the line below compares — folded in, a release build would clamp every timeout at a
+               nesting level past 5 to 4 on the strength of an uninitialised read. */
+            int have = idl_number_of(ctx, IDL_LONG, s->timeout, &delay);
+
+            DCHECK(have,
+                   "§8.7's step 5 reached a `timeout` that is neither unknown external input nor a number — "
+                   "step 4 writes one of exactly those two on every arm it has");
+            if (delay < 4) {
+                JS_FreeValue(ctx, s->timeout);
+                s->timeout = JS_NewFloat64(ctx, 4);
+            }
+        }
+    }
+    STEP_GOTO(hdr->stage, TI_SCHEDULE, NULL);
+    return JS_STEP_YIELD;
+
     STEP_ARM(TI_SCHEDULE);
-    DCHECK(s->placed,
-           "§8.7's timer initialization steps reached step 12 with no `timeout` — step 4 is the only writer of "
-           "it and the stage before this one is step 4, so an unwritten value means this machine was entered "
-           "at a stage it did not leave");
+    DCHECK(s->placed && s->nested,
+           "§8.7's timer initialization steps reached step 12 with no `timeout` or no `nestingLevel` — step 4 "
+           "and step 3 are their only writers and both stages precede this one, so an unwritten value means "
+           "this machine was entered at a stage it did not leave");
 
     /* THE STRING FORM IS A SCRIPT — compiled and run in global scope, which is the sink `setTimeout(str)` is
        known for. It is queued as a script flow (the path an injected <script> takes), never evaluated here:
@@ -833,18 +1096,24 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
 
     /* THE PERIOD IS A DOUBLE AND AN UNKNOWN ONE IS A DIFFERENT QUESTION FROM AN UNKNOWN DELAY, which is why it
        is refused HERE rather than absorbed. A one-shot's unknown expiry is ordered by a fork and is then done
-       with; a REPEAT re-arms from its own period at every fire, and §8.7's task's last step "perform the timer
-       initialization steps AGAIN" runs step 5 on each of those — the clamp that needs the TIMER NESTING LEVEL,
-       which this component does not have and whose absence the re-arm's own assert in timer_run_due already
-       names in full. An unknown period would therefore be re-armed by a rule the engine cannot state, for
-       ever. Build the nesting level first; the two meet at step 5. */
+       with; a REPEAT re-arms from its own period at every fire, and §8.7's step 9.11 "perform the timer
+       initialization steps AGAIN" runs step 5 on each of those — so the clamp is asked once per fire, over a
+       value that is still unknown, from timer_run_due. That is what this refusal now names, and it is a
+       DIFFERENT gap from the one it used to name: the TIMER NESTING LEVEL is built (step 3 reads it at
+       TI_NESTING, step 5 clamps at TI_CLAMP, step 11 rides the entry as TE_NEST), and what is missing is the
+       ability to ASK step 5's comparison from the re-arm — timer_run_due is not a step machine, so it has no
+       resume point to hand a sibling. */
     if (magic && concolic_is(s->timeout))
-        DFAIL("`setInterval` was given a PERIOD that is unknown external input, and §8.7's repeat re-runs the "
-              "whole timer initialization steps at every fire — so step 5 (\"If nestingLevel is greater than "
-              "5, and timeout is less than 4, then set timeout to 4\") governs every re-arm and this "
-              "component has no TIMER NESTING LEVEL to evaluate it with. Build the level first (timer_run_due "
-              "carries the whole design in the assert on its re-arm), then this reads it and the re-arm's "
-              "expiry is §8.7's own number over the unknown rather than a rule invented here");
+        DFAIL("`setInterval` was given a PERIOD that is unknown external input, and §8.7 Timers's step 9.11 "
+              "re-performs the whole timer initialization steps at every fire — so step 5 (\"If nestingLevel "
+              "is greater than 5, and timeout is less than 4, then set timeout to 4\") is a FORK over that "
+              "unknown once per re-arm, and the re-arm happens in timer_run_due, which is a plain C function "
+              "with no resume point for the sibling. WHAT TO BUILD: the re-arm is §8.7's own re-performance "
+              "of this algorithm, so it should BE this machine — timer_run_due hands the entry's handler, "
+              "period and TE_NEST back to the timer initialization steps as a queued re-run rather than "
+              "re-computing the expiry itself, at which point TI_CLAMP's existing fork answers it with no new "
+              "mechanism at all. Until then a repeat's period is a number, and TE_EVERY's `timer_entry_num` "
+              "asserts that from the other end");
     /* A one-shot's period is -1 and is never read; a repeat's is the converted `timeout`, which the refusal
        above has established is a number — so nothing here runs ToNumber over an unknown. */
     every = -1;
@@ -853,8 +1122,11 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
     /* BORROWED, NOT HANDED OVER: timer_set reads `delay` through event_loop_moment_plus, which builds the expiry
        as a NEW value on both of its paths, so the state keeps owning this one and the teardown releases it.
        §8.7's `any... arguments` tail is not declared, so there are no extra arguments to pass — see timer_init,
-       which names what declaring it costs. */
-    *presult = JS_NewInt32(ctx, timer_set(ctx, s->timeout, every, argv[0], 0, NULL));
+       which names what declaring it costs.
+       §8.7 STEP 10, "Increment nestingLevel by one", IS THE `+ 1` — and step 11 is what timer_set does with
+       it. The increment is HERE and not inside timer_set because it is this algorithm's step: `timer_after`'s
+       task is not one this algorithm created, so it passes step 3's own 0 through unincremented. */
+    *presult = JS_NewInt32(ctx, timer_set(ctx, s->timeout, every, s->nest + 1, argv[0], 0, NULL));
     return JS_STEP_DONE;
     /* nothing is queued: the driver asks when the clock may move */
 }
@@ -891,9 +1163,13 @@ int timer_after(JSContext *ctx, double ms, JSValueConst steps)
     /* AN ENGINE CALLER'S `milliseconds` IS A REAL DOUBLE, which is the difference between this entry and the
        page's: the caller is an algorithm of this engine and the number is one the engine computed, so there is
        no unknown here to order by a fork. It crosses into the map as the value every expiry is. */
+    /* AND ITS TASK IS NOT ONE THE TIMER INITIALIZATION STEPS CREATED, so the level it publishes is step 3's
+       own "Otherwise": 0. `run steps after a timeout` is a DIFFERENT algorithm — §8.7's step 13 invokes it
+       from the timer initialization steps rather than being them — so an engine algorithm scheduled through
+       here must not make a `setTimeout` its completion steps perform look nested. */
     {
         JSValue msv = JS_NewFloat64(ctx, ms);
-        int key = timer_set(ctx, msv, -1, steps, 0, NULL);
+        int key = timer_set(ctx, msv, -1, 0, steps, 0, NULL);
         JS_FreeValue(ctx, msv);
         return key;
     }
@@ -1000,6 +1276,12 @@ void timer_init(JSContext *ctx)
     g_id_clear_interval = idl_method_id(ctx, CLEAR_TIMER, 1, js_clear_timer, 0);
     idl_optional_from(0);
     idl_arg_default(0, IDL_DEFAULT_ZERO, NULL);
+    /* §8.7 Timers's STEP 9 TASK, declared once per agent like the four members above — its definition is
+       static and outlives the runtime, which is what JS_RegisterStepDef borrows. */
+    g_task_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &TT_DEF);
+    CHECK(g_task_stepid >= 0,
+          "timer: §8.7 Timers's step 9 task machine could not be registered — every expiry runs through it, so "
+          "an agent without it has no way to fire a timer at all");
     g_atom_map = JS_NewAtom(ctx, "activeTimers");
     g_atom_next = JS_NewAtom(ctx, "timerIdentifier");
     CHECK(g_atom_map != JS_ATOM_NULL && g_atom_next != JS_ATOM_NULL,
@@ -1023,6 +1305,7 @@ void timer_init(JSContext *ctx)
     agent_state_id("timer", &g_id_set_interval, "§8.7 Timers's setInterval declaration");
     agent_state_id("timer", &g_id_clear_timeout, "§8.7 Timers's clearTimeout declaration");
     agent_state_id("timer", &g_id_clear_interval, "§8.7 Timers's clearInterval declaration");
+    agent_state_id("timer", &g_task_stepid, "§8.7 Timers's step 9 task machine");
     agent_state_ptr("timer", &g_script_sink, "the host edge a string-bodied setTimeout is queued through");
 }
 
@@ -1082,5 +1365,9 @@ void timer_free(JSRuntime *rt)
        from the last agent's pool entry. Nothing frees a pool id, which is exactly why nothing but this line
        and agent_state_check_released can notice one that stayed. */
     g_id_set_timeout = g_id_set_interval = g_id_clear_timeout = g_id_clear_interval = -1;
+    /* §8.7 Timers's step 9 task machine goes back with them, and for the same reason: the id indexes a table
+       that belongs to the RUNTIME, so a carried one would mint the next agent's tasks out of the last
+       agent's entry. */
+    g_task_stepid = -1;
     g_script_sink = NULL;
 }

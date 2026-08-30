@@ -14,7 +14,8 @@
    fact, where one prototype answering every realm is a defect. What must not be shared is the TIMELINE, and
    that is answered by the object's properties riding the per-flow COW delta rather than by a second object. */
 static JSValue g_rec = JS_UNDEFINED;
-static JSAtom  g_atom_now = JS_ATOM_NULL, g_atom_render = JS_ATOM_NULL, g_atom_seq = JS_ATOM_NULL;
+static JSAtom  g_atom_now = JS_ATOM_NULL, g_atom_render = JS_ATOM_NULL, g_atom_seq = JS_ATOM_NULL,
+               g_atom_nest = JS_ATOM_NULL;
 
 /* A FIELD OF THE RECORD, as the VALUE it is. OWNED. The two moments may be unknown external input; the
    insertion counter may not, and el_num_get below is where that half is asserted. */
@@ -43,16 +44,20 @@ static void el_set(JSContext *ctx, JSAtom key, JSValueConst v)
     JS_SetProperty(ctx, g_rec, key, JS_DupValue(ctx, v));
 }
 
-/* THE INSERTION COUNTER, which is the one field that can never be unknown: §8.1.7 hands out a real number at
-   every set, and a tie broken by an unknown would be a tie broken by nothing. */
+/* A COUNTER FIELD, which is the kind that can never be unknown — the INSERTION ORDER (§8.1.7 hands out a real
+   number at every set, and a tie broken by an unknown would be a tie broken by nothing) and §8.7 Timers's
+   TIMER NESTING LEVEL of the currently running task (a count of nested invocations of one algorithm, which is
+   something this engine performed rather than something a page supplied). */
 static double el_num_get(JSContext *ctx, JSAtom key)
 {
     JSValue v = el_get(ctx, key);
     double d = 0;
 
     DCHECK(JS_IsNumber(v),
-           "the event loop's task INSERTION ORDER is not a number — it is the counter that breaks a tie "
-           "between two sources' tasks due at the same moment, so an unknown here is a tie decided by nothing");
+           "a COUNTER on the event loop's record is not a number — the task insertion order breaks a tie "
+           "between two sources' tasks due at the same moment and §8.7 Timers's timer nesting level counts "
+           "nested invocations of the timer initialization steps, so an unknown in either is a tie or a "
+           "clamp decided by nothing");
     JS_ToFloat64(ctx, &d, v);
     JS_FreeValue(ctx, v);
     return d;
@@ -114,7 +119,9 @@ void event_loop_init(JSContext *ctx)
     g_atom_now = JS_NewAtom(ctx, "eventLoopNow");
     g_atom_render = JS_NewAtom(ctx, "lastRenderOpportunityTime");
     g_atom_seq = JS_NewAtom(ctx, "taskInsertionOrder");
-    CHECK(g_atom_now != JS_ATOM_NULL && g_atom_render != JS_ATOM_NULL && g_atom_seq != JS_ATOM_NULL,
+    g_atom_nest = JS_NewAtom(ctx, "runningTimerNestingLevel");
+    CHECK(g_atom_now != JS_ATOM_NULL && g_atom_render != JS_ATOM_NULL && g_atom_seq != JS_ATOM_NULL
+          && g_atom_nest != JS_ATOM_NULL,
           "event loop: the record's own keys could not be interned");
     /* NULL-PROTOTYPED, like §8.12 Animation frames's map: this is the loop's own storage and never the page's object, so it
        carries no members a page could have replaced. */
@@ -123,6 +130,10 @@ void event_loop_init(JSContext *ctx)
     JS_SetProperty(ctx, g_rec, g_atom_now, JS_NewFloat64(ctx, 0));
     JS_SetProperty(ctx, g_rec, g_atom_render, JS_NewFloat64(ctx, 0));
     JS_SetProperty(ctx, g_rec, g_atom_seq, JS_NewFloat64(ctx, 0));
+    /* §8.1.7 Event loops: "Each event loop has a currently running task, which is either a task or null.
+       Initially, this is null." Null is level 0 here — see event_loop.h on why 0 is the positive statement
+       and not an absence. */
+    JS_SetProperty(ctx, g_rec, g_atom_nest, JS_NewFloat64(ctx, 0));
     /* THE CLOCK STARTS AT A KNOWN MOMENT and becomes unknown only where a task source's own due moment is —
        which is what makes HR-TIME §4's time origin, stamped from this clock at every realm's creation, a real
        number for every document created before the first such task fires. */
@@ -139,6 +150,8 @@ void event_loop_init(JSContext *ctx)
                      "HTML §8.1.7.1 Definitions' last-render-opportunity-time key on that record");
     agent_state_atom("event_loop", &g_atom_seq,
                      "HTML §8.1.7 Event loops's task-insertion-order key on that record");
+    agent_state_atom("event_loop", &g_atom_nest,
+                     "HTML §8.7 Timers's timer-nesting-level-of-the-currently-running-task key on that record");
 }
 
 /* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.
@@ -159,7 +172,8 @@ void event_loop_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_now);
     JS_FreeAtomRT(rt, g_atom_render);
     JS_FreeAtomRT(rt, g_atom_seq);
-    g_atom_now = g_atom_render = g_atom_seq = JS_ATOM_NULL;
+    JS_FreeAtomRT(rt, g_atom_nest);
+    g_atom_now = g_atom_render = g_atom_seq = g_atom_nest = JS_ATOM_NULL;
 }
 
 JSValue event_loop_now(JSContext *ctx) { return el_get(ctx, g_atom_now); }
@@ -324,6 +338,29 @@ void event_loop_set_last_render(JSContext *ctx, JSValueConst when)
            "caller can produce and could not be evaluated at all once a moment may be unknown");
     JS_FreeValue(ctx, now);
     el_set(ctx, g_atom_render, when);
+}
+
+/* HTML §8.7 Timers's timer initialization steps step 3, ASKED — see event_loop.h. */
+int event_loop_timer_nesting(JSContext *ctx)
+{
+    double d = el_num_get(ctx, g_atom_nest);
+
+    DCHECK(d >= 0 && d == (double)(int)d,
+           "HTML §8.7 Timers's timer nesting level of the currently running task is not a non-negative "
+           "integer — it starts at 0 for an event loop running no task of that algorithm and is only ever "
+           "moved by step 11 (\"Set task's timer nesting level to nestingLevel\") to a value step 10 "
+           "incremented, so anything else means a writer other than §8.7 Timers's own task reached this field");
+    return (int)d;
+}
+
+/* HTML §8.1.7.3 Processing model steps 2.5 and 2.7 — see event_loop.h. */
+void event_loop_set_timer_nesting(JSContext *ctx, int level)
+{
+    DCHECK(level >= 0,
+           "HTML §8.1.7.3 Processing model step 2.5 was asked to make a task whose timer nesting level is "
+           "NEGATIVE the currently running one — §8.7 Timers's step 10 increments from 0, so a task this "
+           "algorithm created is at 1 or above and every other task is at 0");
+    el_num_set(ctx, g_atom_nest, level);
 }
 
 double event_loop_task_seq_peek(JSContext *ctx) { return el_num_get(ctx, g_atom_seq); }
