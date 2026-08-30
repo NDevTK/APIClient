@@ -11,6 +11,12 @@
 #include <stdint.h>
 
 static void *decide_fork_blob(int cursor, int arm, uint32_t asked);   /* the sibling's hot state (below) */
+/* NOTHING THE RUN OBSERVED SAYS WHICH ARM IS THE REAL ONE — decide_real_arm's answer for an example-free
+   value, and the value dec_fork_here and decide_note_forced_arm both read as "make no claim". It is declared
+   with the forward declarations rather than beside its producer because THREE functions spell it and a
+   literal -1 in any of them would be a fourth meaning of the same number (decide_arm already answers -1 for
+   "not concolic" and decide_value_arm for "not decided"). */
+#define REAL_ARM_UNOBSERVED (-1)
 
 /* THE DECISION VECTOR IS A CHAIN, NOT A COPY — the fourth and last instance of cow.c's refcounted immutable
  * segment, and the one that was still copying.
@@ -751,10 +757,23 @@ static int dec_replay(uint32_t asked) {
 
 /* THE FORK — reached by a branch this flow has never decided, and by one whose recorded answer belongs to
    another question (dec_leave_path having just ended the vector at the cursor, which makes the two the same
-   state). FRAME-SNAPSHOT: prepare the FALSE sibling's hot state (its decision vector + the current
+   state). FRAME-SNAPSHOT: prepare the OTHER arm's sibling hot state (its decision vector + the current
    constraint), and signal the interpreter (0x100 bit) to CLONE this frame at the branch. The sibling resumes
-   AT the branch and replays FALSE — it does NOT re-run from the start. This flow takes TRUE. No re-run vector,
-   no fallback.
+   AT the branch and replays its arm — it does NOT re-run from the start. No re-run vector, no fallback.
+   WHICH ARM THIS FLOW KEEPS IS THE OBSERVATION'S TO DECIDE, AND IT USED TO BE THE CONDITION'S SPELLING. This
+   line read `dec_append(1, …)` and blob'd 0: the parent took TRUE at every fork, whatever the run had actually
+   computed. §Learning-from-replies states the rule in one sentence — "at a branch the example marks the real
+   arm PRIMARY; the forced sibling drops the contradicted example, so only gate-DEPENDENT values degrade to a
+   shape while gate-independent values stay concrete" — and with TRUE hardcoded the first clause was false, so
+   the second clause was being asked of the wrong sibling. `if (cfg.admin)` over a loaded `false` kept the
+   ADMIN arm as the primary and pushed the arm a real session takes into a sibling, which is not a fairness
+   question (both arms run, both are ranked identically) but a REPORTING one: the primary is the flow whose
+   values are the ones a session would have computed, and every @H value on it is stated as observed.
+   `real_arm` IS THAT OBSERVATION AND NOT A PREFERENCE — the arm §7.1.2 ToBoolean gives for the concrete
+   example the value already carries, computed ONCE by the caller and used both here and by the FORCED mark, so
+   the two cannot answer differently about one branch. -1 is "nothing observed says", which is the honest state
+   for genuinely external input and absent app state (example-free by design), and there this flow keeps TRUE
+   exactly as it did — an arbitrary but STATED choice between two arms neither of which contradicts anything.
    THE SIBLING'S SNAPSHOT DOES NOT PRE-RECORD ITS ARM, and that deletion is what makes the order in decide_arm
    one rule instead of two. It used to write FALSE into the constraint, take the snapshot, then overwrite with
    TRUE — so the sibling was born already knowing the answer to the branch it was about to re-execute, its
@@ -770,16 +789,22 @@ static int dec_replay(uint32_t asked) {
    The parent's own arm is constrained by decide_arm's tail rather than here, so that the constraint is applied
    in ONE place for all three ways a decision is reached — and so that the seam, which may assemble the sibling
    before this returns, sees the parent's constraint exactly as the sibling's frozen copy left it. */
-static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int restartable, int *forked) {
-    void *dblob = decide_fork_blob(g_c, 0, asked);
+static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int restartable, int real_arm,
+                        int *forked) {
+    int take = real_arm < 0 ? 1 : real_arm;
+    void *dblob;
     void *pblob;
 
+    DCHECK(real_arm == REAL_ARM_UNOBSERVED || real_arm == 0 || real_arm == 1,
+           "a fork was told the real arm is a value that is neither arm nor the unobserved marker — it comes "
+           "from one ToBoolean of one example, so a third value is a caller computing it somewhere else");
+    dblob = decide_fork_blob(g_c, !take, asked);
     fork_key_count(key ? key : "(no source identity)");
     pblob = concolic_pins_suspend();
     *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable);
-    dec_append(1, asked);            /* this flow: TRUE arm, onto the head the freeze above just emptied */
+    dec_append(take, asked);         /* this flow: the observed arm, onto the head the freeze above emptied */
     g_c++;
-    return 1;
+    return take;
 }
 
 /* THE SAME NEW DECISION IN A SESSION THAT EXPLORES NOTHING — the arm the SITE declared, RECORDED like any
@@ -844,7 +869,13 @@ static int dec_answer_here(const char *key, uint32_t asked, int nonforking) {
 /* `nonforking` IS THE ASKING SITE'S OWN ANSWER FOR A SESSION THAT EXPLORES NOTHING — see solver/decide.h. It is
    consulted at exactly one of the three ways a decision is reached, the NEW one, because the other two are
    answers this flow already has and a session's policy cannot change what it already decided. */
-static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonforking, int *forked) {
+/* `real_arm` IS WHAT THE RUN OBSERVED and is consulted at exactly one of the three ways a decision is reached
+ * — the NEW one — for `nonforking`'s reason exactly: the other two are answers this flow already HAS, and an
+ * observation cannot change a decision that has been taken. A replayed arm is this flow's own recorded answer
+ * and a refined one is a consequence of its own constraint; re-deciding either from an example would be the
+ * second evaluator §Re-execution forbids, re-deciding a predicate from something other than the run. */
+static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonforking, int real_arm,
+                      int *forked) {
     uint32_t asked = dec_key_hash(key);
     int arm;
     *forked = 0;
@@ -888,7 +919,7 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonf
            mints the sibling, and one that does not takes the arm the SITE declared and records it. It is not a
            fallback selecting between two implementations of a decision: there is one decision, and this is
            what the other arm's absence means. */
-        arm = engine_session_forks() ? dec_fork_here(ctx, key, asked, restartable, forked)
+        arm = engine_session_forks() ? dec_fork_here(ctx, key, asked, restartable, real_arm, forked)
                                      : dec_answer_here(key, asked, nonforking);
     }
     /* ONE PLACE, ALL THREE ARMS — a replayed arm and a refined one narrow this flow exactly as a forked one
@@ -902,35 +933,34 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonf
     return arm;
 }
 
-/* DID THIS FLOW JUST TAKE AN ARM ITS OWN EXAMPLE CONTRADICTS — the DERIVED/FORCED discriminator, observed at
- * the ONE place an arm is taken and recorded on the flow (flow.h's `path_forced`).
+/* WHICH ARM WOULD A SESSION CARRYING REAL VALUES TAKE — the ONE observation this file makes about a branch,
+ * and the fact BOTH of its consumers read: which sibling is the parent's continuation (dec_fork_here) and
+ * whether the arm this flow ends on is FORCED (flow.h's `path_forced`). It is computed once, at the top of
+ * decide_branch, precisely so those two cannot answer differently about one branch — a primary chosen by one
+ * rule and a forced mark by another would be a flow whose own two records of one arm disagree, and neither
+ * would be wrong at its own site.
  *
  * WHAT MAKES IT AN OBSERVATION AND NOT AN INVENTION. A concolic value is a triple, and where the third member
  * is present the run has a CONCRETE example — a loaded config field, a modelled viewport's `matches`, an
- * `AbortSignal`'s real aborted state, the real bytes of `location.search`. §Solver-half says what that means at
- * a branch: "at a branch the example marks the real arm PRIMARY". So the example ALREADY answers "which arm
- * would a session carrying real values take", by the interpreter's own §7.1.2 ToBoolean over a value this
- * engine computed — no predicate is re-decided from a recorded constraint, nothing is solved, and nothing is
- * picked. The flow taking the other arm is CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED in as many
- * words: "a value exists only because a gate was forced".
+ * `AbortSignal`'s real aborted state, the real bytes of `location.search`. §Learning-from-replies says what
+ * that means at a branch: "at a branch the example marks the real arm PRIMARY; the forced sibling drops the
+ * contradicted example, so only gate-DEPENDENT values degrade to a shape while gate-independent values stay
+ * concrete". So the example ALREADY answers the question, by §7.1.2 ToBoolean over a value this engine
+ * COMPUTED — nothing is solved, nothing is picked, and no predicate is re-decided from a recorded constraint.
+ * That last clause is the line §Re-execution draws: the example rides the value because the interpreter ran
+ * the real op, and reading it here is reading a value the run already has. Deriving the same answer from a
+ * stored expression over the predicate would be the transform-expression that file forbids.
  *
- * A BRANCH WITH NO EXAMPLE MARKS NOTHING, and that is a positive statement rather than a gap. Genuinely
- * external input and server-injected absent state are example-FREE by §Solver-half's design — that is what
- * makes them symbolic — so neither arm of `if (__FLAGS.admin)` over an absent record contradicts any
- * observation. Marking one would be picking an arm to call real, which is the invention this whole taxonomy
- * exists to prevent; the request stays DERIVED, which is exactly what it is (the real code computed it, no
- * session sent it).
- *
- * THE CONTRADICTED EXAMPLE IS NOT YET DROPPED FROM THE VALUE, and that is the NEXT diff rather than a silence:
- * §Learning-from-replies' "the forced sibling drops the contradicted example" needs precisely the fact this
- * function computes, so it could not be built before it. Until it is, a flow past a contradicted branch still
- * reads the pinned-by-nothing example for its @H values — which the provenance now at least SAYS, instead of
- * publishing it under the grade of a value a real session produced.
+ * A BRANCH WITH NO EXAMPLE ANSWERS -1, and that is a positive statement rather than a gap. Genuinely external
+ * input and server-injected absent state are example-FREE by §Solver-half's design — that is what makes them
+ * symbolic — so neither arm of `if (__FLAGS.admin)` over an absent record contradicts any observation, neither
+ * is the "real" one, and nothing may be marked forced. Answering 0 or 1 there would be picking an arm to call
+ * real, which is the invention this whole taxonomy exists to prevent.
  *
  * `JS_ToBool` IS THE RIGHT COERCION AND IT RUNS NO PAGE CODE. §7.1.2 ToBoolean has no ToPrimitive step — an
  * object is true, a string is its length — so this cannot re-enter the interpreter from inside a branch hook,
  * which is what makes it askable here at all. */
-static void decide_note_forced_arm(JSContext *ctx, JSValueConst cond, int arm) {
+static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
     JSValue ex = concolic_example(ctx, cond);
     int real;
 
@@ -939,7 +969,7 @@ static void decide_note_forced_arm(JSContext *ctx, JSValueConst cond, int arm) {
        tag, so a value whose example genuinely IS `undefined` is treated as carrying none — that is the
        producer's encoding, not this reader's default, and the alternative would be this file inventing a
        distinction the value class does not make. */
-    if (JS_IsUndefined(ex)) return;
+    if (JS_IsUndefined(ex)) return REAL_ARM_UNOBSERVED;
     real = JS_ToBool(ctx, ex);
     JS_FreeValue(ctx, ex);
     /* §7.1.2 ToBoolean's only failure is an exception VALUE, which an example can never be: an example rides
@@ -947,10 +977,26 @@ static void decide_note_forced_arm(JSContext *ctx, JSValueConst cond, int arm) {
     DCHECK(real == 0 || real == 1,
            "a concolic value's example coerced to neither true nor false — §7.1.2 ToBoolean answers -1 only "
            "for an exception value, so a producer has attached a pending throw to a value as its example");
+    return real;
+}
+
+/* AND THE ARM THIS FLOW ENDED ON, AGAINST THAT SAME OBSERVATION — CLAUDE.md
+ * §A-REQUEST-CARRIES-THE-PROVENANCE's FORCED in as many words: "a value exists only because a gate was
+ * forced". It is a separate statement from the primacy above because the two are about different flows: the
+ * primacy decides which arm THIS flow keeps at a NEW branch, and this fires for the arm this flow ends on
+ * however it was reached — a fork's, a REPLAYED one (a cold resume re-running its recorded path) and a
+ * constraint-REFINED one alike. A resumed flow whose provenance came back DERIVED would be the whole
+ * discriminator lost at the tier that exists to preserve it.
+ * SO A SIBLING MARKS ITSELF. The fork above hands the contradicted arm to the sibling and records it; the
+ * sibling re-executes this branch when it resumes, replays that arm out of its own vector, and reaches this
+ * line with itself switched in. Marking the sibling from here — at the fork, on the parent's behalf — would be
+ * writing a fact about one flow while another is running, which is the same error one level down as reading a
+ * park's provenance off the flow at join time. */
+static void decide_note_forced_arm(int real_arm, int arm) {
     DCHECK(arm == 0 || arm == 1,
            "an arm that is neither taken nor not-taken was compared against an example — the contradiction is "
            "between TWO booleans, so a third value here is a decision seam that answered something else");
-    if (arm != real) flow_mark_forced_arm();
+    if (real_arm != REAL_ARM_UNOBSERVED && arm != real_arm) flow_mark_forced_arm();
 }
 
 /* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
@@ -958,7 +1004,7 @@ static void decide_note_forced_arm(JSContext *ctx, JSValueConst cond, int arm) {
 static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int nonforking) {
     const char *src = NULL, *tok = NULL;
     char *key;
-    int op, forked = 0, arm;
+    int op, forked = 0, arm, real;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -966,16 +1012,15 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
        value — CONCRETIZE-ON-PIN, so later reads compute the REAL @H value, not the shape. */
     op = concolic_cmp(cond, &src, &tok);
 
+    /* THE OBSERVATION, MADE ONCE, BEFORE ANYTHING IS DECIDED — and read by both of the things that depend on
+       it: which arm this flow keeps if this branch is new, and whether the arm it ends on is FORCED. Taking it
+       twice would be two reads of one example with nothing forcing them to agree. */
+    real = decide_real_arm(ctx, cond);
     key = decide_key(cond);
-    arm = decide_arm(ctx, key, restartable, nonforking, &forked);
+    arm = decide_arm(ctx, key, restartable, nonforking, real, &forked);
     free(key);
 
-    /* WHICH ARM THIS FLOW STANDS ON, AGAINST WHAT THE EXAMPLE SAYS A REAL SESSION WOULD DO. It is asked of
-       EVERY arm and not only of a forked one, because a replayed arm (a cold resume re-running its recorded
-       path) and a refined one (the constraint already answers) stand exactly where a forked one stands — and a
-       resumed flow whose provenance came back DERIVED would be the whole discriminator lost at the tier that
-       exists to preserve it. */
-    decide_note_forced_arm(ctx, cond, arm);
+    decide_note_forced_arm(real, arm);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     /* THE ROOT TRAVELS WITH THE PIN, and it is read off the COMPARISON RESULT rather than re-derived: pred_new
@@ -1059,20 +1104,24 @@ int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking)
  * same question at successive POSITIONS (an iteration over an unknown collection) says so there — each position
  * is its own predicate and must not be decided by the last one's answer.
  *
- * NO ARM TAKEN HERE IS MARKED FORCED, AND WHAT IS MISSING IS A DECLARATION AND NOT A LOOKUP. The branch seam
- * one function up asks the CONDITION for its concrete example and compares the arm against §7.1.2 ToBoolean of
- * it (decide_note_forced_arm); an outcome has no condition and its arms are not booleans — they are numbered
- * COMPLETIONS of a real operation over `over`. Where `over` carries an example the answer exists and is
- * computable, but only by the MACHINE: `JSON.parse` over the example `"{}"` completes normally and over `"#x"`
- * throws, and this seam holds the operand and the operation's NAME, never its semantics. Deciding from the
- * name would be the recognizer §C-stack bans, and picking arm 0 because machines number their ordinary
- * completion there would be inventing which completion a real session reaches.
+ * IT PASSES `REAL_ARM_UNOBSERVED`, AND WHAT IS MISSING IS A DECLARATION AND NOT A LOOKUP. That parameter is
+ * "which completion would a session carrying real values reach", and it decides TWO things at the branch seam
+ * one function up: which arm the parent keeps, and whether the arm it ends on is FORCED. An outcome has no
+ * condition and its arms are not booleans — they are numbered COMPLETIONS of a real operation over `over` —
+ * so §7.1.2 ToBoolean of the operand's example answers a different question and must not be substituted for
+ * this one. Where `over` carries an example the answer exists and is computable, but only by the MACHINE:
+ * `JSON.parse` over the example `"{}"` completes normally and over `"#x"` throws, and this seam holds the
+ * operand and the operation's NAME, never its semantics. Deciding from the name would be the recognizer
+ * §C-stack bans, and taking completion 0 because machines number their ordinary one there would be inventing
+ * which completion a real session reaches.
  * SO THE THING TO BUILD IS THE SITE'S OWN STATEMENT, exactly as `nonforking` already is: the completion this
  * machine's operation reaches when run on the operand's example, or a positive "this machine cannot say". Every
- * machine then answers for itself, at its own definition, and a FORCED completion becomes as visible as a
- * forced branch. Until it is built, a request derived past a forced JSON.parse arm reports DERIVED — which is
- * an under-statement of its provenance and is named here so the next attempt starts from the declaration
- * rather than from a table of operation names. */
+ * machine then answers for itself, at its own definition, and both consequences follow at once — the ordinary
+ * completion becomes the PRIMARY arm, and a forced one becomes as visible as a forced branch. Until it is
+ * built, an outcome fork keeps completion 0 as the parent's (which is what a non-forking session takes, so the
+ * two agree) and a request derived past a forced `JSON.parse` arm reports DERIVED, which is an under-statement
+ * of its provenance and is named here so the next attempt starts from the declaration rather than from a table
+ * of operation names. */
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
     if (!g_running) return -1;
     DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
@@ -1104,7 +1153,7 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n) {
            ordinary completion there (core/timing/timer.c says so at §8.7's step 4). So this entry cannot be
            reached in a non-forking session, and SOLVER_NO_NONFORKING_ARM is what says so: if it ever is, the
            crash names the machine's question rather than recording an arm nobody chose. */
-        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, &forked);
+        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, REAL_ARM_UNOBSERVED, &forked);
         free(key);
         return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }

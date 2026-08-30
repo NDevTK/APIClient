@@ -17,11 +17,17 @@
    THIS flow takes, ORed with SOLVER_FORKED_BIT when a sibling was prepared for the other arm; -1 when the value
    is not concolic (the interpreter falls through to the normal ToBool).
    THE FORKED BIT IS PART OF THE RETURN VALUE AND THIS SAID IT WAS NOT. It documented "the arm (0/1)", and the
-   ONLY caller outside this component believed it: core/dom/abort.c asked `arm == 1`, which is false for the 257
-   a first-time fork returns — so the flow took the FALSE arm while its decision vector recorded TRUE, and the
-   two disagreed for the rest of the run. A protocol whose one caller got it wrong is a protocol nobody should
-   be asked to remember, so the two halves are named here and read through the accessors below. Never compare a
-   raw return value against an arm. */
+   ONLY caller outside this component believed it: core/dom/abort.c asked `arm == 1`, which is false of every
+   value a forking branch returns — so the flow took the FALSE arm while its decision vector recorded TRUE, and
+   the two disagreed for the rest of the run. A protocol whose one caller got it wrong is a protocol nobody
+   should be asked to remember, so the two halves are named here and read through the accessors below. Never
+   compare a raw return value against an arm.
+   AND THE ARM A FORK KEEPS IS NO LONGER ALWAYS TRUE, which is why that defect can no longer be described by
+   ONE number. It used to be: a first-time fork returned 257 and nothing else, so `arm == 1` was wrong in a way
+   a reader could memorise. A fork now keeps the arm the run OBSERVED — §Learning-from-replies' "at a branch
+   the example marks the real arm PRIMARY" — so it returns 256 or 257 depending on what the value's concrete
+   example was, and a caller comparing the raw value against an arm is wrong on a schedule nothing can predict
+   from the source. The accessors are the whole of the contract. */
 #define SOLVER_FORKED_BIT 0x100
 /* The arm this flow takes, from a solver_decide/solver_outcome result known to be >= 0. */
 #define SOLVER_ARM(r)     ((r) & (SOLVER_FORKED_BIT - 1))
