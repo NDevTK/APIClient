@@ -23,6 +23,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 
 const QJS = join(import.meta.dirname, "qjs");
 const CORPUS = join(QJS, "test262", "test");
@@ -108,11 +109,20 @@ const args = ["-c", "test262.conf",
    kill itself; SIGKILL is read as the CPU cause too. */
 const CPU_BUDGET_S = 3600;
 const WALL_BACKSTOP_MS = 7_200_000;
+/* THE CPU THE CHILD ACTUALLY CONSUMED, MEASURED — because the summary below asserted things about it while
+   holding no measurement at all: it called every SIGKILL "the corpus genuinely needs more than this" when
+   SIGKILL is the OOM killer's usual signal, and it told the reader a SIGTERM happened "while consuming little
+   CPU" having never read a meter. Both are the shape this project keeps finding — a plausible sentence that is
+   indistinguishable from a measurement — and the second is its purest form, an assertion about a quantity
+   nothing in the program computes. `cutime`/`cstime` accumulate the CPU of REAPED children and spawnSync reaps
+   before it returns, so the delta across the call is this child's CPU. */
+const cpu0 = childCpuSeconds();
 const r = spawnSync("/bin/sh",
   ["-c", `ulimit -H -t ${CPU_BUDGET_S + 60} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; cd "$1" && shift && exec "$@"`,
    "sh", QJS, bin, ...args],
   { cwd: QJS, encoding: "utf8", maxBuffer: 1 << 30,
     env: { ...process.env, FORK_PREEMPT: "1" }, timeout: WALL_BACKSTOP_MS });
+const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
 const out = (r.stdout || "") + (r.stderr || "");
 /* SINGLE-FILE MODE HAS NO SUMMARY LINE — run-test262 prints one only for a directory run, and a passing file
    prints nothing at all. Reporting the absence of a summary as DID-NOT-COMPLETE told the exact lie this
@@ -184,10 +194,29 @@ const d2c = out.match(/DriveToCompletion: (\d+)/);   /* automatic drive-to-compl
 console.log("\n==================== test262 (feature) ====================");
 /* WHICH OF THEM IT WAS, said out loud. "segfault/abort/timeout" named three causes and distinguished none, so a
    run killed on the clock read exactly like a corpus-wide crash — and did, for a healthy binary, under load. */
-const budgetCause = (r.signal === "SIGXCPU" || r.signal === "SIGKILL")
-    ? `the ${CPU_BUDGET_S}s CPU budget (real CPU consumed, not elapsed — the corpus genuinely needs more than this)`
+/* AND `SIGXCPU || SIGKILL` WAS ITSELF A COLLAPSE, one step short of the correction above it. SIGXCPU is the
+   kernel naming the SOFT rlimit this driver installed; SIGKILL is that rlimit's HARD escalation OR the OOM
+   killer, and only the CPU consumed tells those apart. Reading them as one clause asserted "the corpus
+   genuinely needs more than this" — a sentence about the corpus — for a run the kernel had killed for memory.
+   The CPU figure is printed on every arm, because it is what the reader needs and what none of them carried. */
+const budgetCause =
+    (r.signal === "SIGXCPU" && (cpuUsed === null || cpuUsed >= CPU_BUDGET_S - 1)) ||
+    (r.signal === "SIGKILL" && cpuUsed !== null && cpuUsed >= CPU_BUDGET_S)
+    ? `the ${CPU_BUDGET_S}s CPU budget — ${cpuText(cpuUsed)} of real CPU consumed, not elapsed, so the corpus genuinely needs more than this`
+  : r.signal === "SIGXCPU"
+    /* The kernel raises SIGXCPU only at the soft rlimit, so a meter reading materially below it contradicts the
+       signal. The signal is the kernel's and the number is derived: the number is the one that is wrong. */
+    ? `SIGXCPU — the kernel says this child spent the ${CPU_BUDGET_S}s soft rlimit and this driver's meter read ${cpuText(cpuUsed, 2)} for it. Both cannot be true; the meter (engine/gate_cpu.mjs) is the derived one and is wrong. NOTHING here was measured.`
+  : r.signal === "SIGKILL"
+    ? `SIGKILL after ${cpuText(cpuUsed, 2)} of CPU — ` + (cpuUsed === null
+        ? `unmeasured, so this driver cannot tell its own ${CPU_BUDGET_S + 60}s HARD rlimit from an outside kill.`
+        : `far below the ${CPU_BUDGET_S}s budget, so it is NOT a limit this driver installed. The OOM killer is the usual one (dmesg names it).`)
   : r.signal === "SIGTERM"
-    ? `the ${WALL_BACKSTOP_MS / 1000}s WALL BACKSTOP while consuming little CPU — that is a DEADLOCK or a saturated box, NOT a crash. Re-run on a quiet machine before believing it.`
+    ? `the ${WALL_BACKSTOP_MS / 1000}s WALL BACKSTOP having consumed ${cpuText(cpuUsed, 2)} of CPU — ` + (cpuUsed === null
+        ? "unmeasured, so this driver cannot say whether that is a DEADLOCK or a saturated box. Re-run on a quiet machine before believing it."
+        : cpuUsed < 1
+        ? "that is a DEADLOCK, not load: the process was asleep waiting for something that never came, NOT a crash."
+        : "that is a SATURATED BOX, not a deadlock — it was starved of the thread, NOT a crash. Re-run on a quiet machine before believing it.")
     : null;
 if (!m) { console.log(budgetCause
     ? `  DID-NOT-COMPLETE — killed by ${budgetCause}`

@@ -22,6 +22,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { lexborSourceId } from "./lexbor_source.mjs";
+import { childCpuSeconds, cpuText } from "./gate_cpu.mjs";
 
 /* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND A WALL CLOCK CANNOT SAY WHY. Every program this file
    launches gets ONE budget and ONE backstop, and they measure DIFFERENT THINGS through DIFFERENT SIGNALS so
@@ -80,44 +81,14 @@ const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign
   "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
   "-Werror=implicit-function-declaration"];
 
-/* THE UNITS /proc/self/stat REPORTS CHILD CPU IN, ASKED RATHER THAN ASSUMED. USER_HZ is 100 on every Linux
-   this project has run on, and writing 100 here would be a number nobody fetched — the same thing as a spec
-   section quoted from memory. `getconf` answers it, and an answer that is not a positive integer THROWS
-   rather than being defaulted to the number that is usually right. */
-let CLK_TCK = null;
-function clockTicks() {
-  if (CLK_TCK === null) {
-    const g = spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" });
-    const n = g.status === 0 ? Number((g.stdout || "").trim()) : NaN;
-    if (!Number.isInteger(n) || n <= 0)
-      throw new Error(`[build] \`getconf CLK_TCK\` did not answer a positive integer (status ${g.status}, ` +
-                      `stdout ${JSON.stringify(g.stdout)}) — /proc/self/stat reports child CPU in those units ` +
-                      `and this reporter will not guess them.`);
-    CLK_TCK = n;
-  }
-  return CLK_TCK;
-}
-/* THE CPU THIS PROCESS'S REAPED CHILDREN ACTUALLY CONSUMED — the kernel's own accounting, read either side of
-   the spawn, which is the only number in this file that is about the RUN rather than about the box. Fields 16
-   and 17 of /proc/self/stat (cutime, cstime), indexed past the comm field because a command name may itself
-   contain a space or a `)`.
-   A HOST WITHOUT IT ANSWERS `null`, WHICH IS A POSITIVE STATEMENT AND NOT A ZERO. Every consumer below prints
-   "not measured on this host" rather than a plausible 0.0 s: a zero CPU reading is exactly the evidence a
-   deadlock verdict rests on, so a host that cannot measure must never be able to manufacture one. The BUDGET
-   is unaffected — the kernel enforces the rlimit whether or not this file can read the meter. */
-function childCpuSeconds() {
-  let s;
-  try { s = readFileSync("/proc/self/stat", "utf8"); } catch { return null; }
-  const f = s.slice(s.lastIndexOf(")") + 2).split(" ");
-  const cutime = Number(f[13]), cstime = Number(f[14]);
-  if (!Number.isFinite(cutime) || !Number.isFinite(cstime))
-    throw new Error(`[build] /proc/self/stat did not carry numeric cutime/cstime at fields 16/17 ` +
-                    `(${JSON.stringify(f.slice(11, 15))}) — the child-CPU meter this reporter's verdict is ` +
-                    `measured in reads them, and a non-number there must be fixed rather than absorbed.`);
-  return (cutime + cstime) / clockTicks();
-}
-const cpuText = (v) =>
-  v === null ? "not measured on this host (no /proc/self/stat child accounting)" : `${v.toFixed(1)} s`;
+/* THE CHILD-CPU METER MOVED TO engine/gate_cpu.mjs, WHOLE, because this file's copy was the CORRECT one of
+   THREE and the other two were not — engine/wpt.mjs and engine/solvergate.mjs each carried a hand-copy that
+   indexed /proc/self/stat two fields too low and so reported the PARENT's own `utime`/`stime`, ~0 by
+   construction, as the killed child's consumption. One fact answered from three places is the defect; that two
+   of the three were wrong is only how it surfaced. Nothing about the reading changed — fields 16 and 17,
+   `getconf` for the units, `null` rather than a plausible 0.0 where a host cannot measure — and the shared
+   reader additionally ASSERTS that its parse is anchored at field 3, which is the one thing that can go wrong
+   with the arithmetic and the one thing nothing here could see. */
 const loadNow = () => {
   try { return readFileSync("/proc/loadavg", "utf8").trim().split(/\s+/).slice(0, 3).join(" "); }
   catch { return "unknown"; }

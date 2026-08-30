@@ -99,6 +99,7 @@ import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadavg, cpus } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
+import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 /* THE SHIPPED ARTIFACT, and deliberately not a runner of this gate's own. engine/wpt.mjs builds its own native
    runner because it runs 800 files and an eight-minute wasm link per iteration is a gate nobody runs; this one
    runs a handful of documents through the ENTRY THE EXTENSION LOADS, which costs one import and makes the gate
@@ -808,21 +809,18 @@ if (!docs.length) {
    came". */
 const CPU_BUDGET_S = 120;
 const WALL_BACKSTOP_MS = 900_000;
-const CLK_TCK = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout.trim()) || 0;
-if (!CLK_TCK) { console.error("[solvergate] getconf CLK_TCK answered nothing, so a child's CPU cannot be read"); process.exit(1); }
-const childCpu = () => {
-  const f = readFileSync("/proc/self/stat", "utf8");
-  const v = f.slice(f.lastIndexOf(")") + 2).split(" ");   /* comm may hold spaces; fields resume after it */
-  return (Number(v[11]) + Number(v[12])) / CLK_TCK;       /* stat(3) fields 16,17: cutime, cstime */
-};
+/* THE METER IS engine/gate_cpu.mjs's, because the hand-copied one that stood here indexed /proc/self/stat TWO
+   FIELDS TOO LOW — `utime`/`stime`, THIS process's own CPU — under a comment that correctly named fields 16
+   and 17. It reported the parent's idle time in `waitpid` as the killed child's consumption, which is ~0 by
+   construction, so the paragraph above was true of a number that was about the wrong process. */
 
 function runChild(doc, sched) {
-  const cpu0 = childCpu();
+  const cpu0 = childCpuSeconds();
   const r = spawnSync("/bin/sh",
     ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh",
      process.execPath, SELF, "--run", join(CORPUS, doc), sched],
     { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS });
-  const cpuUsed = childCpu() - cpu0;
+  const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
   const out = (r.stdout || "") + (r.stderr || "");
   const emit = out.match(/^@EMIT (\{.*\})$/m);
   if (emit) return { ok: true, out, result: JSON.parse(emit[1]).result };
@@ -852,17 +850,50 @@ function runChild(doc, sched) {
                   "solver was measured: the run died in emscripten's export wrapper before qjs_begin. The " +
                   "artifact is a build of some OTHER revision (see the [rev] block) and the fix is to rebuild " +
                   "it — `node engine/build.mjs` — never to reshape the call to match what happens to be built"
-              : (r.signal === "SIGXCPU" || r.signal === "SIGKILL")
-                ? `this document did not DRAIN inside ${CPU_BUDGET_S}s of CPU actually consumed. That is a ` +
+              /* `SIGXCPU || SIGKILL` IS A COLLAPSE, AND IT ASSERTED THE WRONG ONE OF THE TWO. SIGXCPU is the
+                 kernel naming the SOFT rlimit THIS driver installed and is a fact about the document; SIGKILL
+                 is the OOM killer's usual signal and is a fact about the box, except at the HARD rlimit ten
+                 seconds above, where it is this driver's again. Reading them as one sentence told the reader
+                 "this document did not DRAIN — find out why" about a run the kernel had killed for memory,
+                 which is a confident false claim about the corpus. engine/wpt.mjs already draws this line; the
+                 discriminator is the CPU consumed, and the CPU consumed is a number this driver has. */
+              : (r.signal === "SIGXCPU" && (cpuUsed === null || cpuUsed >= CPU_BUDGET_S - 1)) ||
+                (r.signal === "SIGKILL" && cpuUsed !== null && cpuUsed >= CPU_BUDGET_S)
+                ? `this document did not DRAIN inside ${CPU_BUDGET_S}s of CPU actually consumed ` +
+                  `(${cpuText(cpuUsed)}, killed by ${r.signal}). That is a ` +
                   "statement about the document, not about the box and not about the solver: the invariant " +
                   "this gate measures is over a FINISHED finding set, and a frontier that never empties has " +
                   "none at any schedule. Find out why it does not drain — do not raise the budget"
+              /* THE METER CONTRADICTING THE KERNEL IS THIS DRIVER'S DEFECT, NOT THE DOCUMENT'S. SIGXCPU arrives
+                 only after the child has spent the soft rlimit, so a reading materially below it cannot be
+                 true — and the arm above must not absorb it into a sentence about the corpus. */
+              : r.signal === "SIGXCPU"
+                ? `the kernel raised SIGXCPU, which it does only when this child spent the ${CPU_BUDGET_S}s ` +
+                  `SOFT rlimit this driver installed — and this driver's CPU meter read ${cpuText(cpuUsed, 2)} ` +
+                  "for it. Both cannot be true of one process, the signal is the kernel's and the number is " +
+                  "derived, so the number is wrong: engine/gate_cpu.mjs is where it is read. Nothing about " +
+                  "this document was measured"
+              : r.signal === "SIGKILL"
+                ? `SIGKILL after ${cpuText(cpuUsed, 2)} of CPU. ` + (cpuUsed === null
+                    ? `Without the meter this driver cannot tell its OWN ${CPU_BUDGET_S + 10}s HARD rlimit ` +
+                      "from a kill that came from outside the run, and those ask for opposite work"
+                    : `That is far below the ${CPU_BUDGET_S}s budget, so it is NOT a limit this driver ` +
+                      "installed — something outside this run killed the process, and the OOM killer is the " +
+                      "usual one (dmesg names it)")
               : r.signal === "SIGTERM"
-                ? (cpuUsed < 1
-                    ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of ` +
+                /* AND THE THIRD STATE THE OLD METER COULD ONLY EVER REPORT AS THE FIRST. Block and starvation
+                   are told apart by this one number, so a host that cannot produce it produces NEITHER verdict
+                   — where the broken reader produced a 0.0, which is the block arm's entire evidence, on every
+                   run on every host. An absent number and a zero number are different facts. */
+                ? (cpuUsed === null
+                    ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s, and the CPU this child consumed is ` +
+                      `${cpuText(cpuUsed)} — so this driver cannot say whether it was blocked on something ` +
+                      "that never came or starved of the thread. Attach to it (gdb -p, /proc/PID/syscall)"
+                    : cpuUsed < 1
+                    ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuText(cpuUsed, 2)} of ` +
                       "CPU — that is a BLOCK, not load: the process was asleep waiting for something that " +
                       "never came. Attach to it (gdb -p, /proc/PID/syscall) and look at the OTHER end"
-                    : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of ` +
+                    : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuText(cpuUsed)} of ` +
                       `CPU, load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not ` +
                       "blocked; RE-RUN THIS DOCUMENT ALONE")
               : `the child exited ${r.status} with no @EMIT line and no @WHY`;

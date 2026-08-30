@@ -22,6 +22,7 @@ import { dirname, join, relative, sep } from "node:path";
 import { tmpdir, cpus, loadavg } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { lexborSourceId } from "./lexbor_source.mjs";
+import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 
 function walk(dir) {
   const out = [];
@@ -48,10 +49,8 @@ const WPT_REV = "bf4714d";
    read as the CPU cause below; the pair just makes the usual path say so in its own signal. */
 const CPU_BUDGET_S = 60;
 const WALL_BACKSTOP_MS = 600_000;
-/* The kernel's own tick, asked for rather than assumed: /proc's CPU fields are in clock ticks and a hardcoded
-   100 is a constant this file would have no way of noticing had gone wrong. */
-const CLK_TCK = Number(spawnSync("getconf", ["CLK_TCK"], { encoding: "utf8" }).stdout.trim()) || 0;
-if (!CLK_TCK) { console.error("[wpt] getconf CLK_TCK answered nothing, so a child's CPU cannot be read"); process.exit(1); }
+/* The meter every verdict below is measured in lives in engine/gate_cpu.mjs — ONE reader, because this file
+   carried a hand-copied one that read the PARENT's own idle CPU and printed it as the killed child's. */
 /* WHAT IS CHECKED OUT. A sparse list rather than the whole 1 GB tree, and it grows as areas are covered — an
    area absent here is honestly untested, which is a different statement from "passes". */
 /* `tools` is not a test area — it is WPT'S OWN SERVER and its vendored dependencies. The corpus is SERVED by
@@ -1521,13 +1520,16 @@ for (const { file: f, kind, variant } of runs) {
        whose logging thread was itself blocked writing to a pipe nobody read. `cutime`/`cstime` in
        /proc/self/stat accumulate the CPU of children this process has REAPED, and spawnSync reaps before it
        returns, so the delta across the call IS that child's CPU — no wrapper, no accounting the kill can
-       destroy. */
-    const childCpu = () => {
-      const f = readFileSync("/proc/self/stat", "utf8");
-      const v = f.slice(f.lastIndexOf(")") + 2).split(" ");   /* comm may hold spaces; fields resume after it */
-      return (Number(v[11]) + Number(v[12])) / CLK_TCK;       /* stat(3) fields 16,17: cutime, cstime */
-    };
-    const cpu0 = childCpu();
+       destroy.
+       AND IT IS READ FROM ONE PLACE NOW, because the copy that stood here indexed those fields TWO TOO LOW —
+       `utime`/`stime`, this driver's OWN CPU — under a comment that correctly named fields 16 and 17. It was
+       therefore not a slightly wrong number but a number about the wrong PROCESS: the parent's, consumed while
+       it sat in `waitpid`, which is ~0 by construction. Every verdict below turned on it, and the SIGXCPU arm
+       printed "this test consumed 0.0s of CPU and really is that expensive" — two assertions that cannot both
+       be true, the second drawn from the one that contradicts the kernel. engine/gate_cpu.mjs holds the meter,
+       names the fields by proc(5)'s own numbers so the comment and the code cannot disagree again, and answers
+       `null` where a host cannot measure rather than a 0.0 that reads as a measurement. */
+    const cpu0 = childCpuSeconds();
     const r = spawnSync("/bin/sh",
                         ["-c", `ulimit -H -t ${CPU_BUDGET_S + 10} 2>/dev/null; ulimit -S -t ${CPU_BUDGET_S}; exec "$@"`, "sh", bin,
                          ...(kind === "document" ? ["--test-document"] : []),
@@ -1538,7 +1540,7 @@ for (const { file: f, kind, variant } of runs) {
                                     server's, neither derivable from the other. The runner asserts they name
                                     one port (wpt_derive_addresses) and has no literal to fall back to. */
                                  WPT_TOP_ORIGIN: serverOrigin } });
-    const cpuUsed = childCpu() - cpu0;
+    const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
        does not have, which is exactly what this gate is for. It is counted apart from a FAIL because the two ask
@@ -1608,32 +1610,73 @@ for (const { file: f, kind, variant } of runs) {
         kind = "killed";
         /* "LOOK AT THE OTHER END" IS AN INSTRUCTION THIS DRIVER CAN CARRY OUT ITSELF, and the other end is
            nearly always the corpus server: a runner blocked with zero CPU is blocked in `read()` on a socket,
-           and the only socket it has is wptserve's. Asked ONLY on the block arm — a STARVED test consumed real
-           CPU and its diagnosis is the load average, which no probe improves. */
-        const gone = cpuUsed < 1 ? await serverGone(rel) : null;
-        cause = cpuUsed < 1
-          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(2)}s of CPU — ` +
+           and the only socket it has is wptserve's. Asked ONLY where a block is not RULED OUT — a STARVED test
+           consumed real CPU and its diagnosis is the load average, which no probe improves. An UNMEASURED run
+           rules nothing out, so it is probed and the probe's answer is reported as an OBSERVATION rather than
+           promoted into a verdict the meter did not support. */
+        const blocked = cpuUsed !== null && cpuUsed < 1;
+        const gone = cpuUsed === null || cpuUsed < 1 ? await serverGone(rel) : null;
+        const otherEnd = gone ? `AND ${gone.said} — that is the other end, and THIS RUN IS TRUNCATED HERE`
+                              : "The corpus server ANSWERED this driver's probe, so the other end is not " +
+                                "wptserve being gone: attach to it (gdb -p, /proc/PID/syscall) and look at " +
+                                "what it is waiting on";
+        cause = cpuUsed === null
+          /* THE THIRD STATE, SAID OUT LOUD. Block and starvation are told apart by ONE number, so a host that
+             cannot produce it cannot produce either verdict — and the failure of the old meter was exactly
+             that it produced a `0.0` here, which is the block arm's whole evidence, for every run on every
+             host. An absent number and a zero number are different facts and this arm keeps them apart. */
+          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s, and the CPU this child consumed is ` +
+            `${cpuText(cpuUsed)} — so this driver CANNOT say whether it was blocked on something that never ` +
+            `came or starved of the thread, which are the only two things it could be and want opposite work. ` +
+            otherEnd
+          : blocked
+          ? `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuText(cpuUsed, 2)} of CPU — ` +
             `that is a BLOCK, not load: the process was asleep waiting for something that never came. ` +
-            (gone ? `AND ${gone.said} — that is the other end, and THIS RUN IS TRUNCATED HERE`
-                  : "The corpus server ANSWERED this driver's probe, so the other end is not wptserve being " +
-                    "gone: attach to it (gdb -p, /proc/PID/syscall) and look at what it is waiting on")
-          : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuUsed.toFixed(1)}s of CPU, ` +
+            otherEnd
+          : `wall backstop at ${WALL_BACKSTOP_MS / 1000}s having consumed ${cpuText(cpuUsed)} of CPU, ` +
             `load average ${loadavg()[0].toFixed(1)} on ${cpus().length} cores — starved, not blocked; RE-RUN THIS FILE ALONE`;
-      } else if (r.signal === "SIGXCPU") {
+      } else if (r.signal === "SIGXCPU" && (cpuUsed === null || cpuUsed >= CPU_BUDGET_S - 1)) {
         kind = "killed";
         cause = `exceeded the ${CPU_BUDGET_S}s CPU budget — SIGXCPU is the kernel raising the SOFT rlimit this ` +
-                `driver installed, so it is not wall time and not load: this test consumed ${cpuUsed.toFixed(1)}s ` +
+                `driver installed, so it is not wall time and not load: this test consumed ${cpuText(cpuUsed)} ` +
                 "of CPU and really is that expensive";
-      } else if (r.signal === "SIGKILL" && cpuUsed >= CPU_BUDGET_S) {
+      } else if (r.signal === "SIGXCPU") {
+        /* THE METER AND THE KERNEL DISAGREEING IS A DEFECT IN THIS DRIVER, NOT A FACT ABOUT THE TEST, and it is
+           asserted here because the alternative is what stood here before: SIGXCPU means the kernel watched
+           this child spend the SOFT rlimit, so a reading materially below the budget is impossible and printing
+           it beside the signal produced one sentence asserting two things that cannot both be true — "SIGXCPU
+           is the kernel raising the rlimit ... this test consumed 0.0s of CPU and really is that expensive" —
+           with the conclusion drawn from the half that contradicts the signal. The kernel is the ground truth
+           and the meter is derived, so the derived one being wrong is this driver's bug to fix, and it lands in
+           the column this file already keeps for its own accounting being wrong. */
+        kind = "UNKNOWN";
+        cause = `the kernel raised SIGXCPU, which it does only when this child spent the ${CPU_BUDGET_S}s SOFT ` +
+                `rlimit this driver installed — and this driver's own CPU meter read ${cpuText(cpuUsed, 2)} for ` +
+                "it. Both cannot be true of one process. The signal is the kernel's and the number is derived " +
+                "from /proc/self/stat's cutime/cstime, so the number is the one that is wrong and engine/" +
+                "gate_cpu.mjs is where it is read. Nothing about this test was measured.";
+      } else if (r.signal === "SIGKILL" && cpuUsed !== null && cpuUsed >= CPU_BUDGET_S) {
         kind = "killed";
         cause = `exceeded the ${CPU_BUDGET_S}s CPU budget and did not die of SIGXCPU, so the kernel escalated to ` +
-                `SIGKILL at the ${CPU_BUDGET_S + 10}s HARD rlimit — ${cpuUsed.toFixed(1)}s of CPU consumed`;
+                `SIGKILL at the ${CPU_BUDGET_S + 10}s HARD rlimit — ${cpuText(cpuUsed)} of CPU consumed`;
+      } else if (r.signal === "SIGKILL" && cpuUsed === null) {
+        /* THE SAME THIRD STATE ONE ARM DOWN. This driver's own hard rlimit and an external kill arrive as the
+           SAME signal and are told apart by the CPU alone, so without it the two collapse — and the arm below
+           would then assert "NOT a limit this driver installed" about a kill this driver installed. */
+        kind = "UNKNOWN";
+        cause = `SIGKILL, and the CPU this child consumed is ${cpuText(cpuUsed)} — so this driver cannot tell ` +
+                `its OWN ${CPU_BUDGET_S + 10}s HARD rlimit from a kill that came from outside the run (the OOM ` +
+                "killer is the usual one, and dmesg names it). Those are the only two candidates and they ask " +
+                "for opposite work.";
       } else if (r.signal === "SIGKILL") {
         /* NOT THE BUDGET, AND SAYING SO IS THE POINT. This used to read `SIGXCPU || SIGKILL` and reported every
            SIGKILL as "this test really is that expensive" — a sentence about the test, asserted for a signal
-           that is the OOM killer's usual one. The CPU consumed is the discriminator and this driver has it. */
+           that is the OOM killer's usual one. The CPU consumed is the discriminator and this driver has it —
+           though for a long time it did not: the meter it asked read the PARENT's idle CPU, so this arm caught
+           every hard-rlimit escalation as well and told the reader to go and read dmesg about a kill this
+           driver had installed itself. */
         kind = "UNKNOWN";
-        cause = `SIGKILL after only ${cpuUsed.toFixed(2)}s of CPU, which is far below the ${CPU_BUDGET_S}s budget ` +
+        cause = `SIGKILL after only ${cpuText(cpuUsed, 2)} of CPU, which is far below the ${CPU_BUDGET_S}s budget ` +
                 "— so it is NOT a limit this driver installed. Something outside this run killed the process; " +
                 "the OOM killer is the usual one (dmesg names it)";
       } else {
