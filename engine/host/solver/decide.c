@@ -942,7 +942,10 @@ static int decide_arm(JSContext *ctx, const char *key, int restartable, int nonf
  *
  * WHAT MAKES IT AN OBSERVATION AND NOT AN INVENTION. A concolic value is a triple, and where the third member
  * is present the run has a CONCRETE example — a loaded config field, a modelled viewport's `matches`, an
- * `AbortSignal`'s real aborted state, the real bytes of `location.search`. §Learning-from-replies says what
+ * `AbortSignal`'s real aborted state, the real bytes of `location.search`, AND THE RESULT OF A COMPARISON OVER
+ * ANY OF THEM, which is the case this rule is mostly about: `concolic_cmp_hook` runs the engine's own §7.2.13
+ * or §7.2.14 on the operands' examples, so `x === 'admin'` over a loaded `'admin'` arrives here carrying
+ * `true`. §Learning-from-replies says what
  * that means at a branch: "at a branch the example marks the real arm PRIMARY; the forced sibling drops the
  * contradicted example, so only gate-DEPENDENT values degrade to a shape while gate-independent values stay
  * concrete". So the example ALREADY answers the question, by §7.1.2 ToBoolean over a value this engine
