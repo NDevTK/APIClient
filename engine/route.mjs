@@ -83,24 +83,31 @@ const boot = factory.default ?? factory;
 /* THE INTERFACE, BY ITS OWN BYTES — this driver's fourth and fifth hand-aligned copies of `Init`'s parameter
    list are gone, and this is what replaces them. `extension/mojom.js` is the ONE description of what may cross
    (its own first paragraph: "an interface only exists if both ends agree on it"), and the other three callers
-   of `qjs_init` are already checked against it — `renderer.html`'s placement table at bind by `rendererImpl`,
-   and `renderer_host_gate.mjs`/`bridge.js` on send by `mojo.js`'s `checkValues`. This one bypassed mojo
+   of `qjs_init` are already checked against it — `renderer.html` at bind by `rendererImpl`, and
+   `renderer_host_gate.mjs`/`bridge.js` on send by `mojo.js`'s `checkValues`. This one bypassed mojo
    entirely, so it was the copy that could go short in silence, and it did: twice.
+   AND THE PLACEMENT COMES FROM THE SAME LOAD, WHICH IS WHY `mojo` IS KEPT RATHER THAN THE DESCRIPTOR ALONE.
+   Turning a declared parameter into wasm operands is `mojo.js`'s `abiPlacement`, over the `type` and
+   `retained` the declaration states — the same function `renderer.html` places by — so this driver's operand
+   count and the extension's are one derivation rather than two readings of one list. A driver that walked the
+   types itself would be the same hand-alignment one layer down: it would answer for the types it knew and
+   silently be wrong about an ownership it never asked about.
    AN ISOLATED CONTEXT, NOT THIS REALM. `renderer_host_gate.mjs` loads these same three files with
    `runInThisContext` because it is IMPERSONATING the browser process and wants their globals; this file is a
    wasm driver that wants one declaration, so evaluating them over its own global would install `mojo`,
    `DCHECK` and `CHECK` into a realm whose fixtures do not expect them — a driver silently gaining the
    extension's assert machinery is a difference between what it runs and what production runs. The load order
    is ast-worker.html's, because mojo.js asserts through check.js and mojom.js declares through mojo.js. */
-const MOJOM = (() => {
+const MOJO = (() => {
   const sandbox = { console };
   sandbox.self = sandbox;
   sandbox.globalThis = sandbox;
   createContext(sandbox);
   for (const f of ['check.js', 'mojo.js', 'mojom.js'])
     runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
-  return sandbox.mojo.interfaceOf('content.mojom.Renderer');
+  return sandbox.mojo;
 })();
+const MOJOM = MOJO.interfaceOf('content.mojom.Renderer');
 
 /* THE READ IS LAST AND BOTH ARMS MAKE IT, so two DIFFERENT worlds ask the same question of one peer — which is
    the case a single-timeline peer cannot answer with one number, and the reason the entry that performs it has
@@ -260,12 +267,12 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     if (!Number.isFinite(want))
       throw new Error('route.mjs could not read qjs_init\'s declared arity out of ' + GLUE_PATH + ' — the ' +
         'glue\'s shape changed, and an unanswerable check must say so rather than pass.');
-    /* ONE VALUE PER DECLARED PARAMETER, BY THE MOJOM'S OWN NAME. A `document` entry is the PAIR the C entry
-       takes — `renderer.html` calls that placement `bytes-pair-retained` and states there why one declared
-       parameter becomes two operands — and every other declared type here is a string, which is one pointer.
-       An unknown type CRASHES rather than guessing an operand count: a placement this driver cannot perform is
-       the same fact renderer.html's `PLACEABLE` asserts, and inventing one would hand the entry something
-       other than what the interface says crossed. */
+    /* ONE VALUE PER DECLARED PARAMETER, BY THE MOJOM'S OWN NAME, PLACED BY THE DECLARATION'S OWN ANSWER. A
+       `bytes` placement is the PAIR the C entry takes — the pointer and the length, because a document may
+       contain a 0x00 that a `strlen` would end the parse at — and a `string` is one pointer. Neither is decided
+       here: `abiPlacement` reads the mojom's `type` and `retained` and CRASHES on a shape nobody has described,
+       which is the one thing a driver must not paper over, since an invented operand count reads every later
+       argument of the call one slot early. */
     const values = {
       document: [hp, hn], url, docId, headers: headers || '', topLevelUrl,
       inheritedCsp: inheritedCsp || '', inheritedCspSelfOrigin: inheritedCspSelf || '',
@@ -280,12 +287,13 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
         throw new Error(`content.mojom.Renderer.Init declares the parameter \`${p.name}\` and route.mjs has ` +
           'no value for it — this driver is older than the interface, and the ONE thing it must not do is ' +
           'place its remaining values anyway, which is how every later argument gets read one slot early.');
-      if (p.type === 'array<uint8>') operands.push(...values[p.name]);
-      else if (p.type === 'string') operands.push(cs(values[p.name]));
+      const pl = MOJO.abiPlacement(p);
+      if (pl.form === 'bytes') operands.push(...values[p.name]);
+      else if (pl.form === 'string') operands.push(cs(values[p.name]));
       else
-        throw new Error(`content.mojom.Renderer.Init declares \`${p.name}\` as \`${p.type}\` and route.mjs ` +
-          'performs no placement for that type — see renderer.html\'s PLACEABLE for what a placement is. A ' +
-          'guessed one is an operand count this driver cannot know.');
+        throw new Error(`content.mojom.Renderer.Init declares \`${p.name}\` as \`${p.type}\`, whose placement ` +
+          `form is \`${pl.form}\`, and this driver performs no such placement. A guessed one is an operand ` +
+          'count this driver cannot know.');
     }
     /* AND THE OTHER SKEW, WHICH THE WALK ALONE DOES NOT SEE. A declared parameter with no value is a driver
        OLDER than the interface and refuses above; a value no parameter declares is a driver NEWER than it, or
@@ -306,7 +314,12 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
         'rather than a parameter. Regenerate with `node engine/build.mjs`; ' +
         'extension/lib/qjs/qjs.mjs.build.json carries the revision the glue was built from.');
     M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
-    M._free(hp);
+    /* AND THE DOCUMENT'S BLOCK IS NOT FREED, because the declaration says the entry KEEPS it: `mojom.js` marks
+       that one parameter `retained`, and what it is retained FOR is the load that fills the parser's input
+       byte stream, which reads through this pointer rather than copying it. This driver used to free it here —
+       the same use-after-free the extension's own placement is shaped to prevent, written where nobody was
+       checking, because this is the caller that bypasses mojo. It is the frame's lifetime either way: the
+       module is torn down whole. */
   }
   /* THE RESIDUE SEEDS THE FRONTIER INSTEAD OF THE BOOT FLOW (solver/cold.h). It is ';'-joined records, which
      is the language cold_park_recipes both writes and reads; the extension joins the stored ARRAY the same

@@ -135,6 +135,56 @@
   }
   function isHandle(t) { return t === "handle<message_pipe>" || t === "handle<message_pipe>?"; }
 
+  /* ── HOW A DECLARED PARAMETER BECOMES WASM OPERANDS, DERIVED, AND THE ONE PLACE THAT ANSWERS IT.
+     `content.mojom.Renderer`'s peer is not JavaScript: it is a wasm module whose entries take C operands, so
+     every caller of that interface has to turn one DECLARED PARAMETER into one or two of them. That fact was
+     written down four times — `renderer.html` carried a hand-aligned `place: [...]` per method, `harness.js`
+     re-derived the same counts by REGEXING that array out of the document's source text, `route.mjs` walked
+     the types itself, and a fifth copy stood as a literal arity beside them — and the list went SHORT TWICE,
+     one parameter apart, with nothing to say so: a short list hands the entry a call one operand short and
+     every later argument is read one slot early, which is a wrong call rather than a missing one.
+     IT IS DERIVED HERE FOR THE REASON `typeOk` AND `isHandle` ARE HERE. Those two already answer what a
+     declared type MEANS operationally — what value satisfies it, and which one is a handle that must be
+     transferred rather than copied. "How many operands, of what form" is that same question asked for the one
+     peer that is not a JS realm, so it is one more property of the declared type and not a table beside it.
+     TWO FACTS DECIDE A PLACEMENT AND ONLY ONE OF THEM IS THE TYPE. The type decides the FORM and the
+     OPERAND COUNT — a byte sequence is a (pointer, length) PAIR because the entry takes both and because a
+     length recovered with `strlen` would end at a 0x00 the sequence may legitimately contain. OWNERSHIP is
+     the other, it is a fact about the C ENTRY rather than about the wire, and no wire type carries it: it is
+     the difference between a live document and a use-after-free, so the DECLARATION states it (`retained`)
+     and this reads it rather than inferring it from the type. Inferring it is what the superseded table did —
+     it tied `array<uint8>` to "kept" and `array<uint8>?` to "freed", which is NULLABILITY standing in for
+     ownership and holds only for as long as those happen to be the same two parameters.
+     A TYPE WITH NO PLACEMENT CRASHES, and a `retained` this cannot honour crashes with it. A number is passed
+     BY VALUE, so there is no pointer for an entry to keep and `retained: true` on one is a declaration that
+     cannot be performed; a handle is a MessagePort, which does not cross into linear memory at all. Guessing
+     an operand count for either is how a call goes one slot out. */
+  function abiPlacement(d) {
+    DCHECK(!!d && typeof d.type === "string" && typeof d.retained === "boolean",
+           "an ABI parameter was placed from a declaration that does not state its OWNERSHIP — `retained` says " +
+           "whether the C entry keeps the pointer past the call, which no wire type can carry and which is the " +
+           "difference between a live document and a use-after-free, so it is declared beside the type and " +
+           "never defaulted here");
+    if (d.type === "string")
+      return { form: "string", operands: 1, nullable: false, retained: d.retained };
+    if (d.type === "array<uint8>" || d.type === "array<uint8>?")
+      return { form: "bytes", operands: 2, nullable: d.type === "array<uint8>?", retained: d.retained };
+    if (d.type === "int32" || d.type === "double") {
+      DCHECK(!d.retained,
+             "the parameter `" + d.name + "` is declared `" + d.type + "` and RETAINED — a number crosses BY " +
+             "VALUE, so there is no pointer in linear memory for the entry to keep and no allocation for a " +
+             "caller to withhold; a declaration that says otherwise describes a placement nobody can perform");
+      return { form: "number", operands: 1, nullable: false, retained: false };
+    }
+    DFAIL("the parameter `" + (d && d.name) + "` is declared `" + (d && d.type) + "` and this bindings layer " +
+          "performs no wasm placement for that type — a placement is how a declared type becomes operands of a " +
+          "C entry, and an invented one is an operand COUNT nobody knows, which reads every later argument of " +
+          "the call one slot early. Build the placement here, where every caller of the ABI reads it");
+    /* RELEASE PATH UNDER THE ASSERT, AND IT REFUSES rather than answering. A guessed count is a wrong call;
+       an absent one is a caller that stops. */
+    throw new TypeError("no wasm ABI placement for the declared type `" + (d && d.type) + "`");
+  }
+
   /* A DECLARATION LIST — a method's parameters, or its reply's. Every entry carries a `why`, and that is not
      documentation: it is the sentence the assert prints when the value is wrong. The two superseded transports
      each held a `checkHeaderFacts` whose real content was those sentences (an absent header is §5.1's undefined
@@ -835,6 +885,11 @@
        TypeError inside a message handler, which reaches nobody: the caller stays parked on a reply that is
        never coming. It is the same descriptor `Remote`/`Receiver` validate against, so there is one of it. */
     interfaceOf: interfaceOf,
+    /* THE PLACEMENT, ASKED RATHER THAN COPIED — see `abiPlacement` above for why one hand-aligned list per
+       caller is the shape that went short twice. Every zone that turns a declared parameter into an operand of
+       a `qjs_*` entry reads it from here: the renderer that performs the call, and the Node drivers that count
+       operands against what the built glue declares it accepts. */
+    abiPlacement: abiPlacement,
     Connection: Connection,
     stats: stats,
   };

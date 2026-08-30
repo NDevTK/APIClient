@@ -70,13 +70,17 @@
    THE TABLE IS NOT PER-SPELLING PLUMBING, WHICH IS THE OBJECTION THE DELETED CODE WAS BUILT AROUND. That code
    took the placement off the WIRE precisely so no per-entry branch would live here — and the cost was that the
    UNTRUSTED side of the boundary was describing its own arguments. What replaces it splits two different facts:
-   the mojom declares what may CROSS (types, nullability, validated at both ends), and the table declares how a
-   declared type becomes ccall operands FOR THIS C ENTRY — a fact about `engine/host/main.c` rather than about
-   the wire, and one no wire type could carry, since whether the entry RETAINS a pointer past the call is the
-   difference between a live document and a use-after-free. The two lists cannot drift apart: the implementation
-   is built by WALKING the interface's own method list, so a mojom method with no binding crashes here naming
-   itself, a binding no method reaches is caught by the count, and every placement is checked against the
-   declared type of the parameter it places. */
+   the mojom declares what may CROSS (types, nullability, ownership, validated at both ends), and the table
+   names WHICH C ENTRY each method is, which is the one thing an interface description cannot carry — a mojom
+   declares an interface, not a symbol in a wasm module.
+   HOW A DECLARED PARAMETER BECOMES OPERANDS IS NOT IN THE TABLE AND WAS, and its removal is why this paragraph
+   changed. It was a `place: [...]` array per method, hand-aligned with the mojom's parameter list, and a hand
+   copy of a parameter list goes short: it did, twice, one parameter apart. It is DERIVED now — `mojo.js`'s
+   `abiPlacement` over the `type` and `retained` the declaration states — so the only list is the interface's
+   own, and a shape nobody has described CRASHES rather than being placed on a guess. Ownership had to become a
+   declaration for that to be possible: whether the entry KEEPS a pointer past the call is the difference
+   between a live document and a use-after-free, no wire type carries it, and inferring it from nullability
+   (which is what the deleted map did) is a different fact wearing the answer's shape. */
 (function () {
   var M = null;        /* the instantiated renderer module — one per frame, one per agent cluster */
   var out = [];        /* the engine's stdout/stderr since the last reply; drained into every reply */
@@ -94,10 +98,11 @@
 
   /* A RETAINED STRING: a NUL-terminated pointer that lives for the renderer's lifetime, which is this frame's —
      the module is destroyed wholesale with the document, so a free list here would be a list nothing could ever
-     read. `qjs_init`/`qjs_join` KEEP five of the pointers they are handed (the document, the address, the name,
-     the header field lines, the top-level URL), so an emscripten transient copy there is a use-after-free. The
-     inherited policy container's two are NOT among them and are placed as plain transients — see the note on
-     the table's `init` row, which reads that off the C entry rather than off this count. */
+     read. WHICH parameters take it is not this function's to know and not a count kept here: `mojom.js`
+     declares `retained` per parameter, `mojo.js`'s abiPlacement reads it, and `callAbi` calls this where the
+     answer is yes. The sentence that stood here named FIVE pointers `qjs_init`/`qjs_join` keep, four of which
+     the entries measurably copy at their own sinks — a hand-kept count of an ownership fact, which is exactly
+     what a per-parameter declaration exists to stop being written down twice. */
   function retainString(s) {
     var n = M.lengthBytesUTF8(s) + 1, p = M._malloc(n);
     CHECK(p !== 0, "OOM placing an ABI string argument in the renderer's linear memory");
@@ -122,8 +127,9 @@
      network error or a load that did not load. The mojom declares it `array<uint8>?` for exactly that and the
      validator has already refused anything else, so this function never sees a shape it has to guess about. The
      extra byte exists because `_malloc(0)` may answer 0, and 0 is what the C entry reads as "no body", which a
-     204 is not. The block is FREED after the call: these entries copy what they are given, unlike the two
-     above, and this is the one placement whose lifetime is the call. */
+     204 is not. The block is FREED after the call, because the declaration says the entry does not keep it —
+     the same `retained` that sends the document above through `retainBytesPair` sends these here, so the two
+     byte placements differ in OWNERSHIP alone and neither is chosen by a spelling of the type. */
   function bodyPair(b) {
     if (b === null) return [0, 0];
     var p = M._malloc(b.length + 1);
@@ -136,148 +142,90 @@
   /* ── THE ABI BINDING TABLE: `content.mojom.Renderer`'s methods against `engine/host/main.c`'s QJS_EXPORT
      bodies. `fn` and `ret` are that entry's C name and return; `out` is the reply field its return becomes, or
      null for a void entry — which still ANSWERS, because the caller awaits the acknowledgement and a WASM abort
-     inside the call must reach it as a rejection; `place` is one placement per DECLARED parameter, in order.
+     inside the call must reach it as a rejection.
 
-     THE PLACEMENTS, AND EVERY ONE IS A FACT ABOUT THE C ENTRY:
-       string-retained — malloc'd, UTF-8 written, NUL-terminated, NEVER FREED (the entry keeps the pointer)
-       bytes-pair-retained — a parameter that arrived as BYTES: copied without an encode, expanded to TWO
-                         operands (the pointer and the length) and NEVER FREED, because the entry keeps the
-                         pointer. It is the placement `qjs_init`/`qjs_join`'s document takes: a document may
-                         contain a 0x00, so its length crosses beside it rather than being recovered with a
-                         `strlen` that would end the parse at that byte
-       string          — emscripten's own transient copy (what M.ccall("…","string") does), for an entry that
-                         reads the string during the call and keeps nothing
-       number          — passed through; the wasm signature decides i32 or f64, which is why `int32` and
-                         `double` place identically
-       bytes-pair      — expands to TWO operands, the pointer and the length, freed after the call returns
-
-     `qjs_init`, `qjs_join`, `qjs_provide` and `qjs_host_answer` are the entries whose ONE mojom parameter
-     becomes TWO C operands, which is the whole reason a placement is per-parameter rather than per-type. The
-     two pairs differ only in LIFETIME, which is a fact about the C entry and not about the bytes. */
+     THERE IS NO `place:` COLUMN ANY MORE, AND ITS DELETION IS THE MECHANISM THIS COMMENT USED TO ASK FOR IN
+     PROSE. It was one placement per declared parameter, hand-aligned with the mojom's own parameter list, and
+     the sentence that stood here said a hand-maintained second copy of a parameter list cannot be made safe by
+     a sentence — only by an assertion. It was not made safe by an assertion either: the list went SHORT TWICE,
+     one parameter apart, and each time this file was the one description of the call that did not gain the
+     argument, so the loop below dropped the wire's last argument on the floor and the entry read it out of
+     whatever followed the last operand. HOW MANY OPERANDS a declared parameter becomes, and whether the entry
+     KEEPS the pointer, are now READ OFF THE DECLARATION (`mojo.js`'s `abiPlacement`, over the `type` and
+     `retained` `mojom.js` states for every parameter), so there is no second list to be short: a parameter
+     added to the interface arrives here as an argument this loop places, and a type or an ownership nobody has
+     described CRASHES instead of being guessed at.
+     WHAT IS LEFT HERE IS THE ONE FACT THE WIRE CANNOT STATE — WHICH C ENTRY A METHOD IS. A mojom declares an
+     interface, not a symbol in a wasm module, and `GetBundleId` is `qjs_bundle_id` by nothing a description
+     carries. `ret` and `out` ride beside it as that entry's ccall return type and the reply field it answers
+     under, and `rendererImpl` below checks both against the mojom's own reply list. */
   var ABI = {
-    /* THE LAST NINE ARE `string` AND NOT `string-retained`, AND THAT IS READ OFF THE C ENTRY LIKE EVERY OTHER
-       PLACEMENT: the inherited policy container is consumed DURING the call — document_install runs
-       `origin_parse` over the self-origin, policy_container_new COPIES the policy text and
-       embedder_policy_adopt COPIES both of HTML §7.1.4's reporting endpoint strings — so no pointer outlives
-       it, and retaining them would be this table asserting an ownership main.c does not take.
-       FOUR OF THEM ARE §7.1.4's EMBEDDER POLICY, the item HTML §7.1.7 "Policy containers" makes part of
-       the container beside the CSP list. They are FOUR parameters because §7.1.4 makes a policy four items and
-       §7.1.7's clone moves every one of them, and the two VALUES cross as the section's own token strings —
-       main.c's own qjs_inherited_container is what turns one back into a value, and it crashes on a token
-       naming none of the three rather than reading it as the default.
-       THE NEXT TWO ARE HTML §7.3.1.3 "Child navigables"'s TWO LINKS FOR THIS NAVIGABLE — its PARENT and its
-       CONTAINER — and neither is part of the policy container above: that is five policies and says nothing
-       about a frame tree. Both are `string` for the same lifetime
-       reason as the rest: navigable_root decodes the parent into a WindowProxy DURING the call
-       (remote_object_decode), and navigable_root_container hands the container's serialized policy to
-       window_proxy_set_remote_container, which `proxy_strdup`s it — so neither keeps a pointer into these
-       bytes.
-       THE LAST IS HTML §3.1.3 "Ancestor origins"' composed list, a THIRD statement about that same navigable
-       and a `string` for that same lifetime reason: navigable_root_ancestor_origins hands it to
-       window_proxy_set_remote_ancestor_origins, which `proxy_strdup`s it.
-       THIS TABLE HAS NOW BEEN ONE ENTRY SHORT TWICE, ONE PARAMETER APART, AND THE SECOND TIME THE PROSE ABOVE
-       ALREADY SAID IT WAS "the defect this list exists to make impossible". Both times `main.c`'s entry,
-       `mojom.js`'s parameter, `bridge.js`'s caller and `engine/renderer_host_gate.mjs`'s driving call gained
-       the argument together and this file — the one that turns a declared parameter into a C operand — did
-       not, so the loop below dropped the wire's last argument on the floor and the entry would have read it
-       out of whatever followed the last operand. A SENTENCE CANNOT MAKE A HAND-MAINTAINED SECOND COPY OF A
-       PARAMETER LIST IMPOSSIBLE; only an assertion can, and the reason neither existing one caught it is
-       worth more than either incident. There are THREE descriptions of this call — this table, `mojom.js`'s
-       declaration, and the built artifact — and only two pairings were ever asserted: `rendererImpl` below
-       checks this table against the MOJOM at bind time, inside the browser, where the failure is an abort a
-       census reads as a page that learned nothing; `harness.js`'s assertEngineAbiPairing checks it against
-       the BUILT GLUE before launch, and a built glue is as old as the last build — so with a stale artifact
-       that gate compared 14 against 14 and reported agreement while the wire disagreed. The table-versus-mojom
-       arity is now also asserted THERE, out of the two files a lane always freezes, so the next omission
-       refuses to launch instead of aborting every row.
-       WHAT AN OMISSION COSTS IS THE MEASURE OF WHY THIS TABLE IS PER-PARAMETER: no browser can analyse a
-       single document against this extension while it stands, so the live corpus census — the only instrument
-       that drives real pages — cannot take one row. A table that is one entry short is not a degraded
-       binding; it is every browser measurement in the tree, stopped. */
-    init:             { fn: "qjs_init",               ret: "number", out: "rc",
-                        place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
-                                "string-retained", "string", "string", "string", "string", "string",
-                                "string", "string", "string", "string"] },
-    join:             { fn: "qjs_join",               ret: "number", out: "rc",
-                        place: ["bytes-pair-retained", "string-retained", "string-retained", "string-retained",
-                                "string-retained", "string", "string", "string", "string", "string",
-                                "string", "string", "string", "string"] },
-    getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId", place: [] },
-    begin:            { fn: "qjs_begin",              ret: null,     out: null,       place: ["string"] },
-    step:             { fn: "qjs_step",               ret: "number", out: "code",     place: [] },
-    getResult:        { fn: "qjs_result",             ret: "string", out: "result",   place: [] },
-    teardown:         { fn: "qjs_teardown",           ret: null,     out: null,       place: [] },
-    getPending:       { fn: "qjs_pending",            ret: "string", out: "requests", place: [] },
-    getChunks:        { fn: "qjs_chunks",             ret: "string", out: "urls",     place: [] },
-    provide:          { fn: "qjs_provide",            ret: null,     out: null,
-                        place: ["string", "string", "string", "bytes-pair"] },
-    getTopWeight:     { fn: "qjs_top_weight",         ret: "number", out: "weight",   place: [] },
-    setYieldFloor:    { fn: "qjs_set_yield_floor",    ret: null,     out: null,       place: ["number"] },
-    requestPark:      { fn: "qjs_request_park",       ret: null,     out: null,       place: [] },
-    emitPartial:      { fn: "qjs_emit_partial",       ret: null,     out: null,       place: [] },
-    getHostRequests:  { fn: "qjs_host_requests",      ret: "string", out: "requests", place: [] },
-    hostAnswer:       { fn: "qjs_host_answer",        ret: null,     out: null,
-                        place: ["number", "string", "number", "bytes-pair"] },
-    getHostNotices:   { fn: "qjs_host_notices",       ret: "string", out: "notices",  place: [] },
-    route:            { fn: "qjs_route",              ret: null,     out: null,       place: ["string", "string"] },
-    perform:          { fn: "qjs_perform",            ret: null,     out: null,       place: ["string", "string"] },
-    hostAnswerRemote: { fn: "qjs_host_answer_remote", ret: null,     out: null,
-                        place: ["number", "string", "string"] },
-    worldGone:        { fn: "qjs_world_gone",         ret: null,     out: null,       place: ["string"] },
-    /* `string` AND NOT `string-retained`, READ OFF THE C ENTRY LIKE EVERY OTHER PLACEMENT: qjs_unload passes
-       the name to world_doc_intern, which either matches an entry it already holds or strdup's its own copy —
-       so the pointer does not outlive the call, and retaining it would be this table asserting an ownership
-       main.c does not take. That is the same reason the two policy-container arguments of init/join above are
-       transient and their five siblings are not. */
-    unload:           { fn: "qjs_unload",             ret: null,     out: null,       place: ["string"] },
+    init:             { fn: "qjs_init",               ret: "number", out: "rc" },
+    join:             { fn: "qjs_join",               ret: "number", out: "rc" },
+    getBundleId:      { fn: "qjs_bundle_id",          ret: "number", out: "bundleId" },
+    begin:            { fn: "qjs_begin",              ret: null,     out: null },
+    step:             { fn: "qjs_step",               ret: "number", out: "code" },
+    getResult:        { fn: "qjs_result",             ret: "string", out: "result" },
+    teardown:         { fn: "qjs_teardown",           ret: null,     out: null },
+    getPending:       { fn: "qjs_pending",            ret: "string", out: "requests" },
+    getChunks:        { fn: "qjs_chunks",             ret: "string", out: "urls" },
+    provide:          { fn: "qjs_provide",            ret: null,     out: null },
+    getTopWeight:     { fn: "qjs_top_weight",         ret: "number", out: "weight" },
+    setYieldFloor:    { fn: "qjs_set_yield_floor",    ret: null,     out: null },
+    requestPark:      { fn: "qjs_request_park",       ret: null,     out: null },
+    emitPartial:      { fn: "qjs_emit_partial",       ret: null,     out: null },
+    getHostRequests:  { fn: "qjs_host_requests",      ret: "string", out: "requests" },
+    hostAnswer:       { fn: "qjs_host_answer",        ret: null,     out: null },
+    getHostNotices:   { fn: "qjs_host_notices",       ret: "string", out: "notices" },
+    route:            { fn: "qjs_route",              ret: null,     out: null },
+    perform:          { fn: "qjs_perform",            ret: null,     out: null },
+    hostAnswerRemote: { fn: "qjs_host_answer_remote", ret: null,     out: null },
+    worldGone:        { fn: "qjs_world_gone",         ret: null,     out: null },
+    unload:           { fn: "qjs_unload",             ret: null,     out: null },
   };
 
-  /* WHICH DECLARED TYPES A PLACEMENT MAY PLACE. This is the two-sided assert the table needs to be safe: the
-     mojom says what crosses and the table says how it lands, and a binding that placed a `string` where the
-     wire declares `array<uint8>` would hand the entry a pointer into a buffer that was encoded on the way — the
-     exact defect the byte types exist to prevent, and one that produces a plausible shorter document rather
-     than a crash. */
-  var PLACEABLE = {
-    "string-retained":     ["string"],
-    "bytes-pair-retained": ["array<uint8>"],
-    "string":              ["string"],
-    "number":              ["int32", "double"],
-    "bytes-pair":          ["array<uint8>?"],
-  };
-
-  /* ONE ABI CALL, driven by the binding rather than by anything the caller said about its own arguments. The
-     validator has already checked every operand against its declared type before this runs, so what is left
-     here is the placement and the call itself. */
-  function callAbi(e, args) {
+  /* ONE ABI CALL, WALKED OFF THE INTERFACE'S OWN PARAMETER LIST. The `PLACEABLE` map that stood here — which
+     declared types each hand-written placement was allowed to place — is deleted with the placements it
+     guarded: it existed because the table and the mojom were two descriptions that could disagree, and a
+     placement DERIVED from the declaration cannot. It was also asserting a rule that is not true, and that is
+     the second reason it goes: it tied `array<uint8>` to "the entry keeps this" and `array<uint8>?` to "free it
+     after the call", which is NULLABILITY standing in for OWNERSHIP and holds only for as long as those happen
+     to be the same two parameters. Ownership is `mojom.js`'s `retained`, stated per parameter.
+     THE VALIDATOR HAS ALREADY RUN. `mojo.js`'s `checkValues` refused any value that is not the declared type
+     before this was reached, so a `bytes` placement is handed a Uint8Array (or, where the declaration is
+     nullable, the `null` that is Fetch's network error) and never a shape this has to guess about. */
+  function callAbi(m, e, args) {
     DCHECK(M !== null,
            "a renderer was asked for an ABI call before its module was instantiated — the invitation is not " +
            "accepted until the module exists, so nothing may be asked of an engine that does not");
-    var types = [], vals = [], transient = [], i, pr, v;
-    for (i = 0; i < e.place.length; i++) {
-      if (e.place[i] === "string-retained") { types.push("number"); vals.push(retainString(args[i])); continue; }
-      if (e.place[i] === "bytes-pair-retained") {
-        /* TWO OPERANDS AND NO `transient` ENTRY — the pointer is the entry's from here on (retainString's
-           reason), and the length rides beside it because the C entry takes the pair. */
-        pr = retainBytesPair(args[i]);
+    var types = [], vals = [], transient = [], i, pl, pr, v;
+    for (i = 0; i < m.params.length; i++) {
+      pl = self.mojo.abiPlacement(m.params[i]);
+      if (pl.form === "string") {
+        /* RETAINED IS A POINTER THIS FRAME MINTS AND NEVER FREES; transient is emscripten's own copy, which it
+           frees when the call returns. The declaration decides which, because only the C entry knows. */
+        if (pl.retained) { types.push("number"); vals.push(retainString(args[i])); }
+        else             { types.push("string"); vals.push(args[i]); }
+        continue;
+      }
+      if (pl.form === "bytes") {
+        /* TWO OPERANDS EITHER WAY — the pointer and the length, because the C entry takes the pair and because
+           a length recovered with `strlen` would end at a 0x00 the sequence may legitimately contain. */
+        pr = pl.retained ? retainBytesPair(args[i]) : bodyPair(args[i]);
+        if (!pl.retained && pr[0]) transient.push(pr[0]);
         types.push("number"); vals.push(pr[0]);
         types.push("number"); vals.push(pr[1]);
         continue;
       }
-      if (e.place[i] === "string")          { types.push("string"); vals.push(args[i]); continue; }
-      if (e.place[i] === "number")          { types.push("number"); vals.push(args[i]); continue; }
-      if (e.place[i] === "bytes-pair") {
-        pr = bodyPair(args[i]);
-        if (pr[0]) transient.push(pr[0]);
-        types.push("number"); vals.push(pr[0]);
-        types.push("number"); vals.push(pr[1]);
-        continue;
-      }
-      DFAIL("the ABI binding for " + e.fn + " named a placement this renderer does not perform: `" +
-            e.place[i] + "`");
+      if (pl.form === "number") { types.push("number"); vals.push(args[i]); continue; }
+      DFAIL("content.mojom.Renderer." + m.name + "'s parameter `" + m.params[i].name + "` resolved to the " +
+            "placement form `" + pl.form + "`, which this renderer does not perform — `mojo.js`'s abiPlacement " +
+            "is where a form is derived and this is where one is carried out, so a form it answers and this " +
+            "cannot is half a placement");
       /* RELEASE PATH UNDER THE ASSERT, and it REFUSES rather than continuing: falling through this loop would
          push no operand for this argument and hand the C entry a call one operand short — every later argument
          read one slot early, which is a wrong call rather than a missing one. */
-      throw new TypeError("unplaceable ABI argument: " + e.place[i]);
+      throw new TypeError("unperformable ABI placement form: " + pl.form);
     }
     try { v = M.ccall(e.fn, e.ret, types, vals); }
     finally { for (i = 0; i < transient.length; i++) M._free(transient[i]); }
@@ -292,7 +240,10 @@
      so the two descriptions cannot drift: a mojom method with no binding crashes NAMING ITSELF (rather than
      reaching a peer as a TypeError inside a message handler, which reaches nobody — the caller stays parked on
      a reply that is never coming), a binding no method reaches is caught by the count, and every parameter's
-     placement is checked against the type the wire declares for it. */
+     placement is RESOLVED HERE, at bind, rather than at the first call of the method that carries it — a
+     method the trusted zone happens not to call for an hour would otherwise carry an undescribed parameter for
+     an hour, and the crash that names it would arrive inside a call instead of at the boot of the frame that
+     cannot serve the interface. */
   function rendererImpl() {
     var def = self.mojo.interfaceOf("content.mojom.Renderer"), impl = {}, bound = 0;
     def.byJs.forEach(function (m) {
@@ -302,18 +253,12 @@
              "an interface is the WHOLE list of its methods and every one of them is a qjs_* entry, so a " +
              "method without a binding is a capability the trusted zone can call and this frame cannot serve");
       if (e === undefined) return;   /* release path under the assert */
-      DCHECK(e.place.length === m.params.length,
-             "the ABI binding for " + m.name + " places " + e.place.length + " argument(s) where its mojom " +
-             "declares " + m.params.length + " — a short list hands the C entry a call one operand short and " +
-             "every later argument is read one slot early, which is a wrong call rather than a missing one");
-      for (var i = 0; i < e.place.length; i++) {
-        var ok = PLACEABLE[e.place[i]];
-        DCHECK(ok !== undefined && ok.indexOf(m.params[i].type) >= 0,
-               "the ABI binding for " + m.name + " places parameter `" + m.params[i].name + "` as `" +
-               e.place[i] + "` while its mojom declares `" + m.params[i].type + "` — the placement is how a " +
-               "declared type becomes an operand of this C entry, so a mismatch is that entry being handed " +
-               "something other than what crossed");
-      }
+      /* EVERY PARAMETER'S PLACEMENT, DERIVED NOW. This asks nothing about the binding — the answer is a
+         function of what the mojom declares — so what it does here is FIRE: a parameter whose type has no
+         placement, or whose ownership the declaration does not state, crashes at the boot of the frame that
+         would have had to place it, naming the parameter. There is nothing left to compare, which is the
+         point: the two lists that could disagree are one list. */
+      for (var i = 0; i < m.params.length; i++) self.mojo.abiPlacement(m.params[i]);
       DCHECK((e.ret === null) === (e.out === null),
              m.name + "'s binding names a C return type with no reply field to carry it, or the reverse — a " +
              "value computed and dropped is a value the caller reads as absent");
@@ -326,8 +271,21 @@
                             : (m.reply.length === 2 && m.reply[0].name === e.out),
              m.name + "'s reply fields do not match its binding — the entry's return is the reply's FIRST " +
              "field and the working set is its last, so a reply this frame builds by name would leave a hole");
+      /* AND THE TYPE THAT RETURN IS READ WITH, against the type the wire declares for the field it becomes.
+         The reply's shape was checked above and its TYPE was not, so a `ret` naming the wrong ccall spelling
+         read the C return through the wrong conversion and the value still arrived — a number where a pointer
+         was, or a decoded string where an integer was — which the validator on the far side then refuses as
+         the PEER being broken. `int32` and `double` are both `number` because the wasm signature is what
+         decides i32 or f64; `string` is emscripten's own read of a NUL-terminated pointer. */
+      DCHECK(e.ret === null ||
+             e.ret === ((m.reply[0].type === "int32" || m.reply[0].type === "double") ? "number"
+                        : m.reply[0].type === "string" ? "string" : null),
+             m.name + "'s binding reads its C return as `" + e.ret + "` while the mojom declares that reply " +
+             "field `" + (m.reply.length ? m.reply[0].type : "(none)") + "` — the ccall type is how the entry's " +
+             "answer is converted out of linear memory, so a mismatch is this frame reading the return through " +
+             "a conversion the wire does not describe and then posting the result as though it did");
       bound++;
-      impl[m.js] = function () { return callAbi(e, Array.prototype.slice.call(arguments)); };
+      impl[m.js] = function () { return callAbi(m, e, Array.prototype.slice.call(arguments)); };
     });
     DCHECK(bound === Object.keys(ABI).length,
            "this renderer holds " + Object.keys(ABI).length + " ABI binding(s) and content.mojom.Renderer " +

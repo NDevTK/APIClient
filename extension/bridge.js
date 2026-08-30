@@ -1576,8 +1576,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   /* A 0x00 IN THESE BYTES IS NOT ASSERTED AGAINST ANY MORE, AND THE ASSERT THAT STOOD HERE IS DELETED RATHER
      THAN WEAKENED. It read `_doc.indexOf(0) < 0` and named the fix — "Give qjs_init a LENGTH beside the
      pointer (qjs_provide now carries one)" — and that length exists: `qjs_init`/`qjs_join` take `(bytes,
-     len)`, renderer.html's `bytes-pair-retained` placement puts both operands in linear memory, and the C
-     entry DCHECKs the guard byte at `bytes[len]` so a length and a C read cannot disagree without crashing.
+     len)`, the renderer's byte placement puts both operands in linear memory, and the C entry DCHECKs the
+     guard byte at `bytes[len]` so a length and a C read cannot disagree without crashing.
      The state it forbade is a state the standard defines: HTML §13.2.3.5 "Preprocessing the input stream" says
      "The handling of U+0000 NULL characters varies based on where the characters are found … They are either
      ignored or, for security reasons, replaced with a U+FFFD REPLACEMENT CHARACTER", and the tokenizer has a
@@ -2265,8 +2265,9 @@ function engineWeight(eng) {
    `fetched` answered: `null` for §5.6's network error (the JSON `null` the engine rejects with a TypeError),
    or `{meta, bytes}`.
    THE PLACEMENT MOVED INTO THE FRAME AND `engineBodyBytes` IS DELETED WITH IT. It malloc'd into `M.HEAPU8`,
-   handed qjs_provide a [ptr, len] pair and freed the block afterwards — the exact algorithm renderer.html's
-   `bytes-pair` placement now performs, on the only side of the boundary that can address that memory, with the
+   handed qjs_provide a [ptr, len] pair and freed the block afterwards — the exact algorithm the renderer's
+   byte placement now performs (the mojom declares this body's bytes NOT retained, which is what makes the free
+   after the call the declared behaviour), on the only side of the boundary that can address that memory, with the
    same "one extra byte so a zero-length body still has an address of its own" and the same `null` meaning THIS
    ANSWER CARRIES NO BODY AT ALL. Keeping a copy here would have been a second placement over a heap this realm
    no longer has a view of.

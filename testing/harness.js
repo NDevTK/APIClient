@@ -397,21 +397,28 @@ function assertRendererSandboxed(expectSandbox, rootPid) {
    handed an engine that cannot answer a single one of the calls the extension makes. Measured, on this
    checkout, against five real sites: every run aborted at `qjs_init` with `native function \`qjs_init\` called
    with 8 args but expects 5`, because the artifact was built two ABI-widening commits earlier — the document's
-   length and the inherited policy container's self-origin had each been added to the C entry and to
-   renderer.html's placement table, and the wasm beside them was from before either. Five sites, five crashes,
+   length and the inherited policy container's self-origin had each been added to the C entry and to the
+   extension's own description, and the wasm beside them was from before either. Five sites, five crashes,
    one signature, and NOTHING in the output named a stale artifact: the message names an arity, and the reader
    is 58 commits away from the cause.
    THE OTHER DIRECTION IS WORSE AND HAS NO MESSAGE AT ALL. Emscripten's own guard is `args.length <= nargs` and
    its comment says why — "too few can be valid since the missing arguments will be zero filled" — so an
-   artifact that expects MORE than the table places runs happily with NULL for every operand the caller never
-   learned about. A `qjs_init` whose inherited-policy pointers arrive as 0 builds a document with a policy
+   artifact that expects MORE than the extension places runs happily with NULL for every operand the caller
+   never learned about. A `qjs_init` whose inherited-policy pointers arrive as 0 builds a document with a policy
    container out of nothing and then reports endpoints and sinks: a plausible datum, which is the one failure
    this project has no way to see.
-   SO THE PAIRING IS ASSERTED FROM BOTH SIDES BEFORE A BROWSER IS LAUNCHED, and it is asserted out of the two
-   files that are ALWAYS present wherever this harness runs — both live under `extension/`, so a corpus lane
+   SO THE PAIRING IS ASSERTED FROM BOTH SIDES BEFORE A BROWSER IS LAUNCHED, and it is asserted out of files that
+   are ALWAYS present wherever this harness runs — all of them live under `extension/`, so a corpus lane
    (testing/corpus/run.sh copies harness.js + extension/ and nothing else) checks exactly the pair it froze.
    The engine SOURCE is deliberately not consulted: `engine/host/main.c` is not copied into a lane, and a check
    that can only be made in the checkout is a check the frozen-artifact runs would have to skip.
+   WHAT THE EXTENSION PLACES IS ASKED, NOT SCRAPED, AND THAT CHANGED WHAT THIS CHECK IS. It used to read a
+   hand-aligned `place: [...]` array out of renderer.html's source text by regex and add it up against a token
+   vocabulary restated here — so the operand count reached this file through a SECOND reader of a hand-kept
+   list, and the check compared one copy of a fact against another. The extension derives its placements from
+   its own wire description now, so this runs that description (check.js + mojo.js + mojom.js, in an isolated
+   context) and asks `abiPlacement` the same question the renderer asks it. The comparison left is the one
+   between two GENERATIONS — source against artifact — which is the only one a rebuild can be the answer to.
    IT IS EQUALITY, NOT A BOUND, and a shape this cannot read is FATAL rather than skipped. A parser that
    silently matches nothing reports agreement it never established — the instrument reading zero, which is the
    defect this whole check exists to stop being invisible. */
@@ -420,7 +427,7 @@ function assertEngineAbiPairing() {
   const gluePath = path.join(EXT_DIR, "lib", "qjs", "qjs.mjs");
   let rendererSrc, glueSrc;
   try { rendererSrc = fs.readFileSync(rendererPath, "utf8"); }
-  catch (e) { throw new Error(`cannot read ${rendererPath} — the renderer's ABI table is one half of the engine\n  pairing this refuses to launch without: ${e.message}`); }
+  catch (e) { throw new Error(`cannot read ${rendererPath} — the renderer's ABI binding table is one half of the\n  engine pairing this refuses to launch without: ${e.message}`); }
   try { glueSrc = fs.readFileSync(gluePath, "utf8"); }
   catch (e) { throw new Error(`cannot read ${gluePath} — the built engine glue is the other half of the\n  pairing. Build it: node engine/build.mjs cow  (${e.message})`); }
 
@@ -431,99 +438,77 @@ function assertEngineAbiPairing() {
   for (const m of glueSrc.matchAll(/createExportWrapper\(\s*"(\w+)"\s*,[^,]+,\s*(\d+)\s*\)/g)) glue.set(m[1], Number(m[2]));
   if (!glue.size) throw new Error(`${gluePath} declares no createExportWrapper entries — this harness could not\n  read what the built engine accepts, and reporting that as agreement is the measurement no run could\n  contradict. The glue's shape changed; fix this parse rather than launching.`);
 
-  /* WHAT THE EXTENSION PLACES. renderer.html's table is per-MOJOM-PARAMETER; the two byte placements each
-     expand to TWO C operands (the pointer and its length), which is the whole reason a placement is
-     per-parameter rather than per-type — see the table's own note. An unknown token is fatal for the same
-     reason a zero-entry parse is: counting it as one operand would invent agreement. */
-  const tableSrc = rendererSrc.match(/var ABI = \{([\s\S]*?)\n\s*\};/);
-  if (!tableSrc) throw new Error(`${rendererPath} holds no \`var ABI = {…}\` table — that table IS the caller's\n  half of the engine ABI, so a shape this cannot read is a pairing nothing checked.`);
-  const OPERANDS = { "string-retained": 1, "string": 1, "number": 1, "bytes-pair-retained": 2, "bytes-pair": 2 };
-  const places = new Map();
-  /* PARAMETERS AND OPERANDS ARE COUNTED SEPARATELY OUT OF THE ONE PARSE, because the two pairings below are
-     asked in two different currencies and collapsing them would make one of them unaskable. The built engine
-     accepts C OPERANDS, so a byte placement counts twice against it; the mojom declares PARAMETERS, so the
-     same placement counts once against that. */
-  const params = new Map();
-  for (const m of tableSrc[1].replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(\w+):\s*\{\s*fn:\s*"(\w+)"[\s\S]*?\bplace:\s*\[([\s\S]*?)\]/g)) {
-    let n = 0;
-    const toks = m[3].split(",").map((s) => s.trim().replace(/^"|"$/g, "")).filter(Boolean);
-    for (const tok of toks) {
-      if (!(tok in OPERANDS)) throw new Error(`${rendererPath}: placement \`${tok}\` on ${m[2]} is not one this\n  harness knows how to count into C operands. Teach it here rather than letting an uncounted placement\n  pass as agreement.`);
-      n += OPERANDS[tok];
-    }
-    places.set(m[2], n);
-    params.set(m[1], toks.length);
+  /* WHAT THE EXTENSION PLACES, ASKED OF THE EXTENSION'S OWN DESCRIPTION RATHER THAN SCRAPED OUT OF IT. This
+     used to REGEX a `place: [...]` array out of renderer.html's source text and add up a token vocabulary
+     restated here — a second reader of a hand-aligned list, which is two ways for one fact to be wrong and one
+     of them silent: a parse that matches nothing reports agreement it never established. The list is gone
+     (renderer.html derives its placements) and so is the scrape. `mojom.js` is the description both ends load,
+     it is a classic script over `self`, and running it in an isolated context is what `engine/route.mjs` does
+     for the same reason — so the operand count comes from the same function the renderer itself places by.
+     AN ISOLATED CONTEXT AND NOT THIS REALM: evaluating these files over the harness's own global would install
+     `mojo`, `DCHECK` and `CHECK` into a driver whose other commands do not expect them. The load order is the
+     frame's, because mojo.js asserts through check.js and mojom.js declares through mojo.js.
+     IT IS STILL READ OUT OF FILES A LANE ALWAYS FREEZES — check.js, mojo.js and mojom.js all live under
+     `extension/`, which run.sh copies whole — for the same reason the glue check does not consult
+     `engine/host/main.c`: a check that can only be made in the checkout is one the frozen-artifact runs would
+     have to skip. A file that will not load is FATAL, never skipped. */
+  const vm = require("vm");
+  const sandbox = { console };
+  sandbox.self = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  for (const f of ["check.js", "mojo.js", "mojom.js"]) {
+    const at = path.join(EXT_DIR, f);
+    try { vm.runInContext(fs.readFileSync(at, "utf8"), sandbox, { filename: at }); }
+    catch (e) { throw new Error(`${at} would not load — it is one of the three files that ARE the extension's\n  wire description, and a harness that cannot read the description cannot state that the engine beside it\n  answers the same calls: ${e.message}`); }
   }
-  if (!places.size) throw new Error(`${rendererPath}'s ABI table parsed to no entries — see above.`);
+  const iface = sandbox.mojo.interfaceOf("content.mojom.Renderer");
+  if (!iface || !iface.methods || !iface.methods.length)
+    throw new Error(`${path.join(EXT_DIR, "mojom.js")} declares no \`content.mojom.Renderer\` methods — that\n  interface IS the engine ABI, so a description that parsed to nothing is a pairing nothing checked.`);
+  /* ONE OPERAND COUNT PER METHOD, DERIVED. A byte parameter is a (pointer, length) PAIR and counts twice
+     against the built engine's arity; everything else is one operand. `abiPlacement` crashes on a type or an
+     ownership nobody has described rather than guessing a count — which is the whole reason this asks it
+     instead of keeping its own table of what a placement is worth. */
+  const operands = new Map();   // mojo method js-name -> C operand count
+  for (const m of iface.methods) {
+    let n = 0;
+    for (const p of m.params) n += sandbox.mojo.abiPlacement(p).operands;
+    operands.set(m.js, n);
+  }
 
-  /* THE THIRD DESCRIPTION OF THE SAME CALL, AND THE PAIRING THAT WAS NEVER ASSERTED BEFORE A LAUNCH. There are
-     three: this table, `mojom.js`'s declaration, and the built artifact. The block below checks the table
-     against the ARTIFACT, and `renderer.html`'s own rendererImpl checks it against the MOJOM — but that second
-     one runs inside the browser, at bind time, so its failure is an abort that a census reads as a page which
-     learned nothing, and the reader has to go looking in a console the renderer does not tee.
-     THE TWO ARE NOT REDUNDANT AND THE STALE-ARTIFACT CASE IS WHY. A built glue is exactly as old as the last
-     build, so when `mojom.js` and `main.c` gained HTML §3.1.3's ancestor origins together and this table did
-     not, the artifact beside them still took the OLD arity — the glue check compared 14 against 14 and
-     reported agreement, the browser launched, and every renderer aborted at bind. Two assertions, both
-     healthy, and between them a state where no document in the tree could be analysed. The mojom is the one
-     description that moves with the SOURCE rather than with the last build, so it is what catches a table that
-     is one entry behind the wire on the pass BEFORE a rebuild rather than the one after.
-     IT IS READ OUT OF THE TWO FILES A LANE ALWAYS FREEZES — both live under `extension/`, which run.sh copies
-     whole — for the same reason the glue check does not consult `engine/host/main.c`: a check that can only be
-     made in the checkout is one the frozen-artifact runs would have to skip. An unparseable shape is FATAL,
-     never skipped: a parser that matches nothing reports agreement it never established. */
-  const mojomPath = path.join(EXT_DIR, "mojom.js");
-  let mojomSrc;
-  try { mojomSrc = fs.readFileSync(mojomPath, "utf8"); }
-  catch (e) { throw new Error(`cannot read ${mojomPath} — the wire declaration is the third description of\n  every ABI call and this refuses to launch without it: ${e.message}`); }
-  const ifaceAt = mojomSrc.indexOf('name: "content.mojom.Renderer"');
-  if (ifaceAt < 0) throw new Error(`${mojomPath} declares no \`content.mojom.Renderer\` — that interface IS what the\n  renderer's ABI table binds, so a shape this cannot find is a pairing nothing checked.`);
-  const nextIface = mojomSrc.indexOf("defineInterface", ifaceAt);
-  const ifaceSrc = mojomSrc.slice(ifaceAt, nextIface < 0 ? mojomSrc.length : nextIface);
-  /* THE ELEMENTS OF ONE `params:` ARRAY, COUNTED BY SCANNING RATHER THAN BY SPLITTING ON COMMAS. A parameter
-     is declared in two shapes in that file — a reference to a shared record (`DOCUMENT`, because Init and Join
-     take one contract) and an inline `{ name, type, why }` — and the second is FULL of commas, inside its own
-     braces and inside prose that runs to several sentences. A comma split reported `Route` as ten parameters
-     and `Begin` as five, which is not a near miss: it is a count of punctuation, and every method in the
-     interface would have been named as skewed on every launch. So depth and string state are tracked, and an
-     array that does not close is fatal for the parser's own reason — a shape this cannot read is agreement it
-     never established. */
-  const countParams = (src, open, name) => {
-    let depth = 0, n = 0, content = false, q = null;
-    for (let i = open; i < src.length; i++) {
-      const c = src[i];
-      if (q) { if (c === "\\") i++; else if (c === q) q = null; continue; }
-      if (c === '"' || c === "'") { q = c; content = true; continue; }
-      if (c === "[" || c === "{") { depth++; if (depth > 1) content = true; continue; }
-      if (c === "]" || c === "}") { depth--; if (depth === 0) return n + (content ? 1 : 0); continue; }
-      if (c === "," && depth === 1) { n++; continue; }
-      if (!/\s/.test(c)) content = true;
-    }
-    throw new Error(`${mojomPath}: the \`params:\` array of \`${name}\` does not close — this harness could not\n  read what the wire declares, and reporting that as agreement is the measurement no run could contradict.`);
-  };
-  const declared = new Map();
-  for (const m of ifaceSrc.matchAll(/\bname:\s*"(\w+)"\s*,\s*params:\s*\[/g))
-    declared.set(m[1][0].toLowerCase() + m[1].slice(1),
-                 countParams(ifaceSrc, m.index + m[0].length - 1, m[1]));
-  if (!declared.size) throw new Error(`${mojomPath}'s \`content.mojom.Renderer\` parsed to no methods — see above.`);
+  /* THE ONE FACT THE WIRE CANNOT CARRY, AND THEREFORE THE ONE THING STILL READ OUT OF THE DOCUMENT: which
+     `qjs_*` entry each method is. A mojom declares an interface, not a symbol in a wasm module, so this pairing
+     cannot be made without renderer.html's binding table. It is found by the `fn:` key naming a `qjs_`-prefixed
+     literal — never by the table's variable name — so a table that moves or is renamed is still read, and a
+     table this cannot read at all is FATAL. */
+  const tableSrc = rendererSrc.match(/var ABI = \{([\s\S]*?)\n\s*\};/);
+  if (!tableSrc) throw new Error(`${rendererPath} holds no \`var ABI = {…}\` table — that table is what binds each\n  mojom method to its C entry, so a shape this cannot read is a pairing nothing checked.`);
+  const entryOf = new Map();    // mojo method js-name -> qjs_* entry
+  for (const m of tableSrc[1].replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(\w+)\s*:\s*\{\s*fn\s*:\s*"(qjs_\w+)"/g))
+    entryOf.set(m[1], m[2]);
+  if (!entryOf.size) throw new Error(`${rendererPath}'s ABI table parsed to no bindings — see above.`);
 
   const wire = [];
-  for (const [js, want] of declared) {
-    if (!params.has(js)) { wire.push(`  ${js}: the mojom declares it, ${path.basename(rendererPath)}'s ABI table has no binding for it`); continue; }
-    if (params.get(js) !== want) wire.push(`  ${js}: the mojom declares ${want} parameter(s), the ABI table places ${params.get(js)}`);
-  }
-  for (const js of params.keys())
-    if (!declared.has(js)) wire.push(`  ${js}: the ABI table binds it, the mojom declares no such method`);
+  for (const m of iface.methods)
+    if (!entryOf.has(m.js)) wire.push(`  ${m.js}: the mojom declares it, ${path.basename(rendererPath)}'s ABI table binds it to no qjs_* entry`);
+  for (const js of entryOf.keys())
+    if (!operands.has(js)) wire.push(`  ${js}: the ABI table binds it, the mojom declares no such method`);
   if (wire.length) throw new Error(
     `the extension's ABI table and its own wire declaration describe different calls — REFUSING TO LAUNCH.\n` +
     `  Every renderer this browser started would abort at bind, before its first document, and the census\n` +
     `  would read those pages as ones that learned nothing.\n` +
     wire.join("\n") + "\n" +
-    `  table: ${rendererPath}\n  wire:  ${mojomPath}\n` +
+    `  table: ${rendererPath}\n  wire:  ${path.join(EXT_DIR, "mojom.js")}\n` +
     `  This is a source-to-source skew and NO rebuild fixes it — the two lists are edited together.`);
 
+  /* AND THE PAIRING A REBUILD DOES FIX. The mojom moves with the SOURCE and the glue is exactly as old as the
+     last build, so this is where a stale artifact is named: emscripten's own wrapper asserts only on too MANY
+     operands (too few are zero-filled silently, and a `qjs_init` whose inherited-policy pointers arrive as 0
+     builds a document out of nothing and then reports endpoints and sinks), and its message names an arity
+     rather than a parameter or a commit. */
   const skew = [];
-  for (const [fn, want] of places) {
+  for (const [js, want] of operands) {
+    const fn = entryOf.get(js);
     if (!glue.has(fn)) { skew.push(`  ${fn}: the extension calls it, the built engine does not export it`); continue; }
     if (glue.get(fn) !== want) skew.push(`  ${fn}: the extension places ${want} operand(s), the built engine accepts ${glue.get(fn)}`);
   }

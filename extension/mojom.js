@@ -118,24 +118,56 @@
      main.c's two entries have byte-identical C signatures, and they are a shared record for that reason rather
      than for brevity: it is ONE contract taken by two operations (root this agent at a document / add a
      document to the agent already running), so a change to what a document arrives with must reach both. */
-  var DOCUMENT = { name: "document", type: "array<uint8>",
+  /* ── AND EVERY PARAMETER OF THIS INTERFACE ALSO STATES ITS OWNERSHIP, WHICH THE TYPE CANNOT.
+     This interface's peer is a wasm module, so a caller does not merely serialize a parameter — it ALLOCATES
+     one in that module's linear memory and hands over a pointer. Whether the C entry KEEPS that pointer past
+     the call is a fact about `engine/host/main.c` and not about the wire, no declared type carries it, and it
+     is the difference between a live document and a use-after-free in one direction and a per-document LEAK in
+     the other. So it is declared here, once, beside the type: `mojo.js`'s `abiPlacement` reads it and every
+     caller of the ABI asks that one function. It used to be a hand-aligned array per caller, and inferred from
+     NULLABILITY where it was checked at all — which is a different fact wearing the answer's shape.
+     `false` IS THE POSITIVE STATEMENT AND IT IS THE ONE THAT NEEDS EVIDENCE: a caller that does not know must
+     not free, so a `false` is a claim that the entry COPIES, and every one below is stated with the sink in
+     `engine/host/main.c`'s call graph that does the copying — named where the parameter is declared, so the
+     next reader can grep the claim instead of trusting it. `true` is the parameter whose copy the entry is
+     still reading after it returns, and there is exactly one.
+     FOUR OF THESE SAID `RETAINED` BEFORE THE CLAIM WAS CHECKED, and all four copy: the address, the document
+     name, the header field lines and the top-level creation URL. The sentence asserting otherwise lived in
+     `renderer.html` beside a hand-kept COUNT of how many pointers the entry keeps — which is the shape this
+     declaration exists to make unnecessary, and the shape that was wrong for as long as nobody re-read it. */
+  var DOCUMENT = { name: "document", type: "array<uint8>", retained: true,
     why: "the document's BYTES, which is what qjs_init/qjs_join take (a pointer and a LENGTH — a document " +
          "may contain a 0x00 and the tokenizer has a rule for it per state) and what HTML §13.2.3.2's " +
          "encoding sniffing is defined over — the algorithm the engine owes, and this zone owes it the bytes " +
-         "for. A string here is a zone that ran a decode it does not own" };
-  var DOCUMENT_URL = { name: "url", type: "string",
+         "for. A string here is a zone that ran a decode it does not own. RETAINED, and it is the only " +
+         "parameter of this interface that is: the entry does not copy these bytes, it hands the pointer to " +
+         "the load that fills the parser's input byte stream (core/loader/html_document.c holds `html` and an " +
+         "offset and reads through it across the fills the load is cut into), so the caller's block is what " +
+         "the parse is reading and freeing it after the call is a document being tokenized out of freed memory" };
+  var DOCUMENT_URL = { name: "url", type: "string", retained: false,
     why: "§4.4's document ADDRESS and not its origin: the engine derives the origin from the address itself " +
          "(§4.7's serialization, its own url.c), so the principal and the address are one fact from one place. " +
-         "Handing over a bare origin made every relative URL a bundle built resolve against the site root" };
-  var DOCUMENT_ID = { name: "docId", type: "string",
+         "Handing over a bare origin made every relative URL a bundle built resolve against the site root. " +
+         "NOT retained: every sink in qjs_init/qjs_join copies or consumes it within the call — url_parse " +
+         "builds a record it frees, policy_container_determine_navigation_params does the same, and the " +
+         "document install interns its own address (core/dom/document.c's doc_addr_intern) while " +
+         "window_install only parses it. The `origin` argument travelling those same two calls is a heap " +
+         "string the entry itself FREES on the way out, which is the structural half of the same measurement" };
+  var DOCUMENT_ID = { name: "docId", type: "string", retained: false,
     why: "the name this document is known by inside the agent — the key qjs_route and the notice stream name a " +
          "target document with. It is minted by the trusted zone for a root and by the ENGINE for a child it " +
-         "creates (`<parent>.<n>`), which SECURITY.md permits precisely because it is only a name" };
-  var DOCUMENT_HEADERS = { name: "headers", type: "string",
+         "creates (`<parent>.<n>`), which SECURITY.md permits precisely because it is only a name. NOT " +
+         "retained: its one sink is world_doc_intern (solver/world.c), which either matches a name the " +
+         "registry already holds or strdup's its own copy — the same sink, and therefore the same ownership, " +
+         "as the Unload parameter this record is shared with. Two entries taking one contract may not disagree " +
+         "about who owns its bytes, and while this said RETAINED and Unload's said transient they did" };
+  var DOCUMENT_HEADERS = { name: "headers", type: "string", retained: false,
     why: "the response's HEADER FIELD LINES verbatim, which is what HTML §7.1.7 \"Policy containers\"' " +
          "create-a-policy-container-from-a-fetch-response is run over. The empty string is the positive " +
          "statement that this document had no response at all (an about:blank, a serialized DOM off " +
-         "content.js), which differs from a response carrying no headers" };
+         "content.js), which differs from a response carrying no headers. NOT retained: its one sink is " +
+         "header_list_parse_field_lines (core/fetch/headers.c), which mallocs both halves of every field line " +
+         "it reads, and the list built out of them is freed inside the same entry" };
   /* THE CREATOR'S POLICY CONTAINER, WHICH IS TWO PARAMETERS BECAUSE CSP §2.2 MAKES IT TWO THINGS. It is
      declared beside `headers` and never inside it: HTML §7.3.2.1 "Creating browsing contexts" sets a
      created Document's policy container to "a clone of creator's policy container", and a clone is not a
@@ -144,12 +176,15 @@
      policies) and a self-origin (an origin which is used when matching the 'self' keyword)", and §2.2.2
      "Parse response's Content Security Policies" fixes that self-origin to "response's URL's origin". So a
      policy delivered as a header is a policy whose `'self'` names the RECEIVING document, which for an
-     inherited list is wrong in both directions at once. */
-  var INHERITED_CSP = { name: "inheritedCsp", type: "string",
+     inherited list is wrong in both directions at once.
+     NEITHER IS RETAINED, and the sinks say so: the container constructor strdup's the policy text
+     (core/frame/policy_container.c's policy_container_new, whose CSP parse then runs over ITS copy) and the
+     self-origin is parsed into an Origin during the call. */
+  var INHERITED_CSP = { name: "inheritedCsp", type: "string", retained: false,
     why: "the serialized CSP list of HTML §7.1.7's CLONE of the creator's policy container, for a document " +
          "another instance's `navigable.create` announced. The empty string is a list with no policies, which " +
          "is NOT the same statement as 'no creator' — that one is made by the self-origin beside it" };
-  var INHERITED_CSP_SELF_ORIGIN = { name: "inheritedCspSelfOrigin", type: "string",
+  var INHERITED_CSP_SELF_ORIGIN = { name: "inheritedCspSelfOrigin", type: "string", retained: false,
     why: "CSP §2.2's SELF-ORIGIN of that inherited list — the CREATOR's origin, serialized, which §6.7.2.8 " +
          "\"Does url match expression in origin with redirect count?\" is what reads. It cannot be recovered " +
          "from the policy bytes (§2.2.2 states it from outside them) and the receiving instance cannot derive " +
@@ -172,21 +207,23 @@
      THE VALUES ARE §7.1.4's OWN TOKENS AND THIS ZONE DOES NOT INTERPRET THEM. The emitting engine writes
      `unsafe-none`/`require-corp`/`credentialless` onto its `navigable.create` notice and this relays the bytes;
      the receiving engine is the only party that turns one back into a value, and it CRASHES on a token naming
-     none of the three rather than reading it as the default. */
-  var INHERITED_COEP = { name: "inheritedCoep", type: "string",
+     none of the three rather than reading it as the default.
+     NONE OF THE FOUR IS RETAINED: §7.1.7's clone is core/frame/embedder_policy.c's embedder_policy_adopt, which
+     copies both of the section's endpoint strings into the item it builds. */
+  var INHERITED_COEP = { name: "inheritedCoep", type: "string", retained: false,
     why: "§7.1.4's embedder policy VALUE of that inherited container, as one of the section's three token " +
          "strings. There is no empty spelling: a container that exists has an embedder policy, initially a " +
          "new one, so the absence of a creator is still said by the self-origin above and this field always " +
          "names a policy" };
-  var INHERITED_COEP_ENDPOINT = { name: "inheritedCoepEndpoint", type: "string",
+  var INHERITED_COEP_ENDPOINT = { name: "inheritedCoepEndpoint", type: "string", retained: false,
     why: "§7.1.4's reporting endpoint of that policy — the `report-to` parameter of the creator's header, " +
          "whose absence §7.1.4 spells as the EMPTY STRING and never as null" };
-  var INHERITED_COEP_REPORT_ONLY = { name: "inheritedCoepReportOnly", type: "string",
+  var INHERITED_COEP_REPORT_ONLY = { name: "inheritedCoepReportOnly", type: "string", retained: false,
     why: "§7.1.4's REPORT ONLY value of that policy, from the creator's " +
          "`Cross-Origin-Embedder-Policy-Report-Only`. It is a separate item because §7.1.4.2's embedder " +
          "policy checks reads it separately — its report-only arm fires where the parent's report-only value " +
          "is compatible with cross-origin isolation and the response's value is not" };
-  var INHERITED_COEP_REPORT_ONLY_ENDPOINT = { name: "inheritedCoepReportOnlyEndpoint", type: "string",
+  var INHERITED_COEP_REPORT_ONLY_ENDPOINT = { name: "inheritedCoepReportOnlyEndpoint", type: "string", retained: false,
     why: "§7.1.4's report only reporting endpoint of that policy. It is carried even though §7.1.4's own " +
          "obtain never writes it — BOTH of its branches set `policy's endpoint`, which is the section's own " +
          "text — because the item exists and a serialization that dropped an item is the defect this whole " +
@@ -206,10 +243,12 @@
      RELAYS the bytes off the emitting engine's `navigable.create` notice and reads none of them — the receiving
      engine is the only party that decodes one, and it crashes on a record it cannot parse. `u` is that
      grammar's undefined and is the positive statement that there is no parent. */
-  var PARENT_NAVIGABLE = { name: "parentNavigable", type: "string",
+  var PARENT_NAVIGABLE = { name: "parentNavigable", type: "string", retained: false,
     why: "§7.3.1.3's parent navigable of this document's navigable, as core/frame/remote_object.h's identity " +
          "record, or `u` for a top-level traversable. There is no empty spelling: a navigable either has a " +
-         "parent or is a top-level traversable, and both are facts a host states" };
+         "parent or is a top-level traversable, and both are facts a host states. NOT retained: navigable_root " +
+         "decodes it into a WindowProxy during the call (remote_object_decode) and keeps no pointer into these " +
+         "bytes" };
 
   /* HTML §7.3.1.3's OTHER LINK FOR THAT SAME NAVIGABLE — its CONTAINER, which is the element whose content
      navigable it is. It is its own parameter for the parent's reason and not as a second spelling of it: a
@@ -228,10 +267,11 @@
      WITHOUT IT the renderer took §9.7 step 1 — "if container is null, return `Enabled`" — for a navigable that
      HAS a container, which grants a cross-origin child every supported feature its embedder was never asked
      about, `cross-origin-isolated` among them. This zone RELAYS the bytes and reads none of them. */
-  var CONTAINER_POLICY = { name: "containerPolicy", type: "string",
+  var CONTAINER_POLICY = { name: "containerPolicy", type: "string", retained: false,
     why: "Permissions Policy §9.5's result for this document's navigable, computed by the instance that holds " +
          "its §7.3.1.3 container element, or `null` for a navigable nothing presents. There is no empty " +
-         "spelling: a navigable either has a container or does not, and both are facts a host states" };
+         "spelling: a navigable either has a container or does not, and both are facts a host states. NOT " +
+         "retained: window_proxy_set_remote_container proxy_strdup's it" };
 
   /* HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for this document — a THIRD
      statement about the same navigable and not a field of either above it, because it is a THIRD algorithm
@@ -255,17 +295,22 @@
      cross-origin frame, and nothing anywhere disagrees — the member exists precisely to report a tree the
      reading page cannot otherwise see. This zone RELAYS the bytes off the emitting renderer's
      `navigable.create` notice and reads none of them. */
-  var ANCESTOR_ORIGINS = { name: "ancestorOrigins", type: "string",
+  var ANCESTOR_ORIGINS = { name: "ancestorOrigins", type: "string", retained: false,
     why: "HTML §3.1.3's internal ancestor origin objects list for this document, composed by the renderer that " +
          "holds its ancestors and serialized as §7.1.1 origin serializations joined by SPACE (URL §3.2 \"Host " +
          "miscellaneous\" makes SPACE a forbidden host code point, so no entry can contain one), or `none` for " +
          "a document with no container document. There is no empty spelling: a document either has ancestors " +
-         "or is the top of its tree, and both are facts a host states" };
+         "or is the top of its tree, and both are facts a host states. NOT retained: " +
+         "window_proxy_set_remote_ancestor_origins proxy_strdup's it" };
 
-  var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string",
+  var TOP_LEVEL_URL = { name: "topLevelUrl", type: "string", retained: false,
     why: "§8.1.3.1's top-level creation URL, which §8.1.3.5 reads to decide whether this realm is a SECURE " +
          "CONTEXT and therefore which of Web IDL §3.3.13's members exist in it. The engine refuses an empty " +
-         "one, so a document reaching here without it is one whose API surface is silently smaller" };
+         "one, so a document reaching here without it is one whose API surface is silently smaller. NOT " +
+         "retained: the agent brings it up through a STACK record nothing can outlive, and its two sinks each " +
+         "take their own copy within the call — realm_install_intrinsics builds a JS string out of it " +
+         "(core/realm.c) and the WindowProxy proxy_strdup's it, while the secure-context predicate beside them " +
+         "only reads it" };
 
   /* NO `version:` LINE, HERE OR BELOW, AND ITS DELETION IS A MECHANISM RATHER THAN A TIDY-UP. Both interfaces
      carried `version: 0`; mojo.js posted it on every bind and the peer asserted it — and it caught nothing,
@@ -314,7 +359,7 @@
 
       { ordinal: 3, name: "Begin",
         params: [
-          { name: "recipes", type: "string",
+          { name: "recipes", type: "string", retained: false,
             why: "the parked residue this frontier key last wrote to IndexedDB, replayed as decision vectors. " +
                  "The empty string is a FRESH frontier, which is a different thing from a resumed one that " +
                  "happened to hold nothing" }],
@@ -381,22 +426,22 @@
 
       { ordinal: 9, name: "Provide",
         params: [
-          { name: "method", type: "string",
+          { name: "method", type: "string", retained: false,
             why: "the METHOD half of the request this answers, which GetPending named first on the line. The " +
                  "engine's pending register is keyed on the PAIR, so a reply carrying the address alone lands " +
                  "in `method` at the C entry with every later operand shifted — which is why qjs_provide " +
                  "DCHECKs the method's presence and engine_provide asserts the token production rather than " +
                  "matching nothing in silence. It is the request's " +
                  "identity and not a hint: the answer to a GET is not the answer to a POST of one address" },
-          { name: "url", type: "string",
+          { name: "url", type: "string", retained: false,
             why: "the TARGET half of the same request, matched with the method against what a flow parked on " +
                  "— the engine's own qjs_provide DFAILs on a pair nothing is parked on, which is what an " +
                  "invented record produces" },
-          { name: "reply", type: "string",
+          { name: "reply", type: "string", retained: false,
             why: "the reply's METADATA as JSON, so it carries its type: a bare string could not say `null` for " +
                  "Fetch §5.6's network error without it being the four characters \"null\", and could not " +
                  "carry the URL list, the status or the headers at all" },
-          { name: "body", type: "array<uint8>?",
+          { name: "body", type: "array<uint8>?", retained: false,
             why: "Fetch §2.2.5's body is a BYTE SEQUENCE, and the decode this zone used to run (§5.2's text()) " +
                  "destroyed exactly the evidence HTML §8.1.4.2's classic-script decode exists to read. `null` " +
                  "is the network error — no body at all — which a zero-length body is not" }],
@@ -418,7 +463,7 @@
 
       { ordinal: 11, name: "SetYieldFloor",
         params: [
-          { name: "floor", type: "double",
+          { name: "floor", type: "double", retained: false,
             why: "the runner-up engine's weight: this engine yields the instant its top flow is outranked, " +
                  "which is what makes the Level-1 interleave a VALUE yield and not a fixed slice. -Infinity is " +
                  "the floor for a pool with nobody else in it; a NaN would make every comparison false so the " +
@@ -444,17 +489,17 @@
 
       { ordinal: 15, name: "HostAnswer",
         params: [
-          { name: "request", type: "int32",
+          { name: "request", type: "int32", retained: false,
             why: "the id engine_host_answer walks every flow's register for. The engine's counter starts at 1, " +
                  "so a 0 answers a call site that does not exist and the answer is dropped on the far side" },
-          { name: "answer", type: "string",
+          { name: "answer", type: "string", retained: false,
             why: "the answer as JSON, carrying its type across the seam exactly as a reply's metadata does" },
-          { name: "completion", type: "int32",
+          { name: "completion", type: "int32", retained: false,
             why: "ECMA-262 6.2.4's completion TYPE — 0 NORMAL, 1 THROW. An answer is a completion record and " +
                  "not a value: this zone fetched bytes rather than running another instance's program, so it " +
                  "has nothing to have thrown in, while a relayed cross-agent operation answers with 1 and the " +
                  "thrown value, which is what lets the asking page's try/catch run" },
-          { name: "body", type: "array<uint8>?",
+          { name: "body", type: "array<uint8>?", retained: false,
             why: "the fetched bytes beside the record, for Provide's reason — a Document is parsed from a byte " +
                  "sequence and XHR §3.6.6 decodes the RECEIVED bytes with the final encoding. `null` is the " +
                  "positive statement that this answer has none, which is what every request kind whose answer " +
@@ -476,10 +521,10 @@
 
       { ordinal: 17, name: "Route",
         params: [
-          { name: "record", type: "string",
+          { name: "record", type: "string", retained: false,
             why: "the delivery record verbatim, in the engine's own grammar — this zone routes TEXT, because " +
                  "only an engine knows what a name in another agent's namespace means" },
-          { name: "senderOrigin", type: "string",
+          { name: "senderOrigin", type: "string", retained: false,
             why: "the SENDER'S ORIGIN, stamped by the TRUSTED zone and never by the untrusted engine. " +
                  "SECURITY.md: a forgeable event.origin defeats every origin check in every bundle the engine " +
                  "analyses — it would report exploits that are not real and miss ones that are — so the engine " +
@@ -488,11 +533,11 @@
 
       { ordinal: 18, name: "Perform",
         params: [
-          { name: "token", type: "string",
+          { name: "token", type: "string", retained: false,
             why: "the rendezvous token this zone minted for the asking flow. The peer answers BY RUNNING A " +
                  "PROGRAM on its own frontier, so the completion does not exist when this call returns and " +
                  "arrives later as a notice echoing this token verbatim" },
-          { name: "record", type: "string",
+          { name: "record", type: "string", retained: false,
             why: "the cross-agent operation, in remote_object.c's grammar — a member whose value is an OBJECT " +
                  "crosses as a NAME in the answering agent's namespace, which JSON could only either " +
                  "serialize (returning something that is not the thing) or drop" }],
@@ -500,16 +545,16 @@
 
       { ordinal: 19, name: "HostAnswerRemote",
         params: [
-          { name: "request", type: "int32",
+          { name: "request", type: "int32", retained: false,
             why: "the host-request id of the flow that asked, on HostAnswer's rule" },
-          { name: "world", type: "string",
+          { name: "world", type: "string", retained: false,
             why: "which of the answering document's TIMELINES computed this completion, in world_serialize's " +
                  "grammar and relayed verbatim off the notice that carried it. A peer's document state IS its " +
                  "flows, so one question has N true answers — and this field is the only thing that tells a " +
                  "SECOND timeline (a fork the asking flow owes) from ONE timeline's answer delivered TWICE (a " +
                  "relay defect). Without it both look identical and the receiving engine cannot assert on " +
                  "either" },
-          { name: "completion", type: "string",
+          { name: "completion", type: "string", retained: false,
             why: "the peer's completion record, RELAYED WHOLE and unread for Perform's reason. An empty one is " +
                  "not `undefined`, it is a relay that lost the peer's answer, and the engine's own decoder " +
                  "says so at the other end" }],
@@ -517,7 +562,7 @@
 
       { ordinal: 20, name: "WorldGone",
         params: [
-          { name: "world", type: "string",
+          { name: "world", type: "string", retained: false,
             why: "the name of a world ANOTHER instance has finished with — its flow left that instance's " +
                  "frontier, or its whole session parked into a generation that will never mint again. This " +
                  "instance holds a COW segment for every foreign world that ever reached it (solver/world.h), " +
