@@ -697,10 +697,19 @@ function censusReading(out) {
                (c.b.pagedReqs ? `, ${c.b.pagedReqs} taken by a sale` : ``) +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
                `; forks ${c.b.forks}` +
-               (c.b.orphanClaims
-                 ? `; inherited drives ${c.b.orphanClaims} rebuilt, ${c.b.orphanClaimsMet} met, ` +
-                   `${c.b.orphanClaimsUnmet} UNMET`
-                 : `; no inherited drives in this session`));
+               /* THREE STATES, THREE SENTENCES — and the middle one is why this is not a ternary. `no inherited
+                  drives in this session` was printed for BOTH "a rebuild ran and carried none" and "no residue
+                  was handed to this session at all", which is a claim about drives made out of a question that
+                  was never asked. solver/result.c calls UNMET the verdict, so a reader taking that sentence at
+                  face value reads a clean bill out of a session with no cold tier in it. `resumed` is the
+                  positive statement that separates them, which is the whole reason it is a row of its own. */
+               (c.b.resumed === 0
+                 ? `; no residue was handed to this session, so the drive verdict is not a reading`
+                 : c.b.orphanClaims
+                   ? `; inherited drives ${c.b.orphanClaims} rebuilt, ${c.b.orphanClaimsMet} met, ` +
+                     `${c.b.orphanClaimsUnmet} UNMET`
+                   : `; a rebuild ran (${c.b.resumedFlows} flows, ${c.b.resumedCands} candidates) and ` +
+                     `carried no inherited drives`));
   }
   /* THE FORK TABLE'S LARGEST ROW, AND ONLY THE LARGEST. decide.c's own note says the table is a CASCADE — a
      chain of gates produces rows in a geometric series and the last site in program order is always the
