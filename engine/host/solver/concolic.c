@@ -762,6 +762,14 @@ static void concolic_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_
    the concrete breakout payload instead of a concolic, so the REAL code builds the exploit and it fires. */
 static char *g_cand_src = NULL, *g_cand_payload = NULL;
 
+/* IS THIS SOURCE THE ONE A CANDIDATE RE-FIRE IS SUBSTITUTING? One spelling, because it is asked at every mint
+   a source can be reached through, and two copies are how the question came to be asked in the field-read path
+   alone while a source installed as a plain property value never passed through it at all (see
+   concolic_derived) — a candidate that could not be delivered and a sink that never fired. */
+static int cand_matches(const char *src) {
+    return g_cand_src && src && !strcmp(src, g_cand_src);
+}
+
 /* THE DECLARED SOURCES and what their component does to an attacker's bytes. A source that declares nothing
    delivers as-is, which is right for injected server state (`window.__STATE`) — the attacker writes that JSON
    directly and no component transforms it.
@@ -1242,7 +1250,7 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
     f[0] = c->ident; f[1] = field;                           /* a name that would not convert -> no identity */
     ident = concolic_ident_compose(".", f, 2);
     if (field) JS_FreeCString(ctx, field);
-    if (g_cand_src && !strcmp(shape, g_cand_src)) {          /* candidate run: this source -> the concrete breakout */
+    if (cand_matches(shape)) {                               /* candidate run: this source -> the concrete breakout */
         r = concolic_deliver(ctx, shape, c->root, g_cand_payload);
         free(shape); free(ident);
         return r;
@@ -2278,6 +2286,18 @@ static JSValue concolic_alloc(JSContext *ctx, const char *shape, const char *src
     Concolic *c;
 
     DCHECK(g_concolic_class != 0, "concolic_new before concolic_init — the class is unregistered");
+    /* NOTHING IS MINTED INSIDE A SLOTS-ONLY SPAN, asserted at the ONE mint every concolic goes through.
+       concolic_slots_only_begin brackets the COW delta's baseline read and its read-back, and a value MINTED
+       during one is a value the delta would record as what a slot HELD — so the unapply would write a
+       per-read derivation into real storage, where it shadows this class's [[Get]] for every sibling flow and
+       takes the per-flow facts that live there (an @S substitution at that member, and concretize-on-pin) with
+       it. The delta reads through JS_GetOwnSlotDesc, which answers from the ordinary layer and runs none of
+       the page's code, so no read-time hook is reachable from it; this is where a route that changed that
+       would say so, rather than after it had silently materialised one flow's unknown as everyone's slot. */
+    DCHECK(!g_slots_only,
+           "a concolic value was minted inside the COW delta's slots-only span — the delta records what a SLOT "
+           "held, so a value synthesised during that read is put BACK by the unapply as a real own slot and "
+           "shadows this class's [[Get]] for every sibling flow");
     /* THE TWO ARE PRESENT TOGETHER OR ABSENT TOGETHER, asserted at the ONE mint every value goes through. A
        value that has a provenance HAS a root: either it is a source read, whose root is itself, or it was
        derived from something that had one. A value with a `src` and no `root` is a derivation that dropped
@@ -2313,7 +2333,7 @@ static JSValue concolic_derived(JSContext *ctx, const char *shape, const char *s
        source installed as a plain property value — location.hash, document.cookie — was minted once at install
        and never passed through it: its candidate could not be delivered and the sink never fired. Minting is
        the one place every source goes through, whichever way it is reached. */
-    if (g_cand_src && src && !strcmp(src, g_cand_src)) {
+    if (cand_matches(src)) {
         /* THE EXAMPLE IS CONSUMED ON THIS PATH TOO. `example` is owned by this call whichever value comes back,
            and the candidate's payload REPLACES it — a source under substitution reads the attacker's bytes, not
            what the address concretely held. Returning without the free leaked it, and it stopped being a
@@ -2355,6 +2375,28 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
            "domain. Without one this value's every gate is observed and discarded, and its parameter reports "
            "provenance with no constraint. Spell the shape as the src in braces (core/frame/location.h is the "
            "pattern); a shape that is not simply `{src}` is fine as long as it names its hole");
+    /* CONCRETIZE-ON-PIN, AT THE MINT WHERE `src` IS THE VALUE'S OWN IDENTITY — which is what makes this the
+       one derivation the pin may be read at. §solver: "once `x==='admin'` pins the value, a later READ of that
+       source returns the pinned bytes, so a later branch on it is decided by RUNNING the real predicate on a
+       real string and does not fork at all". A pin is a fact about THIS value, so it applies exactly where the
+       value being minted IS the pinned one; concolic_derived must NOT ask it, because an arithmetic or builtin
+       result carries its OPERAND's `src` and pinning `location.hash` would then hand `+location.hash` the
+       operand's string instead of a number the run computed.
+       IT IS WHAT A PER-READ MINT NEEDS AND A ONCE-INSTALLED SOURCE NEVER DID. A source held as a plain
+       property is minted once, so a re-read finds the same object and no second mint could disagree with the
+       flow's constraint; an INJECTED-STATE member is minted at every read, and without this the arm that
+       PROVED `__FLAGS.role === "admin"` would keep re-reading the example the server sent a logged-out
+       visitor and compose `/api/user` — an @H value the run contradicted, which §@H calls an invention rather
+       than a partial answer.
+       AFTER THE CANDIDATE AND NEVER BEFORE IT: a candidate re-fire is delivering the attacker's bytes at this
+       exact source, and a pin the exploring run happened to take must not stand in front of them. */
+    if (!cand_matches(src)) {
+        const char *pv = src ? pin_of(src) : NULL;
+        if (pv) {
+            JS_FreeValue(ctx, example);
+            return JS_NewString(ctx, pv);
+        }
+    }
     f[0] = src;
     /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
        seventeen components that owns a source would have to spell the same way twice. */
@@ -2594,6 +2636,12 @@ void concolic_install_source_overlay(void)
                                 "throws on");
     g_source_overlay = 1;
     g_hooks.absent = absent_read_hook;
+    /* AND THE HIT HALF OF THAT SAME QUESTION, installed with it and never without it. A published record's
+       members are unknown whether or not the record HOLDS them — the server chose its extent against this
+       visitor's credentials either way — so a host that took one of these would answer one spelling of one
+       read symbolically and the other concretely, which is worse than answering both concretely: the surface
+       it lost would be the surface the other half reports as reached. */
+    g_hooks.present = absent_present_hook;
     /* THE TWO ENDS OF ONE CHANNEL, INSTALLED TOGETHER. `.publish` is what makes the engine mark the records a
        document injects at all, and `.absent` is the only thing that reads those marks; a host that installed
        one without the other would either pay for marks nobody consults or ask about a graph nobody built. */

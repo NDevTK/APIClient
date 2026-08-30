@@ -8,6 +8,14 @@
    record (the engine has already established it is one of the two). */
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name);
 
+/* Install as JSConcolicHooks.present — THE SAME QUESTION FOR A MEMBER THE RECORD HOLDS. A published record's
+   extent was chosen against THIS visitor's credentials, so `__FLAGS.admin === false` is a fact about this
+   session and not about the program: it is unknown for control flow exactly as a missing member is, and it
+   additionally KNOWS what it concretely is. So this mints the same derivation the read hook does, with the
+   held value as the EXAMPLE — which is the whole of §solver's "a loaded `features.admin:false` must NOT
+   concretize the gate" in one call. `holder` is the record the slot was found on and `value` is borrowed. */
+JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JSValueConst value);
+
 /* Install as JSConcolicHooks.publish. The engine has found `value` reachable from the global object through
    records the document's own inline scripts built, and states the PARENT it hangs off and the NAME it hangs
    under; this files the PATH the record's members are then read by. Parents arrive before their children, so

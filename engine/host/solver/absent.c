@@ -22,6 +22,20 @@
  * frontier by 256; a WPT document exhausted 2.8 GB in forty seconds doing it. A hand-maintained allowlist
  * cannot be right about a surface of this size, and the moment it is wrong the error is silent.
  *
+ * AND IT IS ASKED OF A PRESENT MEMBER AS WELL AS OF A MISSING ONE, which is the half that decides the case
+ * §solver names by name. A server that ships `window.__FLAGS={admin:false}` has WRITTEN the field, so the read
+ * hook below never sees it — the engine asks that one only where the prototype chain ran out. Answering
+ * `false` from the slot then decides `if (__FLAGS.admin)` for the whole program and buries the admin surface,
+ * which is the identical loss this file exists to prevent, reached through a slot instead of a hole. The
+ * extent of that record was the SERVER'S choice against this visitor's credentials, so what it holds is a
+ * per-session fact and not a program constant: unknown for control flow, and — unlike a missing member —
+ * carrying the bytes the server actually sent as its EXAMPLE. §solver: "a loaded `features.admin:false` must
+ * NOT concretize the gate, or the admin endpoint is lost — config is opaque-for-control-flow yet carries its
+ * loaded value as the example."
+ * The two halves share ONE path composition and ONE registry, which is why they are one file: a member's
+ * provenance is `gon.current_user_id` whether or not the record holds it, and two spellers would be two names
+ * for one unknown the moment either drifted.
+ *
  * AND THE QUESTION IS ASKED OF A PRESENT PARENT AS OFTEN AS OF A MISSING GLOBAL, which is the half this file
  * did not have. A server does not only decline to write `window.__FLAGS`; far more often it writes
  * `window.gon={}` and then the two of the twenty-three fields the bundle reads that THIS visitor is entitled
@@ -138,6 +152,68 @@ void absent_publish_hook(JSContext *ctx, JSValueConst parent, JSAtom name, JSVal
     g_ns_n++;
 }
 
+/* THE ONE SPELLING of an injected member's provenance, used by both halves of this file.
+   The PROVENANCE is the whole read as the run composed it — `gon` and `gon.current_user_id` are two different
+   unknowns and each must decide only its own predicates, so the path is composed WHOLE rather than into a
+   fixed buffer: a truncated provenance is not a shorter name for one unknown, it is one name for every unknown
+   that shares a prefix, and every predicate over any of them would then decide all of them. A server's state
+   tree is as deep and as verbosely named as the server chose.
+   `base` is the record's published path, or NULL for a member of the global namespace itself. Both outputs are
+   the caller's to free. */
+static void ns_member_spell(const char *base, const char *name, char **shape, char **src)
+{
+    size_t n = (base ? strlen(base) + 1 : 0) + strlen(name) + 3;
+
+    *shape = (char *)malloc(n);
+    *src   = (char *)malloc(n);
+    CHECK(*shape != NULL && *src != NULL, "absent: OOM spelling the provenance of an injected member");
+    if (base) {
+        snprintf(*shape, n, "{%s.%s}", base, name);
+        snprintf(*src,   n, "%s.%s", base, name);
+    } else {
+        snprintf(*shape, n, "{%s}", name);
+        snprintf(*src,   n, "%s", name);
+    }
+}
+
+/* A MEMBER THE PUBLISHED RECORD HOLDS — see this file's header for why that is the same unknown as one it does
+   not, and the header of JSConcolicHooks.present for which base the engine asks and why it is not the read
+   hook's. The value the slot holds becomes the EXAMPLE, so the flow keeps forking on the gate over it AND the
+   report keeps the bytes the server sent; the mint goes through concolic_new like every other source read, so
+   an @S candidate substitutes at `__FLAGS.admin` exactly as it does at a member nothing wrote. */
+JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JSValueConst value)
+{
+    const char *s = JS_AtomToCString(ctx, name);
+    const char *base;
+    char *shape = NULL, *src = NULL;
+    JSValue r = JS_UNINITIALIZED;
+
+    if (!s)
+        return JS_UNINITIALIZED;
+    DCHECK(JS_VALUE_GET_TAG(value) != JS_TAG_OBJECT,
+           "the engine asked about an OBJECT-valued member of a published record. A record hanging off a "
+           "published record is published in its OWN right by the same walk, and its address is this file's "
+           "registry key — minting a fresh unknown per read would answer `gon.user === gon.user` false and "
+           "hide the key behind a value nothing filed");
+    base = ns_path_of(holder);
+    /* THE ENGINE HAS ALREADY DECIDED THIS RECORD IS PUBLISHED — the mark is set only by the walk that files
+       the row — so a record with no path is the mark and the registry disagreeing, exactly as it is on the
+       miss path, and the alternative to crashing is a member reported under a name no document published. */
+    DCHECK(base != NULL,
+           "a read hit a member of a record the engine says the document published, and this file holds no "
+           "path for it — without the path this member would be reported as a bare field name that any other "
+           "namespace's identically-named field is indistinguishable from");
+    if (!base)
+        goto done;
+    ns_member_spell(base, s, &shape, &src);
+    r = concolic_new(ctx, shape, src, JS_DupValue(ctx, value));
+done:
+    free(shape);
+    free(src);
+    JS_FreeCString(ctx, s);
+    return r;
+}
+
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
 {
     JSValue g = JS_GetGlobalObject(ctx);
@@ -146,7 +222,6 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
     const char *base = NULL;
     JSValue r = JS_UNINITIALIZED;
     char *shape = NULL, *src = NULL;
-    size_t n;
 
     JS_FreeValue(ctx, g);
     if (!s)
@@ -171,24 +246,10 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
         if (!base)
             goto done;
     }
-    /* Example-free: nothing here knows what a logged-in visitor's flags WOULD hold, and inventing one
-       fabricates an observation. The PROVENANCE is the whole read as the run composed it — `gon` and
-       `gon.current_user_id` are two different unknowns and each must decide only its own predicates, so the
-       path is composed WHOLE rather than into a fixed buffer: a truncated provenance is not a shorter name
-       for one unknown, it is one name for every unknown that shares a prefix, and every predicate over any of
-       them would then decide all of them. A server's state tree is as deep and as verbosely named as the
-       server chose. */
-    n = (base ? strlen(base) + 1 : 0) + strlen(s) + 3;
-    shape = (char *)malloc(n);
-    src   = (char *)malloc(n);
-    CHECK(shape != NULL && src != NULL, "absent: OOM spelling the provenance of an unknown read");
-    if (base) {
-        snprintf(shape, n, "{%s.%s}", base, s);
-        snprintf(src,   n, "%s.%s", base, s);
-    } else {
-        snprintf(shape, n, "{%s}", s);
-        snprintf(src,   n, "%s", s);
-    }
+    /* Example-free, and that is the ONE way this half differs from the present half: nothing here knows what a
+       logged-in visitor's flags WOULD hold, and inventing one fabricates an observation. The provenance is
+       spelled by the same speller either way — see ns_member_spell. */
+    ns_member_spell(base, s, &shape, &src);
     r = concolic_new(ctx, shape, src, JS_UNDEFINED);
 done:
     free(shape);
