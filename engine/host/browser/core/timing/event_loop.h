@@ -63,7 +63,9 @@
 
 /* Declared ONCE PER AGENT, before any page script runs — the record must be in the pre-boot baseline. */
 void event_loop_init(JSContext *ctx);
-void event_loop_free(JSContext *ctx);
+/* Undone ONCE PER AGENT, from core/platform.c's release column — which takes the RUNTIME, because the record
+   this gives back is the agent's and not any realm's. */
+void event_loop_free(JSRuntime *rt);
 
 /* The VIRTUAL clock, in ms since the agent started — the one clock every task source is ordered by, and the
    one an Event's `timeStamp` and a file's modification time are stamped from. A moment: a number, or unknown

@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/timing/event_loop.h"
 #include "solver/concolic.h"   /* a moment can be unknown external input, and its ordering is a predicate */
 #include "solver/decide.h"     /* …asked as a restartable branch, and read back by this file's invariants */
@@ -125,17 +126,39 @@ void event_loop_init(JSContext *ctx)
     /* THE CLOCK STARTS AT A KNOWN MOMENT and becomes unknown only where a task source's own due moment is —
        which is what makes HR-TIME §4's time origin, stamped from this clock at every realm's creation, a real
        number for every document created before the first such task fires. */
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The RECORD is also this init's
+       own latch (`JS_IsUndefined(g_rec)` above), which is exactly the slot the header says must be given back:
+       a second agent whose event_loop_init returned early would hold a clock object minted in a runtime that
+       is gone, and every el_get on it reads that heap. */
+    agent_state_value("event_loop", &g_rec,
+                      "HTML §8.1.7 Event loops's own record — the virtual clock, §8.1.7.1's last render "
+                      "opportunity time and the task insertion order — and this component's declaration latch");
+    agent_state_atom("event_loop", &g_atom_now,
+                     "HTML §8.1.7 Event loops's virtual-clock key on that record");
+    agent_state_atom("event_loop", &g_atom_render,
+                     "HTML §8.1.7.1 Definitions' last-render-opportunity-time key on that record");
+    agent_state_atom("event_loop", &g_atom_seq,
+                     "HTML §8.1.7 Event loops's task-insertion-order key on that record");
 }
 
-void event_loop_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.
+   The record is a live JS object a C static holds for the AGENT, so what it is released against is the agent;
+   taking a JSContext is what made it a line each of three hosts had to remember, and a host that forgot it
+   would end on JS_FreeRuntime's gc_obj_list walk with this component's null-prototyped record still in it. */
+void event_loop_free(JSRuntime *rt)
 {
-    if (JS_IsUndefined(g_rec))
-        return;
-    JS_FreeValue(ctx, g_rec);
+    /* NOT `if (JS_IsUndefined(g_rec)) return;`. The release is the inverse of the DECLARATION and rides the
+       same row of core/platform.c's one list, whose declare pass is unconditional and whose table asserts that
+       a release row has a declare — so an early return here would silently absorb a teardown reached without
+       an init instead of naming it. */
+    DCHECK(JS_IsObject(g_rec),
+           "HTML §8.1.7 Event loops's record was released in an agent that never declared it — §8.1.7 gives one "
+           "event loop to a similar-origin window agent and event_loop_init is what builds it");
+    JS_FreeValueRT(rt, g_rec);
     g_rec = JS_UNDEFINED;
-    JS_FreeAtom(ctx, g_atom_now);
-    JS_FreeAtom(ctx, g_atom_render);
-    JS_FreeAtom(ctx, g_atom_seq);
+    JS_FreeAtomRT(rt, g_atom_now);
+    JS_FreeAtomRT(rt, g_atom_render);
+    JS_FreeAtomRT(rt, g_atom_seq);
     g_atom_now = g_atom_render = g_atom_seq = JS_ATOM_NULL;
 }
 

@@ -83,9 +83,7 @@
 #include "browser/core/frame/viewport.h"
 #include "browser/core/frame/visual_viewport.h"
 #include "browser/core/frame/window.h"
-#include "browser/core/rendering/animation_frame.h"
 #include "browser/core/rendering/rendering.h"
-#include "browser/core/timing/event_loop.h"
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/loader/module_loader.h"
@@ -1174,8 +1172,12 @@ QJS_EXPORT void qjs_teardown(void)
        pair inverted, with two rows BETWEEN them, which no adjacency here can express. See core/platform.c's
        entry — and the live leak it names, a MediaQuerySet per MediaQueryList that neither of JS_FreeRuntime's
        censuses can see. */
-    animation_frame_free(g_ctx);
-    event_loop_free(g_ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
+    /* AND HTML §8.1.7 Event loops's OWN RECORD WITH HTML §8.12 Animation frames's map keys, which used to be
+       the two lines here. Both are ROWS on core/platform.h's release column now, run by the platform_agent_free
+       above. All three hosts wrote them identically and identically LATE: §8.1.7's record was released after
+       the `timer` row that column had already run, and every entry in §8.7's map of active timers is due at a
+       moment on that clock — the dependent component going first, exactly as the pair above it did. Reverse
+       declaration order gives timer, then event_loop. See core/platform.c's entry. */
     /* §8.1.3.3's about-to-be-notified rejected promises list is NOT freed here any more — it is a row on
        core/platform.h's release column,
        run by the platform_agent_free above. It was a line in this list and in nobody else's, and the host that

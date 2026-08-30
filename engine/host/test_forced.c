@@ -23,7 +23,6 @@
 #include "core/dom/attr_list.h"  /* dom_attr_get_ns — the §6.3 rows read back the EXPANDED name */
 #include "core/frame/csp_source_list.h"
 #include "core/frame/navigable.h"
-#include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
 #include "core/frame/window.h"
 #include "core/frame/window_proxy.h"
@@ -46,7 +45,6 @@
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
 #include "core/css/css_syntax_match.h"
-#include "core/rendering/animation_frame.h"
 #include "core/rendering/rendering.h"
 #include "core/html/trusted_types.h"
 #include "core/dom/node.h"
@@ -11302,8 +11300,10 @@ int main(int argc, char **argv) {
        over the viewport, so the dependent component went second. Reverse declaration order gives
        media_query_list, visual_viewport, viewport, page_reveal — this pair inverted, with two rows BETWEEN
        them. See core/platform.c's entry, and the live leak it names. */
-    animation_frame_free(ctx);
-    event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
+    /* AND HTML §8.1.7 Event loops's OWN RECORD WITH HTML §8.12 Animation frames's map keys, which used to be
+       the two lines here. Both are ROWS on core/platform.h's release column now, run by the platform_agent_free
+       above — released after `timer`, whose entries are all due at a moment on that clock, instead of before
+       it. See core/platform.c's entry. */
     /* §8.1.4.7's rejection list is a row on core/platform.h's release column now, run by the
        platform_agent_free above — see main.c's teardown for what having it here cost the host that did not. */
     abort_free(ctx);

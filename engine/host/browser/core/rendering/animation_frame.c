@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/rendering/animation_frame.h"
@@ -202,6 +203,25 @@ void animation_frame_init(JSContext *ctx)
     g_slot = realm_value_declare(ctx, "§8.12 Animation frames map of animation frame callbacks");
     g_ready = 1;
     realm_declare_intrinsic(animation_frame_install_map);
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The two POOL ENTRIES are the
+       reason this declaration is not a formality: the release below used to give back the two atoms and the
+       realm slot and leave `g_id_request` and `g_id_cancel` exactly as this init set them, while the latch it
+       consults first is `g_ready` — so a SECOND agent in one process re-declared both members and then
+       installed the FIRST agent's ids, which idl_args_pool_free has already reset to index 0 and whose step
+       definitions were registered in a runtime that is gone. Nothing could report it: a pool entry is an int,
+       so neither of JS_FreeRuntime's censuses has anything to say about one, and the only reader is the id
+       idl_install_method hands to a member the next agent's page then calls. */
+    agent_state_flag("animation_frame", &g_ready, "the declaration latch");
+    agent_state_id("animation_frame", &g_id_request,
+                   "HTML §8.12 Animation frames's requestAnimationFrame member declaration");
+    agent_state_id("animation_frame", &g_id_cancel,
+                   "HTML §8.12 Animation frames's cancelAnimationFrame member declaration");
+    agent_state_atom("animation_frame", &g_atom_queue,
+                     "HTML §8.12 Animation frames's map-of-animation-frame-callbacks key on a Window's record");
+    agent_state_atom("animation_frame", &g_atom_next,
+                     "HTML §8.12 Animation frames's animation-frame-callback-identifier key on that record");
+    agent_state_id("animation_frame", &g_slot,
+                   "the per-realm slot HTML §8.12 Animation frames's map is held in");
 }
 
 /* THE MAP IS BUILT AT REALM INSTALL, which puts it in the pre-boot BASELINE. Built lazily on the first
@@ -231,14 +251,28 @@ void animation_frame_install(JSContext *ctx, JSValueConst global)
     idl_install_method(ctx, (JSValue)global, "cancelAnimationFrame", 1, g_id_cancel);
 }
 
-void animation_frame_free(JSContext *ctx)
+/* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.
+   What this holds is AGENT state (two interned keys, a realm-value slot and two member declarations), so the
+   thing it is released against is the agent, which is a JSRuntime; taking a JSContext is what made it a line
+   each of three hosts had to remember, which is the drift that column exists to end. */
+void animation_frame_free(JSRuntime *rt)
 {
-    if (!g_ready) return;
+    /* NOT `if (!g_ready) return;`. The release is the inverse of the DECLARATION and rides the same row of
+       core/platform.c's one list, whose declare pass is unconditional and whose table asserts that a release
+       row has a declare — so reaching here undeclared is a host that tore this component down with something
+       that is not the platform's one list, and an early return is what would hide it. */
+    DCHECK(g_ready,
+           "§8.12 Animation frames's members were released in an agent that never declared them");
     g_ready = 0;
     /* The MAPS are the realms' — each is released with its context, which is what the per-realm slot array
-       is for. What this owns is the two interned keys. */
-    JS_FreeAtom(ctx, g_atom_queue);
-    JS_FreeAtom(ctx, g_atom_next);
+       is for, and each flow's own entries go with the delta that holds them. What this owns is the two
+       interned keys. */
+    JS_FreeAtomRT(rt, g_atom_queue);
+    JS_FreeAtomRT(rt, g_atom_next);
     g_atom_queue = g_atom_next = JS_ATOM_NULL;
     g_slot = -1;
+    /* AND THE TWO MEMBER DECLARATIONS, which this release used to keep. They name entries in a pool
+       idl_args_pool_free restarts at 0 and step definitions registered with a runtime that is going away
+       with them (core/agent_state.h). */
+    g_id_request = g_id_cancel = -1;
 }

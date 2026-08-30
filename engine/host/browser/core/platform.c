@@ -411,6 +411,18 @@ static void r_visual_viewport(JSRuntime *rt) { (void)rt; visual_viewport_free();
 static void r_event_target(JSRuntime *rt) { event_target_free(rt); }
 static void r_message_port(JSRuntime *rt) { message_port_free(rt); }
 static void r_timer(JSRuntime *rt) { timer_free(rt); }
+/* HTML §8.1.7's OWN RECORD AND §8.12's MAP KEYS, the last two components that were still a hand-copied pair of
+   lines in each of three hosts' teardowns — `animation_frame_free(ctx); event_loop_free(ctx);`, written after
+   platform_agent_free had already run the whole column. Position is the argument for moving them, not tidiness:
+   written there, §8.1.7's record was released AFTER `timer`, whose every entry is due at a moment on that clock
+   and whose own release is on this column — the dependent component going first, which is the same inversion
+   this file's `viewport`/`visual_viewport` note records. Reverse declaration order gives timer then event_loop,
+   which is the order the standards are in.
+   AND THE RECORD IS A LIVE JS OBJECT, so the host that forgot the line would not have leaked it quietly: a
+   null-prototyped Object held by a C static is exactly what JS_FreeRuntime's gc_obj_list walk reports, and this
+   engine's JS_FreeRuntime asserts that list empty. */
+static void r_event_loop(JSRuntime *rt) { event_loop_free(rt); }
+static void r_animation_frame(JSRuntime *rt) { animation_frame_free(rt); }
 static void r_structured_clone(JSRuntime *rt) { structured_clone_free(rt); }
 static void r_rendering(JSRuntime *rt) { rendering_free(rt); }
 static void r_document(JSRuntime *rt) { document_agent_free(rt); }
@@ -784,7 +796,7 @@ static const PlatformComponent PLATFORM[] = {
     /* HTML §8.1.7's EVENT LOOP, before the task sources that are ordered by it: the virtual clock, §8.1.7.1's
        last render opportunity time and the insertion order a source breaks its ties by are the LOOP's, and
        they are per-flow heap state, so the record has to exist before any flow can write one. */
-    { "event_loop",          d_event_loop,          NULL },
+    { "event_loop",          d_event_loop,          NULL,        r_event_loop },
     { "timer",               d_timer,               i_timer,     r_timer },
     { "window_proxy",        d_window_proxy,        NULL,        r_window_proxy },
     { "remote_object",       d_remote_object,       NULL,        r_remote_object },
@@ -801,7 +813,7 @@ static const PlatformComponent PLATFORM[] = {
     { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
     { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
     /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
-    { "animation_frame",     d_animation_frame,     i_animation_frame },
+    { "animation_frame",     d_animation_frame,     i_animation_frame, r_animation_frame },
     { "page_reveal",         d_page_reveal,         i_page_reveal, r_page_reveal },
     { "viewport",            d_viewport,            NULL,        r_viewport },
     { "visual_viewport",     d_visual_viewport,     NULL,        r_visual_viewport },

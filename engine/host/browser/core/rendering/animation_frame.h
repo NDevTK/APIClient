@@ -33,7 +33,9 @@ void animation_frame_init(JSContext *ctx);
    per-document install. */
 void animation_frame_install_map(JSContext *ctx);
 void animation_frame_install(JSContext *ctx, JSValueConst global);
-void animation_frame_free(JSContext *ctx);
+/* THE AGENT'S HALF, UNDONE — core/platform.c's release column, which takes the RUNTIME because that is what an
+   agent is. */
+void animation_frame_free(JSRuntime *rt);
 
 /* §8.1.7.3 "update the rendering" step 4's test, for THIS document: is its map of animation frame callbacks
    non-empty? The rendering loop asks it twice — once to decide whether a navigable might have a rendering

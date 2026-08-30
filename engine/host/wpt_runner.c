@@ -100,11 +100,9 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <errno.h>
-#include "core/timing/event_loop.h"
 #include "core/timing/timer.h"
 #include "core/frame/viewport.h"
 #include "core/frame/visual_viewport.h"
-#include "core/rendering/animation_frame.h"
 #include "core/rendering/rendering.h"
 #include <lexbor/html/html.h>
 #include "core/dom/element.h"
@@ -3416,8 +3414,10 @@ int main(int argc, char **argv)
        before the interface it walks — so what it cost was not an order: both rows' release columns were empty
        while both files declared no agent state, and both carried their CLASS ID past the release. See
        core/platform.c's entry. */
-    animation_frame_free(ctx);
-    event_loop_free(ctx);   /* §8.1.7's own record — the virtual clock and the moments beside it */
+    /* AND HTML §8.1.7 Event loops's OWN RECORD WITH HTML §8.12 Animation frames's map keys, which used to be
+       the two lines here. Both are ROWS on core/platform.h's release column now, run by the platform_agent_free
+       above — released after `timer`, whose entries are all due at a moment on that clock, instead of before
+       it. See core/platform.c's entry. */
     headers_free(ctx);
     response_free(ctx);
     request_free(ctx);
