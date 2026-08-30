@@ -121,6 +121,32 @@ int concolic_is_exploring(void);
    with none, and one empty array reports both. */
 long concolic_source_reads(void);
 
+/* ANSWER [[GetOwnProperty]] FROM REAL SLOTS ONLY, for the span between these two calls.
+ *
+ * A concolic answers ECMAScript §10.1.5 [[GetOwnProperty]] ( propertyKey ) for every member its EXAMPLE holds,
+ * because that is the record's own surface and §7.3.23 EnumerableOwnProperties ( obj, kind ) gates every key
+ * on it. That answer is SYNTHESISED — the descriptor is composed at the query and the value is a derivation
+ * minted afresh — and a synthesised descriptor is not a SLOT.
+ *
+ * THE COW DELTA READS SLOTS, AND THE DIFFERENCE IS THE WHOLE OF WHY THIS EXISTS. A capture records what
+ * storage held before a flow wrote it and an unapply puts that back; handed a synthesised descriptor it
+ * records `existed = 1` for a member that occupies no storage, and the unapply then WRITES it — materialising
+ * a real own slot, holding one flow's derivation, on an object that never had one, where it shadows this
+ * class's own [[Get]] for every sibling flow from then on. What is lost is exactly the two per-flow facts that
+ * live in that [[Get]]: an @S candidate's substitution at that member, and CONCRETIZE-ON-PIN.
+ *
+ * QUICKJS ALREADY DRAWS THIS LINE ONE INTERNAL METHOD OVER and draws it in the engine: delete_property takes
+ * an `as_slot` flag and refuses to consult a class's [[Delete]] under it, saying that "an exotic
+ * named-property hook is a VIEW over storage that is NOT this object's shape … so the storage a flow can
+ * mutate through the view is captured on the object that OWNS it and never as a slot on the viewer". Every
+ * word of that is true of [[GetOwnProperty]], and JS_GetOwnSlotDesc passes the same `as_slot` and then
+ * consults the hook anyway. Until the two agree there, the host says it here: the delta enters this mode
+ * around its baseline read and its read-back, and this class answers from the ordinary layer.
+ *
+ * It is entered around ONE lookup that runs no page code and therefore cannot suspend; nesting is a DCHECK. */
+void concolic_slots_only_begin(void);
+void concolic_slots_only_end(void);
+
 /* THE ONE SEAM a browser component hands a computed value through to become an attacker SOURCE. Returns
    `computed` unchanged where no source overlay is installed, and a concolic carrying it as the EXAMPLE where
    one is. `computed` is consumed either way. */

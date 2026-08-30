@@ -1179,28 +1179,47 @@ void concolic_set_candidate(const char *src, const char *payload) {
  * concrete value here to report — the same answer as a member the record does not hold, for a different and
  * equally honest reason. `JSON.parse` builds only data properties, so the only route to one is a 25.5.1 step 9
  * reviver that defined one, which is the page's own choice. */
-static JSValue example_member(JSContext *ctx, JSValueConst parent_example, JSAtom atom)
+/* ONE READ OF THE EXAMPLE'S OWN SLOT, answering BOTH questions the record is asked about a member: WHAT it
+   holds (the value a derived member carries) and WHETHER it holds it, with the attributes it states. They are
+   one §6.2.6 Property Descriptor and two reads of it would be two answers about one record — the same
+   one-fact-two-fields defect the Concolic struct's own comment records twice over.
+   1 = the example holds an own slot for `atom`; `*out_value` is OWNED (JS_UNDEFINED for an accessor, per the
+   paragraph above) and `*out_flags` is the slot's own C/W/E. 0 = it holds none. */
+static int example_slot(JSContext *ctx, JSValueConst parent_example, JSAtom atom,
+                        JSValue *out_value, int *out_flags)
 {
     JSPropertyDescriptor pd;
     int has;
 
+    *out_value = JS_UNDEFINED;
+    *out_flags = 0;
     /* A primitive example has no members to read: `{hash}.length` off a concrete fragment is a DERIVATION and
        not a slot, and answering it from this object-shaped read would be this file inventing the operation. */
     if (!JS_IsObject(parent_example))
-        return JS_UNDEFINED;
+        return 0;
     has = JS_GetOwnSlotDesc(ctx, &pd, parent_example, atom);
     DCHECK(has >= 0,
            "reading a member off a concolic's own example threw — JS_GetOwnSlotDesc runs none of the page's "
            "code and aborts on a Proxy rather than trapping, so the only completion it has is a value, and an "
            "exception raised here would be left on a context with no flow base to hand it to");
     if (has <= 0)
-        return JS_UNDEFINED;
+        return 0;
+    *out_flags = pd.flags;
     if (pd.flags & JS_PROP_GETSET) {
         JS_FreeValue(ctx, pd.getter);
         JS_FreeValue(ctx, pd.setter);
-        return JS_UNDEFINED;
+        return 1;
     }
-    return pd.value;
+    *out_value = pd.value;
+    return 1;
+}
+
+static JSValue example_member(JSContext *ctx, JSValueConst parent_example, JSAtom atom)
+{
+    JSValue v;
+    int flags;
+
+    return example_slot(ctx, parent_example, atom, &v, &flags) ? v : JS_UNDEFINED;
 }
 
 /* Exotic [[Get]]: reading ANY field of a concolic value yields a DERIVED concolic — unknown injected/attacker
@@ -1906,9 +1925,267 @@ static int concolic_exotic_has(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     (void)ctx; (void)atom;
     return JS_GetOpaque(obj, g_concolic_class) != NULL;
 }
+
+/* ── THE RECORD'S OWN SURFACE ────────────────────────────────────────────────────────────────────────────────
+ *
+ * A KEY THE PAGE NAMES AND A REQUEST TO ENUMERATE ARE TWO DIFFERENT QUESTIONS, and the answers above are the
+ * first kind. [[Get]] and [[HasProperty]] are handed a NAME the page wrote, so "unknown, and here is a derived
+ * unknown for it" is both honest and the whole of the exploration: `if (blk.props.pageProps.user)` forks on a
+ * member the payload does not hold, which is what reaches the logged-in arm. ECMAScript §10.1.11
+ * [[OwnPropertyKeys]] ( ) is asked with NO name at all — the program is asking the record to enumerate ITSELF
+ * — so there is no name to be honest about, and every key answered that the record does not hold is a
+ * FABRICATED field in exactly §@H's sense ("must NEVER INVENT"), performed by a `for..in`.
+ *
+ * SO THE OWN SURFACE IS THE EXAMPLE'S, AND ONLY THE EXAMPLE'S. That is not a weaker answer than [[Get]]'s, it
+ * is an answer to a different question: the example is the record the server actually sent this visitor, so
+ * its key set is an OBSERVATION exactly as a held member's bytes are, and a key it does not hold is a key this
+ * run observed the record not to have.
+ *
+ * FOUR SPELLINGS REACH IT AND EVERY ONE OF THEM NEEDS BOTH HALVES, which is why [[GetOwnProperty]] is
+ * installed beside [[OwnPropertyKeys]] and not after it. §20.1.2.19 Object.keys ( obj ) and §14.7.5.9
+ * EnumerateObjectProperties ( obj ) run §7.3.23 EnumerableOwnProperties ( obj, kind ), and §7.3.25
+ * CopyDataProperties ( target, source, excludedItems ) — the object spread — and §20.1.2.1 Object.assign (
+ * target, ...sources ) run the same two steps: `obj.[[OwnPropertyKeys]]()`, then `obj.[[GetOwnProperty]](key)`
+ * for the [[Enumerable]] test. A class answering only the first has every key dropped at the second (the C key
+ * walk drops it under JS_GPN_ENUM_ONLY, the resumable cursor drops it as "gone between the snapshot and the
+ * read"), so the report is the same empty list either way and nothing says a capability is missing.
+ *
+ * THE VALUE IS THE ONE [[Get]] ANSWERS, never the example's own bytes. §Solver's trust boundary is explicit
+ * that a loaded `features.admin:false` must not concretize the gate over it; a descriptor carrying the raw
+ * example would concretize it through `Object.getOwnPropertyDescriptor`, through
+ * `Object.defineProperties(t, Object.getOwnPropertyDescriptors(cfg))`, and through every C consumer of the
+ * descriptor — the same loss the spread and the assign would suffer if their `Get` did not go through
+ * concolic_exotic_get. One value, one derivation, one place.
+ *
+ * §6.1.7.3 Invariants of the Essential Internal Methods DECIDES THE ATTRIBUTES rather than taste. Its
+ * [[GetOwnProperty]] note: "if a property is described as a data property and it may return different values
+ * over time, then either or both of the [[Writable]] and [[Configurable]] attributes must be true even if no
+ * mechanism to change the value is exposed" — and this one does, because each read mints the derivation
+ * afresh. So CONFIGURABLE and WRITABLE are the spec's answer and not a choice; only ENUMERABLE is read off the
+ * example, where it is an observation about the record. (Nothing in this file is the PROXY's §10.5.5 /
+ * §10.5.11 — those are §10.5 Proxy Object Internal Methods and Internal Slots, a different exotic object whose
+ * invariants are enforced by re-checking a trap's result. A concolic has no handler; it maintains §6.1.7.3
+ * Invariants of the Essential Internal Methods directly, which is what that clause requires of "any
+ * implementation provided exotic objects".)
+ */
+
+/* ANSWER FROM REAL SLOTS ONLY — see concolic.h. A plain static like every other in this file: the host is one
+   agent per instance and nothing here is entered from a second thread. */
+static int g_slots_only;
+
+void concolic_slots_only_begin(void)
+{
+    DCHECK(!g_slots_only,
+           "a slots-only read nested inside another — the mode is entered around ONE lookup that runs no page "
+           "code and can therefore not suspend, so a second entry is a caller holding it across work");
+    g_slots_only = 1;
+}
+
+void concolic_slots_only_end(void)
+{
+    DCHECK(g_slots_only, "a slots-only read was ended without having been begun");
+    g_slots_only = 0;
+}
+
+#if APICLIENT_DEV
+/* Does `obj` carry a REAL own slot for `atom` — the ordinary layer under this class's own surface? The mode is
+   what makes the question answerable at all: with the exotic hook armed, quickjs's [[GetOwnProperty]] answers
+   1 for a shape slot AND for an example member, and the two are exactly what has to be told apart. Its one
+   caller is the disjointness assert below, so it compiles out with that assert. */
+static int concolic_has_own_slot(JSContext *ctx, JSValueConst obj, JSAtom atom)
+{
+    int r;
+
+    concolic_slots_only_begin();
+    r = JS_GetOwnPropertyNoUserCode(ctx, NULL, obj, atom);
+    concolic_slots_only_end();
+    DCHECK(r >= 0, "a slots-only own-property lookup threw — this class's hook answers 0 under the mode and a "
+                   "shape lookup has no other completion");
+    return r > 0;
+}
+#endif
+
+/* §10.1.5 [[GetOwnProperty]] ( propertyKey ) over the record — reached only after quickjs's ordinary lookup
+   found no slot, so a member the flow has MATERIALISED (see the define below) never arrives here. */
+static int concolic_exotic_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueConst obj, JSAtom atom)
+{
+    Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+    JSValue ev;
+    int eflags;
+
+    if (!c)
+        return 0;
+    /* THE DELTA READS STORAGE AND THIS CLASS HAS NONE FOR ITS MEMBERS — concolic.h states the whole of it. */
+    if (g_slots_only)
+        return 0;
+    if (!example_slot(ctx, c->example, atom, &ev, &eflags))
+        return 0;
+    if (!desc) {
+        JS_FreeValue(ctx, ev);
+        return 1;
+    }
+    /* The example's own bytes are NOT the answer — they ride the derivation as its EXAMPLE, which is what
+       concolic_exotic_get composes. An ACCESSOR member arrives here with no value for the same reason
+       example_slot gives, and is still reported as a data property: what the page's getter would compute is
+       unknown, and an unknown is what this class answers with. */
+    JS_FreeValue(ctx, ev);
+    desc->flags = (eflags & JS_PROP_ENUMERABLE) | JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE;
+    desc->getter = JS_UNDEFINED;
+    desc->setter = JS_UNDEFINED;
+    desc->value = concolic_exotic_get(ctx, obj, atom, obj);
+    return 1;
+}
+
+/* §10.1.11 [[OwnPropertyKeys]] ( ) over the record. quickjs MERGES what this returns with the object's
+   ordinary keys and dedups neither, so the two lists must be DISJOINT — §6.1.7.3 Invariants of the Essential
+   Internal Methods states "The returned List must not contain any duplicate entries". That is maintained by
+   the define below, which takes a member OUT of the example as it materialises it into the shape, and
+   asserted here rather than filtered for. */
+static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen, JSValueConst obj)
+{
+    Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0;
+
+    *ptab = NULL;
+    *plen = 0;
+    if (!c)
+        return 0;
+    if (JS_IsUndefined(c->example)) {
+        /* NO EXAMPLE IS NOT AN EMPTY RECORD, and answering the empty List makes them one. An empty example is
+           the positive statement "the payload this visitor was served holds no members"; no example at all is
+           unknown input, whose key set is unknown — and the empty List says the first about the second, which
+           is the defaulted-read defect one layer out: `Object.keys(x).length === 0` is then DECIDED for a
+           program branching on a record the run never saw. §Attacker-sources already names what belongs here —
+           "Iterating an opaque collection FORKS unbounded (each iteration a parkable flow)" — and an
+           enumeration of an unknown key set is that fork with no observed key to seed it from. Build it. */
+        DFAIL("an unknown with NO EXAMPLE was asked to enumerate itself — the empty List would state that the "
+              "record holds nothing, which is a fact this run never observed; build the forking enumeration of "
+              "an unknown key set");
+        return 0;
+    }
+    if (JS_IsString(c->example)) {
+        /* §10.4.3 String Exotic Objects gives a String's own keys as its index properties plus `length`, so
+           the empty List is FALSE for a non-empty one — a wrong positive statement rather than a missing
+           capability. This class models a RECORD's members and declines a primitive example's at every other
+           door too (see example_slot); the wrapper surface is the thing to build. */
+        DFAIL("an unknown whose example is a STRING was asked to enumerate itself — §10.4.3 String Exotic "
+              "Objects' index properties are the answer and this class does not model them; build the "
+              "primitive-example wrapper surface rather than reporting the record as empty");
+        return 0;
+    }
+    if (!JS_IsObject(c->example))
+        return 0;   /* a number/boolean/bigint/null record HAS no own keys — `Object.keys(5)` is [] */
+    DCHECK(!JS_IsProxy(c->example),
+           "a concolic's example is a Proxy — enumerating it is that Proxy's `ownKeys` trap, which is the "
+           "page's code, and an internal method reached from C has no flow base to run one on");
+    if (JS_GetOwnPropertyNames(ctx, &tab, &n, c->example, JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK) < 0)
+        return -1;
+#if APICLIENT_DEV
+    {
+    uint32_t i;
+    for (i = 0; i < n; i++)
+        DCHECK(!concolic_has_own_slot(ctx, obj, tab[i].atom),
+               "a member is BOTH an own slot of the unknown and a member of its example — quickjs appends this "
+               "list to the object's ordinary keys and dedups neither, so the key would be enumerated twice "
+               "and §6.1.7.3 Invariants of the Essential Internal Methods' rule for [[OwnPropertyKeys]] "
+               "broken; the define that materialised it did not take it out of the example");
+    }
+#endif
+    *ptab = tab;
+    *plen = n;
+    return 0;
+}
+
+/* §10.1.6 [[DefineOwnProperty]] ( propertyKey, propertyDesc ) — reached only when the ordinary own-property
+ * scan found nothing, so this is §10.1.6.3 ValidateAndApplyPropertyDescriptor with `current` = whatever THIS
+ * class reported, and the attributes the incoming descriptor does not restate are CURRENT'S, not false.
+ *
+ * WITHOUT IT THE WRITE PATH SILENTLY NARROWS EVERY HELD MEMBER. §10.1.9.2 OrdinarySetWithOwnDescriptor step
+ * 2.c performs `Receiver.[[DefineOwnProperty]](P, { [[Value]]: V })` once [[GetOwnProperty]] has reported the
+ * member writable — a descriptor with a VALUE and no attributes — and quickjs's ordinary define has no
+ * `current` to merge it against here, so `cfg.region = "x"` on a member the payload HOLDS would materialise a
+ * NON-ENUMERABLE, NON-WRITABLE, NON-CONFIGURABLE slot: the member drops out of Object.keys and the next write
+ * to it throws. That is a regression this class's own [[GetOwnProperty]] creates, so this is where it is paid.
+ *
+ * AND MATERIALISING TAKES THE MEMBER OUT OF THE EXAMPLE, which is the whole of how the two key lists stay
+ * disjoint. The example is not a pristine copy of the server's payload — it is the record's CONCRETE STATE,
+ * and a page that overwrites a member has changed that state, so the server's byte for it is no longer what
+ * the record holds. The removal is an ordinary property delete on the example, so the COW delta captures it on
+ * the object that owns the storage and a context switch puts it back, exactly as it does the slot. */
+static int concolic_exotic_define_own(JSContext *ctx, JSValueConst obj, JSAtom prop, JSValueConst val,
+                                      JSValueConst getter, JSValueConst setter, int flags)
+{
+    Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+    JSPropertyDescriptor cur;
+    int ret, nf = flags;
+
+    if (!c || !concolic_exotic_get_own(ctx, &cur, obj, prop))
+        return JS_DefineProperty(ctx, obj, prop, val, getter, setter, flags | JS_PROP_NO_EXOTIC);
+
+    DCHECK(!(cur.flags & JS_PROP_GETSET),
+           "this class reported one of its own members as an ACCESSOR — every one of them is a data property "
+           "carrying a derived unknown, so a getter here is a descriptor built somewhere this file does not "
+           "know about");
+    if (!(nf & JS_PROP_HAS_CONFIGURABLE))
+        nf |= JS_PROP_HAS_CONFIGURABLE | (cur.flags & JS_PROP_CONFIGURABLE);
+    if (!(nf & JS_PROP_HAS_ENUMERABLE))
+        nf |= JS_PROP_HAS_ENUMERABLE | (cur.flags & JS_PROP_ENUMERABLE);
+    if (!(nf & (JS_PROP_HAS_GET | JS_PROP_HAS_SET))) {
+        if (!(nf & JS_PROP_HAS_WRITABLE))
+            nf |= JS_PROP_HAS_WRITABLE | (cur.flags & JS_PROP_WRITABLE);
+        /* A define that restates no VALUE keeps current's — `Object.defineProperty(cfg, "region",
+           {enumerable:false})` must not turn a held member into `undefined`. */
+        if (!(nf & JS_PROP_HAS_VALUE)) {
+            nf |= JS_PROP_HAS_VALUE;
+            val = cur.value;
+        }
+    }
+    /* OUT OF THE EXAMPLE BEFORE INTO THE SHAPE, so no window exists in which both lists name it. */
+    ret = JS_DeleteProperty(ctx, c->example, prop, 0);
+    DCHECK(ret > 0, "a member this class reported could not be removed from the example it was read out of — "
+                    "the example's own slots are the ones JSON.parse and the reply decoders build, all of them "
+                    "configurable, so a refusal is a record some other path froze");
+    if (ret > 0)
+        ret = JS_DefineProperty(ctx, obj, prop, val, getter, setter, nf | JS_PROP_NO_EXOTIC);
+    JS_FreeValue(ctx, cur.value);
+    return ret;
+}
+
+/* §10.1.10 [[Delete]] ( propertyKey ) — reached only when the ordinary own-property scan found nothing. The
+   descriptor this class reports is CONFIGURABLE, so §10.1.10.1 step 4 makes a member the example holds one
+   [[Delete]] must actually REMOVE, and the only place it exists is the example. Without this, `delete
+   cfg.region` answered true and Object.keys went on listing `region` — [[Delete]] and [[OwnPropertyKeys]]
+   disagreeing about one record. */
+static int concolic_exotic_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
+{
+    Concolic *c = JS_GetOpaque(obj, g_concolic_class);
+    JSValue ev;
+    int eflags, ret;
+
+    if (!c || !example_slot(ctx, c->example, prop, &ev, &eflags))
+        return 1;   /* nothing there to remove, which [[Delete]] reports as success */
+    JS_FreeValue(ctx, ev);
+    DCHECK(!JS_IsProxy(c->example),
+           "a concolic's example is a Proxy — removing a member is that Proxy's `deleteProperty` trap, which "
+           "is the page's code, and an internal method reached from C has no flow base to run one on");
+    ret = JS_DeleteProperty(ctx, c->example, prop, 0);
+    DCHECK(ret >= 0, "removing a member from a concolic's example threw — the example holds only the slots "
+                     "JSON.parse and the reply decoders build and this call runs none of the page's code");
+    return ret;
+}
+
 static JSClassExoticMethods g_concolic_exotic = {
+    .get_own_property = concolic_exotic_get_own,
+    .get_own_property_names = concolic_exotic_own_names,
+    .delete_property = concolic_exotic_delete,
+    .define_own_property = concolic_exotic_define_own,
     .get_property = concolic_exotic_get,
     .has_property = concolic_exotic_has,
+    /* The lookup is a slot read of this value's own example and a derivation composed in this file — no page
+       code, by construction, which is what lets the engine's own accessor walk and its COW slot read run it
+       from C. */
+    .get_own_property_no_user_code = true,
 };
 
 /* HOW MANY VALUES THE SOURCE OVERLAY HAS MINTED — see concolic_source_wrap for what the number is for. Reset

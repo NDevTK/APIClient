@@ -1,5 +1,6 @@
 /* Per-flow swappable COW delta — see cow.h. */
 #include "solver/cow.h"
+#include "solver/concolic.h"  /* a delta reads STORAGE — see concolic_slots_only_begin */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
 #include "check.h"
 #include <stdlib.h>
@@ -526,7 +527,14 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
        code with no flow base, and JS_GetOwnSlotDesc asserts that it is not reachable. An ACCESSOR is READ, not
        refused: its getter and setter are function objects the descriptor carries and neither side ever calls
        one, so a flow redefining a shared accessor is isolated like any other slot. */
+    /* …AND A SYNTHESISED DESCRIPTOR IS NOT ONE. A class whose [[GetOwnProperty]] composes its answer at the
+       query — the solver's own value class, whose members are its example's — has no storage here to record,
+       and an entry claiming it does is one whose unapply MATERIALISES the member as a real slot. See
+       concolic_slots_only_begin for why the mode is asked here rather than settled by JS_GetOwnSlotDesc's own
+       `as_slot`, which delete_property already honours. */
+    concolic_slots_only_begin();
     int has = JS_GetOwnSlotDesc(ctx, &base, obj, atom);
+    concolic_slots_only_end();
     /* `> 0` USED TO BE THE WHOLE TEST, so a -1 became existed=0: an entry saying the slot is ABSENT for a slot
        that EXISTS — apply would then delete it — and a live exception belonging to no flow, which the next
        thing to check for one reads as its own. It was reachable: a module namespace's export in TDZ answered
@@ -930,7 +938,12 @@ static void cow_save_cur(JSContext *ctx, CowEntry *e) {
         return;
     }
     JSPropertyDescriptor cur;
-    int has = JS_GetOwnSlotDesc(ctx, &cur, e->obj, e->atom);
+    int has;
+    /* SLOTS, for the reason the baseline read states — the two must ask the same question or the flow's own
+       state and its baseline are two different objects' answers. */
+    concolic_slots_only_begin();
+    has = JS_GetOwnSlotDesc(ctx, &cur, e->obj, e->atom);
+    concolic_slots_only_end();
     DCHECK(has >= 0, "reading back a captured slot threw — a delta holds something that is not an object, "
                      "and a context switch has no flow base to run an exception on");
     DCHECK(has > 0 || (JS_IsUndefined(cur.value) && cur.flags == 0),

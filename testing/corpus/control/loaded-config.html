@@ -24,12 +24,26 @@
   record is parsed out of puts flows on the frontier that compete with index.html's orphan drive, and a row is
   isolated by ORIGIN, so a document sharing a port would put these endpoints in another row's union.
 
+  AND THE RECORD IS ASKED TO ENUMERATE ITSELF, exactly as injected-state.html asks its two arms and for the
+  reason stated there: every read above names a member, so the channel is answering about a name the PAGE
+  supplied, while `Object.keys`, `for..in`, the object spread and `Object.assign` supply none and ask for the
+  record's own key list — ECMAScript §10.1.11 [[OwnPropertyKeys]] ( ), which §20.1.2.19 Object.keys ( obj ),
+  §14.7.5.9 EnumerateObjectProperties ( obj ), §7.3.25 CopyDataProperties ( target, source, excludedItems )
+  and §20.1.2.1 Object.assign ( target, ...sources ) all begin with. A channel answering the empty list makes
+  the page's own loop run zero times, and every rung above still passes. The list and the count ride IN the
+  address so an empty answer (`/api/cfg-keys-`, `/api/cfg-in-0`) is a different emitted fact from a rung that
+  was never reached.
+
   WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable:
       /api/us-east-1/cfg-value       the HELD member, as the bytes the server actually sent
       /api/{…region}/cfg-value       the same call site's SHAPE, carrying the reply's own provenance
       /api/cfg-admin                 a member HELD as `false`, gate forked
       /api/cfg-beta                  the same, one record deeper
       /api/cfg-user                  a member the payload does NOT hold, gate forked
+      /api/cfg-keys-region-tier-admin-nested    the record's own key list, through §20.1.2.19 Object.keys
+      /api/cfg-in-4                             the same list, through §14.7.5.9's for-in
+      /api/cfg-assign-region-tier-admin-nested  the same list, through §20.1.2.1 Object.assign
+      /api/cfg-spread-region-tier-admin-nested  the same list, through §7.3.25's object spread
       runOutcomesMine {complete:1}
   THE FIRST FLOOR ALONE IS THE DEFECT THIS RUNG EXISTS FOR, and it reads as a pass on its own: a run that
   emits the concrete address and none of the three gated ones is a run in which `json()` handed the bundle a

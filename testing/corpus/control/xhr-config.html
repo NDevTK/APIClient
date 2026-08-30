@@ -25,6 +25,14 @@
   one address. A run in which the record forks and the string does not is that second member having been left
   out, which is exactly how a channel goes half-covered without anything reading zero.
 
+  AND THE RECORD IS ASKED TO ENUMERATE ITSELF, the same four spellings the other three channels are asked and
+  for the reason injected-state.html states: the reads above all name a member, so they only ever exercise the
+  channel's answer about a name the PAGE supplied. `Object.keys`, `for..in`, the object spread and
+  `Object.assign` supply none and ask for the record's own key list — ECMAScript §10.1.11 [[OwnPropertyKeys]]
+  ( ) — and a channel that answers the empty list there runs the page's own loop zero times while every rung
+  above still passes. The list and the count ride IN the address, so an empty answer (`/api/xhr-keys-`,
+  `/api/xhr-in-0`) is an emitted fact and not the silence of a rung that was never reached.
+
   WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable:
       /api/us-east-1/xhr-value       the HELD member, as the bytes the server actually sent
       /api/{…region}/xhr-value       the same call site's SHAPE, carrying the reply's own provenance
@@ -32,6 +40,10 @@
       /api/xhr-beta                  the same, one record deeper
       /api/xhr-user                  a member the payload does NOT hold, gate forked
       /api/xhr-text-admin            the STRING arm: §3.6.10's bytes gated on, and the gate forked
+      /api/xhr-keys-region-tier-admin-nested    the record's own key list, through §20.1.2.19 Object.keys
+      /api/xhr-in-4                             the same list, through §14.7.5.9's for-in
+      /api/xhr-assign-region-tier-admin-nested  the same list, through §20.1.2.1 Object.assign
+      /api/xhr-spread-region-tier-admin-nested  the same list, through §7.3.25's object spread
       runOutcomesMine {complete:1}
   THE FIRST FLOOR ALONE READS AS A PASS AND IS THE DEFECT THIS ROW EXISTS FOR: a run that emits the concrete
   address and none of the four gated ones is a run in which this interface's two content members handed the

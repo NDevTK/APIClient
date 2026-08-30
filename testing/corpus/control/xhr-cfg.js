@@ -11,6 +11,17 @@ x.onload = function () {
   if (c.admin) fetch('/api/xhr-admin');         // a member it holds as `false`: unknown for the next visitor
   if (c.nested.beta) fetch('/api/xhr-beta');    // the same, one record deeper
   if (c.user) fetch('/api/xhr-user');           // a member it does NOT hold: unknown, and not `undefined`
+
+  // AND THE RECORD ASKED TO ENUMERATE ITSELF — the four spellings state.js and cfg.js ask of the other three
+  // channels, in the same order. They name no member, so what they ask for is the record's own key list
+  // (ECMAScript §10.1.11 [[OwnPropertyKeys]] ( )); the joined list and the count ride IN the address, so an
+  // enumeration that answered nothing still emits and is a different fact from one that never happened.
+  var n = 0, k;
+  fetch('/api/xhr-keys-' + Object.keys(c).join('-'));        // §20.1.2.19 -> §7.3.23 EnumerableOwnProperties
+  for (k in c) n++;                                          // §14.7.5.9 EnumerateObjectProperties
+  fetch('/api/xhr-in-' + n);
+  fetch('/api/xhr-assign-' + Object.keys(Object.assign({}, c)).join('-'));   // §20.1.2.1 Object.assign
+  fetch('/api/xhr-spread-' + Object.keys({ ...c }).join('-'));               // §7.3.25 CopyDataProperties
 };
 x.send();
 

@@ -32,25 +32,54 @@
   injected input: no example, and the gate over it forks to the logged-in arm. Inverting either half buries the
   gated code or fabricates a value the server never sent.
 
+  AND A RECORD ASKED TO ENUMERATE ITSELF IS A QUESTION NONE OF THE READS ABOVE ASKS. Every read above names a
+  member, so the channel is answering about a NAME the page supplied; `Object.keys`, `for..in`, the object
+  spread and `Object.assign` supply none, and what they ask for is the record's OWN KEY LIST — ECMAScript
+  §10.1.11 [[OwnPropertyKeys]] ( ), which §20.1.2.19 Object.keys ( obj ), §14.7.5.9 EnumerateObjectProperties
+  ( obj ), §7.3.25 CopyDataProperties ( target, source, excludedItems ) and §20.1.2.1 Object.assign ( target,
+  ...sources ) all begin with and then gate on §10.1.5 [[GetOwnProperty]] ( propertyKey ) through §7.3.23
+  EnumerableOwnProperties ( obj, kind ). A channel that answers the empty list there does not merely lose the
+  members: the page's own loop RUNS ZERO TIMES, so every endpoint and every gate behind it is unreachable and
+  nothing reads wrong — the four rungs above would all still pass. That is why the iteration rung is asked of
+  every channel and asked through all four spellings: they are four doors onto one internal method, and a
+  channel that answers one and not another is one capability wearing four names.
+
+  THE LIST AND THE COUNT RIDE IN THE ADDRESS, which is what keeps an empty answer from reading like a missing
+  one. `/api/inline-keys-` and `/api/inline-in-0` are emitted addresses; a channel that never reached the
+  enumeration emits neither. Absence and zero are different facts and this rung refuses to average them.
+
   WHAT THIS DOCUMENT MUST PRODUCE — FLOORS, never equalities, and named so a miss is attributable. The two arms
-  owe the SAME five lines and the list says so line for line, because a list that asked less of one arm would
+  owe the SAME nine lines and the list says so line for line, because a list that asked less of one arm would
   render the disagreement it exists to catch as the expectation:
       /api/200/inline-value            the inline record's HELD member, as the bytes the server sent
       /api/{…statusCode}/inline-value  the same call site's SHAPE, carrying the record's published path
       /api/inline-admin                a member HELD as `false`, gate forked
       /api/inline-beta                 the same, two records deeper
       /api/inline-gated                a member the record does NOT hold, gate forked
+      /api/inline-keys-region-admin-props    the record's own key list, through §20.1.2.19 Object.keys
+      /api/inline-in-3                       the same list, through §14.7.5.9's for-in
+      /api/inline-assign-region-admin-props  the same list, through §20.1.2.1 Object.assign
+      /api/inline-spread-region-admin-props  the same list, through §7.3.25's object spread
       /api/200/block-value             the data block's HELD member, as the bytes the server sent
       /api/{…statusCode}/block-value   the same call site's SHAPE, carrying the block's provenance
       /api/block-admin                 a member HELD as `false`, gate forked
       /api/block-beta                  the same, two records deeper
       /api/block-gated                 a member the record does NOT hold, gate forked
+      /api/block-keys-region-admin-props
+      /api/block-in-3
+      /api/block-assign-region-admin-props
+      /api/block-spread-region-admin-props
       runOutcomesMine {complete:1}
   AN ARM THAT EMITS ITS CONCRETE LINE AND ITS NOT-HELD LINE AND NEITHER OF THE OTHER THREE READS AS A PASS ON
   ITS OWN, and it is the defect this rung exists for: it is a channel that answers a HELD member as a plain
   value, so every gate over one took a single arm and every call site built out of one reported an address with
   no hole in it. Nothing about such a run says a gate went unexplored — the two endpoints it did learn are
   real — and what is lost is the logged-in surface, which is the whole point of the tool.
+
+  AND AN ARM THAT EMITS ALL FIVE MEMBER LINES AND `/api/<arm>-keys-` WITH NOTHING AFTER THE DASH IS THE SAME
+  DEFECT ONE LEVEL OUT: the record answers about every name the page supplies and answers NOTHING when asked
+  what names it has, so a bundle's `Object.entries(cfg).forEach(...)` — the ordinary way a config is read —
+  reaches none of the code inside it. Such a run learns four addresses per arm and calls the channel covered.
 -->
 <script>window.__CTL_INLINE__ = {"region":"us-east-1","admin":false,"props":{"pageProps":{"statusCode":200,"beta":false}}};</script>
 <script id="__CTL_BLOCK__" type="application/json">{"region":"us-east-1","admin":false,"props":{"pageProps":{"statusCode":200,"beta":false}}}</script>
