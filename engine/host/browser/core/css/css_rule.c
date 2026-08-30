@@ -4225,8 +4225,9 @@ void css_rule_install_proto(JSContext *ctx)
     /* CSS Fonts 5 §9.1's CSSFontFaceRule.prototype. Its `style` is a CSSFontFaceDescriptors and not a
        CSSStyleProperties, which is a real difference a page reads (`[object CSSFontFaceDescriptors]`, and a
        `unicode-range` attribute the other interface does not have) — see core/css/css_style_declaration.h.
-       The [PutForwards=cssText] setter is the shared one, because §3.4.4's forwarding is a [[Get]] of `style`
-       by NAME followed by a [[Set]] of `cssText`, which does not care which interface answered. */
+       The [PutForwards=cssText] setter is the shared one, because Web IDL §3.3.10 [PutForwards]'s forwarding is
+       a [[Get]] of `style` by NAME followed by a [[Set]] of `cssText`, which does not care which interface
+       answered. */
     font_face = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(font_face), "CSSFontFaceRule.prototype could not be allocated");
     idl_interface_tag(ctx, font_face, "CSSFontFaceRule");

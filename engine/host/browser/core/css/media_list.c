@@ -337,28 +337,11 @@ static JSValue js_ml_to_string(JSContext *ctx, JSValueConst this_val, int argc, 
     return js_ml_media_text(ctx, this_val, magic);
 }
 
-/* Web IDL §3.4.4's [PutForwards=mediaText] — see media_list.h for why one setter serves every carrier. */
-static JSValue js_ml_put_forwards(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
-{
-    JSValue q = JS_GetPropertyStr(ctx, this_val, "media");
-    int ok;
-
-    (void)magic;
-    if (JS_IsException(q)) return q;
-    if (!JS_IsObject(q)) {
-        JS_FreeValue(ctx, q);
-        return JS_ThrowTypeError(ctx, "the attribute this assignment forwards to is not an object");
-    }
-    ok = JS_SetPropertyStr(ctx, q, "mediaText", JS_DupValue(ctx, val));
-    JS_FreeValue(ctx, q);
-    return ok < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-}
-
 int media_list_put_forwards_setter(void)
 {
     DCHECK(g_id_put_forwards >= 0,
-           "§3.4.4's [PutForwards=mediaText] setter was asked for before media_list_init declared it — every "
-           "prototype that carries a `media` attribute is installed after this component's init runs");
+           "Web IDL §3.3.10's [PutForwards=mediaText] setter was asked for before media_list_init declared it "
+           "— every prototype that carries a `media` attribute is installed after this component's init runs");
     return g_id_put_forwards;
 }
 
@@ -404,7 +387,9 @@ void media_list_init(JSContext *ctx)
     g_id_delete = idl_method_id(ctx, ONE_STR, 1, js_ml_delete, 0);
     g_id_to_string = idl_method_id(ctx, ONE_STR, 1, js_ml_to_string, 0);
     idl_optional_from(0);   /* §4.4's stringifier takes NO arguments — the declared one is `mediaText`'s */
-    g_id_put_forwards = idl_setter_id(ctx, IDL_ANY, false, js_ml_put_forwards, 0);
+    /* Web IDL §3.3.10's [PutForwards=mediaText], whose five steps are §3.7.6 Attributes' and are declared once
+       for the whole platform. This component states only the PAIR — see media_list.h. */
+    g_id_put_forwards = idl_setter_id_put_forwards(ctx, "media", "mediaText");
     realm_declare_intrinsic(media_list_install_proto);
 }
 

@@ -124,9 +124,12 @@ JSValue cssom_font_face_descriptors_for_rule(JSContext *ctx, JSValueConst rule);
  * OWNED: the caller frees. */
 JSValue cssom_page_descriptors_for_rule(JSContext *ctx, JSValueConst rule);
 
-/* Web IDL §3.4.4's [PutForwards=cssText] SETTER, declared once and shared by the two attributes that carry it
-   — §7.1's `element.style` and §6.4.3's `rule.style`. It reads the attribute back by NAME through its own
-   getter, which is what §3.4.4 states, so one declaration serves both and neither component writes its own. */
+/* THE SETTER ID FOR THIS COMPONENT'S `[PutForwards=cssText]` PAIR — Web IDL §3.3.10 [PutForwards], whose five
+   steps are §3.7.6 Attributes' and belong to the binding layer (idl_setter_id_put_forwards), not here. What
+   this component owns is the PAIR — (`style`, `cssText`) — declared once at its init and handed to every
+   attribute that carries the extended attribute: CSSOM §7.1 ElementCSSInlineStyle's `element.style`, §6.4.3
+   CSSStyleRule's `rule.style`, and the CSS Fonts §9.1 and CSSOM §6.4.7 descriptor blocks. The forwarding reads
+   the attribute back BY NAME off the receiver, which is why one declaration serves all of them. */
 int cssom_put_forwards_setter(void);
 
 /* CSS SYNTAX'S "PARSE A STYLESHEET'S CONTENTS", through THE AGENT'S ONE CSS PARSER.

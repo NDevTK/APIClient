@@ -174,6 +174,9 @@ static int g_empty_asl_slot = -1;
    idl_install_accessor_unforgeable's `setter_stepid` means by "read-only". */
 static int g_loc_set[LOC_N];
 static int g_loc_assign = -1, g_loc_replace = -1, g_loc_reload = -1;
+/* §7.2.2 The Window object's `location`, whose [PutForwards=href] SETTER is Web IDL's and not this
+   component's — idl_args.c declares §3.7.6's five forwarding steps once for every carrier in the platform. */
+static int g_win_location_set = -1;
 
 static bool loc_brand(JSContext *ctx, JSValueConst this_val)
 {
@@ -1240,12 +1243,16 @@ static void location_install_realm(JSContext *ctx)
     loc_pin_to_primitive(ctx, loc);
     loc_assert_cross_origin_surface(ctx, loc);
 
-    /* §7.2.2's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location location`. It was a plain
-       writable data property, so `window.location = {href: "..."}` REPLACED the Location object outright —
-       which is the forgery the unforgeable annotations on both sides of this exist to prevent. The forwarding
-       half of [PutForwards=href] is ABSENT rather than stubbed, because it navigates: a setter that stored a
-       string would make a page believe it had navigated. */
-    idl_install_accessor_unforgeable(ctx, global, "location", js_win_location, 0, -1);
+    /* §7.2.2 The Window object's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location location`,
+       with BOTH halves of the declaration. It was a plain writable data property, so
+       `window.location = {href: "..."}` REPLACED the Location object outright — which is the forgery the
+       unforgeable annotations on both sides of this exist to prevent — and then the forwarding half was absent,
+       so `window.location = url` reached nothing at all: a readonly accessor with no setter DROPS the
+       assignment in sloppy mode and throws in strict, where a browser NAVIGATES. The setter is Web IDL's
+       §3.7.6 forwarding and not a body this file writes: it ends in `Set(Q, "href", V, false)`, which is the
+       `href` setter three screens up — the same machine, entered through its own member, so the navigation
+       suspends and resumes exactly as `location.href = url` does. */
+    idl_install_accessor_unforgeable(ctx, global, "location", js_win_location, 0, g_win_location_set);
     realm_value_set(ctx, g_obj_slot, loc);
     {
         /* §7.2.4's associated empty DOMStringList, built WITH the Location and never again. */
@@ -1282,6 +1289,12 @@ void location_init(JSContext *ctx)
     g_loc_assign  = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_ASSIGN);
     g_loc_replace = idl_method_id_step(ctx, URL_ARG, 1, NULL, 0, &LOC_ASSIGN_DECL, LOC_REPLACE);
     g_loc_reload  = idl_method_id_step(ctx, NULL, 0, NULL, 0, &LOC_RELOAD_DECL, 0);
+    /* §7.2.2 The Window object's `location` is [PutForwards=href], so its setter is declared HERE — beside the
+       members the pool must issue before it is sealed — and its ALGORITHM is Web IDL §3.7.6's, shared with
+       every other carrier. The pair is (`location`, `href`) because that is what the IDL line says, and the
+       `href` it names is resolved at assignment time off the receiver rather than baked in here, which is what
+       makes `otherWindow.location = u` reach the OTHER window's Location. */
+    g_win_location_set = idl_setter_id_put_forwards(ctx, "location", "href");
     /* THE TWO ATTACKER SOURCES THIS COMPONENT OWNS. A source's browser delivery is a fact about the COMPONENT,
        not about a document, so it belongs beside the class registration and not in the per-realm install. A
        second same-origin document re-declaring it is what caught this.
@@ -1332,12 +1345,14 @@ void location_free(void)
 
     DCHECK(g_obj_slot >= 0, "§7.2.4's Location was released in an agent that never declared it");
     /* The prototypes, the interface objects and the Locations are the REALMS' — each is released with its
-       context. What the agent holds is the brand, the slot and the eleven member ids the IDL pool issued. */
+       context. What the agent holds is the brand, the slots and the member ids the IDL pool issued — every one
+       this file declares, §7.2.2's forwarding setter included. */
     g_obj_slot = -1;
     g_empty_asl_slot = -1;
     g_loc_class = 0;
     for (i = 0; i < LOC_N; i++) g_loc_set[i] = -1;
     g_loc_assign = g_loc_replace = g_loc_reload = -1;
+    g_win_location_set = -1;
     /* THE SOURCE CLAIMS, GIVEN BACK BY THE COMPONENT THAT OWNS THE SOURCES, and LAST because they are declared
        FIRST — a release is the inverse of its declaration. Their STORAGE is solver/concolic.c's registry and
        the CLAIM is this component's (core/platform.h's fourth paragraph), so they come back at the release of

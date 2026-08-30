@@ -2512,7 +2512,7 @@ static int g_id_create_element = -1, g_id_create_text = -1, g_id_create_comment 
            g_id_create_fragment = -1, g_id_create_element_ns = -1, g_id_create_iterator = -1,
            g_id_create_walker = -1, g_id_create_range = -1, g_id_create_event = -1,
            g_id_create_cdata = -1, g_id_create_pi = -1, g_id_doc_ctor = -1, g_id_adopt_node = -1,
-           g_id_title_set = -1, g_id_dir_set = -1;
+           g_id_title_set = -1, g_id_dir_set = -1, g_id_location_set = -1;
 /* THE SAME FOUR TOUCH HANDLERS core/html/html_element.c excludes, and for the same reason — this interface
    includes the same `GlobalEventHandlers`, so §Touch Events Level 2's "this mixin must not be implemented"
    reaches it too. The list is stated HERE rather than shared from there because idl_members_excluded reads the
@@ -2582,6 +2582,12 @@ static void document_declare_members(JSContext *ctx)
        and the insertions below enqueue before the setter returns. */
     g_id_title_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_TITLE);
     g_id_dir_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_doc_set_html_member, DOC_DIR);
+    /* HTML §3.1.1 The Document object's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
+       location` — the SECOND carrier of the same extended attribute, and the reason the forwarding is Web IDL's
+       and not location.c's: `document.location = url` and `window.location = url` are ONE binding rule read off
+       two IDL lines, and a component-local copy would make one spelling of the same assignment answer
+       differently from the other. The pair is (`location`, `href`) exactly as §7.2.2's is. */
+    g_id_location_set = idl_setter_id_put_forwards(ctx, "location", "href");
     /* EACH POOL ENTRY IS AGENT-LIFETIME STATE, DECLARED BESIDE THE LINE THAT MINTS IT (core/agent_state.h). A
        release that gives the pool back and keeps these numbers is exactly what fetch_free did — the next agent's
        `_init` reads one to decide it need not run, and every member then answers out of a pool a dead runtime
@@ -2601,6 +2607,7 @@ static void document_declare_members(JSContext *ctx)
     agent_state_id("document", &g_id_adopt_node, "§4.5's adoptNode");
     agent_state_id("document", &g_id_title_set, "§3.1.5's `title` setter");
     agent_state_id("document", &g_id_dir_set, "§3.1.5's `dir` setter");
+    agent_state_id("document", &g_id_location_set, "§3.1.1's `location` [PutForwards=href] setter");
 }
 
 static void document_install_members(JSContext *ctx, JSValueConst proto)
@@ -2631,10 +2638,20 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
     idl_install_method(ctx, proto, "createTreeWalker", 1, g_id_create_walker);
     idl_install_method(ctx, proto, "createRange", 0, g_id_create_range);
     idl_install_method(ctx, proto, "createEvent", 1, g_id_create_event);
-    /* §3.1.1: `[PutForwards=href] readonly attribute Location? location`. The forwarding half of the extended
-       attribute — `document.location = url` navigating — is NOT built, and it is absent rather than silently
-       dropped: a setter that stored a string would make a page believe it had navigated. */
-    idl_install_accessor(ctx, proto, "location", js_doc_location, 0, -1);
+    /* §3.1.1 The Document object's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location?
+       location`, with the FORWARDING half — Web IDL §3.7.6's, the same declaration §7.2.2's `location` carries,
+       so `document.location = url` and `window.location = url` are the one algorithm ending in the `href`
+       setter's navigation.
+       WHAT THIS INSTALL IS STILL NARROWER THAN is the OTHER extended attribute on that line. §3.4.10
+       [LegacyUnforgeable] puts an attribute on EVERY OBJECT THAT IMPLEMENTS THE INTERFACE, non-configurable,
+       and this is on the interface prototype object and configurable — which is what every other member of
+       this prototype is and what none of them should be if the IDL says otherwise. The next diff is the
+       per-instance unforgeable install for a Document, which is what idl_install_accessor_unforgeable already
+       does for §7.2.2's `location` on the global; it needs a hook at document creation, since a Document is
+       built per navigation rather than once per realm. ITS ABSENCE SHOWS as
+       `Object.getOwnPropertyDescriptor(document, "location")` answering undefined where a browser answers a
+       non-configurable accessor, and as `delete Document.prototype.location` succeeding. */
+    idl_install_accessor(ctx, proto, "location", js_doc_location, 0, g_id_location_set);
     /* §3.1.1's TREE ENTRY POINTS and §4.5's per-document strings. They were data properties latched onto ONE
        document object at install — wrong in time (each is a lookup in the tree as it IS) and wrong in subject
        (a value stored on one object cannot answer for a second document). */
@@ -4121,7 +4138,7 @@ void document_agent_free(JSRuntime *rt)
     g_id_create_element = g_id_create_text = g_id_create_comment = g_id_create_fragment =
         g_id_create_element_ns = g_id_create_iterator = g_id_create_walker = g_id_create_range =
         g_id_create_event = g_id_create_cdata = g_id_create_pi = g_id_doc_ctor = g_id_adopt_node =
-        g_id_title_set = g_id_dir_set = -1;
+        g_id_title_set = g_id_dir_set = g_id_location_set = -1;
     g_ready_slot = g_showing_slot = -1;
     DCHECK(JS_GetContextMarkHook(rt) == document_realm_mark,
            "§gc's realm-mark hook was given back at the Document component's agent release — it must NOT be, "

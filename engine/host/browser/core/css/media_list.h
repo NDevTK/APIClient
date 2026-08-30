@@ -46,11 +46,12 @@ char *media_list_text(JSContext *ctx, JSValueConst list);
    rule needs (does this `@media` apply?). OWNED: media_query_free. */
 MediaQuerySet *media_list_query_set(JSContext *ctx, JSValueConst list);
 
-/* Web IDL §3.4.4's [PutForwards=mediaText] SETTER, declared once and shared by every attribute that carries it.
-   EVERY carrier in the platform names the attribute `media` — CSSMediaRule's, CSSStyleSheet's and
-   CSSImportRule's — which is what lets one setter serve them all, exactly as §7.1's and §6.4.3's shared
-   `style`/`cssText` pair does; the forwarding is a real [[Get]] of `media` by name followed by a [[Set]] of
-   `mediaText` on the result, which is what §3.4.4 states. */
+/* THE SETTER ID FOR THIS COMPONENT'S `[PutForwards=mediaText]` PAIR — Web IDL §3.3.10 [PutForwards], whose
+   five steps are §3.7.6 Attributes' and belong to the binding layer (idl_setter_id_put_forwards). What this
+   component owns is the PAIR — (`media`, `mediaText`) — and EVERY carrier in the platform names the attribute
+   `media`: CSSMediaRule's, CSSStyleSheet's and CSSImportRule's. That is what lets one declaration serve them
+   all, exactly as the `style`/`cssText` pair does, because the forwarding is a real [[Get]] of `media` by NAME
+   off the receiver followed by a [[Set]] of `mediaText` on the result. */
 int media_list_put_forwards_setter(void);
 
 #endif

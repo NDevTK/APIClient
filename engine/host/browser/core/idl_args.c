@@ -3289,6 +3289,197 @@ void idl_iface_narrow(bool (*is)(JSValueConst v))
     idl_member(g_n - 1)->iface_narrow = is;
 }
 
+/* WEB IDL §3.3.10 [PutForwards]'s FORWARDING HALF, WHICH IS A BINDING RULE AND NOT A COMPONENT'S ALGORITHM.
+ *
+ * §3.3.10 [PutForwards] says what the extended attribute MEANS — "the assignment is 'forwarded' to the
+ * attribute (specified by the extended attribute argument) on the object that is currently referenced by the
+ * attribute being assigned to" — and §3.7.6 Attributes says what a binding DOES about it, as five steps of
+ * "create an attribute setter":
+ *     4.5.8.1  Let Q be ? Get(jsValue, id).
+ *     4.5.8.2  If Q is not an Object, then throw a TypeError.
+ *     4.5.8.3  Let forwardId be the identifier argument of the [PutForwards] extended attribute.
+ *     4.5.8.4  Perform ? Set(Q, forwardId, V, false).
+ *     4.5.8.5  Return undefined.
+ * Not one word of that is about Location, or about a declaration block, or about a MediaList. The two operands
+ * — `id` and `forwardId` — are the ONLY thing that differs between the attributes that carry it, which is why
+ * this is ONE machine parameterised by a pair and not one body per carrier. It had been the other shape: two
+ * components had hand-written the same five steps over their own two names, both of them citing a section
+ * number that is [LegacyNamespace] in the edition they were written against, both of them writing 4.5.8.4's
+ * flag as `true` where the spec writes `false`, and a third and fourth carrier had no forwarding at all.
+ *
+ * AND IT IS A STEP MACHINE BECAUSE 4.5.8.4 RUNS THE PAGE'S CODE — twice over, and one of the two is this
+ * engine's own. The Get at 4.5.8.1 reaches an accessor or a Proxy trap; the Set at 4.5.8.4 reaches the
+ * forwarded-to attribute's SETTER, and HTML §7.2.4 The Location interface's `href` setter is a machine that
+ * NAVIGATES — it suspends inside its own assignment while a `navigate` event listener runs. A plain C body
+ * performing either with JS_GetPropertyStr/JS_SetPropertyStr is a C activation hosting the page's loops, which
+ * is the drive-to-completion this engine aborts on, and against a step-machine setter it is the abort itself.
+ *
+ * WHAT IT DOES NOT PERFORM IS §3.7.6 steps 4.5.2-4.5.4 — the security check, and the `validThis` TypeError for
+ * a receiver that does not implement the attribute's interface. `idl_attribute_this` above is that pair, and it
+ * is Window-only by construction (window_proxy.c owns the brand, and the two accessors this file mints itself
+ * are all installed on the realm's global); a [PutForwards] carrier is declared on Window, on Document, on
+ * Element and on four CSSRule interfaces, so the check needs the RECEIVER'S BRAND to be a fact the pool holds.
+ * THE NEXT DIFF IS THAT: a receiver-brand on the declaration, the way idl_iface_brand already carries an
+ * ARGUMENT's, consumed here and by idl_attribute_this alike. ITS ABSENCE SHOWS as the WRONG TypeError for a
+ * receiver that implements neither interface (4.5.8.2's "not an Object" instead of 4.5.4's, since the Get of a
+ * member the receiver does not have answers undefined), and as NO error at all for the one receiver shape that
+ * has the property without implementing the target —
+ * `Object.getOwnPropertyDescriptor(Document.prototype, "location").set.call(window, u)`, which the spec
+ * refuses at 4.5.4 and this forwards.
+ *
+ * THE STAGES ARE §3.7.6's OWN, one spec step each, and the two requests are why: a machine that could not park
+ * at 4.5.8.1 and again at 4.5.8.4 would be driving both to completion. */
+#define IDL_PF_STAGES(X)                                                                                      \
+    X(IDL_PF_ENTER, "Web IDL §3.7.6 Attributes, create an attribute setter steps 4.1-4.2, 4.5.1 and 4.5.8 (V " \
+                    "is the first argument passed; jsValue is the this value, or the realm's global object "   \
+                    "when that is null or undefined; the attribute's [PutForwards] branch is taken)")         \
+    X(IDL_PF_GET,   "Web IDL §3.7.6 Attributes, create an attribute setter step 4.5.8.1 (let Q be "            \
+                    "? Get(jsValue, id)), whose step 4.5.8.2 refusal of a non-Object Q is on its answer")      \
+    X(IDL_PF_SET,   "Web IDL §3.7.6 Attributes, create an attribute setter step 4.5.8.4 (perform "             \
+                    "? Set(Q, forwardId, V, false))")
+enum { IDL_STEP_STAGE_BASE(IDL_PF_STAGES) IDL_PF_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const IDL_PF_STEPS[] = { IDL_PF_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* §3.7.6's `id` and §3.3.10's identifier argument, INTERNED AT THE DECLARATION. A keyed request is handed its
+   atom twice — once to park on it and once at the call site that collects the answer — with a suspension in
+   between, so it cannot be created per assignment; and the two names are static strings known when the
+   carrier declares itself. The pair is what a magic names, exactly as a member table's index is elsewhere in
+   this engine, so ONE machine serves every carrier without a table of "who is special". */
+typedef struct {
+    JSAtom attr;      /* §3.7.6's `id`: the attribute the assignment was made to */
+    JSAtom forward;   /* §3.3.10's identifier argument: the attribute on Q that receives it */
+} IdlPutForwards;
+static IdlPutForwards *g_pf;
+static int             g_pf_n;
+
+static const IdlPutForwards *idl_put_forwards_of(int magic)
+{
+    DCHECK(magic >= 0 && magic < g_pf_n,
+           "a [PutForwards] setter ran with a magic that names no declared pair — the magic IS the index into "
+           "the pair list this file declares, so an out-of-range one means the setter id outlived the pool the "
+           "pair was declared into (an agent teardown) or was minted by something other than "
+           "idl_setter_id_put_forwards");
+    return &g_pf[magic];
+}
+
+/* WHAT THE MACHINE HOLDS ACROSS ITS SUSPENSIONS: §3.7.6's `jsValue` and its `Q`. The PAIR is the declaration's
+   and V is the invocation's `argv[0]`, so neither of those is this state's to own. `jsValue` is here rather
+   than re-derived at the Get because window_proxy_this_object ANSWERS OWNED and step 4.5.1 is computed once —
+   re-running it per entry would take a second reference to this realm's global on every resume. */
+typedef struct {
+    JSValue js_value;   /* §3.7.6 step 4.5.1's `jsValue` */
+    JSValue q;          /* §3.7.6 step 4.5.8.1's `Q` */
+} IdlPutForwardsState;
+
+static void idl_put_forwards_visit(JSContext *ctx, void *state, JSStepVisit *v)
+{
+    IdlPutForwardsState *s = state;
+
+    v->val(ctx, &s->js_value);
+    v->val(ctx, &s->q);
+}
+
+static int idl_put_forwards_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, JSValueConst *argv,
+                                 JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    IdlPutForwardsState *s = state;
+    const IdlPutForwards *pf = idl_put_forwards_of(idl_step_magic(hdr));
+    int r;
+
+    STEP_DISPATCH(IDL_PF_STAGES, hdr->stage, hdr->def->algorithm, JS_STEP_ABRUPT);
+
+    STEP_ARM(IDL_PF_ENTER);
+    /* Nothing has been asked for yet, so this entry's request answer belongs to nobody. */
+    JS_FreeValue(ctx, cb_result);
+    /* EVERY OWNED FIELD IN PLACE BEFORE THE FIRST THING THAT CAN THROW — the failure path tears this state
+       down through the declaration, which frees exactly what `visit` names and nothing else. */
+    s->js_value = JS_UNDEFINED;
+    s->q = JS_UNDEFINED;
+    /* §3.7.6 steps 4.1-4.2: "Let V be undefined. If any arguments were passed, then set V to the value of the
+       first argument passed." A zero-argument call is spec-legal (`desc.set.call(obj)`) and needs no branch
+       here: `argc` is the DECLARATION's position count and not the caller's, so the pool has already placed
+       the undefined at argv[0] for one. */
+    DCHECK(argc >= 1 && argv != NULL,
+           "a [PutForwards] setter's body ran with no value — a step setter is delivered as a ONE-ARGUMENT "
+           "call whose single declared position the pool always places, so the assigned value is argv[0]");
+    /* STEP 4.5.1: "Let jsValue be the this value, if it is not null or undefined, or realm's global object
+       otherwise." It is the SAME sentence idl_attribute_this resolves for the two accessors this file mints,
+       and it is universal — every regular attribute's setter carries it, not only a [Global] interface's — so
+       `Object.getOwnPropertyDescriptor(window, "location").set.call(null, u)` forwards through this realm's
+       global rather than throwing on a read of undefined. What this does NOT then do is 4.5.2-4.5.4; see the
+       machine's own paragraph for the brand the pool would have to hold and what its absence looks like. */
+    s->js_value = window_proxy_this_object(ctx, hdr->this_val);
+    STEP_GOTO(hdr->stage, IDL_PF_GET, &hdr->get_phase);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(IDL_PF_GET);
+    /* STEP 4.5.8.1. A REAL PROPERTY GET BY NAME, which is what makes one machine serve every carrier and what
+       makes the cross-origin case work: `otherWindow.location = u` reads §7.2.1 Security infrastructure for
+       Window, WindowProxy, and Location objects' cross-origin `location` off the WindowProxy, and whatever
+       answers it is what the write below lands on. */
+    r = step_getprop_run(ctx, hdr, s->js_value, pf->attr, cb_result, &s->q, out_cb, out_argc);
+    if (r) return r < 0 ? JS_STEP_ABRUPT : r;
+    /* STEP 4.5.8.2, on the answer: "If Q is not an Object, then throw a TypeError." It is NOT unreachable and
+       must not be a DCHECK — an attribute this forwards through is [LegacyUnforgeable] on Window and on
+       Document and is NOT on Element or on a CSSRule, so a page that redefines `style` to answer a primitive
+       reaches this line. */
+    if (!JS_IsObject(s->q)) {
+        JS_ThrowTypeError(ctx, "the attribute this assignment forwards to did not answer with an object");
+        return JS_STEP_ABRUPT;
+    }
+    STEP_GOTO(hdr->stage, IDL_PF_SET, &hdr->get_phase);
+    return JS_STEP_YIELD;
+
+    STEP_ARM(IDL_PF_SET);
+    /* STEPS 4.5.8.3-4.5.8.4: `forwardId` is the pair's second half, and the write is 7.3.4 Set with Throw
+       FALSE — a target that REFUSES the write is not an error this forwarding invents. This is where HTML
+       §7.2.4 The Location interface's `href` setter runs, so this member suspends here for the whole of a
+       navigation: its `navigate` event, its listeners, and §7.4.6.2's `popstate`. */
+    r = step_setprop_bare_run(ctx, hdr, s->q, pf->forward, argv[0], cb_result, out_cb, out_argc);
+    if (r) return r < 0 ? JS_STEP_ABRUPT : r;
+    /* STEP 4.5.8.5. Set on the entry that FINISHES, never once in the head: `presult` is an out-parameter of
+       EACH entry, so a member that wrote it before it parked would leave the resumed entry's answer as
+       whatever the driver's slot held. */
+    *presult = JS_UNDEFINED;
+    return JS_STEP_DONE;
+}
+
+/* THERE IS NO `release`. Everything this state holds is the two JSValues the visit above names, so the teardown
+   frees them through that list — and a second list here is what idl_args.h's ownership contract refuses. */
+static const IdlStepDecl IDL_PUT_FORWARDS_DECL = {
+    idl_put_forwards_body, sizeof(IdlPutForwardsState), idl_put_forwards_visit, NULL,
+    "Web IDL §3.7.6 Attributes, create an attribute setter step 4.5.8 (the §3.3.10 [PutForwards] forwarding)",
+    IDL_PF_STEPS
+};
+
+int idl_setter_id_put_forwards(JSContext *ctx, const char *attr_id, const char *forward_id)
+{
+    IdlPutForwards *grown;
+
+    DCHECK(attr_id != NULL && *attr_id && forward_id != NULL && *forward_id,
+           "a [PutForwards] setter was declared with an empty identifier — §3.3.10 takes an identifier and "
+           "§3.7.6 step 4.5.8.1 reads the attribute back BY THAT NAME, so a missing one is a get of the empty "
+           "string on the receiver rather than of the member");
+    DCHECK(strcmp(attr_id, forward_id) != 0,
+           "a [PutForwards] setter forwards an attribute to ITSELF — §3.3.10 forbids a cycle in a chain of "
+           "forwarded assignments outright, and the one-link cycle is the only one a single declaration can "
+           "state; this one would re-enter its own setter until the heap ran out");
+    grown = realloc(g_pf, sizeof(*g_pf) * (size_t)(g_pf_n + 1));
+    CHECK(grown != NULL, "OOM growing the [PutForwards] pair list");
+    g_pf = grown;
+    g_pf[g_pf_n].attr    = JS_NewAtom(ctx, attr_id);
+    g_pf[g_pf_n].forward = JS_NewAtom(ctx, forward_id);
+    CHECK(g_pf[g_pf_n].attr != JS_ATOM_NULL && g_pf[g_pf_n].forward != JS_ATOM_NULL,
+          "a [PutForwards] attribute's own name would not intern");
+    g_pf_n++;
+    /* IDL_ANY, and that is §3.7.6's ORDER rather than a convenience: step 4.5.8 returns BEFORE step 4.6's
+       "converting V to an IDL value of attribute's type" ever runs, so a forwarded assignment hands the
+       forwarded-to setter the page's own value and THAT member's declared type is what converts it. Converting
+       here would coerce twice, and for `location` the first coercion would be to the type of an attribute
+       (`Location`) that no assignment is ever converted to at all. */
+    return idl_setter_id_step(ctx, IDL_ANY, /*null_to_empty*/ false, &IDL_PUT_FORWARDS_DECL, g_pf_n - 1);
+}
+
 int idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic)
 {
     int id = idl_method_id_step(ctx, &type, 1, NULL, 0, decl, magic);
@@ -3986,6 +4177,16 @@ void idl_args_free(JSContext *ctx)
     free(g_dicts);
     g_dicts = NULL;
     g_ndicts = 0;
+    /* And §3.3.10 [PutForwards]'s two names per carrier, interned at the declaration for the same reason the
+       dictionary members' are — a keyed request holds its atom across a suspension — and therefore given back
+       here, with a runtime still to give them back to. */
+    for (i = 0; i < g_pf_n; i++) {
+        JS_FreeAtom(ctx, g_pf[i].attr);
+        JS_FreeAtom(ctx, g_pf[i].forward);
+    }
+    free(g_pf);
+    g_pf = NULL;
+    g_pf_n = 0;
     /* AND THE RUNTIME IS DONE WITH THIS POOL, which is the statement the block half rests on. */
     g_rt = NULL;
 }

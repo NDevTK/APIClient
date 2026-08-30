@@ -2615,29 +2615,6 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
-/* Web IDL §3.4.4's [PutForwards=cssText], which BOTH `style` attributes carry — §7.1's on an element and
-   §6.4.3's on a style rule. The attribute is readonly and yet `el.style = 'color:red'` works, because the
-   setter is "let Q be ? Get(esValue, id); if Type(Q) is not Object, throw a TypeError; perform
-   ? Set(Q, forwardId, V, true)" — a real property get by NAME through the getter, which is why one setter
-   serves both attributes and neither component needs its own. Installing the attribute without it was not a
-   missing feature but a WRONG one: the assignment was silently dropped in sloppy mode and threw a TypeError in
-   strict mode, where a browser sets the declaration block's text. */
-static JSValue js_cssd_put_forwards(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
-{
-    JSValue q = JS_GetPropertyStr(ctx, this_val, "style");
-    int ok;
-
-    (void)magic;
-    if (JS_IsException(q)) return q;
-    if (!JS_IsObject(q)) {
-        JS_FreeValue(ctx, q);
-        return JS_ThrowTypeError(ctx, "the attribute this assignment forwards to is not an object");
-    }
-    ok = JS_SetPropertyStr(ctx, q, "cssText", JS_DupValue(ctx, val));
-    JS_FreeValue(ctx, q);
-    return ok < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-}
-
 /* §7.2's DECLARATIONS OF A COMPUTED BLOCK, which are not stored anywhere and are not the owner element's
    inline ones: "a list of CSS declarations ... with the following properties: ... declarations: the resolved
    value of every LONGHAND property that is a supported CSS property, in LEXICOGRAPHICAL ORDER, plus every
@@ -2966,7 +2943,13 @@ void cssom_init(JSContext *ctx)
         static const IdlArgType ONE_LONG[1] = { IDL_LONG };
         static const IdlArgType THREE_STR[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_DOMSTRING };
         g_set_css_text_id = idl_setter_id(ctx, IDL_DOMSTRING, false, js_cssd_set_css_text, 0);
-        g_put_forwards_id = idl_setter_id(ctx, IDL_ANY, false, js_cssd_put_forwards, 0);
+        /* Web IDL §3.3.10's [PutForwards=cssText], which BOTH `style` attributes carry — CSSOM §7.1
+           ElementCSSInlineStyle's on an element and §6.4.3 CSSStyleRule's on a style rule — plus the CSS Fonts
+           and CSSOM page/margin descriptor blocks below. The five steps are §3.7.6 Attributes' and are
+           declared ONCE for the whole platform (idl_args.c); this component states only the pair. It had its
+           own copy, which is how it came to write §3.7.6 step 4.5.8.4's Throw flag as `true` where the
+           standard writes `false`, and to reach the forwarded-to setter with a JS_SetPropertyStr from C. */
+        g_put_forwards_id = idl_setter_id_put_forwards(ctx, "style", "cssText");
         g_get_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 0);
         g_remove_prop_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 1);
         g_get_priority_id = idl_method_id(ctx, ONE_STR, 1, js_cssd_prop_op, 2);
@@ -3103,8 +3086,8 @@ void cssom_install_proto(JSContext *ctx)
 int cssom_put_forwards_setter(void)
 {
     DCHECK(g_put_forwards_id >= 0,
-           "§3.4.4's [PutForwards] setter was asked for before cssom_init declared it — the two `style` "
-           "attributes that carry it are installed onto prototypes this component's init runs ahead of");
+           "Web IDL §3.3.10's [PutForwards=cssText] setter was asked for before cssom_init declared it — the "
+           "`style` attributes that carry it are installed onto prototypes this component's init runs ahead of");
     return g_put_forwards_id;
 }
 

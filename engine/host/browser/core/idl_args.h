@@ -908,6 +908,26 @@ int  idl_setter_id(JSContext *ctx, IdlArgType type, bool null_to_empty, IdlSette
    [LegacyNullToEmptyString] is part of the TYPE, so no body has to remember it. */
 int  idl_setter_id_step(JSContext *ctx, IdlArgType type, bool null_to_empty, const IdlStepDecl *decl, int magic);
 
+/* WEB IDL §3.3.10 [PutForwards]'s SETTER FOR A READONLY ATTRIBUTE — declared once, here, and shared by every
+ * attribute in the platform that carries the extended attribute. `attr_id` is §3.7.6 Attributes' `id` (the
+ * attribute being assigned to) and `forward_id` is §3.3.10's identifier argument (the attribute on the object
+ * that one references, which receives the assignment). Both must outlive the declaration only as far as this
+ * call: the two names are INTERNED here, because §3.7.6 step 4.5.8.1's Get and step 4.5.8.4's Set are each a
+ * keyed request that holds its atom across a suspension.
+ *
+ * IT IS A MACHINE AND EVERY CARRIER MUST USE THIS ONE. The two operations §3.7.6 states are both the page's
+ * code — 4.5.8.1's Get is an accessor or a Proxy trap, and 4.5.8.4's Set is the forwarded-to attribute's
+ * SETTER, which for HTML §7.2.2 The Window object's `location` is HTML §7.2.4 The Location interface's `href`
+ * and therefore a NAVIGATION that suspends inside the assignment. A per-component copy of the five steps built
+ * out of JS_GetPropertyStr/JS_SetPropertyStr is a C activation hosting that, which is the drive-to-completion
+ * this engine aborts on; two such copies existed and are gone. It is also the shape that gets the SPEC wrong
+ * quietly: both of them wrote 4.5.8.4's Throw flag as `true`, which manufactures a TypeError exactly where the
+ * standard's `false` does nothing.
+ *
+ * The assigned value is passed to the forwarded-to setter UNCONVERTED, which is §3.7.6's own order: step 4.5.8
+ * returns before step 4.6's conversion, so the type that converts is the FORWARDED-TO attribute's. */
+int  idl_setter_id_put_forwards(JSContext *ctx, const char *attr_id, const char *forward_id);
+
 /* An attribute GETTER. It takes a magic exactly as a body does, because a reflected attribute is ONE function
    over a table of names and the getters that need no magic simply ignore it. A getter runs none of the page's
    code — it reads the component's own tree — so it is an ordinary C function and not a machine. */

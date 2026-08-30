@@ -325,6 +325,10 @@ static JSRuntime *g_wp_rt;
    the step body reads it back with idl_step_magic to know which question it was asked. */
 static int g_wp_len_getter_id = -1, g_wp_closed_getter_id = -1;
 static int g_wp_name_setter_id = -1, g_wp_opener_setter_id = -1, g_wp_close_id = -1;
+/* §7.2.2 The Window object's `location` is [PutForwards=href], and this surface is that same interface — so it
+   carries the same forwarding setter the global's `location` does, minted from Web IDL's own declaration
+   (idl_setter_id_put_forwards) rather than from a body of this component's. */
+static int g_wp_location_setter_id = -1;
 
 
 #define WP_OFF(f) (uint16_t)offsetof(ProxyData, f)
@@ -3205,6 +3209,8 @@ void window_proxy_install_proto(JSContext *ctx)
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_name_setter_id);
         else if (i == WP_OPENER)
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_opener_setter_id);
+        else if (i == WP_LOCATION)
+            idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, g_wp_location_setter_id);
         else
             idl_install_accessor(ctx, proto, PROXY_MEMBER[i], proxy_member_get, i, -1);
     }
@@ -3243,9 +3249,18 @@ void window_proxy_init(JSContext *ctx)
        opener-setter.window.js's seven values (a symbol among them) is stored as it stands. */
     g_wp_opener_setter_id = idl_setter_id(ctx, IDL_ANY, false, proxy_opener_set, WP_OPENER);
     g_wp_close_id       = idl_method_id(ctx, NULL, 0, proxy_close, 0);
-    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The FIVE POOL ENTRIES are why
-       the declaration is worth making rather than merely tidy: the release gave back the atoms, the string
-       list and the remote-navigable table and left all five ids exactly as this function set them, so a second
+    /* §7.2.2's `[PutForwards=href, LegacyUnforgeable] readonly attribute Location location` — the SAME IDL line
+       location.c installs on the global, so it carries the same setter here. Without it `frames[0].location = u`
+       and `otherW.location = u` reached NOTHING while `window.location = u` navigated: one member answering
+       differently depending on which of the interface's two surfaces the assignment was written against, which
+       is the shape a shared declaration exists to make unwritable. The forwarding's Get lands on WP_LOCATION
+       above, so the same-origin arm reaches the active document's real Location and the cross-origin arm
+       reaches §7.2.4.5's filtered one — `href`'s setter is the one member BOTH of them have, which is why
+       §7.2.1.3.1 CrossOriginProperties ( O ) lists `location` at all. */
+    g_wp_location_setter_id = idl_setter_id_put_forwards(ctx, "location", "href");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. THE POOL ENTRIES are why the
+       declaration is worth making rather than merely tidy: the release gave back the atoms, the string
+       list and the remote-navigable table and left every id exactly as this function set them, so a second
        agent in one process would have installed §7.2.3's whole member surface out of a pool that no longer has
        those entries — a wrong answer with a live-looking number behind it, which is the one failure neither of
        JS_FreeRuntime's censuses can report. The class id is given back for the reason that header states, and
@@ -3263,6 +3278,8 @@ void window_proxy_init(JSContext *ctx)
                    "§7.2.2.4 Accessing related windows' `opener` setter declaration");
     agent_state_id(WP_COMPONENT, &g_wp_close_id,
                    "§7.2.2.1 Opening and closing windows' `close` declaration");
+    agent_state_id(WP_COMPONENT, &g_wp_location_setter_id,
+                   "§7.2.2 The Window object's `location` [PutForwards=href] setter declaration");
     for (i = 0; i < CROSS_ORIGIN_NAME_N; i++)
         agent_state_atom(WP_COMPONENT, &g_xo_atom[i],
                          "one of §7.2.1.3.1 CrossOriginProperties ( O )'s names, interned");
@@ -3323,7 +3340,7 @@ void window_proxy_free(JSRuntime *rt)
        not built — read by window_proxy_install_proto at the first realm that agent creates, which installs
        §7.2.3's member surface out of whatever now sits at those indices. */
     g_wp_len_getter_id = g_wp_closed_getter_id = -1;
-    g_wp_name_setter_id = g_wp_opener_setter_id = g_wp_close_id = -1;
+    g_wp_name_setter_id = g_wp_opener_setter_id = g_wp_close_id = g_wp_location_setter_id = -1;
     /* AND THE CLASS ID, for the reason core/agent_state.h states: a class is registered in a runtime, the id
        doubles as no latch here but names a class that is gone, and every JS_GetOpaque against it would answer
        about whichever class the next agent's runtime hands that number to. proxy_finalizer and proxy_gc_mark
