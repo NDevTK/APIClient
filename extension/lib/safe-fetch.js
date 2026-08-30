@@ -5,10 +5,18 @@
 // live in ONE auditable place:
 //   • cookies OMITTED by default (credentials:"omit") — no credentialed exfiltration.
 //                        In CREDENTIALED mode (opts.credentialed) the user's cookies
-//                        ARE attached to replay a learned GET and read the REAL
-//                        authenticated reply (the logged-in API surface) — but the
-//                        reply is gated by safeFetch's OWN SOP/CORS check (a host-
-//                        permission fetch bypasses the browser's; see below).
+//                        ARE attached, so the bytes are the REAL authenticated ones
+//                        (the logged-in API surface) — but the reply is gated by
+//                        safeFetch's OWN SOP/CORS check (a host-permission fetch
+//                        bypasses the browser's; see below).
+//                        THE MODE HAS A CALLER: the custom browser's DOCUMENT LOAD.
+//                        CLAUDE.md §A-REAL-NAVIGABLE — "EVERY ONE OF THEM SENDS
+//                        COOKIES: safeFetch supports credentialed loads, and a
+//                        SAME-ORIGIN navigation carries them, exactly as a browser's
+//                        does" — so bridge.js's navigationLoad asks for them wherever
+//                        the address is same-origin with the BROWSER-STATED principal
+//                        of the document being loaded. A session-less tab models
+//                        nothing: not the person's browser and not a clean client.
 //   • GET only         — method is forced to GET: forced execution explores many
 //                        paths; a real POST/PUT/DELETE replay would mutate server
 //                        state. A well-designed server never mutates on GET, so even
@@ -281,12 +289,23 @@ function _isPrivateHost(host) {
 
 // @security-contract  ENFORCEMENT POINT (the single network chokepoint)
 //   guarantees: cookies omitted by default — or, in opts.credentialed mode, a GET
-//               replay whose REPLY is gated by safeFetch's OWN SOP/CORS (same-origin
+//               whose REPLY is gated by safeFetch's OWN SOP/CORS (same-origin
 //               to the principal, else exact-origin ACAO + ACAC == true), since a
 //               host-permission fetch bypasses the browser's same-origin policy;
 //               method GET; http(s) only; origin-relative SSRF (a PRIVATE target is
 //               blocked unless the page principal is itself private) on BOTH the
 //               initial URL and the post-redirect final URL.
+//               EVERY POST-FETCH GATE JUDGES THE POST-REDIRECT URL — the private-host
+//               re-check, the destructive-path re-check, CORB's same-origin exemption
+//               and the credentialed SOP. Fetch §2.2.5 "Requests"' CURRENT URL is the
+//               last in the URL list, and §4.1 "Main fetch" reads a response's
+//               readability off that one.
+//   callers of opts.credentialed: bridge.js's `navigationLoad` and `frontierRederive`,
+//               and ONLY where the address is same-origin with the browser-stated
+//               principal of the document being loaded (`navigationCarriesSession`).
+//               The learned-GET replay path (`fetched`) passes no pageOrigin and is
+//               still uncredentialed — a learned address may be FORCED, which is a
+//               per-origin decision that does not exist yet.
 //   opts.as:    "script"          -> + CORB (cross-origin must be JS-typed)
 //               "sourcemap"/other -> data, no CORB (not executed as code)
 //   answers:    computedType — the ONE type decision made about this response, the
@@ -486,6 +505,27 @@ async function safeFetch(url, opts) {
   var _nosniff = _determineNosniff(headers["x-content-type-options"]);
   var _sn = _sniff(body);
   var _computed = _computedType(headers["content-type"], _nosniff, _sn);
+  /* THE URL THE BYTES CAME FROM, WHICH IS WHAT EVERY GATE BELOW IS ACTUALLY ABOUT.
+     Fetch §2.2.5 "Requests": "A request has an associated current URL. It is a pointer
+     to the last URL in request's URL list" — and §4.1 "Main fetch" gives a response the
+     readable "basic" tainting on "request's CURRENT URL's origin is same origin with
+     request's origin", never on the address that was merely requested. `redirect:
+     "follow"` means the chain has already been walked by the time this line runs, so
+     "where we asked" and "where it came from" are two different facts.
+     THIS FILE ANSWERED THAT QUESTION TWO WAYS, AND THE SPLIT WAS A HOLE. The two
+     post-fetch gates above — the private-host re-check and the destructive-path
+     re-check — both read `resp.url`, for the reason each states: a 30x is followed
+     before either can see it, so the only defensible thing left is to refuse to INGEST
+     what came back. The two gates BELOW read `parsed`, the requested address. So a
+     SAME-ORIGIN request that 302'd to another host was CORB-exempt as "same-origin"
+     and passed the credentialed SOP as same-origin, and the other host's cookie-bearing
+     reply was handed back readable. That was harmless only while `opts.credentialed`
+     had no caller; a navigation that carries the session makes it live. One question,
+     one answer, computed once. */
+  var _finalHref = parsed.href;
+  try { if (resp.url) _finalHref = String(resp.url); } catch (e) {}
+  var _finalOrigin = "";
+  try { _finalOrigin = new URL(_finalHref).origin; } catch (e) {}
   // CORB policy by LOAD TYPE (opts.as). "script" = bytes that will RUN as code
   // (chunk/import, under QuickJS control) -> must be JS-typed/same-origin. Other
   // loads ("sourcemap"/"config"/data — not executed) are exempt. Whether the
@@ -498,7 +538,7 @@ async function safeFetch(url, opts) {
     var _declared = String(headers["content-type"] == null ? "" : headers["content-type"])
       .split(";")[0].trim().toLowerCase();
     var _deny = _corbDeniesScript(_declared, _nosniff, _sn,
-                                  _corbSameOrigin(parsed.href, opts.pageOrigin));
+                                  _corbSameOrigin(_finalHref, opts.pageOrigin));
     // The rule that decided rides the status message with what this file computed the
     // resource to be, which is where every other refusal already puts its ground
     // (`blocked-scheme:https:`).
@@ -531,13 +571,22 @@ async function safeFetch(url, opts) {
     // "" -> fail closed: the principal is NEVER re-derived by parsing a URL (that
     // would fabricate an origin for a sandboxed/about:blank frame).
     var _pageOrigin = opts.pageOrigin || "";
-    var _sameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(parsed.origin) && parsed.origin === _pageOrigin;
+    // OVER `_finalOrigin`, NOT `parsed.origin` — see the paragraph that computes it.
+    var _sameOrigin = _isRealOrigin(_pageOrigin) && _isRealOrigin(_finalOrigin) && _finalOrigin === _pageOrigin;
     if (!_sameOrigin) {
       var _acao = headers["access-control-allow-origin"] || "";
       var _acac = (headers["access-control-allow-credentials"] || "").toLowerCase();
+      // Fetch §4.10 "CORS check": ACAO must byte-match the request's own origin (`*` is
+      // refused once credentials mode is "include") and ACAC must be `true`.
       if (!_isRealOrigin(_pageOrigin) || _acao !== _pageOrigin || _acac !== "true")
-        return { ok: false, status: 0, statusText: "blocked-cors-credentialed", headers: {},
-                 body: _NO_BYTES(), urlList: _urlList(parsed.href, resp), computedType: "" };
+        /* AND THE REFUSAL NAMES THE ORIGIN THAT FAILED THE CHECK, because after the fix
+           above this is the arm a same-origin credentialed load that LANDED somewhere
+           else comes out of, and "blocked" with no ground sends its reader hunting
+           which of three rules fired. Every other refusal in this file already names
+           one (`blocked-scheme:https:`, `blocked-corb:<rule>:<type>`,
+           `blocked-destructive:<token>`); this was the last that did not. */
+        return { ok: false, status: 0, statusText: "blocked-cors-credentialed:" + (_finalOrigin || "unparseable"),
+                 headers: {}, body: _NO_BYTES(), urlList: _urlList(parsed.href, resp), computedType: "" };
     }
   }
   /* AND THE TYPE THIS ZONE COMPUTED TRAVELS WITH THE BYTES. `computedType` is the

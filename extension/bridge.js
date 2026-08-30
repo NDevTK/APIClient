@@ -1035,7 +1035,18 @@ async function frontierIndex() {
   return _frontierIndex;
 }
 /* THE RE-DERIVATION, WHICH IS THE REQUEST THE SHED WAS PROVED AGAINST — same chokepoint, same principal,
-   uncredentialed, the same address. It answers the document half a rehydration needs, or null.
+   the same address, and the same session. It answers the document half a rehydration needs, or null.
+   IT ASKS `navigationCarriesSession`, LIKE EVERY OTHER DOCUMENT LOAD IN THIS FILE, and that is the point of
+   the question existing as a function. This call used to be described as "uncredentialed" beside a
+   `navigationLoad` that was too; leaving it behind when the loader gained the session would make the SAME
+   document load logged-in when it is live and logged-out when it comes back from the cold tier — one
+   question answered two ways, with a residue whose flows then resume into a document their recorded arms
+   were never taken against. The principal is the one PARKED with the recipe (`e.origin`), so a recipe whose
+   principal was empty re-derives uncredentialed exactly as it always did — absence read as a statement,
+   not filled in.
+   IT ALSO MAKES THE STRAND CHECK BELOW MORE LIKELY TO PASS, not less: `landed === e.sourceUrl` is what
+   proves the bytes are this document, and a logged-out GET is the one that gets redirected to a sign-in
+   page and strands.
    THE HEADERS THAT COME BACK ARE THE ONES USED, NOT THE PARKED ONES. HTML §7.1.7 "Policy containers" makes a
    Document's policy container out of the response THAT DOCUMENT came from, and the document about to be
    parsed is the one this response just delivered — so relaying the stored list beside these bytes would judge
@@ -1057,7 +1068,8 @@ async function frontierRederive(e) {
          "bytes this store already has, and the round would pay a network round trip to learn nothing");
   let r = null;
   if (frontierRederivable(e)) {
-    try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl }); }
+    try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
+                                                  credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
   }
   const landed = r && Array.isArray(r.urlList) && r.urlList.length ? r.urlList[r.urlList.length - 1] : null;
@@ -1305,6 +1317,42 @@ function responseFieldLines(h) {
   return out.join("\n");
 }
 
+/* ─── DOES THIS DOCUMENT LOAD CARRY THE PERSON'S SESSION? ────────────────────────────────────────────
+   ONE answer, read by every load in this file, so two loads cannot disagree about it in silence.
+   CLAUDE.md §A REAL NAVIGABLE IS A LEGITIMATE INSTRUMENT: "EVERY ONE OF THEM SENDS COOKIES: `safeFetch`
+   supports credentialed loads, and a SAME-ORIGIN navigation carries them, exactly as a browser's does.
+   There is no credential-free context, no partition, no incognito." A SESSION-LESS TAB IS A THIRD THING
+   THAT MODELS NOTHING — not the person's browser and not a clean client — served a bundle the person will
+   never be served, producing findings that do not reproduce for them.
+   THE CONDITION IS THE SPEC'S OWN, NOT A GUARD BOLTED ON BESIDE THE CHOKEPOINT. `safeFetch`'s credentialed
+   reply gate IS Fetch §4.1 "Main fetch"'s readability rule: a response is "basic" — readable — when
+   "request's current URL's origin is same origin with request's origin", and otherwise needs §4.10 "CORS
+   check" to have granted this exact origin a credentialed read, which no document server grants. So asking
+   for a CROSS-origin document WITH cookies would spend the person's session at that host for bytes this
+   zone must then refuse to read: strictly worse than asking without them. Declining is this caller
+   declining to make a request the chokepoint has already said it will not hand back — not a second network
+   policy, which SECURITY.md gives to `safe-fetch.js` alone.
+   THE PRINCIPAL IS THE BROWSER'S AND IS NEVER RE-DERIVED FROM AN ADDRESS. A page can sandbox its own iframe:
+   an ordinary-looking URL and an OPAQUE origin. `_isRealOrigin` — safe-fetch.js's own predicate, shared
+   rather than copied, so the caller and the gate cannot drift — is what makes that document's load
+   uncredentialed, because an opaque origin is same-origin with nothing.
+   ABSENCE IS A POSITIVE STATEMENT: an empty principal is a document with no session to carry (a cold recipe
+   parked before the field existed), never a hole to fill in.
+   WHAT THIS DELIBERATELY IS NOT, NAMED RATHER THAN HEDGED: the CROSS-ORIGIN navigation. A real browser does
+   send cookies to a cross-origin `<iframe src>`. It cannot here because `safeFetch`'s credentialed gate asks
+   whether the REQUESTING principal may read the bytes, while a navigation's reader is a DIFFERENT instance
+   keyed on the RESPONSE's own origin — the bytes never enter the initiator's heap. That is a question the
+   chokepoint has no vocabulary for, and it needs a document load type IN safe-fetch.js whose read principal
+   is the response's origin, not an `if` at this call site. */
+function navigationCarriesSession(absUrl, principalOrigin) {
+  DCHECK(typeof principalOrigin === "string",
+         "a document load was asked whether it carries the session with no principal stated at all — every " +
+         "producer writes a string (the browser's MessageSender.origin for a live document, the origin of " +
+         "the URL this zone fetched for a peer's child, the parked one for a cold recipe), so `undefined` " +
+         "here is a producer that stopped writing the field rather than a document with no session");
+  return _isRealOrigin(principalOrigin) && originOf(absUrl) === principalOrigin;
+}
+
 /* ─── THE ONE DOCUMENT-LOAD PATH ────────────────────────────────────────────────────────────────────
    HTML §7.4 "Navigation"'s load, as this host performs it: an ADDRESS goes in and a §7.4.5 "Populating a
    session history entry" RESPONSE comes out — the bytes a Document is parsed from, the header list its
@@ -1320,12 +1368,17 @@ function responseFieldLines(h) {
    response header list rather than a map assembled in a page realm, Fetch §2.2.6 "Responses"' URL LIST
    (which only the fetching zone can see), and a refusal that NAMES the rule that refused.
 
-   AND IT IS UNCREDENTIALED, WHICH IS A DIFFERENT DOCUMENT AND SAYS SO. §7.4's fetch here is a navigation
-   this engine initiated, not a learned GET being replayed for its reply, so no cookies are attached and the
-   bytes are the LOGGED-OUT document — which is the surface CLAUDE.md §What-the-tool-produces aims at ("learn
-   the LOGGED-IN API surface WHILE LOGGED OUT"), and which §the-symbolic/trust-boundary already requires the
-   engine to treat correctly: server-injected absent app state is UNKNOWN INJECTED INPUT, so the auth gate
-   FORKS to the logged-in arm rather than concretizing on whatever a personalised SSR happened to render.
+   AND IT CARRIES THE PERSON'S SESSION WHERE A BROWSER'S NAVIGATION WOULD — see `navigationCarriesSession`
+   above, which is where that decision is stated and why. This paragraph used to say the opposite ("it is
+   UNCREDENTIALED, which is a different document and says so"), and it was an honest description of a gap
+   rather than a design: the URL seed replaced a content script that fetched the page's own document WITH
+   the person's cookies, so moving the load to the chokepoint silently swapped the analysed document for the
+   LOGGED-OUT one. §What-the-tool-produces' "learn the LOGGED-IN API surface WHILE LOGGED OUT" is about the
+   BUNDLE — an SPA ships the same JavaScript to a logged-out visitor, which is why forced execution reaches
+   the auth-gated code either way — and it was never an instruction to serve this engine a document the
+   person is not served. §the-symbolic/trust-boundary is unaffected in either direction: server-injected app
+   state is UNKNOWN INJECTED INPUT and the auth gate FORKS, so a personalised SSR's values become examples
+   without ever concretizing the gate.
 
    TWO OUTCOMES AND THEY ARE PAIRED, never defaulted: `bytes` is a byte sequence and `unavailable` is null, or
    `bytes` is null and `unavailable` NAMES WHY in the closed vocabulary the popup renders. `bytes: null` is a
@@ -1334,7 +1387,7 @@ function responseFieldLines(h) {
    EMPTINESS IS NOT JUDGED HERE. An OK response with a zero-length body is a perfectly ordinary empty Document
    under §7.4.5, and refusing one is a SEED's rule (a document with no bytes cannot be the bundle), stated at
    the seed rather than imposed on every child navigable a page creates. */
-async function navigationLoad(u, base, principalUrl) {
+async function navigationLoad(u, base, principalUrl, principalOrigin) {
   /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. §7.4.5
      determines the loaded Document's ORIGIN over the RESPONSE's URL, and a navigable whose load did not load
      still gets a Document — so "there was no response" is not a reason to answer without one, and the honest
@@ -1358,10 +1411,42 @@ async function navigationLoad(u, base, principalUrl) {
          "a §7.4 navigation was asked for with no private-network principal — safeFetch classifies the SSRF " +
          "host relative to it, and a load that supplied its own address as its own principal would let any " +
          "requested URL authorize itself into the user's intranet");
+  /* AND THE CREDENTIALED-READ PRINCIPAL, WHICH IS A SECOND FACT AND NEVER THE FIRST ONE REUSED. `pageUrl`
+     above classifies the SSRF host and is an ADDRESS; `pageOrigin` decides whose authenticated bytes this
+     load may read and is an ORIGIN THE BROWSER STATED. Deriving the second from the first is the exact
+     URL-derivation SECURITY.md's credentialed principal exists to forbid — a sandboxed frame reports an
+     ordinary address and an opaque origin, so parsing the address would hand it same-origin access to its
+     EMBEDDER's authenticated document. They are asserted separately for the same reason they are passed
+     separately. */
+  DCHECK(typeof principalOrigin === "string",
+         "a §7.4 navigation was asked for with no credentialed-read principal — it is the browser's " +
+         "MessageSender.origin for the document this load belongs to, and it is what decides whether the " +
+         "person's session travels; `undefined` is a caller that stopped stating it, which would silently " +
+         "return every tab to loading the LOGGED-OUT document");
   try {
-    // Never `as:"script"` — these bytes are PARSED as a document, not run as code — and never credentialed
-    // (see the header above).
-    const r = await self.safeFetch(abs, { pageUrl: principalUrl });
+    // Never `as:"script"` — these bytes are PARSED as a document, not run as code.
+    /* AND IT CARRIES THE SESSION EXACTLY WHERE A BROWSER'S NAVIGATION WOULD. The chokepoint re-decides this
+       independently on the bytes that come back (its credentialed SOP, over the POST-REDIRECT origin), so a
+       load that leaves this origin between the request and the response is refused there and never here:
+       two-sided, a caller stating intent and the one policy point enforcing it, rather than one check
+       trusted twice.
+       ASKING FOR COOKIES ALSO ARMS THE DESTRUCTIVE-PATH DENY LIST, which is scoped to exactly the
+       credentialed case — so a document whose OWN ADDRESS carries one of its tokens (`/settings/delete-
+       account`, `/logout`) is now refused as `blocked-destructive:<token>` and reported unanalysed instead
+       of loaded. That is over-scoped for THIS caller and the reason is stated rather than worked around: the
+       list exists because "forced execution builds requests no real client makes", and a seeded navigation
+       is a request a real client made SECONDS AGO in this same profile — the person's own browser performed
+       that exact credentialed GET, which is where the seed came from. The condition under which the harm
+       exists is credentialed AND NOT-OBSERVED, and safe-fetch.js can only see the first half because no
+       request in this system yet DECLARES its provenance. That is the next subproblem in order and it is
+       CLAUDE.md §A REQUEST CARRIES THE PROVENANCE OF ITS VALUES' own shape — OBSERVED / DERIVED / FORCED
+       stated beside the method and the credential state, with the chokepoint deciding from it — and it is
+       not invented here as a one-valued flag with no other producer, which would be the vocabulary-with-one-
+       member defect this project has already paid for once. Until it exists the deny list stays armed:
+       being over-broad is its cheap direction (one unfired request, reported with its token) and loosening
+       a security gate as a side effect of turning cookies on is its expensive one. */
+    const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
+                                          credentialed: navigationCarriesSession(abs, principalOrigin) });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
            "safeFetch answered a document load with something other than its reply record — HTML §7.4.5 " +
            "\"Populating a session history entry\"'s attempt-to-populate reads the BODY and the POLICY off " +
@@ -1938,19 +2023,22 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
       const abs = new URL(u, msg.sourceUrl).href;
       // chunks: as-script (CORB), never credentialed. replies: opt-in credentialed -> the AUTHENTICATED
       // logged-in reply (the moat headline), gated by safeFetch's own SOP/CORS + GET-only. Default off.
-      /* @security-finding  NO `pageOrigin` REACHES THE CHOKEPOINT FROM HERE, AND ONE MUST BEFORE
-         `credentialed` IS EVER TURNED ON. safeFetch's credentialed SOP/CORS is written against
-         `opts.pageOrigin` — SECURITY.md: "the requesting frame's MessageSender.origin, opaque-unique —
-         an opaque/"null" principal is same-origin with nothing" — and this zone passes none, so every
-         credentialed read currently fails CLOSED (`_isRealOrigin("")` is false, so no ACAO can match).
-         Nothing sets `msg.credentialed` today, so no credentialed read happens at all; the danger is the
-         obvious "fix" when one is enabled, which is to pass `originOf(msg.sourceUrl)`. That is the exact
-         URL-derivation the credentialed principal exists to forbid, and it would hand a page's own
-         sandboxed iframe (opaque origin, ordinary-looking address) same-origin access to the EMBEDDER's
-         authenticated bytes. THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin,
-         plumbed by _dispatchDocument) — never the address. Wiring it also loosens CORB for a genuinely
-         same-origin chunk, which is spec-correct and is a deliberate decision to take at that time, not a
-         side effect of this line. */
+      /* @security-finding  NO `pageOrigin` REACHES THE CHOKEPOINT FROM *HERE*, AND ONE MUST BEFORE
+         `credentialed` IS EVER TURNED ON FOR A LEARNED GET. The DOCUMENT-LOAD path now passes one
+         (`navigationLoad`, from `msg.origin`) and carries the person's session; this path — the reply to a
+         request the analysed bundle made, and the chunk loads beside it — deliberately still does not, and
+         the difference is PROVENANCE rather than plumbing. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE:
+         a navigation is OBSERVED (the person went there), while an address this engine learned may be
+         DERIVED or FORCED — a value that exists only because a gate was forced — and a credentialed reply
+         to a FORCED request is evidence about what a server says to a request no client makes. Whether to
+         fire those is a per-origin CONFIGURATION in the trusted zone that does not exist yet, so
+         `msg.credentialed` stays unwritten and every read here stays uncredentialed.
+         WHEN IT IS BUILT, THE VALUE TO PASS IS `msg.origin` (the browser's MessageSender.origin, plumbed by
+         _dispatchDocument) and NEVER `originOf(msg.sourceUrl)` — that is the exact URL-derivation the
+         credentialed principal exists to forbid, and it would hand a page's own sandboxed iframe (opaque
+         origin, ordinary-looking address) same-origin access to the EMBEDDER's authenticated bytes. Wiring
+         it also loosens CORB for a genuinely same-origin chunk, which is spec-correct and is a deliberate
+         decision to take at that time, not a side effect of this line. */
       const opts = asScript ? { pageUrl: msg.sourceUrl, as: "script" }
                             : { pageUrl: msg.sourceUrl, credentialed: !!(msg && msg.credentialed) };
       const r = await self.safeFetch(abs, opts);
@@ -2026,8 +2114,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   // this instance holds, so `msg.sourceUrl` is what safeFetch classifies the SSRF host relative to.
   // `unavailable` is the loader's REASON and this caller has no reader for it — a child navigable's page
   // does not appear in the popup's page-source row; `bytes: null` is the whole of what the engine reads.
+  // AND THE CREDENTIALED-READ PRINCIPAL IS THE INITIATING DOCUMENT'S TOO — `msg.origin`, browser-stated for
+  // a live document and the origin of the URL THIS zone fetched for one it provisioned. A same-origin child
+  // navigable therefore carries the session exactly as this document's own load did; a cross-origin one does
+  // not, which is the residual `navigationCarriesSession` names.
   const fetchedDocument = async (u) => {
-    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl);
+    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin);
     return { url: r.url, headers: r.headers, bytes: r.bytes };
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
@@ -4493,7 +4585,19 @@ self.astDispatch = async function astDispatch(msg) {
            "an AST_ANALYZE for a live document arrived carrying a document body or a header list — a seed is " +
            "an address and never bytes, so a producer that ships either has rebuilt the second, unpoliced " +
            "document-load transport this entry exists to be the only alternative to");
-    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl);
+    /* AND IT CARRIES THE PERSON'S SESSION, because this is one of the custom browser's own tabs and the
+       person navigated here. The credentialed-read principal is `msg.origin` — the browser's
+       MessageSender.origin, minted by `_browserFacts` from the object the browser filled in — and NEVER
+       `originOf(msg.sourceUrl)`, which is the URL-derivation this principal exists to forbid.
+       IT IS SAME-ORIGIN BY CONSTRUCTION, so the condition `navigationCarriesSession` tests is one the zone
+       that admitted the seed has already established: it refuses a seed whose origin is not the origin of
+       the browser-stated address, and HTML §7.2.5 "The History interface" lets `pushState` move the PATH and
+       never the origin ("if targetURL and documentURL differ in their scheme, username, password, host, or
+       port components" the rewrite is refused). Two zones reaching the same answer from two facts is not a
+       redundancy to collapse — the brain compares two ADDRESSES to decide this is a route of this document,
+       and this compares an address against a BROWSER-STATED ORIGIN to decide whose bytes may be read, which
+       is what makes an opaque-origin (sandboxed) document's load uncredentialed while its seed is admitted. */
+    const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin);
     /* THE SEED'S OWN RULE, ON TOP OF THE LOADER'S, AND IT IS THE SEED'S BECAUSE IT IS ABOUT A BUNDLE. §7.4.5
        gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
        gets exactly that — but a SEEDED document with no bytes cannot be the program this run exists to
@@ -4507,6 +4611,14 @@ self.astDispatch = async function astDispatch(msg) {
        inside a cluster keyed on origin A: two origins behind one credentialed-read principal, which is
        exactly what engineJoin's own DCHECK refuses one algorithm along, and what SECURITY.md's
        one-instance-per-origin-keyed-agent-cluster forbids.
+       AND THE CHOKEPOINT NOW REFUSES THE CREDENTIALED CASE ONE LAYER EARLIER, WHICH DOES NOT MAKE THIS DEAD.
+       A load that carried the session and landed on another origin comes back as `blocked-cors-credentialed:
+       <landed origin>` — safeFetch's credentialed SOP reads the POST-REDIRECT origin, so the bytes never
+       leave that function, which is strictly better than reading them here and discarding them. This branch
+       is what still answers for a load that carried NO session and so met no such gate: a document whose
+       browser-stated origin is OPAQUE (a sandboxed frame) is seeded and loaded uncredentialed, and a
+       cross-origin 302 under it is caught by exactly this comparison and nothing else. Two refusals, two
+       populations, and each names the origin it landed on.
        IT IS A REPORT AND NOT AN ASSERT, because a server choosing a cross-origin 302 is the SERVER's doing and
        not this zone's invariant broken. It is also EVIDENCE: the person's own navigation landed at the address
        the browser reported, so a second GET of that same address arriving somewhere else is a server treating

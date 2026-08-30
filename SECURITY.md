@@ -125,14 +125,24 @@ has to remember:
   A mismatch is DROPPED closed with a debug line, never asserted — a `DCHECK` on a hostile input hands any web
   renderer an abort of the only trusted zone in the extension. And the seed is never the PRINCIPAL: the
   private-network classification and `window.location` are still `_browserFacts.url`, and `bridge.js` passes
-  that as `safeFetch`'s `pageUrl`, so a suggested address can never authorize itself.
+  that as `safeFetch`'s `pageUrl`, so a suggested address can never authorize itself. **Nor can it authorize
+  the person's cookies:** the seeded load is credentialed (§Network), and the principal that decides that is
+  `_browserFacts`' `origin` — `_senderOrigin`'s browser-minted, opaque-unique answer, passed as
+  `safeFetch`'s `pageOrigin` — so the seed decides only WHICH address is loaded, never whose session loads
+  it. The two facts are separate arguments to the same call for exactly this reason.
 - **AND THE SECOND DOCUMENT-LOAD TRANSPORT IS GONE WITH IT.** `content.js` used to re-fetch the page's own
   document with `credentials:"same-origin"` and ship the bytes. Those bytes were fetched in the PAGE'S realm
   and reached `safeFetch` never, so every guarantee in §Network below — scheme allowlist, origin-relative
   SSRF/PNA on the initial AND post-redirect URL, CORB by expected type, the credentialed destructive-path deny
-  list — applied to the engine's own navigations and to nothing arriving that way. It was also a SECOND
-  credentialed GET of a document the person had already loaded, which a server may answer differently under
-  cache, nonce, personalised SSR or a rate limit, so it did not even buy the observed bytes it appeared to.
+  list — applied to the engine's own navigations and to nothing arriving that way.
+  **THE ARGUMENT THAT USED TO STAND HERE IS DELETED BECAUSE THE CURRENT DESIGN REFUTES IT.** This bullet also
+  said the old transport "was a SECOND credentialed GET of a document the person had already loaded, which a
+  server may answer differently under cache, nonce, personalised SSR or a rate limit, so it did not even buy
+  the observed bytes it appeared to." Every word of that is now equally true of `navigationLoad`, which is a
+  second credentialed GET by design — so keeping the sentence would have this file arguing against the thing
+  it describes two sections down. The real and only objection to the old transport was the one above it:
+  the bytes reached the chokepoint never. A second GET is a cost the popup states in the row it renders for
+  a load that failed ("A single-use URL … cannot be fetched twice"), not a security property.
   `bridge.js`'s `navigationLoad` is now the ONE document-load path — a seed's HTML §7.4 navigation and a child
   navigable's §7.4.5 load are the same call — and the only raw `fetch` left in `content.js` is the
   page-context relay's far end.
@@ -212,16 +222,52 @@ covered below. Neither takes an address from a bundle. `safeFetch` guarantees, i
   == origin, never `*`, **and** `Access-Control-Allow-Credentials: true`). The browser's same-origin
   policy does **not** apply to a host-permission fetch (it can read any origin), so safeFetch
   re-implements the credentialed-CORS rule on the bytes before returning them.
-  **CREDENTIALED MODE IS DORMANT AND FAILS CLOSED — the rule above describes a capability nothing turns
-  on.** No caller sets `opts.credentialed`: `bridge.js` READS `!!msg.credentialed` and nothing anywhere WRITES
-  `msg.credentialed` (`git grep -n credentialed extension/` is every mention, and each is a read, a comment,
-  or a field copied off a stored record). No `pageOrigin` reaches the chokepoint from the engine host at all,
-  so `_isRealOrigin("")` is false, no `ACAO` can ever match, and every credentialed read returns
-  `blocked-cors-credentialed`. `bridge.js` carries a standing `@security-finding` naming the value to pass
-  when it IS enabled — `msg.origin`, the browser's `MessageSender.origin` — and naming the obvious wrong fix
-  (`originOf(msg.sourceUrl)`), which is the exact URL-derivation this principal exists to forbid.
-  **The credentialed reads that actually happen today go through the page-context relay instead** (see
-  below), where the browser enforces SOP/CORS rather than us.
+  **CREDENTIALED MODE HAS EXACTLY ONE CALLER, AND IT IS THE DOCUMENT LOAD.** This paragraph used to say the
+  mode was dormant with no caller; that stopped being true when the custom browser's tabs started sending
+  cookies, which is what CLAUDE.md §A REAL NAVIGABLE requires of every one of them ("`safeFetch` supports
+  credentialed loads, and a SAME-ORIGIN navigation carries them, exactly as a browser's does"). A
+  session-less tab is a third thing that models nothing — not the person's browser and not a clean client —
+  so it is served a bundle the person is never served and its findings do not reproduce for them.
+  **THE CALLER IS `navigationLoad` (and `frontierRederive` beside it), AND WHAT BOUNDS IT IS ONE PREDICATE:**
+  `navigationCarriesSession` in `bridge.js` — the session travels **only** where the address being loaded is
+  same-origin with the **browser-stated** principal of the document being loaded (`msg.origin` /
+  `e.origin`, `_senderOrigin`-minted, opaque-unique), never with an origin parsed out of an address. Three
+  properties make that safe and each is a check rather than a claim: the seed is same-origin **by
+  admission** (the brain refuses a `CONTENT_SEED` whose origin is not the origin of `_browserFacts.url`,
+  which HTML §7.2.5 "The History interface" makes sound because `pushState` moves the path and never the
+  origin); the chokepoint's own credentialed SOP therefore passes trivially and needs no `ACAO`; and the
+  destructive-path deny list (`_destructiveToken`) is scoped to exactly the credentialed case and runs
+  **pre-request and post-redirect**, so it is on this path in both positions. An **opaque-origin** document
+  (a sandboxed frame) is same-origin with nothing, so its tab loads **uncredentialed** — the mode still
+  fails closed everywhere a principal is not a real tuple origin.
+  **AND ARMING THE DENY LIST ON A NAVIGATION IS OVER-SCOPED, WHICH IS STATED RATHER THAN QUIETLY LOOSENED.**
+  A seeded document whose own address carries a listed token (`/settings/delete-account`) is now refused
+  `blocked-destructive:<token>` and reported unanalysed. The list exists because forced execution builds
+  requests no real client makes, and a seeded navigation is one the person's own browser made seconds ago in
+  this profile — the harm condition is *credentialed AND not-observed*, and `safe-fetch.js` can see only the
+  first half because nothing in this system yet DECLARES a request's provenance. That vocabulary
+  (OBSERVED / DERIVED / FORCED, stated beside the method and the credential state, with the chokepoint
+  deciding from it) is the next subproblem, and it is not invented here as a one-valued flag. Until it
+  exists the list stays armed: over-broad is its cheap direction — one unfired request, reported with its
+  token — and loosening a gate as a side effect of turning cookies on is its expensive one.
+  **THE LEARNED-GET REPLAY IS STILL UNCREDENTIALED, AND THAT IS PROVENANCE AND NOT PLUMBING.** `bridge.js`'s
+  `fetched` passes no `pageOrigin` and nothing writes `msg.credentialed`. A navigation is OBSERVED — the
+  person went there — while an address the engine learned may be DERIVED or FORCED, and a credentialed reply
+  to a FORCED request is evidence about what a server says to a request no client makes (CLAUDE.md §A
+  REQUEST CARRIES THE PROVENANCE OF ITS VALUES). Turning that on is a per-origin configuration that does not
+  exist yet; the standing `@security-finding` there names the value to pass (`msg.origin`) and the obvious
+  wrong fix (`originOf(msg.sourceUrl)`), which is the exact URL-derivation this principal exists to forbid.
+  **AND EVERY POST-FETCH GATE NOW JUDGES THE POST-REDIRECT URL, WHICH IT DID NOT.** `safe-fetch.js` had two
+  gates reading `resp.url` (the private-host re-check, the destructive-path re-check) and two reading the
+  *requested* address (CORB's same-origin exemption, the credentialed SOP). Fetch §2.2.5 "Requests" makes a
+  request's CURRENT URL "a pointer to the last URL in request's URL list" and §4.1 "Main fetch" gives a
+  response the readable "basic" tainting on *that* origin matching the request's — so a **same-origin
+  request that 302'd cross-origin** was CORB-exempt as same-origin and passed the credentialed SOP as
+  same-origin, handing back another host's cookie-bearing reply. Harmless while the mode had no caller;
+  live the moment it did. All four gates read the URL the bytes came from, and
+  `blocked-cors-credentialed:<landed origin>` now names its ground like every other refusal in that file.
+  **Credentialed reads also happen through the page-context relay** (see below), where the browser enforces
+  SOP/CORS rather than us.
 - **GET only, enforced by ABSENCE** — `safe-fetch.js` hardcodes `method:"GET"` and never reads `opts.method`
   or `opts.body` (grep: no occurrence). Forced execution explores many paths; it never replays a
   state-changing method. A well-designed server does not mutate on GET, so even a credentialed GET replay is
@@ -414,9 +460,10 @@ asserted only by the document describing it is that very failure, performed on i
 **WHAT IS REAL is the one enforcement point and the four standing findings.** `lib/safe-fetch.js` carries
 `@security-contract  ENFORCEMENT POINT (the single network chokepoint)`. The live per-site security prose is
 spelled `@security-finding` — four of them, and each names a HAZARD rather than certifying a boundary:
-`background.js` (nothing calls `scripting.exec`), `bridge.js` twice (no `pageOrigin` reaches the chokepoint;
-`headers` comes from the untrusted bundle), and `offscreen-brain.js` (against the URL-derived-principal
-"fix"). `git grep -n '@security-finding' extension/` is the whole list. **A boundary is documented by the
+`background.js` (nothing calls `scripting.exec`), `bridge.js` twice (no `pageOrigin` reaches the chokepoint
+**from the learned-GET replay path** — the document-load path now passes one; `headers` comes from the
+untrusted bundle), and `offscreen-brain.js` (against the URL-derived-principal "fix").
+`git grep -n '@security-finding' extension/` is the whole list. **A boundary is documented by the
 DCHECK/CHECK standing at it and by this file, not by a tag vocabulary with one member.** Reviving a
 per-boundary tag scheme means tagging every boundary in the same diff; a scheme with one instance and a
 paragraph claiming universality is worse than none, because it invites the reader to trust an audit that was
@@ -434,6 +481,15 @@ never run.
   assert a REAL EXPLOIT verdict for a sink that never fired. Irreducible by this mechanism.
 - **Relayed-reply attribution** — a `PAGE_FETCH` reply is attributed to the URL the offscreen asked for and
   is vouched for by nothing but the renderer that returned it.
+- **A CROSS-ORIGIN child navigable loads UNCREDENTIALED, where a real browser would send cookies** — the one
+  place the custom browser's tabs are *not* the person's browser, and it is a fidelity gap rather than a
+  hazard. `navigationCarriesSession` refuses the session there because `safeFetch`'s credentialed gate asks
+  whether the REQUESTING principal may read the bytes, while a navigation's reader is a DIFFERENT instance
+  keyed on the RESPONSE's own origin — the bytes never enter the initiator's heap. Asking with cookies today
+  would spend the session at that host for a reply the chokepoint must then refuse, which is strictly worse
+  than asking without. What it needs is a document load TYPE in `safe-fetch.js` whose read principal is the
+  response's own origin; it must not be an `if` at the caller, which would put a network policy where this
+  file gives one only to the chokepoint.
 - **Page-claimed origins in the request log** — `sourceOrigin` / `targetOrigin` on a `PM_RECV` / `MC_OPEN`
   record (the two sites in `content.js` that build them) are read off a real `MessageEvent` in the isolated
   world, so they are
@@ -513,6 +569,9 @@ config-loaded allowlist that no transform-expression or SMT encoding can.
 | A DIFFERENT document (other origin, other frame, second document of the target origin) calls `apiclientsink` with a marker it read | **Mitigated** — `_recordProbeHit` compares the browser's `MessageSender.origin`, the `frameId` and a latched `deliveredDocumentId` against what this zone actually delivered, and records the hit `attributed: false` with its reason rather than dropping it |
 | The DELIVERED page itself calls `apiclientsink` with the marker out of its own payload | **Residual, irreducible by this mechanism** — the hook is installed in that page's own main world, so a REAL EXPLOIT verdict is fabricable by the document under test |
 | Compromised renderer reaches `chrome.tabs.*` / MAIN-world `scripting` through the SW RPC | **Mitigated** — the SW serves `sender.origin === chrome-extension://<id>` only, and pins `__rpc` to `sender.url === getURL("ast-worker.html")` by equality (a prefix would hand every future page whose name merely begins with it the largest privilege the extension has) |
+| A seeded page's server 302s the analyzer's cookie-bearing document load to another origin | **Mitigated** — `safeFetch`'s credentialed SOP reads the POST-REDIRECT origin (Fetch §2.2.5 "Requests"' current URL), so the other host's authenticated bytes are refused *inside* the chokepoint as `blocked-cors-credentialed:<landed origin>`; `bridge.js` independently refuses to seat a document whose response URL is cross-origin to the browser-stated address (`cross-origin-redirect:<origin>`), which is what still answers for an uncredentialed (opaque-principal) load |
+| A page seeds a cross-origin address to spend the user's session at a host it merely names | **Mitigated** — twice, on two different facts: the brain admits a `CONTENT_SEED` only where its origin is the origin of `_browserFacts.url` (HTML §7.2.5 lets `pushState` move the path, never the origin), and `navigationCarriesSession` attaches cookies only where the address is same-origin with the browser-minted `MessageSender.origin`. A seed that passed neither would be dropped before a request exists |
+| The analyzer's own credentialed GET ends the user's session or destroys a resource | **Mitigated** — method is GET (RFC 9110 §9.2.1 Safe Methods), and `_destructiveToken`'s deny list refuses a session-ending or resource-destroying path token, pre-request *and* post-redirect, scoped to exactly the credentialed case. Not a claim that an unmatched path is safe — a floor under the policy, never a substitute for it |
 | A page sandboxes its own iframe (opaque origin) to read the embedder's credentialed API via the shared analysis | **Mitigated** — credentialed-read principal is the *requesting frame's* `MessageSender.origin` (opaque-unique, documentId-keyed), never the top frame or URL-parsed; an opaque origin is same-origin with nothing; a mixed-origin buffer fails closed |
 | Sandboxed *extension* page (origin `"null"`) impersonates a trusted extension document | **Mitigated** — document→document hops require `sender.origin === chrome-extension://<id>`; `"null"` ≠ that |
 | Bundle escapes the WASM sandbox into its host realm | **Out of model, but the blast radius is bounded by the browser** — the host realm is `renderer.html`, a sandboxed frame at a UNIQUE OPAQUE origin, so an escape lands in a document that is cross-origin to the extension, holds no `chrome.*`, holds no principal, and can be given its own renderer process by Site Isolation; it reaches the trusted zone only through the declared `content.mojom.Renderer` methods, validated in both directions by `mojo.js`. This row named "the worker" while the engine still ran in the trusted offscreen realm, where an escape would have held the `Module` handle for every other instance |
