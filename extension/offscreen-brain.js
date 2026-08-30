@@ -1903,7 +1903,16 @@ function _onTabRemoved(tabId) {
   // person's see-and-stop view a list of live tabs rather than a growing list of ghosts, and what keeps
   // startup reconciliation from trying to close a tab the person already closed. It is the only close signal
   // this zone gets — the offscreen document cannot observe tabs at all.
-  forgetOwnedNavigableByTabId(tabId).catch(function (e) {
+  forgetOwnedNavigableByTabId(tabId).then(function (gone) {
+    // The records it dropped are READ, not discarded: a person closing a tab this extension opened is the
+    // one signal that they are declining part of a search, and it is the only place that fact is observable.
+    // A computed answer nobody reads is not a mechanism, and `gone` is empty for every tab close that is not
+    // ours — which is nearly all of them — so this stays silent unless something was actually owned.
+    for (const r of gone) {
+      console.warn("[owned] the person closed a tab this extension opened: %s (owner=%s provenance=%s)",
+                   r.url, r.owner, r.provenance);
+    }
+  }).catch(function (e) {
     RETHROW_FATAL(e);
     // The record survives, so the tab is over-reported rather than forgotten — the safe direction, since the
     // next reconciliation finds its id absent from the live set and resolves it. Surface it anyway: a store
