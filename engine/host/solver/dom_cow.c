@@ -746,6 +746,20 @@ static bool dom_delta_removed(lxb_dom_node_t *n) {
     return false;
 }
 
+/* Does some live delta ALREADY name this node as a creation? Same walk as dom_delta_removed and for the
+   mirror-image reason: a kind-4 entry is an OWNERSHIP claim, and two of them over one node is a
+   `lxb_dom_node_destroy_deep` of memory the first release already freed. The whole chain, because a claim made
+   before a fork lives in the frozen segment both siblings reference. A SPENT entry is NULL (every release nulls
+   its own), so this reports live claims only. Dev-only and O(delta). */
+static bool dom_delta_created(const lxb_dom_node_t *n) {
+    for (int i = 0; i < g_dom_undo_n; i++)
+        if (g_dom_undo[i].kind == 4 && g_dom_undo[i].node == n) return true;
+    for (DomSeg *s = g_dom_base; s; s = s->base)
+        for (int i = 0; i < s->n; i++)
+            if (s->e[i].kind == 4 && s->e[i].node == n) return true;
+    return false;
+}
+
 /* The declaration, asserted. Every operation below runs it on the root it was handed, so a caller cannot
    establish privacy once and then drift into a tree that stopped being private. */
 static void dom_private_check(lxb_dom_node_t *root) {
@@ -757,7 +771,17 @@ static void dom_private_check(lxb_dom_node_t *root) {
 }
 
 /* Take a node OUT of the private tree. No capture, because nothing shared changes: the node is about to be
-   handed to a capturing insert, and that insert is the write another flow could see. */
+ * handed to a capturing insert, and that insert is the write another flow could see.
+ *
+ * AND THIS IS THE ONE SEAM AT WHICH A PARSE'S NODE BECOMES THE FLOW'S — THE OTHER HALF OF A RULE THAT ONLY
+ * WORKS IF BOTH HALVES ARE KEPT. A parse declared PRIVATE records NOTHING: its nodes are owned by the private
+ * ROOT (a Document the same operation created, which the delta owns as a kind-5 entry, or a fragment the parse
+ * itself destroys), so there is one owner for the whole tree and no per-node claim to make. A node's own claim
+ * is made HERE and only here, because leaving the private tree is exactly the moment the root stops being able
+ * to free it. The two conventions are not interchangeable and they cannot be MIXED: a parse that records per
+ * node AND a placement that records at this seam gives every placed node two kind-4 entries, and
+ * dom_release_created destroys through the first and then destroys freed memory through the second. That is
+ * what dom_cow_note_created's own assert now refuses. */
 void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node) {
     dom_private_check(root);
     DCHECK(node && dom_root_of(node) == root,
@@ -984,6 +1008,24 @@ void dom_cow_note_created(lxb_dom_node_t *node)
     DomUndo u;
     if (!g_dom_capture || !node)
         return;
+    /* ONE CLAIM PER NODE, ASSERTED WHERE THE CLAIM IS MADE — which is the only place it can be asserted once
+       rather than at each of the twenty-odd callers. A second entry over one node is not a duplicate record,
+       it is a second `lxb_dom_node_destroy_deep` at discard: dom_release_created nulls ITS OWN entry and knows
+       nothing of the other, so the second call reads a freed node's `first_child` and frees it again.
+       THE TWO WAYS TO REACH IT ARE BOTH CONVENTION MISTAKES, and the message names both because the fix
+       differs. (a) A PRIVATE parse that records per created node, whose product is then placed through
+       dom_cow_take_private — that parse must record nothing and let this seam make the claim (see
+       dom_cow_take_private). (b) A node whose address lexbor has RECYCLED out of an arena while some delta
+       still holds a live claim on the old occupant — which is a document freed out from under an unspent
+       entry, and the entry, not this creation, is the bug. */
+    DCHECK(!dom_delta_created(node),
+           "a node was recorded as this flow's creation while a live delta entry already claims it. Ownership "
+           "is recorded ONCE: a parse declared DOM_PARSE_ROOT_PRIVATE records nothing and its nodes are owned "
+           "by the private root, and a node's own claim is made where it LEAVES that root "
+           "(dom_cow_take_private) — so a parse that also records per node double-claims every node it places, "
+           "and dom_release_created destroy_deeps freed memory on the second entry. The other way here is an "
+           "arena address recycled under an unspent claim, which is a document destroyed while a delta still "
+           "named a node inside it");
     memset(&u, 0, sizeof u);
     dom_capture_begin();
     u.kind = 4; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;

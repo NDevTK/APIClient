@@ -96,18 +96,39 @@ typedef struct XmlTreeBuild XmlTreeBuild;
  * even when `len` is zero: an empty entity is a document that ends immediately, which §2.1's [1] has an answer
  * about (there is no element), and not the absence of a document.
  *
- * `kind` IS CONSULTED, NOT STORED-AND-IGNORED, and it decides exactly one thing: whether each node this build
- * creates is marked as the running flow's own product. A PRIVATE root is a Document the declaring operation
- * made in the same uninterrupted C operation, so no sibling flow can reach it and `dom_cow_note_created` keeps
- * the delta O(shared state touched) rather than O(everything the parse built). A SHARED root is the baseline
- * every flow reads and the structural writes must be captured, so nothing is marked. Guessing either way is
- * silent rather than loud — see solver/dom_cow.h, whose reasoning this is and whose argument is why the fact
- * belongs to the caller that opened the parse.
+ * `kind` IS CONSULTED, NOT STORED-AND-IGNORED, and it decides exactly one thing: WHICH CHOKEPOINT FAMILY every
+ * node this build places goes through — see `xml_tree_place_created` below, which is the one place it is asked.
+ * Guessing either way is silent rather than loud, which is solver/dom_cow.h's reasoning and its argument for
+ * why the fact belongs to the caller that opened the parse.
  *
  * Never returns NULL: an allocation failure here is fatal, because a dropped parse is a document the caller
  * would go on to read as empty. */
 XmlTreeBuild *xml_tree_build_create(lxb_dom_document_t *doc, lxb_dom_node_t *parent, DomParseRootKind kind,
                                     const char *text, size_t len);
+
+/* PLACE A NODE THIS PARSE JUST MADE — the ONE point at which `kind` is asked, and exported because a SECOND
+ * consumer asks the identical question about the identical trees: core/xml/xml_parse.h's
+ * `xml_parse_error_document` builds HTML §8.5.1's `parsererror` element and its Text child into the same root
+ * this build was opened on. Two spellings of one ownership rule is how the two halves of it drift apart, and
+ * this rule is one whose halves cannot drift without a use-after-free (solver/dom_cow.h, the private-tree
+ * family).
+ *
+ * `root` is the node `xml_tree_build_create` was opened on — the tree this parse is building, which for all
+ * three consumers is the Document itself. `parent` is where the node goes and is `root` or a descendant of it.
+ *
+ * PRIVATE takes the private-tree chokepoint and records NOTHING. The delta captures only SHARED baseline state
+ * (CLAUDE.md §State isolation), and a tree the declaring operation created a statement ago is not that: routing
+ * a private parse through the capturing insert puts the document's whole internal structure in the delta, and
+ * recording a creation per node hands a SECOND owner to every node a placement later moves out through
+ * `dom_cow_take_private` — which is where a private tree's node acquires its own owner, and the only place it
+ * does. Until then the root owns them, which is what frees them if the parse is abandoned.
+ *
+ * SHARED takes the capturing insert AND records the creation, which is the same pair HTML §13.2.6's own writer
+ * makes for a shared parse: the insert says what to put back when a delta is unapplied, and the creation says
+ * what to DESTROY when that delta is discarded. Without the second, a parse into the page's own tree leaves
+ * every node it built detached by the undo and freed by nobody. */
+void xml_tree_place_created(lxb_dom_node_t *root, DomParseRootKind kind,
+                            lxb_dom_node_t *parent, lxb_dom_node_t *node);
 
 /* THE TWO TEARDOWNS, AND THE CALLER STATES WHICH — core/xml/xml_element.h's split, carried up to the layer
    that holds the answer. THIS BUILD'S OWN `failed` CANNOT ROUTE IT, which is the whole reason the fact has to

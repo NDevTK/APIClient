@@ -30,6 +30,32 @@ struct XmlTreeBuild {
     bool                failed;
 };
 
+/* See the header — the one point `kind` is asked, and the reason it is one point rather than seven. */
+void xml_tree_place_created(lxb_dom_node_t *root, DomParseRootKind kind,
+                            lxb_dom_node_t *parent, lxb_dom_node_t *node)
+{
+    DCHECK(root != NULL && parent != NULL && node != NULL,
+           "an XML parse placed a node with no tree, no parent or no node — every construct this walk builds "
+           "names all three, so a NULL is a caller that is not this walk");
+    switch (kind) {
+    case DOM_PARSE_ROOT_PRIVATE:
+        /* No creation record: the ROOT owns this tree until a placement moves a node out of it through
+           dom_cow_take_private, which is the one seam that makes a per-node owner. */
+        dom_cow_insert_private(root, parent, node);
+        return;
+    case DOM_PARSE_ROOT_SHARED:
+        /* Recorded BEFORE the insert, over a node that is in no tree — which is where an ownership claim is
+           exact, and why solver/dom_cow.h's §13.2.6 writer takes its claim at the node factory rather than at
+           the insert that could run more than once for one node. */
+        dom_cow_note_created(node);
+        node_insert_at(parent, node, NULL);
+        return;
+    }
+    /* NOT A `default:` ARM — the switch is exhaustive over DomParseRootKind, so a third disposition makes this
+       not compile rather than silently take one of the two answers it is not. */
+    DFAIL("a DomParseRootKind outside the enum reached the XML tree builder's placement");
+}
+
 const char *xml_tree_error_message(XmlTreeError err)
 {
     switch (err) {
@@ -97,8 +123,7 @@ static void xml_tree_flush_text(XmlTreeBuild *b)
     if (b->text_len == 0) return;
     t = lxb_dom_document_create_text_node(b->doc, (const lxb_char_t *)b->text, b->text_len);
     CHECK(t != NULL, "OOM creating a Text node for an XML character run");
-    if (b->kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(t));
-    node_insert_at(b->current, lxb_dom_interface_node(t), NULL);
+    xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(t));
     b->text_len = 0;
 }
 
@@ -272,8 +297,7 @@ static XmlTreeError xml_tree_start_element(XmlTreeBuild *b, const XmlTag *tag, X
     DCHECK(el != NULL, "core/dom/element.h's element_create_ns states it never returns NULL — an allocation "
                        "failure there is fatal — so a NULL here is that contract broken and not an OOM this "
                        "site may report");
-    if (b->kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(el));
-    node_insert_at(b->current, lxb_dom_interface_node(el), NULL);
+    xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(el));
     b->current = lxb_dom_interface_node(el);
 
     if (tag->att_n == 0) return XML_TREE_OK;
@@ -419,8 +443,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         c = lxb_dom_document_create_cdata_section(b->doc, (const lxb_char_t *)norm, need);
         free(norm);
         CHECK(c != NULL, "OOM creating a CDATASection node");
-        if (b->kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(c));
-        node_insert_at(b->current, lxb_dom_interface_node(c), NULL);
+        xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(c));
         return XML_TREE_OK;
     }
 
@@ -436,8 +459,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
         cm = lxb_dom_document_create_comment(b->doc, (const lxb_char_t *)norm, need);
         free(norm);
         CHECK(cm != NULL, "OOM creating a Comment node");
-        if (b->kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(cm));
-        node_insert_at(b->current, lxb_dom_interface_node(cm), NULL);
+        xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(cm));
         return XML_TREE_OK;
     }
 
@@ -455,8 +477,7 @@ XmlTreeError xml_tree_build_step(XmlTreeBuild *b, XmlTreeDetail *detail)
                                                            (const lxb_char_t *)norm, need);
         free(norm);
         CHECK(pi != NULL, "OOM creating a ProcessingInstruction node");
-        if (b->kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(pi));
-        node_insert_at(b->current, lxb_dom_interface_node(pi), NULL);
+        xml_tree_place_created(b->root_parent, b->kind, b->current, lxb_dom_interface_node(pi));
         return XML_TREE_OK;
     }
     }

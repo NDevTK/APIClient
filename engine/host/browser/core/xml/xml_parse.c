@@ -6,7 +6,6 @@
 #include <lexbor/dom/interfaces/text.h>
 
 #include "core/dom/element.h"
-#include "core/dom/node.h"
 #include "core/xml/xml_decl.h"
 #include "core/xml/xml_element.h"
 #include "core/xml/xml_markup.h"
@@ -227,8 +226,7 @@ void xml_parse_error_document(lxb_dom_document_t *doc, lxb_dom_node_t *parent, D
     root = element_create_ns(doc, XML_PARSERERROR_NAMESPACE, strlen(XML_PARSERERROR_NAMESPACE),
                              "parsererror", 11, NULL, 0);
     DCHECK(root != NULL, "core/dom/element.h states element_create_ns never returns NULL");
-    if (kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(root));
-    node_insert_at(parent, lxb_dom_interface_node(root), NULL);
+    xml_tree_place_created(parent, kind, parent, lxb_dom_interface_node(root));
 
     /* §8.5.1's "Optionally, add attributes or children to root to describe the nature of the parsing error."
        The description is the LAYER'S OWN SENTENCE plus the position the reader stopped at — nothing is worded
@@ -239,6 +237,5 @@ void xml_parse_error_document(lxb_dom_document_t *doc, lxb_dom_node_t *parent, D
     if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
     text = lxb_dom_document_create_text_node(doc, (const lxb_char_t *)buf, (size_t)n);
     CHECK(text != NULL, "OOM creating the Text child of an HTML §8.5.1 parsererror element");
-    if (kind == DOM_PARSE_ROOT_PRIVATE) dom_cow_note_created(lxb_dom_interface_node(text));
-    node_insert_at(lxb_dom_interface_node(root), lxb_dom_interface_node(text), NULL);
+    xml_tree_place_created(parent, kind, lxb_dom_interface_node(root), lxb_dom_interface_node(text));
 }

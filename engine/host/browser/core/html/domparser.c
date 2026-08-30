@@ -282,8 +282,15 @@ static JSValue parse_xml_from_a_string(JSContext *ctx, const char *url, const ch
     if (!xml_parse_document(lxb_dom_interface_document(dom), root, DOM_PARSE_ROOT_PRIVATE, xml, len, &report)) {
         lxb_dom_node_t *c, *next;
         /* The partial tree is discarded so that §8.5.1's "Assert: document has no child nodes" holds where the
-           standard writes it — one line below, over the document this branch is about to describe. */
-        for (c = root->first_child; c != NULL; c = next) { next = c->next; dom_cow_remove_child(c); }
+           standard writes it — one line below, over the document this branch is about to describe.
+           THROUGH THE PRIVATE-TREE SEAM AND NOT THE CAPTURING REMOVE. This Document is DOM_PARSE_ROOT_PRIVATE
+           and the parse recorded no creation for anything under it, so a captured removal here would put the
+           partial tree's structure in a delta that has none of it — the invariant that a delta captures only
+           SHARED baseline state (CLAUDE.md §State isolation). `dom_cow_take_private` is the seam at which a
+           node LEAVES the private root, and it makes the flow the owner: these ones are on their way to the
+           flow's own discard rather than to the document, and the delta destroys them exactly as it destroys
+           any other node the flow made. */
+        for (c = root->first_child; c != NULL; c = next) { next = c->next; dom_cow_take_private(root, c); }
         DCHECK(root->first_child == NULL,
                "HTML §8.5.1 step 3's parsererror branch begins \"Assert: document has no child nodes\" and "
                "this document still has one — the partial tree an ill-formed parse left is what was just "

@@ -264,8 +264,20 @@ void dom_cow_set_prop_taint(JSContext *ctx, lxb_dom_element_t *el, const char *n
    scope held in a global is open while another flow runs and opens its own.
    NO PREDICATE ON THE NODE WOULD DO. An unparented tree is what a detached parse result and a subtree REMOVED
    from the document both look like, and the second must never be written raw — another flow's baseline still
-   holds it. The declared root is checked against every live removal entry, which is what tells them apart. */
-void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node);   /* out, on its way to the real tree */
+   holds it. The declared root is checked against every live removal entry, which is what tells them apart.
+   AND THERE IS ONE OWNERSHIP CONVENTION OVER A PRIVATE TREE, WHICH EVERY PARSE THAT FEEDS ONE KEEPS. A parse
+   declared DOM_PARSE_ROOT_PRIVATE records NO creation: the whole tree has ONE owner, which is the private root
+   — a Document the declaring operation made (the delta owns it as a created DOCUMENT) or a fragment the parse
+   destroys — and a node acquires its OWN owner at exactly one seam, dom_cow_take_private, because leaving the
+   private root is the moment that root stops being able to free it. A parse that instead records per created
+   node and is then placed node-by-node claims every placed node TWICE, and the discard's second destroy runs
+   over memory the first one freed. dom_cow_note_created asserts against it rather than leaving it to be kept. */
+/* OUT of the private root, and the one seam at which a node of a private tree gets its OWN owner — the flow's
+   delta, which destroys it on discard. Usually on its way to the real tree (the capturing insert that follows
+   is the write another flow could see); also on its way to the flow's own discard, which is HTML §8.5.1 step
+   3's "Assert: document has no child nodes" emptying an ill-formed XML parse's partial tree. Both are the same
+   fact — the root can no longer free it — and that is what the record states. */
+void dom_cow_take_private(lxb_dom_node_t *root, lxb_dom_node_t *node);
 void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_dom_node_t *child);  /* build it */
 /* and drop it — `with_children` false is an emptied root and asserts it; true DEEP-destroys, which is the
    abandoned-parse case (a machine torn down mid-placement still holds everything it has not moved yet). */
