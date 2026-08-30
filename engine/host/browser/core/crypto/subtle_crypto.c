@@ -205,22 +205,22 @@ static JSValue sd_copy_buffer_source(JSContext *ctx, JSValueConst src)
     const uint8_t *base;
     JSValue copy;
 
-    /* STEP 5, over §3.2.26's "underlying buffer of a buffer source type instance" — V itself for an
+    /* STEP 7, over §3.2.26's "underlying buffer of a buffer source type instance" — V itself for an
        ArrayBuffer, V.[[ViewedArrayBuffer]] for a view, which is the one question the predicate answers for
        both arms. The empty byte sequence IS the message, so the digest is SHA-256("") and not an error: a
        page that detaches its input and then hashes it gets the same answer a browser gives it. */
     if (JS_IsDetachedBufferSource(src))
         return JS_NewArrayBufferCopy(ctx, (const uint8_t *)"", 0);
 
-    /* STEPS 1-4: the window. Everything past step 5 has a live, fixed-length, non-shared buffer under it —
+    /* STEPS 1-6: the window. Everything past step 7 has a live, fixed-length, non-shared buffer under it —
        §3.2.26's conversion at the IDL_BUFFERSOURCE position refused the shared and resizable arms, and the
        detach is the line above — so JS_GetArrayBufferView's out-of-bounds refusal is now unreachable, which
        is what this DCHECK asserts rather than the brand test it used to name. */
     if (!JS_IsArrayBuffer(src)) {
         view_buf = JS_GetArrayBufferView(ctx, src, &off, &len);
         DCHECK(!JS_IsException(view_buf),
-               "§3.2.26's step 3 refused a view whose buffer is neither detached, nor shared, nor resizable — "
-               "the IDL_BUFFERSOURCE conversion performs the brand test and both refusals once and step 5 is "
+               "§3.2.26's step 5 refused a view whose buffer is neither detached, nor shared, nor resizable — "
+               "the IDL_BUFFERSOURCE conversion performs the brand test and both refusals once and step 7 is "
                "asked above, so the only remaining cause of an out-of-bounds view has grown a fourth case");
         ab = view_buf;
     }
@@ -230,7 +230,7 @@ static JSValue sd_copy_buffer_source(JSContext *ctx, JSValueConst src)
         len = whole;
     }
     DCHECK(base != NULL || whole == 0,
-           "§3.2.26 reached a live buffer with no storage — step 5 answered for the detached case above, so a "
+           "§3.2.26 reached a live buffer with no storage — step 7 answered for the detached case above, so a "
            "NULL here is a buffer that is neither detached nor allocated");
     DCHECK(off + len <= (size_t)whole,
            "a BufferSource's byte range reaches past its own buffer — the offset and the length come from the "
