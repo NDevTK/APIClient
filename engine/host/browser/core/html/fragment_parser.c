@@ -107,7 +107,13 @@ void fragment_parse_visit(JSContext *ctx, void *st, JSStepVisit *v)
 const char *fragment_parse_unforkable(const void *st)
 {
     const FragmentParse *s = st;
+    const char *why = xml_fragment_unforkable(&s->xf);
 
+    /* §14.4's HALF ANSWERS FOR ITSELF, because what it owns between two steps is its own — an XML parse handle
+       and a private tree — and a driver that listed those fields would be a second statement of another
+       component's ownership. Asked first because it is the half a flow standing in FRAG_XML is inside. */
+    if (why != NULL)
+        return why;
     if (s->frag != NULL || s->own_context != NULL)
         return "a fragment parse cannot be forked between its parse and its placement — this machine OWNS the "
                "tree the parse produced (`frag`, which fragment_parse_release deep-destroys, with `node` the "
@@ -157,6 +163,10 @@ void fragment_parse_release(JSContext *ctx, void *st)
 {
     FragmentParse *s = st;
     (void)ctx;
+    /* §14.4's machine owns an XML parse handle and, until the take, the private tree it built — released
+       through its own entry for the reason the fork asks it its own question: what it holds is its to name.
+       Idempotent and inert for an HTML parse, whose `xf` is all-zero. */
+    xml_fragment_release(&s->xf);
     /* §8.5.5 step 5's / §8.5.7 step 6's `body` never entered a tree, so nothing else will ever free it. */
     if (s->own_context) {
         dom_cow_destroy_private(lxb_dom_interface_node(s->own_context), /*with_children*/ true);
@@ -224,17 +234,14 @@ void fragment_parse_begin(JSContext *ctx, FragmentParse *s, lxb_dom_element_t *c
        core/dom/attr_list.c's parse-boundary attribute correction, whose own DCHECK says the tree it was handed
        belongs to an XML document — a true sentence about the tree, pointing at the attribute component, for a
        parse that was never HTML. The crash was real and the file was wrong.
-       WHAT TO BUILD is HTML §14.4 "Parsing XML fragments"' XML fragment parsing algorithm, over the XML parser
-       this engine already has (core/xml/xml_parse.c) — feed it `markup` with `context`'s in-scope namespace
-       bindings seeded from its ancestors (core/xml/xml_ns.c is that stack), and return the DocumentFragment
-       §14.4 builds, with §14.4's own well-formedness failure being the SyntaxError its callers throw. */
-    DCHECK(!document_is_xml_of(lxb_dom_interface_node(context)->owner_document),
-           "HTML §8.5.4's fragment parsing algorithm steps step 2 sends an XML document's fragment parse to "
-           "§14.4 \"Parsing XML fragments\"' XML fragment parsing algorithm, and this engine has only the HTML "
-           "one — so this parse would hand XML to the §13.2 tree builder, where `<![CDATA[` is PROGRAM TEXT "
-           "(§13.2.6.4.4 'The \"in head\" insertion mode' switches the tokenizer to §13.2.5.4 \"Script data "
-           "state\") rather than a CDATA section under XML §2.7 \"CDATA Sections\". BUILD §14.4 over "
-           "core/xml/xml_parse.c and route it from this line");
+       THE ANSWER RIDES THE STATE rather than branching here, because the step that acts on it is a stage away:
+       the two algorithms differ in the PARSER and its boundary seams and agree exactly on where the parsed
+       nodes go, so FRAG_XML replaces FRAG_FEED and the placement below is one placement for both. §14.4 itself
+       is core/html/xml_fragment.h.
+       §14.4 STEP 1 IS ALREADY DISCHARGED HERE — "Let context be target if target is an Element; otherwise
+       target's host" — because that is the same resolution §13.4's parse context comes from and the member has
+       already made it. What arrives is the Element, which is what both algorithms take. */
+    s->is_xml = document_is_xml_of(lxb_dom_interface_node(context)->owner_document) ? 1 : 0;
     s->context = context;
     s->anchor = anchor;
     s->where = (uint8_t)where;
@@ -290,6 +297,15 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         return JS_STEP_YIELD;
     }
     case FRAG_FEED:
+        /* HTML §8.5.4's fragment parsing algorithm steps STEP 2, acted on. The answer was taken at
+           fragment_parse_begin — the one point every member converges on — and this is the one place it is
+           acted on, so no member and no other stage asks which parser its bytes get. §14.4 steps 3-4 open the
+           parse in the same call that routes to it, because neither can suspend. */
+        if (s->is_xml) {
+            xml_fragment_begin(ctx, &s->xf, s->context, s->html, s->len);
+            hdr->stage = FRAG_XML;
+            return JS_STEP_YIELD;
+        }
         if (!s->parser) {
             lxb_dom_node_t *cn = lxb_dom_interface_node(s->context);
             /* THROUGH core/html/html_parse.h, WHICH IS WHERE AN HTML PARSER IS MADE. A fragment parse reads
@@ -437,6 +453,45 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
         }
         fragment_parse_placement(s, hdr);
         return JS_STEP_YIELD;
+
+    case FRAG_XML: {
+        /* HTML §14.4 "Parsing XML fragments" steps 5-11, one item per step — the algorithm is
+           core/html/xml_fragment.h's and this is only where its result meets the placement. */
+        int r = xml_fragment_step(ctx, &s->xf);
+
+        if (r != 0)
+            return r;   /* YIELD, or ABRUPT having thrown §14.4 step 7's or step 8's "SyntaxError" */
+        s->frag = xml_fragment_take(&s->xf);
+        /* THE SAME INVARIANT THE HTML ARM ASSERTS AT ITS OWN BOUNDARY, and for the same reason: the placement
+           moves these nodes into the document with no DOM §4.5 adopt, so their node document must ALREADY be
+           the context's. §14.4's reading would put them in a Document of their own and adopt them at step 11's
+           append; core/xml/xml_tree.h's two-argument entry is what lets them be created in the right document
+           instead, and this is where that claim is checked rather than trusted. */
+        DCHECK(s->frag->owner_document == lxb_dom_interface_node(s->context)->owner_document,
+               "HTML §14.4's parse produced nodes belonging to a document other than its context element's — "
+               "the placement below inserts them with no adopt, so their node document would be wrong for "
+               "every flow that reads it");
+        /* NONE OF THE HTML PARSE-BOUNDARY SEAMS RUN FOR THIS TREE, which is core/html/domparser.c's XML arm's
+           list and its reasons: dom_attr_normalize_parsed would rewrite namespaces Namespaces in XML §6.2
+           "Namespace Defaulting"'s expansion just decided, and §13.2.6.4.4's declarative-shadow conversion and §4.8.11.2's media walk
+           are triggers stated over an HTML parser's stack of open elements. The one seam that DOES run is
+           §14.2's already-started stamp, and it runs inside §14.4's own machine because that is the standard
+           that owns it.
+           The reference child is fixed BEFORE anything moves, exactly as on the HTML arm. */
+        s->ref = (s->where == FRAG_INTO_AFTER) ? s->anchor->next
+               : (s->where == FRAG_INTO_FIRST_CHILD) ? s->anchor->first_child
+               : s->anchor;
+        /* §8.6.4 set and filter HTML STEP 8 reaches the same walk from here, because the filter is a fact
+           about the MEMBER and not about which parser produced the tree. */
+        if (s->sanitize) {
+            sanitizer_walk_begin(ctx, &s->san, s->frag, s->san_config, s->safe != 0, SAN_CHILD);
+            s->san_config = JS_UNDEFINED;   /* the walk owns it now */
+            hdr->stage = SAN_CHILD;
+            return JS_STEP_YIELD;
+        }
+        fragment_parse_placement(s, hdr);
+        return JS_STEP_YIELD;
+    }
 
     case FRAG_PLACE: {
         /* Everything here moves nodes OUT of what the parse just built, which nothing else has ever seen — see

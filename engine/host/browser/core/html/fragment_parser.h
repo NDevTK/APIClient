@@ -26,6 +26,7 @@
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/html/sanitizer.h"
+#include "core/html/xml_fragment.h"
 
 /* WHERE THE PARSED NODES GO. Not a step of §13.4 — §13.4 returns a DocumentFragment and says nothing about
    what its caller does with it — but the one thing the six members differ in, so it rides the parse rather
@@ -73,6 +74,10 @@ typedef enum { FRAG_SCRIPTING_INERT = 0, FRAG_SCRIPTING_FRAGMENT = 1 } FragScrip
     X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.5.7 step 7 / §8.6.4 " \
                   "\"Sanitization algorithms\"' set and filter HTML step 7 " \
                   "(the fragment parsing algorithm), one byte per step") \
+    X(FRAG_XML,   "HTML §14.4 \"Parsing XML fragments\"' XML fragment parsing algorithm steps 5-11, which " \
+                  "§8.5.4's fragment parsing algorithm steps step 2 sends every one of those members to when " \
+                  "the target's node document is an XML document (one parse item, or one of step 9's " \
+                  "newChildren, per step)") \
     X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 9 " \
                   "(insert one node of the fragment at the position the member names), and HTML §13.4 steps " \
                   "15-16 for the member that RETURNS it (§8.5.7): lexbor builds under §13.4 step 12's `root`, " \
@@ -126,6 +131,13 @@ typedef struct {
     uint8_t sanitize;
     uint8_t safe;               /* §8.6.4 set and filter HTML's own `safe` argument — true for the two `setHTML` members */
     SanitizerWalk san;
+    /* HTML §8.5.4's fragment parsing algorithm steps STEP 2 — "If target's node document is an XML document,
+       then return the result of invoking the XML fragment parsing algorithm given target and markup". The
+       answer is taken at fragment_parse_begin, which is the one point all six members converge on, and RIDES
+       the state because the step that acts on it is a stage away. `xf` is §14.4's own machine and is inert
+       (all-zero, owning nothing) for every HTML parse. */
+    uint8_t          is_xml;
+    XmlFragmentParse xf;
 } FragmentParse;
 
 /* THE THREE HALVES OF THE OWNERSHIP DECLARATION a member puts on its IdlStepDecl. See core/idl_args.h for why
