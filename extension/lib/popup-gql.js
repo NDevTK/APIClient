@@ -122,16 +122,24 @@ function gqlRenderVariablesContent(panelDiv, op) {
   // Iterative aliasing walk over a fieldDef tree. Worklist replaces the
   // previous nested-recursive applyAliases so adversarially-nested
   // GraphQL variables can't blow the JS stack via this code path.
+  /* THE ALIAS IS A THIRD-PARTY DOCUMENT'S TEXT. `aliasProps` is a discovery-document schema this zone stored
+     — the reviewer's own renames land in it, but so does whatever an imported spec or a fetched document put
+     there — so the name is REFUSED through lib/field-def.js rather than taken: a `name` that is not text is
+     a document making no rename claim, and the wire key is then what the panel renders (`displayName: null`,
+     which the record already states). The rest of the record is synthesizeFieldDefFromValue's, built through
+     makeFieldDef; this walk only writes names that record declares. */
   function applyAliasesIterative(rootDef) {
     const queue = [rootDef];
     while (queue.length > 0) {
       const fd = queue.shift();
       fd.parentSchema = schemaName;
-      if (aliasProps?.[fd.name]?.customName && aliasProps[fd.name].name) {
-        fd.displayName = aliasProps[fd.name].name;
+      const ap = aliasProps === null ? null : fdDocRecord(aliasProps[fd.name]);
+      const alias = (ap !== null && ap.customName === true) ? fdDocString(ap.name) : null;
+      if (alias !== null) {
+        fd.displayName = alias;
         fd.customName = true;
       }
-      if (Array.isArray(fd.children)) {
+      if (fd.children !== null) {
         for (const c of fd.children) queue.push(c);
       }
     }

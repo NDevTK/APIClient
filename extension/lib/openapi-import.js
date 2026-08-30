@@ -449,7 +449,13 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
             description: fDef.description || "",
             enum: fDef.enum || null,
           };
-          if (fieldNums[fName] != null) m.parameters[fName].number = fieldNums[fName];
+          /* THE IMPORTED FIELD NUMBER IS REFUSED, NOT TAKEN. This is a file the researcher was handed, and
+             the number reaches the Send panel's own record (lib/field-def.js), which asserts a scalar-or-
+             null because by then every value came through a refusal like this one. `x-field-numbers: {"a":
+             {}}` names no field number under any reading, and null is the true statement about it — the
+             alternative is the trusted zone aborting on bytes somebody else chose. */
+          const importedNum = fdDocKey(fieldNums[fName]);
+          if (importedNum !== null) m.parameters[fName].number = importedNum;
         }
         // Restored inline — don't also create a synthetic request schema.
         reqSchema = null;

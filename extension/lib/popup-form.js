@@ -78,7 +78,7 @@ function buildFormFields(schema, initialData = null) {
       section.appendChild(
         createFieldInput(
           name,
-          {
+          makeFieldDef({
             name: param.name, // Pass the name (which might be an alias)
             /* NO `displayName` FROM `param._sourceMapName`. It promised the minified-to-declared rename
                (`e` → `owner`) on this label and nothing has ever written the field — no engine emits a
@@ -93,7 +93,16 @@ function buildFormFields(schema, initialData = null) {
             required: param.required,
             description: param.description,
             label: param.required ? "required" : "optional",
-            number: null,
+            /* THE PARAMETER'S OWN NUMBER, where an imported spec declared one. It used to be a hard `null`
+               here, which stated that a parameter is never numbered — false of exactly the case
+               lib/openapi-import.js exists to serve, and the reason an imported `x-field-numbers` entry
+               survived the store and vanished at the panel. `null` still means "not numbered"; it now comes
+               from the producer rather than from this line's assumption about it. */
+            number: param.number,
+            /* `format` IS THE PARAMETER'S, NOT THE RECORD'S DECLARED ABSENCE. resolveEndpointSchema carries
+               it from the discovery declaration, and omitting it here rendered every declared `date-time` /
+               `int64` parameter as one whose document said nothing about its form. */
+            format: param.format,
             messageType: null,
             children: null,
             enum: param.enum,
@@ -121,7 +130,7 @@ function buildFormFields(schema, initialData = null) {
                from `_range` above: `_range` is what live traffic's values happened to span, this is what the
                bundle's own predicates REQUIRE on every path the engine saw reach the request. */
             _bounds: param._bounds === undefined ? null : param._bounds,
-          },
+          }, "lib/popup-form.js URL parameter `" + name + "`"),
           "param",
           0,
           // Prefer the captured value (last real request's data), then
@@ -162,10 +171,17 @@ function buildFormFields(schema, initialData = null) {
       const fieldVal = (initialData && (initialData[field.number] !== undefined || initialData[field.name] !== undefined))
         ? (initialData[field.number] ?? initialData[field.name] ?? null)
         : (field._exampleValue !== undefined ? field._exampleValue : null);
+      /* THE RECORD IS RE-CONSTRUCTED ON ARRIVAL, WHICH IS THE BOUNDARY CHECK AND NOT A REDUNDANT ONE. These
+         fields were built in the OFFSCREEN zone (lib/discovery.js, lib/send.js) and crossed
+         chrome.runtime.sendMessage to get here, and a crossing is exactly where a record can arrive short of
+         a name — the serialization drops an `undefined` property, so a producer that stopped writing a field
+         looks identical on this side to one that never had it. Rebuilding through makeFieldDef asserts the
+         crossed record against the ONE definition instead of letting the builder read the gap through `||`. */
       section.appendChild(
         createFieldInput(
           field.name,
-          { ...field, parentSchema: schema.requestBody.schemaName },
+          makeFieldDef({ ...field, parentSchema: schema.requestBody.schemaName },
+                       "lib/popup-form.js request-body field `" + field.name + "`"),
           "body",
           0,
           fieldVal,
@@ -215,53 +231,48 @@ function buildFormFields(schema, initialData = null) {
 // exists. Lets the form render + collect every JSON property, not just
 // the ones the extension has already learned. Scalars get typed by their
 // JS type; objects become `type: "object"`; arrays become `label: "repeated"`.
-function synthesizeFieldDefFromValue(rootName, rootValue) {
-  // Iterative tree-builder. Each work item pairs (name, value) with the
-  // destination FieldDef shell to populate. Object/array values queue
-  // their children for later population; scalars finalize in-place.
-  // Replaces self-recursion so deeply-nested JSON variables (or
-  // adversarial server payloads) synthesize without growing the JS
-  // call stack.
-  function makeShell(name) {
-    return { name, number: null, required: false, description: null,
-      label: "optional", messageType: null, children: null };
+/* THE VALUE DECIDES THE WHOLE SHAPE, AND IT IS IN HAND BEFORE THE RECORD EXISTS. The previous form allocated
+   a typeless shell, pushed it into its parent's children, and typed it a queue-turn later — which meant the
+   record was briefly a field with no type, and `type` could not be a fact this producer STATES. It never had
+   to be: the value that decides the type is the same value that decides whether there are children, so both
+   are read here, once, and the driver below only POPULATES the children a container already declared. */
+function _synthShapeOfValue(value) {
+  if (value === null || value === undefined) return { type: "string", label: "optional", children: null };
+  if (Array.isArray(value)) {
+    // An array of objects is a REPEATED MESSAGE whose fields are the first object's; an array of scalars is
+    // a repeated scalar and has no children to descend into.
+    const firstObj = value.find(v => v && typeof v === "object" && !Array.isArray(v));
+    if (firstObj) return { type: "object", label: "repeated", children: [] };
+    return { type: value.length ? typeOfScalar(value[0]) : "string", label: "repeated", children: null };
   }
-  const root = makeShell(rootName);
-  const queue = [{ name: rootName, value: rootValue, dst: root }];
+  if (typeof value === "object") return { type: "object", label: "optional", children: [] };
+  return { type: typeOfScalar(value), label: "optional", children: null };
+}
+
+function synthesizeFieldDefFromValue(rootName, rootValue) {
+  // Iterative tree-builder. Each work item pairs a container's value with the record whose `children` it
+  // fills. Replaces self-recursion so deeply-nested JSON variables (or adversarial server payloads)
+  // synthesize without growing the JS call stack.
+  function mk(name, value) {
+    /* EVERY OTHER NAME TAKES ITS DECLARED ABSENCE, and that is a STATEMENT rather than a gap: a field
+       synthesized out of a captured value has no wire number, no schema to rename under, no declared enum
+       and no domain, because nothing observed one — this producer read a value, not a declaration. */
+    return makeFieldDef(Object.assign({ name, required: false }, _synthShapeOfValue(value)),
+                        "lib/popup-form.js synthesized field `" + name + "`");
+  }
+  const root = mk(rootName, rootValue);
+  const queue = [{ value: rootValue, dst: root }];
   while (queue.length > 0) {
     const { value, dst } = queue.shift();
-    if (value === null || value === undefined) {
-      dst.type = "string";
-      continue;
+    if (dst.children === null) continue;
+    const src = Array.isArray(value)
+      ? value.find(v => v && typeof v === "object" && !Array.isArray(v))
+      : value;
+    for (const [k, v] of Object.entries(src)) {
+      const child = mk(k, v);
+      dst.children.push(child);
+      queue.push({ value: v, dst: child });
     }
-    if (Array.isArray(value)) {
-      const firstObj = value.find(v => v && typeof v === "object" && !Array.isArray(v));
-      if (firstObj) {
-        dst.type = "object";
-        dst.label = "repeated";
-        dst.children = [];
-        for (const [k, v] of Object.entries(firstObj)) {
-          const childShell = makeShell(k);
-          dst.children.push(childShell);
-          queue.push({ name: k, value: v, dst: childShell });
-        }
-      } else {
-        dst.type = value.length ? typeOfScalar(value[0]) : "string";
-        dst.label = "repeated";
-      }
-      continue;
-    }
-    if (typeof value === "object") {
-      dst.type = "object";
-      dst.children = [];
-      for (const [k, v] of Object.entries(value)) {
-        const childShell = makeShell(k);
-        dst.children.push(childShell);
-        queue.push({ name: k, value: v, dst: childShell });
-      }
-      continue;
-    }
-    dst.type = typeOfScalar(value);
   }
   return root;
 }
@@ -335,35 +346,47 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   const wrapper = el("div", "form-field");
   wrapper.style.paddingLeft = depth * 16 + "px";
 
+  /* EVERY `fieldDef.*` BELOW IS READ AS ITSELF. lib/field-def.js is the ONE definition of this record and
+     `makeFieldDef` is the only way one is built, so a name that is absent here is a producer that stopped
+     writing it — which crashes at that producer — and a name whose value is `null` is the producer STATING
+     that it observed none. The `||` that used to stand on `type`, `displayName`, `name`, `number`,
+     `parentSchema` and `children` could not tell those two apart, and answered both with the bytes one
+     particular producer happens to use, so a probe-learned field and a discovery-declared unconstrained one
+     rendered identically while only the second had ever been asked. */
   wrapper.dataset.name = name;
-  wrapper.dataset.type = fieldDef.type || "string";
+  wrapper.dataset.type = fieldDef.type;
   wrapper.dataset.category = category;
-  if (fieldDef.number) wrapper.dataset.number = fieldDef.number;
-  if (fieldDef.label) wrapper.dataset.label = fieldDef.label;
-  if (fieldDef.location) wrapper.dataset.location = fieldDef.location;
+  if (fieldDef.number !== null) wrapper.dataset.number = fieldDef.number;
+  wrapper.dataset.label = fieldDef.label;
+  if (fieldDef.location !== null) wrapper.dataset.location = fieldDef.location;
 
   const labelEl = el("label", "form-field-label");
-  // `displayName` is the rendered label only — an explicit `displayName`
-  // override (used by the GraphQL variables tree to render aliases while
-  // keeping the wire key intact) wins, then the fieldDef's own custom
-  // name, then the caller's positional `name`.
-  const displayName = fieldDef.displayName || fieldDef.name || name;
+  /* `displayName: null` MEANS "render the wire name" — the GraphQL variables tree is the one producer that
+     writes an alias, and every other one states its absence. The caller's positional `name` is a genuine
+     ALTERNATIVE and not a filler: `_buildMessageStep` passes a captured body's own key for a field the
+     schema does not declare, which is a different fact from the record's `name` and the reason both are
+     read. */
+  const displayName = fieldDef.displayName !== null ? fieldDef.displayName
+    : (fieldDef.name !== "" ? fieldDef.name : name);
   let labelHtml = `<span class="field-name">${esc(displayName)}</span>`;
 
-  // Add rename button for learned/indexed fields, parameters, or any
-  // field where a caller has explicitly opted in by setting parentSchema
-  // to a non-empty value (used by the GraphQL variables tree to persist
-  // per-operation aliases under `__gqlVars_<op>`).
-  if (fieldDef.number || name.startsWith("field") || category === "param" || (fieldDef.parentSchema && fieldDef.parentSchema !== "params")) {
-    labelHtml += ` <span class="btn-rename" title="Rename field" data-schema="${esc(fieldDef.parentSchema || "params")}" data-key="${esc(name)}">✎</span>`;
+  /* THE RENAME TARGET IS THE RECORD'S, and `parentSchema: null` means this field has none — which is a
+     statement, so it is read as one. It used to be `esc(fieldDef.parentSchema || "params")`, which wrote
+     every unowned field's rename into the URL-PARAMETER schema: a body field synthesized from a captured
+     JSON value carries no schema at all, and clicking its ✎ persisted the rename against `params`, where
+     nothing would ever read it back. The button is only offered where there is somewhere to persist it. */
+  if (fieldDef.parentSchema !== null &&
+      (fieldDef.number !== null || name.startsWith("field") || category === "param" ||
+       fieldDef.parentSchema !== "params")) {
+    labelHtml += ` <span class="btn-rename" title="Rename field" data-schema="${esc(fieldDef.parentSchema)}" data-key="${esc(name)}">✎</span>`;
   }
 
   // esc(): `number` is not guaranteed numeric — openapi-import.js takes it verbatim from an imported spec's
   // `x-field-numbers`, which is a file the researcher was handed. Every value on this path came from
   // somewhere hostile; none of them is escaped by being "probably a number".
-  if (fieldDef.number)
+  if (fieldDef.number !== null)
     labelHtml += ` <span class="field-number">#${esc(String(fieldDef.number))}</span>`;
-  labelHtml += ` <span class="field-type">${esc(fieldDef.type || "string")}</span>`;
+  labelHtml += ` <span class="field-type">${esc(fieldDef.type)}</span>`;
   if (fieldDef.required)
     labelHtml += ` <span class="field-required">required</span>`;
   if (fieldDef.label === "repeated")
@@ -430,7 +453,11 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
   }
 
   // Show AST-discovered valid values as clickable chips
-  if (fieldDef._astValidValues && fieldDef._astValidValues.length > 0 && !fieldDef.enum) {
+  /* `_astValidValues: null` MEANS the bundle was never observed setting this field, and `enum: null` MEANS
+     no document declared a membership — two different silences, each read as itself. The chips are the
+     OBSERVED set and the select above is the DECLARED one, so a field that has both renders the declared
+     one and nothing is doubled. */
+  if (fieldDef._astValidValues !== null && fieldDef._astValidValues.length > 0 && fieldDef.enum === null) {
     const valHint = el("div", "field-ast-values");
     valHint.innerHTML = '<span class="ast-values-label">Values found in JS:</span> '
       + fieldDef._astValidValues.map(v => '<span class="ast-value-chip">' + esc(String(v)) + '</span>').join(' ');
@@ -466,13 +493,23 @@ function _buildFieldStep(name, fieldDef, category, depth, initialValue, queue) {
     addBtn.dataset.formAddRepeated = "1";
     _addItemTargets.set(addBtn, { kind: "repeatedMessage", listContainer, fieldDef, category, depth });
     wrapper.appendChild(addBtn);
-  } else if ((fieldDef.type === "message" || fieldDef.type === "object") && fieldDef.children?.length) {
+  } else if ((fieldDef.type === "message" || fieldDef.type === "object") &&
+             fieldDef.children !== null && fieldDef.children.length > 0) {
     queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: true });
   } else if (fieldDef.type === "message" || fieldDef.type === "object") {
     if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
       queue.push({ kind: "MESSAGE_GROUP", parent: wrapper, fieldDef, category, depth, initialValue, hasSchema: false });
     } else {
-      wrapper.appendChild(createSingleInput({ type: "string" }, "", category));
+      /* A MESSAGE WITH NEITHER A SCHEMA NOR A CAPTURED VALUE STILL NEEDS A BOX TO TYPE INTO, and the box
+         is a FIELD like any other — a bare `{ type: "string" }` was a fifth vocabulary reaching the one
+         consumer, so every domain and example createSingleInput reads was answered by the `||` this record
+         exists to delete. It states what it is: the same field, rendered as raw text because nothing
+         described its shape. */
+      wrapper.appendChild(createSingleInput(
+        makeFieldDef({ name: fieldDef.name, type: "string", label: fieldDef.label,
+                       required: fieldDef.required },
+                     "lib/popup-form.js schemaless message `" + fieldDef.name + "`"),
+        "", category));
     }
   } else if (fieldDef.label === "repeated" && fieldDef.type !== "message") {
     const listContainer = el("div", "form-repeated-list");
@@ -511,7 +548,12 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
   const itemWrapper = el("div", "form-repeated-item form-message-group");
   const summary = document.createElement("div");
   summary.className = "form-repeated-item-summary";
-  summary.textContent = (fieldDef.messageType || fieldDef.name || "item");
+  /* THE SUMMARY NAMES THE MESSAGE IF THERE IS ONE TO NAME. `messageType: null` MEANS this repeated item
+     came from no named schema, which is the case for an array synthesized out of a captured body — so the
+     wire name is used, and "item" only where the record carries neither. Three alternatives, not two
+     fallbacks past a hole. */
+  summary.textContent = fieldDef.messageType !== null ? fieldDef.messageType
+    : (fieldDef.name !== "" ? fieldDef.name : "item");
   const removeBtn = el("button", "btn-small");
   removeBtn.textContent = "×";
   removeBtn.type = "button";
@@ -521,7 +563,10 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
   itemWrapper.appendChild(summary);
 
   const childContainer = el("div", "form-message-children");
-  const schemaChildren = fieldDef.children || [];
+  /* `children: null` MEANS this field is not a message, so it declares NO fields for an item to render —
+     which is a statement about the schema and not a gap: the item's own captured keys are rendered by the
+     loop below either way, and that is the whole content of an item whose shape nothing described. */
+  const schemaChildren = fieldDef.children === null ? [] : fieldDef.children;
   const rendered = new Set();
   for (const child of schemaChildren) {
     rendered.add(child.name);
@@ -532,7 +577,9 @@ function _buildRepeatedItemStep(fieldDef, category, depth, itemValue, queue) {
     queue.push({
       kind: "FIELD", parent: childContainer,
       name: child.name,
-      fieldDef: { ...child, parentSchema: fieldDef.messageType || fieldDef.parentSchema },
+      fieldDef: makeFieldDef(
+        { ...child, parentSchema: fieldDef.messageType !== null ? fieldDef.messageType : fieldDef.parentSchema },
+        "lib/popup-form.js repeated-item child `" + child.name + "`"),
       category, depth: depth + 1, initialValue: childVal,
     });
   }
@@ -563,11 +610,16 @@ function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, q
   details.className = "form-message-group";
   const summary = document.createElement("summary");
   summary.textContent = hasSchema
-    ? (fieldDef.messageType || fieldDef.name || "message")
-    : (fieldDef.name || "object");
+    ? (fieldDef.messageType !== null ? fieldDef.messageType
+       : (fieldDef.name !== "" ? fieldDef.name : "message"))
+    : (fieldDef.name !== "" ? fieldDef.name : "object");
   details.appendChild(summary);
   const childContainer = el("div", "form-message-children");
-  const inheritedSchema = fieldDef.messageType || fieldDef.parentSchema;
+  /* A CHILD INHERITS THE MESSAGE IT CAME FROM, and where this field names none (`messageType: null`) it
+     inherits whatever schema THIS field renames under — which may itself be `null`, meaning the children
+     have no rename target either. Reading the chain as three statements rather than as two fallbacks is
+     what stops a schemaless child being renamed into the URL-parameter schema. */
+  const inheritedSchema = fieldDef.messageType !== null ? fieldDef.messageType : fieldDef.parentSchema;
   const rendered = new Set();
   if (hasSchema) {
     for (const child of fieldDef.children) {
@@ -579,7 +631,8 @@ function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, q
       queue.push({
         kind: "FIELD", parent: childContainer,
         name: child.name,
-        fieldDef: { ...child, parentSchema: inheritedSchema },
+        fieldDef: makeFieldDef({ ...child, parentSchema: inheritedSchema },
+                               "lib/popup-form.js message child `" + child.name + "`"),
         category, depth: depth + 1, initialValue: childVal,
       });
     }
@@ -587,8 +640,11 @@ function _buildMessageStep(fieldDef, category, depth, initialValue, hasSchema, q
   if (initialValue && typeof initialValue === "object" && !Array.isArray(initialValue)) {
     for (const [k, v] of Object.entries(initialValue)) {
       if (rendered.has(k)) continue;
+      /* A CAPTURED KEY THE SCHEMA DOES NOT DECLARE STILL RENAMES UNDER THE MESSAGE IT WAS FOUND IN, where
+         there is one — `inheritedSchema === null` MEANS there is none, and the synthesized record already
+         states that, so the assignment is made only where it carries a fact. */
       const synthDef = synthesizeFieldDefFromValue(k, v);
-      if (inheritedSchema) synthDef.parentSchema = inheritedSchema;
+      if (inheritedSchema !== null) synthDef.parentSchema = inheritedSchema;
       queue.push({
         kind: "FIELD", parent: childContainer,
         name: k, fieldDef: synthDef,
@@ -654,10 +710,13 @@ function resolvePrefill(fieldDef, initialValue) {
 }
 
 function createSingleInput(fieldDef, initialValue = null, category = null) {
-  const type = fieldDef.type || "string";
+  const type = fieldDef.type;
   const pf = resolvePrefill(fieldDef, initialValue);
 
-  if ((type === "enum" || fieldDef.enum) && fieldDef.enum?.length) {
+  /* `enum: null` MEANS no document declared a membership. The `type === "enum"` disjunct that stood here
+     could never reach a select on its own — the `?.length` behind it already required the list — so it read
+     as a second way in and was one. */
+  if (fieldDef.enum !== null && fieldDef.enum.length > 0) {
     const sel = document.createElement("select");
     sel.className = "form-input form-input-select";
     const emptyOpt = document.createElement("option");
@@ -669,7 +728,9 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
       opt.value = fieldDef.enum[i];
       opt.textContent =
         fieldDef.enum[i] +
-        (fieldDef.enumDescriptions?.[i]
+        /* `enumDescriptions: null` MEANS the document described no member; a list SHORTER than `enum` is
+           that document describing only some, which is why the per-index read stays. */
+        (fieldDef.enumDescriptions !== null && fieldDef.enumDescriptions[i]
           ? " - " + fieldDef.enumDescriptions[i]
           : "");
       if (
@@ -688,7 +749,7 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
   // Per user direction: 'I think it should be autocomplete suggestions'
   // — keeps free-text entry while offering the AST-observed values as
   // suggestions the user can pick from.
-  if (fieldDef._astValidValues && fieldDef._astValidValues.length > 0) {
+  if (fieldDef._astValidValues !== null && fieldDef._astValidValues.length > 0) {
     const wrap = document.createDocumentFragment();
     const inp = document.createElement("input");
     inp.type = "text";
@@ -696,7 +757,8 @@ function createSingleInput(fieldDef, initialValue = null, category = null) {
     inp.autocomplete = "off";
     // Stable id derived from field name so re-renders reuse the same
     // datalist (no orphaned <datalist> nodes accumulating in the DOM).
-    const dlId = "astvals-" + (fieldDef.name || "field").replace(/[^A-Za-z0-9]/g, "_") + "-" + (category || "");
+    const dlId = "astvals-" + (fieldDef.name !== "" ? fieldDef.name : "field").replace(/[^A-Za-z0-9]/g, "_")
+      + "-" + (category === null ? "" : category);
     inp.setAttribute("list", dlId);
     /* The prefill (and its attribution in the label) is resolvePrefill's ONE decision — a lone AST value is
        taken, a set of >= 2 is not, per CLAUDE.md's never-auto-pick rule. The datalist below offers the whole
@@ -890,7 +952,16 @@ function _collectShallow(wrapper, queue) {
   const number = wrapper.dataset.number
     ? parseInt(wrapper.dataset.number)
     : null;
-  const label = wrapper.dataset.label || "optional";
+  /* THE WRAPPER IS `_buildFieldStep`'s OWN PRODUCT, so a missing `data-label` is THIS FILE broken and not a
+     producer being silent — it writes the record's `label` unconditionally, which lib/field-def.js requires
+     every producer to state. `|| "optional"` stood here while that write was conditional, and it answered
+     "the builder wrote no cardinality" with the word for "not repeated": a repeated field whose wrapper lost
+     its label collected as a single value, silently dropping every item but one. */
+  DCHECK(typeof wrapper.dataset.label === "string" && wrapper.dataset.label !== "",
+         "a form-field wrapper carries no `data-label` — _buildFieldStep writes the FieldDef's own label on " +
+         "every wrapper it builds, so an absent one is that builder broken and this collection would read a " +
+         "repeated field as a single value");
+  const label = wrapper.dataset.label;
 
   // Repeated message (array of objects) — must be checked BEFORE the
   // scalar `label === "repeated"` branch so the right list container

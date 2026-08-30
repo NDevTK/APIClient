@@ -3,6 +3,62 @@
 // session state attached). Extracted from the offscreen-brain.js monolith (one problem per file); loaded before
 // it, resolves the encode fns (lib/encode.js) + pageContextSend at call-time. The manual testing workbench.
 
+/* A PROBE FIELD IS A DIFFERENT RECORD FROM A FieldDef, AND IT IS TRANSLATED RATHER THAN SPREAD. lib/
+   req2proto.js composes it by reading a `google.rpc.Status` the SERVER wrote, and it carries names the Send
+   panel has never rendered (`wellKnown`, `package`, `messageName`, `requiredChildren`, `isEnum`) beside the
+   ones it has — so `{...probeField}` would smuggle a second vocabulary into the panel's record, which is the
+   disagreement lib/field-def.js exists to end. It is translated field by field, refusing each value the way
+   any third-party document's value is refused (the bytes are a server's, and lib/persistence.js round-trips
+   them through IndexedDB before they reach here).
+   ITERATIVE, because a probe's nesting depth is the SERVER's choice: req2proto attaches children from nested
+   probes with no depth of its own, so a self-recursive translator would be a stack whose bound an origin
+   server sets. */
+function _probeFieldsToDefs(fieldsObj) {
+  function one(name, raw) {
+    const pf = fdDocRecord(raw) === null ? {} : raw;
+    const type = fdDocString(pf.type);
+    const kids = fdDocList(pf.children);
+    return {
+      def: makeFieldDef({
+        name,
+        type: type === null ? "string" : type,
+        number: fdDocKey(pf.number),
+        required: pf.required === true,
+        /* A PROBE STATES CARDINALITY OR IT STATES REQUIREDNESS — never a fourth word. `repeated` is the one
+           spelling the builder branches on, so anything else the probe wrote is not a cardinality this panel
+           can render and the label falls out of `required`, which the line above already decided. */
+        label: pf.label === "repeated" ? "repeated" : (pf.required === true ? "required" : "optional"),
+        messageType: fdDocString(pf.messageType),
+        /* `null` = NOT a message; `[]` = a message the probe found no fields in. The driver below fills it. */
+        children: kids === null ? null : [],
+      }, "lib/send.js probe field `" + name + "`"),
+      kids,
+    };
+  }
+  const out = [];
+  const queue = [];
+  const entries = (fieldsObj && typeof fieldsObj === "object") ? Object.entries(fieldsObj) : [];
+  for (const [k, raw] of entries) {
+    /* THE KEY IS THE NAME WHERE THE PROBE STORE IS AN OBJECT, and the record's own `name` where it is an
+       array (lib/req2proto.js pushes, lib/discovery-probe.js keys) — a prefer-A-else-B alternative between
+       two producers, not a hole: an array index is not a wire key and must never be rendered as one. */
+    const named = Array.isArray(fieldsObj) ? fdDocString(raw && raw.name) : k;
+    const built = one(named === null ? k : named, raw);
+    out.push(built.def);
+    if (built.kids) queue.push({ into: built.def.children, kids: built.kids });
+  }
+  while (queue.length > 0) {
+    const item = queue.shift();
+    for (const raw of item.kids) {
+      const nm = fdDocString(raw && raw.name);
+      const built = one(nm === null ? "" : nm, raw);
+      item.into.push(built.def);
+      if (built.kids) queue.push({ into: built.def.children, kids: built.kids });
+    }
+  }
+  return out;
+}
+
 function resolveEndpointSchema(endpointKey, service, methodId) {
   // GLOBAL — endpoints/discovery/probes live in the cumulative store keyed by
   // endpointKey/service. Nothing here is per-tab/document (only the network log
@@ -55,45 +111,68 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       // Resolve parameters
       if (match.method.parameters) {
         parameters = {};
+        /* A DISCOVERY METHOD'S PARAMETER IS A THIRD-PARTY DOCUMENT, AND `||` NORMALISED ONLY ITS SILENCE.
+           `pDef.enum || null` answers "the document declared no membership" and "the document's `enum` is
+           the string `admin`" with the same bytes, and the second then travels to a panel that renders a
+           select out of it — the same two-claims-one-appearance defect the projection below was written to
+           end, one layer up from where it was fixed. Every value is now REFUSED rather than defaulted
+           (lib/field-def.js): a value in a form this record does not carry states nothing, and `null` is the
+           true statement about it. It must be a refusal and not an assert, because these bytes are a
+           document the target's server served or a spec file the researcher was handed, and the trusted zone
+           does not abort on somebody else's input. */
         for (const [pName, pDef] of Object.entries(match.method.parameters)) {
+          const pd = fdDocRecord(pDef) === null ? {} : pDef;
+          const pAlias = fdDocString(pd.name);
+          const pType = fdDocString(pd.type);
+          const pLoc = fdDocString(pd.location);
+          const pDesc = fdDocString(pd.description);
           parameters[pName] = {
-            name: pDef.name || pName,
-            customName: !!pDef.customName,
-            type: pDef.type || "string",
-            location: pDef.location || "query",
-            required: !!pDef.required,
-            description: pDef.description || "",
-            format: pDef.format || null,
-            enum: pDef.enum || null,
+            name: pAlias === null ? pName : pAlias,
+            customName: pd.customName === true,
+            /* THE FIELD NUMBER A FORM-BODY PARAMETER CARRIES. lib/openapi-import.js writes it onto the
+               parameter verbatim from an imported spec's `x-field-numbers`, and lib/openapi-export.js reads
+               it back on the way out — so it is a fact this record has always held and this projection had
+               never carried, which meant an imported number survived a round-trip through the store and was
+               dropped on the one path that RENDERS it. `null` = this parameter is not numbered. */
+            number: fdDocKey(pd.number),
+            type: pType === null ? "string" : pType,
+            /* "query" IS THE SPEC'S OWN ANSWER, NOT A FILLER: an OpenAPI parameter must state `in`, and a
+               Google discovery parameter without a `location` is a query parameter. It is what a document
+               that names none has said, which is why it is not `null`. */
+            location: pLoc === null ? "query" : pLoc,
+            required: pd.required === true,
+            description: pDesc === null ? "" : pDesc,
+            format: fdDocString(pd.format),
+            enum: fdDocList(pd.enum),
             // Stats-derived metadata
-            _requiredConfidence: pDef._requiredConfidence ?? null,
-            _detectedEnum: !!pDef._detectedEnum,
-            _defaultValue: pDef._defaultValue ?? null,
-            _defaultConfidence: pDef._defaultConfidence ?? null,
-            _range: pDef._range || null,
+            _requiredConfidence: typeof pd._requiredConfidence === "number" ? pd._requiredConfidence : null,
+            _detectedEnum: pd._detectedEnum === true,
+            _defaultValue: pd._defaultValue === undefined ? null : pd._defaultValue,
+            _defaultConfidence: typeof pd._defaultConfidence === "number" ? pd._defaultConfidence : null,
+            _range: fdDocRecord(pd._range),
             // Unified example value (pickExampleValue result) — popup
             // uses this to prefill the Send form so reviewers can
             // send a plausible request without first replaying a
             // captured one. The source tag lets the UI label the
             // prefill (observed / ast / synthesized / type-default).
-            _exampleValue: pDef._exampleValue === undefined ? null : pDef._exampleValue,
-            _exampleValueSource: pDef._exampleValueSource || null,
+            _exampleValue: pd._exampleValue === undefined ? null : pd._exampleValue,
+            _exampleValueSource: fdDocString(pd._exampleValueSource),
             // AST-discovered valid values
-            _astValidValues: pDef._astValidValues || null,
+            _astValidValues: fdDocList(pd._astValidValues),
             /* AND THE OTHER HALF OF THE SHAPE. A param's two facts are PROVENANCE-and-example (above) and
                DOMAIN — what the forced execution's own equality gates proved this value is NOT. A projection
                that carried only the first would put the popup back where the engine was before it emitted
                one: a range-gated parameter and an unconstrained one rendering with identical bytes. Written
                like `_exampleValue` rather than with a `||`, because an empty array must not arrive here as
                "nothing was observed" — lib/learn.js writes `[]` to mean a claim that was DISPROVED. */
-            _excludedValues: pDef._excludedValues === undefined ? null : pDef._excludedValues,
+            _excludedValues: fdDocList(pd._excludedValues),
             /* …AND THE SAME FACT OVER AN ORDERED DOMAIN. `_range` above is what live traffic's observed
                values SPANNED — a statistic; this is what the bundle's own ordering gates REQUIRE, on every
                path the engine observed reaching the request. The two are different claims and are carried
                apart so the popup can say which is which; collapsing them would state a constraint out of a
                sample. Written like `_exampleValue` rather than with a `||`, because lib/learn.js writes
                `null` to mean a claim that was DISPROVED and `undefined` to mean nothing was ever observed. */
-            _bounds: pDef._bounds === undefined ? null : pDef._bounds,
+            _bounds: fdDocRecord(pd._bounds),
             /* NO `_sourceMapName` AND NO `_astValueSource`. The first promised a declared name recovered
                from the page's source map (minified `e` shown as `owner`); nothing in engine/host has ever
                emitted one and lib/learn.js's copy of it read a field the engine's param record does not
@@ -117,16 +196,14 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
     ? globalStore.probeResults.get(endpointKey)
     : null;
   if (probeResult?.fields) {
-    const probeFields = Object.entries(probeResult.fields).map(([name, f]) => ({
-      name,
-      type: f.type || "string",
-      number: f.number || null,
-      required: !!f.required,
-      label: f.label || "optional",
-      messageType: f.messageType || null,
-      description: null,
-      children: f.children || null,
-    }));
+    /* A PROBE'S FIELD LIST IS NOT OURS EITHER. lib/req2proto.js learns it by reading a `google.rpc.Status`
+       the SERVER composed, and lib/persistence.js round-trips it through IndexedDB, so it reaches this line
+       as bytes neither of which we wrote — refused through lib/field-def.js rather than asserted, exactly as
+       a discovery document is. It becomes a WHOLE FieldDef here, which is the change: it used to state nine
+       names and the form builder read the other twenty through `||`, so a probe-learned field and a
+       discovery-declared unconstrained one rendered with identical bytes while only the second had ever been
+       asked about a domain. */
+    const probeFields = _probeFieldsToDefs(probeResult.fields);
 
     if (!bodyFields || bodyFields.length === 0) {
       // No discovery body fields — use probe fields directly
@@ -223,7 +300,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
          overwrite. */
       const declared = Object.prototype.hasOwnProperty.call(parameters, pp.name);
       const cur = declared ? parameters[pp.name]
-                           : { name: pp.name, customName: false, type: "string", location: "path",
+                           : { name: pp.name, customName: false, number: null, type: "string", location: "path",
                                required: true, description: "AST-learned path segment",
                                format: null, enum: null,
                                _requiredConfidence: null, _detectedEnum: false,

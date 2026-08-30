@@ -264,34 +264,47 @@ function resolveDiscoverySchema(doc, schemaName) {
    A public-looking entry point with no caller reads as a capability the surface has, and the next reader
    builds on it. The queue and its two step functions below have a live caller and stay. */
 
+/* A DISCOVERY / OPENAPI PROPERTY IS A THIRD-PARTY DOCUMENT, so every value read out of it goes through
+   lib/field-def.js's refusals rather than through an assert: these bytes are a document the target's server
+   served or a spec file the researcher was handed, and the trusted zone must not abort on them. What a
+   refusal yields is the record's declared absence, which is the TRUE statement about a document that named
+   something this panel cannot render. The record itself (`makeFieldDef`) is ours, so its shape is asserted. */
 function _buildDiscoveryFieldShell(name, prop, requiredList) {
-  var isRequired = (requiredList || []).indexOf(name) >= 0;
-  return {
-    name: prop.name || name,
-    customName: !!prop.customName,
+  /* `{"widget": null}` IS A DOCUMENT THAT NAMED A PROPERTY AND DESCRIBED NOTHING. Reading `.name` off it
+     threw a TypeError out of the trusted zone on bytes a server chose, which is the crash-on-attacker-input
+     this file's refusals exist to prevent — so a non-record property is refused whole and the field carries
+     its key and nothing else, which is exactly what that document states. */
+  if (fdDocRecord(prop) === null) prop = {};
+  var isRequired = Array.isArray(requiredList) && requiredList.indexOf(name) >= 0;
+  var alias = fdDocString(prop.name);
+  return makeFieldDef({
+    name: alias === null ? name : alias,
+    customName: prop.customName === true,
+    /* `type` IS RESTATED BY `_stepMapProperty`, which is the only reader of the property's own type/format/
+       $ref/items and the only place that can decide between them. "string" here is not a default standing in
+       for a missing answer — it is the type of a property whose document says nothing else, which is what
+       mapJsonSchemaType returns for exactly that case. */
     type: "string",
     required: isRequired,
-    description: prop.description || null,
+    description: fdDocString(prop.description),
     label: isRequired ? "required" : "optional",
-    number: prop.id != null ? prop.id : null,
-    messageType: null,
-    children: null,
-    _defaultValue: prop._defaultValue == null ? null : prop._defaultValue,
-    _defaultConfidence: prop._defaultConfidence == null ? null : prop._defaultConfidence,
-    _requiredConfidence: prop._requiredConfidence == null ? null : prop._requiredConfidence,
-    _range: prop._range || null,
-    _detectedEnum: !!prop._detectedEnum,
+    number: fdDocKey(prop.id),
+    _defaultValue: prop._defaultValue === undefined ? null : prop._defaultValue,
+    _defaultConfidence: typeof prop._defaultConfidence === "number" ? prop._defaultConfidence : null,
+    _requiredConfidence: typeof prop._requiredConfidence === "number" ? prop._requiredConfidence : null,
+    _range: fdDocRecord(prop._range),
+    _detectedEnum: prop._detectedEnum === true,
     _exampleValue: prop._exampleValue === undefined ? null : prop._exampleValue,
-    _exampleValueSource: prop._exampleValueSource || null,
-    _astValidValues: prop._astValidValues || null,
+    _exampleValueSource: fdDocString(prop._exampleValueSource),
+    _astValidValues: fdDocList(prop._astValidValues),
     /* THE BODY FIELD'S DOMAIN. endpoint.c mints a param per request-body field and learn.js merges its
        `excludes` onto the schema property, so a gate over a value the page POSTS is observed exactly as one
        over a value it appends to the query is — and a projection that dropped it here would make the popup's
        silence mean two different things in two halves of one record. */
-    _excludedValues: prop._excludedValues === undefined ? null : prop._excludedValues,
+    _excludedValues: fdDocList(prop._excludedValues),
     /* …and the ordering gate's interval beside it, for the same reason and by the same rule. */
-    _bounds: prop._bounds === undefined ? null : prop._bounds,
-  };
+    _bounds: fdDocRecord(prop._bounds),
+  }, "lib/discovery.js _buildDiscoveryFieldShell, property `" + name + "`");
 }
 
 // Sentinel field appended to a children array when a $ref points back
@@ -301,12 +314,18 @@ function _buildDiscoveryFieldShell(name, prop, requiredList) {
 // makes the truncation point visible to callers (form builders,
 // renderers) instead of silently dropping data.
 function _circularRefSentinel(schemaName) {
-  return {
+  /* IT IS A FIELD LIKE ANY OTHER FIELD, and it used to be four names of a record whose other names the form
+     builder then read through `||` — so this sentinel rendered exactly like a real unconstrained string
+     field rather than like the truncation marker it is. Stating the whole record is what makes the two
+     distinguishable: `children: null` says there is no message to descend into, and every domain is stated
+     absent because a marker constrains nothing. */
+  return makeFieldDef({
     name: "...",
     type: "message",
+    required: false,
     description: "(circular ref: " + schemaName + ")",
     label: "optional",
-  };
+  }, "lib/discovery.js _circularRefSentinel for `" + schemaName + "`");
 }
 
 function _drainDiscoveryQueue(queue) {
@@ -335,7 +354,10 @@ function _stepResolveSchema(item, queue) {
   var nextVisited = new Set(visited);
   nextVisited.add(schemaName);
   var schema = doc.schemas[schemaName];
-  var required = schema.required || [];
+  /* THE REQUIRED LIST IS THE DOCUMENT'S, AND IT IS PASSED AS THE DOCUMENT WROTE IT. `|| []` here would have
+     made "this schema declares nothing required" and "this schema's `required` is not a list" the same fact;
+     _buildDiscoveryFieldShell refuses a non-list itself, which is where a third-party value is refused. */
+  var required = schema.required;
   var i = 1;
   for (var propName in schema.properties || {}) {
     var prop = schema.properties[propName];
@@ -359,35 +381,49 @@ function _stepResolveSchema(item, queue) {
 function _stepMapProperty(item, queue) {
   var doc = item.doc, f = item.field, p = item.prop, v = item.visited;
 
-  if (p.$ref) {
+  /* EVERY `p.*` BELOW IS A THIRD-PARTY DOCUMENT'S BYTES, AND THE PROPERTY ITSELF IS THE FIRST OF THEM.
+     `{"widget": null}` reaches here as the raw property the SCHEMA frame queued — _buildDiscoveryFieldShell's
+     own refusal does not cover this frame — and reading `.$ref` off it threw a TypeError out of the trusted
+     zone. A property that is not a record describes nothing beyond its key, and the shell that frame already
+     built says exactly that, so there is nothing further to populate.
+     A `$ref` that is not text names no schema either — refused rather than coerced into a key that would
+     miss `doc.schemas` and leave a message field with an empty children list that reads as "this message has
+     no fields". */
+  if (fdDocRecord(p) === null) return;
+  var ref = fdDocString(p.$ref);
+  if (ref !== null) {
     f.type = "message";
-    f.messageType = p.$ref;
+    f.messageType = ref;
     f.children = [];
-    queue.push({ kind: "SCHEMA", doc: doc, schemaName: p.$ref,
+    queue.push({ kind: "SCHEMA", doc: doc, schemaName: ref,
                   visited: v, into: f.children });
     return;
   }
 
   if (p.type === "array" && p.items) {
+    /* `type: "array"` IS THE DOCUMENT STATING CARDINALITY, and it says so whatever its `items` turns out to
+       be — so the label is taken here and only the SHAPE of the items is refused below. */
     f.label = "repeated";
-    if (p.items.$ref) {
+    var items = fdDocRecord(p.items) === null ? {} : p.items;
+    var itemRef = fdDocString(items.$ref);
+    if (itemRef !== null) {
       f.type = "message";
-      f.messageType = p.items.$ref;
+      f.messageType = itemRef;
       f.children = [];
-      queue.push({ kind: "SCHEMA", doc: doc, schemaName: p.items.$ref,
+      queue.push({ kind: "SCHEMA", doc: doc, schemaName: itemRef,
                     visited: v, into: f.children });
-    } else if (p.items.type === "object" && p.items.properties) {
+    } else if (items.type === "object" && items.properties) {
       f.type = "message";
       f.children = [];
-      var arrRequired = p.items.required || [];
-      for (var ipn in p.items.properties) {
-        var arrShell = _buildDiscoveryFieldShell(ipn, p.items.properties[ipn], arrRequired);
+      var arrRequired = items.required;
+      for (var ipn in items.properties) {
+        var arrShell = _buildDiscoveryFieldShell(ipn, items.properties[ipn], arrRequired);
         f.children.push(arrShell);
         queue.push({ kind: "PROP", doc: doc, field: arrShell,
-                      prop: p.items.properties[ipn], visited: v });
+                      prop: items.properties[ipn], visited: v });
       }
     } else {
-      f.type = mapJsonSchemaType(p.items);
+      f.type = mapJsonSchemaType(items);
     }
     return;
   }
@@ -395,7 +431,7 @@ function _stepMapProperty(item, queue) {
   if (p.type === "object" && p.properties) {
     f.type = "message";
     f.children = [];
-    var nestedRequired = p.required || [];
+    var nestedRequired = p.required;
     for (var pn in p.properties) {
       var nestShell = _buildDiscoveryFieldShell(pn, p.properties[pn], nestedRequired);
       f.children.push(nestShell);
@@ -407,22 +443,27 @@ function _stepMapProperty(item, queue) {
 
   if (p.type === "object" && p.additionalProperties) {
     f.type = "string";
-    f.description =
-      (f.description || "") +
-      " (map<string, " +
-      (p.additionalProperties.type || "string") +
-      ">)";
+    /* `description: null` MEANS "this property carried no text", so it is READ as that here rather than
+       concatenated through a `||` that would make an absent description and an empty one the same fact. */
+    var mapOf = fdDocRecord(p.additionalProperties) === null
+      ? null : fdDocString(p.additionalProperties.type);
+    f.description = (f.description === null ? "" : f.description + " ") +
+      "(map<string, " + (mapOf === null ? "string" : mapOf) + ">)";
     return;
   }
 
   // Scalar
   f.type = mapJsonSchemaType(p);
   if (p.label === "repeated") f.label = "repeated";
-  if (p.enum) {
+  /* `enumValues` DELETED — it was a second copy of `enum` under a name nothing in the extension has ever
+     read, which is a producer emitting into a reader that does not exist. `enum` itself is refused rather
+     than taken: a document whose `enum` is not a list declares no membership, and the select the panel would
+     build out of it would offer the reviewer nothing. */
+  var members = fdDocList(p.enum);
+  if (members !== null) {
     f.type = "enum";
-    f.enum = p.enum;
-    f.enumValues = p.enum;
-    f.enumDescriptions = p.enumDescriptions || null;
+    f.enum = members;
+    f.enumDescriptions = fdDocList(p.enumDescriptions);
   }
 }
 
