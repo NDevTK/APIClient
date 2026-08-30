@@ -205,11 +205,18 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             return pq_reject(ctx, s, presult);
         }
     }
-    /* AN ABRUPT REQUEST RESULT ARRIVES AS AN EXCEPTION AT THE STAGE THAT ASKED, because this machine declares
-       that it catches one: a `toString` or a Proxy trap that threw during one of the reads below is delivered
-       here, and §6.2.1's answer to every one of them is the same rejection. */
-    if (JS_IsException(cb_result))
-        return pq_reject(ctx, s, presult);
+    /* AN ABRUPT REQUEST RESULT ARRIVES AT THE HELPER THAT PARKED, AS ITS OWN -1 — and it is taken THERE, at
+       each `if (r < 0) return pq_reject(...)` below, rather than by one test at the top of this function.
+       A blanket `if (JS_IsException(cb_result)) return pq_reject(...)` stood here and is deleted. It was a
+       workaround for a driver-side rewind (`step_hdr_request_abandon`) that no longer exists: quickjs-step.h's
+       request contract now says an abrupt keyed or coercion completion arrives as the helper's own -1, having
+       ENDED the request first — the cursor rewound and the key released by the same lines that end a normal
+       completion. Consuming the delivery before the helper runs leaves the request recorded as IN FLIGHT, so
+       `step_keyed_abrupt`'s reset never runs and the two asserts that exist to name a stage collecting another
+       stage's answer — `step_getprop_done`'s key check and `step_keyed_answered`'s stage check — are disarmed
+       on exactly the paths where a page's getter throws. It also made every `r < 0` branch below unreachable:
+       five sites that read as the contract while a sixth quietly decided instead of them, which is the seam
+       §C-stack is about rather than a style point. */
 
     if (hdr->stage == PQ_NAME) {
         /* STEP 2: `required DOMString name`. The read is one accessor or Proxy trap away from the page's own
@@ -218,7 +225,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         if (r > 0) return r;
         if (r < 0) return pq_reject(ctx, s, presult);
         cb_result = JS_UNDEFINED;
-        hdr->stage = PQ_NAME_STR;
+        STEP_GOTO(hdr->stage, PQ_NAME_STR, &hdr->get_phase, &hdr->str_phase, NULL);
     }
     if (hdr->stage == PQ_NAME_STR) {
         /* WEB IDL §3.2.17: a REQUIRED dictionary member the object does not have is a TypeError, and
@@ -263,7 +270,14 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            so `FileSystemPermissionDescriptor`'s two are read `handle` then `mode`. The derived type adds at
            most a SUBJECT and at most an ASPECT, and a feature whose type is the default `PermissionDescriptor`
            adds neither. */
-        hdr->stage = pq_after_name(s);
+        /* THE DESTINATION IS COMPUTED INTO A LOCAL FIRST, because STEP_GOTO evaluates it twice (once to ask
+           whether the stage MOVES and once to assign). Both of these are pure, so the value would be the same
+           — but a destination whose expression is written inline is one edit away from being neither. */
+        {
+            int to = pq_after_name(s);
+
+            STEP_GOTO(hdr->stage, to, &hdr->get_phase, &hdr->str_phase, NULL);
+        }
         if (hdr->stage == PQ_SUBJECT) {
             s->subject = JS_NewAtom(ctx, permission_feature_subject(s->feature));
             CHECK(s->subject != JS_ATOM_NULL, "a feature's subject member name could not be interned");
@@ -293,7 +307,11 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                               permission_feature_subject(s->feature), permission_feature_name(s->feature));
             return pq_reject(ctx, s, presult);
         }
-        hdr->stage = permission_feature_aspect(s->feature) ? PQ_ASPECT : PQ_RUN;
+        {
+            int to = permission_feature_aspect(s->feature) ? PQ_ASPECT : PQ_RUN;
+
+            STEP_GOTO(hdr->stage, to, &hdr->get_phase, &hdr->str_phase, NULL);
+        }
         if (hdr->stage == PQ_ASPECT) pq_intern_aspect(ctx, s);
     }
     if (hdr->stage == PQ_ASPECT) {
@@ -306,14 +324,15 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            aspect bit 0, which is what makes the two types one bit. */
         if (JS_IsUndefined(s->aspect_v)) {
             s->aspect_on = 0;
-            hdr->stage = PQ_RUN;
+            STEP_GOTO(hdr->stage, PQ_RUN, &hdr->get_phase, &hdr->str_phase, NULL);
         } else if (!permission_feature_aspect_values(s->feature)) {
             /* `boolean X = false`: ToBoolean, which runs none of the page's code, so there is nothing after
                this read to rest on. */
             s->aspect_on = (uint8_t)JS_ToBool(ctx, s->aspect_v);
-            hdr->stage = PQ_RUN;
+            STEP_GOTO(hdr->stage, PQ_RUN, &hdr->get_phase, &hdr->str_phase, NULL);
         } else {
-            hdr->stage = PQ_ASPECT_STR;    /* Web IDL §3.2.18's ToString may be the page's, so it rests */
+            /* Web IDL §3.2.18's ToString may be the page's, so it rests */
+            STEP_GOTO(hdr->stage, PQ_ASPECT_STR, &hdr->get_phase, &hdr->str_phase, NULL);
         }
     }
     if (hdr->stage == PQ_ASPECT_STR) {
@@ -346,7 +365,7 @@ static int pq_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         }
         s->aspect_on = (uint8_t)(strcmp(v, values[1]) == 0);
         JS_FreeCString(ctx, v);
-        hdr->stage = PQ_RUN;
+        STEP_GOTO(hdr->stage, PQ_RUN, &hdr->get_phase, &hdr->str_phase, NULL);
     }
     DCHECK(hdr->stage == PQ_RUN, "§6.2.1's query resumed into a stage it does not have");
     JS_FreeValue(ctx, cb_result);
