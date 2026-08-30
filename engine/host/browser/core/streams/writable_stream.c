@@ -238,6 +238,30 @@ static WsCtrlData *wc_of(JSValueConst v)
     return c;
 }
 
+/* WRITE ONE OWNED SLOT OF EACH RECORD, and never `JS_FreeValue(ctx, d->f); d->f = <build one>;` — see cow.h for
+   the order and the defect. §5 is where it is sharpest, because the values here are promises and their
+   resolving functions: building one allocates, and an allocation IS a collection (js_trigger_gc has exactly one
+   caller, JS_NewObjectFromShape), so a slot left naming freed storage across the build is walked by the record's
+   own gc_mark and decrefs a JSObject already back on the allocator's free list. Releasing one is the same hazard
+   from the other side — giving back a queue releases every chunk on it, and giving back a promise may run the
+   page's own reactions.
+   Each record binds its layout ONCE, here, so no site can pass a slot from one of the three with the layout of
+   another — the mistake this shape exists to make impossible when a file holds more than one record.
+   The three MINTS do not come here, and that is the one honest exception: each fills its block before
+   JS_SetOpaque, where the record is unreachable by the collector and its slots hold no value to release. */
+static void ws_set(JSContext *ctx, WsData *d, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, d, &WS_REC, slot, v);
+}
+static void wr_set(JSContext *ctx, WsWriterData *w, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, w, &WR_REC, slot, v);
+}
+static void wc_set(JSContext *ctx, WsCtrlData *c, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, c, &WC_REC, slot, v);
+}
+
 bool writable_stream_is(JSValueConst v)
 {
     return g_ws_class != 0 && JS_GetOpaque(v, g_ws_class) != NULL;
@@ -280,13 +304,17 @@ static void wc_dequeue(JSContext *ctx, WsCtrlData *c)
 
 static int wc_reset_queue(JSContext *ctx, WsCtrlData *c)
 {
-    JS_FreeValue(ctx, c->queue);
-    JS_FreeValue(ctx, c->queue_size);
-    c->queue = JS_NewArray(ctx);
-    c->queue_size = JS_NewArray(ctx);
+    JSValue q = JS_NewArray(ctx), qs = JS_NewArray(ctx);
+
+    /* BUILT INTO LOCALS AND THEN PUBLISHED. Both Arrays are minted while the OLD two are still live and still
+       named by the record, so neither of the two collections these allocations can start walks a slot naming
+       freed storage — and an exception marker never reaches a slot wc_gc_mark reads. */
+    if (JS_IsException(q) || JS_IsException(qs)) { JS_FreeValue(ctx, q); JS_FreeValue(ctx, qs); return -1; }
+    wc_set(ctx, c, &c->queue, q);
+    wc_set(ctx, c, &c->queue_size, qs);
     c->qhead = 0;
     c->queue_total = 0;
-    return JS_IsException(c->queue) || JS_IsException(c->queue_size) ? -1 : 0;
+    return 0;
 }
 
 static double wc_desired(WsCtrlData *c) { return c->hwm - c->queue_total; }
@@ -434,8 +462,7 @@ static int wr_settle_run(JSContext *ctx, StreamWork *w, WsWriterData *wr, int wh
             p = JS_NewPromiseCapability(ctx, pair);
             if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
             JS_MarkPromiseHandled(ctx, p);
-            JS_FreeValue(ctx, which ? wr->ready : wr->closed);
-            if (which) wr->ready = p; else wr->closed = p;
+            wr_set(ctx, wr, which ? &wr->ready : &wr->closed, p);
         } else {
             *settled = 1;
             pair[0] = funcs[0];
@@ -670,8 +697,7 @@ static void ws_start_erroring(JSContext *ctx, WsData *d, JSValueConst reason)
 {
     WsCtrlData *c = JS_IsUndefined(d->controller) ? NULL : wc_of(d->controller);
     d->state = WS_ERRORING;
-    JS_FreeValue(ctx, d->stored_error);
-    d->stored_error = JS_DupValue(ctx, reason);
+    ws_set(ctx, d, &d->stored_error, JS_DupValue(ctx, reason));
     if (c) wc_reset_queue(ctx, c);
 }
 
@@ -691,12 +717,9 @@ static int ws_update_backpressure(JSContext *ctx, WsData *d, WsCtrlData *c)
         JSValue funcs[2];
         JSValue p = JS_NewPromiseCapability(ctx, funcs);
         if (JS_IsException(p)) return W_IDLE;
-        JS_FreeValue(ctx, wr->ready);
-        JS_FreeValue(ctx, wr->ready_funcs[0]);
-        JS_FreeValue(ctx, wr->ready_funcs[1]);
-        wr->ready = p;
-        wr->ready_funcs[0] = funcs[0];
-        wr->ready_funcs[1] = funcs[1];
+        wr_set(ctx, wr, &wr->ready, p);
+        wr_set(ctx, wr, &wr->ready_funcs[0], funcs[0]);
+        wr_set(ctx, wr, &wr->ready_funcs[1], funcs[1]);
         wr->ready_settled = 0;
     }
     return W_IDLE;
@@ -978,11 +1001,21 @@ run:
                 continue;
             }
             d->abort_was_erroring = (d->state == WS_ERRORING);
-            JS_FreeValue(ctx, d->abort_reason);
-            d->abort_reason = d->abort_was_erroring ? JS_UNDEFINED : JS_DupValue(ctx, s->w.value);
-            JS_FreeValue(ctx, d->abort_p);
-            d->abort_p = JS_NewPromiseCapability(ctx, d->abort_funcs);
-            if (JS_IsException(d->abort_p)) return JS_STEP_ABRUPT;
+            {
+                /* BUILT INTO LOCALS AND THEN PUBLISHED, all four slots. The capability is minted while the OLD
+                   abort promise is still live and still named by the record, so the collection that mint can
+                   start does not reach a freed slot through ws_gc_mark, and the exception marker never lands in
+                   one. It also puts the two resolving functions through the same door as everything else: given
+                   `d->abort_funcs` directly, JS_NewPromiseCapability writes two of this record's owned slots
+                   from outside it, which is the one write shape the layout assert cannot see. */
+                JSValue funcs[2], p = JS_NewPromiseCapability(ctx, funcs);
+                if (JS_IsException(p)) return JS_STEP_ABRUPT;
+                ws_set(ctx, d, &d->abort_reason,
+                       d->abort_was_erroring ? JS_UNDEFINED : JS_DupValue(ctx, s->w.value));
+                ws_set(ctx, d, &d->abort_p, p);
+                ws_set(ctx, d, &d->abort_funcs[0], funcs[0]);
+                ws_set(ctx, d, &d->abort_funcs[1], funcs[1]);
+            }
             d->abort_pending = 1;
             s->promise = JS_DupValue(ctx, d->abort_p);
             if (d->abort_was_erroring) { STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL); continue; }
@@ -1243,8 +1276,7 @@ run:
             /* §5.2's FinishInFlightClose: a stream that was ERRORING when its close succeeded is CLOSED all
                the same — the abort it was carrying is answered and the error discarded. */
             if (d->state == WS_ERRORING) {
-                JS_FreeValue(ctx, d->stored_error);
-                d->stored_error = JS_UNDEFINED;
+                ws_set(ctx, d, &d->stored_error, JS_UNDEFINED);
                 if (d->abort_pending) {
                     s->w.settle = W_ABORT_RES;
                     STEP_GOTO(s->hdr.stage, S_SETTLE, &s->w.phase, NULL);
@@ -1291,10 +1323,8 @@ run:
         if (s->hdr.stage == S_RELEASE2) {
             WsWriterData *wr = wr_of(s->hdr.this_val);
             DCHECK(wr != NULL, "a §5.3 release lost its writer between two of its own stages");
-            JS_FreeValue(ctx, d->writer);
-            d->writer = JS_UNDEFINED;
-            JS_FreeValue(ctx, wr->stream);
-            wr->stream = JS_UNDEFINED;
+            ws_set(ctx, d, &d->writer, JS_UNDEFINED);
+            wr_set(ctx, wr, &wr->stream, JS_UNDEFINED);
             STEP_GOTO(s->hdr.stage, S_DONE, &s->w.phase, NULL);
             continue;
         }
@@ -1671,8 +1701,7 @@ static int js_ws_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         DCHECK(c != NULL, "CreateWritableStream answered a stream with no controller");
         /* The SINK is the receiver §5.4 invokes the page's methods on — CreateWritableStream has no sink at
            all, so it is set here rather than inside the operation. */
-        JS_FreeValue(ctx, c->sink);
-        c->sink = JS_DupValue(ctx, sink);
+        wc_set(ctx, c, &c->sink, JS_DupValue(ctx, sink));
         s->start_fn = s->snk[SNK_START];  s->snk[SNK_START] = JS_UNDEFINED;
         s->w.value = JS_UNDEFINED;
         STEP_GOTO(hdr->stage, JS_IsFunction(ctx, s->start_fn) ? WSC_CALL : WSC_RESOLVE, &s->w.phase,
