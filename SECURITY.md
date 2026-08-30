@@ -13,7 +13,7 @@ them. This file is the threat model; per-function contracts are inline (`grep @s
 | QuickJS/WASM engine (runs the bundle) | **UNTRUSTED** | it *executes* the attacker bundle. Confined to the WASM sandbox + a fixed set of host edges |
 | Analysis worker (`ast-thread.js`) | trusted code, **hostile inputs** | hosts the WASM; treats every value the engine produces (URLs, source-map pragmas) as attacker-shaped |
 | **Offscreen document** | **TRUSTED** | the only fully-trusted zone — owns state and the network chokepoint |
-| Service worker (`background.js`) | **STATELESS** | extension-page-only; never relays page data |
+| Service worker (`background.js`) | **STATELESS** | extension-page-only; never relays page data. It persists exactly one value — the browser-session epoch, which only it can observe (§State / storage) — and no learned or page data |
 
 ### What the one trusted zone actually holds — and why that is a named cost
 
@@ -131,6 +131,49 @@ has to remember:
   DIRECTLY (a `chrome.runtime.sendMessage` broadcast reaches every extension context), so the SW cannot
   launder a web renderer's message into a trusted extension-origin one. It forwards exactly one browser
   event the offscreen cannot observe (`__evt TAB_REMOVED`, `background.js:75`).
+- **Ownership of every real tab this extension opens lives in its OWN database, `uasr_owned`** — separate from
+  `uasr_store` because the Clear button empties learned data whole, and emptying ownership would not close a
+  single tab, only make the extension forget which of the person's logged-in sessions it left open.
+  `lib/owned-navigables.js` is loaded in TWO realms (the offscreen `<script>`, and the SW via
+  `importScripts`) and they write **disjoint stores with one writer each**: `records` (the trusted brain) and
+  `session` (the SW). **This is the only thing the SW persists, and "stateless" still holds** — one uuid,
+  written when `chrome.runtime.onStartup` says a profile with this extension installed started up, carrying
+  no page data and no learned data and never read back for an authorization decision. It is there because the
+  SW is the ONLY realm that can observe that event, and because the boundary it marks — the instant every
+  `tabs.Tab.id` from the previous session stopped naming the tab it named ("Tab IDs are unique within a
+  browser session", `chrome.tabs` §Tab) — decides whether a stored tab handle may be acted on at all.
+  Delivering it as a MESSAGE would put a lost message between a browser restart and a reconciliation that
+  closes tabs by id; the SW writes it BEFORE it creates the offscreen document, so the reader cannot exist
+  while the answer is stale. A record whose epoch is not the current one is ORPHANED and acted on by nothing:
+  Chrome exposes no per-tab handle that survives a restart (`Tab.sessionId` is "the session ID used to
+  uniquely identify a tab obtained from the sessions API", not a property of a tab we hold), and matching on
+  URL is unsound in both directions, so the orphan is reported to the person rather than guessed at.
+
+## Real tabs — the address IS the check, and it is not `safeFetch`'s
+
+A tab this extension opens is a top-level navigation in the person's profile and **it carries their cookies**;
+CLAUDE.md settles that there is no credential-free context (no partition, no incognito, no interception, and
+`declarativeNetRequest` is not used in this project at all), because a session-less tab models nothing and
+produces findings that do not reproduce for the person.
+
+- **A navigation does not pass through `safeFetch` at all, so "every analyzer-driven request goes through
+  safeFetch" is about the DECISION, not the transport.** The trusted zone still chooses the address and
+  nothing else may; the bytes then travel by the browser's own navigation path, where `safeFetch`'s
+  SOP/CORS/PNA/CORB checks do not run and cannot be made to. That is stated rather than defended: it means the
+  guarantees in the section above are guarantees about `fetch`-shaped traffic, and a real tab's traffic is
+  covered by the address decision and by nothing else.
+- **So the address decision is the whole of it, and it is a `CHECK`.** `checkNavigationProvenance`
+  (`lib/owned-navigables.js`) is reached only through the one entry that also calls the browser's tab-create
+  edge, so it cannot be stepped around — a separate authorize beside a separate create would be two mechanisms
+  that must agree, with the window between them as the harm. A top-level navigation is a GET, inside RFC 9110
+  §9.2.1 Safe Methods' safe set, so the method half is answered and the remaining question is PROVENANCE:
+  OBSERVED and DERIVED addresses navigate (that IS the capability — reaching what a bundle names and no link
+  exposes); an unstated or invented grade aborts; and FORCED aborts today naming the per-origin widening
+  policy that does not yet exist, rather than reading an absent setting the widest way.
+- **A tab is a VISIT, not an execution surface.** Forced execution stays in the WASM sandbox. Nothing in the
+  ownership component injects, drives or scripts a tab; its only browser verbs are create, enumerate and
+  close, and it holds none of them itself (it takes them as arguments, since the offscreen document supports
+  `chrome.runtime` and nothing else).
 
 ## Network — one chokepoint
 
@@ -336,11 +379,12 @@ the honesty mechanism — a label that can't cite a real check is marked as a re
 - **`scripting` + MAIN-world injection is an unused privilege held open.** `_PROBE_INJECTORS` and the
   `scripting.exec` RPC arm (`background.js:102`, `:184`) grant arbitrary MAIN-world execution in any tab
   (`world:"MAIN"`, `target.allFrames`) — full same-origin control of every site the user has open — and
-  **nothing calls it** (`background.js:88` carries the standing finding; `tabs.create` / `tabs.remove` /
-  `tabs.get` likewise have no caller). The gate is sound and is an *equality*, not a prefix
+  **nothing calls it** (`background.js:88` carries the standing finding; `tabs.create` / `tabs.get` likewise
+  have no caller — `tabs.remove` now has one, the startup ownership reconciliation in
+  `lib/owned-navigables.js`, so two `tabs.*` arms remain unused rather than three). The gate is sound and is an *equality*, not a prefix
   (`sender.url === chrome.runtime.getURL("ast-worker.html")`, `background.js:219/23`), so it is unreachable
   today. It is the blast radius of any future hole in that one gate, and the `scripting` permission exists
-  only for it. Either the probe orchestration lands and uses it, or the arm, the injectors, the three unused
+  only for it. Either the probe orchestration lands and uses it, or the arm, the injectors, the two remaining unused
   `tabs.*` arms and the permission are DELETED together.
 
 ## Finding quality — gated by CONSTRAINTS + sink sensitivity, never reachability

@@ -9,6 +9,17 @@
 //   3. perform privileged chrome.tabs.* calls the offscreen can't, as RPC.
 // The popup talks to the brain directly over chrome.runtime.sendMessage (a
 // broadcast reaches the offscreen); the SW stays out of those messages.
+//
+// STATELESS IS ABOUT LEARNED DATA, AND THIS WORKER NOW WRITES EXACTLY ONE VALUE THAT IS NOT ANY. The
+// browser-session epoch (lib/owned-navigables.js) is a fresh uuid written when a profile with this extension
+// installed starts up — no page data, no learned data, never read back for an authorization decision, and in
+// its own object store that only this realm writes. It is here because THIS IS THE ONLY REALM THAT CAN OBSERVE
+// THE EVENT: `chrome.runtime.onStartup` is dispatched to the service worker, and the boundary it marks — the
+// instant every `tabs.Tab.id` in the previous session stopped naming the tab it named — is what decides
+// whether a stored tab handle may be acted on. Delivering it as a MESSAGE instead would put a lost message
+// between a browser restart and a reconciliation that closes tabs by id; a durable write ordered BEFORE the
+// offscreen document is created has no such window.
+importScripts("check.js", "lib/owned-navigables.js");
 
 const EXT_ORIGIN = "chrome-extension://" + chrome.runtime.id;
 const OFFSCREEN_URL = "ast-worker.html";
@@ -45,9 +56,28 @@ async function ensureOffscreen() {
 
 // Wake the brain on browser start / extension update so it resumes any incomplete
 // deep grind from IndexedDB without waiting for a navigation.
+//
+// THE EPOCH IS WRITTEN BEFORE THE BRAIN EXISTS, AND THE `await` IS THE WHOLE POINT. The brain reconciles its
+// ownership record against live tabs at boot and closes what no flow claims; it may only do that with tab
+// handles whose session it can name. Creating the document first would let it read the PREVIOUS session's
+// epoch, decide this session's tab ids are its own, and close tabs belonging to the person. So the ordering
+// is not a preference: a failure to write the epoch must prevent the reader from coming up believing a stale
+// one, which is why nothing here catches past it into `ensureOffscreen`.
+//
+// onInstalled does NOT bump it — an extension update is not a session boundary and every tab id survives one,
+// so bumping would orphan records this session can still act on. It only fills an absent epoch (a first
+// install, whose onStartup does not fire until the next launch).
 try {
-  chrome.runtime.onStartup.addListener(() => ensureOffscreen().catch((e) => console.warn("[bg:onStartup] ensureOffscreen failed:", e && e.message || e)));
-  chrome.runtime.onInstalled.addListener(() => ensureOffscreen().catch((e) => console.warn("[bg:onInstalled] ensureOffscreen failed:", e && e.message || e)));
+  chrome.runtime.onStartup.addListener(() => {
+    markBrowserSessionStart()
+      .then(() => ensureOffscreen())
+      .catch((e) => console.warn("[bg:onStartup] browser-session epoch / ensureOffscreen failed:", e && e.message || e));
+  });
+  chrome.runtime.onInstalled.addListener(() => {
+    ensureBrowserSessionEpoch()
+      .then(() => ensureOffscreen())
+      .catch((e) => console.warn("[bg:onInstalled] browser-session epoch / ensureOffscreen failed:", e && e.message || e));
+  });
 } catch (e) {
   // chrome.runtime.onStartup / onInstalled missing — the only way this catch fires
   // is if the MV3 API surface changed. Surface so the boot-time hook gap is visible.
@@ -92,11 +122,14 @@ chrome.tabs.onRemoved.addListener((tabId) => { toBrain({ __evt: "TAB_REMOVED", t
 // them. The live PoC verification took a different route — the popup embeds the sandboxed poc-sandbox.html and
 // the payload is delivered by the PoC itself (window.open / postMessage), with intercept.js's apiclientsink
 // relaying the hit — so `seedStorage`, `postMessage`, `dispatchEvents` and `readExecFlag` have no caller and
-// `tabs.create` / `tabs.remove` / `tabs.get` below have none either.
+// `tabs.create` / `tabs.get` below have none either. (`tabs.remove` DOES now: the brain's startup ownership
+// reconciliation closes the real tabs this extension opened and then lost — lib/owned-navigables.js. That
+// leaves two unused `tabs.*` arms rather than three, and `tabs.create` acquires its caller with the request
+// path that decides an address.)
 // It is gated to the offscreen document (the only trusted zone), so it is not reachable today; what it is, is
 // the blast radius of any future hole in that gate, held open for a caller that does not exist. Either the
-// probe orchestration this file's comment promises lands and uses it, or this arm, the injectors, the three
-// unused tabs.* arms and the `scripting` permission are DELETED together. It is named here rather than
+// probe orchestration this file's comment promises lands and uses it, or this arm, the injectors, the two
+// remaining unused tabs.* arms and the `scripting` permission are DELETED together. It is named here rather than
 // deleted in a security review because removing it decides that the injected-probe design is not coming back
 // — that is the probe design's call, not this review's.
 const _PROBE_INJECTORS = {
