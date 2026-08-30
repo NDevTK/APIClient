@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>json fork</title>
+<script>
+/* ONE PROBLEM: ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" over a text this engine does not have.
+ *
+ * §25.5.2 step 2 is "Let parseResult be ? ParseJSON(jsonString)", and §25.5.2.1 "ParseJSON ( text )" returns
+ * "either a normal completion containing a Record ... or a throw completion" — its step 1 is "If
+ * StringToCodePoints(text) is not a valid JSON text as specified in ECMA-404, throw a SyntaxError exception".
+ * Over unknown external input BOTH of those completions are feasible, so CLAUDE.md §Solver-half states the
+ * answer outright: "`JSON.parse(x)` on opaque input FORKS a feasible success arm AND a throw arm (the real
+ * `SyntaxError` propagating to a `catch`→sink, or aborting visibly when uncaught)". The throw is a REAL throw:
+ * the page's own `catch` runs and everything behind it is reached, which is the whole reason this is an arm
+ * and not a value.
+ *
+ * WHICH ARM THE RUN OBSERVED IS DECIDED BY RUNNING THE REAL CODEC ON THE REAL BYTES, and that is the half this
+ * document is built around. §Solver-half: the example propagates because the engine RUNS the real op, so the
+ * completion a real session reaches is computed by PARSING the example — never by inspecting a shape, a length
+ * or a leading character. The text here is composed from a field of a consumed reply (§Learning-from-replies:
+ * a reply's fields become concrete examples), so it carries `{"limit":7}` as its example; the parse of those
+ * bytes SUCCEEDS, which makes the value arm this flow's primary and the SyntaxError arm the FORCED sibling.
+ * A text with no example would take neither declaration, and every other unknown this gate's world offers is
+ * example-free — which is why the reply is here and why it is scaffolding rather than a second subject.
+ *
+ * HOW EACH ARM IS SEEN: `/api/parsed/{…}` carries `7` as its example, so it is the arm that ran the parser and
+ * read a field back out of the result; `/api/fallback` is reachable only through the `catch`, so it is the arm
+ * that threw. Two endpoint records, one per completion. A build that stopped forking here emits ONE of them,
+ * whichever it decided, and this gate's set is short by a whole record.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: which completion a flow is standing in is per-flow state held
+ * by a C builtin's own step machine, parked at its ask. The `park` schedule takes that across a session
+ * boundary and rebuilds it; `lastreply` answers the reply that supplies the example at a different step. The
+ * reply is the same reply whenever it lands (§Learning-from-replies), so the parse it feeds must reach the
+ * same completion under all of them — a flow that re-asked and answered differently, or one whose recorded arm
+ * did not survive the park, shows up as one of the two records missing.
+ *
+ * WHY IT DRAINS: no loop and no recursion. One reply, one parse, two arms, one fetch each.
+ *
+ * WHAT IS WRITTEN AROUND, by name. A REVIVER is not passed. §25.5.2 step 9's InternalizeJSONProperty walks the
+ * parse result calling the reviver once per node, and over an unknown whose example is not a JSON text there
+ * is no structure to walk — that reaches a DFAIL naming the unknown-structure walk, which aborts the document
+ * and this gate reports as a corpus defect. This document also depends on the driver's one reply body stating
+ * `limit` as a JSON scalar: the day it states something that is not one, the composed text stops parsing and
+ * that same DFAIL is what this document reaches, rather than a quietly different answer. */
+fetch("/config.json").then(function (r) { return r.json(); }).then(function (cfg) {
+  try {
+    var page = JSON.parse('{"limit":' + cfg.limit + '}');
+    fetch("/api/parsed/" + page.limit);
+  } catch (e) {
+    fetch("/api/fallback");
+  }
+});
+</script>

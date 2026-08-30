@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>timer clamp</title>
+<script>
+/* ONE PROBLEM: HTML §8.7 "Timers"' timer initialization steps step 4 — "If timeout is less than 0, then set
+ * timeout to 0" — asked over a `timeout` that is unknown external input CARRYING AN EXAMPLE.
+ *
+ * The step is a COMPARISON, and Web IDL §3.2.4.5 "long" is TOTAL over [-2147483648, 2147483647], so nothing
+ * about an unknown excludes either sign: both completions of step 4 are feasible over every one of them, with
+ * an example or without. CLAUDE.md §Solver-half is what makes that a fork rather than a choice — "never
+ * collapse a modelable value to bare-concrete — that deletes the fork and its coverage" — and the two arms are
+ * two different programs. The TRUE arm concretizes to the spec's own 0 (concretize-on-pin with the ALGORITHM
+ * doing the pinning). The FALSE arm keeps the unknown, so §8.7 step 3's "startTime plus milliseconds" is a
+ * moment nothing computed, and the entry is then ordered against every other entry by a FORK rather than by a
+ * decided comparison — which is the only page-visible thing either arm does.
+ *
+ * THE EXAMPLE IS THE HALF THIS DOCUMENT EXISTS FOR, AND NOTHING ELSE IN THIS CORPUS SUPPLIES ONE. An
+ * example-free unknown is the easy case; an unknown that HAS one is where a fork can be traded for a real
+ * number the engine computed, which is indistinguishable downstream from a timeout the page wrote as a
+ * literal. `cfg.limit` is the example: CLAUDE.md §Learning-from-replies makes a consumed reply's fields
+ * concrete examples, and this gate's one reply body states `limit` as a JSON number, so the value reaching
+ * `setTimeout` is unknown-for-control-flow and carries 7. Its example is also what says which arm a real
+ * session takes — 7 is not negative, so the arm that KEEPS the unknown is this flow's primary and the clamped
+ * one is its FORCED sibling. The reply round trip is SCAFFOLDING and is named as such: it is how this gate's
+ * world produces an unknown with a numeric example at all, not a second subject.
+ *
+ * WHAT IS OBSERVED IS THE ORDER, AND THE ACCUMULATOR IS THE INSTRUMENT RATHER THAN THE SUBJECT. A page cannot
+ * read a timer's expiry, so the only thing either arm changes is which callback the timer task source runs
+ * first: on the arm that keeps the unknown, `event_loop_before` has two feasible answers and BOTH orders run,
+ * so this document emits `/api/order/k` and `/api/order/ku` — a program in which the unknown-delay timer
+ * fires SECOND — beside the `/api/order/u` and `/api/order/uk` that a decided order produces. Those four
+ * records are the finding set, and a schedule that dropped, starved or forgot the order fork the unknown
+ * expiry created is short by two of them.
+ *
+ * WHAT THIS DOCUMENT DOES NOT COVER, said plainly because the shape of the gap is structural rather than an
+ * omission: THE CLAMPED ARM HAS NO OBSERVABLE OF ITS OWN, and cannot be given one by ordering. Its expiry is a
+ * NUMBER, so every order it produces is decided; its sibling's expiry is unknown, so its sibling FORKS and
+ * therefore explores every order the clamped arm could have produced. A concrete outcome is a subset of a
+ * forked one, so no arrangement of timers makes the clamped arm's contribution unique, and dropping that
+ * sibling changes no set this gate compares.
+ * WHAT WOULD COVER IT is an observable of the EXPIRY ITSELF that is a function of the document alone — and the
+ * obvious one is not: a moment read inside the callback (DOM §2.5 "Constructing events" initializes a
+ * constructed event's `timeStamp` from the current high resolution time, and DOM §2.2 "Interface Event" says
+ * the attribute returns what it was initialized to) separates the arms perfectly and is SCHEDULE-DEPENDENT,
+ * because whether a rendering opportunity has advanced the virtual clock before the reply's continuation runs
+ * is the event loop's choice. Measured on this corpus before this document was written this way: the same
+ * document under `direct`, twice, on one build, emitted `/api/tick/16.6` in one run and `/api/tick/0` in the
+ * other. That is not a cap and not a lost flow — HTML §8.1.7.3 "Processing model" step 2.1 chooses a task
+ * queue "in an implementation-defined manner" — but it makes any corpus document that lets a MOMENT reach an
+ * endpoint a permanent false red, so the clock is not the way in. HOW THE ABSENCE SHOWS today: it does not,
+ * here, and that is the point of writing it down — the clamped sibling is exercised by every schedule and held
+ * invariant by none of them.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: the sibling is minted by a STEP MACHINE at an outcome fork,
+ * not by an interpreter at an OP_if — the driver snapshots the machine at the ask and the sibling re-enters
+ * that body holding the other arm. No other corpus document parks a C builtin's own machine, and the `park`
+ * schedule then carries one across a session boundary and rebuilds it from the residue.
+ *
+ * WHY IT DRAINS: no loop and no recursion. One reply, two timers, two branchless callbacks; the frontier is
+ * the boot flow, the reply's continuation, step 4's sibling and the order forks the unknown expiry produces.
+ *
+ * WHAT IS WRITTEN AROUND, by name: `setInterval` with this same argument reaches §8.7 step 5's TIMER NESTING
+ * LEVEL, which is not built and DFAILs — an abort loses the document's findings and this gate reports it as a
+ * corpus defect, so the repeating form belongs here only once that level exists. */
+var seen = "";
+function note(w) { seen = seen + w; fetch("/api/order/" + seen); }
+fetch("/config.json").then(function (r) { return r.json(); }).then(function (cfg) {
+  setTimeout(function () { note("u"); }, cfg.limit);
+  setTimeout(function () { note("k"); }, 5);
+});
+</script>

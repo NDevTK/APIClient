@@ -1,0 +1,50 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>json prefix</title>
+<script>
+/* ONE PROBLEM: the completion of ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" that the SOURCE's own
+ * domain makes infeasible — json_fork.html's other half, over the same builtin, and the pair is what makes
+ * either readable.
+ *
+ * CLAUDE.md §Solver-half names this document in a sentence: "the leading `#` makes `JSON.parse(location.hash)`'s
+ * success arm infeasible so it throws exactly as V8 does". The fact is the source component's, not a special
+ * case in the parser: HTML §7.2.4 "The Location interface"'s hash getter steps are "If this's url's fragment
+ * is either null or the empty string, return the empty string" and otherwise "Return "#", followed by this's
+ * url's fragment" — so every value the domain permits is the empty string or begins with U+0023 (#), and
+ * neither is a valid JSON text as ECMA-404 specifies. §25.5.2.1 "ParseJSON ( text )" step 1 therefore throws
+ * for the WHOLE domain, so the normal completion is pruned rather than forked, and V8 reaches the same answer
+ * the same way — by the grammar, not by a rule about fragments.
+ *
+ * WHY IT IS A DOCUMENT AND NOT A LINE IN json_fork.html: a pruned arm and a fork are decided at the same ask
+ * over the same operand, and this one leaves NO sibling — so what it emits is the evidence that the prune
+ * happened, and it can only be read against a document where the same ask forks. A run in which both fork, or
+ * in which neither does, is one fact about the ask reported as two.
+ *
+ * IT MUST NOT BE READABLE AS THE OTHER THING IT LOOKS LIKE. One endpoint out of a `catch` is exactly what a
+ * document whose text was never unknown at all would emit — `JSON.parse("")` throws a perfectly ordinary
+ * SyntaxError — and those are two different facts behind one answer. So the fallback carries the source: the
+ * record is `/api/default/{location.hash}` with an EMPTY example list, which says the value that reached the
+ * parse was unknown external input carrying no example, and the prune is then the only thing that explains a
+ * single flow and no fork.
+ *
+ * WHAT MAKES IT A SCHEDULE-INVARIANCE DOCUMENT: a domain prune is a fact about the VALUE, so no schedule may
+ * reach the arm it removed. That is a stronger claim under `park` than anywhere else — the resumed session has
+ * to re-derive the prune from the source's own declaration rather than replay it from a recorded arm, and a
+ * residue that carried the arm instead could resume into the completion the domain excludes. It shows up here
+ * as a second endpoint under one schedule and not another, which is a PoC-grade false positive (a text the
+ * browser's own delivery guarantees is not JSON, parsed anyway) reported to a person in one run and not the
+ * next.
+ *
+ * WHY IT DRAINS: no loop, no recursion, no reply. One flow, one fetch.
+ *
+ * WHAT IS WRITTEN AROUND, by name: no reviver, for json_fork.html's reason. And what this document does the
+ * day the prune stops pruning is worth stating, because it is not a gate failure: the success arm becomes
+ * feasible under EVERY schedule at once, so the differential holds and the change is visible in the @H count
+ * printed beside the verdict — one endpoint becoming two. */
+try {
+  var cfg = JSON.parse(location.hash);
+  fetch("/api/route/" + cfg.view);
+} catch (e) {
+  fetch("/api/default/" + location.hash);
+}
+</script>
