@@ -1186,6 +1186,47 @@ function _bestCandidate(idx) {
          "its own would suspend in the middle of that");
   const live = new Set();
   for (const e of _pool) if (e.msg && e.msg.sourceUrl) live.add(e.msg.sourceUrl);
+  /* WHAT THIS STORE ALREADY KNOWS ABOUT THE ADDRESSES THAT ARE WAITING — the rank a waiting document is
+     entitled to, and the thing this arm used to answer with a constant.
+     WHY THE CONSTANT WAS THE WHOLE ANSWER TO THE SEEDING QUESTION, AND WHY IT WAS "NOTHING". Every waiting
+     document ranked `frontierWeight(FRONTIER_UNSERVED)` — 1.0, unconditionally, however many times that
+     address had already been admitted, fetched, analysed and found to demonstrate nothing new. Once the
+     engine seeds documents from addresses it derived out of a bundle (forced execution from an index page
+     naming the routes no link exposes), that constant is the entire Level-1 answer to "what stops a cycle
+     from dominating": A names B, B names A, and each re-arrival enters at exactly 1.0, tied with every
+     address nobody has ever opened, for ever. §scheduler permits exactly one answer — ranking and starvation
+     — and there was no rank for a starvation to be expressed in.
+     THE HISTORY IS THE ADDRESS'S, NOT THE KEY'S, WHICH IS WHY IT CAN BE ASKED HERE AT ALL. The reason this
+     arm carried a constant is real and is unchanged: a frontier key is `address|bundle`, the bundle half is
+     the ENGINE's own Lexbor <script> scan, and this zone may not guess it (a host-side regex over the markup
+     is exactly what §Architecture forbids), so the host does not yet know WHICH residue this visit resumes.
+     No guess is required to state what the store holds AT AN ADDRESS: every row carries its `sourceUrl`.
+     "This address has been admitted n times across the bundles served there and currently demonstrates F
+     findings" attributes nothing to a key — it is a fact about the ADDRESS, which is the thing being
+     admitted and the thing whose fetch is about to be spent.
+     AND THIS IS WHERE THE OUTBOUND REQUEST'S COST RIDES THE ORDER. A document request spends someone else's
+     server, which is the one asymmetry a document has over a flow, and it is priced by the term that is
+     already here rather than by a constant added beside it: `visits` counts the fetches spent at this
+     address and the reward is divided by them, so an address's rank falls by exactly what it has cost. Nothing
+     here refuses a second fetch — a resumed flow re-derives its examples from CURRENT sources and the
+     re-derivable tier converts storage into precisely this recomputation — it only decides what else the
+     order would rather spend the fetch on first.
+     ONE PASS, AND ONLY OVER THE ADDRESSES IN QUESTION: the cold loop below already walks this index once, so
+     the aggregate is the same order of work and never a per-job scan of the store. */
+  const waitingAddrs = new Set();
+  for (const job of _waiting)
+    if (!(job.msg.frameId && _isRealOrigin(job.msg.origin))) waitingAddrs.add(job.msg.sourceUrl);
+  const byAddress = new Map();
+  if (waitingAddrs.size) for (const row of idx.values()) {
+    if (!waitingAddrs.has(row.sourceUrl)) continue;
+    const a = byAddress.get(row.sourceUrl);
+    /* SUMMED ACROSS THE BUNDLES SERVED AT ONE ADDRESS, which is a pooled mean and not a mixing of records:
+       each row's `emit` is the surface its last run demonstrated and each row's `visits` is the fetches spent
+       reaching it, so the quotient of the sums is "what one admission of this ADDRESS has been worth",
+       weighted by the admissions each bundle actually received. */
+    if (a) { a.emit += row.emit; a.visits += row.visits; }
+    else byAddress.set(row.sourceUrl, { emit: row.emit, visits: row.visits });
+  }
   let best = null;
   for (const job of _waiting) {
     /* A SUB-FRAME NEVER ROOTS A CLUSTER — its embedder names it (see admit), so it is not admissible and is
@@ -1193,11 +1234,31 @@ function _bestCandidate(idx) {
        creates it; nothing here drops it. */
     if (job.msg.frameId && _isRealOrigin(job.msg.origin)) { live.add(job.msg.sourceUrl); continue; }
     live.add(job.msg.sourceUrl);
-    const w = frontierWeight(FRONTIER_UNSERVED);
+    /* AN ADDRESS WITH NO ROWS IS A POSITIVE STATEMENT AND IS READ AS ONE, never as a hole a `||` fills: this
+       profile has never served it, which is what `FRONTIER_UNSERVED` says and the one legitimate zero-visit
+       input this weight takes. The two arms are different facts about the address and say so separately. */
+    const known = byAddress.get(job.msg.sourceUrl);
+    const w = frontierWeight(known !== undefined ? known : FRONTIER_UNSERVED);
     if (!best || w > best.w) best = { kind: "doc", job, w };
   }
   for (const row of idx.values()) {
-    if (live.has(row.sourceUrl)) continue;
+    if (live.has(row.sourceUrl)) {
+      /* THE EXCLUSION MOVES A ROW'S WEIGHT, IT DOES NOT DELETE IT — and deleting it is what it did. A parked
+         entry and the tab that holds its address are ONE work item (the tab's instance resumes that residue
+         itself; rehydrating beside it would replay one document's flows in two instances), so the row leaves
+         this order and the item that stands for it must carry what it was worth. While the waiting arm above
+         answered 1.0, this skip was the second half of one loss running in both directions: an address that
+         has produced nothing was never outranked, and a residue that has produced a great deal was ranked as
+         though it had produced nothing the moment a tab opened its page. Asserted rather than described,
+         because the failure is silent — the row simply is not in the order, and nothing counts what left it.
+         A row excluded because a LIVE INSTANCE holds its address is carried by that engine's own
+         `engineWeight` instead, which is a different mechanism and not this one's to assert. */
+      DCHECK(!waitingAddrs.has(row.sourceUrl) || byAddress.has(row.sourceUrl),
+             "a parked residue was taken out of the Level-1 order because a waiting document holds its " +
+             "address, and that document was not ranked by it — the row's weight has left the order with " +
+             "nothing carrying it, so a productive frontier is admitted as if it had never found anything");
+      continue;
+    }
     if (_pool.some((p) => p.fkey === row.key)) continue;
     /* A STRANDED RESIDUE IS NOT ADMISSIBLE AND IS THEREFORE NOT A CANDIDATE — the same sentence the sub-frame
        above is excluded by, and the same non-loss. Its document was shed against a proof and its re-derivation
