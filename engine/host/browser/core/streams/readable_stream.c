@@ -206,6 +206,27 @@ static ControllerData *ctrl_of(JSValueConst v)
     return c;
 }
 
+/* WRITE ONE OWNED SLOT OF EACH RECORD, and never `JS_FreeValue(ctx, d->f); d->f = <build one>;` — see cow.h for
+   the order and the defect. §4's values are queues, promises and the page's own source methods: building one
+   allocates, and an allocation IS a collection (js_trigger_gc has exactly one caller, JS_NewObjectFromShape),
+   so a slot left naming freed storage across the build is walked by the record's own gc_mark and decrefs a
+   JSObject already back on the allocator's free list. Releasing one is the same hazard from the other side.
+   Each record binds its layout ONCE, here, so no site can pass a slot from one of the three with the layout of
+   another. The MINTS do not come here: each fills its block before JS_SetOpaque, where the record is
+   unreachable by the collector and its slots hold no value to release. */
+void rs_stream_set(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, d, &STREAM_REC, slot, v);
+}
+static void rd_set(JSContext *ctx, ReaderData *r, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, r, &READER_REC, slot, v);
+}
+static void rc_set(JSContext *ctx, ControllerData *c, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, c, &CTRL_REC, slot, v);
+}
+
 /* How many chunks are still unread. §4.2 has no length to expose; this is the queue's own bookkeeping. */
 static uint32_t stream_queued(JSContext *ctx, StreamData *d)
 {
@@ -221,13 +242,17 @@ static uint32_t stream_queued(JSContext *ctx, StreamData *d)
    makes desiredSize answer for chunks that are gone. Returns -1 with an exception live. */
 static int stream_queue_reset(JSContext *ctx, StreamData *d)
 {
-    JS_FreeValue(ctx, d->queue);
-    JS_FreeValue(ctx, d->queue_size);
-    d->queue = JS_NewArray(ctx);
-    d->queue_size = JS_NewArray(ctx);
+    JSValue q = JS_NewArray(ctx), qs = JS_NewArray(ctx);
+
+    /* BUILT INTO LOCALS AND THEN PUBLISHED. Both Arrays are minted while the OLD two are still live and still
+       named by the record, so neither of the two collections these allocations can start walks a slot naming
+       freed storage — and an exception marker never reaches a slot stream_gc_mark reads. */
+    if (JS_IsException(q) || JS_IsException(qs)) { JS_FreeValue(ctx, q); JS_FreeValue(ctx, qs); return -1; }
+    rs_stream_set(ctx, d, &d->queue, q);
+    rs_stream_set(ctx, d, &d->queue_size, qs);
     d->head = 0;
     d->queue_total = 0;
-    return JS_IsException(d->queue) || JS_IsException(d->queue_size) ? -1 : 0;
+    return 0;
 }
 
 /* §4.5's EnqueueValueWithSize, minus its own RangeError — the caller checks that, because the check's failure
@@ -445,8 +470,7 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
                promise objects is what the corpus checks — so it cannot be a no-op. */
             p = JS_NewPromiseCapability(ctx, funcs);
             if (JS_IsException(p)) { JS_FreeValue(ctx, in); return -1; }
-            JS_FreeValue(ctx, rd->closed);
-            rd->closed = p;
+            rd_set(ctx, rd, &rd->closed, p);
         } else {
             rd->closed_settled = 1;
             funcs[0] = rd->closed_funcs[0];               /* the pair is HANDED OVER and dropped together */
@@ -485,8 +509,7 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
     } else if (w->settle == S_ERR_SET) {
         if (d->state == RS_READABLE) {
             d->state = RS_ERRORED;
-            JS_FreeValue(ctx, d->stored_error);
-            d->stored_error = w->err;      /* the reason is HANDED OVER: the stream owns it from here */
+            rs_stream_set(ctx, d, &d->stored_error, w->err);   /* HANDED OVER: the stream owns it from here */
             w->err = JS_UNDEFINED;
             /* §4.5's ResetQueue: an errored stream has no chunks left to give */
             if (stream_queue_reset(ctx, d) < 0) { JS_FreeValue(ctx, in); return -1; }
@@ -511,10 +534,8 @@ int rs_settle_run(JSContext *ctx, StreamWork *w, StreamData *d, JSValue in,
             /* §4.3's GenericRelease, in the one order that works: the `closed` promise is settled while the
                reader still holds the lock, and only then is the lock dropped. */
             DCHECK(rd != NULL, "a release sequence ran on a stream that has no reader");
-            JS_FreeValue(ctx, d->reader);
-            d->reader = JS_UNDEFINED;
-            JS_FreeValue(ctx, rd->stream);
-            rd->stream = JS_UNDEFINED;
+            rs_stream_set(ctx, d, &d->reader, JS_UNDEFINED);
+            rd_set(ctx, rd, &rd->stream, JS_UNDEFINED);
             w->settle = S_REL_LOOP;
         } else {
             w->settle = w->settle == S_CLOSE_CLOSED ? S_CLOSE_LOOP : S_ERR_LOOP;
@@ -1459,9 +1480,8 @@ static int js_cancel_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
         if (bytes) {
             readable_byte_clear_algorithms(ctx, d->controller);
         } else if (c) {
-            JS_FreeValue(ctx, c->pull_fn);
-            JS_FreeValue(ctx, c->cancel_fn);
-            c->pull_fn = c->cancel_fn = JS_UNDEFINED;
+            rc_set(ctx, c, &c->pull_fn, JS_UNDEFINED);
+            rc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
         }
         STEP_GOTO(s->hdr.stage, CN_RESOLVE, &s->w.phase, NULL);
     }
@@ -3811,8 +3831,7 @@ static int js_rs_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             DCHECK(c != NULL, "CreateReadableStream answered a stream with no controller");
             /* The SOURCE is the receiver §4.9.4 invokes the page's methods on — CreateReadableStream has no
                source at all, so it is set here rather than inside the operation. */
-            JS_FreeValue(ctx, c->source);
-            c->source = JS_DupValue(ctx, source);
+            rc_set(ctx, c, &c->source, JS_DupValue(ctx, source));
         }
         s->start_fn = s->src[SRC_START];
         s->src[SRC_START] = JS_UNDEFINED;

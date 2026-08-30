@@ -75,6 +75,13 @@ enum { P_IDLE = 0, P_TEST, P_CALL, P_RESOLVE, P_REJECT, P_THEN };
 StreamData *rs_stream_data(JSValueConst v);
 ReaderData *rs_reader_data(JSValueConst v);
 
+/* WRITE ONE OF A STREAM'S OWNED SLOTS — PUBLISH BEFORE RELEASE, see cow.h. It is EXPORTED because §4.6's
+   controller is attached from the other translation unit, and the layout that says what a StreamData owns
+   lives with the record: a write spelled by hand over there is a write no layout governs, which is exactly the
+   slot a later field addition would be missed at. Passing a slot that is not this record's crashes at the
+   assert inside. */
+void rs_stream_set(JSContext *ctx, StreamData *d, JSValue *slot, JSValue v);
+
 /* 7.4.14's CreateIterResultObject — `{ value, done }`, own properties DEFINED and not assigned. `value` is
    CONSUMED. */
 JSValue rs_read_result(JSContext *ctx, JSValue value, bool done);

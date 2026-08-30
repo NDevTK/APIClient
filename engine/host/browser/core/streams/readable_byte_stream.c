@@ -150,6 +150,23 @@ static ByobReqData *byobreq_of(JSValueConst v)
     return q;
 }
 
+/* WRITE ONE OWNED SLOT OF EITHER RECORD, and never `JS_FreeValue(ctx, c->f); c->f = <build one>;` — see cow.h
+   for the order and the defect. §4.7's two ResetQueue-shaped operations are the live ones: each frees an Array
+   and then allocates its replacement, and an allocation IS a collection (js_trigger_gc has exactly one caller,
+   JS_NewObjectFromShape), so the slot the collector reaches through this component's gc_mark names storage
+   already back on the allocator's free list.
+   Each record binds its layout ONCE, here, so no site can pass a slot from one with the layout of the other.
+   The MINTS do not come here: each fills its block before JS_SetOpaque, where the record is unreachable by the
+   collector and its slots hold no value to release. */
+static void bc_set(JSContext *ctx, ByteCtrlData *c, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, c, &BCTRL_REC, slot, v);
+}
+static void bq_set(JSContext *ctx, ByobReqData *q, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, q, &BYOBREQ_REC, slot, v);
+}
+
 bool readable_byte_ctrl_is(JSValueConst v)
 {
     return g_bctrl_class != 0 && JS_GetOpaque(v, g_bctrl_class) != NULL;
@@ -359,33 +376,36 @@ static void byte_invalidate_byob(JSContext *ctx, ByteCtrlData *c)
     q = byobreq_of(c->byob_request);
     DCHECK(q != NULL, "a byte controller held something that is not a ReadableStreamBYOBRequest");
     if (q) {
-        JS_FreeValue(ctx, q->controller);
-        q->controller = JS_UNDEFINED;
-        JS_FreeValue(ctx, q->view);
-        q->view = JS_NULL;
+        bq_set(ctx, q, &q->controller, JS_UNDEFINED);
+        bq_set(ctx, q, &q->view, JS_NULL);
     }
-    JS_FreeValue(ctx, c->byob_request);
-    c->byob_request = JS_UNDEFINED;
+    bc_set(ctx, c, &c->byob_request, JS_UNDEFINED);
 }
 
 /* §4.9.5's ReadableByteStreamControllerClearPendingPullIntos. */
 static void byte_clear_pending(JSContext *ctx, ByteCtrlData *c)
 {
+    JSValue list;
+
     byte_invalidate_byob(ctx, c);
-    JS_FreeValue(ctx, c->pending);
-    c->pending = JS_NewArray(ctx);
+    /* BUILT INTO A LOCAL AND THEN PUBLISHED: the new Array is minted while the OLD one is still live and still
+       named by the record, so the collection this allocation can start does not reach a freed slot. */
+    list = JS_NewArray(ctx);
+    CHECK(!JS_IsException(list), "a byte stream's pull-into list could not be allocated");
+    bc_set(ctx, c, &c->pending, list);
     c->phead = 0;
-    CHECK(!JS_IsException(c->pending), "a byte stream's pull-into list could not be allocated");
 }
 
 /* §8.1's ResetQueue over §4.7's queue: the entries and the byte total go together. */
 static void byte_reset_queue(JSContext *ctx, ByteCtrlData *c)
 {
-    JS_FreeValue(ctx, c->queue);
-    c->queue = JS_NewArray(ctx);
+    JSValue q = JS_NewArray(ctx);
+
+    /* BUILT INTO A LOCAL AND THEN PUBLISHED, for the reason byte_clear_pending states one screen up. */
+    CHECK(!JS_IsException(q), "a byte stream's queue could not be allocated");
+    bc_set(ctx, c, &c->queue, q);
     c->qhead = 0;
     c->queue_total = 0;
-    CHECK(!JS_IsException(c->queue), "a byte stream's queue could not be allocated");
 }
 
 /* §4.9.5's ReadableByteStreamControllerShiftPendingPullInto. The descriptor is OWNED by the caller. */
@@ -1003,8 +1023,7 @@ void readable_byte_release_steps(JSContext *ctx, JSValueConst ctrl)
     list = JS_NewArray(ctx);
     CHECK(!JS_IsException(list), "a byte stream's pull-into list could not be allocated");
     JS_SetPropertyUint32(ctx, list, 0, first);
-    JS_FreeValue(ctx, c->pending);
-    c->pending = list;
+    bc_set(ctx, c, &c->pending, list);
     c->phead = 0;
     byte_invalidate_byob(ctx, c);
 }
@@ -1039,9 +1058,8 @@ void readable_byte_clear_algorithms(JSContext *ctx, JSValueConst ctrl)
     ByteCtrlData *c = bctrl_of(ctrl);
 
     DCHECK(c != NULL, "a byte ClearAlgorithms ran on a value that is not a ReadableByteStreamController");
-    JS_FreeValue(ctx, c->pull_fn);
-    JS_FreeValue(ctx, c->cancel_fn);
-    c->pull_fn = c->cancel_fn = JS_UNDEFINED;
+    bc_set(ctx, c, &c->pull_fn, JS_UNDEFINED);
+    bc_set(ctx, c, &c->cancel_fn, JS_UNDEFINED);
 }
 
 /* ---- §4.9.5's SetUpReadableByteStreamController ------------------------------------------------------------ */
@@ -1077,8 +1095,7 @@ int readable_byte_ctrl_setup(JSContext *ctx, JSValueConst stream, JSValueConst p
     /* §4.2's constructor builds the stream with §4.6's controller already attached (there is no stream without
        one), so THIS is where a byte stream loses it: the two are alternatives, and a stream carrying both would
        answer §4.9.2's polymorphic call from whichever one a reader happened to find. */
-    JS_FreeValue(ctx, d->controller);
-    d->controller = obj;
+    rs_stream_set(ctx, d, &d->controller, obj);
     return 0;
 }
 
