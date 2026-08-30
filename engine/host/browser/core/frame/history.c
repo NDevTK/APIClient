@@ -55,6 +55,9 @@
 #include "core/realm.h"
 #include "core/structured_clone.h"
 #include "core/url/url.h"
+/* §7.2.5's `url` position is declared IDL_USVSTRING_NULLABLE, and core/idl_args.h's IDL_CONCOLIC_CROSSES rule
+   delivers unknown external input to this body as itself — so step 5 asks whether it is one. */
+#include "solver/concolic.h"
 
 static JSClassID g_history_class;
 static int g_obj_slot = -1;
@@ -341,6 +344,68 @@ static int js_hist_push_replace(JSContext *ctx, JSStepHdr *hdr, void *state, int
        as undefined and one it passed as null arrives as JS_NULL (the declared type is `USVString?`); both are
        the IDL null. */
     if (argc >= 3 && !JS_IsNull(argv[2]) && !JS_IsUndefined(argv[2])) {
+        /* AND THE THIRD STATE OF THE ARGUMENT, WHICH THE TWO ABOVE DO NOT COVER: UNKNOWN EXTERNAL INPUT. The
+           position is declared IDL_USVSTRING_NULLABLE and core/idl_args.h's IDL_CONCOLIC_CROSSES rule hands
+           this body a concolic UNCONVERTED on purpose — opacity has to SURVIVE a coercion or the value stops
+           forking control flow — so "the USVString the IDL conversion produced" is a claim this position
+           cannot make, and the JS_ToCString below dies one frame on, in js_force_tostring, naming this line
+           as a byte consumer and nothing else.
+           IT IS ASKED HERE RATHER THAN LEFT TO THAT BOUNDARY BECAUSE THAT BOUNDARY'S REMEDY IS WRONG FOR THIS
+           SITE, and wrong in the direction that ships. It tells a site that wants a NAME to ask the unknown
+           for its display SHAPE, which is the right answer for a selector and for Fetch §5.4 `fetch(input,
+           init)`, where core/fetch/fetch.c reads the shape and then holds `url_is_real` false so nothing is
+           ever requested at it. There is no such second fact here. This string becomes the DOCUMENT'S OWN
+           ADDRESS at HTML §7.4.4 "Non-fragment synchronous \"navigations\"" step 8, and on the line before
+           that it is DECLARED A PAGE OF THIS APPLICATION (solver/route_seed.h) — a declaration the trusted
+           zone LOADS, same-origin, over the person's own session. So a shape taken here seeds
+           `…/admin/%7Bstate%7D.id`: an address no server has, fetched under the person's name, and then the
+           reply's fields are examples that shape the next endpoint. That is §@H's never-invent one navigation
+           further out than §@H usually has to say it.
+           WHAT TO BUILD, AND THE TWO ARMS ARE DIFFERENT CAPABILITIES RATHER THAN TWO SPELLINGS OF ONE.
+           WITH AN EXAMPLE, the run COMPUTED this address by running the real operations on real concretes
+           (`"/u/" + {reply}.id` ⇒ `/u/8812`), and that is exactly the surface solver/route_seed.h exists for:
+           a page the bundle NAMES out of a value it learned, which no link exposes and no session reached.
+           What is missing is not the string — it is a Document ADDRESS THAT CARRIES AN EXAMPLE AND A DOMAIN.
+           Writing the bare example into the UrlRecord below would collapse a value that is
+           opaque-for-control-flow to bare-concrete, so a later `location.pathname.startsWith("/admin")` would
+           be DECIDED instead of forking and that arm would be lost with nothing to say so. That is the
+           shortcut, not the fix, and it is why this arm is not answered by reading the example here.
+           WITH NO EXAMPLE, the run does not know where this Document went. A Document whose address is
+           unknown is the thing that does not exist yet, and until it does there is no newURL for step 5 to
+           produce and no page for route_seed to declare. Neither arm is answerable by a coercion. */
+#if APICLIENT_DEV
+        if (concolic_is(argv[2])) {
+            const char *sh = concolic_shape_c(argv[2]);
+            JSValue ex = concolic_example(ctx, argv[2]);
+            int has_example = !JS_IsUndefined(ex);
+
+            JS_FreeValue(ctx, ex);
+            DCHECK(sh != NULL,
+                   "an unknown reached §7.2.5's step 5 with no display shape — the shape is the only thing "
+                   "this site can say about an address it cannot know, and a value that has lost it names "
+                   "neither the route that was declared nor the source it was built from");
+            DFAILF("HTML §7.2.5 \"The History interface\"'s shared history push/replace state steps step 5 "
+                   "was handed UNKNOWN EXTERNAL INPUT `%s` as its `url`, and %s. This is the routing member "
+                   "every client-side router uses to say \"this address is a page of my application\", so "
+                   "this is the ONE gate the whole route-seeding surface passes through (§7.4.4's URL and "
+                   "history update steps have exactly this one caller). DO NOT COERCE IT AND DO NOT TAKE ITS "
+                   "SHAPE: the string becomes the Document's address at §7.4.4 step 8 and is declared a page "
+                   "of this application at the line before it (solver/route_seed.h), and the trusted zone "
+                   "LOADS a declared page over the person's own session — a shape would seed an address no "
+                   "server has and learn examples from the reply. %s",
+                   sh,
+                   has_example ? "IT CARRIES A CONCRETE EXAMPLE, so the run computed a real address"
+                               : "IT CARRIES NO EXAMPLE, so the run does not know this Document's address",
+                   has_example
+                     ? "BUILD: a Document address that carries an EXAMPLE AND A DOMAIN, so §7.4.4 step 8 and "
+                       "route_seed_declare take the computed address while a later `location.pathname` read "
+                       "still forks. Writing the bare example into the UrlRecord instead collapses an "
+                       "opaque-for-control-flow value to bare-concrete and silently deletes that arm."
+                     : "BUILD: the Document whose address is UNKNOWN. Until it exists there is no newURL for "
+                       "step 5 to produce, and inventing one from the shape is the false page this assert "
+                       "exists to refuse.");
+        }
+#endif
         url_arg = JS_ToCString(ctx, argv[2]);
         CHECK(url_arg != NULL, "history: the USVString the IDL conversion produced could not be read");
     }
