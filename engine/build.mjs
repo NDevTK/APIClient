@@ -175,6 +175,14 @@ const loadNow = () => {
    is a change in two places on purpose. */
 const COLD_FIELDS = ["live", "framed", "blocked", "owed",
                      "finished", "deepest", "completed", "sold", "forks",
+                     /* `resumed` IS THE POSITIVE STATEMENT the three orphanClaims rows below need, and it is
+                        listed for the reason this list exists rather than as decoration: those three read 0
+                        both when no residue was handed to the session and when a rebuild carried no drives,
+                        and solver/result.c calls the last of them THE VERDICT. Without `resumed` beside them a
+                        reader takes a pass out of a session that never resumed. The four decomposition rows
+                        are cold.h's "which ARMS of the grammar ran" — a residue of only `'f'` records
+                        exercised neither the hex walk nor a candidate resume nor the foreign-world rebuild. */
+                     "resumed", "resumedSegs", "resumedFlows", "resumedCands", "resumedWorlds",
                      "orphanClaims", "orphanClaimsMet", "orphanClaimsUnmet",
                      "hostAsked", "hostAnswered", "hostAnswersExtra", "hostAnswersLate", "hostTerminated",
                      "pagedReqs",
