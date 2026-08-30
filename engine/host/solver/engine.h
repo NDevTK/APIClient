@@ -943,9 +943,48 @@ long engine_units_done(void);
  * record-field gate exists to catch) and the RUNNING flow's cursor (a sample of one flow, which `deepest` and
  * `completed` answer as facts about the DOCUMENT). */
 typedef struct {
-    long finished;          /* flows that ran to their end */
-    long sold;              /* flows this instance PAGED OUT — see g_flows_sold */
+    /* ─── THE TWO RETIREMENT TOTALS, EACH BESIDE THE TWO POPULATIONS IT IS THE SUM OF ────────────────────
+     *
+     * A FRONTIER HOLDS TWO POPULATIONS AND ONE COUNTER CANNOT REPORT ON EITHER. `finished` and `sold` are
+     * over every member, and a member is one of two things: an EXPLORATION flow (a boot fork, a branch arm, a
+     * loop arm, an orphan drive) or an @S CANDIDATE SESSION — solve.c's re-fire of one derived breakout,
+     * which is a flow on the ONE frontier exactly as CLAUDE.md §THERE-IS-NO-GRIND requires and is NOT a
+     * second executor. The two retire for OPPOSITE reasons and take OPPOSITE work: an exploration flow that
+     * ran to its end is coverage this document actually gained, while a candidate session that ran to its end
+     * is one derived payload that did NOT fire and was discarded, which is the search spending itself.
+     * Summed, "the engine retired 47 flows" and "the search discarded 47 candidates having proved nothing"
+     * are one number, and the reader cannot tell which it is holding.
+     *
+     * THE LABEL IS `Flow.cand_src` AND IT IS A BINARY PARTITION BY CONSTRUCTION. One field, set at birth
+     * (solve.c's seed, engine_sibling_assemble's copy, cold.c's 'c' record), never cleared, freed only at
+     * flow_release — so every member is on exactly one side of it at every instant of its life, and the two
+     * arms below cannot overlap or leave a member out. That is why this is TWO rows and not three: being a
+     * DRIVEN ORPHAN (`Flow.orphan`) is a separate field, and a drive seeded from a candidate parent inherits
+     * the substitution AND gets the mark, so a candidate/orphan/plain split would not be a partition at all
+     * and its "sum" would over-count the members that are both.
+     *
+     * THE TOTAL STAYS, AND THE PARTITION IS ASSERTED AGAINST IT — the same discipline solver/cold.h's
+     * `step_units` keeps against `flows`. Each arm is incremented beside its total at the one site that
+     * total is written at, so the identity is what a retirement path added later without a label breaks;
+     * engine_frontier_census is where all three are read together and is where it fires. */
+    long finished;          /* flows that ran to their end — `finished_flows + finished_cands`, asserted */
+    long finished_flows;    /* …the EXPLORATION flows among them: coverage this document gained */
+    long finished_cands;    /* …and the @S candidate sessions: derived payloads that ran and did not fire */
+    long sold;              /* flows this instance PAGED OUT — `sold_flows + sold_cands`, asserted; see
+                               g_flows_sold */
+    long sold_flows;        /* …the exploration flows among them */
+    long sold_cands;        /* …and the candidate sessions, which is the sharper half of the pair: a parked
+                               candidate comes back WITHOUT its ladder (solver/flow.h — `cand_surv` and
+                               `cand_rung` are readings of a re-execution and deliberately do not cross the
+                               tier), so paging one costs the search the distance it had measured. */
     long forks;             /* decide.c's fork total: how many times the decision seam split a flow */
+    /* THESE TWO ARE OVER THE SAME MIXED POPULATION AND ARE DELIBERATELY NOT SPLIT, which is a different
+       answer from the one above and rests on a different fact. They are MAXIMA, not sums, and a candidate
+       session "runs from the baseline" and "re-runs the document from the baseline" (solve.c) — it compiles
+       and completes this document's own programs, consuming the detecting flow's recorded arms. So a program
+       index reached only by a candidate is still a program THIS DOCUMENT reached, and the row is true of the
+       document whichever population set it. Splitting them would answer "which population got there first",
+       which is a question about the schedule and not about the document's coverage. */
     int  deepest;           /* highest program this document has STARTED */
     int  completed;         /* highest program it has run to its END */
     long claims_met;        /* an inherited orphan drive whose body a take handed over */

@@ -342,6 +342,30 @@ char *result_swap_json(void) {
    has either RETIRED its flows or PAGED them out, and `finished` and `sold` beside `live` are what tells those
    apart. The created total keeps its own name on the document (`_flows`), where it is a TOTAL among totals.
 
+   AND `finished` AND `sold` EACH CARRY THE TWO POPULATIONS THEY ARE THE SUM OF, because one counter over a
+   frontier that is mostly @S candidate sessions answers neither question a reader has. An exploration flow
+   retiring is coverage this document gained; a candidate session retiring is one derived payload that ran and
+   did NOT fire, which is the search discarding it — and on a frontier where the candidates are the great
+   majority of the members, "the engine retired N flows" IS "the search discarded essentially nothing" with
+   nothing in the row to say so. The label is `Flow.cand_src` and it is a binary partition for the whole of a
+   member's life (solver/engine.h says why it is two rows and not three), the totals STAY so the parts have
+   something to be checked against, and engine_frontier_census asserts the identity at the one place all six
+   are in one hand — the same discipline `stepUnits` keeps against `live` at the composition below.
+   THE PARTS ARE ROWS AND NOT A SUBTRACTION, deliberately. Emitting the candidate half alone would leave the
+   other half to be derived by a consumer, and a derived half cannot be checked: `finished - finishedCands`
+   is a number for every pair of inputs, including the pair where one of them stopped being written. Both
+   arms are emitted, always, zeroes included, and engine/build.mjs's `COLD_FIELDS` throws on either going
+   absent exactly as it does for every other row here.
+
+   `live` IS NOT SPLIT HERE AND THAT IS NOT AN OVERSIGHT. It is compound in the same way — `cold_census` and
+   `flow_wfq_census` walk the SAME registry — and the `_wfq` census on this same document already carries the
+   candidate half of it as `cands` (solver/flow.h: "members carrying a payload substitution"). A `liveCands`
+   row would be the second spelling of one number in one document, which is precisely the drift the
+   record-field contract exists to catch and which `resumedOrphans` is refused for six paragraphs down.
+   `framed` and `blocked` are compound too and are deliberately whole: the first is the park's re-execution
+   COST and the second is what the host owes, and a pager and a host each pay for a member whichever
+   population it belongs to, so a split of either would be a row no consumer could state anything new from.
+
    THE THREE ORPHAN-CLAIM ROWS ARE THE COLD ROUND TRIP'S VERDICT. `orphanClaims` is how many inherited drives a
    resume rebuilt out of the residue, `orphanClaimsMet` how many of those waits a take satisfied, and
    `orphanClaimsUnmet` how many waiting flows FINISHED never having been handed a body. THE LAST IS THE VERDICT
@@ -424,7 +448,7 @@ char *result_swap_json(void) {
 char *result_cold_json(void) {
     /* The format string's widest expansion, as terms rather than as a sum somebody typed. `COLD_LITERAL` is the
        string with every conversion specifier removed. */
-    enum { COLD_LITERAL = 609, COLD_LONGS = 41, COLD_INTS = 4 };
+    enum { COLD_LITERAL = 669, COLD_LONGS = 45, COLD_INTS = 4 };
     ColdCensus c;
     /* THE PER-ARM HISTOGRAM, COMPOSED INTO ITS OWN BUFFER AND SPLICED AS ONE `%s`. Its width is
        STEP_UNITS_JSON_MAX, an expansion of solver/step_unit.h's list, so an arm ADDED there widens this
@@ -500,7 +524,9 @@ char *result_cold_json(void) {
     if (!out) return NULL;
     m = snprintf(out, n,
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
-                 "\"finished\":%ld,\"deepest\":%d,\"completed\":%d,\"sold\":%ld,\"forks\":%ld,"
+                 "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
+                 "\"deepest\":%d,\"completed\":%d,"
+                 "\"sold\":%ld,\"soldFlows\":%ld,\"soldCands\":%ld,\"forks\":%ld,"
                  "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
                  "\"resumedWorlds\":%ld,"
                  "\"orphanClaims\":%ld,\"orphanClaimsMet\":%ld,\"orphanClaimsUnmet\":%ld,"
@@ -514,7 +540,9 @@ char *result_cold_json(void) {
                  "\"dynBodies\":%ld,\"dynKiB\":%ld,\"sharedKiB\":%ld,"
                  "\"stepUnits\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
-                 e.finished, e.deepest, e.completed, e.sold, e.forks,
+                 e.finished, e.finished_flows, e.finished_cands,
+                 e.deepest, e.completed,
+                 e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  resumed.orphans, e.claims_met, e.claims_unmet,
                  e.host_asked, e.host_answered, e.host_answers_extra, e.host_answers_late, e.host_terminated,

@@ -624,6 +624,12 @@ static long g_paged_reqs;
    that a consumer never defaults a producer's field; the same rule read forwards is that a measurement gets a
    producer before it gets quoted. */
 static long g_flows_sold;
+/* …AND THE TWO POPULATIONS IT IS THE SUM OF — the same split `g_finished` carries and for the same reason,
+   with one asymmetry that makes this the sharper half: a parked @S candidate session comes back WITHOUT the
+   ladder it stood on (solver/flow.h — `cand_surv` and `cand_rung` are observations of a re-execution and
+   deliberately do not cross the tier), so selling one costs the search a measured distance that selling an
+   exploration flow does not cost. One counter said neither. */
+static long g_flows_sold_flows, g_flows_sold_cands;
 
 int engine_take_paged_owed(void) {
     /* BELOW ZERO IS THE IMPOSSIBLE STATE, and it is the only one this function can see. The credit is a count
@@ -5767,6 +5773,10 @@ static void engine_no_stray_completion(JSContext *ctx, const char *where, int de
    where a flow is finished — the two events these count. The commentary on what each MEANS stays with the
    accessors that publish them; this is the definition, and it has to precede its first use. */
 static long g_finished;
+/* …AND THE TWO POPULATIONS IT IS THE SUM OF — see EngineFrontierCensus for what each is and why the label is
+   a binary partition. Both are written at the ONE line `g_finished` is, from `Flow.cand_src`, and the identity
+   between the three is asserted where they are read together. */
+static long g_finished_flows, g_finished_cands;
 static int  g_deepest = -1;
 /* AND THE OTHER END OF THE SAME PROGRAM — the highest index this document has ever run to COMPLETION. It is a
    separate fact from `g_deepest` and the difference between them is the whole diagnosis, which is exactly why
@@ -6701,6 +6711,12 @@ static void flow_switch_in(JSContext *ctx, Flow *f) {   /* resume/start f: apply
 
 static void flow_finish(JSContext *ctx, Flow *f) {   /* f completed: tear down its interleaving state + remove */
     g_finished++;   /* the one place a flow ever COMPLETES — see g_finished */
+    /* …AND WHICH OF THE FRONTIER'S TWO POPULATIONS RETIRED, read from the label at the instant the retirement
+       happens rather than derived afterwards. `cand_src` is live here — flow_release at the bottom of this
+       function is what frees it — and it is the WHOLE of the question (solver/engine.h). An exploration flow
+       finishing is coverage; a candidate session finishing is one derived payload that ran and did not fire,
+       which is the search discarding it. Summed they were one number and the two readings are opposite. */
+    if (f->cand_src) g_finished_cands++; else g_finished_flows++;
     /* "all scripts, chunks, jobs and fetches are done" cannot be true with a continuation still parked — the
        loop above resumes one before it can answer that. Asserting it here is what keeps the park inside the
        no-work-item-is-ever-dropped rule rather than merely intending to. */
@@ -7016,10 +7032,17 @@ static int engine_reclaim_tail(JSRuntime *rt, void *opaque, size_t wanted) {
        usually to nobody at all. Selling a flow that is one of many holders costs the peer one timeline's
        answer, which is exactly what a timeline that never existed would have cost it, and the remaining
        holders still answer under the token the zone still has. */
-    engine_retract_flow(g_sess_ctx, tail);
-    cold_park_flow(tail);
-    flow_release(g_sess_ctx, tail);
-    g_flows_sold++;
+    /* WHICH POPULATION IS LEAVING, READ BEFORE THE RELEASE FREES THE LABEL. `cand_src` is the whole of the
+       question (solver/engine.h) and `flow_release` below frees it, so a read placed beside the counter — where
+       every other line of this sequence puts its accounting — would be a read of freed memory. It is the same
+       sentence §scheduler makes about an operation that becomes a work item: the input is taken at the moment
+       it is still the flow's, never off the object afterwards. */
+    { const int was_cand = tail->cand_src != NULL;
+      engine_retract_flow(g_sess_ctx, tail);
+      cold_park_flow(tail);
+      flow_release(g_sess_ctx, tail);
+      g_flows_sold++;
+      if (was_cand) g_flows_sold_cands++; else g_flows_sold_flows++; }
     return 1;
 }
 
@@ -8251,7 +8274,11 @@ void engine_frontier_census(EngineFrontierCensus *out)
     DCHECK(out != NULL, "the frontier census was asked for into no record — a reading of an instant that lands "
                         "nowhere is a census whose caller cannot have taken it at one instant");
     out->finished          = g_finished;
+    out->finished_flows    = g_finished_flows;
+    out->finished_cands    = g_finished_cands;
     out->sold              = g_flows_sold;
+    out->sold_flows        = g_flows_sold_flows;
+    out->sold_cands        = g_flows_sold_cands;
     out->forks             = decide_fork_total();
     out->deepest           = g_deepest;
     out->completed         = g_completed;
@@ -8278,6 +8305,30 @@ void engine_frontier_census(EngineFrontierCensus *out)
        clear, writes the value and returns — so an id can be settled at most once and a second peer TIMELINE's
        answer goes to `g_host_answers_extra` instead. A fire is therefore one of those two facts having stopped
        being true: an id minted somewhere other than `mint_req`, or a second credit for one entry. */
+    /* THE TWO RETIREMENT PARTITIONS, ASSERTED AT THE ONE PLACE ALL SIX ROWS ARE IN ONE HAND — the same
+       identity solver/cold.c asserts between its `step_units` histogram and `flows`, and asserted for the same
+       reason: a split whose parts do not provably sum to the whole is two numbers that can drift, and drifted
+       they are worse than the one number they replaced, because each half then looks like a measurement.
+       WHAT IT ACTUALLY CATCHES is a retirement or a sale added LATER that moves the total without stating
+       which population it moved. Both totals are written at exactly one line each today and the arm is written
+       on the line beside it, so the identity holds by inspection right now — that is the point: the moment a
+       second site appears, the reading composed from these rows would silently start describing a frontier
+       whose members are not all accounted for, and this is what stops it. `finished` and `sold` are lifetime
+       totals of the INSTANCE (neither is on engine_sched_begin's reset path), so no session boundary can
+       separate a total from its arms. */
+    DCHECKF(out->finished_flows + out->finished_cands == out->finished,
+            "the frontier census's retirement rows do not partition its retirement total (%ld exploration + "
+            "%ld candidate against %ld finished) — every member is on exactly one side of `Flow.cand_src` for "
+            "the whole of its life, so a difference is a flow_finish that moved the total without saying which "
+            "population retired. Both halves are written at one line in flow_finish; a second retirement path "
+            "is what this fires on",
+            out->finished_flows, out->finished_cands, out->finished);
+    DCHECKF(out->sold_flows + out->sold_cands == out->sold,
+            "the frontier census's sale rows do not partition its sale total (%ld exploration + %ld candidate "
+            "against %ld sold) — see the retirement assert above; the label is read BEFORE flow_release frees "
+            "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
+            "is where that shows",
+            out->sold_flows, out->sold_cands, out->sold);
     DCHECKF(out->host_answered <= out->host_asked,
             "the frontier census was taken with more host answers (%ld) than host asks (%ld) — the two count "
             "one population (an id this instance minted, and the ONE delivery that settled it), so "
