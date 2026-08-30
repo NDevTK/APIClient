@@ -5,10 +5,16 @@
  * and no strategy object and a stream built with `new CountQueuingStrategy({ highWaterMark: 4 })` must agree —
  * they do, because both end up in the same two fields of the controller.
  *
- * THE `size` GETTER ANSWERS ONE FUNCTION OBJECT, NOT A NEW ONE. §7.1 and §7.2 both say "this's relevant global
- * object's ... size function", created once and handed out unchanged, and the corpus checks the identity. It is
- * also NOT A METHOD: it ignores its receiver entirely, which is what lets `const { size } = strategy` work and
- * is why it is a plain function rather than something installed on a prototype.
+ * THE `size` GETTER ANSWERS ONE FUNCTION OBJECT, NOT A NEW ONE. §7.2.3 "Constructor and properties" (of
+ * ByteLengthQueuingStrategy) and §7.3.3 "Constructor and properties" (of CountQueuingStrategy) both state the
+ * getter as "return this's relevant global object's ... queuing strategy size function" — created once and
+ * handed out unchanged, and the corpus checks the identity. THE NUMBERS HERE WERE §7.1 AND §7.2, WHICH ARE
+ * "The queuing strategy API" and "The ByteLengthQueuingStrategy class": a reader who followed either found no
+ * getter steps at all, and §7.2 is the worse of the two because it IS one of these interfaces' sections and so
+ * reads as authoritative while naming the wrong one. The titles are written beside the numbers from here on for
+ * that reason — a number renumbers and a title does not, so a drift between them is visible instead of silent.
+ * The getter is also NOT A METHOD: it ignores its receiver entirely, which is what lets `const { size } =
+ * strategy` work and is why it is a plain function rather than something installed on a prototype.
  *
  * BYTE LENGTH'S SIZE IS A MACHINE. It answers `chunk.byteLength`, and that read is one accessor or Proxy trap
  * away from being the page's code — reading it from C is the drive-to-completion this engine aborts on. Count's
@@ -67,15 +73,21 @@ static JSValue js_qs_size(JSContext *ctx, JSValueConst this_val, int magic)
     return realm_value_get(ctx, g_size_fn_slot[q->kind]);   /* OWNED — this realm's */
 }
 
-/* §7.2's size function: one, whatever the chunk is. */
+/* §7.3.2 "Internal slots"' COUNT QUEUING STRATEGY SIZE FUNCTION, whose steps are stated in full as "Return 1"
+   — no `given chunk` clause at all, which is why this reads nothing and why its declared length below is 0
+   where byte length's is 1. It is NOT a no-effect standing in for a measurement this build cannot make: the
+   standard computes the value and the value is 1, so returning it is the implementation and §NO STUBS has
+   nothing to say about it. (The number here was §7.2, which is "The ByteLengthQueuingStrategy class" — the
+   OTHER interface, whose size function is the one thing this one is not.) */
 static JSValue js_count_size(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)ctx; (void)this_val; (void)argc; (void)argv;
     return JS_NewInt32(ctx, 1);
 }
 
-/* §7.1's size function: `chunk.byteLength`, as a REQUEST — the read is the page's code the moment the chunk
-   is anything but a plain typed array. */
+/* §7.2.2 "Internal slots"' BYTE LENGTH QUEUING STRATEGY SIZE FUNCTION: `chunk.byteLength`, as a REQUEST — the
+   read is the page's code the moment the chunk is anything but a plain typed array. (The number here was §7.1,
+   "The queuing strategy API", which states no size function of either interface.) */
 /* WHERE THIS MACHINE RESTS. §7.2.2's steps are ONE step, and that step is the read — so the machine has one
    stage and rests at it for exactly as long as a Proxy trap or an accessor takes. */
 #define BYTE_SIZE_STAGES(X) \
@@ -192,6 +204,27 @@ void queuing_strategy_install_protos(JSContext *ctx)
     size[QS_BYTE_LENGTH] = JS_NewCFunction2(ctx, NULL, "size", 1, JS_CFUNC_step, g_byte_size_stepid);
     CHECK(!JS_IsException(size[QS_COUNT]) && !JS_IsException(size[QS_BYTE_LENGTH]),
           "a queuing strategy's size function could not be allocated");
+    /* THE TWO LENGTHS ARE THE STANDARD'S AND THEY ARE OBSERVABLE, so they are asserted where they are chosen
+       rather than trusted to the literal three lines up. §7.3.2 "Internal slots" mints count's with
+       CreateBuiltinFunction(steps, 0, "size", ...) because its steps take no chunk, and §7.2.2 "Internal
+       slots" mints byte length's with 1 because its steps are "given chunk"; a page reads both back as
+       `strategy.size.length`. Asserted by READING THE OBJECT rather than by restating the literal — a second
+       copy of the number would agree with the first by construction and prove nothing. */
+#if APICLIENT_DEV
+    for (i = 0; i < QS_N; i++) {
+        JSValue len = JS_GetPropertyStr(ctx, size[i], "length");
+        double n = -1;
+
+        CHECK(!JS_IsException(len), "a queuing strategy's size function has no `length` to check");
+        JS_ToFloat64(ctx, &n, len);
+        JS_FreeValue(ctx, len);
+        DCHECK(n == (i == QS_COUNT ? 0.0 : 1.0),
+               "a queuing strategy size function's declared length is not the one its CreateBuiltinFunction "
+               "states — Streams §7.3.2 Internal slots gives count's steps no chunk parameter (length 0) and "
+               "§7.2.2 Internal slots gives byte length's one (length 1), and a page reads both back as "
+               "`strategy.size.length`");
+    }
+#endif
     for (i = 0; i < QS_N; i++) {
         JSValue proto = JS_NewObject(ctx);
         CHECK(!JS_IsException(proto), "a queuing strategy prototype could not be allocated");

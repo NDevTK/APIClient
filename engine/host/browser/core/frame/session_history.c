@@ -1590,15 +1590,16 @@ int session_history_fragment_nav_run(JSContext *ctx, SessionHistoryFragmentNav *
            the address does not move, no entry is appended, and the member that asked answers exactly as it does
            when the navigation succeeded — §7.2.4's setters have no return value and this return is not an
            error.
-           STEP 5.1 IS NOT WRITTEN, AND THAT IS THE ABSENCE OF A READER RATHER THAN A DEFERRED STEP. It sets the
-           navigable's ONGOING NAVIGATION to this navigation's id, and the standard's own note says what that is
-           for: "this makes intercepted hash navigations cancelable by browser UI or window.stop()". This build
-           has no browser UI, and its `window.stop()` is §7.2.2.1's documented no-effect body (window.c's
-           js_win_noeffect, whose comment gives the same reason — there is no in-flight navigation to abort
-           because §7.4.2.5's ABORT A NAVIGATION is not built). A field written here would be a field with one
-           writer and no reader, which is the shape that makes an unwritten producer indistinguishable from a
-           measured one. The two land together: §7.4.2.5's abort, and the navigable's ongoing-navigation field
-           it reads — at which point `stop()` stops sharing the no-effect body and this line writes it. */
+           STEP 5.1 IS NOT WRITTEN, AND ITS READER NOW CRASHES RATHER THAN ANSWERING. It sets the navigable's
+           ONGOING NAVIGATION to this navigation's id, and the standard's own note says what that is for: "this
+           makes intercepted hash navigations cancelable by browser UI or window.stop()". This build has no
+           browser UI, and §7.2.2.1's `stop()` used to SHARE §6.6.6's `blur` no-effect body — which is what made
+           the absence unreadable from either end: a field with one writer and no reader here, and a member over
+           there returning the exact bytes the standard prescribes for a member with no steps. The member's body
+           (core/frame/window.c's js_win_stop) is now its own and DFAILs at its step 2, naming §7.4.2.5 Aborting
+           navigation's `ongoing navigation` field and this line as its writer. So the two still land together
+           and the crash is what says so; the day that diff runs, this line writes the id and that DFAIL goes
+           with it. core/html/document_open.c's §8.4.1 step 8 is the other reader waiting on the same field. */
         if (!proceed) return 0;
         /* STEP 6: "let historyEntry be a NEW SESSION HISTORY ENTRY, with URL url, document state navigable's
            active session history entry's DOCUMENT STATE, navigation API state destinationNavigationAPIState,

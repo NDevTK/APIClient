@@ -119,17 +119,92 @@ static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* §6.6.6's `Window.blur()`, whose METHOD STEPS ARE "TO DO NOTHING" — the standard's own words, and the note
-   beside them says why: "historically, the focus() and blur() methods actually affected the system-level focus
-   of the system widget that contained the navigable, but hostile sites widely abuse this behavior to the user's
-   detriment". So this is the SPEC's no-effect and not this engine's; `Window.focus()` is NOT one of these and
-   is no longer here — §6.6.6 gives it real steps (the navigable, the allow focus steps, then §6.6.4's focusing
-   steps), which core/html/focus.c runs. `stop()` shares this body because this engine has no in-flight
-   navigation to abort. */
-static JSValue js_win_noeffect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+/* HTML §6.6.6 "Focus management APIs"' `Window.blur()`, whose METHOD STEPS ARE "TO DO NOTHING" — the standard's
+   own words, and the note beside them says why: "historically, the focus() and blur() methods actually affected
+   the system-level focus of the system widget that contained the navigable, but hostile sites widely abuse this
+   behavior to the user's detriment". So this is the SPEC's no-effect and not this engine's; `Window.focus()` is
+   NOT one of these and is no longer here — §6.6.6 gives it real steps (the navigable, the allow focus steps,
+   then §6.6.4's focusing steps), which core/html/focus.c runs.
+
+   IT SERVES ONE MEMBER AND IS NAMED FOR IT, WHICH IS THE WHOLE OF THIS EDIT. It was `js_win_noeffect`, shared
+   with `stop()` — and a body named for its SHAPE rather than for its member is what makes the two indistinguishable
+   at the declaration: §NO STUBS permits a no-effect only where the spec defines no scriptable headless result,
+   §6.6.6 says exactly that for `blur` and §7.2.2.1 says the opposite for `stop`, and a shared body records
+   neither fact. The generic name is also the thing that makes the NEXT unbuilt member cheap to hide here, since
+   adding one costs a magic and no new sentence. A member whose absence is honest declares its own body. */
+static JSValue js_win_blur(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
-    (void)ctx; (void)this_val; (void)argc; (void)argv; (void)magic;
+    (void)ctx; (void)this_val; (void)argv; (void)magic;
+    /* §6.6.6 declares `undefined blur()` — no arguments, ever, so a body that could be handed one is a body
+       whose declaration and whose member have come apart. A non-variadic member's count is min(passed,
+       declared) (core/idl_args.c), so `window.blur(1)` still arrives here as zero and the only way this fires
+       is a declaration that stopped matching the IDL. */
+    DCHECK(argc == 0,
+           "HTML §6.6.6 Focus management APIs declares `undefined blur()` with no arguments and this body was "
+           "reached with one — the declaration in window_init and the IDL have come apart");
+    (void)argc;
     return JS_UNDEFINED;
+}
+
+/* HTML §7.2.2.1 "Opening and closing windows"' `stop()`, WHICH HAS REAL STEPS AND IS NOT §6.6.6's NO-EFFECT.
+ * The standard states two: "If this's navigable is null, then return. Stop loading this's navigable." Step 1 is
+ * written below because this engine can answer it; step 2 is the capability that does not exist, and it now
+ * says so at the site instead of being served by `blur`'s body — where a page calling `window.stop()` got the
+ * exact bytes the spec prescribes for a member with no steps at all, and nothing anywhere could tell the two
+ * apart.
+ *
+ * WHAT STEP 2 IS. §7.5.11 "Aborting a document load" defines "stop loading a navigable": (1) let document be
+ * navigable's active document; (2) if document's unload counter is 0 AND navigable's ongoing navigation is a
+ * navigation ID, then set the ongoing navigation for navigable to null — whose note is the observable half,
+ * "this will have the effect of aborting any ongoing navigations of navigable"; (3) abort a document and its
+ * descendants given document, which queues a global task on the navigation and traversal task source per
+ * descendant navigable and then aborts the document — cancelling every instance of the fetch algorithm in its
+ * context and aborting its active parser.
+ *
+ * WHAT TO BUILD, AND WHY IT IS NOT THIS FILE'S. The field step 2 reads is declared by HTML §7.4.2.5 "Aborting
+ * navigation" — "each navigable has an ongoing navigation, which is a navigation ID, "traversal", or null,
+ * initially null" — together with its "set the ongoing navigation" operation, which informs the navigation API
+ * about aborting navigation before it writes. core/frame/navigable.c exposes neither the field nor a stop, so
+ * the member cannot ask its question, let alone answer it. THAT DIFF ALREADY HAS TWO OTHER CALLERS WAITING AND
+ * MUST DELETE ALL THREE SITES AT ONCE: core/frame/session_history.c's §7.4.6.2 step 5.1 is the WRITER (its
+ * comment declines to write a field with no reader and names this body as the reason), and
+ * core/html/document_open.c's §8.4.1 step 8 is the second READER ("if document's node navigable's ongoing
+ * navigation is a navigation ID, then stop loading document's node navigable"). Step 3's own two effects need
+ * state this engine does not keep either — core/frame/document_lifecycle.c argues there is no `salvageable`
+ * field because every reader of it is on a path where it is already false, and core/html/document_open.c's step
+ * 7 records that there is no mid-parse state to abort — so the abort arrives with the parse that outlives its
+ * own C call. Nothing here is approximated in the meantime: the approximations available (treating a parked
+ * host request as the navigation, or asking whether THIS flow is the one navigating) are both about the FLOW
+ * and the question is about the NAVIGABLE, which is the same reason document_open.c gives for naming it rather
+ * than guessing. */
+static JSValue js_win_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
+
+    (void)argv; (void)magic;
+    if (JS_IsUninitialized(nav)) return JS_EXCEPTION;   /* Web IDL §3.7.7's TypeError, already thrown */
+    DCHECK(argc == 0,
+           "HTML §7.2.2.1 Opening and closing windows declares `undefined stop()` with no arguments and this "
+           "body was reached with one — the declaration in window_init and the IDL have come apart");
+    (void)argc;
+    /* STEP 1: "If this's navigable is null, then return." The one question §7.2.2.4's `top`, `parent` and
+       `frameElement` already ask, asked in the one place (window_proxy.h) — a navigable severed by §7.3.1.6
+       step 3's destroy-a-child-navigable, or whose Document §7.5.10 destroyed. */
+    if (window_proxy_navigable_null(ctx, nav)) return JS_UNDEFINED;
+    /* STEP 2. */
+    DFAIL("HTML §7.2.2.1 Opening and closing windows' `stop()` step 2 is STOP LOADING this's navigable, and "
+          "this engine has no entry for it. BUILD HTML §7.4.2.5 Aborting navigation's `ongoing navigation` on "
+          "the navigable (a navigation ID, \"traversal\", or null, initially null) and its `set the ongoing "
+          "navigation` operation in core/frame/navigable.c, then §7.5.11 Aborting a document load's `stop "
+          "loading a navigable` over it. That diff must land ALL THREE SITES TOGETHER, because the field's one "
+          "writer and its other reader are already written as absences waiting for it: "
+          "core/frame/session_history.c's §7.4.6.2 step 5.1 writes it, and core/html/document_open.c's §8.4.1 "
+          "step 8 reads it. Step 3's `abort a document and its descendants` additionally needs the mid-parse "
+          "state core/html/document_open.c step 7 records as absent, and the `salvageable` field "
+          "core/frame/document_lifecycle.c declines to keep. Until then this member must CRASH rather than "
+          "share §6.6.6's `blur` no-effect body, which is what made an unbuilt capability read as the "
+          "standard's own do-nothing");
+    return JS_UNDEFINED;   /* the release fall-through: DFAIL is compiled out, and there is nothing to run */
 }
 
 /* §7.2.2.2's `length`: the number of DOCUMENT-TREE CHILD NAVIGABLES. A GETTER over a real walk, never a stored
@@ -745,8 +820,12 @@ void window_init(JSContext *ctx)
     g_id_name_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_name, 0);
     g_id_status_set = idl_setter_id(ctx, IDL_DOMSTRING, false, js_win_set_status, 0);
     g_id_close = idl_method_id(ctx, NULL, 0, js_win_close, 0);
-    g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 1);
-    g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_noeffect, 2);
+    /* ONE BODY PER MEMBER. These two shared `js_win_noeffect` and were told apart only by a magic, which is
+       how §6.6.6's specified do-nothing and §7.2.2.1's unbuilt two steps came to be byte-identical at every
+       call site; the magic is now unused by both and stays 0, because what distinguishes them is which body
+       runs and not which number it was handed. */
+    g_id_blur  = idl_method_id(ctx, NULL, 0, js_win_blur, 0);
+    g_id_stop  = idl_method_id(ctx, NULL, 0, js_win_stop, 0);
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. It declared NOTHING, and its row
        had an EMPTY RELEASE COLUMN, which is the pair of silences that list reads as agreement: a component
        holding everything and giving none of it back is character-for-character the report a component holding
