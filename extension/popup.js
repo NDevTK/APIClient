@@ -1245,9 +1245,29 @@ function renderEngineRuns() {
     ["sinkTainted", "…with tainted input"], ["sinkSuppressed", "…search declined (unforgeable check)"],
   ];
   const rows = engineRuns.slice().reverse().map((m) => {
-    DCHECK(typeof m.url === "string" && typeof m.resumed === "number",
-           "an engine run record reached the popup without url/resumed — bridge.js writes both on BOTH " +
-           "record shapes (the crash arm included), so a record missing one is that relay broken");
+    DCHECK(typeof m.url === "string",
+           "an engine run record reached the popup without a url — bridge.js writes it on BOTH record shapes " +
+           "(the crash arm included), so a record missing it is that relay broken");
+    /* `resumed` IS A COUNT OR THE STATED ABSENCE OF ONE, AND THIS VIEW SPEAKS BOTH. It was asserted here as a
+       number, which is why nothing caught that it was a number that had been MANUFACTURED: bridge.js
+       re-derived it at each reader out of whichever slice of the engine's output that reader held, and the
+       incremental snapshot holds one line, so every still-running row rendered "0 resumed" no matter how
+       large the residue that had come back. A type check cannot see that, because the wrong answer is
+       perfectly well-typed — which is the whole shape of a defaulted field, and the reason the fix is a third
+       state rather than a stricter number. `null` means no instance ever reached the seeding of its frontier,
+       and it is rendered as the sentence it is; a `?? 0` here would put the defect straight back. */
+    DCHECK(m.resumed === null ||
+           (typeof m.resumed === "number" && Number.isInteger(m.resumed) && m.resumed >= 0),
+           "an engine run record reached the popup with a resume count that is neither a count nor the stated " +
+           "'not known' (`" + String(m.resumed) + "`) — bridge.js writes one or the other on BOTH record " +
+           "shapes, so anything else is that relay broken and the user is shown a number of parked flows " +
+           "nothing observed");
+    /* THE ONE SPELLING OF BOTH STATES, so the three rows below cannot disagree about which sentence an
+       absent count gets. "0 resumed" is a real and useful thing to say — this session was seeded with no
+       residue — and it is exactly what must not be said when nobody looked. */
+    const resumedTxt = m.resumed === null
+      ? "resume state not known (this run never seeded a frontier)"
+      : `${esc(String(m.resumed))} resumed`;
     /* WHICH OF THE THREE THIS ROW IS, ASSERTED AND NEVER INFERRED. It was inferred — from a `crashed` boolean,
        which could say one of three things and so said the other two identically — and a mid-run snapshot
        therefore rendered as a completed analysis with a full set of totals. A record whose state this view
@@ -1267,9 +1287,16 @@ function renderEngineRuns() {
              "a crashed engine run reached the popup with no `err` — bridge.js reads the `engine-crash` line " +
              "off the run's own output and asserts it there, so an absent one here is that relay broken and " +
              "the user is shown a crash with no cause");
+      /* AND THE RESUME STATE IS STATED ON THE CRASH ROW UNCONDITIONALLY, WHICH IS WHERE IT IS WORTH MOST.
+         It was suppressed whenever it was falsy, so a crash of a session seeded from a rebuilt residue and a
+         crash of a session seeded from a fresh boot flow produced the identical sentence — and the cold-tier
+         rebuild is precisely the suspect a reader of this row is trying to rule in or out. All three states
+         are now said: a count (the residue came back and then the run died), zero (no residue was handed to
+         this session, so the cold tier is not implicated) and not-known (the boot died before the frontier
+         was seeded at all, which is itself the answer to when it died). */
       return `<div class="deep-row"><span class="deep-label">${where} — <strong>the engine crashed</strong>`
            + `; this run reported no result document, so it has no counters at all (not zeroes)`
-           + `${m.resumed ? `, ${m.resumed} parked flow(s) had been resumed into it` : ""}`
+           + `; ${resumedTxt}`
            + ` — ${esc(m.err)}</span></div>`;
     }
     const live = m.run === "partial";
@@ -1367,8 +1394,8 @@ function renderEngineRuns() {
     // The numbers on a snapshot are real observations of a page that is STILL being analysed, so they are
     // shown — and they are labelled as a running total, which is the one thing a completed run's row is not.
     const head = live
-      ? `<strong>still running</strong> — snapshot, not a total; ${esc(String(m.resumed))} resumed · so far: `
-      : `run complete · ${esc(String(m.resumed))} resumed · `;
+      ? `<strong>still running</strong> — snapshot, not a total; ${resumedTxt} · so far: `
+      : `run complete · ${resumedTxt} · `;
     return `<div class="deep-row"><span class="deep-label">${where} — ${head}` + parts.join(" · ")
          + `</span><span class="deep-label">${order}</span>` + denom + censusRows.join("") + `</div>`;
   }).join("");

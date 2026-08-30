@@ -324,13 +324,46 @@ function engineLogWrite(eng, m) {
   for (const k of Object.keys(row)) delete row[k];
   Object.assign(row, m);
 }
+/* THE ONE READER OF `_resumed`, SO THE THREE STATES CANNOT BECOME TWO AT ONE CALLER. A record with no engine
+   at all (`nothing-to-run`: no instance was ever built) has nothing to report and says so; an engine that has
+   one reports it; and an engine whose boot died before `begin` carries the `null` its reservation declared,
+   which travels unchanged. The DCHECK is what keeps `undefined` from joining them — a field added to the
+   reservation and not to this shape would arrive here as a fourth state that every consumer renders as the
+   absence, which is the reading that is wrong exactly when the count matters most. */
+function engineResumed(eng) {
+  if (eng === null) return null;
+  DCHECK(eng && typeof eng === "object",
+         "an analysis was composed against an engine record that is neither an instance nor the stated " +
+         "absence — `null` is how this seam's callers say 'no instance ran', and any other falsy value is a " +
+         "caller that stopped passing one rather than one saying there was none");
+  DCHECK(eng._resumed === null ||
+         (typeof eng._resumed === "number" && Number.isInteger(eng._resumed) && eng._resumed >= 0),
+         "an engine record carries a resume count that is neither a count nor the stated 'not known' (`" +
+         String(eng._resumed) + "`) — engineReserve declares it null and engineRoot writes it once at `begin`, " +
+         "so anything else is a third writer, and the value it wrote would be rendered to the user as a " +
+         "number of parked flows that came back");
+  return eng._resumed;
+}
 function linesToAnalysis(lines, msg, outcome, eng) {
   DCHECK(RUN_OUTCOMES.indexOf(outcome) >= 0,
          "a run outcome this seam does not speak: `" + outcome + "` — every consumer of an analysis branches " +
          "on `_run`, so a word none of them knows is a run whose completeness nothing can judge");
   let result = null;
   const extraErrors = [];
-  let resumed = 0;
+  /* THE RESUME COUNT IS NOT READ OFF `lines`, AND THAT IS THE WHOLE OF THE FIX. It used to be, and `lines` is
+     precisely the argument this seam's callers disagree about: `finish` hands the run's WHOLE output,
+     `streamPartial` hands exactly ONE element of it (the @RESULT it just found, spliced out immediately
+     after), and `crashRecord` hands a one-line array it composed itself. `@RESUMED` is printed once, at
+     `begin`, so it is present in the first of those and absent from the other two — and the count was
+     therefore not a property of the session but of which slice its reader held. Every still-running session
+     reported `0 resumed` for that reason alone, and the `parseInt(…) || 0` that stood here is what made an
+     absent line arrive as a plausible zero instead of as the missing datum it was.
+     IT IS A FACT ABOUT THE SESSION, so it is taken from the record that IS the session. `eng._resumed` is
+     written once by `engineRoot`, at the `begin` whose reply carries the line, and is `null` on a record for a
+     session that never reached one — which is the state this function cannot itself distinguish and must
+     therefore not invent, since `crashRecord`'s synthetic lines are byte-identical whether the boot died
+     before `begin` or after it. */
+  const resumed = engineResumed(eng);
   /* THE CAUSE OF A CRASH, READ OFF THE SAME LINES EVERY OTHER FACT ABOUT THE RUN IS READ FROM. Both producers
      of a crashed record put an `@E {"phase":"engine-crash",…,"err":…}` line in `lines` before calling here —
      engineCrash for a live instance (with the ROOT @WHY appended) and crashRecord for a boot that never got
@@ -338,7 +371,6 @@ function linesToAnalysis(lines, msg, outcome, eng) {
   let crashErr = "";
   for (const raw of lines) {
     const ln = String(raw);
-    if (ln.startsWith("@RESUMED ")) { resumed = parseInt(ln.slice(9), 10) || 0; continue; }
     if (ln.startsWith("@RESULT ")) {
       try { result = JSON.parse(ln.slice(8)); }
       catch (e) {
@@ -765,7 +797,7 @@ function frontierPrefPut(name, value) {
   }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference write", e); });
 }
 /* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
-   responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, ts, credentialed }. Rehydration re-runs
+   responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, credentialed }. Rehydration re-runs
    (html,code) + resumes recipes -- so a parked flow on ANY site can be advanced later, even when that page
    isn't open. */
 /* THE DOCUMENT HALF OF A COLD-TIER ENTRY, WITH ONE SPELLER FOR BOTH DIRECTIONS. solver/cold.h's recipe is the
@@ -847,9 +879,14 @@ function frontierDoc(e, when) {
    second subsystem beside the WFQ; it IS the WFQ's ordering, applied to a second resource. The store keeps
    the DOCUMENT half of the highest-weight entries until the share is spent, and the rest keep everything
    else. `frontierWeight` is the same function `_hostOps.evictee` asks of the resident set and `admit` asks
-   of the candidate set — no age, no recency, no count, no timestamp: `ts` is written by the park and read by
-   nothing, and reading it here would be exactly the recency cap this design refuses. §THERE IS NO GRIND is
-   satisfied by construction rather than by care: nothing polls, nothing sweeps, nothing is triggered.
+   of the candidate set — no age, no recency, no count, no timestamp. AND THE STORE HOLDS NO CLOCK, which is
+   the half that makes that a property rather than a promise: an entry carried a park timestamp for as long as
+   nothing read it, and a field the record grammar does not assert, that no consumer names, and that means
+   exactly "when this was last written" is a recency cap already assembled and waiting for its first reader —
+   the ranking would not have to be changed to become one, only asked a different question. It is deleted
+   rather than commented, because a stored fact nobody may use is indistinguishable at every later reading
+   from one nobody has used YET. §THERE IS NO GRIND is satisfied by construction rather than by care: nothing
+   polls, nothing sweeps, nothing is triggered.
    WHAT A SHED ENTRY LOSES, STATED RATHER THAN HIDDEN: nothing, until its document is needed. The recipes,
    the counters, the address, the principal and the policy stay, so a shed residue resumes on the next VISIT
    exactly as it always did (engineRoot seeds from `prior.recipes` and never reads the bytes) and
@@ -992,7 +1029,7 @@ async function frontierResidency() {
               "the store having drifted apart, and shedding would be deciding about a residue nobody can read");
     const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                    responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
-                   ts: e.ts, credentialed: e.credentialed, shed: true };
+                   credentialed: e.credentialed, shed: true };
     frontierRecord(shed, "was shed to the configured share");
     await frontierWrite(e.key, shed);
     if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
@@ -1262,7 +1299,7 @@ async function frontierRederive(e) {
   }
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                           responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
-                          visits: e.visits, ts: e.ts, credentialed: e.credentialed,
+                          visits: e.visits, credentialed: e.credentialed,
                           shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
   await frontierWrite(e.key, strandedEntry);
@@ -1990,8 +2027,17 @@ function engineReserve(cluster, docId, msg, cold) {
      RIGHT NOW, and a same-origin navigation in the tab changes it — HTML §7.4.6.1 "Updating the traversable"
      replaces the Document, keeps the navigable. Collapsing them would make a navigated tab report its findings
      under a document the browser replaced, and would make the reservation's identity move under `finish`. */
+  /* `_resumed` IS DECLARED NULL BECAUSE "NOT YET KNOWN" IS A THIRD STATE AND NOT A ZERO. How many parked flows
+     this session's frontier was seeded with is a fact about how the session BEGAN — `engineRoot`'s `begin`
+     call is the only moment it is decided, and until that call returns there is no answer, only an absence.
+     Zero is a different fact entirely (this zone handed the engine no residue, so it seeded a boot flow), and
+     the two used to be one number: the count was re-derived at every reader out of whichever lines that reader
+     happened to hold, so the incremental snapshot — which is handed exactly ONE line, the @RESULT it just
+     found — reported `0 resumed` for every still-running session there has ever been, however many thousands
+     of flows had come back. A count re-read downstream of the event it counts is a count of the reader's
+     input, and here the reader's input never contained it. */
   const eng = { state: "booting", cluster, docId, topDocId: docId, joinedDocIds: [], msg,
-                groupId: msg && msg.groupId,
+                groupId: msg && msg.groupId, _resumed: null,
                 origin: (msg && msg.origin) || "", _cold: cold, _resolvers: [], _remoteAsked: new Set(),
                 _epoch: self.frontierEpoch(), r: null, _readyP: null };
   _pool.push(eng);
@@ -2038,9 +2084,53 @@ function engineBootFailed(eng, e) {
   const root = _rl === undefined ? "" : rootWhyLine(_rl);
   const err = root ? (m + " | ROOT: " + root) : m;
   crashBanner("create", err);
-  for (const w of eng._resolvers) w.resolve(crashRecord("create", err, w.msg));
+  for (const w of eng._resolvers) w.resolve(crashRecord("create", err, w.msg, eng));
   eng._resolvers.length = 0;
   _reserveStats.failed++;
+}
+/* HOW MANY PARKED FLOWS THIS SESSION'S FRONTIER WAS SEEDED WITH — READ ONCE, WHERE THE SEEDING HAPPENED.
+   THE PRODUCER IS ALREADY EXACT AND THIS ZONE WAS COLLAPSING IT. solver/cold.c prints `@RESUMED <n>` from
+   inside cold_resume, which solver/engine.c calls ONLY for a non-empty residue, and it DCHECKs `flows > 0`
+   immediately above the print — so on the engine side an ABSENT line and a ZERO are not merely distinguishable,
+   the zero cannot be emitted at all. The host had the two facts and reported one number for both.
+   SO BOTH HALVES ARE ASSERTED AGAINST EACH OTHER RATHER THAN EITHER BEING TRUSTED ALONE. `asked` is this
+   zone's own statement (it composed the `recipes` argument one line above the call), the line is the engine's,
+   and each is a check on the other: a residue handed over that produced no line is a rebuild that silently
+   did nothing, and a line with no residue handed over is a session that resumed a frontier this zone never
+   gave it. Neither has a reading in which continuing is correct.
+   AND THE RELEASE ANSWER FOR AN ASKED-BUT-SILENT SESSION IS `null`, NOT `0`. Release has no DCHECK, so this is
+   the one path where the two states can still meet, and the whole point of the field is that they must not:
+   `null` says the count is not known, which is true, where `0` would say a residue was handed to this engine
+   and it resumed nothing — a claim about the cold tier that nothing observed. */
+function engineResumeCount(lines, asked) {
+  let n = -1;
+  for (const raw of lines) {
+    const ln = String(raw);
+    if (!ln.startsWith("@RESUMED ")) continue;
+    const tail = ln.slice(9);
+    DCHECK(/^[0-9]+$/.test(tail),
+           "the engine printed an @RESUMED line whose count is not a decimal number (`" + tail + "`) — " +
+           "solver/cold.c writes it with one `%ld`, so anything else is that line having been composed by " +
+           "something other than the rebuild it reports on");
+    DCHECK(n < 0,
+           "a session printed @RESUMED twice (" + n + " then " + tail + ") — solver/engine.c calls cold_resume " +
+           "once per session and the frontier is seeded once, so a second line is a second rebuild landing on " +
+           "top of a frontier that already stands on the first one's segments");
+    n = Number(tail);
+    DCHECK(n >= 1,
+           "the engine reported a rebuild of " + n + " flows — cold_resume DCHECKs `flows > 0` before it " +
+           "prints, so a zero here is a residue whose whole point was unreachable arriving as a number this " +
+           "zone would render as a successful resume of nothing");
+  }
+  DCHECK((n >= 0) === asked,
+         asked ? "this zone handed the engine a parked residue and the engine reported no rebuild — the " +
+                 "recipes are the only thing that seeds a resumed session, so a silent begin is every parked " +
+                 "flow of that document dropped between the store and the frontier, with the next park " +
+                 "writing the survivors back as if they were all there had ever been"
+               : "the engine reported resuming " + n + " parked flows into a session this zone seeded with no " +
+                 "recipes at all — solver/engine.c seeds from a residue or from a boot flow and never both, " +
+                 "so those flows stand on decision vectors this document was never handed");
+  return n >= 0 ? n : (asked ? null : 0);
 }
 /* THE LOCAL IS `rend` AND THE FIELD IS `eng.r`, which is not an inconsistency: the three fetch closures
    below each bind `const r = await self.safeFetch(...)` — Fetch's reply record — and a renderer named `r` in
@@ -2219,7 +2309,19 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          "decision vectors and never explored from its own first script");
   // PHASE 2 — seed the frontier (fresh, or resume parked recipes). The host sets a VALUE yield-floor per
   // step (the runner-up engine's weight), so this engine yields when it's outranked — no fixed slice.
-  await rend.renderer.begin({ recipes: (prior && prior.recipes) ? prior.recipes : "" });
+  /* THE RESIDUE THIS ZONE IS HANDING OVER, NAMED BEFORE IT IS SENT, because it is one half of a two-sided
+     contract and the other half comes back on the very next line. solver/engine.c seeds a session from the
+     recipes OR from a boot flow and never both, so an EMPTY string here is this zone's own positive statement
+     that nothing was resumed into this session — knowable without asking the engine anything, which is what
+     makes zero a fact rather than a silence. */
+  const _residue = (prior && prior.recipes) ? prior.recipes : "";
+  await rend.renderer.begin({ recipes: _residue });
+  /* …AND THE ENGINE'S HALF, TAKEN AT THE ONE MOMENT IT EXISTS. `cold_resume` prints `@RESUMED <n>` and every
+     child->parent record drains the process's output with it (mojo.js `_envelope`), so the line rides THIS
+     reply — it is in `lines` the instant the await resolves and it is never printed again. Reading it here,
+     once, is what stops it from being re-derived by consumers that were handed a different slice of the
+     output; `linesToAnalysis` now reads this field instead of scanning for the line, on BOTH of its arms. */
+  eng._resumed = engineResumeCount(lines, _residue !== "");
   // DEV-ONLY verification hook (a real page never carries this query param): force the RAM-pressure park so
   // the cross-session round trip (park recipes -> IDB -> restart-keep -> resume) is VERIFIABLE without a 512MB
   // working set. Keyed off the URL (flows reliably through msg.sourceUrl to here, unlike a cross-context
@@ -3806,7 +3908,14 @@ function engineCrash(eng, stage, e) {
    record because each is answering a different caller. Bundled, answering N callers counted N crashes for one
    instance that failed to boot, and the probe's `crashes` would have read the number of documents that
    happened to share a cluster. engineBootFailed banners once and calls this per caller. */
-function crashRecord(stage, m, msg) {
+/* `eng` IS THE RESERVATION THAT FAILED, AND IT IS PASSED BECAUSE A BOOT DOES NOT ALWAYS DIE BEFORE `begin`.
+   `engineBootFailed` covers everything `engineRoot` throws, and `begin` is in the middle of it — so a
+   reservation reaching here may already have been handed a residue and already have been told how many flows
+   came back. Passing `null` would have thrown that away and reported the ONE run where a resumed frontier
+   aborted as a run whose resume state was never known, which is the reading that hides exactly the failure a
+   cold-tier rebuild is most likely to cause. A reservation that died EARLIER still carries the `null` its own
+   literal declared, so this hands the honest answer on both halves without asking which one it is. */
+function crashRecord(stage, m, msg, eng) {
   /* NO RESULT DOCUMENT IS EXPECTED HERE, and this is the only caller that may say so: the instance aborted
      before it could answer, so its absence is the crash rather than a broken contract. */
   /* The empties are `linesToAnalysis`'s own, on the arm that has no document to read — not four assignments
@@ -3816,7 +3925,7 @@ function crashRecord(stage, m, msg) {
      CALLER for one instance that never booted, and each caller is a different DOCUMENT with a different
      address — so the records cannot share a row, and each states the run that document did not get. The
      instance-level fact (one abort) is the crash COUNT, which is incremented once. */
-  return linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, "crashed", null);
+  return linesToAnalysis(['@E {"phase":"engine-crash","stage":"' + stage + '","err":' + JSON.stringify(m) + "}"], msg, "crashed", eng);
 }
 
 /* MACROTASK yield (worker/offscreen). Between engine quanta the host MUST return to the event loop with a
@@ -4771,7 +4880,7 @@ const _hostOps = {
         if (!back) return pick.census;
         doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
                             origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
-                            recipes: stored.recipes, emit: stored.emit, visits: stored.visits, ts: stored.ts,
+                            recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
                             credentialed: stored.credentialed },
                           "was re-derived for the cold tier");
       } else {
@@ -4918,7 +5027,7 @@ const _hostOps = {
            been re-fetched fifty times the rank of one nobody has opened, which is precisely the ratchet this
            write exists to close. `prior` came off the store through the ONE read that does not pass the record
            grammar, which is why its count is asserted above, before this line reads it. */
-        visits: prior ? prior.visits + 1 : 1, ts: Date.now(),
+        visits: prior ? prior.visits + 1 : 1,
       });
     }
     if (eng._cold) {
