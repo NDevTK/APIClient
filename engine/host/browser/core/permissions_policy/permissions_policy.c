@@ -28,24 +28,41 @@ static const PpFeatureRow PP_FEATURES[PP_FEATURE_N] = { PERMISSIONS_POLICY_FEATU
  * the match loop, which is where the two spellings of `*` — §9.2's TOKEN and a Member Value STRING that
  * happens to be `"*"` — would silently become one answer.
  *
- * THERE IS NO src-origin FIELD, and its absence is a statement rather than an omission. §4.7 lists one, and
- * the ONLY algorithm that ever writes one is §9.3 "Parse policy directive"'s `'src'` keyword — which reads the
- * `<iframe allow=…>` attribute, not a header. §9.4 "Process permissions policy attributes" is not built (see
- * the DFAIL in pp_define_inherited, which crashes on an `allow` attribute rather than reading it as empty), so
- * a src-origin field here would be a field with a reader and NO WRITER: exactly the shape CLAUDE.md makes
- * greppable, and the direction that reads as a permissive answer nobody computed. The day §9.3 lands it lands
- * WITH the field, and the crash upstream is what makes that impossible to forget.
+ * THE TWO ORIGIN FIELDS ARE WRITTEN BY DIFFERENT DELIVERIES AND THAT IS WHY THEY ARE TWO. §9.2 "Construct
+ * policy from dictionary and origin" reads a HEADER and can only ever write `self-origin` — its vocabulary is
+ * the tokens `*` and `self`. §9.3 "Parse policy directive" reads an `<iframe allow=…>` ATTRIBUTE and writes
+ * BOTH, because that delivery has a second origin to name: the frame's own declared origin, which the keyword
+ * `'src'` selects and which §9.3 step 2.9.1 ALSO installs for a directive whose target list is EMPTY. So
+ * `allow="autoplay"` is not "autoplay with no allowlist" — it is autoplay for the origin the `src` attribute
+ * names, which is §6.2's own sentence ("the default value for the allowlist is 'src'").
  *
- * `self_origin` IS BORROWED AND MUST BE AGENT-LIFETIME. core/url/origin.h releases origin records with the
- * agent and never before ("every parked flow's delta names these records"), and a policy dies with its
- * Document, so the pointer cannot outlive its referent. */
+ * `self_origin` AND `src_origin` ARE BORROWED AND MUST BE AGENT-LIFETIME. core/url/origin.h releases origin
+ * records with the agent and never before ("every parked flow's delta names these records"), and a policy dies
+ * with its Document, so the pointer cannot outlive its referent. */
 typedef struct {
     bool          star;
     const Origin *self_origin;     /* §4.7's self-origin, or NULL */
+    const Origin *src_origin;      /* §4.7's src-origin, or NULL */
     char        **expressions;     /* §4.7's ordered set of permissions-source-expression (owned, NUL-term) */
     int           n_expressions;
     int           cap_expressions;
 } PpAllowlist;
+
+/* §4.6 "Policy directives" — "an ordered map, mapping policy-controlled features to corresponding allowlists of
+ * origins". ONE TYPE FOR BOTH OF ITS PRODUCERS: §9.2 builds one out of a header dictionary and §9.3 builds one
+ * out of an `allow` attribute, and §4.2 makes the first of them the declarations of a DECLARED POLICY while
+ * §4.5 makes the second a CONTAINER POLICY. Two spellings of one structure would be two places a feature can
+ * go missing, and the shapes are identical because the section is one.
+ *
+ * THE PRESENCE BIT IS SEPARATE FROM THE ALLOWLIST because §9.7 step 5, §9.8 step 3 and §9.9 step 2 all begin by
+ * asking whether the feature EXISTS in the map, and an absent entry is not an empty allowlist: absent falls
+ * through to the DEFAULT allowlist (`Enabled` for a same-origin document), while `autoplay 'none'` is a present
+ * allowlist that matches NOTHING. Reading a zeroed allowlist as absence would turn the second into the first
+ * and hand back a feature the author explicitly withheld. */
+typedef struct {
+    bool        present[PP_FEATURE_N];
+    PpAllowlist allowlist[PP_FEATURE_N];
+} PpPolicyDirective;
 
 /* §4.2's permissions policy — "a struct with the following items: inherited policy …, declared policy …", and
    §4.2's declared policy is «declarations, reporting configuration». THE REPORTING CONFIGURATION IS NOT A
@@ -55,14 +72,8 @@ struct PermissionsPolicy {
     /* §4.3: "After a permissions policy has been initialized, its inherited policy will contain a value for
        each supported feature." A dense array is that sentence — there is no absent entry to answer for. */
     PermissionsPolicyValue inherited[PP_FEATURE_N];
-    /* §4.2's DECLARATIONS: "an ordered map from features to allowlists". THE PRESENCE BIT IS SEPARATE FROM THE
-       ALLOWLIST because §9.8 step 3 and §9.9 step 2 both begin "if feature is PRESENT in policy's declared
-       policy" and an ABSENT feature is not an empty allowlist: absent falls through to the DEFAULT allowlist
-       (`Enabled` for a same-origin document), while `camera=()` is a present allowlist that matches NOTHING.
-       Reading a zeroed allowlist as absence would turn the second into the first and hand back a feature the
-       server explicitly withheld. */
-    bool                   declared_present[PP_FEATURE_N];
-    PpAllowlist            declared[PP_FEATURE_N];
+    /* §4.2's DECLARATIONS — the §4.6 policy directive a response's own header declared. */
+    PpPolicyDirective      declarations;
 };
 
 static void pp_check_feature(PermissionsPolicyFeature feature)
@@ -97,6 +108,51 @@ static void pp_allowlist_free(PpAllowlist *a)
     memset(a, 0, sizeof *a);
 }
 
+static void pp_directive_free(PpPolicyDirective *d)
+{
+    int f;
+
+    /* EVERY FEATURE, NOT THE PRESENT ONES. §4.7's expressions array is allocated by
+       pp_allowlist_add_expression and `present` is what the ANSWERING steps read; tying a free to a flag whose
+       meaning is about answers is the shape that leaks the day an allowlist is built and then not stored. */
+    for (f = 0; f < PP_FEATURE_N; f++)
+        pp_allowlist_free(&d->allowlist[f]);
+    memset(d->present, 0, sizeof d->present);
+}
+
+static void pp_allowlist_add_expression(PpAllowlist *a, const char *s, size_t n)
+{
+    char *copy;
+
+    if (a->n_expressions >= a->cap_expressions) {
+        a->cap_expressions = a->cap_expressions ? a->cap_expressions * 2 : 4;
+        a->expressions = realloc(a->expressions, (size_t)a->cap_expressions * sizeof *a->expressions);
+        CHECK(a->expressions != NULL, "permissions policy: OOM growing §4.7's allowlist expressions");
+    }
+    copy = malloc(n + 1);
+    CHECK(copy != NULL, "permissions policy: OOM copying a §5.1 permissions-source-expression");
+    memcpy(copy, s, n);
+    copy[n] = '\0';
+    a->expressions[a->n_expressions++] = copy;
+}
+
+/* §4.1's "the policy-controlled feature identified by feature-name", and §9.2's / §9.3's shared answer for a
+   name that identifies none: "if feature-name does not identify any recognized policy-controlled feature, then
+   continue". PP_FEATURE_N IS THAT ANSWER — the sentinel the enum already spells — so an unsupported token is
+   SKIPPED and never guessed at, which is §4.1's own "user agents are not required to support every feature".
+   IT TAKES A LENGTH BECAUSE ONE OF ITS TWO CALLERS HAS NO NUL: §9.2's feature-name is a dictionary key that
+   RFC 9651's parse already terminated, and §9.3's is a slice of an attribute value. Two entries would be two
+   readings of §4.1's one sentence, and the day a feature-name grows a case rule they would disagree. */
+static PermissionsPolicyFeature pp_feature_of_token(const char *name, size_t n)
+{
+    int f;
+
+    for (f = 0; f < PP_FEATURE_N; f++)
+        if (strlen(PP_FEATURES[f].token) == n && strncmp(PP_FEATURES[f].token, name, n) == 0)
+            return (PermissionsPolicyFeature)f;
+    return PP_FEATURE_N;
+}
+
 /* §4.7's "To determine whether an allowlist matches an origin origin", verbatim. */
 static bool pp_allowlist_matches(const PpAllowlist *a, const Origin *origin)
 {
@@ -117,7 +173,13 @@ static bool pp_allowlist_matches(const PpAllowlist *a, const Origin *origin)
        `document.domain`, and the two differ for exactly the pages that used that API. */
     if (a->self_origin != NULL && origin_same_origin_domain(a->self_origin, origin))
         return true;
-    /* Step 3 is the src-origin, which this build never writes; see PpAllowlist. */
+    /* Step 3: "If the allowlist's src-origin is not null and it is same origin-domain with origin, then return
+       true." SAME ORIGIN-DOMAIN again, and the field is §9.3's — an `allow` attribute's `'src'` keyword, or its
+       own default for a directive that named no target at all. It is compared against the origin of the
+       Document actually being created, so a frame REDIRECTED off the origin its `src` named does not match:
+       that is the point of the keyword rather than a limitation of it. */
+    if (a->src_origin != NULL && origin_same_origin_domain(a->src_origin, origin))
+        return true;
     /* Step 4: "If origin is an opaque origin, return false." BEFORE the URL parse below, because §7.1.1 gives
        an opaque origin the serialization `null`, which is not a URL and would parse into something that is. */
     if (origin_is_opaque(origin))
@@ -172,9 +234,9 @@ static bool pp_allowlist_matches(const PpAllowlist *a, const Origin *origin)
 static bool pp_declared_decides(const PermissionsPolicy *policy, PermissionsPolicyFeature feature,
                                 const Origin *origin, PermissionsPolicyValue *out)
 {
-    if (!policy->declared_present[feature])
+    if (!policy->declarations.present[feature])
         return false;
-    *out = pp_allowlist_matches(&policy->declared[feature], origin) ? PP_ENABLED : PP_DISABLED;
+    *out = pp_allowlist_matches(&policy->declarations.allowlist[feature], origin) ? PP_ENABLED : PP_DISABLED;
     return true;
 }
 
@@ -258,6 +320,220 @@ PermissionsPolicyValue permissions_policy_check(const PermissionsPolicy *policy,
     return PP_DISABLED;
 }
 
+/* ---- §9.3 and §9.4, the `<iframe allow=…>` half ----------------------------------------------------------- */
+
+/* Infra §4.6 "Code points"' ASCII WHITESPACE — "ASCII whitespace is U+0009 TAB, U+000A LF, U+000C FF, U+000D
+   CR, or U+0020 SPACE" — which is the set Infra §4.7 "Strings"' split-on-ASCII-whitespace uses and therefore
+   what §9.3 step 2.1 splits a serialized-declaration on. It is NOT the same set as §5.1's ABNF RWS, and the
+   difference is deliberate on the standard's part: the grammar says what an AUTHOR should write and the
+   algorithm says what a user agent must accept. Infra names the FF exclusion of XML/JSON/HTTP explicitly and
+   says to prefer this definition, so the U+000C is a member and not an oversight. */
+static bool pp_is_ascii_whitespace(char c)
+{
+    return c == '\t' || c == '\n' || c == '\f' || c == '\r' || c == ' ';
+}
+
+/* Infra §4.7 "Strings"' ASCII CASE-INSENSITIVE compare, over a slice — §9.3 steps 2.9.2.1 and 2.9.2.2 match
+   `'self'` and `'src'` that way, QUOTES INCLUDED. The quotes are part of the keyword (§5.1's `allow-list-value` spells them)
+   and a match that dropped them would resolve a bare host named `self` to the container's own origin. */
+static bool pp_slice_eq_ascii_ci(const char *s, size_t n, const char *lit)
+{
+    size_t k;
+
+    if (strlen(lit) != n)
+        return false;
+    for (k = 0; k < n; k++) {
+        char a = s[k];
+
+        if (a >= 'A' && a <= 'Z')
+            a = (char)(a - 'A' + 'a');
+        if (a != lit[k])
+            return false;
+    }
+    return true;
+}
+
+/* §9.3 step 2.9.2.3-2.9.2.4: "let result be the result of executing the URL parser on element. If result is not
+ * failure: let target be the origin of result; if target is not an opaque origin, append the serialization of
+ * target to allowlist's expressions."
+ *
+ * WHAT IS APPENDED IS AN ORIGIN'S SERIALIZATION AND NOT THE AUTHOR'S BYTES, which is the one place §9.3 and
+ * §9.2 differ about what an expression IS. A header's element is a §5.1 permissions-source-expression and is
+ * stored verbatim; an attribute's is a URL, and the standard normalizes it through §7.1.1's serializer before
+ * storing — so `allow="autoplay https://a.example/path?q"` stores `https://a.example`, and §4.7 step 6 then
+ * measures the checked origin against a host-source with no path to disagree about.
+ *
+ * NO ORIGIN IDENTITY IS MINTED. origin_of_url would keep an agent-lifetime record for every element of every
+ * `allow` attribute of every navigable creation, for a question that never compares two origin RECORDS — the
+ * opacity test is origin_tuple_url's NULL answer and the bytes are origin_serialize_of_url's, and core/url/
+ * origin.h states that those two are the same one reading of URL §4.7 as origin_of_url. */
+static void pp_append_url_origin(PpAllowlist *a, const char *s, size_t n)
+{
+    UrlRecord url, scratch;
+    bool      opaque;
+
+    if (!url_parse(&url, s, n, NULL)) {
+        url_record_free(&url);                       /* URL §4.4's entry leaves `out` initialised on failure */
+        return;
+    }
+    /* origin_tuple_url INITIALISES `scratch` on every path and answers NULL exactly where URL §4.7 gives the
+       URL an OPAQUE origin, which is step 2.9.2.4's condition with no record minted to ask it. */
+    opaque = origin_tuple_url(&url, &scratch) == NULL;
+    url_record_free(&scratch);
+    if (!opaque) {
+        char *serialized = origin_serialize_of_url(&url);
+
+        CHECK(serialized != NULL, "permissions policy: OOM serializing §9.3's target origin");
+        pp_allowlist_add_expression(a, serialized, strlen(serialized));
+        free(serialized);
+    }
+    url_record_free(&url);
+}
+
+/* §9.3 "Parse policy directive" — "given a string (value), an origin (container origin), and an optional origin
+ * (target origin), this algorithm returns a policy directive".
+ *
+ * `target_origin` IS THE ELEMENT'S DECLARED ORIGIN AND IS ALWAYS GIVEN HERE, because §9.4 is this algorithm's
+ * only caller in this build and §9.4 step 2 always passes one. The spec's optionality is real — §7.2's
+ * `permissionsPolicy` object parses a directive with no element to take a declared origin from — so the
+ * NULL arm is written rather than asserted away, and it is the arm in which `'src'` names nothing and an empty
+ * target list yields an allowlist that matches NOTHING rather than the frame's own origin.
+ *
+ * A REPEATED FEATURE OVERWRITES, which is step 2.10's "set directive[feature] to allowlist" over an ORDERED
+ * MAP: `allow="autoplay *; autoplay 'none'"` is `'none'`. That is the OPPOSITE of what a merge would give and
+ * it is the restrictive-looking answer only by coincidence — `allow="autoplay 'none'; autoplay *"` is `*` —
+ * so the old allowlist is FREED at the overwrite rather than leaked or unioned. */
+static void pp_parse_policy_directive(const char *value, size_t len, const Origin *container_origin,
+                                      const Origin *target_origin, PpPolicyDirective *out)
+{
+    size_t i = 0;
+
+    DCHECK(container_origin != NULL,
+           "§9.3 was asked to parse a policy directive with no CONTAINER ORIGIN — it is the second argument and "
+           "is what the keyword `'self'` resolves to, so an absent one does not fail loudly, it silently "
+           "narrows every `'self'` an author wrote to an allowlist that matches nothing");
+    memset(out, 0, sizeof *out);
+    if (value == NULL)
+        return;                                      /* §9.4 step 2 over an element carrying no attribute */
+    /* Step 2: "for each serialized-declaration returned by STRICTLY SPLITTING value on U+003B (;)" — Infra
+       §4.7 "Strings"' strictly-split, so `a;;b` yields an EMPTY declaration between them, which step 2.2
+       discards because splitting an empty string on ASCII whitespace is the empty list. */
+    while (i <= len) {
+        size_t decl_end = i;
+        size_t t;
+        const char           *feature_name;
+        size_t                feature_n;
+        PermissionsPolicyFeature feature;
+        PpAllowlist           allowlist;
+        bool                  any_target = false;
+
+        while (decl_end < len && value[decl_end] != ';')
+            decl_end++;
+        /* Step 2.1: "let tokens be the result of splitting serialized-declaration on ASCII whitespace", read
+           as a walk rather than materialised — the list is consumed exactly once, in order, and step 2.3 and
+           step 2.6 are "the first element" and "the remaining elements". */
+        t = i;
+        while (t < decl_end && pp_is_ascii_whitespace(value[t])) t++;
+        feature_name = value + t;
+        while (t < decl_end && !pp_is_ascii_whitespace(value[t])) t++;
+        feature_n = (size_t)(value + t - feature_name);
+        if (feature_n == 0)
+            goto next;                               /* step 2.2: an empty token list */
+        feature = pp_feature_of_token(feature_name, feature_n);   /* steps 2.3-2.5 */
+        if (feature == PP_FEATURE_N)
+            goto next;                               /* step 2.4 */
+        memset(&allowlist, 0, sizeof allowlist);     /* step 2.7: "let allowlist be a new allowlist" */
+        /* Step 2.8: "if ANY element of targetlist is the string `*`, set allowlist to the special value *." It
+           is asked over the WHOLE list before any element is stored, exactly as §9.2's is, because a `*` does
+           not narrow an allowlist — it REPLACES one, so `allow="autoplay 'none' *"` is `*`. */
+        {
+            size_t u = t;
+
+            while (u < decl_end) {
+                size_t start;
+
+                while (u < decl_end && pp_is_ascii_whitespace(value[u])) u++;
+                start = u;
+                while (u < decl_end && !pp_is_ascii_whitespace(value[u])) u++;
+                if (u == start)
+                    break;
+                any_target = true;
+                if (u - start == 1 && value[start] == '*')
+                    allowlist.star = true;
+            }
+        }
+        if (!allowlist.star) {
+            /* Step 2.9.1: "if targetlist is EMPTY and target origin is given, let allowlist's src-origin be
+               target origin." §6.2 states the same rule from the delivery's side: "the allowlist for the
+               features named in the attribute may be empty; in that case, the default value for the allowlist
+               is 'src'". So `allow="autoplay"` is autoplay FOR THE FRAME'S OWN DECLARED ORIGIN, which is the
+               spelling every real embed uses and is the opposite of an empty allowlist. */
+            if (!any_target && target_origin != NULL)
+                allowlist.src_origin = target_origin;
+            /* Step 2.9.2: "for each element in value". */
+            while (t < decl_end) {
+                size_t start;
+
+                while (t < decl_end && pp_is_ascii_whitespace(value[t])) t++;
+                start = t;
+                while (t < decl_end && !pp_is_ascii_whitespace(value[t])) t++;
+                if (t == start)
+                    break;
+                if (pp_slice_eq_ascii_ci(value + start, t - start, "'self'")) {
+                    allowlist.self_origin = container_origin;      /* step 2.9.2.1 */
+                    continue;
+                }
+                if (target_origin != NULL && pp_slice_eq_ascii_ci(value + start, t - start, "'src'")) {
+                    allowlist.src_origin = target_origin;          /* step 2.9.2.2 */
+                    continue;
+                }
+                /* Steps 2.9.2.3-2.9.2.4. THE KEYWORD `'none'` NEEDS NO BRANCH AND MUST NOT HAVE ONE: §9.3 has
+                   no step for it, so it reaches the URL parser, fails there, and leaves the allowlist as step
+                   2.7 made it — which is §4.7's "a struct with no self-origin, no src-origin and no
+                   expressions", matching nothing. `allow="autoplay 'none'"` is therefore DISABLED because the
+                   keyword parses as no origin at all, and a branch that special-cased it would have to say
+                   what `allow="autoplay 'none' 'self'"` means, which the standard already answers. */
+                pp_append_url_origin(&allowlist, value + start, t - start);
+            }
+        }
+        /* Step 2.10: "set directive[feature] to allowlist." */
+        if (out->present[feature])
+            pp_allowlist_free(&out->allowlist[feature]);
+        out->present[feature]   = true;
+        out->allowlist[feature] = allowlist;
+    next:
+        i = decl_end + 1;
+    }
+}
+
+/* §9.4 "Process permissions policy attributes" — "given an element (element), this algorithm returns a
+ * container policy, which may be empty".
+ *
+ * ITS STEP 1 IS THE CALLER'S AND IS SPELLED AS AN ARGUMENT. "If element is not an `iframe` element, then return
+ * an empty policy directive" is a question about the ELEMENT, and this component does not know what an element
+ * is — core/dom/document.c does, and it states the answer by passing NULL for `allow` and for the declared
+ * origin, which is the same shape §9.5's "null or an element" already travels in. An `<object>` or `<embed>`
+ * container therefore gets step 1's empty directive with no branch here, and the assert below is what stops a
+ * caller stating half of it.
+ *
+ * ITS STEP 3 NAMES A FEATURE THIS USER AGENT DOES NOT SUPPORT. "If element's `allowfullscreen` attribute is
+ * specified, and container policy does not contain an entry for the `fullscreen` feature, set container
+ * policy[fullscreen] = the special value *" — and §4.1's supported-feature set here is HTML §2.2's three names,
+ * which does not include `fullscreen` (Fullscreen defines it, and §4.8 makes its default allowlist that
+ * specification's to state). A feature no supported-feature row names cannot be an entry of this map, so the
+ * step sets nothing and is written out rather than silently skipped: the day `fullscreen` joins the X-list,
+ * this comment is what says the step is owed. */
+static void pp_process_policy_attributes(const char *allow, size_t allow_len, const Origin *container_origin,
+                                         const Origin *declared_origin, PpPolicyDirective *out)
+{
+    DCHECK(allow == NULL || declared_origin != NULL,
+           "§9.4 step 2 was given an `allow` attribute value with no DECLARED ORIGIN — the step passes both to "
+           "§9.3, and without the second the keyword `'src'` names nothing and a directive with an empty target "
+           "list gets an allowlist that matches nothing, which is `<iframe allow=\"autoplay\">` read as the "
+           "`'none'` its author did not write");
+    pp_parse_policy_directive(allow, allow_len, container_origin, declared_origin, out);
+}
+
 /* §9.7 "Define an inherited policy for feature in container at origin" — "given a feature (feature), null or a
  * navigable container (container), an origin for a Document in that container (origin) … this algorithm
  * returns the inherited policy value for feature".
@@ -269,7 +545,7 @@ PermissionsPolicyValue permissions_policy_check(const PermissionsPolicy *policy,
 static PermissionsPolicyValue pp_define_inherited(PermissionsPolicyFeature feature,
                                                   const PermissionsPolicy *container_document_policy,
                                                   const Origin *container_document_origin,
-                                                  const char *container_allow, size_t container_allow_len,
+                                                  const PpPolicyDirective *container_policy,
                                                   const Origin *origin)
 {
     PermissionsPolicyValue by_default;
@@ -294,21 +570,17 @@ static PermissionsPolicyValue pp_define_inherited(PermissionsPolicyFeature featu
     /* Steps 4 and 5: "let container policy be the result of running Process permissions policy attributes on
        container. If feature exists in container policy: if the allowlist for feature in container policy
        matches origin, return `Enabled`; otherwise return `Disabled`."
-       §9.4 builds that container policy by running §9.3's parse-policy-directive over the `allow` ATTRIBUTE,
-       and neither §9.3 nor §4.7's allowlist matching is built. A present `allow` is therefore an answer this
-       component cannot compute, and it is a crash rather than a default because the default is the PERMISSIVE
-       direction: `<iframe allow="autoplay 'none'">` would be read as an iframe that said nothing.
+       THE DIRECTIVE ARRIVES BUILT, and §9.5's caller is where step 4 runs — see permissions_policy_create.
        §9.4's OTHER attribute needs no branch: its step 3 sets `allowfullscreen` into the container policy under
        the `fullscreen` feature, which §4.1 leaves out of this user agent's supported-feature set, so it names
        nothing this loop iterates over. */
-    if (container_allow != NULL && container_allow_len != 0)
-        DFAIL("§9.4 \"Process permissions policy attributes\" reached an `<iframe allow=…>` and this build "
-              "parses none. What is missing is §9.3 \"Parse policy directive\" (semicolon-split, per-directive "
-              "token list, the `'self'`/`'src'` keywords resolved against the container document's origin and "
-              "the element's declared origin) and §4.7 \"Allowlists\"' matches-an-origin, which §9.7 step 5 "
-              "then asks of the created Document's origin. Until both exist this container's policy is being "
-              "read as EMPTY, which grants the frame every feature the attribute was written to withhold — so "
-              "build the two and delete this crash rather than letting the frame inherit a permissive default");
+    DCHECK(container_policy != NULL,
+           "§9.7 step 5 was asked whether a feature exists in a container policy that was never built — step 4 "
+           "runs §9.4's process-permissions-policy-attributes on the container, and every container has one "
+           "(an element carrying no `allow` attribute yields §9.4's EMPTY policy directive, which is a "
+           "statement and not an absence)");
+    if (container_policy->present[feature])
+        return pp_allowlist_matches(&container_policy->allowlist[feature], origin) ? PP_ENABLED : PP_DISABLED;
 
     /* Steps 6, 7 and 8 — the DEFAULT ALLOWLIST, §4.8's two values and nothing else.
        "6. If feature's default allowlist is *, return `Enabled`.
@@ -335,9 +607,11 @@ static PermissionsPolicyValue pp_define_inherited(PermissionsPolicyFeature featu
 PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_document_policy,
                                              const Origin *container_document_origin,
                                              const char *container_allow, size_t container_allow_len,
+                                             const Origin *container_declared_origin,
                                              const Origin *origin)
 {
     PermissionsPolicy *policy;
+    PpPolicyDirective  container_policy;
     int f;
 
     /* Step 1: "Assert: If not null, container is a navigable container." The caller states the container by
@@ -356,57 +630,48 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
            "§9.5 was given an `allow` attribute with NO container — §9.4's process-permissions-policy-"
            "attributes reads that attribute off the navigable container itself, so an attribute without one is "
            "a caller that lost the element it came from");
+    DCHECK(container_declared_origin == NULL || container_document_origin != NULL,
+           "§9.5 was given a container's DECLARED ORIGIN with no container — §7.2's declared origin is computed "
+           "from the element's own `sandbox`, `srcdoc` and `src` attributes and its node document, so one "
+           "without a container document is a caller that lost the element it was read off");
     DCHECK(origin != NULL, "§9.5 was asked to create a permissions policy for a navigable with no origin — the "
                            "origin is the Document's own and every §9.7 default-allowlist step compares against "
                            "it");
     policy = calloc(1, sizeof *policy);
     CHECK(policy != NULL, "permissions policy: OOM creating §9.5's policy for a navigable");
+    /* §9.7 STEP 4 RUNS ONCE, HERE, AND NOT PER FEATURE — which is the same answer and not an optimisation to
+       be traded away later. §9.4 is a pure function of the ELEMENT (its `allow` attribute, its node document's
+       origin, its declared origin), and §9.5's loop varies only `feature`, so a per-feature call would parse
+       the same bytes PP_FEATURE_N times and build PP_FEATURE_N directives of which each call reads one entry.
+       Hoisting it is also what makes the parse's OWNERSHIP statable: a directive owns heap allowlists, and
+       there is exactly one of them here with exactly one free.
+       IT DOES NOT RUN AT ALL FOR A NULL CONTAINER, because §9.7 RETURNS at its step 1 and step 4 is three steps
+       further down: there is no element to process the attributes of, and §9.3's second argument — the
+       container document's origin, which `'self'` resolves to — would be the absent one its own assert names. */
+    memset(&container_policy, 0, sizeof container_policy);
+    if (container_document_origin != NULL)
+        pp_process_policy_attributes(container_allow, container_allow_len, container_document_origin,
+                                     container_declared_origin, &container_policy);
     /* Steps 2-4: "let inherited policy be a new ordered map. For each feature supported, let isInherited be the
        result of running Define an inherited policy for feature in container at origin …; set inherited
        policy[feature] to isInherited." EVERY supported feature, which is what §4.3's "will contain a value for
        each supported feature" makes the array's density mean. */
     for (f = 0; f < PP_FEATURE_N; f++)
         policy->inherited[f] = pp_define_inherited((PermissionsPolicyFeature)f, container_document_policy,
-                                                   container_document_origin, container_allow,
-                                                   container_allow_len, origin);
+                                                   container_document_origin, &container_policy, origin);
+    /* THE CONTAINER POLICY DIES WITH THE ALGORITHM. §9.5 returns a permissions policy and §4.2 gives it an
+       inherited policy and a declared policy — never a container policy, which §4.5 makes a fact about the
+       CHILD NAVIGABLE and which §9.7 consults and discards. Keeping it on the record would be storing an input
+       beside an answer, and every later reader would have to be told which of the two decides. */
+    pp_directive_free(&container_policy);
     /* Step 5: "let policy be a new permissions policy, with inherited policy inherited policy and declared
-       policy «[], []»." — the calloc above IS that empty declared policy: every `declared_present` is false,
-       which is "the feature is not present in the declared policy" and not "the feature has an empty
+       policy «[], []»." — the calloc above IS that empty declared policy: every `declarations.present` is
+       false, which is "the feature is not present in the declared policy" and not "the feature has an empty
        allowlist". §9.6 is the one algorithm that turns any of them true. */
     return policy;
 }
 
 /* ---- §9.1, §9.2 and §9.6's response half ----------------------------------------------------------------- */
-
-static void pp_allowlist_add_expression(PpAllowlist *a, const char *s, size_t n)
-{
-    char *copy;
-
-    if (a->n_expressions >= a->cap_expressions) {
-        a->cap_expressions = a->cap_expressions ? a->cap_expressions * 2 : 4;
-        a->expressions = realloc(a->expressions, (size_t)a->cap_expressions * sizeof *a->expressions);
-        CHECK(a->expressions != NULL, "permissions policy: OOM growing §4.7's allowlist expressions");
-    }
-    copy = malloc(n + 1);
-    CHECK(copy != NULL, "permissions policy: OOM copying a §5.1 permissions-source-expression");
-    memcpy(copy, s, n);
-    copy[n] = '\0';
-    a->expressions[a->n_expressions++] = copy;
-}
-
-/* §4.1's "the policy-controlled feature identified by feature-name", and §9.2's / §9.3's shared answer for a
-   name that identifies none: "if feature-name does not identify any recognized policy-controlled feature, then
-   continue". PP_FEATURE_N IS THAT ANSWER — the sentinel the enum already spells — so an unsupported token is
-   SKIPPED and never guessed at, which is §4.1's own "user agents are not required to support every feature". */
-static PermissionsPolicyFeature pp_feature_of_token(const char *name)
-{
-    int f;
-
-    for (f = 0; f < PP_FEATURE_N; f++)
-        if (!strcmp(PP_FEATURES[f].token, name))
-            return (PermissionsPolicyFeature)f;
-    return PP_FEATURE_N;
-}
 
 /* §5.2's TOKEN `*` and TOKEN `self`, asked of ONE bare item. The KIND is half the question and dropping it is
    the trap: `camera="self"` is a STRING whose text is `self` and §5.2 makes a String "a String containing the
@@ -435,22 +700,23 @@ static bool pp_member_list_has_star(const SfMember *m)
 /* §9.2 "Construct policy from dictionary and origin" — "given an ordered map (dictionary) and an origin
  * (origin), this algorithm will return a declared policy".
  *
- * IT WRITES THE TWO ARRAYS RATHER THAN RETURNING A MAP, because the declared policy IS those two arrays on the
- * policy record (see the struct) and a second representation to copy out of would be a second place a feature
- * can go missing. `present`/`declared` are PP_FEATURE_N-wide and start empty, which is §9.2 step 1's "let
- * declarations be an empty ordered map".
+ * IT WRITES A §4.6 POLICY DIRECTIVE RATHER THAN RETURNING A MAP, because that IS what a declared policy's
+ * declarations are and a second representation to copy out of would be a second place a feature can go missing.
+ * `out` starts EMPTY, which is §9.2 step 1's "let declarations be an empty ordered map" — the same type §9.3
+ * builds out of an attribute, because §4.6 is one section and not two.
  *
  * §9.2's REPORTING CONFIGURATION (its step 2 and its step 3's `report-to`) IS PARSED AND DISCARDED — the named
  * residual permissions_policy.h states, and the reason a `report-to` parameter is not a crash: it cannot move
  * any answer, because every answer is decided by an ALLOWLIST. */
 static void pp_construct_from_dictionary(const SfDictionary *dict, const Origin *origin,
-                                         bool *present, PpAllowlist *declared)
+                                         PpPolicyDirective *out)
 {
     int i;
 
     for (i = 0; i < dict->n_members; i++) {                     /* step 3: "for each feature-name → (value, params)" */
         const SfMember          *m = &dict->members[i].value;
-        PermissionsPolicyFeature feature = pp_feature_of_token(dict->members[i].key);
+        PermissionsPolicyFeature feature = pp_feature_of_token(dict->members[i].key,
+                                                               strlen(dict->members[i].key));
         PpAllowlist              allowlist;
 
         if (feature == PP_FEATURE_N)                            /* step 3.1 */
@@ -501,13 +767,13 @@ static void pp_construct_from_dictionary(const SfDictionary *dict, const Origin 
         /* Step 3.7: "set declarations[feature] to allowlist." A REPEATED FEATURE CANNOT ARRIVE HERE — RFC 9651
            §4.2.2 step 2.4 overwrote the earlier member in the dictionary — so this is a set and never a merge,
            and the assert is what says so rather than a free that would quietly accept one. */
-        DCHECK(!present[feature],
+        DCHECK(!out->present[feature],
                "§9.2 reached one policy-controlled feature TWICE from a single dictionary — RFC 9651 §4.2.2's "
                "ordered map overwrites a duplicate key in place ('all but the last instance are ignored'), so "
                "two members naming one feature is a dictionary parse that APPENDED where the section says it "
                "must overwrite, and the allowlist about to be dropped is the one the server sent last");
-        present[feature]   = true;
-        declared[feature]  = allowlist;
+        out->present[feature]   = true;
+        out->allowlist[feature] = allowlist;
     }
 }
 
@@ -527,15 +793,16 @@ static void pp_construct_from_dictionary(const SfDictionary *dict, const Origin 
  * platform-wide uniformity Fetch's own note demands, and is why sf_parse_dictionary failing here is a VALUE
  * and never a crash. */
 static void pp_process_response_policy(const char *header_value, const Origin *origin,
-                                       bool *present, PpAllowlist *declared)
+                                       PpPolicyDirective *out)
 {
     SfDictionary dict;
 
+    memset(out, 0, sizeof *out);                                 /* step 3's empty ordered map */
     if (header_value == NULL)
         return;                                                  /* no such header: step 3's empty map */
     if (!sf_parse_dictionary(header_value, strlen(header_value), &dict))
         return;                                                  /* step 3, for a value that did not parse */
-    pp_construct_from_dictionary(&dict, origin, present, declared);   /* step 4 */
+    pp_construct_from_dictionary(&dict, origin, out);            /* step 4 */
     sf_dictionary_free(&dict);
 }
 
@@ -552,9 +819,8 @@ SerializedResponsePermissionsPolicy serialized_response_permissions_policy(const
 void permissions_policy_apply_response(PermissionsPolicy *policy, const char *header_value,
                                        const Origin *origin)
 {
-    bool        present[PP_FEATURE_N];
-    PpAllowlist declared[PP_FEATURE_N];
-    int         f;
+    PpPolicyDirective d;
+    int               f;
 
     DCHECK(policy != NULL,
            "§9.6's steps 2-4 were asked to apply a response's declared policy to NOTHING — its step 1 has "
@@ -563,18 +829,15 @@ void permissions_policy_apply_response(PermissionsPolicy *policy, const char *he
            "§9.6 was given no ORIGIN. HTML §7.5.1 passes navigationParams's origin, §9.2 makes it what the "
            "token `self` resolves to, and an allowlist whose self-origin is absent refuses the document's own "
            "origin — so a missing origin does not fail loudly, it silently narrows every `self` a server wrote");
-    for (f = 0; f < PP_FEATURE_N; f++) {
-        DCHECK(!policy->declared_present[f],
+    for (f = 0; f < PP_FEATURE_N; f++)
+        DCHECK(!policy->declarations.present[f],
                "§9.6 is applying a response to a policy that ALREADY carries a declared policy — its step 1 "
                "returns §9.5's policy, whose declared policy is «[], []», so a policy with declarations here "
                "has had a response applied to it once already and the second application would be a document "
                "judged under two responses' headers at once");
-        present[f] = false;
-        memset(&declared[f], 0, sizeof declared[f]);
-    }
     /* Step 2: "let d be the result of running Process response policy given response, origin and
        report-only." The report-only choice is the CALLER's, spelled as WHICH field value it passed. */
-    pp_process_response_policy(header_value, origin, present, declared);
+    pp_process_response_policy(header_value, origin, &d);
     /* Step 3: "for each feature → allowlist of d's declarations: if policy's inherited policy[feature] is true,
        then set policy's declared policy's declarations[feature] to allowlist."
        "TRUE" IS §4.2's `Enabled` — the section defines an inherited policy as a map to `Enabled` or `Disabled`
@@ -583,13 +846,16 @@ void permissions_policy_apply_response(PermissionsPolicy *policy, const char *he
        declare it back, and the declaration is DROPPED rather than stored-and-overruled, which is the difference
        §9.11's endpoint would later be able to see. */
     for (f = 0; f < PP_FEATURE_N; f++) {
-        if (present[f] && policy->inherited[f] == PP_ENABLED) {
-            policy->declared_present[f] = true;
-            policy->declared[f]         = declared[f];
-        } else {
-            pp_allowlist_free(&declared[f]);
+        if (d.present[f] && policy->inherited[f] == PP_ENABLED) {
+            policy->declarations.present[f]   = true;
+            policy->declarations.allowlist[f] = d.allowlist[f];
+            memset(&d.allowlist[f], 0, sizeof d.allowlist[f]);   /* moved: `d` owns it no longer */
         }
     }
+    /* WHAT STEP 3 DID NOT TAKE IS FREED HERE AND NOT AT THE BRANCH, because the ownership statement is about
+       `d` as a whole: every allowlist step 3 moved out has been emptied above, so this frees exactly the
+       declarations the inherited policy refused. */
+    pp_directive_free(&d);
     /* Step 4: "set policy's declared policy[feature]'s reporting configuration to d's reporting configuration."
        THE STEP IS OUTSIDE THE LOOP IN THE SPEC AND NAMES A `feature` THAT IS OUT OF SCOPE THERE — an editorial
        defect in §9.6, whose intent §4.2 settles: a declared policy is «declarations, reporting configuration»,
@@ -639,7 +905,7 @@ char *permissions_policy_serialize(const PermissionsPolicy *policy)
        permissions_policy_apply_response over ITS response. A record with declarations on it would be one
        instance applying its own response headers to a document that never received them. */
     for (f = 0; f < PP_FEATURE_N; f++)
-        DCHECK(!policy->declared_present[f],
+        DCHECK(!policy->declarations.present[f],
                "§4.2's permissions policy is being serialized for a peer instance with a DECLARED POLICY on it "
                "— every policy that crosses is §9.5's own result and §9.5's declared policy is «[], []», so "
                "declarations here are a §9.6 result (this instance's response applied) being sent where a §9.5 "
@@ -750,17 +1016,11 @@ PermissionsPolicy *permissions_policy_deserialize(const char *text)
 
 void permissions_policy_free(PermissionsPolicy *policy)
 {
-    int f;
-
     if (policy == NULL)
         return;
-    /* THE DECLARED POLICY'S ALLOWLISTS ARE THE ONLY OWNED THING ON THIS RECORD, and the loop runs over every
-       feature rather than over the present ones: §4.7's expressions array is allocated by
-       pp_allowlist_add_expression, `declared_present` is what §9.8/§9.9 READ, and an allowlist built and then
-       dropped by §9.6 step 3 is freed at its site. Reading the presence bit here would tie a FREE to a flag
-       whose meaning is about ANSWERS — the shape that leaks the day a policy is stored without being present. */
-    for (f = 0; f < PP_FEATURE_N; f++)
-        pp_allowlist_free(&policy->declared[f]);
+    /* THE DECLARED POLICY'S DECLARATIONS ARE THE ONLY OWNED THING ON THIS RECORD, and pp_directive_free runs
+       over every feature rather than over the present ones — see its own comment. */
+    pp_directive_free(&policy->declarations);
     free(policy);
 }
 

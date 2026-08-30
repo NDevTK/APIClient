@@ -113,16 +113,30 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
  * (origin) this algorithm returns a new Permissions Policy": one §9.7 inherited-policy value per supported
  * feature, and §9.5's own «[], []» declared policy.
  *
- * §9.7 IS THE WHOLE OF WHAT THE ARGUMENTS ARE FOR, and they are the three things it reads off the container:
+ * §9.7 IS THE WHOLE OF WHAT THE ARGUMENTS ARE FOR, and they are the four things it reads off the container:
  * `container_document_policy` is "container's node document's" permissions policy (its §9.7 steps 2 and 3),
- * `container_document_origin` is "container's node document's origin" (its step 7), and `container_allow`/
- * `container_allow_len` are the value of the `allow` attribute that §9.4 "Process permissions policy
- * attributes" turns into a container policy (its steps 4-5). A TOP-LEVEL DOCUMENT passes NULL for all of them,
- * which is §9.7 step 1's "if container is null, return `Enabled`" — the absence of a container is a POSITIVE
- * statement about this navigable and never a missing argument, which is why they are absent TOGETHER and
- * asserted to be. The attribute arrives as BYTES AND A LENGTH because that is how the DOM holds an attribute
- * value; a container element that carries no `allow` attribute at all passes NULL, which §9.4 step 2 reads as
- * the empty directive rather than as a missing input.
+ * `container_document_origin` is "container's node document's origin" (its step 7 — and §9.4 step 2's second
+ * argument, which is what the keyword `'self'` resolves to inside an `allow` attribute), `container_allow`/
+ * `container_allow_len` are the value of the `allow` attribute, and `container_declared_origin` is §7.2 "The
+ * permissionsPolicy object"'s DECLARED ORIGIN of the element — §9.4 step 2's third argument, and what the
+ * keyword `'src'` resolves to. A TOP-LEVEL DOCUMENT passes NULL for all of them, which is §9.7 step 1's "if
+ * container is null, return `Enabled`" — the absence of a container is a POSITIVE statement about this
+ * navigable and never a missing argument, which is why they are absent TOGETHER and asserted to be. The
+ * attribute arrives as BYTES AND A LENGTH because that is how the DOM holds an attribute value; a container
+ * element that carries no `allow` attribute at all passes NULL, which §9.4 step 2 reads as the empty directive
+ * rather than as a missing input.
+ *
+ * §9.4 STEP 1 IS THE CALLER'S, AND IT IS SPELLED AS AN ABSENT ATTRIBUTE. "If element is not an `iframe`
+ * element, then return an empty policy directive" is a question about what an element IS, and this component
+ * does not know what an element is; the caller that does states the answer by passing NULL for `container_allow`
+ * and for `container_declared_origin`. So an `<object>` or `<embed>` container reaches §9.7 steps 6-8 with no
+ * branch here, and the declared origin — which §7.2 computes for any Element — is not read for a container
+ * whose attribute the standard does not honour.
+ *
+ * THE DECLARED ORIGIN IS THE ELEMENT'S AND NOT THE CREATED DOCUMENT'S, and they legitimately differ: §7.2
+ * computes it from the `src` attribute the embedder WROTE, so a frame that redirected elsewhere, or that
+ * inherited an `about:blank`, is checked against `origin` (the Document's own) and does not match a `'src'`
+ * allowlist. That is the keyword meaning what it says rather than a narrowing.
  *
  * THE CONTAINER DOCUMENT'S POLICY AND ORIGIN ARRIVE TOGETHER OR NOT AT ALL, and that is asserted. They are two
  * facts about one element, so half of them is not a partial container — it is a container in ANOTHER WASM
@@ -138,6 +152,7 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
 PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_document_policy,
                                              const Origin *container_document_origin,
                                              const char *container_allow, size_t container_allow_len,
+                                             const Origin *container_declared_origin,
                                              const Origin *origin);
 void permissions_policy_free(PermissionsPolicy *policy);
 

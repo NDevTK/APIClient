@@ -76,9 +76,9 @@ static Origin *origin_alloc(void)
 }
 
 /* THE MINT — the standard's "return a NEW opaque origin", and the one place a nonce is created. Every caller
-   of it is a spec step that says exactly those words: URL §4.7's `data:`/`file:`/unknown-scheme case, and
-   §7.3.2.1's steps 1 and 2. */
-static const Origin *origin_opaque_new(void)
+   of it is a spec step that says exactly those words: URL §4.7's `data:`/`file:`/unknown-scheme case,
+   §7.3.2.1's steps 1 and 2, and Permissions Policy §7.2's declared origin steps 1 and 2. */
+const Origin *origin_opaque_new(void)
 {
     Origin *o = origin_alloc();
 

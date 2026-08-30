@@ -63,6 +63,15 @@ typedef struct Origin Origin;
    meaningful operation on it is equality — so a caller that needs those must ask this first. */
 bool origin_is_opaque(const Origin *o);
 
+/* §7.1.1's "A NEW OPAQUE ORIGIN" — "an internal value, with no serialization it can be recreated from … for
+   which the only meaningful operation is testing for equality". EVERY CALL MINTS A DISTINCT ONE, which is the
+   whole content of the phrase: two documents that both serialize to `null` are the same string and different
+   principals, so an algorithm whose step says "return a new opaque origin" must not be given a shared record.
+   It is here rather than private to origin_determine because that is HTML §7.3.2.1's algorithm and not the only
+   one with such a step — Permissions Policy §7.2's declared origin has two of them. Agent-lifetime, like every
+   record this file hands out. */
+const Origin *origin_opaque_new(void);
+
 /* §7.1.1's SAME ORIGIN, both steps. */
 bool origin_same(const Origin *a, const Origin *b);
 

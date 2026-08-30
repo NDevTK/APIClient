@@ -3445,10 +3445,88 @@ char *document_ancestor_origins_for_child(JSContext *ctx, JSValueConst container
     return text;
 }
 
+/* PERMISSIONS POLICY §7.2 "The permissionsPolicy object"'s DECLARED ORIGIN OF AN ELEMENT — "the origin of the
+ * document which the embedding page INTENDS to load into a frame", which is §9.4 step 2's third argument and
+ * therefore what the `allow` attribute's `'src'` keyword resolves to.
+ *
+ * IT IS AN INTENTION AND NOT AN OUTCOME, which is why it is computed from the ELEMENT rather than read off the
+ * navigable's Document. The two differ exactly where a real page differs from what its author wrote: a frame
+ * that redirected cross-origin, one that has not loaded yet and is still on the initial `about:blank`, one
+ * whose `src` was rewritten after creation. The standard checks the created Document's own origin against this
+ * one (§4.7 step 3), so a frame that went somewhere else does NOT get the delegation — the keyword means what
+ * it says.
+ *
+ * ITS TWO OPAQUE ARMS EACH MINT A FRESH ORIGIN, and that is the whole of their effect. §7.1.1's opaque origin
+ * is same origin-domain with nothing but ITSELF, and the Document created in a sandboxed frame gets its own
+ * separate opaque origin from §7.3.2.1's determine-the-origin — so a `'src'` allowlist on a sandboxed frame
+ * matches nothing, which is the answer, and reusing one record for both would make it match everything.
+ *
+ *   1. "If node's node document's sandboxed origin browsing context flag is set, then return a new opaque
+ *      origin."  §7.1.5's flag, read off the CONTAINER DOCUMENT's active sandboxing flag set.
+ *   2. "If node's `sandbox` attribute is set, and does not contain the `allow-same-origin` keyword, then
+ *      return a new opaque origin."  Asked through §7.1.5's own parse rather than by a second token scan:
+ *      parse-a-sandboxing-directive sets the sandboxed origin flag for exactly the token lists that lack that
+ *      keyword, so `sandbox_parse_directive`'s answer IS this condition and the keyword's spelling lives in
+ *      one place.
+ *   3. "If node's `srcdoc` attribute is set, then return node's node document's origin."
+ *   4. "If node's `src` attribute is set: let url be the result of parsing node's `src` attribute, relative to
+ *      node's node document. If url is not failure, return url's origin."  A `src` that does NOT parse falls
+ *      through to step 5, which is the spec's own structure and not a repair.
+ *   5. "Return node's node document's origin." */
+static const Origin *doc_declared_origin(lxb_dom_node_t *el, SandboxFlags document_flags,
+                                         const Origin *document_origin)
+{
+    lxb_dom_element_t *e = (lxb_dom_element_t *)el;
+    const lxb_char_t  *v;
+    size_t             n = 0;
+    UrlRecord          url, base;
+    const char        *base_url;
+    bool               have_base;
+    const Origin      *o;
+
+    /* "IS SET" IS A PRESENCE TEST AND NOT A VALUE TEST, at every one of the three attributes below. Lexbor
+       answers NULL from get_attribute for an attribute that IS present with an EMPTY value, so asking for the
+       value would read `<iframe sandbox>` — the most restrictive spelling there is — as an unsandboxed frame,
+       and `<iframe srcdoc>` as one that loads its `src`. The same distinction core/html/html_iframe.c draws
+       over `srcdoc`. */
+    if (document_flags & SANDBOX_ORIGIN)                                    /* step 1 */
+        return origin_opaque_new();
+    if (lxb_dom_element_has_attribute(e, (const lxb_char_t *)"sandbox", 7)) {
+        v = lxb_dom_element_get_attribute(e, (const lxb_char_t *)"sandbox", 7, &n);
+        if (sandbox_parse_directive(v ? (const char *)v : "", v ? n : 0) & SANDBOX_ORIGIN)   /* step 2 */
+            return origin_opaque_new();
+    }
+    if (lxb_dom_element_has_attribute(e, (const lxb_char_t *)"srcdoc", 6))
+        return document_origin;                                             /* step 3 */
+    if (!lxb_dom_element_has_attribute(e, (const lxb_char_t *)"src", 3))
+        return document_origin;                                             /* step 5 */
+    n = 0;
+    v = lxb_dom_element_get_attribute(e, (const lxb_char_t *)"src", 3, &n);
+    /* `<iframe src="">` IS PARSED AND NOT SHORT-CIRCUITED. The empty string resolves to the BASE URL, which a
+       `<base href>` can have moved off the document's own origin — so step 4 and step 5 legitimately differ
+       here, and answering step 5 for it would be this function deciding a case the standard already decides. */
+    base_url = document_base_url_of(el->owner_document);
+    url_record_init(&base);
+    have_base = base_url && *base_url && url_parse(&base, base_url, strlen(base_url), NULL);
+    o = url_parse(&url, v ? (const char *)v : "", v ? n : 0, have_base ? &base : NULL)   /* step 4 */
+        ? origin_of_url(&url) : document_origin;                            /* … or step 5 on a failure */
+    url_record_free(&url);
+    url_record_free(&base);
+    return o;
+}
+
 /* WHAT PERMISSIONS POLICY §9.7 READS OFF A NAVIGABLE CONTAINER, gathered for the navigable this Document is
- * being created in. §9.5 takes "null or an element (container)" and §9.7 reads three things off it: "container's
- * node document"'s permissions policy (its steps 2 and 3), that document's ORIGIN (its step 7), and the `allow`
- * attribute §9.4 "Process permissions policy attributes" turns into a container policy (its steps 4-5).
+ * being created in. §9.5 takes "null or an element (container)" and §9.7 reads four things off it: "container's
+ * node document"'s permissions policy (its steps 2 and 3), that document's ORIGIN (its step 7 — and §9.4 step
+ * 2's second argument, which `'self'` resolves to), the `allow` attribute, and the element's §7.2 DECLARED
+ * ORIGIN, which §9.4 step 2 hands §9.3 as its target origin.
+ *
+ * §9.4 STEP 1 IS PERFORMED HERE — "if element is not an `iframe` element, then return an empty policy
+ * directive". It is a question about what an element IS, which is this file's knowledge and not the policy
+ * component's, and the answer travels as the ABSENCE of both attribute-derived arguments: an `<object>`,
+ * `<embed>` or `<frame>` container reaches §9.7 with no container policy, exactly as an `<iframe>` carrying no
+ * `allow` attribute does. Reading the attribute off every element instead would honour an `allow` HTML does not
+ * define on it, which is a feature GRANTED by a spelling no standard gives meaning to.
  *
  * THE CONTAINER IS HTML §7.3.1.3 "Child navigables"' CONTAINER OF A NAVIGABLE — "the navigable container whose
  * content navigable is navigable, or null if there is no such element" — asked of the navigable rather than
@@ -3467,6 +3545,7 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
 {
     const PermissionsPolicy *container_doc_policy = NULL;
     const Origin *container_doc_origin = NULL;
+    const Origin *container_declared_origin = NULL;
     const lxb_char_t *allow = NULL;
     size_t allow_len = 0;
 
@@ -3489,14 +3568,19 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
                "§9.7's \"container's node document\" holds no permissions policy while holding a navigable — "
                "§9.5 runs for every Document a navigable is given, so a container document without one was "
                "installed past it and its own inheritance is unknown rather than empty");
-        /* §9.4 step 2 reads "the value of element's allow attribute". An element carrying none yields NULL,
-           which §9.4 turns into an empty policy directive — a positive statement that this container declared
-           nothing, and not an input the walk failed to find. */
-        allow = lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"allow", 5,
-                                              &allow_len);
+        /* §9.4 step 1, then its step 2's "the value of element's allow attribute" and "element's declared
+           origin". An `<iframe>` carrying no `allow` attribute yields NULL for the value, which §9.4 turns into
+           an empty policy directive — a positive statement that this container declared nothing, and not an
+           input the walk failed to find. The DECLARED ORIGIN is computed for it either way, because §9.3 step
+           2.9.1 reads it for a directive whose target list is empty and cannot be handed it later. */
+        if (lxb_html_tree_node_is(el, LXB_TAG_IFRAME)) {
+            allow = lxb_dom_element_get_attribute((lxb_dom_element_t *)el, (const lxb_char_t *)"allow", 5,
+                                                  &allow_len);
+            container_declared_origin = doc_declared_origin(el, cd->sandbox_flags, container_doc_origin);
+        }
     }
     return permissions_policy_create(container_doc_policy, container_doc_origin, (const char *)allow,
-                                     allow_len, origin);
+                                     allow_len, container_declared_origin, origin);
 }
 
 /* §9.6 "Create a Permissions Policy for a navigable from response" FOR THE NAVIGABLE A DOCUMENT IS BEING
