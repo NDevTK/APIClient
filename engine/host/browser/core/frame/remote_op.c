@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/agent_state.h"
 #include "core/frame/remote_object.h"
 #include "core/frame/remote_op.h"
 #include "core/realm.h"
@@ -68,7 +69,31 @@ void remote_op_init(JSContext *ctx)
                                           "through");
     g_apply_slot = realm_value_declare(ctx, "%Reflect.apply%, the intrinsic a peer performs a cross-agent "
                                             "[[Call]] through");
+    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. Two slot NUMBERS into a
+       realm-value pool that is itself the agent's, and this row's release column was empty because its file
+       already had a `_free` and the name was TAKEN: `remote_op_free` frees ONE parsed record, per operation.
+       A name collision is not a release, and the pairing in core/platform.c could not see the difference —
+       the row declared nothing and released nothing, which is the arm that passes in silence. */
+    agent_state_id("remote_op", &g_set_slot,
+                   "the realm-value slot holding %Reflect.set%, the intrinsic a peer performs a cross-agent "
+                   "[[Set]] through");
+    agent_state_id("remote_op", &g_apply_slot,
+                   "the realm-value slot holding %Reflect.apply%, the intrinsic a peer performs a cross-agent "
+                   "[[Call]] through");
     realm_declare_intrinsic(remote_op_install);
+}
+
+/* THE AGENT HALF, UNDONE — and it is named `_agent_free` because `remote_op_free` below is a DIFFERENT
+   operation on a DIFFERENT lifetime: it frees one parsed record, once per operation performed. The two halves
+   of `document` are named the same way and for the same reason. What this owes is the two slot NUMBERS: the
+   VALUES they hold are each realm's own and go with their contexts, and the POOL is released by
+   realm_intrinsics_free — so a carried number is an index into a pool the next agent has not built yet, read
+   by remote_op_program at the first cross-agent [[Set]] or [[Call]] that agent is asked to perform. */
+void remote_op_agent_free(void)
+{
+    DCHECK(g_set_slot >= 0 && g_apply_slot >= 0,
+           "the cross-agent operation performer was released in an agent that never declared it");
+    g_set_slot = g_apply_slot = -1;
 }
 
 /* ---- THE RECORD ------------------------------------------------------------------------------------------ */

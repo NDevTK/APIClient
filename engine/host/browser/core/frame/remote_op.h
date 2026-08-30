@@ -34,6 +34,9 @@
 
 /* Declared once per agent: the two intrinsic slots, and the per-realm capture that fills them. */
 void remote_op_init(JSContext *ctx);
+/* The AGENT's half, undone — core/platform.h's release column. NOT `remote_op_free`, which is further down and
+   is a different lifetime entirely: that one frees ONE parsed record, once per operation performed. */
+void remote_op_agent_free(void);
 
 /* ONE RECORD, PARSED ONCE. The field COUNT and the field LAYOUT are both facts about the operation and are
    stated beside it, because a record shorter than its operation used to be SKIPPED — which parks the asking

@@ -434,6 +434,12 @@ static void r_idb_record(JSRuntime *rt) { (void)rt; idb_record_free(); }
 static void r_indexed_db(JSRuntime *rt) { (void)rt; indexed_db_free(); }
 static void r_domparser(JSRuntime *rt) { (void)rt; domparser_free(); }
 static void r_module_loader(JSRuntime *rt) { module_loader_free(rt); }
+/* AND THE SIXTH, WHOSE RELEASE COLUMN WAS EMPTY FOR A DIFFERENT REASON: its file already had a `remote_op_free`
+   and that name is a PER-OPERATION free of one parsed record, not an agent release. A collision is not a
+   release, and nothing here could tell the two apart — the row declared no agent state and released none,
+   which is the pair of silences this list reads as agreement. The agent half is `remote_op_agent_free`, named
+   as `document`'s two halves are. */
+static void r_remote_op(JSRuntime *rt) { (void)rt; remote_op_agent_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
@@ -686,7 +692,7 @@ static const PlatformComponent PLATFORM[] = {
     /* The PEER's half of the same seam: what this agent does when it is ASKED to perform one. Its per-realm
        install captures %Reflect.set%/%Reflect.apply%, so it declares before any component whose install could
        run page code — which is none of them, and is why it sits beside the asking half rather than at the end. */
-    { "remote_op",           d_remote_op,           NULL },
+    { "remote_op",           d_remote_op,           NULL,        r_remote_op },
     /* HTML §7.2.4's CROSS-ORIGIN Location, AFTER window_proxy: §7.2.2's `location` member is what answers
        with one, and this row builds the per-realm surface that member hands across an origin boundary. */
     { "remote_location",     d_remote_location,     NULL },
