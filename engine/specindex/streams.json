@@ -1,0 +1,1973 @@
+{
+ "spec": "Streams Standard",
+ "key": "streams",
+ "base": "https://streams.spec.whatwg.org/",
+ "specUpdated": "18 August 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Model",
+   "page": "",
+   "id": "model"
+  },
+  "3": {
+   "title": "Conventions",
+   "page": "",
+   "id": "conventions"
+  },
+  "4": {
+   "title": "Readable streams",
+   "page": "",
+   "id": "rs"
+  },
+  "5": {
+   "title": "Writable streams",
+   "page": "",
+   "id": "ws"
+  },
+  "6": {
+   "title": "Transform streams",
+   "page": "",
+   "id": "ts"
+  },
+  "7": {
+   "title": "Queuing strategies",
+   "page": "",
+   "id": "qs"
+  },
+  "8": {
+   "title": "Supporting abstract operations",
+   "page": "",
+   "id": "other-stuff"
+  },
+  "9": {
+   "title": "Using streams in other specifications",
+   "page": "",
+   "id": "other-specs"
+  },
+  "10": {
+   "title": "Examples of creating streams",
+   "page": "",
+   "id": "creating-examples"
+  },
+  "2.1": {
+   "title": "Readable streams",
+   "page": "",
+   "id": "rs-model"
+  },
+  "2.2": {
+   "title": "Writable streams",
+   "page": "",
+   "id": "ws-model"
+  },
+  "2.3": {
+   "title": "Transform streams",
+   "page": "",
+   "id": "ts-model"
+  },
+  "2.4": {
+   "title": "Pipe chains and backpressure",
+   "page": "",
+   "id": "pipe-chains"
+  },
+  "2.5": {
+   "title": "Internal queues and queuing strategies",
+   "page": "",
+   "id": "queuing-strategies"
+  },
+  "2.6": {
+   "title": "Locking",
+   "page": "",
+   "id": "locking"
+  },
+  "4.1": {
+   "title": "Using readable streams",
+   "page": "",
+   "id": "rs-intro"
+  },
+  "4.2": {
+   "title": "The ReadableStream class",
+   "page": "",
+   "id": "rs-class"
+  },
+  "4.2.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "rs-class-definition"
+  },
+  "4.2.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "rs-internal-slots"
+  },
+  "4.2.3": {
+   "title": "The underlying source API",
+   "page": "",
+   "id": "underlying-source-api"
+  },
+  "4.2.4": {
+   "title": "Constructor, methods, and properties",
+   "page": "",
+   "id": "rs-prototype"
+  },
+  "4.2.5": {
+   "title": "Asynchronous iteration",
+   "page": "",
+   "id": "rs-asynciterator"
+  },
+  "4.2.6": {
+   "title": "Transfer via postMessage()",
+   "page": "",
+   "id": "rs-transfer"
+  },
+  "4.3": {
+   "title": "The ReadableStreamGenericReader mixin",
+   "page": "",
+   "id": "generic-reader-mixin"
+  },
+  "4.3.1": {
+   "title": "Mixin definition",
+   "page": "",
+   "id": "generic-reader-mixin-definition"
+  },
+  "4.3.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "generic-reader-internal-slots"
+  },
+  "4.3.3": {
+   "title": "Methods and properties",
+   "page": "",
+   "id": "generic-reader-prototype"
+  },
+  "4.4": {
+   "title": "The ReadableStreamDefaultReader class",
+   "page": "",
+   "id": "default-reader-class"
+  },
+  "4.4.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "default-reader-class-definition"
+  },
+  "4.4.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "default-reader-internal-slots"
+  },
+  "4.4.3": {
+   "title": "Constructor, methods, and properties",
+   "page": "",
+   "id": "default-reader-prototype"
+  },
+  "4.5": {
+   "title": "The ReadableStreamBYOBReader class",
+   "page": "",
+   "id": "byob-reader-class"
+  },
+  "4.5.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "byob-reader-class-definition"
+  },
+  "4.5.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "byob-reader-internal-slots"
+  },
+  "4.5.3": {
+   "title": "Constructor, methods, and properties",
+   "page": "",
+   "id": "byob-reader-prototype"
+  },
+  "4.6": {
+   "title": "The ReadableStreamDefaultController class",
+   "page": "",
+   "id": "rs-default-controller-class"
+  },
+  "4.6.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "rs-default-controller-class-definition"
+  },
+  "4.6.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "rs-default-controller-internal-slots"
+  },
+  "4.6.3": {
+   "title": "Methods and properties",
+   "page": "",
+   "id": "rs-default-controller-prototype"
+  },
+  "4.6.4": {
+   "title": "Internal methods",
+   "page": "",
+   "id": "rs-default-controller-internal-methods"
+  },
+  "4.7": {
+   "title": "The ReadableByteStreamController class",
+   "page": "",
+   "id": "rbs-controller-class"
+  },
+  "4.7.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "rbs-controller-class-definition"
+  },
+  "4.7.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "rbs-controller-internal-slots"
+  },
+  "4.7.3": {
+   "title": "Methods and properties",
+   "page": "",
+   "id": "rbs-controller-prototype"
+  },
+  "4.7.4": {
+   "title": "Internal methods",
+   "page": "",
+   "id": "rbs-controller-internal-methods"
+  },
+  "4.8": {
+   "title": "The ReadableStreamBYOBRequest class",
+   "page": "",
+   "id": "rs-byob-request-class"
+  },
+  "4.8.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "rs-byob-request-class-definition"
+  },
+  "4.8.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "rs-byob-request-internal-slots"
+  },
+  "4.8.3": {
+   "title": "Methods and properties",
+   "page": "",
+   "id": "rs-byob-request-prototype"
+  },
+  "4.9": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "rs-all-abstract-ops"
+  },
+  "4.9.1": {
+   "title": "Working with readable streams",
+   "page": "",
+   "id": "rs-abstract-ops"
+  },
+  "4.9.2": {
+   "title": "Interfacing with controllers",
+   "page": "",
+   "id": "rs-abstract-ops-used-by-controllers"
+  },
+  "4.9.3": {
+   "title": "Readers",
+   "page": "",
+   "id": "rs-reader-abstract-ops"
+  },
+  "4.9.4": {
+   "title": "Default controllers",
+   "page": "",
+   "id": "rs-default-controller-abstract-ops"
+  },
+  "4.9.5": {
+   "title": "Byte stream controllers",
+   "page": "",
+   "id": "rbs-controller-abstract-ops"
+  },
+  "5.1": {
+   "title": "Using writable streams",
+   "page": "",
+   "id": "ws-intro"
+  },
+  "5.2": {
+   "title": "The WritableStream class",
+   "page": "",
+   "id": "ws-class"
+  },
+  "5.2.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "ws-class-definition"
+  },
+  "5.2.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "ws-internal-slots"
+  },
+  "5.2.3": {
+   "title": "The underlying sink API",
+   "page": "",
+   "id": "underlying-sink-api"
+  },
+  "5.2.4": {
+   "title": "Constructor, methods, and properties",
+   "page": "",
+   "id": "ws-prototype"
+  },
+  "5.2.5": {
+   "title": "Transfer via postMessage()",
+   "page": "",
+   "id": "ws-transfer"
+  },
+  "5.3": {
+   "title": "The WritableStreamDefaultWriter class",
+   "page": "",
+   "id": "default-writer-class"
+  },
+  "5.3.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "default-writer-class-definition"
+  },
+  "5.3.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "default-writer-internal-slots"
+  },
+  "5.3.3": {
+   "title": "Constructor, methods, and properties",
+   "page": "",
+   "id": "default-writer-prototype"
+  },
+  "5.4": {
+   "title": "The WritableStreamDefaultController class",
+   "page": "",
+   "id": "ws-default-controller-class"
+  },
+  "5.4.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "ws-default-controller-class-definition"
+  },
+  "5.4.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "ws-default-controller-internal-slots"
+  },
+  "5.4.3": {
+   "title": "Methods and properties",
+   "page": "",
+   "id": "ws-default-controller-prototype"
+  },
+  "5.4.4": {
+   "title": "Internal methods",
+   "page": "",
+   "id": "ws-default-controller-internal-methods"
+  },
+  "5.5": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "ws-all-abstract-ops"
+  },
+  "5.5.1": {
+   "title": "Working with writable streams",
+   "page": "",
+   "id": "ws-abstract-ops"
+  },
+  "5.5.2": {
+   "title": "Interfacing with controllers",
+   "page": "",
+   "id": "ws-abstract-ops-used-by-controllers"
+  },
+  "5.5.3": {
+   "title": "Writers",
+   "page": "",
+   "id": "ws-writer-abstract-ops"
+  },
+  "5.5.4": {
+   "title": "Default controllers",
+   "page": "",
+   "id": "ws-default-controller-abstract-ops"
+  },
+  "6.1": {
+   "title": "Using transform streams",
+   "page": "",
+   "id": "ts-intro"
+  },
+  "6.2": {
+   "title": "The TransformStream class",
+   "page": "",
+   "id": "ts-class"
+  },
+  "6.2.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "ts-class-definition"
+  },
+  "6.2.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "ts-internal-slots"
+  },
+  "6.2.3": {
+   "title": "The transformer API",
+   "page": "",
+   "id": "transformer-api"
+  },
+  "6.2.4": {
+   "title": "Constructor and properties",
+   "page": "",
+   "id": "ts-prototype"
+  },
+  "6.2.5": {
+   "title": "Transfer via postMessage()",
+   "page": "",
+   "id": "ts-transfer"
+  },
+  "6.3": {
+   "title": "The TransformStreamDefaultController class",
+   "page": "",
+   "id": "ts-default-controller-class"
+  },
+  "6.3.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "ts-default-controller-class-definition"
+  },
+  "6.3.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "ts-default-controller-internal-slots"
+  },
+  "6.3.3": {
+   "title": "Methods and properties",
+   "page": "",
+   "id": "ts-default-controller-prototype"
+  },
+  "6.4": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "ts-all-abstract-ops"
+  },
+  "6.4.1": {
+   "title": "Working with transform streams",
+   "page": "",
+   "id": "ts-abstract-ops"
+  },
+  "6.4.2": {
+   "title": "Default controllers",
+   "page": "",
+   "id": "ts-default-controller-abstract-ops"
+  },
+  "6.4.3": {
+   "title": "Default sinks",
+   "page": "",
+   "id": "ts-default-sink-abstract-ops"
+  },
+  "6.4.4": {
+   "title": "Default sources",
+   "page": "",
+   "id": "ts-default-source-abstract-ops"
+  },
+  "7.1": {
+   "title": "The queuing strategy API",
+   "page": "",
+   "id": "qs-api"
+  },
+  "7.2": {
+   "title": "The ByteLengthQueuingStrategy class",
+   "page": "",
+   "id": "blqs-class"
+  },
+  "7.2.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "blqs-class-definition"
+  },
+  "7.2.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "blqs-internal-slots"
+  },
+  "7.2.3": {
+   "title": "Constructor and properties",
+   "page": "",
+   "id": "blqs-prototype"
+  },
+  "7.3": {
+   "title": "The CountQueuingStrategy class",
+   "page": "",
+   "id": "cqs-class"
+  },
+  "7.3.1": {
+   "title": "Interface definition",
+   "page": "",
+   "id": "cqs-class-definition"
+  },
+  "7.3.2": {
+   "title": "Internal slots",
+   "page": "",
+   "id": "cqs-internal-slots"
+  },
+  "7.3.3": {
+   "title": "Constructor and properties",
+   "page": "",
+   "id": "cqs-prototype"
+  },
+  "7.4": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "qs-abstract-ops"
+  },
+  "8.1": {
+   "title": "Queue-with-sizes",
+   "page": "",
+   "id": "queue-with-sizes"
+  },
+  "8.2": {
+   "title": "Transferable streams",
+   "page": "",
+   "id": "transferrable-streams"
+  },
+  "8.3": {
+   "title": "Miscellaneous",
+   "page": "",
+   "id": "misc-abstract-ops"
+  },
+  "9.1": {
+   "title": "Readable streams",
+   "page": "",
+   "id": "other-specs-rs"
+  },
+  "9.1.1": {
+   "title": "Creation and manipulation",
+   "page": "",
+   "id": "other-specs-rs-create"
+  },
+  "9.1.2": {
+   "title": "Reading",
+   "page": "",
+   "id": "other-specs-rs-reading"
+  },
+  "9.1.3": {
+   "title": "Introspection",
+   "page": "",
+   "id": "other-specs-rs-introspect"
+  },
+  "9.2": {
+   "title": "Writable streams",
+   "page": "",
+   "id": "other-specs-ws"
+  },
+  "9.2.1": {
+   "title": "Creation and manipulation",
+   "page": "",
+   "id": "other-specs-ws-creation"
+  },
+  "9.2.2": {
+   "title": "Writing",
+   "page": "",
+   "id": "other-specs-ws-writing"
+  },
+  "9.3": {
+   "title": "Transform streams",
+   "page": "",
+   "id": "other-specs-ts"
+  },
+  "9.3.1": {
+   "title": "Creation and manipulation",
+   "page": "",
+   "id": "other-specs-ts-creation"
+  },
+  "9.3.2": {
+   "title": "Wrapping into a custom class",
+   "page": "",
+   "id": "other-specs-ts-wrapping"
+  },
+  "9.4": {
+   "title": "Other stream pairs",
+   "page": "",
+   "id": "other-specs-pairs"
+  },
+  "9.4.1": {
+   "title": "Duplex streams",
+   "page": "",
+   "id": "other-specs-duplex"
+  },
+  "9.4.2": {
+   "title": "Endpoint pairs",
+   "page": "",
+   "id": "other-specs-endpoints"
+  },
+  "9.5": {
+   "title": "Piping",
+   "page": "",
+   "id": "other-specs-piping"
+  },
+  "10.1": {
+   "title": "A readable stream with an underlying push source (no backpressure support)",
+   "page": "",
+   "id": "example-rs-push-no-backpressure"
+  },
+  "10.2": {
+   "title": "A readable stream with an underlying push source and backpressure support",
+   "page": "",
+   "id": "example-rs-push-backpressure"
+  },
+  "10.3": {
+   "title": "A readable byte stream with an underlying push source (no backpressure support)",
+   "page": "",
+   "id": "example-rbs-push"
+  },
+  "10.4": {
+   "title": "A readable stream with an underlying pull source",
+   "page": "",
+   "id": "example-rs-pull"
+  },
+  "10.5": {
+   "title": "A readable byte stream with an underlying pull source",
+   "page": "",
+   "id": "example-rbs-pull"
+  },
+  "10.6": {
+   "title": "A writable stream with no backpressure or success signals",
+   "page": "",
+   "id": "example-ws-no-backpressure"
+  },
+  "10.7": {
+   "title": "A writable stream with backpressure and success signals",
+   "page": "",
+   "id": "example-ws-backpressure"
+  },
+  "10.8": {
+   "title": "A { readable, writable } stream pair wrapping the same underlying resource",
+   "page": "",
+   "id": "example-both"
+  },
+  "10.9": {
+   "title": "A transform stream that replaces template tags",
+   "page": "",
+   "id": "example-ts-lipfuzz"
+  },
+  "10.10": {
+   "title": "A transform stream created from a sync mapper function",
+   "page": "",
+   "id": "example-ts-sync-mapper"
+  },
+  "10.11": {
+   "title": "Using an identity transform stream as a primitive to create new readable streams",
+   "page": "",
+   "id": "example-identity-transform-usages"
+  }
+ },
+ "dfns": {
+  "[[abortsteps]]( reason )": [
+   "5.4.4",
+   "5.5.2"
+  ],
+  "[[cancelsteps]]( reason )": [
+   "4.6.4",
+   "4.7.4",
+   "4.9.2"
+  ],
+  "[[pullsteps]]( readrequest )": [
+   "4.6.4",
+   "4.7.4",
+   "4.9.2"
+  ],
+  "abort a writable stream": [
+   "2.2"
+  ],
+  "abort( reason )": [
+   "5.2.3",
+   "5.2.4",
+   "5.3.3"
+  ],
+  "acquirereadablestreambyobreader( stream )": [
+   "4.9.1"
+  ],
+  "acquirereadablestreamdefaultreader( stream )": [
+   "4.9.1"
+  ],
+  "acquirewritablestreamdefaultwriter( stream )": [
+   "5.5.1"
+  ],
+  "active reader": [
+   "2.6"
+  ],
+  "active writer": [
+   "2.6"
+  ],
+  "branches of a readable stream tee": [
+   "2.1"
+  ],
+  "buffer byte length": [
+   "4.7.2"
+  ],
+  "byob reader": [
+   "2.6"
+  ],
+  "byob readers": [
+   "2.6"
+  ],
+  "byte length": [
+   "4.7.2"
+  ],
+  "byte length queuing strategy size function": [
+   "7.2.2"
+  ],
+  "byte offset": [
+   "4.7.2"
+  ],
+  "bytes filled": [
+   "4.7.2"
+  ],
+  "cancel a readable stream": [
+   "2.1"
+  ],
+  "cancel( reason )": [
+   "4.2.3",
+   "4.2.4",
+   "4.3.3",
+   "6.2.3"
+  ],
+  "cancopydatablockbytes( tobuffer toindex frombuffer fromindex count )": [
+   "8.3"
+  ],
+  "cantransferarraybuffer( o )": [
+   "8.3"
+  ],
+  "chunk steps": [
+   "4.4.2",
+   "4.5.2"
+  ],
+  "cloneasuint8array( o )": [
+   "8.3"
+  ],
+  "close sentinel": [
+   "5.4.2"
+  ],
+  "close steps": [
+   "4.4.2",
+   "4.5.2"
+  ],
+  "constructor(transformer writablestrategy readablestrategy)": [
+   "6.2.4"
+  ],
+  "constructor(transformer writablestrategy)": [
+   "6.2.4"
+  ],
+  "constructor(underlyingsink strategy)": [
+   "5.2.4"
+  ],
+  "constructor(underlyingsource strategy)": [
+   "4.2.4"
+  ],
+  "count queuing strategy size function": [
+   "7.3.2"
+  ],
+  "create a proxy": [
+   "9.5"
+  ],
+  "create an identity transformstream": [
+   "9.3.1"
+  ],
+  "create from an async sequence": [
+   "9.1.1"
+  ],
+  "create from async sequence": [
+   "9.1.1"
+  ],
+  "createreadablebytestream( startalgorithm pullalgorithm cancelalgorithm )": [
+   "4.9.1"
+  ],
+  "creating a proxy": [
+   "9.5"
+  ],
+  "creating an identity transformstream": [
+   "9.3.1"
+  ],
+  "crossrealmtransformsenderror( port error )": [
+   "8.2"
+  ],
+  "current byob request view": [
+   "9.1.1"
+  ],
+  "default reader": [
+   "2.6"
+  ],
+  "default readers": [
+   "2.6"
+  ],
+  "dequeuevalue( container )": [
+   "8.1"
+  ],
+  "desired size to fill a stream internal queue": [
+   "2.5"
+  ],
+  "desired size to fill the stream queue": [
+   "2.5"
+  ],
+  "desired size to fill up to the high water mark": [
+   "9.1.1"
+  ],
+  "duplex stream": [
+   "9.4.1"
+  ],
+  "element size": [
+   "4.7.2"
+  ],
+  "endpoint pair": [
+   "9.4.2"
+  ],
+  "enqueue( chunk )": [
+   "4.6.3",
+   "4.7.3",
+   "6.3.3"
+  ],
+  "enqueuevaluewithsize( container value size )": [
+   "8.1"
+  ],
+  "error steps": [
+   "4.4.2",
+   "4.5.2"
+  ],
+  "error( e )": [
+   "4.6.3",
+   "4.7.3",
+   "5.4.3",
+   "6.3.3"
+  ],
+  "extracthighwatermark( strategy defaulthwm )": [
+   "7.4"
+  ],
+  "extractsizealgorithm( strategy )": [
+   "7.4"
+  ],
+  "flush( controller )": [
+   "6.2.3"
+  ],
+  "from( asynciterable )": [
+   "4.2.4"
+  ],
+  "get a reader": [
+   "9.1.2"
+  ],
+  "get a writer": [
+   "9.2.2"
+  ],
+  "getreader( options )": [
+   "4.2.4"
+  ],
+  "getting a reader": [
+   "9.1.2"
+  ],
+  "getting a writer": [
+   "9.2.2"
+  ],
+  "high water mark": [
+   "2.5"
+  ],
+  "identity transform stream": [
+   "2.3"
+  ],
+  "initializereadablestream( stream )": [
+   "4.9.1"
+  ],
+  "initializewritablestream( stream )": [
+   "5.5.1"
+  ],
+  "internal queues": [
+   "2.5"
+  ],
+  "isnonnegativenumber( v )": [
+   "8.3"
+  ],
+  "isreadablestreamlocked( stream )": [
+   "4.9.1"
+  ],
+  "iswritablestreamlocked( stream )": [
+   "5.5.1"
+  ],
+  "locked to a reader": [
+   "2.6"
+  ],
+  "locked to a writer": [
+   "2.6"
+  ],
+  "minimum fill": [
+   "4.7.2"
+  ],
+  "need more data": [
+   "9.1.1"
+  ],
+  "needs more data": [
+   "9.1.1"
+  ],
+  "new bytelengthqueuingstrategy( init )": [
+   "7.2.3"
+  ],
+  "new countqueuingstrategy( init )": [
+   "7.3.3"
+  ],
+  "new readablestream( underlyingsource strategy )": [
+   "4.2.4"
+  ],
+  "new readablestreambyobreader( stream )": [
+   "4.5.3"
+  ],
+  "new readablestreamdefaultreader( stream )": [
+   "4.4.3"
+  ],
+  "new transformstream( transformer writablestrategy readablestrategy )": [
+   "6.2.4"
+  ],
+  "new writablestream( underlyingsink strategy )": [
+   "5.2.4"
+  ],
+  "new writablestreamdefaultwriter( stream )": [
+   "5.3.3"
+  ],
+  "original source": [
+   "2.4"
+  ],
+  "packandpostmessage( port type value )": [
+   "8.2"
+  ],
+  "packandpostmessagehandlingerror( port type value )": [
+   "8.2"
+  ],
+  "peekqueuevalue( container )": [
+   "8.1"
+  ],
+  "pending abort request": [
+   "5.2.2"
+  ],
+  "pipe chain": [
+   "2.4"
+  ],
+  "pipe through": [
+   "9.5"
+  ],
+  "pipe to": [
+   "9.5"
+  ],
+  "piped through": [
+   "9.5"
+  ],
+  "piped to": [
+   "9.5"
+  ],
+  "pipethrough( transform options )": [
+   "4.2.4"
+  ],
+  "pipethrough(transform options)": [
+   "4.2.4"
+  ],
+  "pipeto( destination options )": [
+   "4.2.4"
+  ],
+  "pipeto(destination options)": [
+   "4.2.4"
+  ],
+  "piping through": [
+   "9.5"
+  ],
+  "piping to": [
+   "9.5"
+  ],
+  "prevent cancel": [
+   "4.2.5"
+  ],
+  "pull from bytes": [
+   "9.1.1"
+  ],
+  "pull into descriptor": [
+   "4.7.2"
+  ],
+  "pull source": [
+   "2.1"
+  ],
+  "pull sources": [
+   "2.1"
+  ],
+  "pull( controller )": [
+   "4.2.3"
+  ],
+  "push source": [
+   "2.1"
+  ],
+  "push sources": [
+   "2.1"
+  ],
+  "queuing strategy": [
+   "2.5"
+  ],
+  "read a chunk": [
+   "9.1.2"
+  ],
+  "read all bytes": [
+   "9.1.2"
+  ],
+  "read into request": [
+   "4.5.2"
+  ],
+  "read loop": [
+   "9.1.2"
+  ],
+  "read request": [
+   "4.4.2"
+  ],
+  "read( view options )": [
+   "4.5.3"
+  ],
+  "read(view options)": [
+   "4.5.3"
+  ],
+  "readable byte stream": [
+   "2.1"
+  ],
+  "readable byte stream queue entry": [
+   "4.7.2"
+  ],
+  "readable side": [
+   "2.3"
+  ],
+  "readable stream": [
+   "2.1"
+  ],
+  "readable stream reader": [
+   "2.6"
+  ],
+  "readablebytestreamcontrollercallpullifneeded( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerclearalgorithms( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerclearpendingpullintos( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerclose( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollercommitpullintodescriptor( stream pullintodescriptor )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerconvertpullintodescriptor( pullintodescriptor )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerenqueue( controller chunk )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerenqueuechunktoqueue( controller buffer byteoffset bytelength )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollererror( controller e )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerfillreadrequestfromqueue( controller readrequest )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollergetbyobrequest( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollergetdesiredsize( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerhandlequeuedrain( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerinvalidatebyobrequest( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerprocesspullintodescriptorsusingqueue( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerprocessreadrequestsusingqueue( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerpullinto( controller view min readintorequest )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespond( controller byteswritten )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondinclosedstate( controller firstdescriptor )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondinternal( controller byteswritten )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollerrespondwithnewview( controller view )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollershiftpendingpullinto( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamcontrollershouldcallpull( controller )": [
+   "4.9.5"
+  ],
+  "readablebytestreamtee( stream )": [
+   "4.9.1"
+  ],
+  "readablestream(underlyingsource strategy)": [
+   "4.2.4"
+  ],
+  "readablestreamaddreadintorequest( stream readrequest )": [
+   "4.9.2"
+  ],
+  "readablestreamaddreadrequest( stream readrequest )": [
+   "4.9.2"
+  ],
+  "readablestreambyobreadererrorreadintorequests( reader e )": [
+   "4.9.3"
+  ],
+  "readablestreambyobreaderread( reader view min readintorequest )": [
+   "4.9.3"
+  ],
+  "readablestreambyobreaderrelease( reader )": [
+   "4.9.3"
+  ],
+  "readablestreamcancel( stream reason )": [
+   "4.9.2"
+  ],
+  "readablestreamclose( stream )": [
+   "4.9.2"
+  ],
+  "readablestreamdefaultcontrollercallpullifneeded( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollercancloseorenqueue( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerclearalgorithms( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerclose( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerenqueue( controller chunk )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollererror( controller e )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollergetdesiredsize( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollerhasbackpressure( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultcontrollershouldcallpull( controller )": [
+   "4.9.4"
+  ],
+  "readablestreamdefaultreadererrorreadrequests( reader e )": [
+   "4.9.3"
+  ],
+  "readablestreamdefaultreaderread( reader readrequest )": [
+   "4.9.3"
+  ],
+  "readablestreamdefaultreaderrelease( reader )": [
+   "4.9.3"
+  ],
+  "readablestreamdefaulttee( stream cloneforbranch2 )": [
+   "4.9.1"
+  ],
+  "readablestreamerror( stream e )": [
+   "4.9.2"
+  ],
+  "readablestreamfromiterable( asynciterable )": [
+   "4.9.1"
+  ],
+  "readablestreamfulfillreadintorequest( stream chunk done )": [
+   "4.9.2"
+  ],
+  "readablestreamfulfillreadrequest( stream chunk done )": [
+   "4.9.2"
+  ],
+  "readablestreamgetnumreadintorequests( stream )": [
+   "4.9.2"
+  ],
+  "readablestreamgetnumreadrequests( stream )": [
+   "4.9.2"
+  ],
+  "readablestreamhasbyobreader( stream )": [
+   "4.9.2"
+  ],
+  "readablestreamhasdefaultreader( stream )": [
+   "4.9.2"
+  ],
+  "readablestreampipeto( source dest preventclose preventabort preventcancel [ signal ])": [
+   "4.9.1"
+  ],
+  "readablestreamreadergenericcancel( reader reason )": [
+   "4.9.3"
+  ],
+  "readablestreamreadergenericinitialize( reader stream )": [
+   "4.9.3"
+  ],
+  "readablestreamreadergenericrelease( reader )": [
+   "4.9.3"
+  ],
+  "readablestreamtee( stream cloneforbranch2 )": [
+   "4.9.1"
+  ],
+  "reader type": [
+   "4.7.2"
+  ],
+  "reading a chunk": [
+   "9.1.2"
+  ],
+  "reading all bytes": [
+   "9.1.2"
+  ],
+  "release a lock": [
+   "2.6"
+  ],
+  "release a read lock": [
+   "2.6"
+  ],
+  "release a write lock": [
+   "2.6"
+  ],
+  "release its lock": [
+   "2.6"
+  ],
+  "resetqueue( container )": [
+   "8.1"
+  ],
+  "respond( byteswritten )": [
+   "4.8.3"
+  ],
+  "respondwithnewview( view )": [
+   "4.8.3"
+  ],
+  "set up": [
+   "9.1.1",
+   "9.1.2",
+   "9.2.1",
+   "9.2.2",
+   "9.3.1"
+  ],
+  "set up with byte reading support": [
+   "9.1.1"
+  ],
+  "setting up": [
+   "9.3.1"
+  ],
+  "setupcrossrealmtransformreadable( stream port )": [
+   "8.2"
+  ],
+  "setupcrossrealmtransformwritable( stream port )": [
+   "8.2"
+  ],
+  "setupreadablestreambyobreader( reader stream )": [
+   "4.9.3"
+  ],
+  "setupreadablestreamdefaultreader( reader stream )": [
+   "4.9.3"
+  ],
+  "setuptransformstreamdefaultcontrollerfromtransformer( stream transformer transformerdict )": [
+   "6.4.2"
+  ],
+  "setupwritablestreamdefaultwriter( writer stream )": [
+   "5.5.1"
+  ],
+  "shutdown with an action": [
+   "4.9.1"
+  ],
+  "size( chunk )": [
+   "7.1"
+  ],
+  "start( controller )": [
+   "4.2.3",
+   "5.2.3",
+   "6.2.3"
+  ],
+  "structuredclone( v )": [
+   "8.3"
+  ],
+  "tee a readable stream": [
+   "2.1"
+  ],
+  "transferarraybuffer( o )": [
+   "8.3"
+  ],
+  "transform stream": [
+   "2.3"
+  ],
+  "transform( chunk controller )": [
+   "6.2.3"
+  ],
+  "transformstream(transformer writablestrategy readablestrategy)": [
+   "6.2.4"
+  ],
+  "transformstream(transformer writablestrategy)": [
+   "6.2.4"
+  ],
+  "transformstreamdefaultcontrollerclearalgorithms( controller )": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollerenqueue( controller chunk )": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollererror( controller e )": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollerperformtransform( controller chunk )": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultcontrollerterminate( controller )": [
+   "6.4.2"
+  ],
+  "transformstreamdefaultsinkabortalgorithm( stream reason )": [
+   "6.4.3"
+  ],
+  "transformstreamdefaultsinkclosealgorithm( stream )": [
+   "6.4.3"
+  ],
+  "transformstreamdefaultsinkwritealgorithm( stream chunk )": [
+   "6.4.3"
+  ],
+  "transformstreamdefaultsourcecancelalgorithm( stream reason )": [
+   "6.4.4"
+  ],
+  "transformstreamdefaultsourcepullalgorithm( stream )": [
+   "6.4.4"
+  ],
+  "transformstreamerror( stream e )": [
+   "6.4.1"
+  ],
+  "transformstreamerrorwritableandunblockwrite( stream e )": [
+   "6.4.1"
+  ],
+  "transformstreamsetbackpressure( stream backpressure )": [
+   "6.4.1"
+  ],
+  "transformstreamunblockwrite( stream )": [
+   "6.4.1"
+  ],
+  "ultimate sink": [
+   "2.4"
+  ],
+  "underlying byte source": [
+   "2.1"
+  ],
+  "underlying sink": [
+   "2.2"
+  ],
+  "underlying source": [
+   "2.1"
+  ],
+  "value with size": [
+   "8.1"
+  ],
+  "view constructor": [
+   "4.7.2"
+  ],
+  "was already erroring": [
+   "5.2.2"
+  ],
+  "writable side": [
+   "2.3"
+  ],
+  "writable stream": [
+   "2.2"
+  ],
+  "writable stream writer": [
+   "2.6"
+  ],
+  "writablestream(underlyingsink strategy)": [
+   "5.2.4"
+  ],
+  "writablestreamabort( stream reason )": [
+   "5.5.1"
+  ],
+  "writablestreamaddwriterequest( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamclose( stream )": [
+   "5.5.1"
+  ],
+  "writablestreamclosequeuedorinflight( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamdealwithrejection( stream error )": [
+   "5.5.2"
+  ],
+  "writablestreamdefaultcontrolleradvancequeueifneeded( controller )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerclearalgorithms( controller )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerclose( controller )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollererror( controller error )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollererrorifneeded( controller error )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollergetbackpressure( controller )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollergetchunksize( controller chunk )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollergetdesiredsize( controller )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerprocessclose( controller )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerprocesswrite( controller chunk )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultcontrollerwrite( controller chunk chunksize )": [
+   "5.5.4"
+  ],
+  "writablestreamdefaultwriterabort( writer reason )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterclose( writer )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterclosewitherrorpropagation( writer )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterensureclosedpromiserejected( writer error )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterensurereadypromiserejected( writer error )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwritergetdesiredsize( writer )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterrelease( writer )": [
+   "5.5.3"
+  ],
+  "writablestreamdefaultwriterwrite( writer chunk )": [
+   "5.5.3"
+  ],
+  "writablestreamfinisherroring( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightclose( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightclosewitherror( stream error )": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightwrite( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamfinishinflightwritewitherror( stream error )": [
+   "5.5.2"
+  ],
+  "writablestreamhasoperationmarkedinflight( stream )": [
+   "5.5.2"
+  ],
+  "writablestreammarkcloserequestinflight( stream )": [
+   "5.5.2"
+  ],
+  "writablestreammarkfirstwriterequestinflight( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamrejectcloseandclosedpromiseifneeded( stream )": [
+   "5.5.2"
+  ],
+  "writablestreamstarterroring( stream reason )": [
+   "5.5.2"
+  ],
+  "writablestreamupdatebackpressure( stream backpressure )": [
+   "5.5.2"
+  ],
+  "write a chunk": [
+   "9.2.2"
+  ],
+  "write( chunk )": [
+   "5.3.3"
+  ],
+  "write( chunk controller )": [
+   "5.2.3"
+  ],
+  "writing a chunk": [
+   "9.2.2"
+  ]
+ },
+ "uses": {
+  "[[abortsteps]]( reason )": {
+   "10.11": 2
+  },
+  "[[cancelsteps]]( reason )": {
+   "10.11": 3
+  },
+  "[[pullsteps]]( readrequest )": {
+   "10.11": 3
+  },
+  "abort a writable stream": {
+   "4.2.4": 2,
+   "10.11": 2
+  },
+  "abort( reason )": {
+   "5.5.4": 2,
+   "10.11": 9
+  },
+  "active reader": {
+   "4.4.3": 2,
+   "4.5.3": 2,
+   "5.3.3": 3,
+   "10.11": 3
+  },
+  "buffer byte length": {
+   "4.9.5": 2
+  },
+  "byob readers": {
+   "4.2.3": 2,
+   "10.3": 3
+  },
+  "byte length": {
+   "4.9.5": 14,
+   "10.11": 2
+  },
+  "byte offset": {
+   "4.9.5": 13,
+   "10.11": 2
+  },
+  "bytes filled": {
+   "4.9.5": 27
+  },
+  "cancel a readable stream": {
+   "4.2.4": 6
+  },
+  "cancel( reason )": {
+   "4.4.3": 2,
+   "4.5.3": 2,
+   "4.9.4": 3,
+   "4.9.5": 2,
+   "6.4.2": 2,
+   "10.11": 10
+  },
+  "chunk steps": {
+   "4.9.1": 3,
+   "4.9.2": 2,
+   "4.9.5": 2,
+   "10.11": 2
+  },
+  "cloneasuint8array( o )": {
+   "4.9.1": 2
+  },
+  "close sentinel": {
+   "5.5.4": 2
+  },
+  "close steps": {
+   "4.9.1": 3,
+   "4.9.2": 4,
+   "10.11": 2
+  },
+  "create a proxy": {
+   "10.11": 2
+  },
+  "create an identity transformstream": {
+   "10.11": 2
+  },
+  "create from async sequence": {
+   "10.11": 2
+  },
+  "default readers": {
+   "10.5": 2
+  },
+  "dequeuevalue( container )": {
+   "5.5.4": 2
+  },
+  "desired size to fill the stream queue": {
+   "4.2.3": 2,
+   "5.3.3": 3
+  },
+  "element size": {
+   "4.9.5": 7
+  },
+  "enqueue( chunk )": {
+   "6.2.3": 3,
+   "10.11": 8
+  },
+  "enqueuevaluewithsize( container value size )": {
+   "5.5.4": 2
+  },
+  "error steps": {
+   "4.9.1": 3,
+   "4.9.3": 4,
+   "4.9.5": 2,
+   "10.11": 2
+  },
+  "error( e )": {
+   "10.11": 13
+  },
+  "extracthighwatermark( strategy defaulthwm )": {
+   "4.2.4": 2,
+   "6.2.4": 2
+  },
+  "extractsizealgorithm( strategy )": {
+   "6.2.4": 2
+  },
+  "flush( controller )": {
+   "6.4.2": 2,
+   "10.11": 2
+  },
+  "from( asynciterable )": {
+   "10.11": 2
+  },
+  "get a reader": {
+   "10.11": 2
+  },
+  "get a writer": {
+   "10.11": 2
+  },
+  "getreader( options )": {
+   "2.1": 2,
+   "10.11": 3
+  },
+  "high water mark": {
+   "5.1": 2,
+   "7.2.3": 2,
+   "7.3.3": 2
+  },
+  "identity transform stream": {
+   "10.11": 3
+  },
+  "initializereadablestream( stream )": {
+   "9.1.1": 2
+  },
+  "internal queues": {
+   "10.3": 2
+  },
+  "isreadablestreamlocked( stream )": {
+   "4.2.4": 4,
+   "4.9.3": 2,
+   "4.9.4": 2,
+   "9.5": 2
+  },
+  "iswritablestreamlocked( stream )": {
+   "4.2.4": 2,
+   "5.2.4": 3,
+   "9.5": 2
+  },
+  "locked to a reader": {
+   "4.2.4": 7,
+   "5.2.4": 4,
+   "10.11": 3
+  },
+  "minimum fill": {
+   "4.9.5": 5
+  },
+  "needs more data": {
+   "10.11": 2
+  },
+  "new bytelengthqueuingstrategy( init )": {
+   "10.11": 3
+  },
+  "new countqueuingstrategy( init )": {
+   "10.11": 3
+  },
+  "new readablestream( underlyingsource strategy )": {
+   "4.2.3": 3,
+   "10.11": 7
+  },
+  "new readablestreambyobreader( stream )": {
+   "10.11": 3
+  },
+  "new readablestreamdefaultreader( stream )": {
+   "10.11": 3
+  },
+  "new transformstream( transformer writablestrategy readablestrategy )": {
+   "6.2.3": 2,
+   "10.11": 9
+  },
+  "new writablestream( underlyingsink strategy )": {
+   "5.2.3": 2,
+   "10.11": 7
+  },
+  "new writablestreamdefaultwriter( stream )": {
+   "10.11": 3
+  },
+  "piped through": {
+   "10.11": 3
+  },
+  "piped to": {
+   "10.11": 4
+  },
+  "pipethrough( transform options )": {
+   "10.11": 3
+  },
+  "pipeto( destination options )": {
+   "2.4": 2,
+   "10.11": 5
+  },
+  "pull sources": {
+   "4.2.3": 2
+  },
+  "pull( controller )": {
+   "4.9.4": 2,
+   "4.9.5": 2,
+   "10.11": 2
+  },
+  "push sources": {
+   "4.2.3": 2
+  },
+  "queuing strategy": {
+   "4.6.2": 2,
+   "5.4.2": 2,
+   "7.2": 2
+  },
+  "read a chunk": {
+   "10.11": 2
+  },
+  "read all bytes": {
+   "10.11": 2
+  },
+  "read request": {
+   "4.9.1": 2,
+   "9.1.2": 2
+  },
+  "read( view options )": {
+   "4.5.2": 2,
+   "4.9.5": 2,
+   "10.11": 3
+  },
+  "readable byte stream": {
+   "4.2.4": 2,
+   "4.8.3": 3
+  },
+  "readable side": {
+   "6.2.3": 5,
+   "6.2.4": 2,
+   "6.3.3": 3,
+   "10.11": 3
+  },
+  "readable stream": {
+   "4.2.4": 8,
+   "6.1": 3,
+   "10.11": 2
+  },
+  "readable stream reader": {
+   "4.7.2": 2,
+   "10.11": 2
+  },
+  "readablebytestreamcontrollerclose( controller )": {
+   "4.9.1": 4
+  },
+  "readablebytestreamcontrollerenqueue( controller chunk )": {
+   "4.9.1": 3,
+   "9.1.1": 2
+  },
+  "readablebytestreamcontrollererror( controller e )": {
+   "4.9.1": 6
+  },
+  "readablebytestreamcontrollergetbyobrequest( controller )": {
+   "4.9.1": 2
+  },
+  "readablebytestreamcontrollerrespond( controller byteswritten )": {
+   "4.9.1": 3,
+   "9.1.1": 3
+  },
+  "readablebytestreamcontrollerrespondwithnewview( controller view )": {
+   "4.9.1": 3
+  },
+  "readablestreamaddreadintorequest( stream readrequest )": {
+   "4.9.5": 2
+  },
+  "readablestreambyobreaderrelease( reader )": {
+   "4.9.1": 2
+  },
+  "readablestreamcancel( stream reason )": {
+   "4.9.1": 10
+  },
+  "readablestreamclose( stream )": {
+   "4.9.5": 2
+  },
+  "readablestreamdefaultcontrollercallpullifneeded( controller )": {
+   "4.6.4": 2
+  },
+  "readablestreamdefaultcontrollercancloseorenqueue( controller )": {
+   "4.6.3": 2
+  },
+  "readablestreamdefaultcontrollerclearalgorithms( controller )": {
+   "4.6.4": 2
+  },
+  "readablestreamdefaultcontrollerclose( controller )": {
+   "4.9.1": 3
+  },
+  "readablestreamdefaultcontrollerenqueue( controller chunk )": {
+   "4.9.1": 3
+  },
+  "readablestreamdefaultcontrollererror( controller e )": {
+   "4.9.1": 5,
+   "6.4.3": 3,
+   "8.2": 2
+  },
+  "readablestreamdefaultreaderread( reader readrequest )": {
+   "4.9.1": 2,
+   "9.1.2": 2
+  },
+  "readablestreamdefaultreaderrelease( reader )": {
+   "4.2.5": 4,
+   "4.9.1": 2
+  },
+  "readablestreamfulfillreadrequest( stream chunk done )": {
+   "4.9.5": 2
+  },
+  "readablestreamgetnumreadintorequests( stream )": {
+   "4.9.5": 2
+  },
+  "readablestreamgetnumreadrequests( stream )": {
+   "4.9.4": 2,
+   "4.9.5": 2
+  },
+  "readablestreamhasbyobreader( stream )": {
+   "4.9.5": 3
+  },
+  "readablestreamhasdefaultreader( stream )": {
+   "4.9.5": 2
+  },
+  "readablestreampipeto( source dest preventclose preventabort preventcancel [ signal ])": {
+   "4.2.4": 2,
+   "9.5": 2
+  },
+  "readablestreamtee( stream cloneforbranch2 )": {
+   "9.1.2": 2
+  },
+  "reader type": {
+   "4.7.4": 2,
+   "4.9.5": 9
+  },
+  "release its lock": {
+   "4.4.3": 2,
+   "4.5.3": 2,
+   "5.3.3": 4,
+   "10.11": 3
+  },
+  "resetqueue( container )": {
+   "4.9.4": 2,
+   "4.9.5": 2
+  },
+  "respond( byteswritten )": {
+   "10.11": 2
+  },
+  "respondwithnewview( view )": {
+   "10.11": 2
+  },
+  "set up": {
+   "10.11": 6
+  },
+  "size( chunk )": {
+   "7.4": 2,
+   "10.11": 2
+  },
+  "start( controller )": {
+   "4.9.4": 2,
+   "4.9.5": 2,
+   "5.5.4": 2,
+   "6.2.4": 2,
+   "10.11": 6
+  },
+  "transferarraybuffer( o )": {
+   "4.8.3": 3,
+   "4.9.5": 6
+  },
+  "transform( chunk controller )": {
+   "6.4.2": 2,
+   "10.11": 2
+  },
+  "transformstreamdefaultcontrollerclearalgorithms( controller )": {
+   "6.4.3": 2
+  },
+  "transformstreamdefaultcontrollerperformtransform( controller chunk )": {
+   "6.4.3": 2
+  },
+  "transformstreamdefaultsinkwritealgorithm( stream chunk )": {
+   "6.4.1": 2
+  },
+  "transformstreamerror( stream e )": {
+   "6.4.2": 2
+  },
+  "transformstreamerrorwritableandunblockwrite( stream e )": {
+   "6.4.2": 2
+  },
+  "transformstreamunblockwrite( stream )": {
+   "6.4.4": 2
+  },
+  "underlying byte source": {
+   "4.7.2": 11
+  },
+  "underlying sink": {
+   "5.1": 3,
+   "5.2.2": 3,
+   "5.2.3": 6,
+   "5.2.4": 3,
+   "5.3.3": 3,
+   "5.4.2": 5,
+   "5.4.3": 2,
+   "9.2.1": 2
+  },
+  "underlying source": {
+   "2.4": 2,
+   "4.2.4": 2,
+   "4.6.2": 7,
+   "4.9.2": 3,
+   "4.9.5": 2
+  },
+  "view constructor": {
+   "4.9.5": 2
+  },
+  "writable side": {
+   "6.2.3": 4,
+   "6.2.4": 2,
+   "6.3.3": 3,
+   "10.11": 3
+  },
+  "writable stream": {
+   "4.1": 2,
+   "6.1": 3
+  },
+  "writable stream writer": {
+   "5.1": 2,
+   "10.11": 2
+  },
+  "writablestreamabort( stream reason )": {
+   "4.9.1": 2,
+   "5.2.2": 3
+  },
+  "writablestreamclosequeuedorinflight( stream )": {
+   "4.9.1": 3,
+   "5.5.1": 2,
+   "5.5.3": 2,
+   "5.5.4": 2
+  },
+  "writablestreamdefaultcontrollererrorifneeded( controller error )": {
+   "6.4.4": 2,
+   "8.2": 2
+  },
+  "writablestreamdefaultwritergetdesiredsize( writer )": {
+   "4.9.1": 2
+  },
+  "writablestreamupdatebackpressure( stream backpressure )": {
+   "5.5.4": 3
+  },
+  "write a chunk": {
+   "10.11": 2
+  },
+  "write( chunk )": {
+   "5.1": 9,
+   "10.11": 3
+  },
+  "write( chunk controller )": {
+   "5.5.4": 2,
+   "10.11": 2
+  }
+ }
+}

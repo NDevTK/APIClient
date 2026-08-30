@@ -137,6 +137,15 @@ const SPECS = [
     base: "https://url.spec.whatwg.org/", anchors: ["url"] },
   { key: "fetch", label: "Fetch Standard", kind: "bikeshed",
     base: "https://fetch.spec.whatwg.org/", anchors: ["fetch"] },
+  /* STREAMS EARNED ITS ROW BY BEING THE BLIND SPOT THAT COST A HAND-AUDIT. `core/streams/pipe.c` cited
+     §4.2.4 for ReadableStreamPipeTo at twenty-three sites — every stage label, every DCHECK and the
+     `algorithm` string — and the operation is defined at §4.9.1 "Working with readable streams"; §4.2.4
+     "Constructor, methods, and properties" is where `pipeTo` and `pipeThrough` are and it only CALLS it. The
+     audit reported NOTHING, because an unindexed standard's citations are counted under OTHER_SPECS and never
+     checked, and 226 of them were. That is the coverage loss this file's own header says is printed rather
+     than assumed to be zero — and printing it is what made someone read the number. */
+  { key: "streams", label: "Streams Standard", kind: "bikeshed",
+    base: "https://streams.spec.whatwg.org/", anchors: ["streams"] },
 ];
 const SPEC_BY_KEY = new Map(SPECS.map((s) => [s.key, s]));
 const indexFileOf = (key) => join(INDEX_DIR, key + ".json");
@@ -543,7 +552,7 @@ function regen(keys) {
  * wrong answer — the citation is counted under its own name and printed in the report. The list exists so an
  * unanchored citation in such a file is not mistaken for one of ours. */
 const OTHER_SPECS = [
-  "csp", "xhr", "streams", "idl", "webidl", "xml", "namespaces", "encoding", "infra", "storage",
+  "csp", "xhr", "idl", "webidl", "xml", "namespaces", "encoding", "infra", "storage",
   "indexeddb", "database", "webcrypto", "svg", "mathml", "wasm", "uievents", "console", "performance",
   "workers", "websockets", "mimesniff", "rfc", "unicode", "utf", "trusted", "permissions", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
