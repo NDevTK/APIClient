@@ -100,6 +100,22 @@ static JSValue   g_deliver_fn = JS_UNDEFINED;   /* the queued delivery task's ca
 static const uint16_t PORT_VALS[] = { MP_OFF(entangled), MP_OFF(queue) };
 static const CowRecord PORT_REC = { sizeof(PortData), PORT_VALS, 2 };
 
+/* WRITE ONE OF THE TWO, and never `JS_FreeValue(ctx, d->f); d->f = <build one>;` — see cow.h for the order and
+   the defect. Both slots make the release side of it real: giving back `queue` releases every message still on
+   it and giving back `entangled` may drop the last reference to the peer port, and a host finalizer reached
+   either way is the page's platform code, which may allocate — and an allocation IS a collection (js_trigger_gc
+   has exactly one caller, JS_NewObjectFromShape), which re-enters this record through port_gc_mark.
+   The record and its layout are bound HERE rather than at each call, so no site can pass a slot from one record
+   with the layout of another. port_new's mint does not come here, and that is the one honest exception: before
+   JS_SetOpaque the record is unreachable by the collector and its calloc'd slots hold no value to release.
+   A MOVE-OUT does not come here either, and it is not the same operation: §9.4.4's disentangle hands the slot's
+   reference to the step state and clears the slot, so there is no release at all and no instant at which the
+   slot names storage that has been given back. */
+static void mp_set(JSContext *ctx, PortData *d, JSValue *slot, JSValue v)
+{
+    cow_record_set(ctx, d, &PORT_REC, slot, v);
+}
+
 /* HOW MANY MESSAGES THE QUEUE HOLDS, building the Array on first use. Lazy because most ports never receive
    one and an Array per port is not free; the record's slot is JS_UNDEFINED until then. Returns 0 with an
    exception live. */
@@ -107,8 +123,11 @@ static int port_queue_len(JSContext *ctx, PortData *d, uint32_t *pn)
 {
     JSValue len;
     if (JS_IsUndefined(d->queue)) {
-        d->queue = JS_NewArray(ctx);
-        if (JS_IsException(d->queue)) { d->queue = JS_UNDEFINED; return 0; }
+        JSValue q = JS_NewArray(ctx);
+        /* BUILT INTO A LOCAL AND THEN PUBLISHED, so the exception marker never reaches the record's slot at all
+           — port_gc_mark walks that slot, and a marker there is a value the walk has no answer for. */
+        if (JS_IsException(q)) return 0;
+        mp_set(ctx, d, &d->queue, q);
     }
     len = JS_GetPropertyStr(ctx, d->queue, "length");
     if (JS_IsException(len)) return 0;
@@ -669,7 +688,7 @@ static int js_port_close_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc
             DCHECK(o != NULL, "HTML §9.4.4's disentangle steps assert otherPort exists, and this port was "
                               "entangled with something that is not a MessagePort — entanglement is written "
                               "in exactly two places and both write a port");
-            if (o) { JS_FreeValue(ctx, o->entangled); o->entangled = JS_UNDEFINED; }
+            if (o) mp_set(ctx, o, &o->entangled, JS_UNDEFINED);
         }
         /* The disentangle steps' step 4. A `close` event bubbles no further than its target and is not
            cancelable: §9.4.4 fires it with no initialisation, which is DOM §2.5's un-initialized event. */
@@ -743,16 +762,14 @@ static JSValue port_transfer_out(JSContext *ctx, JSValueConst v)
     JS_SetPropertyUint32(ctx, h, TH_HEAD, JS_NewUint32(ctx, d->head));
     JS_SetPropertyUint32(ctx, h, TH_REMOTE, JS_DupValue(ctx, d->entangled));
     /* The old object keeps nothing: its queue has moved and it is detached. */
-    JS_FreeValue(ctx, d->queue);
-    d->queue = JS_UNDEFINED;
+    mp_set(ctx, d, &d->queue, JS_UNDEFINED);
     d->head = 0;
     d->enabled = 0;
     d->detached = 1;
     if (!JS_IsUndefined(d->entangled)) {
         PortData *o = port_of(d->entangled);
-        if (o) { JS_FreeValue(ctx, o->entangled); o->entangled = JS_UNDEFINED; }
-        JS_FreeValue(ctx, d->entangled);
-        d->entangled = JS_UNDEFINED;
+        if (o) mp_set(ctx, o, &o->entangled, JS_UNDEFINED);
+        mp_set(ctx, d, &d->entangled, JS_UNDEFINED);
     }
     return h;
 }
@@ -767,7 +784,7 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder)
 
     if (JS_IsException(obj)) return obj;
     d = JS_GetOpaque(obj, g_port_class);
-    d->queue = JS_GetPropertyUint32(ctx, holder, TH_QUEUE);
+    mp_set(ctx, d, &d->queue, JS_GetPropertyUint32(ctx, holder, TH_QUEUE));
     { JSValue hv = JS_GetPropertyUint32(ctx, holder, TH_HEAD);
       JS_ToUint32(ctx, &head, hv);
       JS_FreeValue(ctx, hv); }
@@ -778,11 +795,8 @@ static JSValue port_transfer_in(JSContext *ctx, JSValueConst holder)
     remote = JS_GetPropertyUint32(ctx, holder, TH_REMOTE);
     if (!JS_IsUndefined(remote)) {
         PortData *o = port_of(remote);
-        d->entangled = JS_DupValue(ctx, remote);
-        if (o) {
-            JS_FreeValue(ctx, o->entangled);
-            o->entangled = JS_DupValue(ctx, obj);
-        }
+        mp_set(ctx, d, &d->entangled, JS_DupValue(ctx, remote));
+        if (o) mp_set(ctx, o, &o->entangled, JS_DupValue(ctx, obj));
     }
     JS_FreeValue(ctx, remote);
     return obj;
@@ -827,8 +841,8 @@ JSValue message_port_pair(JSContext *ctx, JSValue *port2)
     /* ENTANGLE. Each holds the other, which is the cycle port_gc_mark exists for. */
     d1 = JS_GetOpaque(p1, g_port_class);
     d2 = JS_GetOpaque(p2, g_port_class);
-    d1->entangled = JS_DupValue(ctx, p2);
-    d2->entangled = JS_DupValue(ctx, p1);
+    mp_set(ctx, d1, &d1->entangled, JS_DupValue(ctx, p2));
+    mp_set(ctx, d2, &d2->entangled, JS_DupValue(ctx, p1));
     *port2 = p2;
     return p1;
 }
