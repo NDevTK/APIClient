@@ -1084,7 +1084,19 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * is what an execution fact must be filed under. The hole cannot be that key — it is derived by stripping
  * braces, so it is lossy and not even total (`{}` has none while the value still has a source) — and the
  * identity cannot be the report's, because by the time a URL string carries a hole the value is gone. */
-static void decide_note_forced_arm(JSValueConst cond, int real_arm, int arm) {
+/* AND IT IS ASKED OF AN OUTCOME FORK'S OPERAND TOO, WHICH IS THE SAME STATEMENT AND NOT AN ANALOGY. `v` is the
+ * value the decision was ABOUT: a branch's condition, or the unknown OPERAND a native operation's completion
+ * depends on. What makes the second one this function's business is the DEFINITION of a machine's `real`
+ * declaration (quickjs.h): it is the completion the operation reaches WHEN RUN ON THE OPERAND'S EXAMPLE. So a
+ * flow standing on some OTHER completion is standing where that example does not put it — `JSON.parse` threw
+ * on a path whose example parses, §8.7's timeout was negative on a path whose example is 500 — and that is
+ * "the arm this flow ends on contradicts the observation" in exactly the sense the mark and the drop are made
+ * for. One inference, no step in between, and no transform inverted: both halves are read off observations the
+ * run made, the same way the equality case is.
+ * THE CMP-SUBJECT HALF IS SILENT THERE RATHER THAN WRONG. An operand is not a comparison result, so it carries
+ * no `cmp_subj_ident` and the second contradiction does not fire — the operand IS the subject at an outcome,
+ * and it is already named by its own identity above. */
+static void decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
     const char *ident;
 
     DCHECK(arm == 0 || arm == 1,
@@ -1092,9 +1104,9 @@ static void decide_note_forced_arm(JSValueConst cond, int real_arm, int arm) {
            "between TWO booleans, so a third value here is a decision seam that answered something else");
     if (real_arm == REAL_ARM_UNOBSERVED || arm == real_arm) return;
     flow_mark_forced_arm();
-    ident = concolic_ident_c(cond);
+    ident = concolic_ident_c(v);
     if (ident) concolic_contradict_example(ident);
-    ident = concolic_cmp_subject_ident(cond);
+    ident = concolic_cmp_subject_ident(v);
     if (ident) concolic_contradict_example(ident);
 }
 
@@ -1217,16 +1229,16 @@ int solver_decide_restartable(JSContext *ctx, JSValueConst cond, int nonforking)
  * about the same fork made in this file's vocabulary, and translated rather than shared so that two seams
  * cannot drift into meaning the number instead of the statement.
  *
- * NAMED RESIDUAL — THE PARAMETER EXISTS AND NO ASK SITE STATES ONE YET. Every site in the engine passes
- * JS_OUTCOME_REAL_UNSTATED, so an outcome fork keeps completion 0 as the parent's (which is what a non-forking
- * session takes, so the two agree) and marks no arm forced. WHAT THE NEXT DIFF BUILDS is one site's real
- * declaration, starting with the two that can already answer: `JSON.parse` runs the real codec on the source's
- * example through g_concolic.builtin and reports whether that completes or throws, and core/timing/timer.c's
- * fork over HTML §8.7 Timers' timer initialization steps step 4 ("If timeout is less than 0, then set timeout
- * to 0") runs that comparison on the example, the same shape decide_real_arm computes for a branch. HOW ITS
- * ABSENCE SHOWS: a request derived past a FORCED outcome arm reports its provenance as DERIVED rather than
- * FORCED, which is an under-statement of it — the one thing an outcome fork cannot yet say about a request the
- * way a branch fork already does. */
+ * AND A STATED DECLARATION IS READ TWICE HERE, WHICH IS THE WHOLE OF WHAT IT BUYS. It goes to decide_arm, where
+ * a NEW decision keeps the real completion for this flow and hands the other to the sibling; and it goes to
+ * decide_note_forced_arm, where the arm this flow ACTUALLY ends on — new, replayed off its own vector, or
+ * refined out of its own constraint — is compared against it, so the flow standing on a completion its
+ * operand's example contradicts marks itself FORCED and stops believing that example. A machine that states
+ * nothing reaches neither: both arms run and neither is marked, exactly as a branch over an example-free value
+ * behaves. THE SECOND READ IS NOT OPTIONAL EXTRA CREDIT — a declaration consumed only by the primacy would be
+ * an observation with a computed writer and no reader for the fact it exists to supply, which is the mirror of
+ * the field nobody writes and is just as invisible: every request behind an outcome fork would keep reporting
+ * DERIVED while the machine had already said which completion was real. */
 int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int real) {
     if (!g_running) return -1;
     DCHECK(concolic_is(over), "the outcome seam was asked about a value that is not unknown — a native "
@@ -1246,7 +1258,7 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
     {
         const char *f[2];
         char *key;
-        int forked = 0, arm;
+        int forked = 0, arm, real_arm;
         DCHECK(concolic_src_c(over) != NULL,
                "an unknown operand with no source identity reached the outcome seam — its completions cannot "
                "be constrained, so two asks about it would be one fact");
@@ -1270,10 +1282,16 @@ int solver_outcome(JSContext *ctx, JSValueConst over, const char *op, int n, int
         /* THE TRANSLATION IS EXPLICIT AND NOT A SHARED NUMBER. Both spellings are -1 and both mean "make no
            claim", but they are two vocabularies with two owners — the machine's declaration at its ask, this
            file's observation at a branch — and writing the translation down is what keeps a later change to
-           either from silently becoming a change to both. */
-        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM,
-                         real == JS_OUTCOME_REAL_UNSTATED ? REAL_ARM_UNOBSERVED : real, &forked);
+           either from silently becoming a change to both. It is done ONCE, above both readers, for the reason
+           decide_branch computes its own observation once: two translations of one declaration is two answers
+           to one question with nothing forcing them to agree. */
+        real_arm = real == JS_OUTCOME_REAL_UNSTATED ? REAL_ARM_UNOBSERVED : real;
+        arm = decide_arm(ctx, key, 0, SOLVER_NO_NONFORKING_ARM, real_arm, &forked);
         free(key);
+        /* THE ARM THIS FLOW ENDS ON, AGAINST THE MACHINE'S DECLARATION — the same statement decide_branch
+           makes one screen up, made here BEFORE the forked bit is composed because the bit is a message to the
+           driver about snapshotting and is not part of the arm. */
+        decide_note_forced_arm(over, real_arm, arm);
         return forked ? (arm | SOLVER_FORKED_BIT) : arm;
     }
 }

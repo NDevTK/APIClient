@@ -682,21 +682,46 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
            milliseconds is less than or equal to this one's, have completed" — a comparison the ENGINE makes,
            never one the page wrote. This component realises it as (now + timeout, insertion order) on the
            virtual clock, so what it needs from the value is one number.
-           AN UNKNOWN WITH NO EXAMPLE IS NOT A MISSING NUMBER, IT IS A FORK, and §8.7 states the fork itself.
+           AN UNKNOWN IS NOT A MISSING NUMBER, IT IS A FORK, and §8.7 states the fork itself.
            Step 4 is "If timeout is less than 0, then set timeout to 0" — a comparison over exactly this value,
            whose TRUE arm the SPEC then assigns a concrete 0 to. So one arm of every such call runs on a number
            nothing invented, and the other keeps the unknown and is ordered by event_loop_before's fork. This is
            the concretize-on-pin rule with the spec doing the pinning: `x === 'admin'` concretizes because the
            code determined the value, and step 4's true arm concretizes because the ALGORITHM determined it. */
-        if (!idl_number_of(ctx, IDL_LONG, argv[1], &delay)) {
-            /* §8.7 step 4 over an unknown: both outcomes are feasible (§3.2.4.5's `long` spans
-               [-2147483648, 2147483647] and ConvertToInt is TOTAL, so nothing has excluded either sign), so
-               BOTH arms run — this flow takes one and the driver snapshots the machine for the other.
+        /* WHETHER STEP 4 FORKS IS A QUESTION ABOUT THE VALUE'S DOMAIN, AND ASKING IT OF THE VALUE'S EXAMPLE
+           ANSWERED A DIFFERENT ONE. This test used to be `!idl_number_of(...)` — so an unknown that HAD an
+           example never reached the fork at all: it fell into the arm below, which ran step 4 on the example
+           and stored a plain Number, and the unknown was gone. That is the collapse §Solver-half forbids
+           ("never collapse a modelable value to bare-concrete — that deletes the fork and its coverage"),
+           performed silently, because what replaced the value was a REAL number the engine had computed and
+           nothing downstream could tell it from a timeout the page wrote as a literal. The domain is what
+           decides: §3.2.4.5's `long` spans [-2147483648, 2147483647] and ConvertToInt is TOTAL, so nothing has
+           excluded either sign for ANY unknown, with an example or without one, and both completions of step 4
+           are feasible over every one of them. So the fork is asked over the unknown, and the example is
+           demoted to what it is everywhere else in this engine — the answer to WHICH ARM A REAL SESSION TAKES,
+           not to whether there are two. */
+        if (concolic_is(argv[1])) {
+            /* §8.7 step 4 over an unknown: both outcomes are feasible, so BOTH arms run — this flow takes one
+               and the driver snapshots the machine for the other.
                OUTCOME 0 IS THE FALSE ARM, which is step_fork_run's own rule read against this predicate: a
                run with no forking policy (the @S candidate re-fire) takes outcome 0, and the ordinary
                completion of "is this timeout negative" is that it is not. Numbering the spec's ASSIGNMENT
-               first would divert every candidate re-fire onto an arm the page's own value does not take. */
-            int arm = 0, rc = step_fork_run(ctx, hdr, argv[1], TI_STEP4_OP, 2, JS_OUTCOME_REAL_UNSTATED, &arm);
+               first would divert every candidate re-fire onto an arm the page's own value does not take.
+               `real` IS THIS MACHINE'S DECLARATION AND IT IS STEP 4'S OWN COMPARISON, RUN. HTML §8.7 Timers'
+               timer initialization steps step 4 is "If timeout is less than 0, then set timeout to 0", and
+               `delay` is that timeout: §3.2.4.5's ConvertToInt(V, 32, "signed") run by idl_number_of on this
+               value's own EXAMPLE, through the one copy of that arithmetic. So `delay < 0` is the completion
+               the operation reaches on the example — computed by performing the comparison, never by a rule
+               predicting it — which is the same shape decide.c computes for a bytecode branch and is what
+               makes one arm this flow's primary and the other FORCED.
+               WITH NO EXAMPLE THERE IS NOTHING TO RUN IT ON, and JS_OUTCOME_REAL_UNSTATED is the positive
+               statement of that rather than a guess: a `setTimeout(f, x)` whose delay is example-free has no
+               observed completion, so neither arm may be called the real one and neither is marked forced.
+               idl_number_of answers 0 for exactly that value, which is why its answer is read here as the
+               presence of an example and no longer as the presence of a fork. */
+            int have = idl_number_of(ctx, IDL_LONG, argv[1], &delay);
+            int real = have ? (delay < 0) : JS_OUTCOME_REAL_UNSTATED;
+            int arm = 0, rc = step_fork_run(ctx, hdr, argv[1], TI_STEP4_OP, 2, real, &arm);
 
             if (rc)
                 return rc;
@@ -708,6 +733,13 @@ static int js_set_timer(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
             s->timeout = (arm == 1) ? JS_NewFloat64(ctx, 0)   /* step 4's own assignment, on its own arm */
                                     : JS_DupValue(ctx, argv[1]);
         } else {
+            int have = idl_number_of(ctx, IDL_LONG, argv[1], &delay);
+
+            DCHECK(have,
+                   "§3.2.4.5's conversion produced no number for a position this arm has already established "
+                   "is NOT unknown external input — idl_number_of answers 0 only for an unknown carrying no "
+                   "example, so a 0 here is a value that is neither a Number nor a concolic reaching a body "
+                   "whose declaration converts every numeric argument");
             /* §3.2.4.5's own postcondition, which is what the tag test was reaching for and could not state:
                ConvertToInt takes the integer part modulo 2**32 and folds it into range, so a `long` is ALWAYS
                an integer in [-2147483648, 2147483647] — NaN and the infinities became +0 in the conversion. */

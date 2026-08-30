@@ -294,9 +294,10 @@ void flow_observe_rung(Flow *f, int rung) {
  * IDEMPOTENT BY THE ASSIGNMENT and not by a guard: a path cannot un-take an arm, so the second contradiction
  * says nothing the first did not, and there is no reading to discard. */
 void flow_mark_forced_arm(void) {
-    /* NO `if (g_running)` GUARD, for flow_age_running's reason exactly. The only caller is the branch seam,
-       which decide.c reaches only with a flow switched in (it returns -1 before asking anything otherwise), so
-       a mark with nothing running is a contradiction observed on a path belonging to no flow — and the arm
+    /* NO `if (g_running)` GUARD, for flow_age_running's reason exactly. Every caller is a DECISION seam — a
+       bytecode branch, and a native operation's outcome fork over a machine's stated real completion — and
+       decide.c reaches both only with a flow switched in (each returns -1 before asking anything otherwise),
+       so a mark with nothing running is a contradiction observed on a path belonging to no flow — and the arm
        that took it would then go on to build requests that declare themselves DERIVED. */
     DCHECK(g_running != NULL,
            "an arm contradicting its own example was recorded with no flow running — the contradiction is a "
