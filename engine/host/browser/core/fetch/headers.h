@@ -45,6 +45,15 @@ bool  header_forbidden_request(const char *lower_name, const char *value);
 void  header_list_free(HeaderList *l);
 /* §5.1 append: lowercase the name, keep the pair. Both strings are COPIED. */
 void  header_list_append(HeaderList *l, const char *name, const char *value);
+/* §5.1's "append a header (name, value) to a Headers object" over a LIST AND A GUARD — everything that
+   algorithm reads — for a caller that carries a header list forward and has no Headers object yet. Fetch §5.4
+   new Request(input, init) step 34 is the one: a Request input contributes a copy of its header list, and a
+   non-empty init re-appends every entry of it under the NEW request's guard, which is where a `no-cors` mode
+   drops what it drops. `value` must already be normalized (it is, coming off a list §5.1 built). Returns 0 for
+   written OR silently refused — two outcomes the spec does not let a caller distinguish — and -1 with a
+   TypeError live, which only the "immutable" guard produces. */
+int   header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
+                                 const char *name, const char *value);
 /* §5.1 set: replace every entry with this name by one. */
 void  header_list_set(HeaderList *l, const char *name, const char *value);
 void  header_list_delete(HeaderList *l, const char *name);

@@ -44,6 +44,15 @@ int  body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
 int  body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, BodyState *dst, BodyState *src,
                     JSValue in, JSValue **out_cb, int *out_argc);
 
+/* Streams §9.5 Piping's "CREATE A PROXY", which is the OTHER thing and must never be read as the clone above:
+   the proxy pulls from the source "while stream itself becomes immediately LOCKED AND DISTURBED", so exactly
+   ONE of the two is readable afterwards. Fetch §5.4 new Request(input, init) step 41 is its caller — a Request
+   built out of another Request takes that one's body and leaves it unusable, which is why `new Request(r)`
+   followed by `r.text()` throws where `r.clone()` would not. `src_obj` is the object holding `src`, because the
+   disturbance latch is COW-captured state and the capture is keyed on it. `dst` must be a zeroed BodyState.
+   Returns 0, or -1 with an exception live. */
+int  body_create_proxy(JSContext *ctx, JSValueConst src_obj, BodyState *src, BodyState *dst);
+
 /* DECLARE that an interface includes Body: the class its instances wear, and how to find the BodyState on one.
    `of` returns NULL when the value is not an instance, which is the receiver check every member performs.
    Returns a handle. There is ONE set of reader machines for the whole platform; the handle is what tells them

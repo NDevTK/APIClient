@@ -690,6 +690,19 @@ static int headers_append_one(JSContext *ctx, HeaderList *l, uint8_t guard, cons
     return allow < 0 ? -1 : 0;
 }
 
+/* …AND THE SAME ALGORITHM FOR A CALLER THAT HOLDS A LIST AND A GUARD RATHER THAN A `Headers` OBJECT — Fetch
+   §5.4 new Request(input, init) step 34's "If headers is a Headers object, then for each header of its header
+   list, APPEND header to this's headers". That arm is a §5.1 append per entry, under the NEW request's guard,
+   and it is a different algorithm from headers_fill_run: fill resolves §3.2.25's union through the value's own
+   @@iterator, which step 34 must not do for a header list the constructor is carrying forward. Exported rather
+   than re-derived at the caller, because a second copy of "which headers this guard drops" is a second thing to
+   keep in step with §5.1's two lists. */
+int header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard guard,
+                               const char *name, const char *value)
+{
+    return headers_append_one(ctx, l, (uint8_t)guard, name, value);
+}
+
 enum { HDR_APPEND = 0, HDR_SET, HDR_DELETE, HDR_GET, HDR_HAS, HDR_GETSETCOOKIE, HDR_MEMBER_N };
 /* THE AGENT'S POOL ENTRIES, one per §5.2 operation — the OBJECTS they are installed as are each realm's. */
 static int g_id[HDR_MEMBER_N];

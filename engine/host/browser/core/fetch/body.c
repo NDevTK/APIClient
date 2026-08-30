@@ -137,6 +137,35 @@ int body_clone_run(JSContext *ctx, uint8_t *phase, JSValue *cb, int cb_cap, Body
     return 0;
 }
 
+/* Streams §9.5 Piping's "create a proxy" — "To create a proxy for a ReadableStream stream … The result will
+   be a new ReadableStream object which pulls its data from stream, WHILE STREAM ITSELF BECOMES IMMEDIATELY
+   LOCKED AND DISTURBED." Fetch §5.4 new Request(input, init) step 41 is the one caller: a Request built out of
+   another Request takes its body, and the INPUT is unusable afterwards, which is why step 41 refuses an
+   already-unusable one first.
+   IT IS NOT THE TEE ABOVE, and reading the two as one is the mistake this exists to make impossible: §2.2.4's
+   clone leaves BOTH sides readable, and a proxy leaves exactly one. `new Request(r); r.text()` must throw, and
+   with a tee it would resolve.
+   In this engine a body is BYTES with a stream built on demand, so the proxy is the bytes plus the source's
+   disturbance latch — observably the same object graph, and it needs no identity transform and no park. */
+int body_create_proxy(JSContext *ctx, JSValueConst src_obj, BodyState *src, BodyState *dst)
+{
+    DCHECK(src->has, "§5.4 step 41 asked for a proxy of a NULL body — step 41 is guarded by \"inputBody is "
+                     "non-null\", so a caller reaching here with none skipped that guard");
+    DCHECK(src->bytes != NULL,
+           "a STREAM-BACKED body reached Fetch §5.4 step 41's create-a-proxy: §5.2's ReadableStream arm leaves "
+           "the bytes in the stream, and Streams §9.5 Piping's create-a-proxy pipes it through an identity "
+           "TransformStream — which this engine has no body representation for. It is the SAME unbuilt "
+           "capability fetch()'s host edge names: read the stream to the end as a stage of the machine that "
+           "needs the bytes, and hand those bytes on");
+    if (body_state_set(ctx, dst, src->bytes, src->len) < 0)
+        return -1;
+    /* "stream itself becomes immediately locked and disturbed" — the same latch a read sets, captured into the
+       running flow's delta first, because the source Request is shared baseline state for every sibling arm. */
+    cow_capture_host_state(ctx, src_obj, &src->used, sizeof src->used);
+    src->used = 1;
+    return 0;
+}
+
 /* §5.2'S "EXTRACT A BODY", ONCE, for both interfaces that take a BodyInit.
  *
  * It was written twice — in the Response constructor and in the Request one — and each copy knew TWO of the

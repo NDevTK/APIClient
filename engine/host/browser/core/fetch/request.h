@@ -8,10 +8,6 @@ void request_install_proto(JSContext *ctx);   /* §5.4's prototype, for ONE real
 void request_install(JSContext *ctx, JSValueConst global);
 void request_free(JSContext *ctx);
 
-/* The request's URL as `fetch(input)` reads it when `input` is a Request rather than a string, or NULL when
-   the value is not one. */
-const char *request_url_of(JSValueConst v);
-
 /* IS THIS VALUE A Request — the BRAND, which is what Web IDL's `RequestInfo = Request or USVString` union
    resolves on. A union member that is an interface type matches a PLATFORM OBJECT OF THAT INTERFACE and
    nothing else; every other value goes to the USVString member and is converted. `JS_IsObject` is not that
