@@ -1135,6 +1135,31 @@ void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const cha
 void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid);
 
+/* THE SAME ATTRIBUTE, WITH ITS GETTER DECLARING THAT ITS BODY RUNS NONE OF THE PAGE'S CODE.
+ *
+ * WHY THERE IS ANYTHING TO DECLARE. A property read that lands on an accessor may not invoke it from C:
+ * §10.1.8.1 OrdinaryGet ( obj, propertyKey, receiver ) step 7 is `Return ? Call(getter, receiver)`, and a C
+ * activation has no flow base under it, so a loop in the page's getter would drive to completion instead of
+ * parking. The engine therefore routes every accessor read through the trampoline and a C reader that reaches
+ * one ABORTS naming the site. All of that is about a body that RUNS THE PAGE, and it is vacuous for a C getter
+ * that runs none: nothing to suspend, no continuation to hold, and the routed path reaching the same C body
+ * through the same dispatch. Such a getter was aborting on a non-problem, which costs real aborts and teaches
+ * the next reader to distrust the crashes that mean something.
+ *
+ * THE DECLARATION IS A CLAIM, AND A FALSE ONE FIRES. Say nothing and the member is undeclared, which means "a C
+ * reader of this must be routed, and it crashes" — that stays the default for every attribute in the engine.
+ * Say this and the engine holds you to it: while the getter runs, entry into ANY bytecode body aborts naming
+ * this member, because bytecode is the one door the page's code comes through. So the day a helper three calls
+ * down gains a [[Get]] on an object whose prototype a page can extend, a coercion of a value a page can make an
+ * object, or a callback, the claim CRASHES instead of silently keeping an exemption it stopped deserving.
+ *
+ * IT IS NOT THE ANSWER TO A LONG GETTER. The claim is about what the body REACHES, never about how much work it
+ * does — a walk over every child of a large tree reaches no page code and still holds the scheduler for the
+ * length of the walk, and the answer to that one is `idl_install_accessor_step` below, whose getter is a machine
+ * that yields. The two are different questions and a member can need both answers at different times. */
+void idl_install_accessor_no_user_code(JSContext *ctx, JSValueConst target, const char *name,
+                                       IdlGetter getter, int getter_magic, int setter_stepid);
+
 /* WEB IDL §3.4.10's [LegacyUnforgeable] ATTRIBUTE — the OTHER of the two places §3.7.6 puts an attribute, and
  * a different member of the platform rather than a different way of writing the same one.
  *

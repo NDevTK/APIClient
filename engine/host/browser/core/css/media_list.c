@@ -405,7 +405,7 @@ void media_list_install_proto(JSContext *ctx)
     CHECK(!JS_IsException(proto), "MediaList.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "MediaList");
     idl_install_accessor(ctx, proto, "mediaText", js_ml_media_text, 0, g_id_set_media_text);
-    idl_install_accessor(ctx, proto, "length", js_ml_length, 0, -1);
+    idl_install_accessor_no_user_code(ctx, proto, "length", js_ml_length, 0, -1);
     idl_install_method(ctx, proto, "item", 1, g_id_item);
     idl_install_method(ctx, proto, "appendMedium", 1, g_id_append);
     idl_install_method(ctx, proto, "deleteMedium", 1, g_id_delete);

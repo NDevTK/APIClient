@@ -611,7 +611,7 @@ void attr_install_protos(JSContext *ctx)
     nnm_p = JS_NewObject(ctx);
     CHECK(!JS_IsException(nnm_p), "NamedNodeMap.prototype could not be allocated");
     idl_interface_tag(ctx, nnm_p, "NamedNodeMap");
-    idl_install_accessor(ctx, nnm_p, "length", js_nnm_length, 0, -1);
+    idl_install_accessor_no_user_code(ctx, nnm_p, "length", js_nnm_length, 0, -1);
     idl_install_method(ctx, nnm_p, "item", 1, g_item_id);
     idl_install_method(ctx, nnm_p, "getNamedItem", 1, g_get_named_id);
     idl_install_method(ctx, nnm_p, "removeNamedItem", 1, g_remove_named_id);

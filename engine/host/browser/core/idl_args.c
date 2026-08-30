@@ -4021,15 +4021,25 @@ void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const cha
    descriptor is otherwise identical — the same getter, the same setter, [[Enumerable]] true — so this is one
    define with one flag decided by the member's IDL, not two installs. */
 static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char *name,
-                                IdlGetter getter, int getter_magic, int setter_stepid, int flags)
+                                IdlGetter getter, int getter_magic, int setter_stepid, int flags,
+                                bool no_user_code)
 {
     DCHECK(setter_stepid < 0 || idl_declared_before_seal(setter_stepid), name);
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue g = JS_UNDEFINED, st = JS_UNDEFINED;
 
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
-    if (getter)
+    DCHECK(getter != NULL || !no_user_code,
+           "a no-user-code declaration was made for an attribute that has no getter — the claim is about what a "
+           "GETTER'S BODY reaches, and a write-only member has no body to make it about");
+    if (getter) {
         g = JS_NewCFunction2(ctx, (JSCFunction *)getter, name, 0, JS_CFUNC_getter_magic, getter_magic);
+        /* THE DECLARATION RIDES THE MINTED OBJECT, which is what makes it PER MEMBER. A shared C body reached
+           through several magics (js_rule_get is one) is several function objects, so one arm of it saying this
+           says nothing about the others — the granularity a per-function-pointer exemption would not have. */
+        if (no_user_code)
+            JS_DeclareCFunctionNoUserCode(g);
+    }
     /* The GETTER here is a plain C function with no pool entry (this is the form for an attribute whose read
        runs none of the page's code), but the SETTER is a step member exactly like any other, so it is minted
        the same way and named the same way. It was the fourth hand-written mint. */
@@ -4043,7 +4053,19 @@ void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
                           IdlGetter getter, int getter_magic, int setter_stepid)
 {
     idl_define_accessor(ctx, target, name, getter, getter_magic, setter_stepid,
-                        JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+                        JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE, /*no_user_code*/false);
+}
+
+/* THE SAME INSTALL, WITH THE GETTER'S BODY DECLARING WHAT IT REACHES — see idl_args.h for what the claim buys
+   and what it costs. It is a separate entry point rather than a parameter on the one above for a reason that is
+   not convenience: a parameter would have to be answered at every one of the hundreds of existing installs, and
+   the answer that gets typed under those conditions is the one that makes the build go quiet. A member that
+   says nothing is undeclared, which is the safe reading and the crashing one. */
+void idl_install_accessor_no_user_code(JSContext *ctx, JSValueConst target, const char *name,
+                                       IdlGetter getter, int getter_magic, int setter_stepid)
+{
+    idl_define_accessor(ctx, target, name, getter, getter_magic, setter_stepid,
+                        JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE, /*no_user_code*/true);
 }
 
 /* §3.4.10's [LegacyUnforgeable] — see idl_args.h. The property is defined at the SAME moment and with the same
@@ -4055,7 +4077,8 @@ void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const
     DCHECK(getter != NULL,
            "an unforgeable attribute was installed with no getter — [LegacyUnforgeable] exists so that a read "
            "of this member cannot be redirected, and a member with nothing to read is not that member");
-    idl_define_accessor(ctx, target, name, getter, getter_magic, setter_stepid, JS_PROP_ENUMERABLE);
+    idl_define_accessor(ctx, target, name, getter, getter_magic, setter_stepid, JS_PROP_ENUMERABLE,
+                        /*no_user_code*/false);
 }
 
 /* §3.7.6's [Replaceable] SETTER, and its one implementation. The spec's steps are "Perform

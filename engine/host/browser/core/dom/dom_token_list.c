@@ -493,7 +493,7 @@ void dom_token_list_install_proto(JSContext *ctx)
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "DOMTokenList.prototype could not be allocated");
     idl_interface_tag(ctx, proto, "DOMTokenList");
-    idl_install_accessor(ctx, proto, "length", js_tl_length, 0, -1);
+    idl_install_accessor_no_user_code(ctx, proto, "length", js_tl_length, 0, -1);
     idl_install_accessor(ctx, proto, "value", js_tl_value, 0, g_set_value_id);
     idl_install_method(ctx, proto, "item", 1, g_item_id);
     idl_install_method(ctx, proto, "contains", 1, g_contains_id);
