@@ -14,6 +14,7 @@
 #include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_dimension.h"
+#include "core/css/css_image.h"
 #include "core/css/css_length.h"
 #include "core/css/css_math.h"
 #include "core/css/css_syntax_match.h"
@@ -423,6 +424,21 @@ done:
     return ok;
 }
 
+/* §5.1's `<image>`: "Any valid <image> value" — and the LEVEL is the REFERENCING spec's, not the newest one.
+   §5.1's own row links `<image>` at css-images-3 §2 "Image Values: the <image> type", whose production is
+   `<image> = <url> | <gradient>`; that is exactly what core/css/css_image.c decides, and it is the same
+   production css-backgrounds-3 normatively references, which is why one component answers both. css-images-4
+   §2 "2D Image Values: the <image> type" widens the type to six arms, and each of those arms crashes INSIDE
+   that component naming its OWN css-images-4 section — a `conic-gradient()` reports §3.3 "Conic Gradients:
+   the conic-gradient() notation" rather than reporting that this engine has no `<image>` grammar at all,
+   which is the difference between a gap a reader can act on and a claim about the tree that stopped being
+   true. Like `<color>` below, this takes the value's TEXT and not a token, because an image is a functional
+   notation whose interior is its own grammar. */
+static bool val_is_image(const char *span, size_t span_len)
+{
+    return css_image_is_image(span, span_len);
+}
+
 /* §5.1's `<color>`: "Any valid <color> value" — CSS Color 4's production, answered by the component that owns
    it, over the span the value occupies. It takes TEXT and not a token because a colour is `#fff`, an ident, or
    a functional notation whose interior is its own grammar. */
@@ -463,14 +479,7 @@ static bool val_type_matches(const char *type, const ValLead *lead, const char *
     if (strcmp(type, "<time>") == 0)               return val_is_time(lead, span, span_len);
     if (strcmp(type, "<resolution>") == 0)         return val_is_resolution(lead, span, span_len);
     if (strcmp(type, "<custom-ident>") == 0)       return val_is_custom_ident(lead);
-    if (strcmp(type, "<image>") == 0)
-        DFAIL("a registered custom property's syntax is `<image>` and this engine has no `<image>` grammar. "
-              "CSS Images 4 §2 '2D Image Values: the <image> type' defines it as `<url> | <image()> | "
-              "<image-set()> | <cross-fade()> | <element()> | <gradient>`, and its `<gradient>` half is §3 "
-              "'Gradients' — §3.1's linear, §3.2's radial, §3.3's conic and §3.4's three repeating forms, over "
-              "§3.5's colour stop lists, `<angle>`, `<length-percentage>` and `<position>`. BUILD it as "
-              "core/css/css_image.c — a component in its own right, because `background-image` and the "
-              "computed-value path need the same production — and route this name to it");
+    if (strcmp(type, "<image>") == 0)              return val_is_image(span, span_len);
     DCHECK(strcmp(type, "<transform-list>") != 0,
            "§5.1's PRE-MULTIPLIED `<transform-list>` reached the per-type match. It is unrolled to "
            "`<transform-function>` with §5.2's space multiplier one level up, where the multiplier belongs, so "
@@ -484,8 +493,15 @@ static bool val_type_matches(const char *type, const ValLead *lead, const char *
               "Transforms 2 §12.2 '3D Transform Functions' adds matrix3d, translate3d/translateZ, "
               "scale3d/scaleZ, rotate3d/rotateX/rotateY/rotateZ and perspective. Every argument type in both "
               "lists is one this file already decides, and `<zero>` is CSS Values §5.3's literal number 0. "
-              "BUILD it as core/css/css_transform.c and route both names to it; `<transform-list>` is §5.1's "
-              "pre-multiplied name for `<transform-function>+` and is already unrolled to that here");
+              "BUILD it as core/css/css_transform_function.c and route both names to it, the way `<image>` "
+              "above is routed to core/css/css_image.c. IT IS NOT core/css/css_transform.c: that name is "
+              "TAKEN, by the component answering CSS Transforms 1's transformable and transformed ELEMENT "
+              "(cited with its edition note in that component's own header, because the CR numbers the "
+              "defining section and the Editor's Draft leaves it unnumbered) — a walk over lexbor elements and "
+              "computed values, which is a different question from whether a run of BYTES matches a value "
+              "production, and bolting this grammar onto it would give one file two contracts. "
+              "`<transform-list>` is §5.1's pre-multiplied name for `<transform-function>+` and is already "
+              "unrolled to that here");
     DFAIL("a syntax component names a type that is not one of CSS Properties and Values API 1 §5.1's fifteen "
           "supported names. §5.4.4 only ever produces a name it has already checked against that list, so a "
           "name reaching here is that list having grown in the parser and not in the matcher");

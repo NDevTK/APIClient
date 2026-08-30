@@ -4613,10 +4613,9 @@ heap COW delta for free and parks with the flow that wrote it.
 ### 17.2 `attachShadow(init)` and the `shadowRoot` getter — DOM §4.9
 
   1. Let *registry* be this's node document's **custom element registry**. —
-  2. If `init["customElementRegistry"]` exists, set *registry* to it. — *(ABSENT — see 17.6)*
+  2. If `init["customElementRegistry"]` exists, set *registry* to it. —
   3. If *registry* is non-null, its **is scoped** is false, and it is not this's node document's
-     registry, throw `NotSupportedError`. — *(unreachable: this engine has exactly one registry and
-     it IS the node document's, so the comparison cannot fail)*
+     registry, throw `NotSupportedError`. —
   4. Run **attach a shadow root** with this and the six init members. —
   5. Return this's shadow root. —
 
@@ -4843,16 +4842,20 @@ document), boolean *subtree* (default false), node-or-null *parent* (default nul
   6. If *node* is an element, *node* is a **shadow host**, and *node*'s shadow root's **clonable** is
      true — `CLONE_SHADOW`:
      1. Assert: *copy* is not a shadow host. —
-     2. Let *shadowRootRegistry* be *node*'s shadow root's custom element registry. — ABSENT
+     2. Let *shadowRootRegistry* be *node*'s shadow root's custom element registry. —
      3. If *shadowRootRegistry* is a global custom element registry, set it to *document*'s custom
-        element registry's effective global custom element registry. — ABSENT
-     4. — (2-3 are one absent field; see 17.6.)
+        element registry's effective global custom element registry. — ABSENT **AT THIS SITE**: the
+        mapping itself exists as `ce_registry_effective_global` in `custom_elements.c`, but it is
+        `static` there and the clone reads the slot directly, so a GLOBAL registry clones across as
+        itself instead of through the document's effective global. What the next diff builds is the
+        export plus this one call; its absence shows as a clone whose shadow root resolves definitions
+        in the source document's registry after the copy has moved to another document.
+     4. —
      5. **Attach a shadow root** with *copy*, *node*'s shadow root's **mode**, **true**, *node*'s
         shadow root's **serializable**, **delegates focus**, **slot assignment**, and
         *shadowRootRegistry*. —
      6. Set *copy*'s shadow root's **declarative** to *node*'s shadow root's declarative. —
      7. Set *copy*'s shadow root's **keep custom element registry null** to *node*'s shadow root's. —
-        ABSENT
      8. For each *child* of *node*'s shadow root's children, in tree order: clone a node given *child*
         with *document*, **subtree set to true**, and *parent* set to *copy*'s shadow root. "This
         intentionally does not pass the *fallbackRegistry* argument." —
@@ -4904,13 +4907,17 @@ which is what the standard says happens and is not a should-never-happen.
 
 ### 17.6 What is honestly ABSENT, by name
 
-- **`ShadowRootInit`'s `customElementRegistry`.** Its type is `CustomElementRegistry?`, and this
-  engine's `window.customElements` is a plain object with four methods — there is no
+- **`ShadowRootInit`'s `customElementRegistry` is BUILT** — 17.2, which is where the account of it
+  lives. This entry used to say `window.customElements` was a plain object with four methods, with no
   `CustomElementRegistry` interface, no interface object, no prototype and therefore no brand to
-  convert against. Declaring the member without one could not tell a `TypeError` (not a registry)
-  from the `NotSupportedError` step 3 throws (a registry that is not this document's), so it lands
-  with the interface, together with §4.13.4 steps 8-9's "element definition is running" flag and
-  step 7.1's "is scoped" that §16.6 already names.
+  convert against, so the member could not tell a `TypeError` (not a registry) from step 3's
+  `NotSupportedError` (a registry that is not this document's). Every clause of that is now false:
+  `custom_elements.c` builds a CONSTRUCTIBLE `CustomElementRegistry` with a class-id brand and §4.13.4's
+  `is scoped`, `shadow_root.c` resolves 17.2 steps 1-3 against it, and a registry is a NODE's state
+  rather than the document's — so step 3's comparison is a real one that can fail, and the note calling
+  it unreachable "because this engine has exactly one registry" went with it. **This bullet is kept
+  rather than deleted because four components cite §17.6 BY NAME as the authority on what is missing,
+  and a reader who follows one of those pointers must not find the old claim still standing.**
 - **The FRAGMENT parses that opt in** — `Element.setHTMLUnsafe`, `ShadowRoot.setHTMLUnsafe` and
   `Document.parseHTMLUnsafe` (HTML §8.5.2, over §8.6.4's "set and filter HTML"). 17.5a's step runs at
   the parse boundary and takes the parser's *allow declarative shadow roots* as a parameter; the only
@@ -4920,9 +4927,14 @@ which is what the standard says happens and is not a should-never-happen.
   that pass true, and each also needs §8.6.4's `options` — whose `sanitizer` and `runScripts` members
   are the Sanitizer API, absent entirely, so they land together rather than as a member that silently
   ignores a sanitizer it was handed.
-- **`shadowrootcustomelementregistry`** — a boolean content attribute reflected by a DOMString IDL
-  attribute (`shadowRootCustomElementRegistry`), and 17.5a step 5.5's `registry` argument that reads
-  it. It lands with `CustomElementRegistry`, for the reason the `ShadowRootInit` member above it does.
+- **`shadowrootcustomelementregistry` is BUILT** — 17.5a step 5.5's `registry` argument that reads the
+  content attribute is `declarative_shadow.c`'s, and the IDL attribute reflecting it
+  (`shadowRootCustomElementRegistry`) is a row in `html_element.c`'s `R_TEMPLATE`. It is a PLAIN
+  `DOMString` mirror and never was an enumerated one: HTML §4.12.3 declares it `[CEReactions, Reflect]
+  attribute DOMString` with no *limited to only known values* line, and states the reason itself — the
+  member "intentionally does not have a boolean type so it can be extended". The old entry called it "a
+  boolean content attribute reflected by a DOMString IDL attribute" that "lands with
+  `CustomElementRegistry`"; the registry landed, and the reflection did not go with it.
 - **`clonable`'s effect is BUILT** — 17.5b, which is where the account of it lives. This entry used to
   say the machine could not host step 6 and that the restructure was a ~60-line rewrite behind
   `dom/nodes`' 25k subtests. The restructure is `CLONE_LEAVE` and it landed on its own first, with

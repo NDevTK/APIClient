@@ -255,14 +255,22 @@ static const ElReflect R_SLOT[]   = { { "name", "name", REFLECT_STRING } };
 static const ElReflect R_FRAMESET[] = {
     { "cols", "cols", REFLECT_STRING }, { "rows", "rows", REFLECT_STRING },
 };
-/* §4.12.3's THREE PLAIN reflections. The other three shadow-root attributes are not plain mirrors:
+/* §4.12.3's FOUR PLAIN reflections. The other two shadow-root attributes are not plain mirrors:
    `shadowrootmode` and `shadowrootslotassignment` are enumerated and LIMITED TO ONLY KNOWN VALUES, so they
-   live in declarative_shadow.c with the parser step that reads them, and `shadowrootcustomelementregistry`
-   is absent with the registry interface (SPEC_STEPS.md §17.6). */
+   live in declarative_shadow.c with the parser step that reads them.
+   `shadowRootCustomElementRegistry` IS one, and the reason it used to be listed beside them was a claim about
+   this tree rather than about the IDL: it was recorded as "absent with the registry interface", and that
+   interface is here — `CustomElementRegistry` is constructible in core/html/custom_elements.c and
+   declarative_shadow.c already reads this very content attribute for HTML §13.2.6.4.4's registry argument. The
+   IDL never made it enumerated either: §4.12.3 declares `[CEReactions, Reflect] attribute DOMString
+   shadowRootCustomElementRegistry` with NO "limited to only known values" line, and the spec says why in its
+   own sentence — the member "intentionally does not have a boolean type so it can be extended" — so a plain
+   `DOMString` mirror is the whole of its behaviour and REFLECT_STRING is that mirror. */
 static const ElReflect R_TEMPLATE[] = {
     { "shadowRootDelegatesFocus", "shadowrootdelegatesfocus", REFLECT_BOOL },
     { "shadowRootClonable",       "shadowrootclonable",       REFLECT_BOOL },
     { "shadowRootSerializable",   "shadowrootserializable",   REFLECT_BOOL },
+    { "shadowRootCustomElementRegistry", "shadowrootcustomelementregistry", REFLECT_STRING },
 };
 static const ElReflect R_DATA[]   = { { "value", "value", REFLECT_STRING } };
 static const ElReflect R_METER[]  = { { "min", "min", REFLECT_STRING }, { "max", "max", REFLECT_STRING } };

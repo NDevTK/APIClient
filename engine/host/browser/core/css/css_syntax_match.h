@@ -34,10 +34,17 @@
  * the per-type dispatch, which fires for any supported name this file does not decide.
  *
  * A TYPE THIS ENGINE HAS NO GRAMMAR FOR CRASHES AT THE VALUE THAT NEEDS IT, never quietly refuses. Answering
- * "does not match" for `<image>` would turn an unbuilt component into a rule the page's own `initialValue`
- * reports as absent — a plausible datum indistinguishable from a measurement — so the three names whose
- * grammars are whole components in their own right abort by name, and the abort says which component to build.
- * Refusing is reserved for values the grammars below actually decided. */
+ * "does not match" for `<transform-function>` would turn an unbuilt component into a rule the page's own
+ * `initialValue` reports as absent — a plausible datum indistinguishable from a measurement — so a name whose
+ * grammar is a whole component in its own right aborts by name, and the abort says which component to build.
+ * Refusing is reserved for values the grammars below actually decided.
+ *
+ * AND THE ABORT NAMES A COMPONENT THAT DOES NOT EXIST YET, WHICH IS A CLAIM ABOUT THIS TREE AND SO GOES STALE.
+ * `<image>` used to abort here saying this engine had no `<image>` grammar, and core/css/css_image.c — the
+ * component that very crash asked for — was built without the crash being deleted, so the abort stood telling
+ * the next reader to build what was already there. It is now ROUTED to that component. Before writing the code
+ * one of these aborts asks for, grep for the entry it names; when you build one, delete the crash AND the
+ * prose agreeing with it in the same diff. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_SYNTAX_MATCH_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_SYNTAX_MATCH_H
 
