@@ -829,6 +829,12 @@ void window_message_init(JSContext *ctx)
     g_id_post = idl_method_id_dict(ctx, POST_ARGS, 3, POST_OPTS,
                                    (int)(sizeof POST_OPTS / sizeof POST_OPTS[0]), js_window_post, 0);
     idl_optional_from(1);
+    /* AND THE SAME NUMBER FOR THE ENTRY STEP 4 LEAVES AT ARITY 3, which is a DIFFERENT list of optionality
+       values and had been reading this one. `optional sequence<object> transfer = []` makes position 2
+       optional in the legacy entry too — so the two agree here, which is exactly why nothing had noticed that
+       only one of them was ever consulted (see idl_overload_split_optional_from). Stating it is what makes
+       the agreement a fact this member declares rather than a coincidence the machine relies on. */
+    idl_overload_split_optional_from(2);
     agent_state_id(WM_COMPONENT, &g_id_post, "§9.3.3's postMessage declaration, and the declaration latch");
     agent_state_value(WM_COMPONENT, &g_deliver_fn, "§9.3.3's delivery-task callee, one per agent");
     agent_state_id(WM_COMPONENT, &g_deliver_stepid, "§9.3.3's delivery task machine");

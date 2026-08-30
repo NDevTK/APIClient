@@ -271,6 +271,14 @@ typedef struct {
        does not declare it converts every position it lists. It was IDL_MAX_DECLARED + 1, a sentinel that could
        only exist while there was a ceiling to derive it from, and that named a position no member had. */
     int        first_optional;
+    /* §3.6's LENGTH-DIFFERING OVERLOAD SPLIT, as the two numbers steps 3-4 and step 15.3 need and the
+       declaration's single `first_optional` cannot carry. `split_at` is the position such a split sits at
+       (idl_type_is_length_split), or -1 for the members that declare none — which is all but two of them.
+       `split_longer_optional` is the LONGER entry's OWN first optional position, declared through
+       idl_overload_split_optional_from and asserted present at the seal, because the entry that survives
+       steps 3-4 is the one whose optionality step 15.3 reads and the shorter entry's is the wrong list. */
+    int        split_at;
+    int        split_longer_optional;
     /* §3.6 STEP 14.2's DEFAULT VALUES, one entry per position the IDL lists — see idl_arg_default. NULL for a
        member declaring none, which is nearly all of them; allocated by the first declaration that names one,
        and freed with the pool exactly as `types` is. A position whose entry is IDL_DEFAULT_NONE has no default,
@@ -467,7 +475,11 @@ static JSRuntime     *g_rt;
 static bool           g_sealed;   /* the first document's install is done — see idl_declared_before_seal */
 static int            g_sealed_at; /* how many members existed then: a member minted after this is a new one */
 
-void idl_args_seal(void) { g_sealed = true; g_sealed_at = g_n; }
+/* Defined beside the split helpers below, and called from the seal because the seal is the ONE moment the whole
+   platform's declarations exist and none of them can change again — see idl_overload_split_optional_from. */
+static void idl_seal_check_splits(void);
+
+void idl_args_seal(void) { idl_seal_check_splits(); g_sealed = true; g_sealed_at = g_n; }
 
 /* WAS THIS MEMBER DECLARED BEFORE THE PLATFORM WAS SEALED? Asked at INSTALL, because the install is where the
    member's NAME is — and a name is the whole difference between an assert you can act on and one that only
@@ -822,7 +834,89 @@ static const void *idl_body_state_const(const IdlMember *m, const void *st)
 static bool idl_type_is_dictionary(IdlArgType t)
 {
     return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_STRING_OR_DICT ||
-           t == IDL_USVSTRING_OR_DICT || t == IDL_SEQUENCE_OBJECT_OR_DICT;
+           t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
+           t == IDL_SEQUENCE_OBJECT_OR_DICT;
+}
+
+/* §3.6's LENGTH-DIFFERING SPLIT — a declared type whose two overload entries END at different positions, so
+   steps 3-4 can remove one of them from the ARGUMENT COUNT alone, before any value is looked at.
+   IDL_SEQUENCE_OBJECT_OR_DICT is deliberately NOT one: its two entries are the same length, nothing is removed
+   early, and its arm is step 12's test of the value. The distinction is what decides both halves below — which
+   position gets its type rewritten, and whose optionality list step 15.3 then reads. */
+static bool idl_type_is_length_split(IdlArgType t)
+{
+    return t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT;
+}
+
+/* THE TYPE THE LONGER ENTRY DECLARES AT THAT POSITION — what step 4 leaves standing once the shorter entry is
+   gone. It is a total function over the rows above and crashes for anything else, so a split row added without
+   a longer-entry type names itself here rather than falling through to the shorter entry's dictionary. */
+static IdlArgType idl_split_longer_type(IdlArgType t)
+{
+    switch (t) {
+    case IDL_USVSTRING_OR_DICT:           return IDL_USVSTRING;
+    case IDL_UNRESTRICTED_DOUBLE_OR_DICT: return IDL_UNRESTRICTED_DOUBLE;
+    default: break;
+    }
+    DFAIL("§3.6 steps 3-4 removed the shorter overload entry at a position whose declared type names no LONGER "
+          "entry type — a length-differing split states BOTH of its arms, so a row idl_type_is_length_split "
+          "accepts and this does not is half a declaration");
+    return t;
+}
+
+/* §3.6 STEPS 3-4's OUTCOME for a member declaring a length-differing split: did the LONGER entry survive.
+   argcount is min(maxarg, args) and the shorter entry's type list ENDS at the split position, so a call
+   passing anything BEYOND that position has removed it outright. Asked of `argc` rather than of the position
+   being converted, because it is a fact about the CALL and every position of the call reads the same answer —
+   which is exactly what the version of this that lived inline at one position could not express. */
+static bool idl_split_longer_survived(const IdlMember *m, int argc)
+{
+    return m->split_at >= 0 && argc > m->split_at + 1;
+}
+
+/* §3.6 STEP 15.3's OPTIONALITY, READ OFF THE ENTRY THAT SURVIVED — "let optionality be the value at index i in
+   the list of optionality values of the REMAINING entry". For every member with no length-differing split
+   there is one entry and the declaration's own number IS that list; for the two that have one, the surviving
+   entry decides. idl_args_seal asserts that such a member declared the longer entry's number, so there is
+   nothing to fall back to here. */
+static int idl_first_optional(const IdlMember *m, int argc)
+{
+    if (!idl_split_longer_survived(m, argc)) return m->first_optional;
+    DCHECK(m->split_longer_optional >= 0,
+           "a §3.6 length-differing overload split reached a conversion without its LONGER entry's optional "
+           "index — idl_args_seal asserts every such member declares one, so this member was declared after "
+           "the platform was sealed");
+    return m->split_longer_optional;
+}
+
+/* THE TWO-SIDED HALF OF THAT DECLARATION, run once when the platform is sealed. A member whose types name a
+   length-differing split and that never said where the LONGER entry's optional arguments begin is a member
+   §3.6 step 15.3 cannot be run for — so it is caught HERE, with every declaration in hand and before any page
+   can call one, rather than at whichever arity happens to reach the missing number first. The reverse is
+   asserted too: a number declared by a member with no split is a declaration describing an entry that does not
+   exist, which is how such a call lands on the wrong member (see IDL_LAST_DECL_ONLY). */
+static void idl_seal_check_splits(void)
+{
+    int i, k;
+
+    for (i = 0; i < g_n; i++) {
+        const IdlMember *m = idl_member(i);
+
+        DCHECK(m->split_at < 0 || m->split_longer_optional >= 0,
+               "a member declared a §3.6 overload split whose two entries differ in LENGTH and never said where "
+               "the LONGER entry's own optional arguments begin — step 15.3 reads optionality off the entry "
+               "that survived steps 3-4, so without it every position past the split is measured against the "
+               "SHORTER entry's declaration. State it with idl_overload_split_optional_from");
+        DCHECK(m->split_at >= 0 || m->split_longer_optional < 0,
+               "a member with no length-differing §3.6 overload split declared where its LONGER entry's "
+               "optional arguments begin — there is no such entry, so the declaration describes a member that "
+               "is not this one");
+        for (k = 0; k < m->nargs; k++)
+            DCHECK(!idl_type_is_length_split(m->types[k]) || m->split_at == k,
+                   "a member's length-differing §3.6 split was not recorded at the position its type list "
+                   "declares it — the position is READ from the types at declaration, so the two disagreeing "
+                   "means a second split was declared and one of them decides every arity");
+    }
 }
 
 static int idl_declared_positions(const IdlMember *m)
@@ -1494,8 +1588,13 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                `el.append()` require nothing even though the member declares the tail's type. Stated here
                rather than per member: a variadic member that had to remember to say so is a member whose
                forgetting turns into a TypeError the spec does not have. */
+            /* AND IT IS THE SURVIVING ENTRY'S COUNT, not the declaration's. §3.6 removes entries at steps 3-4
+               and only then, at step 5, counts what the remaining one requires — so a call that reached past a
+               length-differing split is measured against the LONGER entry, whose required positions run past
+               the split even where the declaration made position 0 optional for the shorter one. */
             int declared = idl_declared_positions(m);
-            int required = m->first_optional < declared ? m->first_optional : declared;
+            int first_opt = idl_first_optional(m, s->hdr.argc);
+            int required = first_opt < declared ? first_opt : declared;
             if (s->hdr.argc < required) {
                 JS_FreeValue(ctx, cb_result);
                 JS_ThrowTypeError(ctx, "%d argument%s required, but only %d present",
@@ -1567,13 +1666,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         IdlArgType t = (s->i < m->nargs) ? m->types[s->i]
                      : (m->variadic ? m->types[m->nargs - 1] : IDL_ANY);
         /* §3.6 STEPS 3-4, WHICH RUN BEFORE ANY VALUE IS LOOKED AT: argcount is min(maxarg, args) and every
-           entry of the effective overload set whose type list is not that long is REMOVED. The only shape of
-           that this platform declares is a position where one of two overloads ENDS (see IDL_USVSTRING_OR_DICT
-           in idl_args.h) — so a call reaching past this position has already deleted the shorter entry, and
-           what is left is the longer one's own type at this index. */
-        bool step4_only_longer = (t == IDL_USVSTRING_OR_DICT && s->hdr.argc > s->i + 1);
+           entry of the effective overload set whose type list is not that long is REMOVED. The shape of that
+           this platform declares is a position where one of two overloads ENDS (idl_type_is_length_split) — so
+           a call reaching past that position has already deleted the shorter entry, and what is left is the
+           longer one's own type at that index and the longer one's own OPTIONALITY at every index.
+           BOTH HALVES ARE THE SAME FACT ABOUT THE CALL, which is why they are computed together and from
+           `argc` rather than from `s->i`: the removal happens once, before the loop starts, and every position
+           the loop then converts belongs to the entry that survived it. Written as a per-position test of one
+           type it could only ever rewrite the split position itself, and the positions AFTER the split went on
+           reading the shorter entry's optional index — see idl_overload_split_optional_from. */
+        bool longer_survived = idl_split_longer_survived(m, s->hdr.argc);
+        bool step4_only_longer = longer_survived && s->i == m->split_at;
+        int  first_opt = idl_first_optional(m, s->hdr.argc);
 
-        if (step4_only_longer) t = IDL_USVSTRING;
+        if (step4_only_longer) t = idl_split_longer_type(t);
 
         /* §3.6: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
            undefined — which is what lets it tell "no base" from the base "undefined". A VARIADIC TAIL is not
@@ -1587,7 +1693,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            its declared default — so a dictionary position falls through to the conversion below, which is
            what §3.2.17 says converting `undefined` to a dictionary produces. */
         if (!step4_only_longer && !idl_type_is_dictionary(t) &&
-            s->i < idl_declared_positions(m) && s->i >= m->first_optional && JS_IsUndefined(a)) {
+            s->i < idl_declared_positions(m) && s->i >= first_opt && JS_IsUndefined(a)) {
             JS_FreeValue(ctx, cb_result);
             cb_result = JS_UNDEFINED;
             /* §3.6 STEP 14.2: an optional argument whose IDL writes `= …` is not absent — it holds THAT value,
@@ -1717,6 +1823,21 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             DCHECK(m->dict_n > 0, "a member declared an overload splitting at a dictionary argument with no "
                                   "dictionary members — the dictionary is half of what that type states");
             t = (JS_IsObject(a) || JS_IsNull(a) || JS_IsUndefined(a)) ? IDL_DICT : IDL_USVSTRING;
+        }
+        /* §3.6 AT THE ARITY WHERE ONLY THE DICTIONARY ENTRY IS LEFT, and there is no step 12 to run: the row
+           above needs one because BOTH its entries are still standing at arity 2, while this one's three
+           entries have lengths 0, 1 and 2 and steps 3-4 therefore leave exactly one at every arity (see
+           IDL_UNRESTRICTED_DOUBLE_OR_DICT). Reaching here means the longer entry was removed, so the surviving
+           entry declares a dictionary at this position and §3.2.17 converts whatever the page passed —
+           including `el.scrollTo(0)`, whose 0 is not undefined, null or an Object and is therefore a
+           TypeError from the type rather than an x coordinate. */
+        if (t == IDL_UNRESTRICTED_DOUBLE_OR_DICT) {
+            DCHECK(m->dict_n > 0, "a member declared a number-or-dictionary overload split with no dictionary "
+                                  "members — the dictionary is half of what that type states");
+            DCHECK(!step4_only_longer,
+                   "§3.6 steps 3-4 chose the LONGER entry and the position still carries the split type — the "
+                   "rewrite at the top of this loop is what performs that choice, so the two have come apart");
+            t = IDL_DICT;
         }
 
         /* §3.2.25 over `(DOMString or sequence<DOMString>)`, whose arm is decided by a READ of the page's value
@@ -2748,6 +2869,21 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
     /* NO OPTIONAL ARGUMENTS, stated in the member's OWN terms: one past its last position. There is nothing
        here to overflow and nothing to keep in step with a ceiling — see idl_optional_from. */
     idl_member(idx)->first_optional = nargs;
+    /* §3.6's LENGTH-DIFFERING SPLIT, READ OFF THE TYPE LIST rather than named a second time by the caller: the
+       position IS in the types the member just declared, so asking for it again would be one fact stated
+       twice and free to disagree. -1 is "this member declares none", which is nearly all of them, and the
+       LONGER entry's optional index stays unset until idl_overload_split_optional_from states it — asserted
+       at the seal, where every declaration exists and none can change again. */
+    idl_member(idx)->split_at = -1;
+    idl_member(idx)->split_longer_optional = -1;
+    for (k = 0; k < nargs; k++)
+        if (idl_type_is_length_split(types[k])) {
+            DCHECK(idl_member(idx)->split_at < 0,
+                   "a member declared TWO §3.6 length-differing overload splits — steps 3-4 remove entries by "
+                   "one argument count, so a second split is a second answer to the same question and the "
+                   "conversion would resolve every position against whichever was found first");
+            idl_member(idx)->split_at = k;
+        }
     /* NO DECLARED DEFAULTS, which is what §3.6's absent rule is the answer for. The array is allocated by the
        first idl_arg_default this member makes, so a member with none costs nothing. */
     idl_member(idx)->arg_dflts = NULL;
@@ -2923,6 +3059,29 @@ void idl_optional_from(int first_optional)
     DCHECK(first_optional >= 0 && first_optional <= idl_member(g_n - 1)->nargs,
            "a member's first OPTIONAL argument is not one of the positions it declares");
     idl_member(g_n - 1)->first_optional = first_optional;
+}
+
+/* See idl_args.h. Same "names the last declaration" rule as idl_optional_from — and it is an index into the
+   SAME type list, because a length-differing split is two entries over ONE declaration: the shorter one ends
+   at the split and the longer one runs to `nargs`. */
+void idl_overload_split_optional_from(int longer_first_optional)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "a longer-overload-entry optional index was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(m->split_at >= 0,
+           "a member that declares no §3.6 length-differing overload split said where its LONGER entry's "
+           "optional arguments begin — the split is read off the type list, so a member with none has no "
+           "second entry for this to describe");
+    /* THE LONGER ENTRY STARTS PAST THE SPLIT, so its first optional position cannot be at or before it: the
+       shorter entry is the one that ENDS there, and a longer entry whose optional arguments began inside the
+       shared prefix would be the shorter entry with extra positions rather than a second overload. */
+    DCHECK(longer_first_optional > m->split_at && longer_first_optional <= m->nargs,
+           "a longer overload entry's first OPTIONAL argument is not one of the positions past the split that "
+           "the member declares");
+    m->split_longer_optional = longer_first_optional;
 }
 
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated AFTER

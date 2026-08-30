@@ -254,6 +254,26 @@ typedef enum {
        The string arm is a USVString (§3.2.12's scalar value conversion), which is what §7.2.2's IDL writes and
        what every other member of the URL surface takes. The dictionary is named beside the member. */
     IDL_USVSTRING_OR_DICT,
+    /* THE SAME §3.6 LENGTH-DIFFERING SPLIT WHERE THE LONGER ENTRY'S TYPE AT THIS POSITION IS A NUMBER — and
+       where, unlike the row above, THE TWO ENTRIES NEVER COEXIST AT ONE ARITY, so no value is ever looked at.
+       CSSOM VIEW §6 Extensions to the Element Interface declares it three times over, and §4 Extensions to the
+       Window Interface three more:
+
+           Promise<undefined> scroll(optional ScrollToOptions options = {});
+           Promise<undefined> scroll(unrestricted double x, unrestricted double y);
+
+       §3.6's effective overload set for that pair has an entry of length 0, one of length 1 (the dictionary)
+       and one of length 2 (the two doubles). Steps 3-4 — argcount is min(maxarg, args), and every entry whose
+       type list is not that long is removed — therefore leave EXACTLY ONE entry at every arity, and step 12
+       never runs: `el.scrollTo(0, 0)` is the numeric entry because it passed two arguments and
+       `el.scrollTo({left: 0})` is the dictionary because it passed one, with nothing about either VALUE
+       consulted. Which is also what makes `el.scrollTo(0)` a TypeError — §3.2.17 step 1 refuses a value that is
+       not undefined, null or an Object — rather than a scroll to x=0, and that is what a browser answers.
+       ITS CONCOLIC RULE IS UNASKED WHERE THE ROW ABOVE'S IS CROSSES, and that is a consequence of the sentence
+       above rather than a second policy: by the time idl_concolic_rule is consulted, a call at the LONGER arity
+       has already had this position rewritten to the number, so the only value this row itself ever describes
+       is a dictionary — a bag of member READS, each yielding another unknown. */
+    IDL_UNRESTRICTED_DOUBLE_OR_DICT,
     /* THE SAME §3.6 SPLIT WHERE NEITHER ENTRY IS LONGER — the position the two entries of HTML §9.4.4 Message
        ports' `MessagePort.postMessage` differ at:
 
@@ -400,6 +420,11 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
     switch (t) {
     case IDL_ANY:
     case IDL_DICT:
+    /* A §3.6 LENGTH-DIFFERING SPLIT WHOSE TWO ENTRIES NEVER COEXIST AT ONE ARITY resolves from the argument
+       count alone, so the conversion has already rewritten this position to the longer entry's number before
+       any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
+       dictionary asks the value nothing. See IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
+    case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
     case IDL_INTERFACE:
         return IDL_CONCOLIC_UNASKED;
     /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM. Its arm decides
@@ -662,6 +687,31 @@ typedef struct {
    declared and past what any member may declare, and the value that meant "none" changed whenever the ceiling
    did. The declaration asserts the bound, so the state cannot be reached. */
 void idl_optional_from(int first_optional);
+
+/* DECLARE WHERE THE **LONGER OVERLOAD ENTRY'S** OPTIONAL ARGUMENTS START — the other half of a §3.6 split whose
+ * two entries differ in LENGTH (IDL_USVSTRING_OR_DICT, IDL_UNRESTRICTED_DOUBLE_OR_DICT), and the half this file
+ * stated as a rule and then applied to exactly one position.
+ *
+ * §3.6 step 15.3 reads optionality "at index i in the list of optionality values of the REMAINING entry", and
+ * IDL_USVSTRING_OR_DICT's own paragraph above says so in those words — but only the SPLIT POSITION was ever
+ * resolved that way. Every position AFTER it went on being measured against the DECLARATION's
+ * `first_optional`, which is the SHORTER entry's, because the declaration has one number and §3.6 needs one
+ * per surviving entry. Nothing had noticed, and the reason is worth stating rather than being lucky twice:
+ * HTML §7.2.2's `postMessage` is the only member that had ever declared such a split, and its third argument
+ * (`optional sequence<object> transfer = []`) is optional in the LONGER entry too — so the one number happened
+ * to be right for both.
+ *
+ * CSSOM VIEW §6's `scroll(unrestricted double x, unrestricted double y)` is where they disagree, and it
+ * disagrees at the ordinary case rather than at an edge: the declaration MUST make position 0 optional, because
+ * the dictionary entry writes `optional ScrollToOptions options = {}` and `el.scrollTo()` is a legal call — and
+ * position 1 is REQUIRED in the entry that survives at arity 2. Without this, `el.scrollTo(1, undefined)` reads
+ * position 1 as an ABSENT optional and the body is handed nothing where §3.2.8 owes it ToNumber(undefined),
+ * which §3.2's normalize-non-finite then makes 0. One number, two entries, and the wrong one silently wins.
+ *
+ * It names the member the LAST declaration made, as idl_optional_from and idl_arg_default do, and it must be
+ * stated for EVERY member declaring a length-differing split: idl_args_seal walks the platform and asserts it,
+ * so a member that forgot cannot reach a conversion. */
+void idl_overload_split_optional_from(int longer_first_optional);
 
 /* §3.6 STEP 14.2'S DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a position, beside "the page
    passed one" and "the argument is absent", and exactly the distinction IdlDictDefault already draws for a

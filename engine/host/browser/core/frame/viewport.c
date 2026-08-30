@@ -275,7 +275,11 @@ JSValue viewport_env_value(JSContext *ctx, const char *member, JSValue computed)
  * SCROLL STEPS) is asserted against `scrollTo`, the member whose arrival means a scrolling box can be moved at
  * all, so the step that would have to drain doc's pending scroll events names itself first. §6's
  * `scrollTop`/`scrollLeft` setter reaches `viewport_scroll` below and moves nothing: its clamp collapses to the
- * position the viewport already has, which is asserted there. */
+ * position the viewport already has, which is asserted there. SO DO §6's `scroll()`, `scrollTo()` and
+ * `scrollBy()` ON AN ELEMENT, at their steps 8 and 9 — a root element and a quirks-mode body route to this
+ * viewport algorithm by name, which is why the probe above names `scrollTo` ON THE GLOBAL and not the member
+ * name alone: the WINDOW member is the one whose arrival means the viewport can be moved, and an ELEMENT
+ * member of the same name reaches this clamp exactly as the setter does. */
 double viewport_scroll_x(JSContext *ctx)
 {
     (void)ctx;

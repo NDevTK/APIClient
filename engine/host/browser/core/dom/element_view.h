@@ -49,7 +49,9 @@
  *   over a SUBTREE has followed them: §2's scrolling area is derived, so `scrollWidth` answers and the setter's
  *   step 10 decides its own overflow disjunct out of it. What still crashes here names a term the cascade never
  *   carried or an algorithm outside this section rather than "there is no layout": `getClientRects()` wants
- *   step 3's transforms APPLIED, and the setter's last step wants §3.1's SCROLL AN ELEMENT and a scroll
+ *   step 3's transforms APPLIED, and §6's own last step — the setter's and the three scroll members', one
+ *   site — wants §6.1 Element Scrolling Members' SCROLL AN ELEMENT (which is where "to scroll an element … to
+ *   x,y" is stated; §3.1 Scrolling is the PERFORM A SCROLL that one ends in) and a scroll
  *   position held as per-flow state. CSSOM VIEW §7's offset family is the measure of
  *   how far that is: core/html/html_element_view.c reports `offsetWidth` and `offsetTop` for an ordinary box
  *   out of these same two components, because §7's own text says UNSCALED and IGNORING TRANSFORMS where §6's
@@ -88,10 +90,13 @@
  * SO THE VIEWPORT HAS ONE VALID SCROLL POSITION AND SO DOES EVERY ELEMENT. viewport.h derives the first: the
  * viewport's scrolling area is the ICB, and a scrolling box whose scrolling area is its own size can only sit
  * at its origin. The second is derived rather than assumed: the origin of a scrolling area is defined AT the
- * element's default scroll position, a scroll position moves only when §3.1's PERFORM A SCROLL runs, and the
- * only route to that for an element is the `scrollTop`/`scrollLeft` setter below — which DFAILs rather than
- * scrolling. So "no element has been scrolled" is true BY CONSTRUCTION, which is what makes the getters' final
- * step a derivation and not a shrug, and the DFAIL is what keeps it true.
+ * element's default scroll position, a scroll position moves only when §3.1's PERFORM A SCROLL runs, and every
+ * route to that for an element ends at ONE crash — §6 writes the same two last steps for the
+ * `scrollTop`/`scrollLeft` setter and for `scroll()`/`scrollTo()`/`scrollBy()`, and element_view.c states them
+ * once (`ev_scroll_the_element_or_terminate`) rather than twice. So "no element has been scrolled" is true BY
+ * CONSTRUCTION, which is what makes the getters' final step a derivation and not a shrug, and the DFAIL is what
+ * keeps it true. IT MUST STAY ONE SITE: a second copy of that crash is a second description of one absence,
+ * and the one nobody deletes is the one that goes on naming work that is already done.
  *
  * THE CONCOLIC POLICY IS INHERITED, NOT RE-DECIDED. A member that reports the viewport's size reports a UA
  * CHOICE, so it carries the modelled geometry as the EXAMPLE of a concolic minted through viewport.h's one seam
@@ -143,10 +148,26 @@
  * the EXAMPLE and hands the pair to viewport.h's one seam, and a box whose size the author pinned arrives with
  * no fact to mint. Propagation from the operand, never a second policy.
  *
- * WHAT IS HONESTLY ABSENT: `checkVisibility`, `scrollIntoView`, `scroll`, `scrollTo`, `scrollBy` and
- * `currentCSSZoom`. `checkVisibility` needs a flat-tree walk over computed `content-visibility`, `visibility`
- * and `opacity`; the three scroll methods are §6's Promise-returning form of the setter below and arrive with
- * the Promise the perform-a-scroll steps return. The IDL audit reports all of them, which is correct. */
+ * WHAT IS HONESTLY ABSENT: `checkVisibility`, `scrollIntoView` and `currentCSSZoom`. `checkVisibility` needs a
+ * flat-tree walk over computed `content-visibility`, `visibility` and `opacity`. `scrollIntoView` is not the
+ * three members beside it wearing another name: §6.1 Element Scrolling Members gives it two algorithms of its
+ * own — DETERMINE THE SCROLL-INTO-VIEW POSITION, which aligns the target's bounding border box against a
+ * scrolling box's four flow-relative edges under `block`/`inline` of "start"/"center"/"end"/"nearest", and
+ * SCROLL A TARGET INTO VIEW, which walks "each ancestor element or viewport that establishes a scrolling box,
+ * in order of innermost to outermost" and settles one Promise over the set. Neither is expressible while an
+ * element has no ASSOCIATED SCROLLING BOX, which is the first of the two absences the crash in element_view.c
+ * names; the ancestor walk is that same question asked once per ancestor. The IDL audit reports all three,
+ * which is correct.
+ *
+ * WHAT WAS ON THAT LIST AND SHOULD NOT HAVE BEEN: `scroll`, `scrollTo` and `scrollBy`, which stood here as
+ * "§6's Promise-returning form of the setter below" that "arrive with the Promise the perform-a-scroll steps
+ * return". The first half is right and the second was over-broad by nine of §6's eleven steps. Only step 11
+ * performs a scroll. Steps 3 through 9 are the four questions this component already answers plus the two
+ * VIEWPORT routes the setter beside them was already taking — a root element scrolls the window, and so does a
+ * quirks-mode body that is not potentially scrollable — and §6's own steps 4, 5, 7 and 10 RETURN A RESOLVED
+ * PROMISE with no scroll at all. A member is absent when its ALGORITHM cannot run, never when its last step
+ * cannot; the ones that reach step 11 crash there exactly as the setter does, and that crash is now one site
+ * for both. Reading a member's hardest step as the member is how a buildable one stays on an absent list. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_VIEW_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ELEMENT_VIEW_H
 
