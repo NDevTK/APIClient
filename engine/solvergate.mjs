@@ -471,13 +471,33 @@ async function child(docPath, schedName) {
          grammar's word for exactly that, a POSITIVE claim this gate is entitled to make about fixtures
          nothing embeds. An EMPTY FIELD IS NOT THE SAME CLAIM — it is a host that stopped writing the field,
          which the engine refuses, because reading silence as the empty list is what tells a cross-origin
-         frame it is the top of its own tree, and no page can tell that from the truth. */
+         frame it is the top of its own tree, and no page can tell that from the truth.
+         `creationSandboxFlags` IS HTML §7.1.5 "Sandboxing"'s CREATION SANDBOXING FLAG SET for that same
+         navigable — a FOURTH statement about it, and the one this driver went short on next. §7.1.5's
+         determine-the-creation-sandboxing-flags is "given null or an element embedder, return the union of the
+         flags that are present in the following sandboxing flag sets: if embedder is null, then the flags set
+         on browsing context's popup sandboxing flag set; if embedder is an element, then the flags set on
+         embedder's iframe sandboxing flag set; [and] … on embedder's node document's active sandboxing flag
+         set". This gate's fixtures have NO embedder — the same absence `parentNavigable` and `containerPolicy`
+         each state one algorithm over — so only the first arm applies, and §7.1.5 says of that set: "Every
+         top-level browsing context has a popup sandboxing flag set… When a browsing context is created, its
+         popup sandboxing flag set must be empty. It is populated by the rules for choosing a navigable and the
+         obtain a browsing context to use for a navigation response algorithm", and this driver runs neither.
+         The union is EMPTY, and `none` is that grammar's word for it — a POSITIVE claim on `ancestorOrigins`'
+         rule: core/frame/sandboxing.c's sandbox_flags_of_serialized refuses an empty field, because an empty
+         one is a host that stopped writing it and reading that as the empty set is what would let a
+         cross-origin `<iframe sandbox>` child run the scripts its embedder's markup forbids.
+         IT IS STATED, NOT DERIVED FROM THE `u` PARENT BESIDE IT. main.c says outright that the two navigables
+         its entry roots — a top-level traversable and one a PEER created — are told apart by nobody there, so
+         a zero would be right for one of them and the absence of an answer for the other; each fact crosses on
+         its own. */
       const operands = abiOperands("Init", "qjs_init", {
         document: [hp, u8.length], url, docId: name, headers: "", topLevelUrl: url,
         inheritedCsp: "", inheritedCspSelfOrigin: "",
         inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
         inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
         parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none",
+        creationSandboxFlags: "none",
       }, e.cs);
 
       /* THE TYPE LIST IS THE OPERAND LIST'S OWN LENGTH — a wasm operand is a number whatever the declared
