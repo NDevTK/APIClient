@@ -19,7 +19,7 @@
  * Usage:  node engine/test262.mjs [subdir]     e.g. node engine/test262.mjs built-ins/Array
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
@@ -45,6 +45,42 @@ const target = sub ? (sub.startsWith("/") ? sub : join("test262", "test", sub)) 
 const isFile = sub.endsWith(".js");
 const dir = isFile ? null : target;
 const SRCS = ["quickjs.c", "libregexp.c", "libunicode.c", "dtoa.c", "quickjs-libc.c", "run-test262.c"];
+
+/* WHAT THE CONF DECIDED, READ HERE SO THE SUMMARY CAN NAME IT. Two of this gate's numbers are functions of
+   test262.conf and the summary quoted neither: the `skipped` total is decided by the [features] section, and the
+   DENOMINATOR of the result itself is decided by one `mode=` line. A summary that prints a number whose meaning
+   lives in another file, without saying which meaning, hands the reader a quantity they cannot check. */
+const CONF = join(QJS, "test262.conf");
+const confSkipFeatures = [];
+let confMode = null;
+{
+  let section = "";
+  for (let line of readFileSync(CONF, "utf8").split(/\r?\n/)) {
+    line = line.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    if (line.startsWith("[")) { section = line.slice(1, -1); continue; }
+    const eq = line.indexOf("=");
+    const k = (eq < 0 ? line : line.slice(0, eq)).trim();
+    const v = eq < 0 ? "" : line.slice(eq + 1).trim();
+    if (section === "config" && k === "mode") confMode = v;
+    /* `no` and `skip` both disable a feature in run-test262's load_config; `Atomics=!tcc` is a compiler
+       condition and not a skip, so matching the two words exactly is what keeps it out of this list. */
+    else if (section === "features" && (v === "skip" || v === "no")) confSkipFeatures.push(k);
+  }
+}
+/* THE ONLY MODES THAT PERFORM THE EXECUTIONS THE ORACLE DEMANDS. test262 INTERPRETING.md "Strict Mode": a file
+   flagged none of noStrict/onlyStrict/module/raw MUST be executed twice, sloppy and strict. Every other mode
+   runs such a file ONCE — and because the FILE was collected, that missing execution appears in no exclusion
+   list, no skip count and no NOT-RUN line. It is the excluded-test failure with nothing anywhere to name it. */
+const modeRunsBoth = confMode === "all" || confMode === "both";
+/* A LIST IS PRINTED WHOLE OR IT IS NOT EVIDENCE. Truncating the skip entries to the interesting few would put
+   this summary back in the business of choosing what the reader gets to check, which is the habit the line
+   below exists to end; so it wraps instead of eliding. */
+const wrapList = (items, perLine, indent) => {
+  const rows = [];
+  for (let i = 0; i < items.length; i += perLine) rows.push(indent + items.slice(i, i + perLine).join(", "));
+  return rows.join("\n");
+};
 
 if (!existsSync(CORPUS)) {
   console.error("[test262] corpus missing — check it out:\n" +
@@ -150,6 +186,18 @@ const m = out.match(/Result: (\d+)\/(\d+) errors/);
    The numbers are printed so that gap is visible rather than inferred. */
 const excl = out.match(/errors?, (\d+) excluded/);
 const skip = out.match(/(\d+) skipped/);
+/* AND WHICH KIND OF NOT-RUN EACH ONE IS. The line above reported the whole skipped total as "skipped for
+   unlisted features", and the unlisted count was ZERO: every one of them was a file matching a deliberate
+   `=skip` in test262.conf's [features]. That is the defect this project keeps finding — several states behind
+   one number — performed on the very line built to expose it, and the two states it merged fail in opposite
+   directions: a deliberate skip is a decision to re-examine when a capability lands, while an unlisted feature
+   is a name nobody wrote down, which the next corpus update produces silently and for free.
+   run-test262 distinguishes them itself: it prints `unknown feature: X` for a name absent from [features] and
+   nothing at all for one carrying `=skip`. So the split is MEASURED here, never inferred. The warning is
+   emitted once per unknown feature per file, so its LINE COUNT is not a file count and is not reported as one —
+   what it establishes is the NAMES, and whether the number is zero. */
+const unknownFeatLines = out.match(/^\S+\.js:\d+: unknown feature: \S+/gm) || [];
+const unknownFeats = [...new Set(unknownFeatLines.map((l) => l.replace(/^.*unknown feature: /, "")))].sort();
 /* TWO LEAK DETECTORS, AND THIS COUNTED ONLY ONE. `[gcleak]` is the gc_obj_list walk in JS_FreeRuntime — it
    sees a leaked GC OBJECT. run-test262 keeps its OWN malloc accounting and prints `Memory leak: N bytes lost
    in 1 block` for a raw allocation that never came back, which the gc walk cannot see because it is not a GC
@@ -180,7 +228,14 @@ const wholeCorpus = !sub;
 /* `Memory leak` is excluded ANYWHERE in the line, not just right after the `:N: `. run-test262 is
    multi-threaded and two workers can interleave mid-line, producing `fileA:1: fileB:1: Memory leak: …` — a
    lookahead anchored at the prefix lets that through and the summary then lists non-failures as failures. */
-const failLines = (out.match(/^\S+\.js:\d+: [^\n]*/gm) || []).filter((l) => !/Memory leak/.test(l));
+/* AND `unknown feature` IS THE SAME TRAP, ONE LINE LATER. run-test262 emits its unlisted-feature warning in the
+   IDENTICAL `<file>:<line>: <message>` shape as a failure, so a corpus update that introduces a feature nobody
+   has listed would fill this FAILING list with files that did not fail — they were SKIPPED. It is invisible
+   while the unlisted count is zero, which is exactly why it has to be excluded now rather than when it fires:
+   the verdict is unaffected (that comes from run-test262's own test_failed) so nothing would go red, and the
+   only symptom would be a reader hunting phantom failures in files that never ran. */
+const failLines = (out.match(/^\S+\.js:\d+: [^\n]*/gm) || [])
+  .filter((l) => !/Memory leak/.test(l) && !/unknown feature:/.test(l));
 /* FEATURE ENGAGEMENT: a passing result does NOT prove time-travel ran on the test logic. The engine reports
    preempt-requested vs fired; requested>fired means the feature was gated somewhere (nested async/generator
    activation) and the run passed tests it silently SKIPPED — a fake green. A well-engineered test for all
@@ -234,8 +289,30 @@ else {  console.log(`  ${m[1]}/${m[2]} errors, ${leaks} leaks` +
                       (failLines.length > 12 ? `\n    … and ${failLines.length - 12} more` : ""));
         if ((excl && +excl[1] > 0) || (skip && +skip[1] > 0))
           console.log(`  NOT RUN: ${excl ? excl[1] : 0} excluded by test262.conf, ${skip ? skip[1] : 0} skipped ` +
-                      `for unlisted features — the count above is over what remained`);
+                      `for a feature — the count above is over what remained`);
+        if (skip && +skip[1] > 0)
+          console.log(unknownFeats.length
+            ? `    …of which ${unknownFeats.length} feature name(s) are in NOBODY'S LIST (${unknownFeatLines.length} warning ` +
+              `line(s)) — list or =skip them in test262.conf [features]: ${unknownFeats.join(", ")}`
+            : `    …NONE for an unlisted feature: every one matches a deliberate =skip in test262.conf [features], ` +
+              `each of which names the capability whose arrival retires it —\n` +
+              wrapList(confSkipFeatures, 6, "      "));
      }
+/* WHICH EXECUTIONS THE DENOMINATOR IS OVER, said at the place the number is read. run-test262 counts test_count
+   per EXECUTION, so under a both-modes config the total is executions and under any other it is files — the
+   same printed number meaning two different things with nothing to distinguish them. */
+if (m) console.log(modeRunsBoth
+  ? `  mode=${confMode} — each collected file executed BOTH sloppy and strict unless flagged ` +
+    `noStrict/onlyStrict/module/raw, so the count above is EXECUTIONS, not files`
+  : `  mode=${confMode}  <-- HALF-RUN: a file flagged none of noStrict/onlyStrict/module/raw is executed in ONE\n` +
+    `        mode where test262 INTERPRETING.md "Strict Mode" requires TWO. Those strict executions are in no\n` +
+    `        exclusion list and no skip count — the FILE was collected, so the total above looks complete.`);
+/* THE BUDGET, MEASURED, ON EVERY RUN AND NOT ONLY WHEN IT FIRES. It was printed only on the kill arms, so the
+   one question a reader needs in order to size it — how much of it a healthy run actually spends — was never
+   answered by a healthy run. A limit nobody can see the headroom of is a limit that gets raised by guesswork. */
+if (m) console.log(cpuUsed === null
+  ? `  cpu: ${cpuText(cpuUsed)} — this run's headroom under the ${CPU_BUDGET_S}s budget is therefore UNKNOWN`
+  : `  cpu: ${cpuText(cpuUsed, 2)} consumed of the ${CPU_BUDGET_S}s budget`);
 if (notEngaged) {
   console.log("  feature: NOT ENGAGED (0 back-edges)  <-- proves NOTHING: no loop ever suspended/resumed in this run");
 } else if (f) {
@@ -270,7 +347,15 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
 }
 console.log("===========================================================");
 /* fail on: crash, spec errors, leaks, a NOT-ENGAGED run (0 back-edges proves nothing), fake-green (engagement
-   < 100%), OR any drive-to-completion. */
+   < 100%), a HALF-RUN config, OR any drive-to-completion. */
+/* A HALF-RUN CANNOT REPORT GREEN. An excluded test is a failure, and a required execution that never happens is
+   an excluded test whose file was collected — so the only thing standing between it and a green summary is this
+   line. It is gated on a WHOLE-CORPUS run for the same reason the leak ceiling is: a one-off `-d` probe under
+   `mode=strict` is a deliberate question about one axis, not the gate, and its number is not comparable. */
+const halfRun = wholeCorpus && !!m && !modeRunsBoth;
+if (halfRun)
+  console.error(`test262.conf has mode=${confMode}: this run performed ONE execution for every file the suite ` +
+                `requires TWO of. Set mode=all — a gate that under-runs must not exit 0.`);
 const fakeGreen = notEngaged ? true : (f ? (+f[4] > 0) : true);
 let leakBad = gcLeaks > 0;
 if (wholeCorpus && m) {
@@ -283,4 +368,4 @@ if (wholeCorpus && m) {
     leakBad = true;
   }
 }
-process.exit((!m || +m[1] > 0 || leakBad || fakeGreen || driveN > 0) ? 1 : 0);
+process.exit((!m || +m[1] > 0 || leakBad || fakeGreen || driveN > 0 || halfRun) ? 1 : 0);
