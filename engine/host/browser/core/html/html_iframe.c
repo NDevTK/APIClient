@@ -39,6 +39,7 @@
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_proxy.h"
 #include "core/url/url.h"   /* §4.8.5's shared attribute processing steps ask whether a url MATCHES about:blank */
+#include "solver/concolic.h"   /* `src` is a slot a SOURCE can be stashed in — the destination keeps its triple */
 #include "solver/engine.h"
 #include "solver/flow.h"
 #include "solver/world.h"
@@ -112,6 +113,105 @@ bool iframe_has_navigable(JSContext *ctx, JSValueConst wrap)
     return had;
 }
 
+/* HTML §4.8.5 "The `iframe` element"'s `src`, READ AS THE VALUE IT IS BEFORE IT IS ASKED FOR BYTES — the one
+ * gate both of this file's DESTINATIONS pass through.
+ *
+ * WHY IT IS A FUNCTION WITH TWO CALLERS AND NOT AN `if` AT EACH OF THEM. Two entries here build a destination
+ * out of this one attribute. One is the shared attribute processing steps for `iframe` and `frame` elements'
+ * step 2 — "let maybeURL be the result of ENCODING-PARSING A URL given that attribute's value, relative to
+ * element's node document" — which is what an attribute WRITE navigates an existing content navigable to. The
+ * other is iframe_create_navigable, and its `src` read is THIS ENGINE'S rather than the standard's: the iframe
+ * HTML element post-connection steps are three steps, of which step 2 is "create a new child navigable for
+ * insertedNode" (HTML §7.3.1.3 "Child navigables", which takes no url and navigates nothing) and step 3 is
+ * process-the-iframe-attributes with initialInsertion true, and navigable_create FOLDS that navigate into the
+ * create — the fold iframe_process_attributes' own `initial_insertion` test exists to compensate for. So the
+ * two reads are two algorithms in the standard and two callers here for the same reason, and each names its
+ * own at the call. An entry that skipped the question would not report a missing capability — it would report
+ * core/dom/element.c's BYTES accessor failing on a value that accessor should never have been shown, which is
+ * CLAUDE.md §A-QUESTION-SOME-ENTRIES-ASK's crash landing in the wrong file.
+ *
+ * AND THAT ACCESSOR'S REMEDY IS WRONG FOR THIS FILE, which is the whole reason the question is asked here
+ * rather than left to it. element_attr_get tells a site to "read it with element_attr_get_value and carry the
+ * value", and that is right for a component that can HOLD a JSValue — core/html/hyperlink.c takes the value
+ * and makes its own §4.6.5 assertion over it. There is nothing here to carry it TO: navigable_create and
+ * navigable_navigate both take a `const char *`, so a value read and not converted is converted one line
+ * later or dropped. What is missing is not the read. It is the DESTINATION, and it is the same capability
+ * core/frame/navigable.c's §7.2.2.1 window-open residual names from the other side of the same gap.
+ *
+ * THE TWO ARMS ARE DIFFERENT CAPABILITIES RATHER THAN TWO SPELLINGS OF ONE, exactly as they are at
+ * core/frame/history.c's §7.2.5 step 5. WITH AN EXAMPLE the run COMPUTED a real address by running the real
+ * operations on real concretes (`"/embed/" + {reply}.id` ⇒ `/embed/8812`) — a page the bundle NAMES, which no
+ * link exposes and no session reached, which is §What-the-tool-produces' whole subject. WITH NO EXAMPLE the
+ * run does not know where this frame points, and §4.8.5's step 2 has nothing to encoding-parse; falling to its
+ * step 1 `about:blank` would CHOOSE that arm silently, so a document reachable only through a computed `src`
+ * would contribute nothing and the frame would be indistinguishable from an ordinary srcless one.
+ *
+ * IT DOES NOT TAKE THE EXAMPLE AND WRITE IT INTO THE BYTES. That collapses a value that is opaque-for-control-
+ * flow to bare-concrete, so a later `frame.contentWindow.location.pathname.startsWith("/admin")` would be
+ * DECIDED where it must FORK, and the arm would be gone with nothing to say so. It does not take the SHAPE
+ * either: this string is fetched, over the person's own session, by the one chokepoint — a shape seeds an
+ * address no server has and then the reply's fields are examples that shape the next endpoint.
+ *
+ * Answers OWNED bytes, or NULL for an attribute that is absent — §4.8.5 asks presence and value separately and
+ * so must this, which is why an absent `src` and `src=""` do not arrive here as one answer. */
+static char *iframe_src_destination(JSContext *ctx, JSValueConst wrap, const char *algorithm)
+{
+    JSValue v = element_attr_get_value(ctx, wrap, "src");
+    const char *c;
+    char *out = NULL;
+
+    DCHECK(algorithm != NULL, "§4.8.5's `src` was read for a destination by a caller that did not name the "
+                              "algorithm reading it — the two entries are two different steps of two different "
+                              "sections and the assert below is the only place that difference is visible");
+#if APICLIENT_DEV
+    if (concolic_is(v)) {
+        const char *sh = concolic_shape_c(v);
+        JSValue ex = concolic_example(ctx, v);
+        int has_example = !JS_IsUndefined(ex);
+
+        JS_FreeValue(ctx, ex);
+        DCHECK(sh != NULL,
+               "an unknown reached §4.8.5's `src` with no display shape — the shape is the only thing this "
+               "site can say about a destination it cannot know, and a value that has lost it names neither "
+               "the frame that was pointed somewhere nor the source it was pointed there from");
+        DFAILF("%s read an `<iframe>`'s `src` and it holds UNKNOWN EXTERNAL INPUT `%s`, and %s. This is the "
+               "one gate both of this file's destinations pass through, and the value becomes an address this "
+               "engine FETCHES. DO NOT COERCE IT AND DO NOT TAKE ITS SHAPE. %s",
+               algorithm, sh,
+               has_example ? "IT CARRIES A CONCRETE EXAMPLE, so the run computed a real address"
+                           : "IT CARRIES NO EXAMPLE, so the run does not know where this frame points",
+               has_example
+                 ? "BUILD: a child navigable whose ADDRESS carries an EXAMPLE AND A DOMAIN, so the create's "
+                   "load and §4.8.5's navigate take the computed address while a later read of that frame's "
+                   "`location.pathname` still forks. Writing the bare example into the bytes below instead "
+                   "collapses an opaque-for-control-flow value to bare-concrete and silently deletes that arm. "
+                   "It is the same capability core/frame/navigable.c's §7.2.2.1 residual names for "
+                   "`window.open`, reached from the element side."
+                 : "BUILD: the child navigable whose DESTINATION IS UNKNOWN. §4.8.5's shared attribute "
+                   "processing steps step 2 encoding-parses \"that attribute's value\" and there is no value "
+                   "to parse; taking step 1's about:blank instead would choose that arm silently, and the "
+                   "frame would then be indistinguishable from a srcless one.");
+    }
+#endif
+    if (!JS_IsNull(v) && !JS_IsException(v)) {
+        c = JS_ToCString(ctx, v);
+        /* FATAL RATHER THAN "THE ATTRIBUTE IS ABSENT", which is what core/dom/element.c's bytes accessor
+           answers here and is the concealment CLAUDE.md §A-FIELD-A-CONSUMER-DEFAULTS names: a frame silently
+           left at about:blank with a throw still pending, and a destination gone with nothing saying so. Two
+           things reach it — OOM, and a RELEASE build where the arm above is compiled out and a concolic's
+           ToString throws — and the second is precisely the case that must not be swallowed. */
+        CHECK(c != NULL,
+              "§4.8.5's `src` would not convert to bytes: either the allocation failed, or this is a release "
+              "build and the attribute holds unknown external input, whose ToString has no concolic semantics "
+              "— a dev build names the capability to build at the arm above this line");
+        out = strdup(c);
+        CHECK(out != NULL, "§4.8.5: OOM copying an `<iframe>`'s destination");
+        JS_FreeCString(ctx, c);
+    }
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
 void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
 {
     char *src, *name, *sandbox;
@@ -128,7 +228,11 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
        the attribute keeps its value. Both are read through the DOM chokepoint so the read stays in the running
        flow's delta — a flow that set `src` and a sibling that did not create different children, which is the
        whole reason the navigable is per-flow. */
-    src  = element_attr_get(ctx, wrap, "src");
+    src  = iframe_src_destination(ctx, wrap,
+                                  "HTML §4.8.5 \"The `iframe` element\"'s iframe HTML element post-connection "
+                                  "steps step 2, \"create a new child navigable for insertedNode\" "
+                                  "(HTML §7.3.1.3 \"Child navigables\"), into which this engine folds step "
+                                  "3's navigate");
     name = element_attr_get(ctx, wrap, "name");
     /* §7.1.5's IFRAME SANDBOXING FLAG SET: "every iframe element has an iframe sandboxing flag set … which
        flags in it are set at any particular time is determined by the iframe element's sandbox attribute."
@@ -203,7 +307,9 @@ void iframe_create_navigable(JSContext *ctx, JSValueConst wrap)
  * event steps nor the navigate runs. */
 static bool iframe_shared_attribute_steps(JSContext *ctx, JSValueConst wrap, char **out_url, bool *out_blank)
 {
-    char *src = element_attr_get(ctx, wrap, "src");
+    char *src = iframe_src_destination(ctx, wrap,
+                                       "HTML §4.8.5 \"The `iframe` element\"'s shared attribute processing "
+                                       "steps for `iframe` and `frame` elements, step 2's encoding-parse");
     UrlRecord base, rec;
     const char *base_url;
     bool have_base, parsed = false;
@@ -352,15 +458,22 @@ void iframe_process_attributes(JSContext *ctx, JSValueConst wrap, bool initial_i
 void iframe_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, const char *local)
 {
     lxb_dom_node_t *n = lxb_dom_interface_node(el);
-    JSValue wrap;
-    char *srcdoc;
+    JSValue wrap, srcdoc;
+    bool has_srcdoc;
 
     if (ns && *ns) return;
     DCHECK(local != NULL, "§4.8.5 was asked about an attribute change with no attribute name");
     if (!iframe_element_is(n) || strcmp(local, "src")) return;
     wrap = node_wrap(ctx, n);
-    srcdoc = element_attr_get(ctx, wrap, "srcdoc");
-    if (!iframe_has_navigable(ctx, wrap) || srcdoc) { free(srcdoc); JS_FreeValue(ctx, wrap); return; }
+    /* "NO `srcdoc` ATTRIBUTE SPECIFIED" IS A PRESENCE TEST, so it asks for the VALUE and not for bytes — the
+       same distinction core/html/hyperlink.c's link_has_activation draws over `href`. A frame whose `srcdoc` a
+       flow tainted still HAS a srcdoc, and stringifying it merely to learn that it is there is a de-taint that
+       buys nothing: it would abort in core/dom/element.c's bytes accessor, one attribute away from the `src`
+       this function was called about, and name a capability neither this condition nor that write needs. */
+    srcdoc = element_attr_get_value(ctx, wrap, "srcdoc");
+    has_srcdoc = !JS_IsNull(srcdoc) && !JS_IsException(srcdoc);
+    JS_FreeValue(ctx, srcdoc);
+    if (!iframe_has_navigable(ctx, wrap) || has_srcdoc) { JS_FreeValue(ctx, wrap); return; }
     iframe_process_attributes(ctx, wrap, /*initialInsertion*/ false);
     JS_FreeValue(ctx, wrap);
 }
