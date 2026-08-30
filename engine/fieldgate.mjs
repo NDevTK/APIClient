@@ -1057,6 +1057,159 @@ function swallowingTrySpans(struct) {
 
 const inSpan = (spans, off) => spans.some(([a, b]) => off >= a && off < b);
 
+/* ---- the type an `instanceof` GUARD states, and the EXTENT over which it states it -------------------------- */
+
+/* A DECLARATION IS NOT ALWAYS A DECLARATOR. Everything §the PLATFORM receiver reads is a construct that names a
+ * type at the point the object is CREATED or HANDED OVER — `new URL(x)`, `await fetch(u)`, an IDL-typed callback
+ * parameter, the arguments a local helper is called with — and a union-typed parameter has no such construct at
+ * all. Fetch §5.4's `fetch(input, init)` takes a `RequestInfo`, which is `Request or USVString`, and the page's
+ * own wrapper of it then asks the question the spec's union leaves open, in the way the language provides:
+ * `input instanceof Request ? input.url : String(input)`. That test IS the declaration, and reading it is the
+ * same kind of fact as reading a `#define` body — nothing is followed through an assignment, a return or a
+ * promise; the guard and the read it guards are ONE expression.
+ *
+ * WITHOUT IT THE SHAPE ANCHOR ANSWERS, AND IT ANSWERS CONFIDENTLY AND WRONGLY. `input` reads `url` and `method`
+ * and `init` reads `body` and `method`; those are names of the capture record `emit()` composes, so two of them
+ * intersect an emitted shape and the ≥2 rule anchors a Fetch §5.4 Request to it. §the PLATFORM receiver's own
+ * paragraph anticipated exactly that receiver — "a platform object whose members happen to collide with two of
+ * an emitted record's names is exactly the receiver the shape rule anchors CONFIDENTLY and wrongly" — and asked
+ * `ifaceOfExpr` first to prevent it; the prevention only works where `ifaceOfExpr` can answer, and for a
+ * narrowed union it could not. A wrong anchor is worse than an undecided one in both directions at once: the
+ * receiver's remaining IDL members are then scored against a record that never had them, and the record's own
+ * audit budget is spent on an object that is not it.
+ *
+ * THE EXTENT IS THE WHOLE OF THE RIGOUR, because `input instanceof Request` says nothing about `input` anywhere
+ * else in the body. So a guard carries a SPAN, taken from the construct that scopes it and from nothing else:
+ *   - a ternary's CONSEQUENT — `x instanceof R ? x.f : …` — from the `?` to its matching `:`;
+ *   - the right operand of `&&`, which is evaluated only where the left held, so the walk steps over `&&` and
+ *     keeps looking rather than stopping;
+ *   - an `if`'s CONSEQUENT, braced or a single statement, when the test's own paren is what the walk ran out to.
+ * A read outside every such span is not narrowed, and a receiver read both inside and outside one is a union
+ * this cannot collapse — which is AMBIGUOUS at the anchor, never an answer.
+ *
+ * NAMED RESIDUAL — THE NEGATED EARLY-RETURN GUARD. `if (!(x instanceof R)) return;` narrows `x` for the rest of
+ * the body, and nothing here reads it: that is CONTROL FLOW rather than a construct, and every other rule in
+ * this file is lexical. The next diff that wants it builds a "the statement list after a test whose every arm
+ * leaves the block" primitive — `alwaysThrowingNames` is the same shape of question already asked once here.
+ * Its absence shows as a receiver in AMBIGUOUS, or anchored by shape, whose reads are all members of one
+ * interface and whose function opens with a negated `instanceof` test; it never shows as a wrong interface,
+ * because a guard this does not see narrows nothing.
+ *
+ * NAMED RESIDUAL — THE DICTIONARY, WHICH IS THE OTHER HALF OF THE SAME RECEIVER AND IS NOT AN `instanceof`
+ * QUESTION AT ALL. `window.fetch = async function (input, init)` binds two parameters, and the one this rule
+ * fixes is `input`; `init` is the `RequestInit` declared in Fetch §5.4 Request class, which no test narrows
+ * because a DICTIONARY is not a thing anything is an instance of — Web IDL §2.7 Dictionaries defines one as
+ * "an ordered map data type with a fixed, ordered set of entries" and says an operation taking one "will
+ * perform a one-time conversion from the given JavaScript value", so there is no interface object, no
+ * prototype and nothing for `instanceof` to test; the type is stated ONLY by the operation that declares the
+ * argument. Two things are missing and they stack: `idl_members.mjs` collects
+ * `interface`, `interface mixin`, `callback interface` and `namespace` and NOT `dictionary`, so there is no
+ * member list to diff against; and there is no arm anywhere here that types the parameters of a function
+ * literal ASSIGNED TO a platform member, which is the mirror of §paramSlot's function literal PASSED TO one.
+ * The next diff builds the first (dictionaries into the member map, flattened through the inheritance §2.7
+ * gives them, as an identity kind with no subtree to narrow within) and then the second. ITS ABSENCE SHOWS as
+ * `init` reading `body` and `method` — two names of the capture record `emit()` composes — so the ≥2 shape rule
+ * anchors it to that record and it appears NOWHERE in this report, because both names have producers; the tell
+ * is that a `RequestInit` never reaches DECIDED PLATFORM while the `input` declared beside it now does. A relay
+ * that named `input` and `init` as one finding is corrected here: they are two, and only one of them is this. */
+
+/* The `:` matching a ternary `?` at `from`, or -1. Nested ternaries are counted; `?.` and `??` are neither. */
+function ternaryColon(struct, from) {
+  let d = 0, q = 0;
+  for (let i = from; i < struct.length; i++) {
+    const c = struct[i];
+    if (PAIRS[c]) { d++; continue; }
+    if (c === ")" || c === "]" || c === "}") { if (!d) return -1; d--; continue; }
+    if (d) continue;
+    if (c === "?") { if (struct[i + 1] === "?" || struct[i + 1] === ".") { i++; continue; } q++; continue; }
+    if (c === ":") { if (!q) return i; q--; continue; }
+    if (c === ";") return -1;
+  }
+  return -1;
+}
+
+/* The opener matching the closer at `close`, or -1. */
+function openerOf(struct, close) {
+  let d = 0;
+  for (let j = close; j >= 0; j--) {
+    const c = struct[j];
+    if (c === ")" || c === "]" || c === "}") d++;
+    else if (c === "(" || c === "[" || c === "{") { d--; if (!d) return j; }
+  }
+  return -1;
+}
+
+/* The span a test ending at `from` narrows, or null — the three constructs named above and nothing else. */
+function guardedSpan(struct, code, from) {
+  for (let i = from; ;) {
+    i = sig(struct, i, struct.length);
+    if (i >= struct.length) return null;
+    const ch = struct[i];
+    if (ch === "&" && struct[i + 1] === "&") { i += 2; continue; }
+    if (ch === "?" && struct[i + 1] !== "?" && struct[i + 1] !== ".") {
+      const c = ternaryColon(struct, i + 1);
+      return c < 0 ? null : [i + 1, c];
+    }
+    if (ch !== ")") return null;
+    const open = openerOf(struct, i);
+    if (open < 0) return null;
+    let k = open;
+    while (k > 0 && /\s/.test(struct[k - 1])) k--;
+    const e = k;
+    while (k > 0 && /[\w$]/.test(struct[k - 1])) k--;
+    if (code.slice(k, e) !== "if") return null;
+    const b = sig(struct, i + 1, struct.length);
+    if (struct[b] === "{") { const c = matchAt(struct, b); return c < 0 ? null : [b + 1, c - 1]; }
+    let e2 = b, d = 0;
+    for (; e2 < struct.length; e2++) {
+      const c2 = struct[e2];
+      if (PAIRS[c2]) d++;
+      else if (c2 === ")" || c2 === "]" || c2 === "}") { if (!d) break; d--; }
+      else if (c2 === ";" && !d) break;
+    }
+    return [b, e2];
+  }
+}
+
+/* Every `X instanceof E` in a file, as {recv, rhs, rhsAt, from, to}. The receiver is normalized by the SAME walk
+   a read's receiver is, so the two texts are comparable without a second normalizer; a receiver that walk
+   DECIDES against (`""` — a literal head) or cannot read (`null`) narrows nothing, which is the under-crediting
+   direction and leaves the read to every other rule here. The RHS is handed on as TEXT: what interface it names
+   is a Web IDL question, and it is asked where every other one is — in `ifaceOfExpr`, after the IDL is loaded. */
+function instanceofGuards(struct, code) {
+  const out = [];
+  const re = /\binstanceof\b/g;
+  let m;
+  while ((m = re.exec(struct))) {
+    const recv = receiverBefore(struct, code, m.index);
+    if (!recv) continue;
+    const r0 = sig(struct, m.index + m[0].length, struct.length);
+    let e = r0, d = 0;
+    for (; e < struct.length; e++) {
+      const c = struct[e];
+      if (PAIRS[c]) { d++; continue; }
+      if (c === ")" || c === "]" || c === "}") { if (!d) break; d--; continue; }
+      if (d) continue;
+      if (c === "?" && struct[e + 1] === ".") { e++; continue; }
+      if (c === "?" || c === ":" || c === "," || c === ";") break;
+      if ((c === "&" || c === "|") && struct[e + 1] === c) break;
+    }
+    const rhs = code.slice(r0, e).replace(/\s+/g, " ").trim();
+    if (!rhs) continue;
+    const span = guardedSpan(struct, code, e);
+    if (!span) continue;
+    /* A NAME REASSIGNED INSIDE ITS OWN GUARD IS NOT GUARDED, which is the SAME unambiguity rule §a binding's
+       own initializer applies one construct over: a test states what the name is at the test, and a write
+       between there and the read states that it is something else. Asked of every identifier in the chain, so
+       `e = other` inside the block disqualifies `e.data`'s guard as well as `e`'s. A write this cannot see
+       leaves the guard standing, which is the one direction that could decide wrongly — and it is why the
+       question is asked of the file's own assignment primitive rather than of a second walk. */
+    if (!(recv.match(/[A-Za-z_$][\w$]*/g) || []).some((n) => assignmentsTo(struct, n, span[0], span[1])))
+      out.push({ recv, at: m.index, rhs, rhsAt: r0, from: span[0], to: span[1] });
+  }
+  return out;
+}
+
 /* ---- receiver scope: TWO BINDINGS OF ONE SPELLING ARE TWO RECEIVERS, NOT ONE ------------------------------- */
 
 /* A RECEIVER IS ANCHORED BY ITS TEXT, AND TEXT IS ONLY A FACT INSIDE ONE SCOPE. Normalizing to source text is
@@ -1393,6 +1546,15 @@ function scanJS(file, src) {
     const base = /^[A-Za-z_$][\w$]*/.exec(recv);
     return base ? `${recv}@${binderOf(base[0], off)}` : recv;
   };
+  /* A GUARD IS KEYED LIKE A READ, not spelled like one. `keyOf` qualifies the receiver's text by the scope its
+     base name is bound in, so a nested function that shadows `input` cannot borrow the outer `input`'s guard —
+     the same fact §receiver scope records for reads, asked once here so the two cannot disagree. */
+  const guards = instanceofGuards(struct, code).map((g) => ({ ...g, key: keyOf(g.recv, g.at) }));
+  const guardedBy = (recv, off) => {
+    const k = keyOf(recv, off);
+    for (const g of guards) if (g.key === k && off >= g.from && off < g.to) return { text: g.rhs, at: g.rhsAt };
+    return null;
+  };
   const localReads = [];   // {name, recv, key, off, form}
   const localWrites = [];  // {name, off}
   const wholeDefaults = [];// {off, keys, left, op} — a `|| { … }` substituting an entire record
@@ -1616,7 +1778,7 @@ function scanJS(file, src) {
   collectAbiJS(file, src, code, struct);
 
   return { file, src, localReads, localWrites, wholeDefaults, site, initOf, binderOf, paramSlot,
-           localParamSlot, callArgsOf };
+           localParamSlot, callArgsOf, guardedBy };
 }
 
 /* ---- the RETURN-DOMAIN namespace: the one place a plausible datum is a VALUE rather than a NAME ------------ */
@@ -2317,7 +2479,18 @@ for (const s of jsScans)
     if (bestN >= 2) wholeDefaulted.push({ ...s.site(w.off), left: w.left, op: w.op, shape: best, keys: w.keys });
   }
 
-const ambiguous = [];   // a receiver that reads exactly ONE field of some emitted shape — undecidable, counted
+/* A RECEIVER WHOSE RECORD IDENTITY THIS CANNOT DECIDE — counted, never resolved either way. Every row carries
+   its own REASON, because the category now holds more than one question and a section header stating one of
+   them says the wrong thing about the rest: a reader who cannot tell which question a row is an instance of
+   cannot tell what would answer it, which is the same "three states behind one answer" this file refuses in the
+   engine. Grouped by reason on the way out, exactly as REFUSED is. */
+const ambiguous = [];   // {file, line, recv, reason, why}
+const ONE_FIELD = "a receiver reading exactly ONE field of an emitted record beside name(s) no producer writes" +
+                  " — whether the object is that record is not decidable here, so neither is whether those" +
+                  " names are the defect";
+const oneFieldWhy = (shared, unwritten) =>
+  `${shared ? `shares \`${shared}\`, also names` : "names only"} ` +
+  `${unwritten.slice(0, 4).map((n) => `\`${n}\``).join(", ")}${unwritten.length > 4 ? " …" : ""}`;
 
 /* ---- the PLATFORM receiver: a DECIDED negative, from the IDL rather than from a list ---------------------- */
 
@@ -2509,47 +2682,22 @@ function ifaceOfExpr(text, off, scan, seen) {
     const key = `${scan.file}\0${t}\0${scan.binderOf(t, off)}`;
     if (s.has(key)) return null;
     s.add(key);
-    const init = scan.initOf(t, off);
-    if (init !== null && init !== "") return ifaceOfExpr(init, off, scan, s);
-    if (scan.binderOf(t, off) === "file") return GLOBAL_IFACE.get(t) || null;
-    /* A PARAMETER OF A CALLBACK THE PLATFORM CALLS IS TYPED BY THE IDL, and by nothing else in this file. The
-       chain is three declarations long and every link is spec text: the callee's operation declares its
-       argument a callback type, that callback declares its own argument list, and the parameter's POSITION
-       picks one. Nothing is followed through an assignment or a return — a call site is a construct, and this
-       is the same kind of fact as a binding's initializer, read at the other end of the call. */
-    const slot = scan.paramSlot(t, off);
-    if (slot) {
-      const m2 = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(slot.callee);
-      if (!m2) return null;
-      const on = ifaceOfExpr(m2[1], slot.calleeAt, scan, s);
-      if (!on || on.startsWith(CTOR)) return null;
-      const cbType = argTypeName(on, m2[2], slot.arg);
-      const args = cbType && callbackArgs(cbType);
-      const a2 = args && args[slot.param];
-      return a2 ? ifaceOfType(a2.idlType) : null;
-    }
-    /* …and a parameter of a function THIS FILE declares is typed by the arguments this file passes it — see
-       §localParamSlot. The cycle guard is keyed on the FUNCTION AND SLOT rather than on the name, because a
-       recursive helper reaches its own parameter through a different binding and the name key would not see it. */
-    const lp = scan.localParamSlot(t, off);
-    if (!lp) return null;
-    const fnKey = `${scan.file}\0fn:${lp.fnName}#${lp.param}`;
-    if (s.has(fnKey)) return null;
-    s.add(fnKey);
-    const passed = scan.callArgsOf(lp.fnName, lp.param, lp.declParen);
-    if (!passed || !passed.length) return null;
-    let one = null;
-    for (const a of passed) {
-      /* EACH CALL SITE GETS ITS OWN COPY OF THE GUARD, because two sites passing the SAME identifier are not a
-         cycle and reading them as one answered the whole question `null`. `_urlList(parsed.href, resp)` appears
-         four times in one body; with a shared set the first `resp` resolved, added its key, and the second read
-         its own answer as a loop — so a helper called consistently was decided only when its callers happened
-         to spell the argument differently, which is the tokenizer deciding, not the constructs. */
-      const got = ifaceOfExpr(a.text, a.at, scan, new Set(s));
-      if (!got || (one !== null && one !== got)) return null;
-      one = got;
-    }
-    return one;
+    /* THE BINDING FIRST, THE GUARD ONLY WHERE THE BINDING SAYS NOTHING — one identity, asked in one order, so
+       there are never two answers to compare. Everything below states what the binding IS, everywhere in its
+       scope; a guard states what it is HERE, and a name whose declaration already names an interface is
+       narrowed by `narrowIdentity` within that interface's own subtree rather than by a second mechanism.
+       So the guard is the LAST resort, which is exactly the position §the PLATFORM receiver leaves open: a
+       receiver whose declaration this cannot resolve. The RHS of the test is an ordinary expression and is
+       resolved by this same function, so `x instanceof Request` and `x instanceof window.Request` are one
+       question — and Web IDL §3.7.3 makes the answer an interface OBJECT, whose instances are the interface,
+       which is the one step `ctor:` already spells. A test against anything else names no interface and
+       narrows nothing. */
+    const bound = identityOfBinding(t, off, scan, s);
+    if (bound) return bound;
+    const g = scan.guardedBy(t, off);
+    if (!g) return null;
+    const ctor = ifaceOfExpr(g.text, g.at, scan, new Set(s));
+    return ctor && ctor.startsWith(CTOR) ? ctor.slice(CTOR.length) : null;
   }
   /* A trailing `(…)` is a CALL and a trailing `.name` is a member; both are stripped right to left, so
      `document.getElementById(i)` is Document's `getElementById` and nothing has to be parsed forward. */
@@ -2578,6 +2726,54 @@ function ifaceOfExpr(text, off, scan, seen) {
     return memberIface(base, m[2], "attribute");
   }
   return null;
+}
+
+/* WHAT A BARE NAME'S OWN BINDING SAYS IT IS — the initializer, the global, the IDL-typed callback parameter, the
+   local parameter typed by its call sites. Every arm is a construct at the DECLARATION; none of them is a fact
+   about the point of use, which is why the caller can fall through to a guard when they all answer nothing. The
+   cycle guard is the caller's, because it is the caller that keys it. */
+function identityOfBinding(t, off, scan, s) {
+  const init = scan.initOf(t, off);
+  if (init !== null && init !== "") return ifaceOfExpr(init, off, scan, s);
+  if (scan.binderOf(t, off) === "file") return GLOBAL_IFACE.get(t) || null;
+  /* A PARAMETER OF A CALLBACK THE PLATFORM CALLS IS TYPED BY THE IDL, and by nothing else in this file. The
+     chain is three declarations long and every link is spec text: the callee's operation declares its
+     argument a callback type, that callback declares its own argument list, and the parameter's POSITION
+     picks one. Nothing is followed through an assignment or a return — a call site is a construct, and this
+     is the same kind of fact as a binding's initializer, read at the other end of the call. */
+  const slot = scan.paramSlot(t, off);
+  if (slot) {
+    const m2 = /^(.*)\.([A-Za-z_$][\w$]*)$/.exec(slot.callee);
+    if (!m2) return null;
+    const on = ifaceOfExpr(m2[1], slot.calleeAt, scan, s);
+    if (!on || on.startsWith(CTOR)) return null;
+    const cbType = argTypeName(on, m2[2], slot.arg);
+    const args = cbType && callbackArgs(cbType);
+    const a2 = args && args[slot.param];
+    return a2 ? ifaceOfType(a2.idlType) : null;
+  }
+  /* …and a parameter of a function THIS FILE declares is typed by the arguments this file passes it — see
+     §localParamSlot. The cycle guard is keyed on the FUNCTION AND SLOT rather than on the name, because a
+     recursive helper reaches its own parameter through a different binding and the name key would not see it. */
+  const lp = scan.localParamSlot(t, off);
+  if (!lp) return null;
+  const fnKey = `${scan.file}\0fn:${lp.fnName}#${lp.param}`;
+  if (s.has(fnKey)) return null;
+  s.add(fnKey);
+  const passed = scan.callArgsOf(lp.fnName, lp.param, lp.declParen);
+  if (!passed || !passed.length) return null;
+  let one = null;
+  for (const a of passed) {
+    /* EACH CALL SITE GETS ITS OWN COPY OF THE GUARD, because two sites passing the SAME identifier are not a
+       cycle and reading them as one answered the whole question `null`. `_urlList(parsed.href, resp)` appears
+       four times in one body; with a shared set the first `resp` resolved, added its key, and the second read
+       its own answer as a loop — so a helper called consistently was decided only when its callers happened
+       to spell the argument differently, which is the tokenizer deciding, not the constructs. */
+    const got = ifaceOfExpr(a.text, a.at, scan, new Set(s));
+    if (!got || (one !== null && one !== got)) return null;
+    one = got;
+  }
+  return one;
 }
 
 /* WHICH INTERFACE IN `base`'s SUBTREE THE READ SET FITS. An IDL return type is an upper bound — `getElementById`
@@ -2622,8 +2818,8 @@ for (const cm of cMatched) {
     continue;
   }
   for (const k of cm.keys) if (!unwritten.includes(k)) rec(fields, k).reads.push({ file: cm.file, line: cm.line });
-  ambiguous.push({ file: cm.file, line: cm.line, recv: "a matcher pattern", shared: cm.keys.find((k) => !unwritten.includes(k)),
-                   unwritten });
+  ambiguous.push({ file: cm.file, line: cm.line, recv: "a matcher pattern", reason: ONE_FIELD,
+                   why: oneFieldWhy(cm.keys.find((k) => !unwritten.includes(k)), unwritten) });
 }
 
 for (const s of jsScans) {
@@ -2639,7 +2835,25 @@ for (const s of jsScans) {
        emitted record's names is exactly the receiver the shape rule anchors CONFIDENTLY and wrongly — and it
        then reports the rest of that object's own IDL members as fields nobody writes, and every default over
        one of them as a concealment. Deciding identity first is what makes the two categories disjoint. */
-    const base = ifaceOfExpr(recv, rs[0].off, s, null);
+    /* AND ASKED AT EVERY READ, NOT AT THE FIRST ONE, because ONE of the constructs that answers it is a fact
+       about a POSITION rather than about the binding. Every other arm of `ifaceOfExpr` reads the declaration
+       the group's own key is qualified by — the reads of one group share a binder by construction, so those
+       arms cannot disagree across it and asking `rs[0]` was the same as asking all of them. An `instanceof`
+       guard is not like that: it holds inside its own consequent and nowhere else, so a receiver read both
+       inside and outside one is a union whose arms are two different objects. Deciding it from `rs[0]` would
+       pick whichever arm the file happened to write first — the tokenizer deciding, which is the thing this
+       file refuses everywhere — so a disagreement is AMBIGUOUS and is counted as one. */
+    const bases = rs.map((r) => ifaceOfExpr(recv, r.off, s, null));
+    const base = bases.every((b) => b === bases[0]) ? bases[0] : undefined;
+    if (base === undefined) {
+      const named = [...new Set(bases.filter(Boolean))];
+      ambiguous.push({ ...s.site(rs[0].off), recv,
+                       reason: "a receiver an `instanceof` guard narrows at SOME of its reads and not at others" +
+                               " — the identity is a union this cannot collapse, and neither arm may anchor the other",
+                       why: `is ${named.map(anIface).join(" or ")} only inside its guard, and reads ` +
+                            `${[...names].map((n) => `\`${n}\``).join(", ")} across both` });
+      continue;
+    }
     if (base) {
       const narrowed = narrowIdentity(base, names);
       if (narrowed) {
@@ -2660,8 +2874,9 @@ for (const s of jsScans) {
          also reads a name NO producer emits — which is the only configuration in which the undecided question
          could be hiding this defect, and reporting the rest would be reporting the language again. */
       if (bestN === 1 && [...names].some((n) => !(fields.get(n)?.writes.length)))
-        ambiguous.push({ ...s.site(rs[0].off), recv, shared: [...names].filter((n) => cEmitted.has(n))[0],
-                         unwritten: [...names].filter((n) => !(fields.get(n)?.writes.length)) });
+        ambiguous.push({ ...s.site(rs[0].off), recv, reason: ONE_FIELD,
+                         why: oneFieldWhy([...names].filter((n) => cEmitted.has(n))[0],
+                                          [...names].filter((n) => !(fields.get(n)?.writes.length))) });
       continue;
     }
     for (const r of rs) {
@@ -2948,13 +3163,16 @@ show(`FIELD NAME THROUGH THE RAW ENTRY — ${rawKeys.length} ${C_RAW}( literal(s
      rawKeys, (r) => `${place(r)}  ${r.keys.join(" ")}   in \`${r.text}\``);
 
 if (ambiguous.length) {
-  log(`── AMBIGUOUS ANCHOR — ${ambiguous.length} receiver(s) reading exactly ONE field of an emitted record beside ` +
-      `name(s) no producer writes. Whether the object is that record is not decidable here, so neither is whether ` +
-      `those names are the defect; this is the report on itself, not a pass ──`);
-  for (const a of ambiguous.slice(0, 15))
-    log(`  ${place(a)}  \`${a.recv}\` ${a.shared ? `shares \`${a.shared}\`, also names` : "names only"} ` +
-        `${a.unwritten.slice(0, 4).map((n) => `\`${n}\``).join(", ")}${a.unwritten.length > 4 ? " …" : ""}`);
-  if (ambiguous.length > 15) log(`  … and ${ambiguous.length - 15} more`);
+  log(`── AMBIGUOUS ANCHOR — ${ambiguous.length} receiver(s) whose record identity this cannot decide. Counted, ` +
+      `never resolved either way; this is the report on itself, not a pass. GROUPED BY THE QUESTION, because a ` +
+      `count that merges two questions tells a reader neither what is undecided nor what would decide it ──`);
+  const aByReason = new Map();
+  for (const a of ambiguous) { if (!aByReason.has(a.reason)) aByReason.set(a.reason, []); aByReason.get(a.reason).push(a); }
+  for (const [reason, as] of [...aByReason].sort((x, y) => y[1].length - x[1].length)) {
+    log(`  ${String(as.length).padStart(5)}  ${reason}`);
+    for (const a of as.slice(0, 20)) log(`         ${place(a)}  \`${a.recv}\` ${a.why}`);
+    if (as.length > 20) log(`         … and ${as.length - 20} more in this group`);
+  }
 }
 
 /* PRINTED IN FULL, AND NOT A DEFECT — a decided negative nobody can see is the concealment this file reports.
