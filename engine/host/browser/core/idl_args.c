@@ -4823,17 +4823,18 @@ void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const c
    for the other by mistake. The IDL-shaped future for these is to declare their arguments through the args
    machine like every other member — at which point they move to idl_install_method and this loses a caller.
    RESIDUAL — THIS INSTALLER STILL TAKES `length` AND CANNOT DERIVE IT.
-   NOT COVERED: fifty installs across fourteen files (core/dom/observable.c and observable_ops.c, the five
-   core/streams files, core/events/event_target.c, core/html/html_form.c and element_internals.c,
-   core/idl_async_iter.c, core/idl_iter.c) register their algorithm with a raw JS_RegisterStepDef and have NO
-   pool entry, so there is no declared arity for Web IDL §3.7.7 Operations' length to be computed from and the
-   number at the call site is the ONLY statement of it. That is why this is a residual and not a DFAIL: the
+   NOT COVERED: every install reached from core/dom/observable.c and observable_ops.c, the five core/streams
+   files, core/events/event_target.c, core/html/html_form.c and element_internals.c, core/idl_async_iter.c and
+   core/idl_iter.c — each registers its algorithm with a raw JS_RegisterStepDef and has NO pool entry, so there
+   is no declared arity for Web IDL §3.7.7 Operations' length to be computed from and the number at the call
+   site is the ONLY statement of it. (A count is deliberately not written here: it is what grep answers, and it
+   is wrong the first time one of those components converts.) That is why this is a residual and not a DFAIL: the
    code is correct for what it does, and the assert below is what keeps it from being reached by a member that
    COULD derive — a declared member cannot arrive here, and a raw one cannot reach idl_install_method.
    WHAT THE NEXT DIFF BUILDS: those members' arguments declared through this machine (idl_method_id_step and
    its siblings), one component at a time, at which point each moves to idl_install_method, loses its number,
    and this installer loses a caller — reaching zero, at which point it deletes.
-   HOW ITS ABSENCE WOULD SHOW: a `length` a page reads off one of those fifty members disagreeing with its
+   HOW ITS ABSENCE WOULD SHOW: a `length` a page reads off one of those members disagreeing with its
    IDL — `subscription.addTeardown.length`, `writer.write.length` — with nothing in this engine able to say so,
    which is exactly how seven mixin installs came to disagree with each other. */
 void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid)
