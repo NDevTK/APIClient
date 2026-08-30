@@ -1264,12 +1264,14 @@ static JSValue san_preset_config(JSContext *ctx, JSValueConst spec)
    Returns an OWNED canonical configuration, or JS_EXCEPTION with a TypeError pending. */
 static JSValue san_config_from_spec(JSContext *ctx, JSValueConst spec)
 {
-    DCHECK(!JS_IsUndefined(spec), "§8.6.4 step 2 resolved an ABSENT sanitizer here — which default it takes "
+    DCHECK(!JS_IsUndefined(spec), "§8.6.4's `get a sanitizer instance from options` step 2 resolved an ABSENT "
+                                  "sanitizer here — which default it takes "
                                   "is the DICTIONARY's (\"default\" for SetHTMLOptions, {} for "
                                   "SetHTMLUnsafeOptions), so the caller answers it and this never sees one");
     if (sanitizer_is(spec)) {
-        /* §8.6.4 step 5 returns the INSTANCE, and `sanitize` step 3 then mutates ITS configuration — so this
-           is the same object the page holds, not a copy of it. */
+        /* §8.6.4's `get a sanitizer instance from options`: neither the string arm (step 4) nor the dictionary
+           arm (step 5) runs for a Sanitizer INSTANCE, so step 6 returns the instance itself — and `sanitize`
+           step 3 then mutates ITS configuration, so this is the same object the page holds, not a copy. */
         SanitizerRec *r = san_rec_of(spec);
 
         return JS_DupValue(ctx, r->config);

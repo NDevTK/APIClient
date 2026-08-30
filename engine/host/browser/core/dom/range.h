@@ -43,11 +43,13 @@ void range_replace_data_steps(JSContext *ctx, lxb_dom_node_t *node, uint32_t off
 
 /* §4.4 `normalize()` STEPS 6.1-6.4 — run once per contiguous exclusive Text node `sib` that `node` absorbs,
    BEFORE `sib` is removed and with `length` being `node`'s length BEFORE the absorption. The removal that
-   follows runs §5.5's pre-remove steps, which is right: 6.1-6.4 have already taken every boundary point off
+   follows runs §5.5's LIVE RANGE pre-remove steps (the standard's own term, defined at §5.5 — the unqualified
+   "pre-remove" is §4.2.3's own operation), which is right: 6.1-6.4 have already taken every boundary point off
    `sib`, so what is left for the removal to do is the sibling-index shift it does for any other node. */
 void range_normalize_absorb_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *sib, uint32_t length);
 
-/* §4.10 "split a Text node" STEPS 7.2-7.5 — run by the split once `new_node` is in the tree beside `node`.
+/* §4.11 "Interface Text"'s "split a Text node" STEPS 7.2-7.5 — run by the split once `new_node` is in the
+   tree beside `node`.
    `offset` is the split point in code units. */
 void range_split_text_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t *new_node, uint32_t offset);
 

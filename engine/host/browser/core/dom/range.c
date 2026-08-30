@@ -13,7 +13,8 @@
  * flow moves the boundary points on THAT flow's timeline and a sibling's range is untouched.
  *
  * EVERY MEMBER §5.5 DECLARES IS HERE, the five that MOVE CONTENT included. This paragraph used to say those
- * five were absent because §4.10's "replace data" and "split" did not exist; both exist, all five are
+ * five were absent because §4.10 "Interface CharacterData"'s "replace data" and §4.11 "Interface Text"'s
+ * "split a Text node" did not exist; both exist, all five are
  * installed below, and the prose outlived the absence it described — which is worse than no prose, because it
  * reads as authoritative and sends the next reader to build what is already built.
  *
@@ -263,7 +264,8 @@ void range_replace_data_steps(JSContext *ctx, lxb_dom_node_t *node, uint32_t off
     }
 }
 
-/* §4.10 "split a Text node" STEPS 7.2-7.5. Step 7.1's insert has already run, and its OWN live-range step
+/* §4.11 "Interface Text"'s "split a Text node" STEPS 7.2-7.5. Step 7.1's insert has already run, and its OWN
+   live-range step
    (§4.2.3 insert step 6) has already moved every boundary point in the parent whose offset is GREATER than the
    new node's index; 7.4 and 7.5 are what handles the one that is EQUAL to it. The two halves together are
    "every offset at or after the split point moves along by one", which is why neither is redundant. */
@@ -274,9 +276,9 @@ void range_split_text_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_node_t
     uint32_t idx;
     int i;
 
-    DCHECK(node != NULL && new_node != NULL, "§4.10's split live-range steps ran for no node");
+    DCHECK(node != NULL && new_node != NULL, "§4.11's split live-range steps ran for no node");
     parent = node->parent;
-    DCHECK(parent != NULL, "§4.10 split step 7 runs only for a Text node that HAS a parent — step 8 is the "
+    DCHECK(parent != NULL, "§4.11 split step 7 runs only for a Text node that HAS a parent — step 8 is the "
                            "parentless case and has no live-range steps at all");
     if (!g_live_n) return;
     idx = node_index(node);
@@ -327,7 +329,9 @@ void range_normalize_absorb_steps(JSContext *ctx, lxb_dom_node_t *node, lxb_dom_
         if (bounds_start(b) == sib) bounds_set_start(ctx, b, nw, b->start_off + length);
         if (bounds_end(b) == sib)   bounds_set_end(ctx, b, nw, b->end_off + length);
         /* STEPS 6.3-6.4: a boundary point in the PARENT naming the sibling's own position lands at the seam.
-           Re-read for the reason §5.5's pre-remove steps re-read: 6.1 may have just moved it. */
+           Re-read for the reason §5.5's LIVE RANGE pre-remove steps re-read: 6.1 may have just moved it. The
+           standard's term is "live range pre-remove steps" and §5.5 is where it defines them; the unqualified
+           "pre-remove" is §4.2.3 "Mutation algorithms"' OWN operation, which is a different algorithm. */
         if (bounds_start(b) == parent && b->start_off == idx) bounds_set_start(ctx, b, nw, length);
         if (bounds_end(b) == parent && b->end_off == idx)     bounds_set_end(ctx, b, nw, length);
     }

@@ -713,6 +713,18 @@ function audit(argv) {
    * SENTENCE (`… is not 7.4.9.`) — a `.` alone is punctuation, a `.` before a digit is another component.
    * The first spelling of this lookahead dropped every sentence-final citation silently. */
   const BARE = /(?<![\w.§])([1-9][0-9]?(?:\.[1-9][0-9]*){1,4})(?!\w)(?!\.\d)/g;
+  /* AND THE RIGHT OPERAND OF A RANGE IS NOT A CITATION CANDIDATE AT ALL, for the same reason a float literal is
+   * not: it is not a number this tree is naming a section by. `steps 1-4.1` and `steps 4.2-4.4` are how every
+   * stage label in this tree writes a span of STEPS, and the lookbehind above admits `4.1` and `4.4` out of
+   * them because a `-` is not a word character. What follows such a match is the REST OF THE SENTENCE, so the
+   * term scan reads the algorithm the label is about and reports it as misattributed to a section number that
+   * was never written — the tool inventing the citation it then judges. Two of `dom/range.c`'s four findings
+   * were exactly this, and 178 bare candidates tree-wide sit in this position.
+   * IT IS EXCLUDED RATHER THAN RESOLVED BECAUSE IT IS GENUINELY UNDECIDABLE. `13.2-13.4` in prose is a range of
+   * SECTIONS and `7.5-7.9` is a range of STEPS, and nothing at the site distinguishes them; this file's own
+   * doctrine for a site it cannot decide is to refuse the guess, and the cost is one operand of a bare-written
+   * span — whose left operand is still read, and whose §-written spelling is read by CITE regardless. */
+  const RANGE_OPERAND = /[0-9](?:\.[0-9]+)*\s*[-‐-―]\s*$/;
 
   /* Look a phrase up in every index at once. Returns the LONGEST phrase any standard knows, the standards
    * that know it, and — per standard — whether the cited number is its definition site or a prominent use. */
@@ -765,6 +777,7 @@ function audit(argv) {
     BARE.lastIndex = 0;
     for (let m; (m = BARE.exec(src)); ) {
       if (seen.has(m.index) || !inSpans(spans, m.index)) continue;
+      if (RANGE_OPERAND.test(src.slice(Math.max(0, m.index - 24), m.index))) continue;
       cites.push({ at: m.index, len: m[0].length, no: m[1], anchor: null, bare: true });
     }
     cites.sort((a, b) => a.at - b.at);

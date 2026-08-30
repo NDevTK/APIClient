@@ -32,7 +32,8 @@ bool sanitizer_is(JSValueConst v);
    page's markup, so the walk is of the page's size and a flow inside it must be able to park and resume.
  *
  * IT IS DRIVEN BY THE MEMBER THAT PARSED THE FRAGMENT rather than being a machine of its own, because §8.6.4
- * states it as step 7 of `set and filter HTML`: the fragment between the parse and the replacement is that
+ * states it as step 8 of `set and filter HTML`: the fragment between the parse (step 7) and the replacement
+ * (step 9) is that
  * member's, and a second machine would need the fragment handed across a boundary that does not exist. So the
  * stages below are expanded into the HOSTING member's stage list (element.c's), which is what makes each of
  * them a rest point the driver can assert on and a parked flow can name.
@@ -102,7 +103,7 @@ typedef struct {
 void sanitizer_walk_begin(JSContext *ctx, SanitizerWalk *w, lxb_dom_node_t *root, JSValue config,
                           bool safe, int stage_base);
 /* ONE step. Returns JS_STEP_YIELD while there is more to do and 0 when the walk is over; the caller owns what
-   happens next, which for §8.6.4 is step 8's replacement. */
+   happens next, which for §8.6.4 is step 9's replacement. */
 int  sanitizer_walk_step(JSContext *ctx, JSStepHdr *hdr, SanitizerWalk *w);
 /* WHAT THIS RECORD OWNS, declared once — the config AND the level stack. The machine that holds it names this
    in its own `visit`, so the fork clones both and the teardown releases both through that ONE list. There is

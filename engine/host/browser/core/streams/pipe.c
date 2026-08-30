@@ -1,4 +1,7 @@
-/* PIPING — the Streams Standard §4.2.4's ReadableStreamPipeTo, and §4.2's `pipeTo` and `pipeThrough` over it.
+/* PIPING — the Streams Standard §4.9.1 "Working with readable streams"' ReadableStreamPipeTo, and §4.2.4
+ * "Constructor, methods, and properties"' `pipeTo` and `pipeThrough` over it. §4.2.4 is where the two MEMBERS
+ * are defined and §4.9.1 is where the OPERATION they both call is; the step numbers every label below carries
+ * are that operation's, so they are §4.9.1's.
  *
  * WHY IT IS ITS OWN COMPONENT. The algorithm is not §4's and it is not §5's: it holds a reader on one and a
  * writer on the other, and every one of its decisions reads state from both. Written inside either half it
@@ -156,50 +159,50 @@ enum {
     OP_N
 };
 
-/* WHERE THIS MACHINE RESTS, AS §4.2.4 NUMBERS IT. `pipeTo` and `pipeThrough` are four and six steps whose last
+/* WHERE THIS MACHINE RESTS, AS §4.9.1's ReadableStreamPipeTo NUMBERS IT. `pipeTo` and `pipeThrough` are four and six steps whose last
    real one is ReadableStreamPipeTo, and that operation's step 15 is prose rather than a numbered list — it
    names its parts ("error and close states must be propagated", "shutdown with an action", "finalize"), so the
    labels name them the way the standard writes them. Everything before step 15 IS numbered and the stages say
    which number they are at. */
 #define PIPE_STAGES(X) \
-    X(S_ENTRY, "Streams §4.2 pipeTo/pipeThrough (this invocation's entry: which member or which of §4.2.4's " \
+    X(S_ENTRY, "Streams §4.2.4 pipeTo/pipeThrough (this invocation's entry: which member or which of §4.9.1's " \
                "reactions it is)") \
-    X(S_TRANSFORM, "Streams §4.2 pipeThrough(transform, options) steps 2 and 4 (Get(transform, \"writable\") " \
+    X(S_TRANSFORM, "Streams §4.2.4 pipeThrough(transform, options) steps 2 and 4 (Get(transform, \"writable\") " \
                    "and Get(transform, \"readable\"))") \
-    X(S_OPT, "Streams §4.2 pipeTo step 3 / pipeThrough step 3 (the StreamPipeOptions members, read in the " \
+    X(S_OPT, "Streams §4.2.4 pipeTo step 3 / pipeThrough step 3 (the StreamPipeOptions members, read in the " \
              "lexicographic order Web IDL §3.2.17 converts a dictionary in)") \
-    X(S_LOCKS, "Streams §4.2 pipeTo steps 1-2 / pipeThrough steps 1-2 (the two lock checks — a rejected " \
+    X(S_LOCKS, "Streams §4.2.4 pipeTo steps 1-2 / pipeThrough steps 1-2 (the two lock checks — a rejected " \
                "promise for pipeTo, a throw for pipeThrough)") \
-    X(S_ACQ_READER, "Streams §4.2.4 ReadableStreamPipeTo step 9 (AcquireReadableStreamDefaultReader on the " \
+    X(S_ACQ_READER, "Streams §4.9.1 ReadableStreamPipeTo step 9 (AcquireReadableStreamDefaultReader on the " \
                     "source)") \
-    X(S_ACQ_WRITER, "Streams §4.2.4 ReadableStreamPipeTo step 10 (AcquireWritableStreamDefaultWriter on the " \
+    X(S_ACQ_WRITER, "Streams §4.9.1 ReadableStreamPipeTo step 10 (AcquireWritableStreamDefaultWriter on the " \
                     "destination)") \
-    X(S_WIRE, "Streams §4.2.4 ReadableStreamPipeTo steps 11-14 (the pipe's promise, the abort algorithm, and " \
+    X(S_WIRE, "Streams §4.9.1 ReadableStreamPipeTo steps 11-14 (the pipe's promise, the abort algorithm, and " \
               "step 15's \"error and close states must be propagated\" checks in the order it lists them)") \
-    X(S_LOOP, "Streams §4.2.4 ReadableStreamPipeTo step 15's backpressure rule (wait on the writer's `ready` " \
+    X(S_LOOP, "Streams §4.9.1 ReadableStreamPipeTo step 15's backpressure rule (wait on the writer's `ready` " \
               "before reading again)") \
-    X(S_READ, "Streams §4.2.4 ReadableStreamPipeTo step 15 (read a chunk from the reader)") \
-    X(S_READ_DONE, "Streams §4.2.4 ReadableStreamPipeTo step 15 (the read's result: a chunk to write, or the " \
+    X(S_READ, "Streams §4.9.1 ReadableStreamPipeTo step 15 (read a chunk from the reader)") \
+    X(S_READ_DONE, "Streams §4.9.1 ReadableStreamPipeTo step 15 (the read's result: a chunk to write, or the " \
                    "source's close)") \
-    X(S_WRITE, "Streams §4.2.4 ReadableStreamPipeTo step 15 (write the chunk to the destination, without " \
+    X(S_WRITE, "Streams §4.9.1 ReadableStreamPipeTo step 15 (write the chunk to the destination, without " \
                "waiting for it)") \
-    X(S_DEFERRED, "Streams §4.2.4 ReadableStreamPipeTo step 15's propagation rules (the source-side rule that " \
+    X(S_DEFERRED, "Streams §4.9.1 ReadableStreamPipeTo step 15's propagation rules (the source-side rule that " \
                   "was waiting for a read in flight to be delivered)") \
-    X(S_SHUTDOWN, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"shutdown\" (whether the pending writes must " \
+    X(S_SHUTDOWN, "Streams §4.9.1 ReadableStreamPipeTo step 15's \"shutdown\" (whether the pending writes must " \
                   "settle first)") \
-    X(S_ACT_PICK, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"shutdown with an action\" (choosing the " \
+    X(S_ACT_PICK, "Streams §4.9.1 ReadableStreamPipeTo step 15's \"shutdown with an action\" (choosing the " \
                   "action: abort the destination, cancel the source, or close the destination)") \
-    X(S_ACTION, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"shutdown with an action\" (performing it)") \
-    X(S_SIG_PICK, "Streams §4.2.4 ReadableStreamPipeTo step 14.1 (the abort algorithm's ordered set of " \
+    X(S_ACTION, "Streams §4.9.1 ReadableStreamPipeTo step 15's \"shutdown with an action\" (performing it)") \
+    X(S_SIG_PICK, "Streams §4.9.1 ReadableStreamPipeTo step 14.1 (the abort algorithm's ordered set of " \
                   "actions, chosen from preventAbort and preventCancel)") \
-    X(S_SIG_CALL, "Streams §4.2.4 ReadableStreamPipeTo step 14.1.5 (waiting for all of those actions)") \
-    X(S_FINALIZE, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (release the writer)") \
-    X(S_REL_READER, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (release the reader)") \
-    X(S_SETTLE, "Streams §4.2.4 ReadableStreamPipeTo step 15's \"finalize\" (settle the pipe's promise — the " \
+    X(S_SIG_CALL, "Streams §4.9.1 ReadableStreamPipeTo step 14.1.5 (waiting for all of those actions)") \
+    X(S_FINALIZE, "Streams §4.9.1 ReadableStreamPipeTo step 15's \"finalize\" (release the writer)") \
+    X(S_REL_READER, "Streams §4.9.1 ReadableStreamPipeTo step 15's \"finalize\" (release the reader)") \
+    X(S_SETTLE, "Streams §4.9.1 ReadableStreamPipeTo step 15's \"finalize\" (settle the pipe's promise — the " \
                 "resolving function's 27.5.1.3 step 2.f `then` read is the page's)") \
-    X(S_RESULT, "Streams §4.2 pipeTo steps 1-2 (settling this member's OWN capability, for the answers it " \
+    X(S_RESULT, "Streams §4.2.4 pipeTo steps 1-2 (settling this member's OWN capability, for the answers it " \
                 "rejects with before any pipe exists)") \
-    X(S_DONE, "Streams §4.2 pipeTo step 4 / pipeThrough steps 5-6 (the operation is complete)")
+    X(S_DONE, "Streams §4.2.4 pipeTo step 4 / pipeThrough steps 5-6 (the operation is complete)")
 enum { PIPE_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const PIPE_STEPS[] = { PIPE_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
@@ -291,7 +294,7 @@ static void pipe_begin_shutdown(JSContext *ctx, JSPipeState *s, PipeData *p, int
     STEP_GOTO(s->hdr.stage, S_SHUTDOWN, &s->w.phase, NULL);
 }
 
-/* §4.2.4's two SOURCE-side rules, applied from the one place both reach — whether at once or after the read
+/* §4.9.1 step 15's two SOURCE-side rules, applied from the one place both reach — whether at once or after the read
    they were waiting behind. */
 static void pipe_apply_source_rule(JSContext *ctx, JSPipeState *s, PipeData *p, int op, JSValueConst err)
 {
@@ -329,7 +332,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
             s->pipe = JS_DupValue(ctx, JS_StepClosureData(hdr, 0));
             s->value = JS_DupValue(ctx, step_arg(hdr, 0));
             p = pipe_of(s->pipe);
-            DCHECK(p != NULL, "a §4.2.4 reaction captured something that is not a pipe");
+            DCHECK(p != NULL, "a §4.9.1 reaction captured something that is not a pipe");
             switch (op) {
             case OP_READY_OK:
                 /* backpressure has cleared: read the next chunk — unless the pipe is already stopping, in
@@ -354,7 +357,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 STEP_GOTO(s->hdr.stage, S_READ_DONE, &s->w.phase, NULL);
                 break;
             case OP_WRITE_SETTLED:
-                DCHECK(p->writes > 0, "a §4.2.4 write settled that was never counted as outstanding");
+                DCHECK(p->writes > 0, "a §4.9.1 write settled that was never counted as outstanding");
                 p->writes--;
                 /* the wait that shutdown parked on is over exactly when the last one settles */
                 /* THE FLAG IS CLEARED IN THE ARM THAT ENDS THE WAIT. It was cleared by a line testing the
@@ -370,7 +373,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 break;
             case OP_SRC_ERRORED:
             case OP_SRC_CLOSED:
-                /* §4.2.4 rules 1 and 3 — the SOURCE side. Both are held while a read is outstanding, for the
+                /* §4.9.1 step 15's rules 1 and 3 — the SOURCE side. Both are held while a read is outstanding, for the
                    reason `read_pending` states: the spec cannot observe either of them before the read it
                    already answered has delivered. */
                 if (p->read_pending) {
@@ -383,12 +386,12 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 pipe_apply_source_rule(ctx, s, p, op, s->value);
                 break;
             case OP_DST_ERRORED:
-                /* §4.2.4 rule 2, errors backward. */
+                /* §4.9.1 step 15's rule 2, errors backward. */
                 pipe_begin_shutdown(ctx, s, p, 1, JS_DupValue(ctx, s->value),
                                     p->prevent[OPT_CANCEL] ? ACT_NONE : ACT_CANCEL_SOURCE);
                 break;
             case OP_DST_CLOSED: {
-                /* §4.2.4 rule 4, closing backward: the destination finished under the pipe, which is an ERROR
+                /* §4.9.1 step 15's rule 4, closing backward: the destination finished under the pipe, which is an ERROR
                    for the pipe however ordinary it was for the destination — there is still source left. */
                 JSValue err;
                 JS_ThrowTypeError(ctx, "the destination writable stream closed before all data could be piped "
@@ -398,7 +401,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 break;
             }
             case OP_ACT_OK: case OP_ACT_ERR: {
-                /* §4.2.4: when the ACTION fails, that failure is what the pipe reports, whatever the rule that
+                /* §4.9.1 step 15: when the ACTION fails, that failure is what the pipe reports, whatever the rule that
                    started the shutdown was going to report. */
                 int failed = (op == OP_ACT_ERR);
                 if (p->action != ACT_SIGNAL) {
@@ -413,7 +416,7 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 /* THE SIGNAL'S COMPOUND IS A Promise.all, so it answers only when BOTH have settled and it
                    reports the FIRST rejection. Finalizing on the first fulfilment would release the locks
                    while the other operation was still running against them. */
-                DCHECK(p->acts_pending > 0, "a §4.2.4 compound action settled more times than it was started");
+                DCHECK(p->acts_pending > 0, "a §4.9.1 compound action settled more times than it was started");
                 p->acts_pending--;
                 if (failed && !p->acts_failed) {
                     p->acts_failed = 1;
@@ -431,9 +434,9 @@ static int js_pipe_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **o
                 break;
             }
             default: {
-                /* §4.2.4 step 5's abort algorithm: the signal fired. */
+                /* §4.9.1 step 14.1's abort algorithm: the signal fired. */
                 JSValue reason;
-                DCHECK(op == OP_ABORT_ALGO, "a §4.2.4 machine ran with an operation this component does not have");
+                DCHECK(op == OP_ABORT_ALGO, "a §4.9.1 machine ran with an operation this component does not have");
                 reason = abort_signal_reason(ctx, p->signal);
                 pipe_begin_shutdown(ctx, s, p, 1, reason, ACT_SIGNAL);
                 break;
@@ -622,7 +625,7 @@ run:
             s->promise = s->through ? JS_DupValue(ctx, s->tr[TR_READABLE]) : JS_DupValue(ctx, p->promise);
             if (s->through) JS_MarkPromiseHandled(ctx, p->promise);
 
-            /* §4.2.4 step 5: the signal. An ALGORITHM, not a listener — it runs before the `abort` event and
+            /* §4.9.1 step 14: the signal. An ALGORITHM, not a listener — it runs before the `abort` event and
                the page can neither see it nor remove it. A signal already aborted shuts the pipe down at once
                and the loop never starts. */
             if (!JS_IsUndefined(p->signal)) {
@@ -757,7 +760,7 @@ run:
         case S_DEFERRED: {
             int held = p->deferred_op;
             JSValue err = p->deferred_err;
-            DCHECK(held != 0, "a §4.2.4 machine reached the held-rule stage with no rule held");
+            DCHECK(held != 0, "a §4.9.1 machine reached the held-rule stage with no rule held");
             p->deferred_op = 0;
             p->deferred_err = JS_UNDEFINED;
             pipe_apply_source_rule(ctx, s, p, held, err);
@@ -810,7 +813,7 @@ run:
                    as the pipe's own failure. */
                 WritableStreamState ds = WS_WRITABLE;
                 bool close_queued = false;
-                DCHECK(p->action == ACT_CLOSE_DEST, "a §4.2.4 shutdown carried an action this file does not have");
+                DCHECK(p->action == ACT_CLOSE_DEST, "a §4.9.1 shutdown carried an action this file does not have");
                 s->act_fn = s->act_recv = JS_UNDEFINED;
                 writable_stream_query(p->dest, &ds, NULL, &close_queued);
                 if (close_queued || ds == WS_CLOSED) {
@@ -847,7 +850,7 @@ run:
         }
 
         case S_SIG_PICK: {
-            /* §4.2.4 step 5's compound: up to two operations, each guarded by the state its own rule names,
+            /* §4.9.1 step 14.1's compound: up to two operations, each guarded by the state its own rule names,
                all STARTED before either is awaited — a page counts which of its `abort` and `cancel` ran
                before either settled, so this is not a chain. The guard is read here and the call is issued in
                the next stage, for the reason above: starting the abort is what stops the destination being
@@ -896,7 +899,7 @@ run:
         }
 
         case S_FINALIZE:
-            /* §4.2.4's finalize: release the writer's lock, then the reader's, then answer. */
+            /* §4.9.1 step 15's finalize: release the writer's lock, then the reader's, then answer. */
             {
                 JSValue op = writable_stream_op(ctx, WS_OP_RELEASE);
                 r = step_call_run(ctx, &s->w.phase, STEP_CB(s->w.cb), op, p->writer,
@@ -955,7 +958,7 @@ run:
 
         default:
             DCHECK(s->hdr.stage == S_DONE,
-                   "a §4.2.4 machine resumed in a stage §4.2's pipe operations do not have");
+                   "a §4.9.1 machine resumed in a stage §4.2.4's pipe members do not have");
             JS_FreeValue(ctx, cb_result);
             return JS_STEP_DONE;   /* the answer, if this entry has one, is taken by js_pipe_fini */
         }
@@ -970,7 +973,7 @@ run:
    than letting the throw unwind it. */
 #define PIPE_DEF(i) { sizeof(JSPipeState), js_pipe_step, js_pipe_fini, (i), \
                       .catches_abrupt = 1, .visit = js_pipe_visit, \
-                      .algorithm = "Streams §4.2 pipeTo/pipeThrough, through §4.2.4 ReadableStreamPipeTo", \
+                      .algorithm = "Streams §4.2.4 pipeTo/pipeThrough, through §4.9.1 ReadableStreamPipeTo", \
                       .steps = PIPE_STEPS }
 static const JSTrampStepDef js_pipe_defs[OP_N] = {
     PIPE_DEF(0),  PIPE_DEF(1),  PIPE_DEF(2),  PIPE_DEF(3),  PIPE_DEF(4),
@@ -993,7 +996,7 @@ void pipe_init(JSContext *ctx)
 
     for (i = 0; i < OP_N; i++) {
         g_op_stepid[i] = JS_RegisterStepDef(rt, &js_pipe_defs[i]);
-        CHECK(g_op_stepid[i] >= 0, "piping: no step id for a §4.2.4 operation");
+        CHECK(g_op_stepid[i] >= 0, "piping: no step id for a §4.9.1 operation");
     }
     g_pipe_to_stepid = g_op_stepid[OP_PIPE_TO];
     g_pipe_through_stepid = g_op_stepid[OP_PIPE_THROUGH];

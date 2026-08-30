@@ -25,7 +25,8 @@ enum {
     /* §8.5.2's `setHTML` — the SAFE member — on the same two interfaces. It is the same machine and not a
        sixth algorithm: §8.6.4 set and filter HTML's `set and filter HTML` is what all four of these are, and `safe` is the one
        argument that differs. What `safe` decides is stated where §8.6.4 set and filter HTML states it — the sanitizer the options
-       resolve to, and §8.6.4 set and filter HTML's step 3 removal of what is unsafe from it. */
+       resolve to, and §8.6.4 `sanitize`'s step 3 removal of what is unsafe from it — `sanitize`'s OWN step 3,
+       not `set and filter HTML`'s, whose step 3 is the safe-`script` early return. */
     ELEMENT_SET_HTML,             /* §8.5.2's setHTML, on Element */
     SHADOW_ROOT_SET_HTML,         /* §8.5.2's setHTML, on ShadowRoot */
 };

@@ -45,8 +45,8 @@ enum { FRAG_INTO_CHILDREN = 0, FRAG_INTO_BEFORE, FRAG_INTO_AFTER, FRAG_INTO_FIRS
      FRAGMENT — §13.2.4.5 verbatim: "Scripts are executed as soon as they are inserted into the document as
    part of a the HTML fragment parsing algorithm, ignoring async and defer attributes. This mode is used by
    createContextualFragment()." Two members reach it: HTML §8.5.7 "The createContextualFragment() method" step
-   7 passes it outright, and HTML §8.6.4 "Sanitization algorithms"' set and filter HTML step 5 passes it when
-   `options["runScripts"]` is true.
+   7 passes it outright, and HTML §8.6.4 "Sanitization algorithms"' set and filter HTML step 6 passes it when
+   `options["runScripts"]` is true (step 5 is what sets scriptingMode to Inert; step 6 is what overrides it).
    IT IS THE MEMBER'S TO STATE AND NEVER THE MACHINE'S TO INFER. A predicate here — "is this parse the one
    whose scripts run?" — would be one fact answered from one place for every caller, and the two callers'
    answers come from different sections. */
@@ -69,22 +69,22 @@ typedef enum { FRAG_SCRIPTING_INERT = 0, FRAG_SCRIPTING_FRAGMENT = 1 } FragScrip
     X(FRAG_START, "HTML §8.5.4 innerHTML setter steps 2-3 / §8.5.5 outerHTML setter steps 2-5 / §8.5.6 " \
                   "insertAdjacentHTML steps 2-4 / §8.5.7 createContextualFragment steps 2-6 / §8.5.2 " \
                   "setHTMLUnsafe step 2 and §8.6.4 \"Sanitization algorithms\"' set and filter HTML " \
-                  "steps 1-5 (the target the fragment is parsed against)") \
+                  "steps 1-6 (the target the fragment is parsed against)") \
     X(FRAG_FEED,  "HTML §8.5.4 step 4 / §8.5.5 step 6 / §8.5.6 step 5 / §8.5.7 step 7 / §8.6.4 " \
-                  "\"Sanitization algorithms\"' set and filter HTML step 6 " \
+                  "\"Sanitization algorithms\"' set and filter HTML step 7 " \
                   "(the fragment parsing algorithm), one byte per step") \
-    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 8 " \
+    X(FRAG_PLACE, "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 9 " \
                   "(insert one node of the fragment at the position the member names), and HTML §13.4 steps " \
                   "15-16 for the member that RETURNS it (§8.5.7): lexbor builds under §13.4 step 12's `root`, " \
                   "so this is where those nodes become the fragment's, one node per step") \
     X(FRAG_DONE,  "HTML §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.5.7 step 7 / §8.6.4 " \
-                  "\"Sanitization algorithms\"' set and filter HTML step 8 (the fragment is placed or returned)")
+                  "\"Sanitization algorithms\"' set and filter HTML step 9 (the fragment is placed or returned)")
 /* FOUR STAGES, NOT FIVE, for insertAdjacentHTML and createContextualFragment: neither replaces its target's
    children, so FRAG_CLEAR is past the end of what they declare and the driver says so if the shared machine
    ever reaches it from there. It is its own list for that reason — the setter's declaration is the shared four
    followed by this one. */
 #define FRAG_STAGE_CLEAR(X) \
-    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 8 (replace all within target: remove " \
+    X(FRAG_CLEAR, "HTML §8.5.4 step 5 / §8.6.4 \"Sanitization algorithms\"' set and filter HTML step 9 (replace all within target: remove " \
                   "one existing child per step)")
 /* AND §8.6.4 set and filter HTML's FILTER, whose stages are sanitizer.h's own X-list. They belong to the members that FILTER —
    §8.5.2's setHTML and setHTMLUnsafe — and are numbered after this machine's because the walk runs between the
@@ -117,8 +117,8 @@ typedef struct {
        throw path too. */
     lxb_dom_element_t *own_context;
     lxb_dom_node_t *anchor, *ref, *frag, *node;
-    /* §8.6.4 set and filter HTML's STEPS 4 AND 7. `san_config` is the canonical configuration the options resolved to, held from
-       step 4 (which reads the options, before the parse) until step 7 hands it to the walk that consumes it;
+    /* §8.6.4 set and filter HTML's STEPS 4 AND 8. `san_config` is the canonical configuration the options resolved to, held from
+       step 4 (which reads the options, before the parse) until step 8 hands it to the walk that consumes it;
        `sanitize` is whether this member filters at all, which is what tells §8.5.4's innerHTML setter,
        §8.5.6's insertAdjacentHTML and §8.5.7's createContextualFragment — none of which is
        `set and filter HTML` — from the three that are. */
@@ -141,7 +141,7 @@ void fragment_parse_begin(JSContext *ctx, FragmentParse *s, lxb_dom_element_t *c
                           int where, const char *html, bool clear_first, bool allow_declarative,
                           FragScriptingMode scripting);
 
-/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.5.7 step 7 / §8.6.4 set and filter HTML step 8 — WHERE
+/* §8.5.4 step 5 / §8.5.5 step 7 / §8.5.6 step 6 / §8.5.7 step 7 / §8.6.4 set and filter HTML step 9 — WHERE
    THE PARSE GOES NEXT. Exported because §8.6.4's FILTER resumes into it from the other side of the sanitizer
    walk, and the two must not drift. */
 void fragment_parse_placement(FragmentParse *s, JSStepHdr *hdr);

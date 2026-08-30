@@ -586,8 +586,8 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
     DCHECK(magic >= 0 && magic < (int)(sizeof(FRAG_SINK) / sizeof(FRAG_SINK[0])),
            "the fragment-parse machine was declared with a magic no member of element.h's list names");
 
-    /* §8.6.4 set and filter HTML STEP 7's WALK owns every stage past this machine's own, and it resumes into itself for as many
-       nodes as the fragment has. When it is done the member continues at step 8, which is the same placement
+    /* §8.6.4 set and filter HTML STEP 8's WALK owns every stage past this machine's own, and it resumes into itself for as many
+       nodes as the fragment has. When it is done the member continues at step 9, which is the same placement
        the unfiltered members reach straight from the parse. */
     if (hdr->stage >= SAN_CHILD && hdr->stage <= SAN_POP) {
         int r = sanitizer_walk_step(ctx, hdr, &s->san);
@@ -750,7 +750,7 @@ static int js_el_set_html(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JS
                                            "template one");
                 target = &t->content->node;
             }
-            /* §8.6.4 set and filter HTML step 6 invokes the fragment parsing algorithm with allowDeclarativeShadowRoots TRUE for
+            /* §8.6.4 set and filter HTML step 7 invokes the fragment parsing algorithm with allowDeclarativeShadowRoots TRUE for
                ALL FOUR of its members — a `<template shadowrootmode>` a SAFE member parses becomes a real
                shadow root and is then sanitized like any other tree, which is what step 1.5.6 walks into.
                §8.5.4's innerHTML setter is not one of them and passes false. */
@@ -816,7 +816,7 @@ int element_declare_set_html_unsafe(JSContext *ctx, int magic)
    `(TrustedHTML or DOMString)` union (nothing is trusted — the SANITIZER is what makes it safe, which is also
    why the member exists) and SetHTMLOptions declares ONE member where SetHTMLUnsafeOptions declares two. A
    `runScripts` this declaration does not list is one the body can never see, which is what makes §8.6.4 set and filter HTML step
-   5.1's assert structural here rather than a check. */
+   6.1's assert structural here rather than a check. */
 int element_declare_set_html(JSContext *ctx, int magic)
 {
     static const IdlArgType SET_HTML_ARGS[2] = { IDL_DOMSTRING, IDL_DICT };
