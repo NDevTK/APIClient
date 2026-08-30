@@ -1709,10 +1709,23 @@ static void timer_install_map(JSContext *ctx)
 void timer_install(JSContext *ctx, JSValueConst global)
 {
     JSValue g = (JSValue)global;
-    idl_install_method(ctx, g, "setTimeout", 2, g_id_set_timeout);
-    idl_install_method(ctx, g, "setInterval", 2, g_id_set_interval);
-    idl_install_method(ctx, g, "clearTimeout", 1, g_id_clear_timeout);
-    idl_install_method(ctx, g, "clearInterval", 1, g_id_clear_interval);
+    /* Web IDL §3.7.7 Operations' `length` — "the length of the shortest argument list in the entries in S",
+       over the effective overload set computed "with argument count 0", and NOT the declared arity, which is
+       what all four of these were.
+       §8.2's `long setTimeout(TimerHandler handler, optional long timeout = 0, any... arguments)`: §2.5.8
+       Overloading's step 5.9 loop walks back over the variadic tail (its step 5.9.1 breaks only for an
+       argument that "is not marked as optional and is not a final, variadic argument") and then over
+       `timeout`, and stops at the required `handler` — so the shortest entry is 1. `clearTimeout(optional long
+       id = 0)` has nothing required at all, so the loop reaches i = 0 and step 5.9.5's note applies: S holds
+       (X, « », « ») and the length is 0.
+       Both numbers are already stated by the declarations in timer_init — `idl_optional_from(1)` for the two
+       setters and `idl_optional_from(0)` for the two clearers — which is the whole of the defect: the fact was
+       written twice and only one copy was §3.7.7's. The `any...` tail is not yet declared (see timer_init),
+       and that does not move either number: the tail is optional under step 5.9.1 either way. */
+    idl_install_method(ctx, g, "setTimeout", 1, g_id_set_timeout);
+    idl_install_method(ctx, g, "setInterval", 1, g_id_set_interval);
+    idl_install_method(ctx, g, "clearTimeout", 0, g_id_clear_timeout);
+    idl_install_method(ctx, g, "clearInterval", 0, g_id_clear_interval);
     JS_SetPropertyStr(ctx, g, "queueMicrotask",
                       JS_NewCFunction(ctx, js_queue_microtask, "queueMicrotask", 1));
 }

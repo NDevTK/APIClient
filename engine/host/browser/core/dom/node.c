@@ -2809,9 +2809,14 @@ static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc
 /* `undefined before((Node or DOMString)... nodes)` and the three beside it — the union and the variadic tail
    are both DECLARED, so every argument is a Node or a real string by the time the body runs. */
 static const IdlArgType MIXIN_NODES[1] = { IDL_STRING_UNLESS_IFACE };
-typedef struct { const char *name; int len; int magic; } NodeMixinMember;
+/* THE TABLE NO LONGER CARRIES A `length`, AND THAT COLUMN IS WHY THIS WAS WRONG. Every row here reaches ONE
+   declaration — the single idl_method_id_ext in mixin_declare below — so the members' Web IDL §3.7.7
+   Operations `length` is one number, and a per-row copy of it is a fact seven rows were each asked to
+   remember. They did not agree: `remove` and `replaceChildren` said 0 while `before`, `after`, `replaceWith`,
+   `append` and `prepend` said 1, for the same arity. See mixin_install for the derivation. */
+typedef struct { const char *name; int magic; } NodeMixinMember;
 static const NodeMixinMember CHILD_NODE_MIXIN[] = {
-    { "remove", 0, 0 }, { "before", 1, 1 }, { "after", 1, 2 }, { "replaceWith", 1, 3 },
+    { "remove", 0 }, { "before", 1 }, { "after", 2 }, { "replaceWith", 3 },
 };
 
 /* DOM §4.2.6 Mixin ParentNode, its insertion half — `Document includes ParentNode`, `DocumentFragment
@@ -2819,7 +2824,7 @@ static const NodeMixinMember CHILD_NODE_MIXIN[] = {
    already live on the interfaces that declare them. (The number read "§4.2.8", which is Mixin ChildNode:
    this file cited two different sections for ParentNode and neither reader could tell which was the typo.) */
 static const NodeMixinMember PARENT_NODE_MIXIN[] = {
-    { "append", 1, 4 }, { "prepend", 1, 5 }, { "replaceChildren", 0, 6 },
+    { "append", 4 }, { "prepend", 5 }, { "replaceChildren", 6 },
 };
 
 /* §4.2.6 THE ParentNode MIXIN'S READS AND LOOKUPS, over the node the mixin is ON.
@@ -3120,12 +3125,38 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
     g_mixin_declared = 1;
 }
 
+/* WEB IDL §3.7.7 Operations' `length` FOR EVERY MEMBER OF BOTH MIXINS, WHICH IS 0, DERIVED AND NOT REMEMBERED.
+   §3.7.7's last three steps are verbatim: "Compute the effective overload set for regular operations … with
+   identifier id on target and with argument count 0, and let S be the result. Let length be the length of the
+   shortest argument list in the entries in S. Let F be CreateBuiltinFunction(steps, length, id, « », realm)."
+   §2.5.8 Overloading's compute-the-effective-overload-set is what puts a length-0 entry in S here, and the
+   load-bearing half is its trailing loop rather than its variadic expansion: step 5.7 only ever appends
+   LONGER tuples (i runs n to max − 1), while step 5.9.1 breaks only when "arguments[i] is not optional (i.e.,
+   it is not marked as optional and is not a final, variadic argument)" — so for a member whose only argument
+   IS a final variadic one the loop does not break, step 5.9.5 appends the tuple its own note spells out
+   ("if i is 0, this means to add to S the tuple (X, « », « »)"), and the shortest argument list in S is empty.
+   Every row of both tables is that member: `(Node or DOMString)... nodes`, plus §4.2.8's `remove()`, which
+   declares no argument at all and is therefore 0 by step 5.6.
+   SO `el.append()` IS A LEGAL CALL AND `Element.prototype.append.length` IS 0, and the 1 that stood here made
+   the second a lie a bundle can branch on: feature detection and polyfill shims read `.length` off these
+   members precisely because the mixin post-dates the interfaces it is included by.
+   RESIDUAL — THE NUMBER IS STILL WRITTEN BY HAND AT THIS CALL, one file over from where it can be computed.
+   NOT COVERED: idl_install_method takes `length` as a parameter, so every install in the platform re-states a
+   fact its own declaration already fixed, and nothing compares the two. WHAT THE NEXT DIFF BUILDS: idl_args.c
+   already computes exactly this number at §3.6 step 5's arity check — `min(idl_first_optional(m, 0),
+   idl_declared_positions(m))`, whose two halves are the declaration's `first_optional` and `variadic ? nargs-1
+   : nargs`, and whose `argc` of 0 is §3.7.7's own argument count, so the shorter entry of a length-differing
+   split wins there exactly as §3.7.7 requires — so it exposes that as a per-stepid accessor, drops `length`
+   from idl_install_method and its three siblings, and DFAILs for a stepid that was registered with a raw
+   JS_RegisterStepDef rather than declared through the pool (which has no arity to derive from). HOW ITS
+   ABSENCE WOULD SHOW: a member whose declaration and install disagree, silently, exactly as five of these
+   seven rows did — visible only by reading a `length` off the prototype and comparing it with the IDL. */
 static void mixin_install(JSContext *ctx, JSValueConst proto, const NodeMixinMember *tab, unsigned n)
 {
     unsigned k;
     DCHECK(g_mixin_declared, "a node mixin was installed before its members were declared");
     for (k = 0; k < n; k++)
-        idl_install_method(ctx, proto, tab[k].name, tab[k].len, g_mixin_id[tab[k].magic]);
+        idl_install_method(ctx, proto, tab[k].name, 0, g_mixin_id[tab[k].magic]);
 }
 
 void node_install_child_mixin(JSContext *ctx, JSValueConst proto)

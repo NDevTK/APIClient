@@ -860,7 +860,14 @@ void event_install_proto(JSContext *ctx)
                                (int)(sizeof(js_event_consts) / sizeof(js_event_consts[0])));
     idl_install_accessor(ctx, proto, "cancelBubble", js_event_get_cancel_bubble, 0, g_cancel_bubble_setid);
     idl_install_accessor(ctx, proto, "returnValue", js_event_get_return_value, 0, g_return_value_setid);
-    idl_install_method(ctx, proto, "initEvent", 3, g_init_event_id);
+    /* Web IDL §3.7.7 Operations: "Let length be the length of the shortest argument list in the entries in S",
+       over the effective overload set computed "with argument count 0". §2.2's
+       `initEvent(DOMString type, optional boolean bubbles = false, optional boolean cancelable = false)` has
+       two trailing optional arguments, so §2.5.8 Overloading's step 5.9 loop puts entries of length 2 and 1 in
+       S and stops at the required `type` — the shortest is 1, which is the same number the declaration above
+       already states as `idl_optional_from(1)`. The 3 that stood here was the DECLARED arity, which is what
+       §3.7.7 explicitly is not. */
+    idl_install_method(ctx, proto, "initEvent", 1, g_init_event_id);
     JS_SetClassProto(ctx, g_event_class, proto);   /* the realm owns it from here */
 }
 

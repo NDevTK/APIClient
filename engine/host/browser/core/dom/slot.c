@@ -735,8 +735,19 @@ void slot_init(JSContext *ctx)
        and no sibling would ever see a slot it signalled. */
     g_signal_slots = JS_NewArray(ctx);
     CHECK(!JS_IsException(g_signal_slots), "§4.2.2.5's signal slots set could not be allocated");
+    /* HTML §4.12.4 The slot element writes both of these with the argument OPTIONAL —
+       `sequence<Node> assignedNodes(optional AssignedNodesOptions options = {})` — and that word was in the
+       comment beside ASSIGNED_OPTS above and in no code. The declaration therefore said position 0 was
+       REQUIRED, and Web IDL §3.6 Overload resolution algorithm's step 5 ("If S is empty, then throw a
+       TypeError", reached because step 4 removes every entry whose type list is not of length argcount) makes
+       that a throw: `slot.assignedNodes()` — the ordinary call, the one every page writes — was a TypeError in
+       this engine and is a sequence in every browser.
+       It is also the number Web IDL §3.7.7 Operations' `length` is computed from, so the two members' 0 on
+       their prototypes was right by accident while their declaration said 1. */
     g_id_assigned_nodes = idl_method_id_dict(ctx, ONE_DICT, 1, ASSIGNED_OPTS, 1, js_slot_assigned, 0);
+    idl_optional_from(0);
     g_id_assigned_elements = idl_method_id_dict(ctx, ONE_DICT, 1, ASSIGNED_OPTS, 1, js_slot_assigned, 1);
+    idl_optional_from(0);
     /* `undefined assign((Element or Text)... nodes)` — a VARIADIC interface-typed tail, so the declaration
        brands every argument against the node class and the body's own test narrows it to §4.2.2's two kinds. */
     g_id_assign = idl_method_id_ext(ctx, NODES, 1, true, node_class_id(), js_slot_assign, 0);
