@@ -32,15 +32,34 @@
  * program runs. Adding a row here means stating the feature's default allowlist FROM ITS OWN SPECIFICATION —
  * §4.8's value is normative and inventing one is a security answer nobody measured.
  *
- * THE DECLARED POLICY IS «[], []» FOR EVERY POLICY THIS BUILD CREATES, AND THAT IS §9.5'S OWN VALUE rather
- * than an omission: "let policy be a new permissions policy, with inherited policy inheritedPolicy and
- * declared policy «[], []»". The only algorithm that ever fills it is §9.6 "Create a Permissions Policy for a
- * navigable from response", whose §9.1 "Process response policy" reads the `Permissions-Policy` header — and
- * that parse (a structured-field dictionary, §9.2's allowlist construction, §4.7's allowlist matching) is not
- * built. It is not left as a silence either: core/frame/navigation_params.c CRASHES on a navigation response
- * that carries the header, so a document whose declared policy would differ from «[], []» never reaches this
- * component with the wrong answer. Which is why the §9.8 and §9.9 steps that read the declared policy are not
- * written here as branches nothing can take — the crash is upstream, at the bytes.
+ * THE DECLARED POLICY IS §9.5'S «[], []» UNTIL §9.6 FILLS IT, AND §9.6 IS THE RESPONSE'S OWN HEADER. "Let
+ * policy be a new permissions policy, with inherited policy inheritedPolicy and declared policy «[], []»" is
+ * §9.5's last step, and §9.6 "Create a Permissions Policy for a navigable from response" is the one algorithm
+ * that ever changes it: its step 2 runs §9.1 "Process response policy" over the response's
+ * `Permissions-Policy` header, and its step 3 copies each resulting allowlist onto the policy for every
+ * feature the INHERITED policy still permits.
+ *
+ * WHY THE SILENCE THAT PRECEDED IT WAS DANGEROUS AND NOT MERELY INCOMPLETE. §9.5's «[], []» is the MOST
+ * PERMISSIVE declared policy there is: §9.9 step 2 is skipped entirely when a feature is absent from it, so
+ * the answer falls through to §9.9's own default-allowlist steps (its steps 3 and 4, which §9.8 does not have)
+ * and every restriction the server wrote is read as
+ * silence. A build that parsed no header would therefore not be "missing a feature" — it would be answering
+ * `Enabled` for documents a real browser answers `Disabled` for, which for `cross-origin-isolated` is a
+ * capability decided by an absence. That is why this used to be a CRASH at the bytes rather than a default,
+ * and why the crash is deleted in the same diff that makes the parse real.
+ *
+ * §9.2's REPORTING CONFIGURATION IS A NAMED RESIDUAL AND IS NOT STORED. §9.2 step 3 sets
+ * `reporting-config[feature]` from a Member Value's `report-to` parameter, and the only algorithm that reads
+ * one is §9.11 "Get the reporting endpoint for a feature", whose only callers are §9.13's and §9.14's
+ * generate-a-report steps. Those steps do not exist here — §9.10's two DFAILs name them and the Reporting
+ * §3.4.1 machinery under them — so a stored map would be a value with a computed writer and NO READER, which
+ * is the mirror of the defect CLAUDE.md makes greppable and is harder to see because the value would be real.
+ *   — WHAT IS NOT COVERED: a `report-to` parameter on a Member Value, which this build parses and discards.
+ *   — WHAT THE NEXT DIFF BUILDS: §9.11 over a reporting-configuration map, landing WITH §9.13/§9.14's report
+ *     bodies on Reporting §3.4.1, at which point the map has a reader on the same diff that writes it.
+ *   — HOW ITS ABSENCE WOULD SHOW: it cannot move any §9.8, §9.9 or §9.10 ANSWER, because those are decided by
+ *     an ALLOWLIST and a parameter never touches one. It shows the first time a report is generated and names
+ *     no endpoint — and §9.10's two DFAILs stand in front of that, so it cannot be reached in silence.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_PERMISSIONS_POLICY_PERMISSIONS_POLICY_H
 #define ENGINE_HOST_BROWSER_CORE_PERMISSIONS_POLICY_PERMISSIONS_POLICY_H
@@ -122,6 +141,61 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
                                              const Origin *origin);
 void permissions_policy_free(PermissionsPolicy *policy);
 
+/* ---- §9.6's RESPONSE HALF ---------------------------------------------------------------------------------
+ *
+ * WHAT A RESPONSE STATES ABOUT A DOCUMENT'S PERMISSIONS POLICY, IN THE FORM IT TRAVELS. HTML §7.5.1 "Shared
+ * document creation infrastructure" runs "creating a permissions policy from a response" given
+ * "navigationParams's navigable's container, navigationParams's origin, and navigationParams's response", and
+ * §10.1 "Changes to the HTML specification" inserts the SAME call with report-only True beside it. So the
+ * response is an input to DOCUMENT CREATION, which happens later than the fetch — and CLAUDE.md's rule (an
+ * operation that becomes a work item takes its inputs WITH it) is why this is a value carried from
+ * core/frame/navigation_params.c rather than a header list read back at the install.
+ *
+ * IT IS THE TWO FIELD VALUES AND NOT THE HEADER LIST, because §9.1 reads exactly one name out of that list per
+ * call and Fetch §2.2.2 step 2's "get" is what turns repeated headers into the one string it parses. Carrying
+ * the got values IS carrying the response as far as §9.1 can see it, and it is what lets the response be freed
+ * at the fetch — which this engine does, deliberately, so that nothing the bundle runs can ask for a header
+ * again.
+ *
+ * BOTH MAY BE NULL AND THAT IS A POSITIVE STATEMENT: a response carrying neither header, and a Document
+ * created from NO response at all (§7.3.2.1's initial about:blank), agree — §9.1 step 3 returns an empty
+ * ordered map for both, and §9.6's merge then has nothing to copy, so the policy is §9.5's. There is no third
+ * state to spell and therefore no second constructor: an absent header and a header declaring nothing are the
+ * same declared policy, which is Fetch's own note about a structured field that is missing or malformed.
+ *
+ * IT IS BUILT THROUGH A FUNCTION AND NEVER BY AN INITIALIZER, for SerializedPolicyContainer's reason: a
+ * designated initializer zero-fills what it does not name, so the day a third delivery lands (§6.2's `allow`
+ * attribute does not travel this way, but a `<meta>` delivery would) every producer stops compiling until it
+ * states one, instead of silently carrying a NULL nobody chose. */
+typedef struct {
+    const char *enforced;      /* §6.1's `Permissions-Policy` field value, or NULL */
+    const char *report_only;   /* §8.1's `Permissions-Policy-Report-Only` field value, or NULL */
+} SerializedResponsePermissionsPolicy;
+
+SerializedResponsePermissionsPolicy serialized_response_permissions_policy(const char *enforced,
+                                                                          const char *report_only);
+
+/* §9.6 "Create a Permissions Policy for a navigable from response", STEPS 2 THROUGH 4 — over a policy its step
+ * 1 has already produced.
+ *
+ * STEP 1 IS THE CALLER'S BECAUSE IT HAS TWO IMPLEMENTATIONS AND ONLY THE CALLER KNOWS WHICH. "Let policy be
+ * the result of running Create a Permissions Policy for a navigable given container and origin" is
+ * permissions_policy_create for a navigable whose §7.3.1.3 container is an element in THIS heap, and it is
+ * permissions_policy_deserialize for one whose container is in another WASM instance — where §9.5 ran in the
+ * instance that HELD the element and its answer crossed. Folding step 1 in here would mean this function
+ * taking either an element's three facts or a peer's record, which is one function answering two questions.
+ * Steps 2-4 are identical for both, which is the half that must not be written twice.
+ *
+ * `header_value` is the field value §9.1 step 2 gets — the enforced or the report-only one, chosen by the
+ * CALLER, which is §9.1 step 1 ("let header name be `Permissions-Policy-Report-Only` if report-only is True,
+ * or `Permissions-Policy` otherwise"). NULL is a response that carried none.
+ * `origin` is §9.2's origin — the origin of the Document being created — and is what `self` resolves to. It is
+ * BORROWED and must be an AGENT-LIFETIME record (core/url/origin.h releases these with the agent and never
+ * before), because §4.7's self-origin is stored on the allowlist and outlives this call by the life of the
+ * Document. */
+void permissions_policy_apply_response(PermissionsPolicy *policy, const char *header_value,
+                                       const Origin *origin);
+
 /* ---- §4.2's PERMISSIONS POLICY IN THE FORM IT CROSSES AN INSTANCE BOUNDARY --------------------------------
  *
  * WHY A POLICY CROSSES AT ALL, WHEN §9.5 TAKES AN ELEMENT. SECURITY.md keys a WASM instance on
@@ -137,10 +211,17 @@ void permissions_policy_free(PermissionsPolicy *policy);
  * §9.4's container policy against the child's origin, and its step 7 compares the two origins — so "the
  * inputs" is that document's WHOLE policy (its inherited map AND its declared policy's allowlists), its
  * origin, and the `allow` attribute's bytes, and a peer handed them would be a SECOND site evaluating §9.7.
- * One question answered in two places is the defect the top of this file is written against. Carrying HALF the
- * inputs — the inherited map with the declared allowlists left behind — is not a smaller carrier but a WRONG
- * one: it agrees with §9.8 only while every declared policy in this build is §9.5's «[], []», and stops
- * agreeing, silently, on the day §9.6's `Permissions-Policy` header parse lands.
+ * One question answered in two places is the defect the top of this file is written against.
+ *
+ * AND WHAT CROSSES IS §9.5'S RESULT, WHOSE DECLARED POLICY IS EMPTY BY CONSTRUCTION — which is why this record
+ * carries the INHERITED MAP ALONE and why that is not the half-a-policy it would otherwise be. §9.6 splits into
+ * a step 1 that needs the CONTAINER (the creator's heap) and steps 2-4 that need the RESPONSE (the child's own,
+ * fetched by the child's own instance), and the two live on opposite sides of the boundary. So the creator
+ * sends §9.5's answer and the RECEIVER runs permissions_policy_apply_response over the response IT fetched;
+ * neither side evaluates the other's half. A record that carried declarations would therefore be a §9.6 result
+ * sent where a §9.5 answer belongs — one instance applying another instance's response headers to a document
+ * that never received them — and permissions_policy_serialize ASSERTS against exactly that rather than
+ * against the struct's size, because the size was only ever a proxy for this sentence.
  *
  * THE GRAMMAR IS §4.1's TOKENS AND §4.2's TWO WORDS — `<token>=<Enabled|Disabled>`, ';'-joined. The standard's
  * own vocabulary rather than this build's declaration order, for the reason HTML §7.1.4's values cross their
@@ -169,14 +250,15 @@ bool permissions_policy_serialized_has_container(const char *text);
    the absence is §9.7 step 1's answer and is a decision its READER takes rather than a policy to build. */
 PermissionsPolicy *permissions_policy_deserialize(const char *text);
 
-/* §4.2's EMPTY PERMISSIONS POLICY — "a permissions policy that has an inherited policy which contains
-   `Enabled` for every supported feature, a declared policy whose declarations and reporting configuration are
-   both empty ordered maps". It is what §10.1 "Changes to the HTML specification" gives every Document as its
-   REPORT-ONLY permissions policy ("which is a permissions policy, which is initially empty"), and §9.10 checks
-   against it to decide whether a report-only violation happened. ONE CONSTANT, borrowed and never freed: an
-   empty policy is a value of this user agent's supported-feature set and holds nothing about any document, so
-   it is not the per-realm fact the module-static rule is written against. */
-const PermissionsPolicy *permissions_policy_empty(void);
+/* §4.2's EMPTY PERMISSIONS POLICY IS GONE FROM THIS INTERFACE, and the deletion is the point rather than a
+   simplification. It existed as the stand-in for §10.1's REPORT-ONLY permissions policy while no header could
+   be parsed — one constant handed to every §9.10 check — and §9.6's report-only arm now gives every Document
+   a real one, built by §9.5 over its own navigable and narrowed by its own `Permissions-Policy-Report-Only`.
+   With that, nothing read the constant: a value with a writer and no reader is not a mechanism, and keeping
+   one that ANSWERS A SECURITY QUESTION would leave a second, more permissive report-only policy available to
+   whichever caller reached for it next. §4.2's empty policy is not a value this user agent needs a name for —
+   it is what a Document with no navigable would have, and §4.8.5's allowed-to-use refuses such a Document at
+   its step 1 without ever asking a policy. */
 
 /* §9.9 "Check permissions policy" — "given permissions policy (policy), a feature (feature), an origin
    (origin) and another origin (document origin), this algorithm returns `Disabled` if feature should be

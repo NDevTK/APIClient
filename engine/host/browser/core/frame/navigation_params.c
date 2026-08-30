@@ -64,50 +64,44 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
      * header a MEANING — the empty declared policy — which is exactly what §9.5's create hands every Document
      * this build makes, so a response with neither header is fully modelled and nothing here fires.
      *
-     * A PRESENT ONE IS AN UNBUILT CAPABILITY WITH A SECURITY MEANING, which is why it crashes rather than being
-     * dropped. §9.5's «[], []» is the MOST PERMISSIVE declared policy there is: every narrowing a server wrote
-     * would vanish, and §9.9's step 2 would fall through to the feature's default allowlist as though the site
-     * had asked for nothing. Silently answering "allowed" for a feature a response disallowed is the defaulted-
-     * read defect with a policy decision inside it.
+     * WHAT IS PERFORMED HERE IS §9.1'S STEP 1 AND FETCH'S HALF OF ITS STEP 2, AND NOT THE PARSE. Step 1 picks
+     * the header NAME from `report-only`, and step 2's get-a-structured-field-value begins with Fetch §2.2.2
+     * step 2's JOIN of every header of that name with 0x2C 0x20. Both are questions about a header LIST, and a
+     * header list exists only while the response does — this engine frees it at the parse, deliberately, so
+     * that nothing the bundle runs can ask for a header again. The rest of §9.1 needs the ORIGIN, which is not
+     * decided until HTML §7.5.1 creates the Document, so it runs there
+     * (core/permissions_policy/permissions_policy.h's permissions_policy_apply_response).
+     *
+     * BOTH NAMES ARE GOT UNCONDITIONALLY BECAUSE `report-only` IS NOT KNOWN HERE — §10.1 "Changes to the HTML
+     * specification" inserts a SECOND §9.6 call beside §7.5.1's with report-only True, so ONE response feeds
+     * two policies and this struct carries what both of them will ask for. Getting one and not the other would
+     * be this function deciding which of §7.5.1's two calls exists.
+     *
+     * AN ABSENT HEADER IS NULL AND THAT IS A POSITIVE STATEMENT — §9.1 step 3's empty ordered map, which §9.6's
+     * merge then has nothing to copy from, leaving §9.5's policy. It is the same answer a response carrying a
+     * MALFORMED value gets, which is Fetch's own note ("get a structured field value intentionally does not
+     * distinguish between a header not being present and its value failing to parse") and is decided at the
+     * parse rather than here.
      *
      * IT IS READ HERE BECAUSE THIS IS WHERE A RESPONSE IS READ — the same seam §7.1.3's opener policy and
      * §7.1.4's embedder policy are obtained at. A ROOT document's headers DO reach it: an entry that roots an
      * agent at a response is handed the response's header block, parses it into a Fetch header list and calls
-     * this function over that list, so a top-level `Permissions-Policy` reaches this crash. The sentence that
-     * stood here said the exact opposite — that a root document's headers never reach this function and that
-     * carrying one therefore needed a new field on core/platform.h's host record — and it was believed and
-     * acted on, which is what a stale claim about the tree costs when it is written beside a `DFAIL`. The tree
-     * settles it in one grep: every `navigation_params_from_response` call site has a
-     * `header_list_parse_field_lines` above it.
+     * this function over that list.
      *
-     * WHAT THIS CRASH DOES NOT COVER IS THE RESPONSE THAT DOES NOT COME THROUGH THIS FUNCTION — a CHILD
-     * NAVIGABLE's. Its loader parses its own header list and then performs §7.4.6 PIECEWISE off it, calling
-     * §7.1.4's and §7.1.3's obtains directly and asking `header_list_get` for the CSP list and the computed
-     * type; the piece it does not perform is this one, so a framed document's `Permissions-Policy` is dropped
-     * in silence while the identical header on the framing document aborts. §7.5.1's `requestsOAC` is NOT the
-     * same omission and must not be read as one: §8.1.2.2 allocates a cluster once per agent and §7.1.2's note
-     * says a later same-origin Document inherits that allocation, so a child navigable of this agent has no
-     * such question to ask.
+     * WHAT THIS DOES NOT COVER IS THE RESPONSE THAT DOES NOT COME THROUGH THIS FUNCTION — a CHILD NAVIGABLE's.
+     * Its loader parses its own header list and then performs §7.4.6 PIECEWISE off it, calling §7.1.4's and
+     * §7.1.3's obtains directly and asking `header_list_get` for the CSP list and the computed type; the piece
+     * it does not perform is this one, so a framed document's `Permissions-Policy` is dropped in silence while
+     * the identical header on the framing document is applied. §7.5.1's `requestsOAC` is NOT the same omission
+     * and must not be read as one: §8.1.2.2 allocates a cluster once per agent and §7.1.2's note says a later
+     * same-origin Document inherits that allocation, so a child navigable of this agent has no such question to
+     * ask.
      * ONE ALGORITHM ASKED AT ONE ENTRY AND NOT AT ANOTHER IS THE DEFECT, AND THE FIX IS AT THE ENTRY THAT DOES
      * NOT ASK — the child loader builds its navigation params through this function like every other entry.
      * It is not a second reader here, and it is not a field on the host record: a fact this engine already
      * decides from a response it already holds does not need a second door in from the trusted zone. */
-    {
-        const char *pp = header_list_get_last(headers, "permissions-policy");
-        const char *ppro = header_list_get_last(headers, "permissions-policy-report-only");
-
-        if (pp != NULL || ppro != NULL)
-            DFAIL("a navigation response carries a `Permissions-Policy` (or `Permissions-Policy-Report-Only`) "
-                  "header and this build parses neither. Permissions Policy §9.6 \"Create a Permissions Policy "
-                  "for a navigable from response\" is what would apply it, over §9.1 \"Process response "
-                  "policy\" (a structured-field DICTIONARY, not an item or a list), §9.2 \"Construct policy "
-                  "from dictionary and origin\" (the `*` and `self` tokens, `report-to` parameters, and the "
-                  "permissions-source-expression allowlist) and §4.7 \"Allowlists\"' matches-an-origin, which "
-                  "§9.9 step 2 then asks. Until those exist the Document would get §9.5's «[], []» declared "
-                  "policy — the MOST permissive one — so every restriction this server wrote would be read as "
-                  "silence. Build §9.6 and hand its declared policy to permissions_policy_create; the "
-                  "report-only half is §10.1's separate report-only permissions policy on the Document");
-    }
+    out->permissions_policy             = header_list_get(headers, "permissions-policy");
+    out->permissions_policy_report_only = header_list_get(headers, "permissions-policy-report-only");
 
     /* §7.1.4's obtain, which §7.1.7's create-a-policy-container-from-a-fetch-response step 4 makes the policy
        container's EMBEDDER POLICY item: "if environment is non-null, then set result's embedder policy to the
@@ -136,6 +130,10 @@ void navigation_params_free(NavigationParams *p)
     if (!p) return;
     free(p->csp);
     p->csp = NULL;
+    free(p->permissions_policy);
+    p->permissions_policy = NULL;
+    free(p->permissions_policy_report_only);
+    p->permissions_policy_report_only = NULL;
     embedder_policy_free(&p->embedder);
     opener_policy_free(&p->opener);
 }

@@ -177,12 +177,15 @@ static void engine_agent_init(JSContext *ctx, const char *origin, const char *to
    that substitution unspellable rather than merely fixed. */
 static void engine_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                                  DocumentKind kind,
-                                 SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                                 SerializedPolicyContainer policy,
+                                 SerializedResponsePermissionsPolicy permissions_policy,
+                                 SandboxFlags sandbox_flags,
                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
-    platform_document_install(ctx, g, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
+    platform_document_install(ctx, g, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
+                              doc_id, nav_proxy);
     JS_FreeValue(ctx, g);
 }
 
@@ -238,12 +241,15 @@ static JSContext *engine_realm_new(JSRuntime *rt, const char *top_level_url)
 
 static JSContext *engine_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                      const char *top_level_url, const char *origin, DocumentKind kind,
-                                     SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                                     SerializedPolicyContainer policy,
+                                     SerializedResponsePermissionsPolicy permissions_policy,
+                                     SandboxFlags sandbox_flags,
                                      uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = engine_realm_new(rt, top_level_url);
 
-    engine_realm_install(ctx, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
+    engine_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
+                         nav_proxy);
     return ctx;
 }
 
@@ -685,7 +691,10 @@ QJS_EXPORT int qjs_init(const char *html, unsigned html_len, const char *url, co
         SerializedPolicyContainer policy =
             policy_container_determine_navigation_params(url, response, inherited);
 
-        engine_realm_install(g_ctx, g_dom, url, origin, root_kind, policy, np.sandbox_flags,
+        engine_realm_install(g_ctx, g_dom, url, origin, root_kind, policy,
+                             serialized_response_permissions_policy(np.permissions_policy,
+                                                                    np.permissions_policy_report_only),
+                             np.sandbox_flags,
                              world_local_doc(), root_proxy);
         JS_FreeValue(g_ctx, root_proxy);
     }
@@ -905,6 +914,8 @@ QJS_EXPORT int qjs_join(const char *html, unsigned html_len, const char *url, co
             policy_container_determine_navigation_params(url, response, inherited);
 
         engine_realm_install(cctx, dom, url, origin_serialized(origin_agent()), joined_kind, policy,
+                             serialized_response_permissions_policy(np.permissions_policy,
+                                                                    np.permissions_policy_report_only),
                              np.sandbox_flags, doc, proxy);
         JS_FreeValue(cctx, proxy);
     }

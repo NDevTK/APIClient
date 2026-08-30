@@ -3,7 +3,10 @@
 #include <string.h>
 
 #include "check.h"
+#include "core/fetch/structured_fields.h"
+#include "core/frame/csp_source_list.h"
 #include "core/permissions_policy/permissions_policy.h"
+#include "core/url/url.h"
 
 /* §4.1's SUPPORTED FEATURES as one table, built from the one X-list the enum is built from — so a row cannot
    exist in one and not the other, and the token and the §4.8 default allowlist of a feature are read from the
@@ -17,14 +20,49 @@ typedef struct {
 static const PpFeatureRow PP_FEATURES[PP_FEATURE_N] = { PERMISSIONS_POLICY_FEATURES(PP_ROW) };
 #undef PP_ROW
 
-/* §4.2's permissions policy. THE DECLARED POLICY IS NOT A FIELD, and permissions_policy.h says why: §9.5 gives
-   every policy this build creates the declared policy «[], []», the only algorithm that would give it another
-   is §9.6, and the response header §9.6 reads crashes upstream (core/frame/navigation_params.c). A field whose
-   sole value is the empty map would be a map no writer fills and no reader could distinguish from a hole. */
+/* §4.7's ALLOWLIST — "may be either: the special value *, which represents every origin, or a struct
+ * containing: expressions … self-origin … src-origin".
+ *
+ * `*` IS A FIELD AND NOT A SENTINEL EXPRESSION, because §4.7's own first step reads it that way ("if the
+ * allowlist is the special value *, then return true") and because the alternative is a string compare inside
+ * the match loop, which is where the two spellings of `*` — §9.2's TOKEN and a Member Value STRING that
+ * happens to be `"*"` — would silently become one answer.
+ *
+ * THERE IS NO src-origin FIELD, and its absence is a statement rather than an omission. §4.7 lists one, and
+ * the ONLY algorithm that ever writes one is §9.3 "Parse policy directive"'s `'src'` keyword — which reads the
+ * `<iframe allow=…>` attribute, not a header. §9.4 "Process permissions policy attributes" is not built (see
+ * the DFAIL in pp_define_inherited, which crashes on an `allow` attribute rather than reading it as empty), so
+ * a src-origin field here would be a field with a reader and NO WRITER: exactly the shape CLAUDE.md makes
+ * greppable, and the direction that reads as a permissive answer nobody computed. The day §9.3 lands it lands
+ * WITH the field, and the crash upstream is what makes that impossible to forget.
+ *
+ * `self_origin` IS BORROWED AND MUST BE AGENT-LIFETIME. core/url/origin.h releases origin records with the
+ * agent and never before ("every parked flow's delta names these records"), and a policy dies with its
+ * Document, so the pointer cannot outlive its referent. */
+typedef struct {
+    bool          star;
+    const Origin *self_origin;     /* §4.7's self-origin, or NULL */
+    char        **expressions;     /* §4.7's ordered set of permissions-source-expression (owned, NUL-term) */
+    int           n_expressions;
+    int           cap_expressions;
+} PpAllowlist;
+
+/* §4.2's permissions policy — "a struct with the following items: inherited policy …, declared policy …", and
+   §4.2's declared policy is «declarations, reporting configuration». THE REPORTING CONFIGURATION IS NOT A
+   FIELD and permissions_policy.h states the residual: §9.11 is its only reader and §9.11's only callers are
+   §9.13/§9.14, which do not exist here, so storing it would be a value with a writer and no reader. */
 struct PermissionsPolicy {
     /* §4.3: "After a permissions policy has been initialized, its inherited policy will contain a value for
        each supported feature." A dense array is that sentence — there is no absent entry to answer for. */
     PermissionsPolicyValue inherited[PP_FEATURE_N];
+    /* §4.2's DECLARATIONS: "an ordered map from features to allowlists". THE PRESENCE BIT IS SEPARATE FROM THE
+       ALLOWLIST because §9.8 step 3 and §9.9 step 2 both begin "if feature is PRESENT in policy's declared
+       policy" and an ABSENT feature is not an empty allowlist: absent falls through to the DEFAULT allowlist
+       (`Enabled` for a same-origin document), while `camera=()` is a present allowlist that matches NOTHING.
+       Reading a zeroed allowlist as absence would turn the second into the first and hand back a feature the
+       server explicitly withheld. */
+    bool                   declared_present[PP_FEATURE_N];
+    PpAllowlist            declared[PP_FEATURE_N];
 };
 
 static void pp_check_feature(PermissionsPolicyFeature feature)
@@ -47,21 +85,115 @@ PermissionsPolicyDefaultAllowlist permissions_policy_default_allowlist(Permissio
     return PP_FEATURES[feature].default_allowlist;
 }
 
-/* §9.8 "Get feature value for origin", steps 2-4 — the whole of it for a policy whose declared policy is
- * «[], []».
+/* ---- §4.7 "Allowlists" ------------------------------------------------------------------------------------ */
+
+static void pp_allowlist_free(PpAllowlist *a)
+{
+    int k;
+
+    for (k = 0; k < a->n_expressions; k++)
+        free(a->expressions[k]);
+    free(a->expressions);
+    memset(a, 0, sizeof *a);
+}
+
+/* §4.7's "To determine whether an allowlist matches an origin origin", verbatim. */
+static bool pp_allowlist_matches(const PpAllowlist *a, const Origin *origin)
+{
+    UrlRecord url;
+    bool      ok;
+    int       k;
+
+    DCHECK(a != NULL && origin != NULL,
+           "§4.7's allowlist matching was asked about nothing — an allowlist and an origin are both records, "
+           "and the absence of either is a caller that lost one rather than an answer of `false`");
+    /* Step 1: "If the allowlist is the special value *, then return true." The spec's own note is why there is
+       no scheme test beside it: "We are not using the CSP variant of wildcard matching as it requires the
+       HTTPS scheme." So `*` here is broader than `*` in a CSP source list, deliberately. */
+    if (a->star)
+        return true;
+    /* Step 2: "If the allowlist's self-origin is not null and it is same origin-domain with origin, then
+       return true." SAME ORIGIN-DOMAIN and not same origin — §7.1.1's other relation, which consults
+       `document.domain`, and the two differ for exactly the pages that used that API. */
+    if (a->self_origin != NULL && origin_same_origin_domain(a->self_origin, origin))
+        return true;
+    /* Step 3 is the src-origin, which this build never writes; see PpAllowlist. */
+    /* Step 4: "If origin is an opaque origin, return false." BEFORE the URL parse below, because §7.1.1 gives
+       an opaque origin the serialization `null`, which is not a URL and would parse into something that is. */
+    if (origin_is_opaque(origin))
+        return false;
+    /* Step 5: "Let url be the result of calling the url parser on the serialization of origin." */
+    {
+        const char *s = origin_serialized(origin);
+
+        ok = url_parse(&url, s, strlen(s), NULL);
+        DCHECK(ok, "§4.7 step 5 could not parse the serialization of a TUPLE origin as a URL — §7.1.1 "
+                   "serializes a tuple origin as `scheme://host[:port]`, which the URL parser accepts by "
+                   "construction, and step 4 has already refused the one origin that serializes to `null`");
+        /* THE FREE IS ON THE FAILURE PATH TOO, which URL §4.4's entry states as its contract: "`out` is left
+           initialised-and-empty on failure, so the caller frees it either way". Without it the release build —
+           where the DCHECK above is compiled out and this branch is the only exit — would leak a record per
+           call, on a path that runs once per source expression of every policy of every check. */
+        if (!ok) {
+            url_record_free(&url);
+            return false;
+        }
+    }
+    /* Step 6: "For each permissions-source-expression item in the allowlist's expressions: if the result of
+       running CSP §6.7.2.8 `Does url match expression in origin with redirect count?` on url, item, origin,
+       and 0 is true then return true."
+       THE THIRD ARGUMENT IS `origin` AND NOT THE SELF-ORIGIN, which is what §4.7 says and is not the same
+       thing: §6.7.2.8 reads it for the `'self'` keyword and for a SCHEMELESS host-source's scheme, and a
+       permissions-source-expression is never `'self'` (§9.2 handles that token itself and
+       csp_source_is_scheme_or_host_source refuses the keyword), so what the argument actually decides here is
+       the scheme a bare `example.com` is measured against. THE REDIRECT COUNT IS 0 BECAUSE §4.7 PASSES 0 —
+       there is no request here at all, so the path comparison §6.7.2.8 drops after a redirect always applies. */
+    for (k = 0; k < a->n_expressions; k++) {
+        CspToken e;
+
+        e.p = a->expressions[k];
+        e.n = strlen(a->expressions[k]);
+        if (csp_source_match_url(e, &url, origin, 0) == CSP_MATCHES) {
+            url_record_free(&url);
+            return true;
+        }
+    }
+    url_record_free(&url);
+    /* Step 7: "Return false." */
+    return false;
+}
+
+/* §9.8 step 3 / §9.9 step 2, which are the SAME two lines and are written once:
+     "If feature is present in policy's declared policy:
+        1. If policy's declared policy's declarations[feature] matches origin, then return `Enabled`.
+        2. Otherwise return `Disabled`."
+   `*decided` says whether the step FIRED, which is the whole of what the two callers need to know — §9.8 falls
+   through to `Enabled` and §9.9 falls through to the default allowlist, and those are different answers. */
+static bool pp_declared_decides(const PermissionsPolicy *policy, PermissionsPolicyFeature feature,
+                                const Origin *origin, PermissionsPolicyValue *out)
+{
+    if (!policy->declared_present[feature])
+        return false;
+    *out = pp_allowlist_matches(&policy->declared[feature], origin) ? PP_ENABLED : PP_DISABLED;
+    return true;
+}
+
+/* §9.8 "Get feature value for origin".
  *   "1. Let policy be document's report-only permissions policy if report-only is True, or document's
  *    permissions policy otherwise." — the CALLER's choice, so it passes the policy rather than the document.
  *   "2. If policy's inherited policy for feature is `Disabled`, return `Disabled`."
- *   "3. If feature is present in policy's declared policy: …" — absent for every policy here, by §9.5.
+ *   "3. If feature is present in policy's declared policy: …"
  *   "4. Return `Enabled`."
  *
  * IT DOES NOT CONSULT THE DEFAULT ALLOWLIST, and that is the whole difference from §9.9 one function down. An
  * implementation that shared one body between them would answer a parent's inheritance question with a
  * cross-origin child's `'self'` refusal and disable a feature at every nesting level.
- * `origin` is §9.8's third argument and is READ BY STEP 3 ALONE — the step this build's declared policy makes
- * unreachable. It stays in the signature because the caller is §9.7, which passes two DIFFERENT origins to two
- * consecutive calls, and a signature that dropped it would make those two calls identical and silently collapse
- * §9.7 steps 2 and 3 into one. */
+ * `origin` is §9.8's third argument and is READ BY STEP 3 — which is now REACHABLE, because §9.6 fills the
+ * declared policy from the response. It was already in the signature when the step was not, because the caller
+ * is §9.7, which passes two DIFFERENT origins to two consecutive calls, and a signature that dropped it would
+ * make those two calls identical and silently collapse §9.7 steps 2 and 3 into one — which is the same reason
+ * it is right now, one step further along: those two calls are what ask an embedder's OWN declared allowlist
+ * whether it reaches the child's origin. */
 static PermissionsPolicyValue pp_get_feature_value_for_origin(const PermissionsPolicy *policy,
                                                               PermissionsPolicyFeature feature,
                                                               const Origin *origin)
@@ -76,7 +208,13 @@ static PermissionsPolicyValue pp_get_feature_value_for_origin(const PermissionsP
     pp_check_feature(feature);
     if (policy->inherited[feature] == PP_DISABLED)
         return PP_DISABLED;                                   /* step 2 */
-    return PP_ENABLED;                                        /* step 4 — step 3 is «[], []» here */
+    {
+        PermissionsPolicyValue declared;
+
+        if (pp_declared_decides(policy, feature, origin, &declared))
+            return declared;                                  /* step 3 */
+    }
+    return PP_ENABLED;                                        /* step 4 */
 }
 
 /* §9.9 "Check permissions policy", in full. Steps 3-4 are the DEFAULT ALLOWLIST steps §9.8 does not have. */
@@ -94,7 +232,16 @@ PermissionsPolicyValue permissions_policy_check(const PermissionsPolicy *policy,
     /* Step 1: "If policy's inherited policy for feature is `Disabled`, return `Disabled`." */
     if (policy->inherited[feature] == PP_DISABLED)
         return PP_DISABLED;
-    /* Step 2: "If feature is present in policy's declared policy: …" — «[], []» here; see the struct. */
+    /* Step 2: "If feature is present in policy's declared policy: 1. If … declarations[feature] matches origin,
+       then return `Enabled`. 2. Otherwise return `Disabled`." THIS IS THE STEP THE HEADER FILLS, and it is the
+       one that makes a server's `Permissions-Policy` mean anything: a feature the response DECLARED is decided
+       here and never reaches the default allowlist below. */
+    {
+        PermissionsPolicyValue declared;
+
+        if (pp_declared_decides(policy, feature, origin, &declared))
+            return declared;
+    }
     /* Step 3: "If feature's default allowlist is *, return `Enabled`." */
     if (PP_FEATURES[feature].default_allowlist == PP_ALLOWLIST_STAR)
         return PP_ENABLED;
@@ -223,8 +370,231 @@ PermissionsPolicy *permissions_policy_create(const PermissionsPolicy *container_
                                                    container_document_origin, container_allow,
                                                    container_allow_len, origin);
     /* Step 5: "let policy be a new permissions policy, with inherited policy inherited policy and declared
-       policy «[], []»." — the empty declared policy is the absence of the field; see the struct. */
+       policy «[], []»." — the calloc above IS that empty declared policy: every `declared_present` is false,
+       which is "the feature is not present in the declared policy" and not "the feature has an empty
+       allowlist". §9.6 is the one algorithm that turns any of them true. */
     return policy;
+}
+
+/* ---- §9.1, §9.2 and §9.6's response half ----------------------------------------------------------------- */
+
+static void pp_allowlist_add_expression(PpAllowlist *a, const char *s, size_t n)
+{
+    char *copy;
+
+    if (a->n_expressions >= a->cap_expressions) {
+        a->cap_expressions = a->cap_expressions ? a->cap_expressions * 2 : 4;
+        a->expressions = realloc(a->expressions, (size_t)a->cap_expressions * sizeof *a->expressions);
+        CHECK(a->expressions != NULL, "permissions policy: OOM growing §4.7's allowlist expressions");
+    }
+    copy = malloc(n + 1);
+    CHECK(copy != NULL, "permissions policy: OOM copying a §5.1 permissions-source-expression");
+    memcpy(copy, s, n);
+    copy[n] = '\0';
+    a->expressions[a->n_expressions++] = copy;
+}
+
+/* §4.1's "the policy-controlled feature identified by feature-name", and §9.2's / §9.3's shared answer for a
+   name that identifies none: "if feature-name does not identify any recognized policy-controlled feature, then
+   continue". PP_FEATURE_N IS THAT ANSWER — the sentinel the enum already spells — so an unsupported token is
+   SKIPPED and never guessed at, which is §4.1's own "user agents are not required to support every feature". */
+static PermissionsPolicyFeature pp_feature_of_token(const char *name)
+{
+    int f;
+
+    for (f = 0; f < PP_FEATURE_N; f++)
+        if (!strcmp(PP_FEATURES[f].token, name))
+            return (PermissionsPolicyFeature)f;
+    return PP_FEATURE_N;
+}
+
+/* §5.2's TOKEN `*` and TOKEN `self`, asked of ONE bare item. The KIND is half the question and dropping it is
+   the trap: `camera="self"` is a STRING whose text is `self` and §5.2 makes a String "a String containing the
+   ASCII permissions-source-expression", so reading it as the keyword would resolve an allowlist to the
+   document's own origin because of a pair of quotes. */
+static bool pp_bare_is_token(const SfBareItem *b, const char *token)
+{
+    return b->kind == SF_TOKEN && b->text != NULL && !strcmp(b->text, token);
+}
+
+/* §9.2's inner-list scan for the token `*`: "or if value is a list which contains the token *". It is asked
+   BEFORE any element is stored, because it does not narrow an allowlist — it REPLACES one, so
+   `camera=(self *)` is `*` and not "self plus a wildcard". */
+static bool pp_member_list_has_star(const SfMember *m)
+{
+    int k;
+
+    if (!m->inner_list)
+        return false;
+    for (k = 0; k < m->n_items; k++)
+        if (pp_bare_is_token(&m->items[k].item, "*"))
+            return true;
+    return false;
+}
+
+/* §9.2 "Construct policy from dictionary and origin" — "given an ordered map (dictionary) and an origin
+ * (origin), this algorithm will return a declared policy".
+ *
+ * IT WRITES THE TWO ARRAYS RATHER THAN RETURNING A MAP, because the declared policy IS those two arrays on the
+ * policy record (see the struct) and a second representation to copy out of would be a second place a feature
+ * can go missing. `present`/`declared` are PP_FEATURE_N-wide and start empty, which is §9.2 step 1's "let
+ * declarations be an empty ordered map".
+ *
+ * §9.2's REPORTING CONFIGURATION (its step 2 and its step 3's `report-to`) IS PARSED AND DISCARDED — the named
+ * residual permissions_policy.h states, and the reason a `report-to` parameter is not a crash: it cannot move
+ * any answer, because every answer is decided by an ALLOWLIST. */
+static void pp_construct_from_dictionary(const SfDictionary *dict, const Origin *origin,
+                                         bool *present, PpAllowlist *declared)
+{
+    int i;
+
+    for (i = 0; i < dict->n_members; i++) {                     /* step 3: "for each feature-name → (value, params)" */
+        const SfMember          *m = &dict->members[i].value;
+        PermissionsPolicyFeature feature = pp_feature_of_token(dict->members[i].key);
+        PpAllowlist              allowlist;
+
+        if (feature == PP_FEATURE_N)                            /* step 3.1 */
+            continue;
+        memset(&allowlist, 0, sizeof allowlist);                /* step 3.4: "let allowlist be a new allowlist" */
+        /* Step 3.5: "if value is the token *, or if value is a list which contains the token *, set allowlist
+           to the special value *." */
+        if ((!m->inner_list && pp_bare_is_token(sf_member_bare(m), "*")) || pp_member_list_has_star(m)) {
+            allowlist.star = true;
+        } else if (!m->inner_list) {
+            /* Step 3.6.1: "if value is the token self, let allowlist's self-origin be origin."
+               A BARE ITEM THAT IS NEITHER TOKEN LEAVES THE ALLOWLIST EMPTY, AND THAT IS WHAT §9.2 SAYS. Its
+               otherwise-arm has exactly two branches — the token `self`, and "otherwise if value is a LIST" —
+               so a Member Value that is a bare STRING (`camera="https://a.example"`, which §5.2 admits) falls
+               out of both and §9.2 stores the empty allowlist it made at step 3.4. That is the RESTRICTIVE
+               direction and it is written verbatim rather than repaired here: guessing the other reading would
+               be this file inventing an allowlist entry no algorithm produced, which is precisely what §9.2's
+               own "does not identify any recognized feature ⇒ continue" refuses to do one line up. */
+            if (pp_bare_is_token(sf_member_bare(m), "self"))
+                allowlist.self_origin = origin;
+        } else {
+            int k;
+
+            /* Step 3.6.2: "otherwise if value is a list, then for each element in value: …" */
+            for (k = 0; k < m->n_items; k++) {
+                const SfBareItem *e = &m->items[k].item;
+
+                if (pp_bare_is_token(e, "self")) {              /* step 3.6.2.1 */
+                    allowlist.self_origin = origin;
+                    continue;
+                }
+                /* Step 3.6.2.2: "if element is a valid permissions-source-expression, append element to
+                   allowlist's expressions." §5.1: `permissions-source-expression = scheme-source / host-source`
+                   — CSP §2.3.1's two productions, recognised by the one reading of that grammar this tree has
+                   (core/frame/csp_source_list.h). §5.2's "any other items inside of an Inner List will be
+                   ignored by the processing steps" is the same sentence read from the other side, which is why
+                   an unrecognised element is skipped rather than failing the member. */
+                if (e->text != NULL) {
+                    CspToken t;
+
+                    t.p = e->text;
+                    t.n = strlen(e->text);
+                    if (csp_source_is_scheme_or_host_source(t))
+                        pp_allowlist_add_expression(&allowlist, e->text, t.n);
+                }
+            }
+        }
+        /* Step 3.7: "set declarations[feature] to allowlist." A REPEATED FEATURE CANNOT ARRIVE HERE — RFC 9651
+           §4.2.2 step 2.4 overwrote the earlier member in the dictionary — so this is a set and never a merge,
+           and the assert is what says so rather than a free that would quietly accept one. */
+        DCHECK(!present[feature],
+               "§9.2 reached one policy-controlled feature TWICE from a single dictionary — RFC 9651 §4.2.2's "
+               "ordered map overwrites a duplicate key in place ('all but the last instance are ignored'), so "
+               "two members naming one feature is a dictionary parse that APPENDED where the section says it "
+               "must overwrite, and the allowlist about to be dropped is the one the server sent last");
+        present[feature]   = true;
+        declared[feature]  = allowlist;
+    }
+}
+
+/* §9.1 "Process response policy" — "given a response (response), an origin (origin), and a boolean
+ * (report-only), this algorithm returns a declared policy".
+ *
+ * ITS STEP 1 AND HALF OF ITS STEP 2 HAPPENED AT THE RESPONSE, and that is the split permissions_policy.h
+ * argues: step 1 picks the header NAME from `report-only`, and step 2's "get a structured field value" begins
+ * with Fetch §2.2.2 step 2's join of every header of that name. Both are questions about a header LIST, which
+ * exists only while the response does — so core/frame/navigation_params.c performs them and what arrives here
+ * is the one field value. What is left is the half that is about the GRAMMAR and the ORIGIN, and neither of
+ * those is available at the fetch: the origin is not decided until §7.5.1.
+ *
+ * STEP 3 IS THE ONE THAT MAKES A MALFORMED HEADER SAFE: "if parsed header is null, return an empty ordered
+ * map." Fetch's get returns null for a value that does not parse as well as for an absent header, so a server
+ * sending `Permissions-Policy: ((((` gets the same declared policy as one sending nothing — which is the
+ * platform-wide uniformity Fetch's own note demands, and is why sf_parse_dictionary failing here is a VALUE
+ * and never a crash. */
+static void pp_process_response_policy(const char *header_value, const Origin *origin,
+                                       bool *present, PpAllowlist *declared)
+{
+    SfDictionary dict;
+
+    if (header_value == NULL)
+        return;                                                  /* no such header: step 3's empty map */
+    if (!sf_parse_dictionary(header_value, strlen(header_value), &dict))
+        return;                                                  /* step 3, for a value that did not parse */
+    pp_construct_from_dictionary(&dict, origin, present, declared);   /* step 4 */
+    sf_dictionary_free(&dict);
+}
+
+SerializedResponsePermissionsPolicy serialized_response_permissions_policy(const char *enforced,
+                                                                          const char *report_only)
+{
+    SerializedResponsePermissionsPolicy r;
+
+    r.enforced    = enforced;
+    r.report_only = report_only;
+    return r;
+}
+
+void permissions_policy_apply_response(PermissionsPolicy *policy, const char *header_value,
+                                       const Origin *origin)
+{
+    bool        present[PP_FEATURE_N];
+    PpAllowlist declared[PP_FEATURE_N];
+    int         f;
+
+    DCHECK(policy != NULL,
+           "§9.6's steps 2-4 were asked to apply a response's declared policy to NOTHING — its step 1 has "
+           "already run §9.5 and returned a policy, so a NULL here is a caller that did not perform step 1");
+    DCHECK(origin != NULL,
+           "§9.6 was given no ORIGIN. HTML §7.5.1 passes navigationParams's origin, §9.2 makes it what the "
+           "token `self` resolves to, and an allowlist whose self-origin is absent refuses the document's own "
+           "origin — so a missing origin does not fail loudly, it silently narrows every `self` a server wrote");
+    for (f = 0; f < PP_FEATURE_N; f++) {
+        DCHECK(!policy->declared_present[f],
+               "§9.6 is applying a response to a policy that ALREADY carries a declared policy — its step 1 "
+               "returns §9.5's policy, whose declared policy is «[], []», so a policy with declarations here "
+               "has had a response applied to it once already and the second application would be a document "
+               "judged under two responses' headers at once");
+        present[f] = false;
+        memset(&declared[f], 0, sizeof declared[f]);
+    }
+    /* Step 2: "let d be the result of running Process response policy given response, origin and
+       report-only." The report-only choice is the CALLER's, spelled as WHICH field value it passed. */
+    pp_process_response_policy(header_value, origin, present, declared);
+    /* Step 3: "for each feature → allowlist of d's declarations: if policy's inherited policy[feature] is true,
+       then set policy's declared policy's declarations[feature] to allowlist."
+       "TRUE" IS §4.2's `Enabled` — the section defines an inherited policy as a map to `Enabled` or `Disabled`
+       and §9.6 writes the boolean spelling of it — and the test is what stops a response from re-granting a
+       feature its EMBEDDER already refused: a cross-origin child whose parent disallowed `autoplay` cannot
+       declare it back, and the declaration is DROPPED rather than stored-and-overruled, which is the difference
+       §9.11's endpoint would later be able to see. */
+    for (f = 0; f < PP_FEATURE_N; f++) {
+        if (present[f] && policy->inherited[f] == PP_ENABLED) {
+            policy->declared_present[f] = true;
+            policy->declared[f]         = declared[f];
+        } else {
+            pp_allowlist_free(&declared[f]);
+        }
+    }
+    /* Step 4: "set policy's declared policy[feature]'s reporting configuration to d's reporting configuration."
+       THE STEP IS OUTSIDE THE LOOP IN THE SPEC AND NAMES A `feature` THAT IS OUT OF SCOPE THERE — an editorial
+       defect in §9.6, whose intent §4.2 settles: a declared policy is «declarations, reporting configuration»,
+       so what is set is the declared policy's ONE reporting configuration. This build stores none; see the
+       named residual in permissions_policy.h. */
 }
 
 /* §4.2's TWO WORDS. They are the vocabulary a value CROSSES in, and they are the same two the standard uses
@@ -259,18 +629,22 @@ char *permissions_policy_serialize(const PermissionsPolicy *policy)
            "§4.2's permissions policy was serialized for a peer instance from NOTHING — a NULL policy is a "
            "Document §9.5 never ran for, and the record that provisions an instance states what its "
            "navigable's container DID answer, never that nobody asked");
-    /* THE FORCING ASSERT FOR THE ITEM ADDED NEXT. §4.2 makes a permissions policy a struct of an inherited
-       policy AND a declared policy, and this build's struct holds only the first because §9.5 gives every
-       policy it creates the declared policy «[], []» (see the struct above). The day §9.6's header parse lands
-       and a declared policy becomes a field, this serializer would carry HALF a policy across an instance
-       boundary and the peer would read the half it got as the whole — a cross-origin child silently judged
-       under its container's inheritance and none of its own response's declarations. The size equality is what
-       makes that impossible to add quietly: it fails the moment the struct grows. */
-    DCHECK(sizeof *policy == sizeof policy->inherited,
-           "§4.2's permissions policy has grown an item beside its inherited policy and this serializer still "
-           "carries only the inherited map — a peer instance would then be provisioned with half a policy and "
-           "no way to know it. Carry the new item on this record too (it crosses as TEXT, in the standard's own "
-           "vocabulary, like everything else here) and read it back in permissions_policy_deserialize");
+    /* THE ASSERT THAT SAYS WHAT THIS RECORD IS, and it replaces a `sizeof` equality that stood here while the
+       struct held only the inherited map. That size check was a PROXY for this sentence and it has now been
+       cashed: the struct DID grow a declared policy, and the growth is not the defect the check was written
+       against — what would be is a policy carrying DECLARATIONS being sent where §9.5's answer belongs.
+       §9.6 splits across the boundary (permissions_policy.h says how): step 1 needs the CONTAINER, which is in
+       the creator's heap, and steps 2-4 need the RESPONSE, which only the child's own instance ever fetches.
+       So what crosses is §9.5's result, whose declared policy is empty by construction, and the receiver runs
+       permissions_policy_apply_response over ITS response. A record with declarations on it would be one
+       instance applying its own response headers to a document that never received them. */
+    for (f = 0; f < PP_FEATURE_N; f++)
+        DCHECK(!policy->declared_present[f],
+               "§4.2's permissions policy is being serialized for a peer instance with a DECLARED POLICY on it "
+               "— every policy that crosses is §9.5's own result and §9.5's declared policy is «[], []», so "
+               "declarations here are a §9.6 result (this instance's response applied) being sent where a §9.5 "
+               "answer belongs. The receiver runs §9.6's steps 2-4 over the response IT fetched; send it the "
+               "policy BEFORE permissions_policy_apply_response ran, not after");
     for (f = 0; f < PP_FEATURE_N; f++)
         n += strlen(PP_FEATURES[f].token) + 1 + strlen(pp_value_token(policy->inherited[f])) + 1;
     out = malloc(n);
@@ -376,33 +750,18 @@ PermissionsPolicy *permissions_policy_deserialize(const char *text)
 
 void permissions_policy_free(PermissionsPolicy *policy)
 {
-    /* NOT the constant below: §4.2's empty policy is a value of this user agent and belongs to no Document, so
-       a Document release that reached it would be freeing something it never owned. */
-    DCHECK(policy != permissions_policy_empty(),
-           "§4.2's EMPTY permissions policy was passed to a free — it is one constant borrowed by every §9.10 "
-           "report-only check, not a policy §9.5 created for a Document");
-    free(policy);
-}
-
-const PermissionsPolicy *permissions_policy_empty(void)
-{
-    /* §4.2: "An empty permissions policy is a permissions policy that has an inherited policy which contains
-       `Enabled` for every supported feature …". PP_ENABLED is 1, so this cannot be a zero-initialized static;
-       it is written out, and the assertion below is what keeps that true if the enum's spelling ever moves. */
-    static PermissionsPolicy empty;
-    static bool built;
     int f;
 
-    if (!built) {
-        for (f = 0; f < PP_FEATURE_N; f++)
-            empty.inherited[f] = PP_ENABLED;
-        built = true;
-    }
-    DCHECK(empty.inherited[0] == PP_ENABLED,
-           "§4.2's empty permissions policy does not contain `Enabled` for its first supported feature — an "
-           "empty policy that reads `Disabled` reports a report-only violation for every feature of every "
-           "document");
-    return &empty;
+    if (policy == NULL)
+        return;
+    /* THE DECLARED POLICY'S ALLOWLISTS ARE THE ONLY OWNED THING ON THIS RECORD, and the loop runs over every
+       feature rather than over the present ones: §4.7's expressions array is allocated by
+       pp_allowlist_add_expression, `declared_present` is what §9.8/§9.9 READ, and an allowlist built and then
+       dropped by §9.6 step 3 is freed at its site. Reading the presence bit here would tie a FREE to a flag
+       whose meaning is about ANSWERS — the shape that leaks the day a policy is stored without being present. */
+    for (f = 0; f < PP_FEATURE_N; f++)
+        pp_allowlist_free(&policy->declared[f]);
+    free(policy);
 }
 
 /* §9.10 "Is feature enabled in document for origin?", in full. */
@@ -417,9 +776,9 @@ PermissionsPolicyValue permissions_policy_is_feature_enabled_in_document(const P
 
     DCHECK(report_only != NULL,
            "§9.10 was given no REPORT-ONLY permissions policy — §10.1 \"Changes to the HTML specification\" "
-           "gives EVERY Document one (\"which is a permissions policy, which is initially empty\"), so the "
-           "absence is a caller that has not been told which policy it holds rather than a document without "
-           "one; §4.2's empty policy is what a Document whose response declared none has");
+           "gives EVERY Document one and its insertion into HTML §7.5.1 sets it to §9.6 run with report-only "
+           "True, so a Document that has an enforced policy has this one too: they are built together, from "
+           "one navigable and one response, and a caller holding only the first has taken half of a creation");
     /* Steps 3 and 4: §9.9 against each of the two policies, both at the DOCUMENT's origin for the second
        argument — §9.10 passes "document's origin" as §9.9's `document origin` in both calls. */
     result = permissions_policy_check(policy, feature, origin, document_origin);
@@ -443,10 +802,14 @@ PermissionsPolicyValue permissions_policy_is_feature_enabled_in_document(const P
     if (report && result == PP_ENABLED && report_only_result == PP_DISABLED)
         DFAIL("§9.10's report arm reached GENERATE REPORT FOR VIOLATION OF PERMISSIONS POLICY with disposition "
               "\"Report\" — this Document's REPORT-ONLY permissions policy disallows a feature its enforced "
-              "policy allows. §10.1 makes a Document's report-only policy initially EMPTY and §9.6's "
-              "report-only arm (the `Permissions-Policy-Report-Only` header, §9.1 with report-only True) is the "
-              "only thing that ever narrows it, so reaching this means that header is now parsed and the "
-              "report it demands is not built: Reporting §3.4.1 plus §9.14's body");
+              "policy allows. The two policies share an inherited map and differ only in their DECLARED one, so "
+              "reaching this means the response sent a `Permissions-Policy-Report-Only` that narrows a feature "
+              "its `Permissions-Policy` left alone — exactly what that header is for, and exactly the case this "
+              "build cannot deliver on. The ANSWER is unaffected (§9.10 returns the ENFORCED result and the "
+              "caller has already been allowed correctly); what is missing is the observable: §9.14's "
+              "generate-report-for-POTENTIAL-violation body on Reporting §3.4.1 \"Generate report of type with "
+              "data\" plus §4.1's ReportingObserver, and §9.11's endpoint over a reporting configuration §9.2 "
+              "currently parses and discards");
     /* Step 6: "Return result." */
     return result;
 }

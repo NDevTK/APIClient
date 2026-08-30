@@ -116,6 +116,8 @@ typedef struct {
     const char               *origin;          /* the document's PRINCIPAL */
     DocumentKind              kind;            /* DOM §4.5's TYPE and CONTENT TYPE, as §7.4.5's arm decided */
     SerializedPolicyContainer policy;          /* HTML §7.1.7's POLICY CONTAINER it is created with */
+    SerializedResponsePermissionsPolicy
+                              permissions_policy;   /* Permissions Policy §9.1's two response header values */
     SandboxFlags              sandbox_flags;   /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET */
     uint32_t                  doc_id;          /* the world registry's name for this document */
     JSValueConst              nav_proxy;       /* §7.2.3's ONE WindowProxy for its navigable */
@@ -629,7 +631,8 @@ static void i_intersection_observer(JSContext *c, JSValueConst g, const Platform
 static void i_dom_string_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_string_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
-    document_install(c, g, d->dom, d->url, d->kind, d->policy, d->sandbox_flags, d->doc_id, d->nav_proxy);
+    document_install(c, g, d->dom, d->url, d->kind, d->policy, d->permissions_policy, d->sandbox_flags,
+                     d->doc_id, d->nav_proxy);
 }
 static void i_domparser(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; domparser_install(c, g); }
 static void i_xml_serializer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; xml_serializer_install(c, g); }
@@ -1231,20 +1234,22 @@ void platform_agent_free(void)
 
 void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                                const char *origin, DocumentKind kind, SerializedPolicyContainer policy,
+                               SerializedResponsePermissionsPolicy permissions_policy,
                                SandboxFlags sandbox_flags,
                                uint32_t doc_id, JSValueConst nav_proxy)
 {
     /* THE ONE CONSTRUCTION OF THIS VALUE IN THE PROGRAM — see platform_agent_init above for why it is here and
        not in the three hosts that used to write these assignments out by hand. */
     const PlatformDocument d = {
-        .dom           = dom,
-        .url           = url,
-        .origin        = origin,
-        .kind          = kind,
-        .policy        = policy,
-        .sandbox_flags = sandbox_flags,
-        .doc_id        = doc_id,
-        .nav_proxy     = nav_proxy,
+        .dom                = dom,
+        .url                = url,
+        .origin             = origin,
+        .kind               = kind,
+        .policy             = policy,
+        .permissions_policy = permissions_policy,
+        .sandbox_flags      = sandbox_flags,
+        .doc_id             = doc_id,
+        .nav_proxy          = nav_proxy,
     };
     const PlatformDocument *doc = &d;
     int i;

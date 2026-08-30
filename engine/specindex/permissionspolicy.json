@@ -1,0 +1,496 @@
+{
+ "spec": "Permissions Policy",
+ "key": "permissionspolicy",
+ "base": "https://w3c.github.io/webappsec-permissions-policy/",
+ "specUpdated": "18 June 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "3": {
+   "title": "Other and related mechanisms",
+   "page": "",
+   "id": "other-and-related-mechanisms"
+  },
+  "4": {
+   "title": "Framework",
+   "page": "",
+   "id": "framework"
+  },
+  "5": {
+   "title": "Permissions Policy Serialization",
+   "page": "",
+   "id": "serialization"
+  },
+  "6": {
+   "title": "Delivery",
+   "page": "",
+   "id": "delivery"
+  },
+  "7": {
+   "title": "Policy Introspection from Scripts",
+   "page": "",
+   "id": "introspection"
+  },
+  "8": {
+   "title": "Reporting",
+   "page": "",
+   "id": "reporting"
+  },
+  "9": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "algorithms"
+  },
+  "10": {
+   "title": "Changes to other specifications",
+   "page": "",
+   "id": "changes-to-other-specifications"
+  },
+  "11": {
+   "title": "IANA Considerations",
+   "page": "",
+   "id": "iana-considerations"
+  },
+  "12": {
+   "title": "Privacy and Security",
+   "page": "",
+   "id": "privacy-and-security"
+  },
+  "13": {
+   "title": "Change log",
+   "page": "",
+   "id": "change-log"
+  },
+  "4.1": {
+   "title": "Policy-controlled Features",
+   "page": "",
+   "id": "features"
+  },
+  "4.2": {
+   "title": "Policies",
+   "page": "",
+   "id": "policies"
+  },
+  "4.3": {
+   "title": "Inherited policies",
+   "page": "",
+   "id": "inherited-policies"
+  },
+  "4.4": {
+   "title": "Header policies",
+   "page": "",
+   "id": "header-policies"
+  },
+  "4.5": {
+   "title": "Container policies",
+   "page": "",
+   "id": "container-policies"
+  },
+  "4.6": {
+   "title": "Policy directives",
+   "page": "",
+   "id": "policy-directives"
+  },
+  "4.7": {
+   "title": "Allowlists",
+   "page": "",
+   "id": "allowlists"
+  },
+  "4.8": {
+   "title": "Default Allowlists",
+   "page": "",
+   "id": "default-allowlists"
+  },
+  "5.1": {
+   "title": "HTML attribute serialization",
+   "page": "",
+   "id": "ascii-serialization"
+  },
+  "5.2": {
+   "title": "Structured header serialization",
+   "page": "",
+   "id": "structured-header-serialization"
+  },
+  "6.1": {
+   "title": "` Permissions-Policy ` HTTP Header Field",
+   "page": "",
+   "id": "permissions-policy-http-header-field"
+  },
+  "6.2": {
+   "title": "The allow attribute of the iframe element",
+   "page": "",
+   "id": "iframe-allow-attribute"
+  },
+  "6.3": {
+   "title": "Additional attributes to support legacy features",
+   "page": "",
+   "id": "legacy-attributes"
+  },
+  "6.3.1": {
+   "title": "allowfullscreen",
+   "page": "",
+   "id": "iframe-allowfullscreen-attribute"
+  },
+  "7.1": {
+   "title": "Overview",
+   "page": "",
+   "id": "introspection-overview"
+  },
+  "7.1.1": {
+   "title": "Document policies",
+   "page": "",
+   "id": "document-policies"
+  },
+  "7.1.2": {
+   "title": "Frame policies",
+   "page": "",
+   "id": "frame-policies"
+  },
+  "7.2": {
+   "title": "The permissionsPolicy object",
+   "page": "",
+   "id": "the-policy-object"
+  },
+  "8.1": {
+   "title": "` Permissions-Policy-Report-Only ` HTTP Header Field",
+   "page": "",
+   "id": "permissions-policy-report-only-http-header-field"
+  },
+  "9.1": {
+   "title": "Process response policy",
+   "page": "",
+   "id": "algo-process-response-policy"
+  },
+  "9.2": {
+   "title": "Construct policy from dictionary and origin",
+   "page": "",
+   "id": "algo-construct-policy"
+  },
+  "9.3": {
+   "title": "Parse policy directive",
+   "page": "",
+   "id": "algo-parse-policy-directive"
+  },
+  "9.4": {
+   "title": "Process permissions policy attributes",
+   "page": "",
+   "id": "algo-process-policy-attributes"
+  },
+  "9.5": {
+   "title": "Create a Permissions Policy for a navigable",
+   "page": "",
+   "id": "algo-create-for-navigable"
+  },
+  "9.6": {
+   "title": "Create a Permissions Policy for a navigable from response",
+   "page": "",
+   "id": "algo-create-from-response"
+  },
+  "9.7": {
+   "title": "Define an inherited policy for feature in container at origin",
+   "page": "",
+   "id": "algo-define-inherited-policy-in-container"
+  },
+  "9.8": {
+   "title": "Get feature value for origin",
+   "page": "",
+   "id": "algo-get-feature-value-for-origin"
+  },
+  "9.9": {
+   "title": "Check permissions policy",
+   "page": "",
+   "id": "algo-check-permissions-policy"
+  },
+  "9.10": {
+   "title": "Is feature enabled in document for origin?",
+   "page": "",
+   "id": "algo-is-feature-enabled"
+  },
+  "9.11": {
+   "title": "Get the reporting endpoint for a feature",
+   "page": "",
+   "id": "algo-get-reporting-endpoint"
+  },
+  "9.12": {
+   "title": "Check potential violation of permissions policy in container",
+   "page": "",
+   "id": "algo-check-potential-violation-in-container"
+  },
+  "9.13": {
+   "title": "Generate report for violation of permissions policy on settings",
+   "page": "",
+   "id": "algo-report-permissions-policy-violation"
+  },
+  "9.14": {
+   "title": "Generate report for potential violation of permissions policy on settings",
+   "page": "",
+   "id": "algo-report-potential-permissions-policy-violation"
+  },
+  "9.15": {
+   "title": "Should request be allowed to use feature?",
+   "page": "",
+   "id": "algo-should-request-be-allowed-to-use-feature"
+  },
+  "10.1": {
+   "title": "Changes to the HTML specification",
+   "page": "",
+   "id": "changes-to-html"
+  },
+  "12.1": {
+   "title": "Exposure of cross-origin behavior",
+   "page": "",
+   "id": "privacy-expose-behavior"
+  },
+  "12.2": {
+   "title": "Unanticipated behavior changes",
+   "page": "",
+   "id": "privacy-alter-behavior"
+  },
+  "12.3": {
+   "title": "Exposure of embedding policy",
+   "page": "",
+   "id": "privacy-expose-policy"
+  },
+  "13.1": {
+   "title": "Changes since FPWD",
+   "page": "",
+   "id": "changes-since-fpwd"
+  }
+ },
+ "dfns": {
+  "allow list": [
+   "5.1"
+  ],
+  "allow list value": [
+   "5.1"
+  ],
+  "allowsfeature(feature origin)": [
+   "7.2"
+  ],
+  "associated node": [
+   "7.2"
+  ],
+  "check permissions policy": [
+   "9.9"
+  ],
+  "check potential violation of permissions policy in container": [
+   "9.12"
+  ],
+  "construct policy from dictionary and origin": [
+   "9.2"
+  ],
+  "container policy": [
+   "4.5"
+  ],
+  "create a permissions policy for a navigable": [
+   "9.5"
+  ],
+  "create a permissions policy for a navigable from response": [
+   "9.6"
+  ],
+  "declared origin": [
+   "7.2"
+  ],
+  "declared policy": [
+   "4.2"
+  ],
+  "default allowlist": [
+   "4.8"
+  ],
+  "default allowlists": [
+   "4.8"
+  ],
+  "default origin": [
+   "7.2"
+  ],
+  "define an inherited policy for feature in container at origin": [
+   "9.7"
+  ],
+  "empty permissions policy": [
+   "4.2"
+  ],
+  "feature identifier": [
+   "5.1"
+  ],
+  "generate report for potential violation of permissions policy on settings": [
+   "9.14"
+  ],
+  "generate report for violation of permissions policy on settings": [
+   "9.13"
+  ],
+  "get feature value for origin": [
+   "9.8"
+  ],
+  "get the reporting endpoint for a feature": [
+   "9.11"
+  ],
+  "header policy": [
+   "4.4"
+  ],
+  "inherited policy": [
+   "4.2"
+  ],
+  "inherited policy for a feature": [
+   "4.3"
+  ],
+  "is feature enabled in document for origin": [
+   "9.10"
+  ],
+  "observable policy": [
+   "7.2"
+  ],
+  "parse policy directive": [
+   "9.3"
+  ],
+  "permissions policy": [
+   "4.2",
+   "6.1"
+  ],
+  "permissions policy report only": [
+   "8.1"
+  ],
+  "permissions policy violation reports": [
+   "8"
+  ],
+  "permissions source expression": [
+   "5.1"
+  ],
+  "policy controlled feature": [
+   "4.1"
+  ],
+  "policy directive": [
+   "4.6"
+  ],
+  "policy directives": [
+   "4.6"
+  ],
+  "policy object": [
+   "7.2"
+  ],
+  "process permissions policy attributes": [
+   "9.4"
+  ],
+  "process response policy": [
+   "9.1"
+  ],
+  "report only permissions policy": [
+   "10.1"
+  ],
+  "reporting configuration": [
+   "4.2"
+  ],
+  "self origin": [
+   "4.7"
+  ],
+  "serialized permissions policy": [
+   "5.1"
+  ],
+  "serialized policy directive": [
+   "5.1"
+  ],
+  "should request be allowed to use feature": [
+   "9.15"
+  ],
+  "src origin": [
+   "4.7"
+  ],
+  "supported features": [
+   "4.1"
+  ],
+  "the special value": [
+   "4.7"
+  ]
+ },
+ "uses": {
+  "allowsfeature(feature origin)": {
+   "13.1": 3
+  },
+  "check permissions policy": {
+   "9.10": 2
+  },
+  "declared origin": {
+   "9.12": 2
+  },
+  "declared policy": {
+   "7.2": 2,
+   "9.6": 2,
+   "9.8": 2,
+   "9.9": 2,
+   "13.1": 2
+  },
+  "default allowlist": {
+   "9.7": 2,
+   "9.9": 2,
+   "13.1": 2
+  },
+  "define an inherited policy for feature in container at origin": {
+   "9.12": 2
+  },
+  "generate report for potential violation of permissions policy on settings": {
+   "9.12": 2
+  },
+  "generate report for violation of permissions policy on settings": {
+   "9.10": 2
+  },
+  "get feature value for origin": {
+   "9.7": 2
+  },
+  "get the reporting endpoint for a feature": {
+   "9.10": 2,
+   "9.12": 2
+  },
+  "inherited policy": {
+   "4.3": 2
+  },
+  "observable policy": {
+   "7.1.2": 2,
+   "12.1": 2
+  },
+  "permissions policy": {
+   "2": 6,
+   "7.2": 2,
+   "9.5": 2,
+   "13.1": 2
+  },
+  "permissions source expression": {
+   "4.7": 2
+  },
+  "policy controlled feature": {
+   "4.2": 3,
+   "4.8": 2,
+   "9.2": 2,
+   "9.3": 2
+  },
+  "policy directive": {
+   "5.2": 2,
+   "13.1": 2
+  },
+  "policy object": {
+   "13.1": 2
+  },
+  "report only permissions policy": {
+   "9.10": 2
+  },
+  "reporting configuration": {
+   "9.6": 2
+  },
+  "self origin": {
+   "9.2": 2
+  },
+  "src origin": {
+   "9.3": 2
+  },
+  "supported features": {
+   "7.2": 3
+  }
+ }
+}

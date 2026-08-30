@@ -501,6 +501,17 @@ static bool csp_host_source_parse(CspToken e, CspHostSource *out)
     return true;
 }
 
+/* §2.3.1's `scheme-source / host-source` as a PREDICATE — see csp_source_list.h for who asks and why it is
+   exported rather than written again next door. The split is discarded: the caller that asks this is STORING
+   the expression as text (Permissions Policy §4.7's allowlist holds "an ordered set of
+   permissions-source-expression") and re-parses at the match, exactly as csp_source_match_url does. */
+bool csp_source_is_scheme_or_host_source(CspToken expression)
+{
+    CspHostSource hs;
+
+    return csp_host_source_parse(expression, &hs);
+}
+
 /* ---- §6.7.2.9 - §6.7.2.12, THE FOUR RELATIONS ------------------------------------------------------------ */
 
 /* §6.7.2.9 scheme-part matching. ASYMMETRIC BY DESIGN: `http:` matches an https URL and not the other way

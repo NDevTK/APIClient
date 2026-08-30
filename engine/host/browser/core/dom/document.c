@@ -188,6 +188,18 @@ typedef struct Document {
        operations from different inputs — §7.1.7's determine step picks a container, §9.5 walks the navigable's
        container element — so a record that folded one into the other would have to invent the walk. */
     PermissionsPolicy   *permissions_policy;
+    /* PERMISSIONS POLICY §10.1's REPORT-ONLY PERMISSIONS POLICY: "Every Document has a report-only permissions
+       policy, which is a permissions policy, which is initially empty", and the same section's insertion into
+       HTML §7.5.1 sets it to §9.6 run with report-only True — the `Permissions-Policy-Report-Only` header.
+       A SECOND POLICY AND NOT A FLAG ON THE FIRST. §9.10 checks a feature against BOTH and compares the two
+       answers ("if result is `Enabled` and report-only result is `Disabled`" is its report arm), so a single
+       record carrying a report-only bit could not express the state that arm exists for. It is also why
+       §9.6's report-only argument re-runs §9.5 rather than sharing a policy: the two inherited maps are equal
+       today and the two DECLARED policies are what differ, and reading one map through two declarations is the
+       shape that makes a report-only header narrow the ENFORCED answer.
+       It stood as permissions_policy_empty() at the one §9.10 call site until the header could be parsed —
+       which was correct for a build that never read one, and became a hole the moment it could. */
+    PermissionsPolicy   *report_only_permissions_policy;
     /* HTML §7.1.5's ACTIVE SANDBOXING FLAG SET — a field of the DOCUMENT and not of the policy container
        beside it, which §7.1.7 gives a CSP list, an embedder policy, a referrer policy and two integrity
        policies and no flag set at all. §7.5.1's creation table lists the two on separate rows for that
@@ -3414,8 +3426,21 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
                                      allow_len, origin);
 }
 
-/* §9.5 FOR THE NAVIGABLE A DOCUMENT IS BEING CREATED IN — the same algorithm above, asked of the navigable
- * rather than of an element, which is what routes its three container cases.
+/* §9.6 "Create a Permissions Policy for a navigable from response" FOR THE NAVIGABLE A DOCUMENT IS BEING
+ * CREATED IN — §9.5 asked of the navigable rather than of an element (which is what routes its three container
+ * cases), and then the response's own declared policy applied over it.
+ *
+ * ITS STEP 1 HAS TWO IMPLEMENTATIONS HERE AND STEPS 2-4 HAVE ONE, which is exactly the split
+ * core/permissions_policy/permissions_policy.h argues for. Step 1 is a question about the CONTAINER — an
+ * element in this heap, or a peer instance's already-computed answer read back off the provisioning record —
+ * and steps 2-4 are a question about the RESPONSE, which is this document's own however its container was
+ * reached. So the two arms below rejoin at one permissions_policy_apply_response.
+ *
+ * `header_value` IS ONE OF THE TWO AND THE CALLER PICKS, which is §9.1 step 1: HTML §7.5.1 runs this with the
+ * `Permissions-Policy` value and §10.1 "Changes to the HTML specification" runs it AGAIN with the
+ * `Permissions-Policy-Report-Only` value for the Document's REPORT-ONLY permissions policy. They are two
+ * SEPARATE policies and not a flag on one — §9.10 checks the same feature against both and compares the two
+ * answers, which a single policy carrying a report-only bit could not express at all.
  *
  * THE CROSS-INSTANCE ARM IS ANSWERED FROM A CARRIED RESULT, NOT FROM CARRIED INPUTS, and the two are not
  * interchangeable. §9.5's arguments are the container ELEMENT and the origin of the Document being created,
@@ -3430,7 +3455,8 @@ PermissionsPolicy *document_permissions_policy_for_container(JSValueConst contai
  * child navigable by §7.3.1.3's own definition, so it HAS a container; the record that provisioned this
  * instance either stated what that container answered or it did not, and the second is a host that owes a
  * call rather than a navigable with no container. */
-static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSValueConst nav_proxy)
+static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSValueConst nav_proxy,
+                                                             const char *header_value)
 {
     JSValue container = window_proxy_container(ctx, nav_proxy);
     PermissionsPolicy *policy;
@@ -3458,11 +3484,22 @@ static PermissionsPolicy *document_create_permissions_policy(JSContext *ctx, JSV
                    "non-null and gives it a container element, so the two statements on that record "
                    "contradict each other and one of them is about a different navigable");
             JS_FreeValue(ctx, container);
-            return permissions_policy_deserialize(carried);
+            /* §9.6 step 1, cross-instance arm: §9.5 ran in the instance that HELD the container element and
+               its answer crossed. Steps 2-4 are below, over THIS document's response — which is the whole
+               reason the record carries §9.5's result and not §9.6's. */
+            policy = permissions_policy_deserialize(carried);
+            permissions_policy_apply_response(policy, header_value, window_proxy_origin(nav_proxy));
+            return policy;
         }
     }
+    /* §9.6 step 1, local arm. */
     policy = document_permissions_policy_for_container(container, window_proxy_origin(nav_proxy));
     JS_FreeValue(ctx, container);
+    /* §9.6 steps 2-4: "let d be the result of running Process response policy given response, origin and
+       report-only", then copy each declaration the INHERITED policy still permits. The origin is §9.2's — the
+       origin of the Document being created in this navigable, which is the same one §9.5 was given one line
+       up, because both algorithms take navigationParams's origin. */
+    permissions_policy_apply_response(policy, header_value, window_proxy_origin(nav_proxy));
     return policy;
 }
 
@@ -3487,7 +3524,7 @@ bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
         const Origin *origin = window_proxy_origin(d->proxy);
 
         return permissions_policy_is_feature_enabled_in_document(d->permissions_policy,
-                                                                 permissions_policy_empty(), feature,
+                                                                 d->report_only_permissions_policy, feature,
                                                                  origin, origin, true) == PP_ENABLED;
     }
 }
@@ -3849,6 +3886,7 @@ static void doc_rec_release(Document *d)
     /* Permissions Policy §9.5's policy, malloc'd for the same reason and released beside the container it sits
        beside on the record. NULL for a Document with no browsing context, which never had one. */
     permissions_policy_free(d->permissions_policy);
+    permissions_policy_free(d->report_only_permissions_policy);
     if (d->dom)
         lxb_dom_interface_document(d->dom)->user = NULL;
     free(d);
@@ -4020,7 +4058,8 @@ bool document_is_xml_of(const lxb_dom_document_t *dom)
 }
 
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      DocumentKind kind, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                      DocumentKind kind, SerializedPolicyContainer policy,
+                      SerializedResponsePermissionsPolicy permissions_policy, SandboxFlags sandbox_flags,
                       uint32_t doc_id, JSValueConst nav_proxy)
 {
     Document *d;
@@ -4088,7 +4127,15 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        ITS INPUTS ARE THE CONTAINER'S, so they are read here rather than derived later — §7.3.1.3 severs a
        navigable's container when the element is removed, and a policy re-derived after that would silently
        become a top-level document's. */
-    d->permissions_policy = document_create_permissions_policy(ctx, nav_proxy);
+    d->permissions_policy = document_create_permissions_policy(ctx, nav_proxy, permissions_policy.enforced);
+    /* AND §10.1's INSERTION INTO §7.5.1, WHICH IS THE SAME ALGORITHM WITH ITS report-only ARGUMENT TRUE: "let
+       reportOnlyPermissionsPolicy be the result of calling Create a Permissions Policy for a navigable from
+       response given navigationParams's navigable's container, navigationParams's origin,
+       navigationParams's response, and True", and in step 10 "set the new Document's report-only permissions
+       policy to reportOnlyPermissionsPolicy". Beside the enforced one because §9.10 reads BOTH of them for one
+       question, and a Document that had only the first would answer that question with a constant. */
+    d->report_only_permissions_policy =
+        document_create_permissions_policy(ctx, nav_proxy, permissions_policy.report_only);
     /* §7.3.2.1 "Creating browsing contexts" runs the two ancestor-origins step lists here, beside §9.5's
        permissions policy and for the same reason: both are SNAPSHOTS of the container relation, both are
        read off `nav_proxy` while it still names the tree this Document was created in, and both become

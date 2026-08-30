@@ -40,6 +40,16 @@ typedef struct {
        delivers several policies and how core/frame/policy_container.c parses them apart again. NULL when the
        response carried no `Content-Security-Policy`. Owned. */
     char        *csp;
+    /* PERMISSIONS POLICY §9.1's TWO HEADER FIELD VALUES, as Fetch §2.2.2 step 2's get returned them — the
+       enforced `Permissions-Policy` and the report-only `Permissions-Policy-Report-Only`. NULL for a response
+       that carried neither, which is §9.1 step 3's empty ordered map and not a hole. Owned.
+       THEY ARE THE RESPONSE AS FAR AS §9.1 CAN SEE IT, and they travel rather than being re-read because the
+       algorithm that consumes them is HTML §7.5.1's "creating a permissions policy from a response", which
+       needs the ORIGIN and therefore cannot run until the Document is created — by which time this engine has
+       freed the header list on purpose. BOTH names are carried because §10.1 inserts a SECOND §9.6 call with
+       report-only True beside §7.5.1's, so one response feeds two policies. */
+    char        *permissions_policy;
+    char        *permissions_policy_report_only;
     /* §7.4.5's FINAL SANDBOXING FLAG SET — the union described above. */
     SandboxFlags sandbox_flags;
     /* §7.1.7's EMBEDDER POLICY, the container item obtained from this response (§7.1.4). */

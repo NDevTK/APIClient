@@ -126,9 +126,16 @@
    "Creating browsing contexts" for the initial `about:blank`. A builder NEVER derives it: the arm is a fact
    about the response, which the builder does not have, and a builder that answered "text/html" would be
    stating the one thing every Document in this engine used to say whatever had been fetched. */
+/* `permissions_policy` is PERMISSIONS POLICY §9.1's TWO RESPONSE HEADER FIELD VALUES, which HTML §7.5.1 runs
+   "creating a permissions policy from a response" over. A builder NEVER derives them and there is nothing it
+   could derive them FROM: they are a fact about the response, which the builder does not have, and §9.5's
+   «[], []» — what a builder would fall back to — is the MOST PERMISSIVE declared policy there is, so a builder
+   guessing here would answer `Enabled` for every feature the framed server withheld. */
 typedef JSContext *(*RealmBuilder)(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                    const char *top_level_url, const char *origin, DocumentKind kind,
-                                   SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                                   SerializedPolicyContainer policy,
+                                   SerializedResponsePermissionsPolicy permissions_policy,
+                                   SandboxFlags sandbox_flags,
                                    uint32_t doc_id, JSValueConst nav_proxy);
 void navigable_set_realm_builder(RealmBuilder b);
 

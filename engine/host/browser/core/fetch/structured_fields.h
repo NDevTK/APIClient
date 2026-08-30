@@ -36,13 +36,22 @@
  * length that is not 4n+1) and retained AS DELIVERED. That keeps the parse contract above exact — valid input
  * parses, invalid input fails — without this file growing a second copy of a codec for nobody.
  *
- * ONLY "item" IS SPELLABLE. Fetch's get-a-structured-field-value takes a type of "dictionary", "list" or
- * "item", and the three headers this engine reads are all items. There is no entry here that takes a type, so
- * a caller needing a list finds nothing to call rather than a parameter that silently accepts one. A shape
- * that cannot express the case is not a check someone has to remember — and this is a claim about a PARSER
- * with two callers, which is the whole reason it holds: it is not a general rule about network verbs, and the
- * one this line used to cite (SECURITY.md's "there is no place to express a POST") is deleted, because a
- * Google API error-probe learns by sending a malformed POST and reading the rejection. */
+ * "item" AND "dictionary" ARE SPELLABLE AND "list" IS NOT, AND THE RULE THAT DECIDES THAT IS UNCHANGED. Fetch's
+ * get-a-structured-field-value takes a type of "dictionary", "list" or "item", and there is still no entry
+ * here that TAKES a type: a caller states which grammar it wants by which function it calls, so a caller
+ * needing a list finds nothing to call rather than a parameter that silently accepts one. What changed is the
+ * population, and it changed for a header whose type is the whole trap — Permissions Policy §6.1
+ * "`Permissions-Policy` HTTP Header Field": "Its value must be a dictionary". §5.2 "Structured header
+ * serialization" then makes each Member Name a feature and each Member Value an allowlist, and §9.1 "Process
+ * response policy" gets it with type "dictionary" by name. An ITEM parse of `geolocation=(), camera=(self)`
+ * does not fail SAFELY, it fails at the comma, which Fetch's own note then makes indistinguishable from the
+ * header not being sent — and §9.5's «[], []» declared policy is the MOST PERMISSIVE one, so every restriction
+ * that server wrote would be read as silence. That is why the grammar is a parse and not a `strchr` loop.
+ *
+ * AND THE DICTIONARY BRINGS THE INNER LIST WITH IT, WHICH THE ITEM GRAMMAR NEVER NEEDED. §4.2.2's member value
+ * is §4.2.1.1's "Parsing an Item or Inner List", and §5.2 uses BOTH arms in one header: `camera=self` is the
+ * item arm and `camera=(self "https://a.example")` is the inner-list arm. Parsing only the item arm would fail
+ * the whole dictionary member for the spelling every real policy uses. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_STRUCTURED_FIELDS_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_STRUCTURED_FIELDS_H
 #include <stdbool.h>
@@ -110,5 +119,66 @@ void sf_item_free(SfItem *it);
    own note and not a simplification — the two are deliberately indistinguishable so that every consumer on
    the platform handles them identically. */
 bool sf_header_item(const HeaderList *l, const char *name, SfItem *out);
+
+/* ---- §3.2's DICTIONARY, and the §4.2.1.1 tuple its values are ------------------------------------------- */
+
+/* §4.2.1.1's "(item_or_inner_list, parameters)" TUPLE — "item_or_inner_list can be either a single bare item
+ * or an array of (bare_item, parameters) tuples".
+ *
+ * THE TUPLE'S PARAMETERS ARE ONE FIELD ACROSS BOTH ARMS AND THAT IS THE POINT. §4.2.3 gives the item arm its
+ * parameters and §4.2.1.2 step 3.2.2 gives the inner-list arm its own, and Permissions Policy §5.2 defines
+ * `report-to` as a parameter of the MEMBER VALUE — which is either arm — so a reader that had to ask which arm
+ * it was holding before it could look up a parameter would be a reader with two chances to get one lookup
+ * wrong. `tuple.params` is therefore §4.2.1.1's `parameters` in both arms, and sf_member_param reads it
+ * without branching.
+ * `tuple.item` IS THE BARE ITEM OF THE ITEM ARM AND MEANS NOTHING IN THE OTHER, which is why it is read
+ * through sf_member_bare rather than off the struct: a `kind` of SF_INTEGER on an inner-list member is the
+ * zero this struct was calloc'd with and not a number the sender wrote, and reading it as one is the defaulted
+ * field defect with a grammar behind it. */
+typedef struct {
+    bool    inner_list;
+    SfItem  tuple;
+    SfItem *items;        /* the inner-list arm's members, each with its OWN §4.2.3.2 parameters (owned) */
+    int     n_items;
+    int     cap_items;
+} SfMember;
+
+/* §3.2's DICTIONARY: "an ordered map of key-value pairs". ORDER IS KEPT — §9.2's "for each feature-name →
+   (value, params) of dictionary" iterates it, and a later member of a real header can only ever be the LAST
+   declaration of that feature because §4.2.2 step 2.4 overwrites in place rather than appending. */
+typedef struct {
+    char     *key;
+    SfMember  value;
+} SfDictMember;
+
+typedef struct {
+    SfDictMember *members;
+    int           n_members;
+    int           cap_members;
+} SfDictionary;
+
+/* RFC 9651 §4.2 "Parsing Structured Fields" with field_type = "dictionary": discard leading SP, run §4.2.2
+   "Parsing a Dictionary", discard leading SP, and FAIL if anything is left. `out` is filled only on success
+   and is the caller's to sf_dictionary_free; on failure nothing is left allocated.
+   AN EMPTY INPUT IS A SUCCESSFUL PARSE OF AN EMPTY DICTIONARY, which is §4.2.2 step 3 ("No structured data has
+   been found; return dictionary (which is empty)") and not a failure to report. It matters here: a
+   `Permissions-Policy:` with an empty value declares nothing, and §9.1 returning an empty ordered map for it
+   is a DIFFERENT statement from §9.1 returning one because the header was absent only in that the first is
+   what the sender wrote. Both leave §9.6's merge with nothing to do, which is why neither needs a caller
+   branch — but a parser that FAILED on it would be reporting a malformed field for a well-formed one. */
+bool sf_parse_dictionary(const char *input, size_t len, SfDictionary *out);
+
+/* FETCH §2.2.2's "get a structured field value given a header name `name` and a string type from a header
+   list", with type "dictionary". `name` must already be LOWERCASE. Returns FALSE for BOTH "the list contains
+   no such header" and "the value did not parse", for sf_header_item's reason and Fetch's own note. */
+bool sf_header_dictionary(const HeaderList *l, const char *name, SfDictionary *out);
+
+/* §4.2.1.1's BARE ITEM, for the item arm. ASSERTS the arm — see SfMember. */
+const SfBareItem *sf_member_bare(const SfMember *m);
+
+/* §4.2.3.2's map lookup over §4.2.1.1's `parameters`, in either arm. BORROWED, NULL when absent. */
+const SfBareItem *sf_member_param(const SfMember *m, const char *key);
+
+void sf_dictionary_free(SfDictionary *d);
 
 #endif

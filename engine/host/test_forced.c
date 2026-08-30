@@ -4559,12 +4559,15 @@ static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_le
    the `eval` sink below stand where the language's own `eval` would. */
 static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const char *url, const char *origin,
                              DocumentKind kind,
-                             SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                             SerializedPolicyContainer policy,
+                             SerializedResponsePermissionsPolicy permissions_policy,
+                             SandboxFlags sandbox_flags,
                              uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSValue g = JS_GetGlobalObject(ctx);
 
-    platform_document_install(ctx, g, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
+    platform_document_install(ctx, g, dom, url, origin, kind, policy, permissions_policy, sandbox_flags,
+                              doc_id, nav_proxy);
 
     /* THE FIXTURE'S OWN SURFACE — the @S sinks and the host-edge stand-ins the probes drive. Every one of
        these is this fixture's, which is why it is here and not in the list. */
@@ -4603,7 +4606,9 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
 /* A SAME-ORIGIN CHILD NAVIGABLE'S REALM — a second JSContext in the SAME JSRuntime. */
 static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const char *url,
                                  const char *top_level_url, const char *origin, DocumentKind kind,
-                                 SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                                 SerializedPolicyContainer policy,
+                                 SerializedResponsePermissionsPolicy permissions_policy,
+                                 SandboxFlags sandbox_flags,
                                  uint32_t doc_id, JSValueConst nav_proxy)
 {
     JSContext *ctx = JS_NewContext(rt);
@@ -4616,7 +4621,8 @@ static JSContext *tf_child_realm(JSRuntime *rt, lxb_html_document_t *dom, const 
        §7.4 decided this child's top-level creation URL and handed it over — using `url` would make an
        about:blank iframe of an http page a secure context. */
     realm_install_intrinsics(ctx, top_level_url);
-    tf_realm_install(ctx, dom, url, origin, kind, policy, sandbox_flags, doc_id, nav_proxy);
+    tf_realm_install(ctx, dom, url, origin, kind, policy, permissions_policy, sandbox_flags, doc_id,
+                     nav_proxy);
     return ctx;
 }
 
@@ -11317,7 +11323,10 @@ int main(int argc, char **argv) {
         tf_realm_install(ctx, dom, "https://x.test/p", "https://x.test",
                          document_kind(/*is_xml*/false, "text/html"),
                          serialized_policy_container(NULL, "https://x.test",
-                                                     serialized_embedder_policy_new()), 0,
+                                                     serialized_embedder_policy_new()),
+                         /* NO RESPONSE, so Permissions Policy §9.1 step 3's empty ordered map — this fixture's
+                            markup is a C string literal and no server said anything about its policy. */
+                         serialized_response_permissions_policy(NULL, NULL), 0,
                          world_local_doc(), root_proxy);
         JS_FreeValue(ctx, root_proxy);
     }

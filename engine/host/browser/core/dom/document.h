@@ -92,7 +92,8 @@ void document_install_proto(JSContext *ctx);
    `text/html`, §4.5's "is this an HTML document" answered yes for it, and the HTML parse-boundary correction
    ran over a tree an XML parser built. */
 void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
-                      DocumentKind kind, SerializedPolicyContainer policy, SandboxFlags sandbox_flags,
+                      DocumentKind kind, SerializedPolicyContainer policy,
+                      SerializedResponsePermissionsPolicy permissions_policy, SandboxFlags sandbox_flags,
                       uint32_t doc_id, JSValueConst nav_proxy);
 
 /* WHICH DOCUMENT THIS REALM IS, in the world registry's naming. §7.4 mints a child's name from it, so a

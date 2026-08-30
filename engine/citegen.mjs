@@ -211,6 +211,18 @@ const SPECS = [
     base: "https://w3c.github.io/FileAPI/", anchors: ["file api", "fileapi"] },
   { key: "permissions", label: "Permissions", kind: "respec",
     base: "https://w3c.github.io/permissions/", anchors: ["permissions"] },
+  /* PERMISSIONS POLICY IS A DIFFERENT STANDARD FROM PERMISSIONS AND THE ROW ABOVE DOES NOT COVER IT — which is
+     the silent-zero shape this table's own comment describes, arriving through a NEAR MISS rather than an
+     absence. `engine/specindex/permissions.json` indexes w3c.github.io/permissions, whose deepest heading is
+     §8 and which has no §9 at all, so every `Permissions Policy §9.x` in the tree resolved against nothing and
+     was counted under OTHER_SPECS — including a DFAIL that instructed the next reader to build §9.6 over §9.1,
+     §9.2 and §4.7. Seven numbers, all correct as it happens, and not one of them checkable.
+     ITS ANCHOR IS THE TWO-WORD NAME AND MUST BE, because anchorTokens reads the longest tail first and
+     `permissions` alone is the row above: a one-word anchor here would make the two standards indistinguishable
+     in the direction that judges §9.6 against a standard that stops at §8. It is bikeshed like the other
+     W3C-hosted rows, so it needs no reader of its own. */
+  { key: "permissionspolicy", label: "Permissions Policy", kind: "bikeshed",
+    base: "https://w3c.github.io/webappsec-permissions-policy/", anchors: ["permissions policy"] },
   { key: "xml", label: "Extensible Markup Language (XML) 1.0 (Fifth Edition)", kind: "xmlspec",
     base: "https://www.w3.org/TR/xml/", anchors: ["xml"] },
 ];

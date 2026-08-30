@@ -52,6 +52,9 @@
    below takes one and this unit is a direct user of the type. */
 #include "core/frame/policy_container.h"
 #include "core/frame/sandboxing.h"
+/* Permissions Policy §9.1's response half, in the form it crosses this seam — HTML §7.5.1 creates a Document
+   from it beside the policy container, so this unit is a direct user of the type. */
+#include "core/permissions_policy/permissions_policy.h"
 
 /* WHAT A HOST STATES, AND WHY IT IS A PARAMETER LIST AND NOT A STRUCT THE HOST FILLS IN.
  *
@@ -133,6 +136,16 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
  * that policy came from. A host that passed `origin` for it would be right for every unsandboxed top-level
  * document and silently wrong for exactly those two cases. IT ALWAYS EXISTS: every Document has a container,
  * including the initial about:blank.
+ * `permissions_policy` is PERMISSIONS POLICY §9.1's TWO RESPONSE HEADER FIELD VALUES, which HTML §7.5.1 needs
+ * because its own steps run "creating a permissions policy from a response" given "navigationParams's
+ * navigable's container, navigationParams's origin, and navigationParams's response" — and §10.1 inserts a
+ * second call with report-only True beside it. IT IS NOT A POLICY-CONTAINER ITEM and must never be folded into
+ * `policy`: §7.1.7 gives a container exactly a CSP list, an embedder policy and a referrer policy, and a
+ * permissions policy is none of the three — §7.5.1 lists them as separate rows of one creation, which is the
+ * same reason `sandbox_flags` is its own argument. It is a SEPARATE fact from `origin` too, and that is the
+ * pairing §9.2 makes: the header says `self` and the ORIGIN says what `self` is.
+ * A Document created from NO response states both halves NULL, which is §9.1 step 3's empty ordered map — an
+ * answer, not an omission — so there is nothing here a host can decline to state.
  * `sandbox_flags` is HTML §7.1.5's ACTIVE SANDBOXING FLAG SET this Document is created with. A SEPARATE fact
  * from the policy for the same reason `url` and `origin` are separate from each other: §7.1.7's policy
  * container holds no flag set, so a host that derived one from the policy would answer a question the
@@ -148,6 +161,7 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
  * `nav_proxy` is §7.2.3's ONE WindowProxy for the navigable this document is active in. */
 void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *dom, const char *url,
                                const char *origin, DocumentKind kind, SerializedPolicyContainer policy,
+                               SerializedResponsePermissionsPolicy permissions_policy,
                                SandboxFlags sandbox_flags,
                                uint32_t doc_id, JSValueConst nav_proxy);
 

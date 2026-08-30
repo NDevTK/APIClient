@@ -379,7 +379,21 @@ static bool sf_parse_params(SfIn *in, SfItem *it)
     return true;
 }
 
-/* ---- the two entry points -------------------------------------------------------------------------------- */
+/* ---- §4.2.3 Parsing an Item ------------------------------------------------------------------------------ */
+
+/* §4.2.3, WITHOUT §4.2's wrapper — "parse bare item, parse parameters, return the tuple", and NOT the leading
+   SP skip or the trailing "input_string is not empty, fail" that belong to §4.2 steps 2 and 5. It is factored
+   out because §4.2.1.1 and §4.2.1.2 both run §4.2.3 in the MIDDLE of a string, where a trailing check would
+   fail every dictionary with more than one member. */
+static bool sf_item_in(SfIn *in, SfItem *out)
+{
+    memset(out, 0, sizeof *out);
+    if (!sf_parse_bare(in, &out->item)) return false;
+    if (!sf_parse_params(in, out))      return false;
+    return true;
+}
+
+/* ---- the entry points ------------------------------------------------------------------------------------ */
 
 void sf_item_free(SfItem *it)
 {
@@ -406,8 +420,7 @@ bool sf_parse_item(const char *input, size_t len, SfItem *out)
     in.n = len;
     in.i = 0;
     sf_skip_sp(&in);
-    if (!sf_parse_bare(&in, &out->item)) { sf_item_free(out); return false; }
-    if (!sf_parse_params(&in, out))      { sf_item_free(out); return false; }
+    if (!sf_item_in(&in, out)) { sf_item_free(out); return false; }
     sf_skip_sp(&in);
     /* §4.2 step 5: "if input_string is not empty, fail parsing" — this is the step that makes two identical
        `Cross-Origin-Embedder-Policy: require-corp` headers fail, because Fetch's get joined them into
@@ -449,4 +462,209 @@ bool sf_header_item(const HeaderList *l, const char *name, SfItem *out)
     ok = sf_parse_item(value, strlen(value), out);
     free(value);
     return ok;   /* step 5: "if parsing failed, then return null" — indistinguishable from absence, by design */
+}
+
+/* ---- §4.2.1.2 Parsing an Inner List, §4.2.1.1 Parsing an Item or Inner List, §4.2.2 Parsing a Dictionary -- */
+
+static void sf_member_free(SfMember *m)
+{
+    int k;
+
+    if (!m) return;
+    sf_item_free(&m->tuple);
+    for (k = 0; k < m->n_items; k++)
+        sf_item_free(&m->items[k]);
+    free(m->items);
+    memset(m, 0, sizeof *m);
+}
+
+void sf_dictionary_free(SfDictionary *d)
+{
+    int k;
+
+    if (!d) return;
+    for (k = 0; k < d->n_members; k++) {
+        free(d->members[k].key);
+        sf_member_free(&d->members[k].value);
+    }
+    free(d->members);
+    memset(d, 0, sizeof *d);
+}
+
+/* §4.2.1.2, verbatim. Its step 3.5 — "if the first character of input_string is not SP or ')', fail parsing" —
+   is what makes `(a,b)` a malformed inner list rather than a one-element one: the members of an inner list are
+   SP-delimited and a comma there is not a separator, it is a syntax error that §4.2.2 then propagates to the
+   whole field. */
+/* EVERY FAILURE ARM FREES THE PARTIAL MEMBER, and that is not tidiness — it is the ownership contract this
+   file already states for sf_parse_item ("on failure nothing is left allocated"). A parse that fails mid-inner-
+   list has already allocated a token's text and a parameter map, and the caller's sf_dictionary_free can only
+   reach members that were SET; the one being built is reachable from nowhere else. THE COUNTER IS THEREFORE
+   INCREMENTED BEFORE THE ITEM IS PARSED, so the slot is inside the member the moment it exists. */
+static bool sf_inner_list_in(SfIn *in, SfMember *out)
+{
+    memset(out, 0, sizeof *out);
+    out->inner_list = true;
+    if (sf_eof(in) || sf_take(in) != '(') { sf_member_free(out); return false; }   /* step 1 */
+    while (!sf_eof(in)) {                                            /* step 3 */
+        sf_skip_sp(in);                                              /* step 3.1 */
+        if (!sf_eof(in) && sf_peek(in) == ')') {                     /* step 3.2 */
+            sf_take(in);
+            /* step 3.2.2: the INNER LIST's own parameters, which is where §5.2's `report-to` lands when the
+               Member Value is written as `camera=(self);report-to="x"`. They go on `tuple` for the reason
+               structured_fields.h gives — one field for §4.2.1.1's `parameters` in both arms. */
+            if (!sf_parse_params(in, &out->tuple)) { sf_member_free(out); return false; }
+            return true;
+        }
+        if (out->n_items >= out->cap_items) {                        /* step 3.3 / 3.4 */
+            out->cap_items = out->cap_items ? out->cap_items * 2 : 4;
+            out->items = realloc(out->items, (size_t)out->cap_items * sizeof *out->items);
+            CHECK(out->items != NULL, "structured fields: OOM growing §3.1.1's inner list");
+        }
+        memset(&out->items[out->n_items], 0, sizeof out->items[0]);
+        out->n_items++;
+        if (!sf_item_in(in, &out->items[out->n_items - 1])) { sf_member_free(out); return false; }
+        /* step 3.5: "if the first character of input_string is not SP or ')', fail parsing" */
+        if (sf_eof(in) || (sf_peek(in) != ' ' && sf_peek(in) != ')')) { sf_member_free(out); return false; }
+    }
+    sf_member_free(out);
+    return false;                                                    /* step 4: end of inner list not found */
+}
+
+/* §4.2.1.1: "if the first character of input_string is '(', return the result of running Parsing an Inner
+   List … return the result of running Parsing an Item". */
+static bool sf_item_or_inner_list_in(SfIn *in, SfMember *out)
+{
+    if (!sf_eof(in) && sf_peek(in) == '(')
+        return sf_inner_list_in(in, out);
+    memset(out, 0, sizeof *out);
+    if (!sf_item_in(in, &out->tuple)) { sf_member_free(out); return false; }
+    return true;
+}
+
+/* §4.2.2 step 2.4/2.5's ORDERED MAP SET — "if dictionary already contains a key this_key … overwrite its value
+   with member. Otherwise, append key this_key with value member". OVERWRITE IN PLACE, which is the note the
+   section ends on ("when duplicate Dictionary keys are encountered, all but the last instance are ignored")
+   and is not the same as appending a second entry: §9.2 iterates this map once per member, so a duplicate that
+   appended would run the LAST declaration and then be unable to say it had ever seen the first. */
+static void sf_dict_set(SfDictionary *d, char *key, const SfMember *value)
+{
+    int k;
+
+    for (k = 0; k < d->n_members; k++) {
+        if (!strcmp(d->members[k].key, key)) {
+            sf_member_free(&d->members[k].value);
+            d->members[k].value = *value;
+            free(key);
+            return;
+        }
+    }
+    if (d->n_members >= d->cap_members) {
+        d->cap_members = d->cap_members ? d->cap_members * 2 : 4;
+        d->members = realloc(d->members, (size_t)d->cap_members * sizeof *d->members);
+        CHECK(d->members != NULL, "structured fields: OOM growing §3.2's dictionary");
+    }
+    d->members[d->n_members].key = key;
+    d->members[d->n_members].value = *value;
+    d->n_members++;
+}
+
+/* §4.2's OWS — "optional whitespace", SP or HTAB. It is NOT §4.2 step 2's leading-SP skip and the two are
+   deliberately different: §4.2.2 steps 2.6 and 2.9 discard OWS around the ',' between members, so
+   `a=1,\tb=2` is well formed while a TAB anywhere an SP is called for is not. */
+static void sf_skip_ows(SfIn *in)
+{
+    while (in->i < in->n && (in->s[in->i] == ' ' || in->s[in->i] == '\t')) in->i++;
+}
+
+static bool sf_dictionary_in(SfIn *in, SfDictionary *out)
+{
+    memset(out, 0, sizeof *out);
+    while (!sf_eof(in)) {                                            /* step 2 */
+        char    *key = sf_parse_key(in);                             /* step 2.1 */
+        SfMember member;
+
+        if (!key) return false;
+        if (!sf_eof(in) && sf_peek(in) == '=') {                     /* step 2.2 */
+            sf_take(in);
+            if (!sf_item_or_inner_list_in(in, &member)) { free(key); return false; }
+        } else {                                                     /* step 2.3 */
+            /* "let value be Boolean true" — a bare Member Name IS a member whose value is the boolean true,
+               which is why `Origin-Agent-Cluster`-shaped spellings survive here and why §5.2's "Member Values
+               of any other form will cause the entire Dictionary Member to be ignored" is a PROCESSING rule
+               rather than a parse rule: this parses, and §9.2 then declines to recognise it. */
+            memset(&member, 0, sizeof member);
+            member.tuple.item.kind = SF_BOOLEAN;
+            member.tuple.item.boolean = true;
+            if (!sf_parse_params(in, &member.tuple)) { sf_member_free(&member); free(key); return false; }
+        }
+        sf_dict_set(out, key, &member);                              /* steps 2.4 and 2.5 */
+        sf_skip_ows(in);                                             /* step 2.6 */
+        if (sf_eof(in)) return true;                                 /* step 2.7 */
+        if (sf_take(in) != ',') return false;                        /* step 2.8 */
+        sf_skip_ows(in);                                             /* step 2.9 */
+        if (sf_eof(in)) return false;                                /* step 2.10: a trailing comma */
+    }
+    return true;                                                     /* step 3: an empty dictionary */
+}
+
+bool sf_parse_dictionary(const char *input, size_t len, SfDictionary *out)
+{
+    SfIn in;
+
+    DCHECK(out != NULL, "a structured field dictionary was parsed into nothing");
+    memset(out, 0, sizeof *out);
+    if (!input) return false;
+    in.s = input;
+    in.n = len;
+    in.i = 0;
+    sf_skip_sp(&in);                                                 /* §4.2 step 2 */
+    if (!sf_dictionary_in(&in, out)) { sf_dictionary_free(out); return false; }
+    sf_skip_sp(&in);                                                 /* §4.2 step 4 */
+    /* §4.2 step 5: "if input_string is not empty, fail parsing". §4.2.2 step 2.7 already returns at the end of
+       a well-formed dictionary, so anything left here is input §4.2.2 stopped on without failing — which the
+       grammar makes unreachable, and the check stays because §4.2 states it and because an unreachable check
+       costs one comparison while a missing one is a field this parser accepts and no browser does. */
+    if (!sf_eof(&in)) { sf_dictionary_free(out); return false; }
+    return true;
+}
+
+bool sf_header_dictionary(const HeaderList *l, const char *name, SfDictionary *out)
+{
+    char *value;
+    bool  ok;
+
+    DCHECK(l != NULL && name != NULL && out != NULL, "a structured field value was got from nothing");
+    {
+        const char *p;
+        for (p = name; *p; p++)
+            DCHECK(!(*p >= 'A' && *p <= 'Z'),
+                   "a header name given to Fetch's get-a-structured-field-value carries an uppercase letter — "
+                   "a header list stores names lowercased, so a constant spelled any other way is a name this "
+                   "list can never contain");
+    }
+    memset(out, 0, sizeof *out);
+    /* Fetch §2.2.2 step 2's join with 0x2C 0x20 — and for a DICTIONARY that join is not a hazard the way it is
+       for an item: two `Permissions-Policy` headers combine into one well-formed dictionary, which is exactly
+       what §4.2.2's overwrite rule is written for. */
+    value = header_list_get(l, name);
+    if (!value) return false;   /* step 3 */
+    ok = sf_parse_dictionary(value, strlen(value), out);
+    free(value);
+    return ok;                  /* step 5 */
+}
+
+const SfBareItem *sf_member_bare(const SfMember *m)
+{
+    DCHECK(m != NULL, "a structured field member's bare item was read off nothing");
+    DCHECK(!m->inner_list,
+           "§4.2.1.1's BARE ITEM was read off a member that is an INNER LIST — the two arms of that tuple are "
+           "different shapes and only one of them has a bare item, so a reader that did not ask which arm it "
+           "holds is about to read the zero this struct was allocated with as a Member Value the sender wrote");
+    return &m->tuple.item;
+}
+
+const SfBareItem *sf_member_param(const SfMember *m, const char *key)
+{
+    DCHECK(m != NULL, "a structured field member's parameters were looked up on nothing");
+    return sf_item_param(&m->tuple, key);
 }

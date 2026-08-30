@@ -136,4 +136,21 @@ CspMatch csp_source_list_match_url(const CspDirective *directive, const UrlRecor
 CspMatch csp_source_match_url(CspToken expression, const UrlRecord *url, const Origin *self_origin,
                               int redirect_count);
 
+/* §2.3.1's `scheme-source / host-source` — is this token one of those two productions? It is the RECOGNISER
+ * half of §6.7.2.8's step 2/3 arm, exposed because ANOTHER STANDARD names that pair as its own production and
+ * has to ask before it stores: Permissions Policy §5.1 "HTML attribute serialization" defines
+ * `permissions-source-expression = scheme-source / host-source`, and its §9.2 "Construct policy from
+ * dictionary and origin" appends an element to an allowlist only "if element is a valid
+ * permissions-source-expression".
+ *
+ * IT IS EXPORTED RATHER THAN RE-DERIVED FOR THIS FILE'S OWN REASON — one reading of the grammar. A second
+ * recogniser next door would not merely duplicate: it would be a recogniser whose author has not read
+ * §6.7.2.8, and the two would disagree in the direction that WIDENS a policy. The concrete case is the
+ * quoted keywords, which are the whole point of asking: `'self'`, `'src'` and `'none'` are §5.1
+ * allow-list-values and are NOT permissions-source-expressions, and this predicate refuses all three (a `'` is
+ * neither a scheme's first character nor a host-char) — while §6.7.2.8's step 4 would happily match `'self'`
+ * if such a string were stored as an expression, turning a keyword the caller already handled into a second,
+ * unintended match. */
+bool csp_source_is_scheme_or_host_source(CspToken expression);
+
 #endif

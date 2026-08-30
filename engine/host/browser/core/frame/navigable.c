@@ -508,6 +508,12 @@ typedef struct {
        it (policy_container.h), and this record outlives that frame — so the items are held rather than the
        struct, and the struct is rebuilt from them at the finish. */
     char *csp, *self_origin, *coep_endpoint, *coep_report_only_endpoint;
+    /* PERMISSIONS POLICY §9.1's TWO RESPONSE HEADER FIELD VALUES, copied for the same reason `csp` is: HTML
+       §7.5.1 creates the Document from them and the creation is finished on the far side of however many
+       suspensions the parse takes, by which time the header list this frame read them out of is gone. NULL for
+       the no-response arm, which is §9.1 step 3's empty ordered map and is the whole of what §7.3.2.1's initial
+       about:blank has to say about a header. */
+    char *permissions_policy, *permissions_policy_report_only;
     EmbedderPolicyValue coep_value, coep_report_only_value;
     /* §7.1.1's ORIGINS, HELD AS POINTERS AND NOT COPIED, which is a statement about origin records rather than
        an exception to the paragraph above: an origin belongs to the agent and outlives every frame that names
@@ -553,6 +559,7 @@ static void nav_create_free(NavCreateWork *w)
 {
     free(w->url); free(w->top_level_url); free(w->about_base_url);
     free(w->csp); free(w->self_origin); free(w->coep_endpoint); free(w->coep_report_only_endpoint);
+    free(w->permissions_policy); free(w->permissions_policy_report_only);
     free(w->decoded);
     free(w);
 }
@@ -566,6 +573,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
                                        const char *body, size_t body_len,
                                        const char *content_type, const MimeType *computed_type,
                                        SerializedPolicyContainer policy,
+                                       SerializedResponsePermissionsPolicy permissions_policy,
                                        const char *about_base_url, SandboxFlags sandbox_flags)
 {
     NavCreateWork *w;
@@ -650,6 +658,8 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->self_origin              = nav_strdup(policy.self_origin);
     w->coep_endpoint            = nav_strdup(policy.embedder.endpoint);
     w->coep_report_only_endpoint = nav_strdup(policy.embedder.report_only_endpoint);
+    w->permissions_policy       = nav_strdup(permissions_policy.enforced);
+    w->permissions_policy_report_only = nav_strdup(permissions_policy.report_only);
     w->coep_value               = policy.embedder.value;
     w->coep_report_only_value   = policy.embedder.report_only_value;
     w->origin                   = origin;
@@ -728,7 +738,10 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
     cctx = g_realm_builder(JS_GetRuntime(ctx), w->dom, w->url, w->top_level_url, origin_serialized(w->origin),
-                           w->kind, policy, w->sandbox_flags, w->doc, nav_proxy);
+                           w->kind, policy,
+                           serialized_response_permissions_policy(w->permissions_policy,
+                                                                  w->permissions_policy_report_only),
+                           w->sandbox_flags, w->doc, nav_proxy);
     CHECK(cctx != NULL, "the host's realm builder produced no realm for a same-origin child navigable");
     /* AND §13.2.3.2's ANSWER ONTO THE DOCUMENT IT IS ABOUT, for the same reason and in the same place as the
        about base URL below: it is a fact the OPERATION determined and the host's realm builder cannot answer.
@@ -800,8 +813,14 @@ JSContext *navigable_realm(JSContext *ctx, uint32_t doc, const char *url, const 
            "on the other side of however many suspensions the frontier asked for. This entry exists for the "
            "destination that has no response at all, and driving a response through it would hold the thread "
            "for the length of the document inside whatever flow happened to be running");
+    /* NO RESPONSE, SO NO §9.1 HEADER VALUES — and that is §9.6 answering rather than this call declining to.
+       §9.1 step 3 gives an absent header the empty ordered map, so §9.6's merge copies nothing and the initial
+       about:blank's permissions policy is exactly §9.5's, which is what §7.3.2.1 creates it with. It is stated
+       here rather than defaulted because serialized_response_permissions_policy is the only constructor and a
+       caller that stops stating it stops compiling. */
     w = nav_create_begin(ctx, doc, url, top_level_url, origin, NULL, OPENER_POLICY_UNSAFE_NONE, /*navigates*/false,
-                         NULL, 0, NULL, NULL, policy, about_base_url, sandbox_flags);
+                         NULL, 0, NULL, NULL, policy,
+                         serialized_response_permissions_policy(NULL, NULL), about_base_url, sandbox_flags);
     DCHECK(nav_create_ended(w),
            "§7.4's initial about:blank was opened as a creation with items left to fill — its markup is a "
            "constant of this build and reaches child_document as the no-response arm, which takes no load "
@@ -1066,6 +1085,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
     OpenerPolicy response_coop;
     char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
+    /* PERMISSIONS POLICY §9.1 step 1 and Fetch's half of its step 2, for BOTH names — §7.5.1 runs §9.6 with the
+       enforced value and §10.1 inserts a second call with the report-only one, so one response feeds two
+       policies and this frame reads both. Same ownership as `resp_csp`, and freed with it. */
+    char *resp_pp = NULL, *resp_pp_report_only = NULL;
     /* The JOINED `Content-Type`, which is Fetch §2.2.2 "Headers"'s input and therefore §13.2.3.2's; same ownership as
        resp_csp above. The type §7.4.5 dispatches on is NOT computed from it — see the read below. */
     char *resp_ctype = NULL;
@@ -1197,6 +1220,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
+        /* THE SAME `get`, FOR THE HEADER THAT DECIDES WHAT THIS DOCUMENT MAY USE. It is read HERE, at the child
+           navigable's own response, because §9.6 takes navigationParams's RESPONSE and this frame is where a
+           child's response is read — the framing document's copy of this question is answered at
+           core/frame/navigation_params.c and says nothing about the framed document's own headers. */
+        resp_pp = header_list_get(&response_headers, "permissions-policy");
+        resp_pp_report_only = header_list_get(&response_headers, "permissions-policy-report-only");
         /* THE RESPONSE'S `Content-Type`, TWICE, BECAUSE TWO STANDARDS READ IT DIFFERENTLY AND BOTH ARE RIGHT.
            Fetch §2.2.2's `get` JOINS every value with ", " and that is what Fetch §2.2.2 "Headers"'s "extract a MIME
            type" takes — the form HTML §13.2.3.2 "Determining the character encoding" needs, since Fetch §3.5's
@@ -1566,7 +1595,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->create = nav_create_begin(ctx, doc, dest_url, tlu, origin, tlo, response_coop.value,
                                      /*navigates*/true, (const char *)body, body_len, resp_ctype,
                                      computed_defined ? &computed : NULL,
-                                     policy, about_base, final_flags);
+                                     policy,
+                                     serialized_response_permissions_policy(resp_pp, resp_pp_report_only),
+                                     about_base, final_flags);
     }
     opener_policy_free(&response_coop);
     embedder_policy_free(&response_ep);
@@ -1581,6 +1612,8 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeCString(ctx, inherited_coep_report_only_endpoint);
     JS_FreeCString(ctx, about_base);
     free(resp_csp);
+    free(resp_pp);
+    free(resp_pp_report_only);
     free(resp_ctype);
     /* CSP §2.2.2's SELF-ORIGIN BYTES, WHICH THIS FRAME OWNS AND THE CONTAINER HAS COPIED — the same ownership
        as `resp_csp` beside it, and freed after nav_create_begin for the same reason: the container the
