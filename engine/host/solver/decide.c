@@ -440,11 +440,52 @@ int decide_cursor(void) { return g_c; }
  * undercount that says so is a measurement, an undercount that does not is a lie. */
 /* THE ROW HOLDS THE WHOLE KEY, because a census that truncates its own key merges the rows it exists to tell
    apart — the same defect the key construction itself carried, one layer up, and it would report a frontier
-   growing at "one predicate" that is really two. The rows themselves are declared above decide_free. */
-static void fork_key_count(const char *key)
+   growing at "one predicate" that is really two. The rows themselves are declared above decide_free.
+
+   AND THE TABLE HOLDS TWO NAMESPACES, WHICH THREE SENTENCES IN THIS TREE ASSERTED AND NO LINE OF CODE DID.
+   decide_fork_json says the overflow row sits "under a name no constraint key can collide with because no key
+   is prose"; decide_fork_same_path says a synthetic row must never be "a fabricated key, which would merge
+   with a real one the moment one spelled the same way"; concolic.c says the two encodings "are disjoint in
+   every spelling this engine" has. All three are claims about a KEY'S FIRST BYTE and all three were unchecked,
+   which is the shape CLAUDE.md calls too FEW asserts: a constraint key is concolic_ident_compose's output and
+   every field of it is written `<len>:<bytes>`, so it opens on a DECIMAL DIGIT; a synthetic row is prose this
+   file and engine.c write by hand and opens on `(`. A collision does not crash and does not truncate — it
+   ADDS two populations into one row, and the row still sums into the total, so the census stays internally
+   consistent while naming a predicate that took a fraction of the forks filed under it. That is the
+   plausible-datum defect performed on the one instrument whose whole job is to say WHERE the frontier is
+   growing, and nothing downstream could ever tell.
+   THE NAMESPACE IS THE CALLER'S TO STATE, not this function's to sniff. A predicate whose key happened to open
+   on `(` would otherwise be waved through as a synthetic row by the very test meant to catch it — the
+   recognizer shape, at the one place it would silently invert the answer — and a caller passing NULL for "I
+   have no key" must not be able to masquerade as one that has nothing to say. So each site names which
+   population it is filing into, and BOTH halves are asserted here, at the one point every row converges on. */
+typedef enum { FORK_ROW_PREDICATE, FORK_ROW_SYNTHETIC } ForkRowKind;
+static void fork_key_count(const char *key, ForkRowKind kind)
 {
     int i;
 
+    DCHECK(key != NULL && *key,
+           "a fork census row was filed under no name at all — every row of this table is either a constraint "
+           "key or a named mechanism that forks without one, and an empty name merges with nothing because it "
+           "IS nothing: the row would sum into the total while describing no site a reader can go to");
+    /* A CONSTRAINT KEY OPENS ON ITS OWN LENGTH PREFIX. concolic_ident_compose writes `<len>:<bytes>` per
+       field, so `branch` composes to a key beginning "6:" and `outcome` to one beginning "7:" — there is no
+       spelling of a value's identity that opens on anything but a digit, which is precisely WHY the prose rows
+       are safe to share this namespace. If this fires, the identity grammar changed and the overflow row's own
+       collision argument went with it. */
+    DCHECK(kind != FORK_ROW_PREDICATE || (*key >= '0' && *key <= '9'),
+           "a fork census row was filed as a PREDICATE under a name that is not a constraint key — every key "
+           "concolic_ident_compose produces opens on a decimal length prefix, and a name that does not is "
+           "either prose filed through the wrong site or an identity grammar that no longer keeps the two "
+           "namespaces disjoint. Either way the synthetic rows can now collide with a predicate and the "
+           "largest row of this table stops naming a site");
+    /* …AND A SYNTHETIC ROW OPENS ON `(`, which is the other half of the same claim and is what stops a
+       mechanism-row from being read as a branch the program took. */
+    DCHECK(kind != FORK_ROW_SYNTHETIC || *key == '(',
+           "a mechanism that forks without a predicate filed its row under a name that does not read as one — "
+           "the prose rows are told apart from constraint keys by their leading `(` and by nothing else, so a "
+           "name without it is a fabricated predicate: it merges with a real key the moment one spells the "
+           "same way, and until then it reports a branch the program never took");
     g_fork_total++;
     for (i = 0; i < DECIDE_FORK_KEYS; i++) {
         if (!g_fork_keys[i].n) {                       /* an empty row: claim it */
@@ -746,7 +787,7 @@ void *decide_fork_same_path(const char *why) {
        function the page never called, which has no peer and no answer in it — so the row was false about most
        of what it held while reading as a measurement of one thing. Every mechanism that forks without a
        predicate gets its own row now, and the rows still sum to the total. */
-    fork_key_count(why);
+    fork_key_count(why, FORK_ROW_SYNTHETIC);
     return b;
 }
 
@@ -870,7 +911,13 @@ static int dec_fork_here(JSContext *ctx, const char *key, uint32_t asked, int re
            "a fork was told the real arm is a value that is neither arm nor the unobserved marker — it comes "
            "from one ToBoolean of one example, so a third value is a caller computing it somewhere else");
     dblob = decide_fork_blob(g_c, !take, asked);
-    fork_key_count(key ? key : "(no source identity)");
+    /* THE TWO NAMESPACES PART HERE, and the ternary that used to stand in one argument is why they must: a
+       `key ? key : "(prose)"` hands one parameter two populations, so the site that KNOWS which one it has is
+       the site that was saying nothing about it. A value with no identity this engine can spell is not a
+       predicate — decide_key returns NULL for it and both arms are kept — so its row is a named mechanism like
+       every other fork that asked no question. */
+    if (key) fork_key_count(key, FORK_ROW_PREDICATE);
+    else     fork_key_count("(no source identity)", FORK_ROW_SYNTHETIC);
     pblob = concolic_pins_suspend();
     *forked = engine_prepare_fork(ctx, dblob, pblob, key, restartable);
     dec_append(take, asked);         /* this flow: the observed arm, onto the head the freeze above emptied */

@@ -150,10 +150,27 @@ int  decide_cursor(void);
    which would merge with a real one the moment a predicate spelled the same way.
    READ THE COUNTS AS ARRIVALS, NOT AS PRODUCTION. Each row is how many flows REACHED that site, and every
    fork upstream doubles what reaches everything below it, so a program with k independent gates in sequence
-   produces rows in a geometric series and the LAST site in program order is always the largest. Measured on
-   the full-document smoke: 32, 64, 128, 256, 512 across five distinct gates, with the biggest row 44% of all
-   forks — read as one hot predicate that is a hot predicate, and read correctly it is the bottom of a cascade
-   that would be untouched by anything done to it.
+   produces rows in a geometric series and the LAST site in program order is always the largest. A biggest row
+   is therefore read as the BOTTOM OF A CASCADE and not as one hot predicate — anything done to that site
+   leaves the series that feeds it untouched. (A percentage measured on some past run used to stand here as the
+   worked example. It was status: it named a fixture and a revision it did not carry, so it stayed quotable
+   long after it stopped being true of any tree, and the shape above is the whole of what it was teaching.)
+
+   AND THE ADMISSION POLICY AND THAT SENTENCE ARE IN TENSION, WHICH IS A PROPERTY OF THE TABLE AND NOT OF ANY
+   RUN. The rows are claimed FIRST-COME — fork_key_count fills the first free slot and every later key goes to
+   the overflow — while the paragraph above says the largest row is the LAST site in program order. Latest and
+   largest are the same end of the program, so a table that admits by arrival is structurally likeliest to
+   exclude exactly the row it exists to name, and it does so silently: the overflow row is rendered in the same
+   object under the same shape as a real key, so a consumer taking the argmax over the table can hand back a
+   NON-SITE as its answer to "which predicate is growing the frontier". The overflow row's hit count is
+   honest — an undercount that says so is a measurement — but it is one number over an unknown number of
+   sites, so "one hot predicate that fell out of the table" and "a genuine long tail" read identically, and
+   those two have opposite fixes. WHAT MAKES THE TOP ROW READABLE AT ALL is therefore the overflow row's own
+   size beside it: while the overflow leads the table, the table has not answered, and a reader who quotes the
+   argmax has quoted the bucket. Building the answer means changing WHICH keys a fixed-size census retains
+   (the established heavy-hitter algorithms — Misra-Gries, Space-Saving — are what that question is called
+   outside this file, and both trade exact counts for the guarantee that the heaviest key is resident), never
+   growing the table until a fixture stops overflowing, which fixes one document and no other.
    It is keyed by the CONSTRAINT key rather than a file:line because that is what a predicate IS here — two
    forks at one source and operation are one predicate however many call sites spell it, and a chain (a source
    whose operation string carries a position) shows as `distinct` climbing with `total`, which distinguishes
