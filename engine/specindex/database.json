@@ -1,0 +1,1162 @@
+{
+ "spec": "Indexed Database API",
+ "key": "database",
+ "base": "https://w3c.github.io/IndexedDB/",
+ "specUpdated": "13 August 2025",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Constructs",
+   "page": "",
+   "id": "constructs"
+  },
+  "3": {
+   "title": "Exceptions",
+   "page": "",
+   "id": "exceptions"
+  },
+  "4": {
+   "title": "API",
+   "page": "",
+   "id": "async-api"
+  },
+  "5": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "algorithms"
+  },
+  "6": {
+   "title": "Database operations",
+   "page": "",
+   "id": "database-operations"
+  },
+  "7": {
+   "title": "ECMAScript binding",
+   "page": "",
+   "id": "binding"
+  },
+  "8": {
+   "title": "Privacy considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "9": {
+   "title": "Security considerations",
+   "page": "",
+   "id": "security"
+  },
+  "10": {
+   "title": "Accessibility considerations",
+   "page": "",
+   "id": "accessibility"
+  },
+  "11": {
+   "title": "Revision history",
+   "page": "",
+   "id": "revision-history"
+  },
+  "12": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "2.1": {
+   "title": "Database",
+   "page": "",
+   "id": "database-construct"
+  },
+  "2.1.1": {
+   "title": "Database connection",
+   "page": "",
+   "id": "database-connection"
+  },
+  "2.2": {
+   "title": "Object store",
+   "page": "",
+   "id": "object-store-construct"
+  },
+  "2.2.1": {
+   "title": "Object store handle",
+   "page": "",
+   "id": "object-store-handle-construct"
+  },
+  "2.3": {
+   "title": "Values",
+   "page": "",
+   "id": "value-construct"
+  },
+  "2.4": {
+   "title": "Keys",
+   "page": "",
+   "id": "key-construct"
+  },
+  "2.5": {
+   "title": "Key path",
+   "page": "",
+   "id": "key-path-construct"
+  },
+  "2.6": {
+   "title": "Index",
+   "page": "",
+   "id": "index-construct"
+  },
+  "2.6.1": {
+   "title": "Index handle",
+   "page": "",
+   "id": "index-handle-construct"
+  },
+  "2.7": {
+   "title": "Transactions",
+   "page": "",
+   "id": "transaction-construct"
+  },
+  "2.7.1": {
+   "title": "Transaction lifecycle",
+   "page": "",
+   "id": "transaction-lifecycle"
+  },
+  "2.7.2": {
+   "title": "Transaction scheduling",
+   "page": "",
+   "id": "transaction-scheduling"
+  },
+  "2.7.3": {
+   "title": "Upgrade transactions",
+   "page": "",
+   "id": "upgrade-transaction-construct"
+  },
+  "2.8": {
+   "title": "Requests",
+   "page": "",
+   "id": "request-construct"
+  },
+  "2.8.1": {
+   "title": "Open requests",
+   "page": "",
+   "id": "open-requests"
+  },
+  "2.8.2": {
+   "title": "Connection queues",
+   "page": "",
+   "id": "connection-queues"
+  },
+  "2.9": {
+   "title": "Key range",
+   "page": "",
+   "id": "range-construct"
+  },
+  "2.10": {
+   "title": "Cursor",
+   "page": "",
+   "id": "cursor-construct"
+  },
+  "2.11": {
+   "title": "Key generators",
+   "page": "",
+   "id": "key-generator-construct"
+  },
+  "2.12": {
+   "title": "Record snapshot",
+   "page": "",
+   "id": "record-snapshot-construct"
+  },
+  "4.1": {
+   "title": "The IDBRequest interface",
+   "page": "",
+   "id": "request-api"
+  },
+  "4.2": {
+   "title": "Event interfaces",
+   "page": "",
+   "id": "events"
+  },
+  "4.3": {
+   "title": "The IDBFactory interface",
+   "page": "",
+   "id": "factory-interface"
+  },
+  "4.4": {
+   "title": "The IDBDatabase interface",
+   "page": "",
+   "id": "database-interface"
+  },
+  "4.5": {
+   "title": "The IDBObjectStore interface",
+   "page": "",
+   "id": "object-store-interface"
+  },
+  "4.6": {
+   "title": "The IDBIndex interface",
+   "page": "",
+   "id": "index-interface"
+  },
+  "4.7": {
+   "title": "The IDBKeyRange interface",
+   "page": "",
+   "id": "keyrange"
+  },
+  "4.8": {
+   "title": "The IDBRecord interface",
+   "page": "",
+   "id": "record-interface"
+  },
+  "4.9": {
+   "title": "The IDBCursor interface",
+   "page": "",
+   "id": "cursor-interface"
+  },
+  "4.10": {
+   "title": "The IDBTransaction interface",
+   "page": "",
+   "id": "transaction"
+  },
+  "5.1": {
+   "title": "Opening a database connection",
+   "page": "",
+   "id": "opening"
+  },
+  "5.2": {
+   "title": "Closing a database connection",
+   "page": "",
+   "id": "closing-connection"
+  },
+  "5.3": {
+   "title": "Deleting a database",
+   "page": "",
+   "id": "deleting-a-database"
+  },
+  "5.4": {
+   "title": "Committing a transaction",
+   "page": "",
+   "id": "commit-transaction"
+  },
+  "5.5": {
+   "title": "Aborting a transaction",
+   "page": "",
+   "id": "abort-transaction"
+  },
+  "5.6": {
+   "title": "Asynchronously executing a request",
+   "page": "",
+   "id": "async-execute-request"
+  },
+  "5.7": {
+   "title": "Upgrading a database",
+   "page": "",
+   "id": "upgrade-transaction-steps"
+  },
+  "5.8": {
+   "title": "Aborting an upgrade transaction",
+   "page": "",
+   "id": "abort-upgrade-transaction"
+  },
+  "5.9": {
+   "title": "Firing a success event",
+   "page": "",
+   "id": "fire-success-event"
+  },
+  "5.10": {
+   "title": "Firing an error event",
+   "page": "",
+   "id": "fire-error-event"
+  },
+  "5.11": {
+   "title": "Clone a value",
+   "page": "",
+   "id": "clone-value"
+  },
+  "5.12": {
+   "title": "Creating a request to retrieve multiple items",
+   "page": "",
+   "id": "create-request-to-retrieve-multiple-items"
+  },
+  "6.1": {
+   "title": "Object store storage operation",
+   "page": "",
+   "id": "object-store-storage-operation"
+  },
+  "6.2": {
+   "title": "Object store retrieval operations",
+   "page": "",
+   "id": "object-store-retrieval-operation"
+  },
+  "6.3": {
+   "title": "Index retrieval operations",
+   "page": "",
+   "id": "index-retrieval-operation"
+  },
+  "6.4": {
+   "title": "Object store deletion operation",
+   "page": "",
+   "id": "object-store-deletion-operation"
+  },
+  "6.5": {
+   "title": "Record counting operation",
+   "page": "",
+   "id": "record-counting-operation"
+  },
+  "6.6": {
+   "title": "Object store clear operation",
+   "page": "",
+   "id": "object-store-clear-operation"
+  },
+  "6.7": {
+   "title": "Cursor iteration operation",
+   "page": "",
+   "id": "cursor-iteration-operation"
+  },
+  "7.1": {
+   "title": "Extract a key from a value",
+   "page": "",
+   "id": "extract-key-from-value"
+  },
+  "7.2": {
+   "title": "Inject a key into a value",
+   "page": "",
+   "id": "inject-key-into-value"
+  },
+  "7.3": {
+   "title": "Convert a key to a value",
+   "page": "",
+   "id": "convert-key-to-value"
+  },
+  "7.4": {
+   "title": "Convert a value to a key",
+   "page": "",
+   "id": "convert-value-to-key"
+  },
+  "8.1": {
+   "title": "User tracking",
+   "page": "",
+   "id": "user-tracking"
+  },
+  "8.2": {
+   "title": "Cookie resurrection",
+   "page": "",
+   "id": "cookie-resurrection"
+  },
+  "8.3": {
+   "title": "Sensitivity of data",
+   "page": "",
+   "id": "sensitivity-of-data"
+  },
+  "9.1": {
+   "title": "DNS spoofing attacks",
+   "page": "",
+   "id": "dns-spoofing-attacks"
+  },
+  "9.2": {
+   "title": "Cross-directory attacks",
+   "page": "",
+   "id": "cross-directory-attacks"
+  },
+  "9.3": {
+   "title": "Implementation risks",
+   "page": "",
+   "id": "implementation-risks"
+  },
+  "9.4": {
+   "title": "Persistence risks",
+   "page": "",
+   "id": "persistence-risks"
+  }
+ },
+ "dfns": {
+  ") id dom idbobjectstoreparameters keypath keypath": [
+   "4.4"
+  ],
+  "abort a transaction": [
+   "5.5"
+  ],
+  "abort an upgrade transaction": [
+   "5.8"
+  ],
+  "add or put": [
+   "4.5"
+  ],
+  "add( value key )": [
+   "4.5"
+  ],
+  "add(value key)": [
+   "4.5"
+  ],
+  "advance( count )": [
+   "4.9"
+  ],
+  "array key": [
+   "2.4"
+  ],
+  "asynchronously execute a request": [
+   "5.6"
+  ],
+  "bound( lower upper loweropen upperopen )": [
+   "4.7"
+  ],
+  "bound(lower upper loweropen upperopen)": [
+   "4.7"
+  ],
+  "bound(lower upper loweropen)": [
+   "4.7"
+  ],
+  "bound(lower upper)": [
+   "4.7"
+  ],
+  "check that a key could be injected into a value": [
+   "7.2"
+  ],
+  "cleanup event loop": [
+   "2.7"
+  ],
+  "cleanup indexed database transactions": [
+   "2.7.1"
+  ],
+  "clear an object store": [
+   "6.6"
+  ],
+  "close a database connection": [
+   "5.2"
+  ],
+  "close pending flag": [
+   "2.1.1"
+  ],
+  "cmp( first second )": [
+   "4.3"
+  ],
+  "commit a transaction": [
+   "5.4"
+  ],
+  "compare two keys": [
+   "2.4"
+  ],
+  "connection queue": [
+   "2.8.2"
+  ],
+  "constructor(type eventinitdict)": [
+   "4.2"
+  ],
+  "containing only": [
+   "2.9"
+  ],
+  "continue( key )": [
+   "4.9"
+  ],
+  "continueprimarykey( key primarykey )": [
+   "4.9"
+  ],
+  "convert a key to a value": [
+   "7.3"
+  ],
+  "convert a value to a key": [
+   "7.4"
+  ],
+  "convert a value to a key range": [
+   "2.9"
+  ],
+  "convert a value to a multientry key": [
+   "7.4"
+  ],
+  "count the records in a range": [
+   "6.5"
+  ],
+  "count( query )": [
+   "4.5",
+   "4.6"
+  ],
+  "create a request to retrieve multiple items": [
+   "5.12"
+  ],
+  "create a sorted name list": [
+   "2"
+  ],
+  "createindex( name keypath options )": [
+   "4.5"
+  ],
+  "createindex(name keypath options)": [
+   "4.5"
+  ],
+  "createindex(name keypath)": [
+   "4.5"
+  ],
+  "createobjectstore( name options )": [
+   "4.4"
+  ],
+  "createobjectstore(name options)": [
+   "4.4"
+  ],
+  "current number": [
+   "2.11"
+  ],
+  "database access task source": [
+   "4"
+  ],
+  "delete a database": [
+   "5.3"
+  ],
+  "delete records from an object store": [
+   "6.4"
+  ],
+  "delete( query )": [
+   "4.5"
+  ],
+  "deletedatabase( name )": [
+   "4.3"
+  ],
+  "deleteindex( name )": [
+   "4.5"
+  ],
+  "deleteobjectstore( name )": [
+   "4.4"
+  ],
+  "done flag": [
+   "2.8"
+  ],
+  "durability hint": [
+   "2.7"
+  ],
+  "effective key": [
+   "2.10"
+  ],
+  "effective object store": [
+   "2.10"
+  ],
+  "equal to": [
+   "2.4"
+  ],
+  "evaluate a key path on a value": [
+   "7.1"
+  ],
+  "extract a key from a value using a key path": [
+   "7.1"
+  ],
+  "fire a success event": [
+   "5.9"
+  ],
+  "fire a version change event": [
+   "4.2"
+  ],
+  "fire an error event": [
+   "5.10"
+  ],
+  "generate a key": [
+   "2.11"
+  ],
+  "get( query )": [
+   "4.5",
+   "4.6"
+  ],
+  "getall( queryoroptions count )": [
+   "4.5",
+   "4.6"
+  ],
+  "getall(queryoroptions count)": [
+   "4.5",
+   "4.6"
+  ],
+  "getallkeys( queryoroptions count )": [
+   "4.5",
+   "4.6"
+  ],
+  "getallkeys(queryoroptions count)": [
+   "4.5",
+   "4.6"
+  ],
+  "getallrecords( options )": [
+   "4.5",
+   "4.6"
+  ],
+  "getkey( query )": [
+   "4.5",
+   "4.6"
+  ],
+  "got value flag": [
+   "2.10"
+  ],
+  "greater than": [
+   "2.4"
+  ],
+  "idbversionchangeevent(type eventinitdict)": [
+   "4.2"
+  ],
+  "in a key range": [
+   "2.9"
+  ],
+  "in line keys": [
+   "2.2"
+  ],
+  "includes( key )": [
+   "4.7"
+  ],
+  "index handle": [
+   "2.6.1"
+  ],
+  "index set": [
+   "2.2.1"
+  ],
+  "index( name )": [
+   "4.5"
+  ],
+  "inject a key into a value using a key path": [
+   "7.2"
+  ],
+  "is a potentially valid key range": [
+   "2.9"
+  ],
+  "iterate a cursor": [
+   "6.7"
+  ],
+  "key generator": [
+   "2.11"
+  ],
+  "key only flag": [
+   "2.10"
+  ],
+  "key path": [
+   "2.2",
+   "2.5",
+   "2.6"
+  ],
+  "key range": [
+   "2.9"
+  ],
+  "less than": [
+   "2.4"
+  ],
+  "list of records": [
+   "2.2",
+   "2.6"
+  ],
+  "lower bound": [
+   "2.9"
+  ],
+  "lower open flag": [
+   "2.9"
+  ],
+  "lowerbound( lower open )": [
+   "4.7"
+  ],
+  "lowerbound(lower open)": [
+   "4.7"
+  ],
+  "multientry flag": [
+   "2.6"
+  ],
+  "object store": [
+   "2.2",
+   "2.2.1"
+  ],
+  "object store handle": [
+   "2.2.1",
+   "2.6.1"
+  ],
+  "object store position": [
+   "2.10"
+  ],
+  "object store set": [
+   "2.1.1"
+  ],
+  "objectstore( name )": [
+   "4.10"
+  ],
+  "only( value )": [
+   "4.7"
+  ],
+  "open a database connection": [
+   "5.1"
+  ],
+  "open request": [
+   "2.8.1"
+  ],
+  "open( name version )": [
+   "4.3"
+  ],
+  "open(name version)": [
+   "4.3"
+  ],
+  "opencursor( query direction )": [
+   "4.5",
+   "4.6"
+  ],
+  "opencursor(query direction)": [
+   "4.5",
+   "4.6"
+  ],
+  "openkeycursor( query direction )": [
+   "4.5",
+   "4.6"
+  ],
+  "openkeycursor(query direction)": [
+   "4.5",
+   "4.6"
+  ],
+  "out of line keys": [
+   "2.2"
+  ],
+  "overlapping scope": [
+   "2.7"
+  ],
+  "possibly update the key generator": [
+   "2.11"
+  ],
+  "potentially valid key range": [
+   "2.9"
+  ],
+  "primary key": [
+   "2.12"
+  ],
+  "processed flag": [
+   "2.8"
+  ],
+  "put( value key )": [
+   "4.5"
+  ],
+  "put(value key)": [
+   "4.5"
+  ],
+  "queue a database task": [
+   "4"
+  ],
+  "read only transaction": [
+   "2.7"
+  ],
+  "read write transaction": [
+   "2.7"
+  ],
+  "record snapshot": [
+   "2.12"
+  ],
+  "referenced value": [
+   "2.6"
+  ],
+  "request list": [
+   "2.7"
+  ],
+  "retrieve a key from an object store": [
+   "6.2"
+  ],
+  "retrieve a referenced value from an index": [
+   "6.3"
+  ],
+  "retrieve a value from an index": [
+   "6.3"
+  ],
+  "retrieve a value from an object store": [
+   "6.2"
+  ],
+  "retrieve multiple items from an index": [
+   "6.3"
+  ],
+  "retrieve multiple items from an object store": [
+   "6.2"
+  ],
+  "source handle": [
+   "2.10"
+  ],
+  "store a record into an object store": [
+   "6.1"
+  ],
+  "transaction( storenames mode options )": [
+   "4.4"
+  ],
+  "transaction(storenames mode options)": [
+   "4.4"
+  ],
+  "transaction(storenames mode)": [
+   "4.4"
+  ],
+  "unbounded key range": [
+   "2.9"
+  ],
+  "unique flag": [
+   "2.6"
+  ],
+  "update( value )": [
+   "4.9"
+  ],
+  "upgrade a database": [
+   "5.7"
+  ],
+  "upgrade transaction": [
+   "2.1",
+   "2.7.3"
+  ],
+  "upper bound": [
+   "2.9"
+  ],
+  "upper open flag": [
+   "2.9"
+  ],
+  "upperbound( upper open )": [
+   "4.7"
+  ],
+  "upperbound(upper open)": [
+   "4.7"
+  ],
+  "valid key path": [
+   "2.5"
+  ]
+ },
+ "uses": {
+  "abort a transaction": {
+   "5.6": 2,
+   "5.7": 2,
+   "5.10": 2
+  },
+  "add( value key )": {
+   "12": 3
+  },
+  "advance( count )": {
+   "12": 2
+  },
+  "array key": {
+   "2.6": 2,
+   "6.1": 7,
+   "7.4": 3
+  },
+  "asynchronously execute a request": {
+   "4.5": 8,
+   "4.6": 5,
+   "4.9": 5
+  },
+  "bound( lower upper loweropen upperopen )": {
+   "12": 4
+  },
+  "cleanup event loop": {
+   "2.7.1": 3
+  },
+  "close a database connection": {
+   "2.1.1": 3
+  },
+  "close pending flag": {
+   "4.4": 3,
+   "5.2": 3
+  },
+  "cmp( first second )": {
+   "12": 2
+  },
+  "compare two keys": {
+   "6.3": 2
+  },
+  "continue( key )": {
+   "12": 3
+  },
+  "continueprimarykey( key primarykey )": {
+   "12": 2
+  },
+  "convert a key to a value": {
+   "4.7": 2,
+   "4.8": 2,
+   "4.9": 2,
+   "6.2": 2,
+   "6.3": 2
+  },
+  "convert a value to a key": {
+   "2.9": 3,
+   "4.3": 2,
+   "4.7": 6,
+   "4.9": 3
+  },
+  "convert a value to a key range": {
+   "4.5": 6,
+   "4.6": 5,
+   "5.12": 2
+  },
+  "count( query )": {
+   "12": 6
+  },
+  "create a request to retrieve multiple items": {
+   "4.5": 3,
+   "4.6": 3
+  },
+  "createindex( name keypath options )": {
+   "12": 3
+  },
+  "createobjectstore( name options )": {
+   "12": 3
+  },
+  "delete( query )": {
+   "12": 2
+  },
+  "deletedatabase( name )": {
+   "12": 2
+  },
+  "deleteindex( name )": {
+   "12": 2
+  },
+  "deleteobjectstore( name )": {
+   "12": 2
+  },
+  "done flag": {
+   "4.1": 3,
+   "4.3": 4,
+   "4.9": 3,
+   "5.5": 2
+  },
+  "durability hint": {
+   "4.10": 2
+  },
+  "effective key": {
+   "4.9": 6
+  },
+  "effective object store": {
+   "4.9": 10
+  },
+  "equal to": {
+   "2.9": 3,
+   "4.9": 7,
+   "6.1": 4,
+   "6.7": 11
+  },
+  "fire a success event": {
+   "4.3": 2
+  },
+  "fire a version change event": {
+   "5.1": 2,
+   "5.3": 2
+  },
+  "fire an error event": {
+   "4.3": 2
+  },
+  "get( query )": {
+   "12": 4
+  },
+  "getall( queryoroptions count )": {
+   "12": 8,
+   "2.9": 4
+  },
+  "getallkeys( queryoroptions count )": {
+   "12": 8,
+   "2.9": 3
+  },
+  "getallrecords( options )": {
+   "12": 6
+  },
+  "getkey( query )": {
+   "12": 4
+  },
+  "got value flag": {
+   "4.5": 2,
+   "4.6": 2,
+   "4.9": 11
+  },
+  "greater than": {
+   "12": 2,
+   "2.9": 2,
+   "4.9": 3,
+   "6.1": 3,
+   "6.7": 10
+  },
+  "idbversionchangeevent(type eventinitdict)": {
+   "12": 5
+  },
+  "in a key range": {
+   "6.2": 4,
+   "6.3": 6,
+   "6.4": 2,
+   "6.7": 4
+  },
+  "in line keys": {
+   "4.5": 3,
+   "4.9": 2
+  },
+  "includes( key )": {
+   "12": 2
+  },
+  "index handle": {
+   "2.10": 2,
+   "4.5": 2
+  },
+  "index set": {
+   "4.5": 4
+  },
+  "index( name )": {
+   "12": 2
+  },
+  "iterate a cursor": {
+   "4.5": 2,
+   "4.6": 2,
+   "4.9": 3
+  },
+  "key generator": {
+   "2.2": 2,
+   "4.5": 4
+  },
+  "key only flag": {
+   "4.5": 3,
+   "4.6": 3,
+   "4.9": 3,
+   "6.7": 2
+  },
+  "key path": {
+   "12": 3,
+   "2.11": 9,
+   "4.5": 7,
+   "4.6": 3,
+   "6.1": 2,
+   "7.2": 2
+  },
+  "key range": {
+   "4.5": 13,
+   "4.6": 11,
+   "4.7": 5,
+   "5.12": 2
+  },
+  "less than": {
+   "4.9": 3,
+   "6.7": 8
+  },
+  "list of records": {
+   "12": 2,
+   "2.12": 6,
+   "6.1": 3,
+   "6.2": 4,
+   "6.3": 6,
+   "6.4": 2
+  },
+  "lower bound": {
+   "4.7": 5
+  },
+  "lower open flag": {
+   "4.7": 5
+  },
+  "lowerbound( lower open )": {
+   "12": 3
+  },
+  "multientry flag": {
+   "4.6": 2,
+   "6.1": 5
+  },
+  "object store": {
+   "12": 2,
+   "2.6": 7,
+   "2.7": 2,
+   "2.7.1": 2,
+   "2.7.2": 5,
+   "2.7.3": 2,
+   "2.10": 8,
+   "2.11": 14,
+   "4.4": 21,
+   "4.5": 23,
+   "4.6": 7,
+   "4.10": 4,
+   "5.5": 2,
+   "5.8": 7,
+   "5.12": 4,
+   "6.7": 4
+  },
+  "object store handle": {
+   "12": 2,
+   "4.4": 2
+  },
+  "object store position": {
+   "4.9": 2,
+   "6.7": 3
+  },
+  "object store set": {
+   "4.4": 2
+  },
+  "objectstore( name )": {
+   "12": 2
+  },
+  "only( value )": {
+   "12": 2
+  },
+  "open request": {
+   "2.8.2": 3,
+   "4.1": 3,
+   "4.3": 2
+  },
+  "open( name version )": {
+   "12": 3
+  },
+  "opencursor( query direction )": {
+   "12": 8
+  },
+  "openkeycursor( query direction )": {
+   "12": 8
+  },
+  "overlapping scope": {
+   "12": 2,
+   "2.7.2": 7
+  },
+  "processed flag": {
+   "4.3": 2,
+   "4.9": 3,
+   "5.5": 2
+  },
+  "put( value key )": {
+   "12": 3
+  },
+  "queue a database task": {
+   "4.3": 4,
+   "5.1": 2,
+   "5.3": 2,
+   "5.5": 2
+  },
+  "read only transaction": {
+   "2.7.2": 3,
+   "4.5": 4,
+   "4.9": 3
+  },
+  "read write transaction": {
+   "2.7.2": 10
+  },
+  "referenced value": {
+   "6.3": 3
+  },
+  "request list": {
+   "5.6": 3
+  },
+  "source handle": {
+   "4.5": 2,
+   "4.6": 2,
+   "4.9": 4
+  },
+  "store a record into an object store": {
+   "4.9": 2
+  },
+  "transaction( storenames mode options )": {
+   "12": 4
+  },
+  "unbounded key range": {
+   "4.5": 3,
+   "4.6": 3
+  },
+  "unique flag": {
+   "2.10": 2,
+   "4.5": 3,
+   "4.6": 2,
+   "6.1": 2
+  },
+  "update( value )": {
+   "12": 2
+  },
+  "upgrade a database": {
+   "11": 2
+  },
+  "upgrade transaction": {
+   "12": 2,
+   "2.2.1": 2,
+   "4.4": 9,
+   "4.5": 14,
+   "4.6": 3,
+   "4.10": 3,
+   "5.4": 3,
+   "5.5": 5,
+   "5.7": 3
+  },
+  "upper bound": {
+   "4.7": 5
+  },
+  "upper open flag": {
+   "4.7": 5
+  },
+  "upperbound( upper open )": {
+   "12": 3
+  }
+ }
+}

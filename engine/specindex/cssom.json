@@ -1,0 +1,925 @@
+{
+ "spec": "CSS Object Model (CSSOM)",
+ "key": "cssom",
+ "base": "https://drafts.csswg.org/cssom/",
+ "specUpdated": "10 June 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "3": {
+   "title": "CSSOMString",
+   "page": "",
+   "id": "cssomstring-type"
+  },
+  "4": {
+   "title": "Media Queries",
+   "page": "",
+   "id": "media-queries"
+  },
+  "5": {
+   "title": "Selectors",
+   "page": "",
+   "id": "selectors"
+  },
+  "6": {
+   "title": "CSS",
+   "page": "",
+   "id": "css-object-model"
+  },
+  "7": {
+   "title": "DOM Access to CSS Declaration Blocks",
+   "page": "",
+   "id": "dom-access-to-css-declaration-blocks"
+  },
+  "8": {
+   "title": "Utility APIs",
+   "page": "",
+   "id": "utility-apis"
+  },
+  "9": {
+   "title": "Resolved Values",
+   "page": "",
+   "id": "resolved-values"
+  },
+  "10": {
+   "title": "IANA Considerations",
+   "page": "",
+   "id": "iana-considerations"
+  },
+  "11": {
+   "title": "Change History",
+   "page": "",
+   "id": "change-history"
+  },
+  "12": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "sec"
+  },
+  "13": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "priv"
+  },
+  "14": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "acknowledgments"
+  },
+  "2.1": {
+   "title": "Common Serializing Idioms",
+   "page": "",
+   "id": "common-serializing-idioms"
+  },
+  "4.1": {
+   "title": "Parsing Media Queries",
+   "page": "",
+   "id": "parsing-media-queries"
+  },
+  "4.2": {
+   "title": "Serializing Media Queries",
+   "page": "",
+   "id": "serializing-media-queries"
+  },
+  "4.2.1": {
+   "title": "Serializing Media Feature Values",
+   "page": "",
+   "id": "serializing-media-feature-values"
+  },
+  "4.3": {
+   "title": "Comparing Media Queries",
+   "page": "",
+   "id": "comparing-media-queries"
+  },
+  "4.4": {
+   "title": "The MediaList Interface",
+   "page": "",
+   "id": "the-medialist-interface"
+  },
+  "5.1": {
+   "title": "Parsing Selectors",
+   "page": "",
+   "id": "parsing-selectors"
+  },
+  "5.2": {
+   "title": "Serializing Selectors",
+   "page": "",
+   "id": "serializing-selectors"
+  },
+  "6.1": {
+   "title": "CSS Style Sheets",
+   "page": "",
+   "id": "css-style-sheets"
+  },
+  "6.1.1": {
+   "title": "The StyleSheet Interface",
+   "page": "",
+   "id": "the-stylesheet-interface"
+  },
+  "6.1.2": {
+   "title": "The CSSStyleSheet Interface",
+   "page": "",
+   "id": "the-cssstylesheet-interface"
+  },
+  "6.1.2.1": {
+   "title": "Deprecated CSSStyleSheet members",
+   "page": "",
+   "id": "legacy-css-style-sheet-members"
+  },
+  "6.2": {
+   "title": "CSS Style Sheet Collections",
+   "page": "",
+   "id": "css-style-sheet-collections"
+  },
+  "6.2.1": {
+   "title": "The HTTP Default-Style Header",
+   "page": "",
+   "id": "the-http-default-style-header"
+  },
+  "6.2.2": {
+   "title": "The StyleSheetList Interface",
+   "page": "",
+   "id": "the-stylesheetlist-interface"
+  },
+  "6.2.3": {
+   "title": "Extensions to the DocumentOrShadowRoot Interface Mixin",
+   "page": "",
+   "id": "extensions-to-the-document-or-shadow-root-interface"
+  },
+  "6.3": {
+   "title": "Style Sheet Association",
+   "page": "",
+   "id": "style-sheet-association"
+  },
+  "6.3.1": {
+   "title": "Fetching CSS style sheets",
+   "page": "",
+   "id": "fetching-css-style-sheets"
+  },
+  "6.3.2": {
+   "title": "The LinkStyle Interface",
+   "page": "",
+   "id": "the-linkstyle-interface"
+  },
+  "6.3.3": {
+   "title": "Requirements on specifications",
+   "page": "",
+   "id": "requirements-on-specifications"
+  },
+  "6.3.4": {
+   "title": "Requirements on user agents Implementing the xml-stylesheet processing instruction",
+   "page": "",
+   "id": "requirements-on-user-agents-implementing-the-xml-stylesheet-processing-instruction"
+  },
+  "6.3.5": {
+   "title": "Requirements on user agents Implementing the HTTP Link Header",
+   "page": "",
+   "id": "requirements-on-user-agents-implementing-the-http-link-header"
+  },
+  "6.4": {
+   "title": "CSS Rules",
+   "page": "",
+   "id": "css-rules"
+  },
+  "6.4.1": {
+   "title": "The CSSRuleList Interface",
+   "page": "",
+   "id": "the-cssrulelist-interface"
+  },
+  "6.4.2": {
+   "title": "The CSSRule Interface",
+   "page": "",
+   "id": "the-cssrule-interface"
+  },
+  "6.4.3": {
+   "title": "The CSSStyleRule Interface",
+   "page": "",
+   "id": "the-cssstylerule-interface"
+  },
+  "6.4.4": {
+   "title": "The CSSImportRule Interface",
+   "page": "",
+   "id": "the-cssimportrule-interface"
+  },
+  "6.4.5": {
+   "title": "The CSSGroupingRule Interface",
+   "page": "",
+   "id": "the-cssgroupingrule-interface"
+  },
+  "6.4.6": {
+   "title": "The CSSMediaRule Interface",
+   "page": "",
+   "id": "the-cssmediarule-interface"
+  },
+  "6.4.7": {
+   "title": "The CSSPageRule Interface",
+   "page": "",
+   "id": "the-csspagerule-interface"
+  },
+  "6.4.8": {
+   "title": "The CSSMarginRule Interface",
+   "page": "",
+   "id": "the-cssmarginrule-interface"
+  },
+  "6.4.9": {
+   "title": "The CSSNamespaceRule Interface",
+   "page": "",
+   "id": "the-cssnamespacerule-interface"
+  },
+  "6.5": {
+   "title": "CSS Declarations",
+   "page": "",
+   "id": "css-declarations"
+  },
+  "6.6": {
+   "title": "CSS Declaration Blocks",
+   "page": "",
+   "id": "css-declaration-blocks"
+  },
+  "6.6.1": {
+   "title": "The CSSStyleDeclaration Interface",
+   "page": "",
+   "id": "the-cssstyledeclaration-interface"
+  },
+  "6.7": {
+   "title": "CSS Values",
+   "page": "",
+   "id": "css-values"
+  },
+  "6.7.1": {
+   "title": "Parsing CSS Values",
+   "page": "",
+   "id": "parsing-css-values"
+  },
+  "6.7.2": {
+   "title": "Serializing CSS Values",
+   "page": "",
+   "id": "serializing-css-values"
+  },
+  "6.7.2.1": {
+   "title": "Examples",
+   "page": "",
+   "id": "serializing-css-values-examples"
+  },
+  "7.1": {
+   "title": "The ElementCSSInlineStyle Mixin",
+   "page": "",
+   "id": "the-elementcssinlinestyle-mixin"
+  },
+  "7.2": {
+   "title": "Extensions to the Window Interface",
+   "page": "",
+   "id": "extensions-to-the-window-interface"
+  },
+  "8.1": {
+   "title": "The CSS.escape() Method",
+   "page": "",
+   "id": "the-css.escape()-method"
+  },
+  "10.1": {
+   "title": "Default-Style",
+   "page": "",
+   "id": "default-style"
+  },
+  "11.1": {
+   "title": "Changes From 17 March 2016",
+   "page": "",
+   "id": "changes-from-17-march-2016"
+  },
+  "11.2": {
+   "title": "Changes From 5 December 2013",
+   "page": "",
+   "id": "changes-from-5-december-2013"
+  },
+  "11.3": {
+   "title": "Changes From 12 July 2011 To 5 December 2013",
+   "page": "",
+   "id": "changes-from-12-july-2011-to-5-december-2013"
+  }
+ },
+ "dfns": {
+  "add a css style sheet": [
+   "6.2"
+  ],
+  "addrule( selector block optionalindex )": [
+   "6.1.2.1"
+  ],
+  "addrule(selector block optionalindex)": [
+   "6.1.2.1"
+  ],
+  "addrule(selector style index)": [
+   "6.1.2.1"
+  ],
+  "addrule(selector style)": [
+   "6.1.2.1"
+  ],
+  "alternate flag": [
+   "6.1"
+  ],
+  "appendmedium( medium )": [
+   "4.4"
+  ],
+  "associated css style sheet": [
+   "6.3.2"
+  ],
+  "camel cased attribute": [
+   "6.6.1"
+  ],
+  "case sensitive flag": [
+   "6.5"
+  ],
+  "change the preferred css style sheet set name": [
+   "6.2"
+  ],
+  "charset rule": [
+   "6.4.2"
+  ],
+  "child css rules": [
+   "6.4"
+  ],
+  "collection of media queries": [
+   "4.4"
+  ],
+  "compare media queries": [
+   "4.3"
+  ],
+  "computed flag": [
+   "6.6"
+  ],
+  "constructed flag": [
+   "6.1"
+  ],
+  "constructor document": [
+   "6.1"
+  ],
+  "create a constructed cssstylesheet": [
+   "6.1"
+  ],
+  "create a css style sheet": [
+   "6.2"
+  ],
+  "create a medialist object": [
+   "4.4"
+  ],
+  "css declaration": [
+   "6.5"
+  ],
+  "css declaration block": [
+   "6.6"
+  ],
+  "css property to idl attribute": [
+   "6.6.1"
+  ],
+  "css rule": [
+   "6.4"
+  ],
+  "css rules": [
+   "6.1"
+  ],
+  "css style sheet": [
+   "6.1"
+  ],
+  "css style sheet set": [
+   "6.2"
+  ],
+  "css style sheet set name": [
+   "6.2"
+  ],
+  "cssstylesheet( options )": [
+   "6.1"
+  ],
+  "dashed attribute": [
+   "6.6.1"
+  ],
+  "default style": [
+   "10.1"
+  ],
+  "deletemedium( medium )": [
+   "4.4"
+  ],
+  "deleterule( index )": [
+   "6.1.2",
+   "6.4.5"
+  ],
+  "disabled flag": [
+   "6.1"
+  ],
+  "disallow modification flag": [
+   "6.1"
+  ],
+  "document or shadow root css style sheets": [
+   "6.2"
+  ],
+  "enable a css style sheet set": [
+   "6.2"
+  ],
+  "enabled css style sheet set": [
+   "6.2"
+  ],
+  "escape a character": [
+   "2.1"
+  ],
+  "escape a character as code point": [
+   "2.1"
+  ],
+  "escape( ident )": [
+   "8.1"
+  ],
+  "escaped as code point": [
+   "2.1"
+  ],
+  "fetch a css style sheet": [
+   "6.3.1"
+  ],
+  "final css style sheets": [
+   "6.2"
+  ],
+  "font face rule": [
+   "6.4.2"
+  ],
+  "getcomputedstyle( elt pseudoelt )": [
+   "7.2"
+  ],
+  "getcomputedstyle(elt pseudoelt)": [
+   "7.2"
+  ],
+  "getpropertypriority( property )": [
+   "6.6.1"
+  ],
+  "getpropertyvalue( property )": [
+   "6.6.1"
+  ],
+  "http default style": [
+   "10.1"
+  ],
+  "idl attribute to css property": [
+   "6.6.1"
+  ],
+  "import rule": [
+   "6.4.2"
+  ],
+  "important flag": [
+   "6.5"
+  ],
+  "insert a css rule": [
+   "6.4"
+  ],
+  "insertrule( rule index )": [
+   "6.1.2",
+   "6.4.5"
+  ],
+  "insertrule(rule index)": [
+   "6.1.2",
+   "6.4.5"
+  ],
+  "item( index )": [
+   "4.4",
+   "6.2.2",
+   "6.4.1",
+   "6.6.1"
+  ],
+  "last css style sheet set name": [
+   "6.2"
+  ],
+  "margin bottom": [
+   "6.4.7"
+  ],
+  "margin left": [
+   "6.4.7"
+  ],
+  "margin right": [
+   "6.4.7"
+  ],
+  "margin rule": [
+   "6.4.2"
+  ],
+  "margin top": [
+   "6.4.7"
+  ],
+  "media rule": [
+   "6.4.2"
+  ],
+  "namespace rule": [
+   "6.4.2"
+  ],
+  "origin clean flag": [
+   "6.1"
+  ],
+  "owner css rule": [
+   "6.1"
+  ],
+  "owner node": [
+   "6.1",
+   "6.6"
+  ],
+  "page orientation": [
+   "6.4.7"
+  ],
+  "page rule": [
+   "6.4.2"
+  ],
+  "parent css rule": [
+   "6.4",
+   "6.6"
+  ],
+  "parent css style sheet": [
+   "6.1",
+   "6.4"
+  ],
+  "parse a css declaration block": [
+   "6.6"
+  ],
+  "parse a css rule": [
+   "6.4"
+  ],
+  "parse a css value": [
+   "6.7.1"
+  ],
+  "parse a group of selectors": [
+   "5.1"
+  ],
+  "parse a list of css page selectors": [
+   "6.4.7"
+  ],
+  "parse a media query": [
+   "4.1"
+  ],
+  "parse a media query list": [
+   "4.1"
+  ],
+  "persistent css style sheet": [
+   "6.2"
+  ],
+  "preferred css style sheet set name": [
+   "6.2"
+  ],
+  "preferred order": [
+   "6.6"
+  ],
+  "property name": [
+   "6.5"
+  ],
+  "readonly flag": [
+   "6.6"
+  ],
+  "remove a css rule": [
+   "6.4"
+  ],
+  "remove a css style sheet": [
+   "6.2"
+  ],
+  "removeproperty( property )": [
+   "6.6.1"
+  ],
+  "removerule( index )": [
+   "6.1.2.1"
+  ],
+  "replace( text )": [
+   "6.1.2"
+  ],
+  "replacesync( text )": [
+   "6.1.2"
+  ],
+  "resolved value": [
+   "9"
+  ],
+  "resolved value special case property": [
+   "9"
+  ],
+  "resolved value special case property like color": [
+   "9"
+  ],
+  "resolved value special case property like height": [
+   "9"
+  ],
+  "resolved value special case property like top": [
+   "9"
+  ],
+  "select a css style sheet set": [
+   "6.2"
+  ],
+  "serialize a comma separated list": [
+   "2.1"
+  ],
+  "serialize a css component value": [
+   "6.7.2"
+  ],
+  "serialize a css declaration": [
+   "6.6"
+  ],
+  "serialize a css declaration block": [
+   "6.6"
+  ],
+  "serialize a css rule": [
+   "6.4"
+  ],
+  "serialize a css value": [
+   "6.7.2"
+  ],
+  "serialize a function": [
+   "2.1"
+  ],
+  "serialize a group of selectors": [
+   "5.2"
+  ],
+  "serialize a list of css page selectors": [
+   "6.4.7"
+  ],
+  "serialize a local": [
+   "2.1"
+  ],
+  "serialize a media feature value": [
+   "4.2.1"
+  ],
+  "serialize a media query": [
+   "4.2"
+  ],
+  "serialize a media query list": [
+   "4.2"
+  ],
+  "serialize a selector": [
+   "5.2"
+  ],
+  "serialize a simple selector": [
+   "5.2"
+  ],
+  "serialize a string": [
+   "2.1"
+  ],
+  "serialize a url": [
+   "2.1"
+  ],
+  "serialize a whitespace separated list": [
+   "2.1"
+  ],
+  "serialize an identifier": [
+   "2.1"
+  ],
+  "serialize as a string": [
+   "2.1"
+  ],
+  "set a css declaration": [
+   "6.6.1"
+  ],
+  "setproperty( property value priority )": [
+   "6.6.1"
+  ],
+  "setproperty(property value priority)": [
+   "6.6.1"
+  ],
+  "setproperty(property value)": [
+   "6.6.1"
+  ],
+  "specified order": [
+   "6.4.3"
+  ],
+  "stringification behavior": [
+   "4.4"
+  ],
+  "style rule": [
+   "6.4.2"
+  ],
+  "stylesheet base url": [
+   "6.1"
+  ],
+  "supported css property": [
+   "2"
+  ],
+  "supported styling language": [
+   "2"
+  ],
+  "synchronously replace the rules of a cssstylesheet": [
+   "6.1.2"
+  ],
+  "update style attribute for": [
+   "6.6"
+  ],
+  "updating flag": [
+   "6.6"
+  ],
+  "webkit cased attribute": [
+   "6.6.1"
+  ]
+ },
+ "uses": {
+  "addrule( selector block optionalindex )": {
+   "14": 6
+  },
+  "alternate flag": {
+   "6.2": 2
+  },
+  "appendmedium( medium )": {
+   "14": 2
+  },
+  "camel cased attribute": {
+   "14": 2
+  },
+  "charset rule": {
+   "14": 2
+  },
+  "child css rules": {
+   "6.4.5": 3
+  },
+  "compare media queries": {
+   "4.4": 2
+  },
+  "constructed flag": {
+   "6.1.2": 3
+  },
+  "create a medialist object": {
+   "6.1": 3
+  },
+  "css declaration": {
+   "6.6": 7,
+   "6.6.1": 15
+  },
+  "css declaration block": {
+   "6.6.1": 4
+  },
+  "css rule": {
+   "6.4.2": 2
+  },
+  "css rules": {
+   "6.1.2": 5
+  },
+  "css style sheet": {
+   "6.2": 16,
+   "6.2.2": 4,
+   "6.4.4": 4
+  },
+  "cssstylesheet( options )": {
+   "14": 5
+  },
+  "dashed attribute": {
+   "14": 2
+  },
+  "default style": {
+   "6.2.1": 2
+  },
+  "deletemedium( medium )": {
+   "14": 2
+  },
+  "deleterule( index )": {
+   "14": 4
+  },
+  "disabled flag": {
+   "6.2": 8
+  },
+  "disallow modification flag": {
+   "6.1.2": 6
+  },
+  "escape a character as code point": {
+   "14": 2
+  },
+  "escape( ident )": {
+   "14": 2
+  },
+  "font face rule": {
+   "14": 2
+  },
+  "getcomputedstyle( elt pseudoelt )": {
+   "9": 2,
+   "14": 3
+  },
+  "getpropertypriority( property )": {
+   "14": 2
+  },
+  "getpropertyvalue( property )": {
+   "14": 2
+  },
+  "import rule": {
+   "14": 2
+  },
+  "important flag": {
+   "6.6": 3,
+   "6.6.1": 6
+  },
+  "insertrule( rule index )": {
+   "14": 6
+  },
+  "item( index )": {
+   "14": 8
+  },
+  "margin bottom": {
+   "14": 2
+  },
+  "margin left": {
+   "14": 2
+  },
+  "margin right": {
+   "14": 2
+  },
+  "margin rule": {
+   "14": 2
+  },
+  "margin top": {
+   "14": 2
+  },
+  "media rule": {
+   "14": 2
+  },
+  "namespace rule": {
+   "14": 2
+  },
+  "origin clean flag": {
+   "6.1.2": 3
+  },
+  "owner node": {
+   "14": 2,
+   "6.2": 2
+  },
+  "page orientation": {
+   "14": 2
+  },
+  "page rule": {
+   "14": 2
+  },
+  "parent css rule": {
+   "14": 2
+  },
+  "parent css style sheet": {
+   "14": 2
+  },
+  "parse a media query": {
+   "4.4": 2
+  },
+  "property name": {
+   "6.6": 3,
+   "6.6.1": 12
+  },
+  "readonly flag": {
+   "6.6.1": 3
+  },
+  "remove a css rule": {
+   "6.1.2": 3
+  },
+  "removeproperty( property )": {
+   "14": 2
+  },
+  "removerule( index )": {
+   "14": 3
+  },
+  "replace( text )": {
+   "14": 2
+  },
+  "replacesync( text )": {
+   "14": 2
+  },
+  "serialize a comma separated list": {
+   "5.2": 2,
+   "6.7.2": 2
+  },
+  "serialize a css declaration block": {
+   "6.4": 2
+  },
+  "serialize a css value": {
+   "6.6": 2,
+   "6.6.1": 2
+  },
+  "serialize a media query list": {
+   "6.4": 2
+  },
+  "serialize a string": {
+   "14": 2,
+   "5.2": 2,
+   "6.4": 2
+  },
+  "serialize a url": {
+   "6.4": 3
+  },
+  "serialize an identifier": {
+   "5.2": 6,
+   "6.4": 2
+  },
+  "setproperty( property value priority )": {
+   "14": 3
+  },
+  "stringification behavior": {
+   "14": 2
+  },
+  "style rule": {
+   "14": 2
+  },
+  "supported css property": {
+   "6.6.1": 4
+  },
+  "supported styling language": {
+   "6.3.1": 2
+  },
+  "update style attribute for": {
+   "6.6.1": 3
+  },
+  "webkit cased attribute": {
+   "14": 2
+  }
+ }
+}

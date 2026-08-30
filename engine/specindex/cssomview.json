@@ -1,0 +1,523 @@
+{
+ "spec": "CSSOM View Module",
+ "key": "cssomview",
+ "base": "https://drafts.csswg.org/cssom-view/",
+ "specUpdated": "9 June 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Background",
+   "page": "",
+   "id": "background"
+  },
+  "2": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "3": {
+   "title": "Common Infrastructure",
+   "page": "",
+   "id": "common-infrastructure"
+  },
+  "4": {
+   "title": "Extensions to the Window Interface",
+   "page": "",
+   "id": "extensions-to-the-window-interface"
+  },
+  "5": {
+   "title": "Extensions to the Document Interface",
+   "page": "",
+   "id": "extensions-to-the-document-interface"
+  },
+  "6": {
+   "title": "Extensions to the Element Interface",
+   "page": "",
+   "id": "extension-to-the-element-interface"
+  },
+  "7": {
+   "title": "Extensions to the HTMLElement Interface",
+   "page": "",
+   "id": "extensions-to-the-htmlelement-interface"
+  },
+  "8": {
+   "title": "Extensions to the HTMLImageElement Interface",
+   "page": "",
+   "id": "extensions-to-the-htmlimageelement-interface"
+  },
+  "9": {
+   "title": "Extensions to the Range Interface",
+   "page": "",
+   "id": "extensions-to-the-range-interface"
+  },
+  "10": {
+   "title": "Extensions to the MouseEvent Interface",
+   "page": "",
+   "id": "extensions-to-the-mouseevent-interface"
+  },
+  "11": {
+   "title": "Geometry",
+   "page": "",
+   "id": "geometry"
+  },
+  "12": {
+   "title": "VisualViewport",
+   "page": "",
+   "id": "visualViewport"
+  },
+  "13": {
+   "title": "Events",
+   "page": "",
+   "id": "events"
+  },
+  "14": {
+   "title": "Post-Layout State Snapshotting",
+   "page": "",
+   "id": "post-layout-snapshot"
+  },
+  "15": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "16": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "17": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "18": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acks"
+  },
+  "2.1": {
+   "title": "CSS pixels",
+   "page": "",
+   "id": "css-pixels"
+  },
+  "2.2": {
+   "title": "Zooming",
+   "page": "",
+   "id": "zooming"
+  },
+  "2.3": {
+   "title": "Web-exposed screen information",
+   "page": "",
+   "id": "web-exposed-screen-information"
+  },
+  "3.1": {
+   "title": "Scrolling",
+   "page": "",
+   "id": "scrolling"
+  },
+  "3.2": {
+   "title": "WebIDL values",
+   "page": "",
+   "id": "webidl-values"
+  },
+  "4.1": {
+   "title": "The features argument to the open() method",
+   "page": "",
+   "id": "the-features-argument-to-the-open()-method"
+  },
+  "4.2": {
+   "title": "The MediaQueryList Interface",
+   "page": "",
+   "id": "the-mediaquerylist-interface"
+  },
+  "4.2.1": {
+   "title": "Event summary",
+   "page": "",
+   "id": "mediaquerylist-event-summary"
+  },
+  "4.3": {
+   "title": "The Screen Interface",
+   "page": "",
+   "id": "the-screen-interface"
+  },
+  "5.1": {
+   "title": "The CaretPosition Interface",
+   "page": "",
+   "id": "the-caretposition-interface"
+  },
+  "6.1": {
+   "title": "Element Scrolling Members",
+   "page": "",
+   "id": "element-scrolling-members"
+  },
+  "11.1": {
+   "title": "The GeometryUtils Interface",
+   "page": "",
+   "id": "the-geometryutils-interface"
+  },
+  "12.1": {
+   "title": "The VisualViewport Interface",
+   "page": "",
+   "id": "the-visualviewport-interface"
+  },
+  "13.1": {
+   "title": "Resizing viewports",
+   "page": "",
+   "id": "resizing-viewports"
+  },
+  "13.2": {
+   "title": "Scrolling",
+   "page": "",
+   "id": "scrolling-events"
+  },
+  "13.3": {
+   "title": "Event summary",
+   "page": "",
+   "id": "event-summary"
+  }
+ },
+ "dfns": {
+  "addlistener( callback )": [
+   "4.2"
+  ],
+  "adjust a point from the border box": [
+   "11.1"
+  ],
+  "adjust a point to the border box": [
+   "11.1"
+  ],
+  "associated document": [
+   "2"
+  ],
+  "beginning edges": [
+   "2"
+  ],
+  "caret node": [
+   "5.1"
+  ],
+  "caret offset": [
+   "5.1"
+  ],
+  "caret position": [
+   "5.1"
+  ],
+  "caretpositionfrompoint( x y options )": [
+   "5"
+  ],
+  "caretpositionfrompoint(x y options)": [
+   "5"
+  ],
+  "caretpositionfrompoint(x y)": [
+   "5"
+  ],
+  "checkvisibility( options )": [
+   "6"
+  ],
+  "constructor(type eventinitdict)": [
+   "4.2"
+  ],
+  "convertpointfromnode( point from options )": [
+   "11.1"
+  ],
+  "convertpointfromnode(point from options)": [
+   "11.1"
+  ],
+  "convertpointfromnode(point from)": [
+   "11.1"
+  ],
+  "convertquadfromnode( quad from options )": [
+   "11.1"
+  ],
+  "convertquadfromnode(quad from options)": [
+   "11.1"
+  ],
+  "convertquadfromnode(quad from)": [
+   "11.1"
+  ],
+  "convertrectfromnode( rect from options )": [
+   "11.1"
+  ],
+  "convertrectfromnode(rect from options)": [
+   "11.1"
+  ],
+  "convertrectfromnode(rect from)": [
+   "11.1"
+  ],
+  "determine the device pixel ratio": [
+   "4"
+  ],
+  "determine the scroll into view position": [
+   "6.1"
+  ],
+  "elementfrompoint( x y )": [
+   "5"
+  ],
+  "elementsfrompoint( x y )": [
+   "5"
+  ],
+  "ending edges": [
+   "2"
+  ],
+  "evaluate media queries and report changes": [
+   "4.2"
+  ],
+  "get the bounding box": [
+   "6"
+  ],
+  "get the complete transform": [
+   "11.1"
+  ],
+  "getboxquads( options )": [
+   "11.1"
+  ],
+  "id dom caretpositionfrompointoptions shadowroots shadowroots": [
+   "5"
+  ],
+  "instant scroll": [
+   "3.1"
+  ],
+  "matches state": [
+   "4.2"
+  ],
+  "matchmedia( query )": [
+   "4"
+  ],
+  "media query list": [
+   "4.2"
+  ],
+  "mediaquerylistevent(type eventinitdict)": [
+   "4.2"
+  ],
+  "moveby( x y )": [
+   "4"
+  ],
+  "moveto( x y )": [
+   "4"
+  ],
+  "normalize non finite values": [
+   "3.2"
+  ],
+  "overflow directions": [
+   "2"
+  ],
+  "page zoom": [
+   "2.2"
+  ],
+  "pending scroll events": [
+   "13.2"
+  ],
+  "perform a scroll": [
+   "3.1"
+  ],
+  "potentially scrollable": [
+   "2"
+  ],
+  "removelistener( callback )": [
+   "4.2"
+  ],
+  "resizeby( x y )": [
+   "4"
+  ],
+  "resizeto( width height )": [
+   "4"
+  ],
+  "run snapshot post layout state steps": [
+   "14"
+  ],
+  "run the resize steps": [
+   "13.1"
+  ],
+  "run the scroll steps": [
+   "13.2"
+  ],
+  "scroll a target into view": [
+   "6.1"
+  ],
+  "scroll an element": [
+   "6.1"
+  ],
+  "scroll completed": [
+   "3.1"
+  ],
+  "scroll to the beginning of the document": [
+   "3.1"
+  ],
+  "scroll(x y)": [
+   "4",
+   "6"
+  ],
+  "scrollby(x y)": [
+   "4",
+   "6"
+  ],
+  "scrolling area": [
+   "2"
+  ],
+  "scrolling area origin": [
+   "2"
+  ],
+  "scrolling box": [
+   "2"
+  ],
+  "scrollintoview( arg )": [
+   "6"
+  ],
+  "scrollto(x y)": [
+   "4",
+   "6"
+  ],
+  "set up browsing context features": [
+   "4.1"
+  ],
+  "smooth scroll": [
+   "3.1"
+  ],
+  "smooth scroll aborted": [
+   "3.1"
+  ],
+  "smooth scroll completed": [
+   "3.1"
+  ],
+  "supported open() feature name": [
+   "4.1"
+  ],
+  "svg layout box": [
+   "2"
+  ],
+  "web exposed available screen area": [
+   "2.3"
+  ],
+  "web exposed screen area": [
+   "2.3"
+  ]
+ },
+ "uses": {
+  "addlistener( callback )": {
+   "18": 2
+  },
+  "associated document": {
+   "4": 2
+  },
+  "beginning edges": {
+   "6.1": 2
+  },
+  "caret node": {
+   "5": 2
+  },
+  "caret offset": {
+   "5": 2
+  },
+  "caret position": {
+   "5": 3
+  },
+  "caretpositionfrompoint( x y options )": {
+   "17": 3,
+   "18": 3
+  },
+  "checkvisibility( options )": {
+   "18": 3
+  },
+  "convertpointfromnode( point from options )": {
+   "18": 3
+  },
+  "convertquadfromnode( quad from options )": {
+   "18": 3
+  },
+  "convertrectfromnode( rect from options )": {
+   "18": 3
+  },
+  "elementfrompoint( x y )": {
+   "18": 2
+  },
+  "elementsfrompoint( x y )": {
+   "18": 2
+  },
+  "ending edges": {
+   "6.1": 2
+  },
+  "getboxquads( options )": {
+   "18": 3
+  },
+  "matchmedia( query )": {
+   "18": 2
+  },
+  "mediaquerylistevent(type eventinitdict)": {
+   "18": 5
+  },
+  "moveby( x y )": {
+   "18": 2
+  },
+  "moveto( x y )": {
+   "18": 2
+  },
+  "normalize non finite values": {
+   "4": 2,
+   "6": 6
+  },
+  "overflow directions": {
+   "4": 4,
+   "6.1": 4
+  },
+  "perform a scroll": {
+   "4": 3,
+   "18": 4,
+   "6.1": 3
+  },
+  "potentially scrollable": {
+   "6": 7
+  },
+  "removelistener( callback )": {
+   "18": 2
+  },
+  "resizeby( x y )": {
+   "18": 2
+  },
+  "resizeto( width height )": {
+   "17": 2,
+   "18": 2
+  },
+  "scroll an element": {
+   "6": 3
+  },
+  "scroll(x y)": {
+   "17": 3,
+   "18": 10
+  },
+  "scrollby(x y)": {
+   "17": 3,
+   "18": 10
+  },
+  "scrolling area": {
+   "4": 5,
+   "6": 8,
+   "6.1": 5
+  },
+  "scrolling box": {
+   "6": 3,
+   "18": 2,
+   "3.1": 7,
+   "6.1": 3
+  },
+  "scrollintoview( arg )": {
+   "17": 4,
+   "18": 3
+  },
+  "scrollto(x y)": {
+   "17": 3,
+   "18": 10
+  },
+  "smooth scroll": {
+   "6.1": 2
+  },
+  "web exposed available screen area": {
+   "4.1": 6,
+   "4.3": 2
+  },
+  "web exposed screen area": {
+   "4": 2,
+   "10": 2,
+   "4.1": 2,
+   "4.3": 2
+  }
+ }
+}

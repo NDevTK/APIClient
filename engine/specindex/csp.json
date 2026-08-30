@@ -1,0 +1,1329 @@
+{
+ "spec": "Content Security Policy Level 3",
+ "key": "csp",
+ "base": "https://w3c.github.io/webappsec-csp/",
+ "specUpdated": "13 August 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Framework",
+   "page": "",
+   "id": "framework"
+  },
+  "3": {
+   "title": "Policy Delivery",
+   "page": "",
+   "id": "policy-delivery"
+  },
+  "4": {
+   "title": "Integrations",
+   "page": "",
+   "id": "integrations"
+  },
+  "5": {
+   "title": "Reporting",
+   "page": "",
+   "id": "reporting"
+  },
+  "6": {
+   "title": "Content Security Policy Directives",
+   "page": "",
+   "id": "csp-directives"
+  },
+  "7": {
+   "title": "Security and Privacy Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "8": {
+   "title": "Authoring Considerations",
+   "page": "",
+   "id": "authoring-considerations"
+  },
+  "9": {
+   "title": "Implementation Considerations",
+   "page": "",
+   "id": "implementation-considerations"
+  },
+  "10": {
+   "title": "IANA Considerations",
+   "page": "",
+   "id": "iana-considerations"
+  },
+  "11": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "1.1": {
+   "title": "Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "1.1.1": {
+   "title": "Control Execution",
+   "page": "",
+   "id": "example-basic"
+  },
+  "1.2": {
+   "title": "Goals",
+   "page": "",
+   "id": "goals"
+  },
+  "1.3": {
+   "title": "Changes from Level 2",
+   "page": "",
+   "id": "changes-from-level-2"
+  },
+  "2.1": {
+   "title": "Infrastructure",
+   "page": "",
+   "id": "framework-infrastructure"
+  },
+  "2.2": {
+   "title": "Policies",
+   "page": "",
+   "id": "framework-policy"
+  },
+  "2.2.1": {
+   "title": "Parse a serialized CSP",
+   "page": "",
+   "id": "parse-serialized-policy"
+  },
+  "2.2.2": {
+   "title": "Parse response ’s Content Security Policies",
+   "page": "",
+   "id": "parse-response-csp"
+  },
+  "2.3": {
+   "title": "Directives",
+   "page": "",
+   "id": "framework-directives"
+  },
+  "2.3.1": {
+   "title": "Source Lists",
+   "page": "",
+   "id": "framework-directive-source-list"
+  },
+  "2.4": {
+   "title": "Violations",
+   "page": "",
+   "id": "framework-violation"
+  },
+  "2.4.1": {
+   "title": "Create a violation object for global , policy , and directive",
+   "page": "",
+   "id": "create-violation-for-global"
+  },
+  "2.4.2": {
+   "title": "Create a violation object for request , and policy .",
+   "page": "",
+   "id": "create-violation-for-request"
+  },
+  "3.1": {
+   "title": "The Content-Security-Policy HTTP Response Header Field",
+   "page": "",
+   "id": "csp-header"
+  },
+  "3.2": {
+   "title": "The Content-Security-Policy-Report-Only HTTP Response Header Field",
+   "page": "",
+   "id": "cspro-header"
+  },
+  "3.3": {
+   "title": "The <meta> element",
+   "page": "",
+   "id": "meta-element"
+  },
+  "4.1": {
+   "title": "Integration with Fetch",
+   "page": "",
+   "id": "fetch-integration"
+  },
+  "4.1.1": {
+   "title": "Report Content Security Policy violations for request",
+   "page": "",
+   "id": "report-for-request"
+  },
+  "4.1.2": {
+   "title": "Should request be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-request"
+  },
+  "4.1.3": {
+   "title": "Should response to request be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-response"
+  },
+  "4.1.4": {
+   "title": "Potentially report hash",
+   "page": "",
+   "id": "potentially-report-hash"
+  },
+  "4.2": {
+   "title": "Integration with HTML",
+   "page": "",
+   "id": "html-integration"
+  },
+  "4.2.1": {
+   "title": "Run CSP initialization for a Document",
+   "page": "",
+   "id": "run-document-csp-initialization"
+  },
+  "4.2.2": {
+   "title": "Retrieve the CSP list of an object",
+   "page": "",
+   "id": "get-csp-of-object"
+  },
+  "4.2.3": {
+   "title": "Should element ’s inline type behavior be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-inline"
+  },
+  "4.2.4": {
+   "title": "Should navigation request of type be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-navigation-request"
+  },
+  "4.2.5": {
+   "title": "Should navigation response to navigation request of type in target be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-navigation-response"
+  },
+  "4.2.6": {
+   "title": "Run CSP initialization for a global object",
+   "page": "",
+   "id": "run-global-object-csp-initialization"
+  },
+  "4.3": {
+   "title": "Integration with WebRTC",
+   "page": "",
+   "id": "webrtc-integration"
+  },
+  "4.3.1": {
+   "title": "Should RTC connections be blocked for global ?",
+   "page": "",
+   "id": "should-block-rtc-connection"
+  },
+  "4.4": {
+   "title": "Integration with ECMAScript",
+   "page": "",
+   "id": "ecma-integration"
+  },
+  "4.4.1": {
+   "title": "EnsureCSPDoesNotBlockStringCompilation( realm , parameterStrings , bodyString , codeString , compilationType , parameterArgs , bodyArg )",
+   "page": "",
+   "id": "can-compile-strings"
+  },
+  "4.5": {
+   "title": "Integration with WebAssembly",
+   "page": "",
+   "id": "wasm-integration"
+  },
+  "4.5.1": {
+   "title": "EnsureCSPDoesNotBlockWasmByteCompilation realm",
+   "page": "",
+   "id": "can-compile-wasm-bytes"
+  },
+  "5.1": {
+   "title": "Violation DOM Events",
+   "page": "",
+   "id": "violation-events"
+  },
+  "5.2": {
+   "title": "Obtain the blockedURI of a violation’s resource",
+   "page": "",
+   "id": "obtain-violation-blocked-uri"
+  },
+  "5.3": {
+   "title": "Obtain the deprecated serialization of violation",
+   "page": "",
+   "id": "deprecated-serialize-violation"
+  },
+  "5.4": {
+   "title": "Strip URL for use in reports",
+   "page": "",
+   "id": "strip-url-for-use-in-reports"
+  },
+  "5.5": {
+   "title": "Report a violation",
+   "page": "",
+   "id": "report-violation"
+  },
+  "6.1": {
+   "title": "Fetch Directives",
+   "page": "",
+   "id": "directives-fetch"
+  },
+  "6.1.1": {
+   "title": "child-src",
+   "page": "",
+   "id": "directive-child-src"
+  },
+  "6.1.1.1": {
+   "title": "child-src Pre-request check",
+   "page": "",
+   "id": "child-src-pre-request"
+  },
+  "6.1.1.2": {
+   "title": "child-src Post-request check",
+   "page": "",
+   "id": "child-src-post-request"
+  },
+  "6.1.2": {
+   "title": "connect-src",
+   "page": "",
+   "id": "directive-connect-src"
+  },
+  "6.1.2.1": {
+   "title": "connect-src Pre-request check",
+   "page": "",
+   "id": "connect-src-pre-request"
+  },
+  "6.1.2.2": {
+   "title": "connect-src Post-request check",
+   "page": "",
+   "id": "connect-src-post-request"
+  },
+  "6.1.3": {
+   "title": "default-src",
+   "page": "",
+   "id": "directive-default-src"
+  },
+  "6.1.3.1": {
+   "title": "default-src Pre-request check",
+   "page": "",
+   "id": "default-src-pre-request"
+  },
+  "6.1.3.2": {
+   "title": "default-src Post-request check",
+   "page": "",
+   "id": "default-src-post-request"
+  },
+  "6.1.3.3": {
+   "title": "default-src Inline Check",
+   "page": "",
+   "id": "default-src-inline"
+  },
+  "6.1.4": {
+   "title": "font-src",
+   "page": "",
+   "id": "directive-font-src"
+  },
+  "6.1.4.1": {
+   "title": "font-src Pre-request check",
+   "page": "",
+   "id": "font-src-pre-request"
+  },
+  "6.1.4.2": {
+   "title": "font-src Post-request check",
+   "page": "",
+   "id": "font-src-post-request"
+  },
+  "6.1.5": {
+   "title": "frame-src",
+   "page": "",
+   "id": "directive-frame-src"
+  },
+  "6.1.5.1": {
+   "title": "frame-src Pre-request check",
+   "page": "",
+   "id": "frame-src-pre-request"
+  },
+  "6.1.5.2": {
+   "title": "frame-src Post-request check",
+   "page": "",
+   "id": "frame-src-post-request"
+  },
+  "6.1.6": {
+   "title": "img-src",
+   "page": "",
+   "id": "directive-img-src"
+  },
+  "6.1.6.1": {
+   "title": "img-src Pre-request check",
+   "page": "",
+   "id": "img-src-pre-request"
+  },
+  "6.1.6.2": {
+   "title": "img-src Post-request check",
+   "page": "",
+   "id": "img-src-post-request"
+  },
+  "6.1.7": {
+   "title": "manifest-src",
+   "page": "",
+   "id": "directive-manifest-src"
+  },
+  "6.1.7.1": {
+   "title": "manifest-src Pre-request check",
+   "page": "",
+   "id": "manifest-src-pre-request"
+  },
+  "6.1.7.2": {
+   "title": "manifest-src Post-request check",
+   "page": "",
+   "id": "manifest-src-post-request"
+  },
+  "6.1.8": {
+   "title": "media-src",
+   "page": "",
+   "id": "directive-media-src"
+  },
+  "6.1.8.1": {
+   "title": "media-src Pre-request check",
+   "page": "",
+   "id": "media-src-pre-request"
+  },
+  "6.1.8.2": {
+   "title": "media-src Post-request check",
+   "page": "",
+   "id": "media-src-post-request"
+  },
+  "6.1.9": {
+   "title": "object-src",
+   "page": "",
+   "id": "directive-object-src"
+  },
+  "6.1.9.1": {
+   "title": "object-src Pre-request check",
+   "page": "",
+   "id": "object-src-pre-request"
+  },
+  "6.1.9.2": {
+   "title": "object-src Post-request check",
+   "page": "",
+   "id": "object-src-post-request"
+  },
+  "6.1.10": {
+   "title": "script-src",
+   "page": "",
+   "id": "directive-script-src"
+  },
+  "6.1.10.1": {
+   "title": "script-src Pre-request check",
+   "page": "",
+   "id": "script-src-pre-request"
+  },
+  "6.1.10.2": {
+   "title": "script-src Post-request check",
+   "page": "",
+   "id": "script-src-post-request"
+  },
+  "6.1.10.3": {
+   "title": "script-src Inline Check",
+   "page": "",
+   "id": "script-src-inline"
+  },
+  "6.1.11": {
+   "title": "script-src-elem",
+   "page": "",
+   "id": "directive-script-src-elem"
+  },
+  "6.1.11.1": {
+   "title": "script-src-elem Pre-request check",
+   "page": "",
+   "id": "script-src-elem-pre-request"
+  },
+  "6.1.11.2": {
+   "title": "script-src-elem Post-request check",
+   "page": "",
+   "id": "script-src-elem-post-request"
+  },
+  "6.1.11.3": {
+   "title": "script-src-elem Inline Check",
+   "page": "",
+   "id": "script-src-elem-inline"
+  },
+  "6.1.12": {
+   "title": "script-src-attr",
+   "page": "",
+   "id": "directive-script-src-attr"
+  },
+  "6.1.12.1": {
+   "title": "script-src-attr Inline Check",
+   "page": "",
+   "id": "script-src-attr-inline"
+  },
+  "6.1.13": {
+   "title": "style-src",
+   "page": "",
+   "id": "directive-style-src"
+  },
+  "6.1.13.1": {
+   "title": "style-src Pre-request Check",
+   "page": "",
+   "id": "style-src-pre-request"
+  },
+  "6.1.13.2": {
+   "title": "style-src Post-request Check",
+   "page": "",
+   "id": "style-src-post-request"
+  },
+  "6.1.13.3": {
+   "title": "style-src Inline Check",
+   "page": "",
+   "id": "style-src-inline"
+  },
+  "6.1.14": {
+   "title": "style-src-elem",
+   "page": "",
+   "id": "directive-style-src-elem"
+  },
+  "6.1.14.1": {
+   "title": "style-src-elem Pre-request Check",
+   "page": "",
+   "id": "style-src-elem-pre-request"
+  },
+  "6.1.14.2": {
+   "title": "style-src-elem Post-request Check",
+   "page": "",
+   "id": "style-src-elem-post-request"
+  },
+  "6.1.14.3": {
+   "title": "style-src-elem Inline Check",
+   "page": "",
+   "id": "style-src-elem-inline"
+  },
+  "6.1.15": {
+   "title": "style-src-attr",
+   "page": "",
+   "id": "directive-style-src-attr"
+  },
+  "6.1.15.1": {
+   "title": "style-src-attr Inline Check",
+   "page": "",
+   "id": "style-src-attr-inline"
+  },
+  "6.2": {
+   "title": "Other Directives",
+   "page": "",
+   "id": "directives-other"
+  },
+  "6.2.1": {
+   "title": "webrtc",
+   "page": "",
+   "id": "directive-webrtc"
+  },
+  "6.2.1.1": {
+   "title": "webrtc Pre-connect Check",
+   "page": "",
+   "id": "webrtc-pre-connect"
+  },
+  "6.2.2": {
+   "title": "worker-src",
+   "page": "",
+   "id": "directive-worker-src"
+  },
+  "6.2.2.1": {
+   "title": "worker-src Pre-request Check",
+   "page": "",
+   "id": "worker-src-pre-request"
+  },
+  "6.2.2.2": {
+   "title": "worker-src Post-request Check",
+   "page": "",
+   "id": "worker-src-post-request"
+  },
+  "6.3": {
+   "title": "Document Directives",
+   "page": "",
+   "id": "directives-document"
+  },
+  "6.3.1": {
+   "title": "base-uri",
+   "page": "",
+   "id": "directive-base-uri"
+  },
+  "6.3.1.1": {
+   "title": "Is base allowed for document ?",
+   "page": "",
+   "id": "allow-base-for-document"
+  },
+  "6.3.2": {
+   "title": "sandbox",
+   "page": "",
+   "id": "directive-sandbox"
+  },
+  "6.3.2.1": {
+   "title": "sandbox Initialization",
+   "page": "",
+   "id": "sandbox-init"
+  },
+  "6.4": {
+   "title": "Navigation Directives",
+   "page": "",
+   "id": "directives-navigation"
+  },
+  "6.4.1": {
+   "title": "form-action",
+   "page": "",
+   "id": "directive-form-action"
+  },
+  "6.4.1.1": {
+   "title": "form-action Pre-Navigation Check",
+   "page": "",
+   "id": "form-action-pre-navigate"
+  },
+  "6.4.2": {
+   "title": "frame-ancestors",
+   "page": "",
+   "id": "directive-frame-ancestors"
+  },
+  "6.4.2.1": {
+   "title": "frame-ancestors Navigation Response Check",
+   "page": "",
+   "id": "frame-ancestors-navigation-response"
+  },
+  "6.4.2.2": {
+   "title": "Relation to ` ` X-Frame-Options ` `",
+   "page": "",
+   "id": "frame-ancestors-and-frame-options"
+  },
+  "6.5": {
+   "title": "Reporting Directives",
+   "page": "",
+   "id": "directives-reporting"
+  },
+  "6.5.1": {
+   "title": "report-uri",
+   "page": "",
+   "id": "directive-report-uri"
+  },
+  "6.5.2": {
+   "title": "report-to",
+   "page": "",
+   "id": "directive-report-to"
+  },
+  "6.6": {
+   "title": "Directives Defined in Other Documents",
+   "page": "",
+   "id": "directives-elsewhere"
+  },
+  "6.7": {
+   "title": "Matching Algorithms",
+   "page": "",
+   "id": "matching-algorithms"
+  },
+  "6.7.1": {
+   "title": "Script directive checks",
+   "page": "",
+   "id": "script-checks"
+  },
+  "6.7.1.1": {
+   "title": "Script directives pre-request check",
+   "page": "",
+   "id": "script-pre-request"
+  },
+  "6.7.1.2": {
+   "title": "Script directives post-request check",
+   "page": "",
+   "id": "script-post-request"
+  },
+  "6.7.2": {
+   "title": "URL Matching",
+   "page": "",
+   "id": "matching-urls"
+  },
+  "6.7.2.1": {
+   "title": "Does request violate policy ?",
+   "page": "",
+   "id": "does-request-violate-policy"
+  },
+  "6.7.2.2": {
+   "title": "Does resource hint request violate policy ?",
+   "page": "",
+   "id": "does-resource-hint-violate-policy"
+  },
+  "6.7.2.3": {
+   "title": "Does nonce match source list ?",
+   "page": "",
+   "id": "match-nonce-to-source-list"
+  },
+  "6.7.2.4": {
+   "title": "Does integrity metadata match source list ?",
+   "page": "",
+   "id": "match-integrity-metadata-to-source-list"
+  },
+  "6.7.2.5": {
+   "title": "Does request match source list ?",
+   "page": "",
+   "id": "match-request-to-source-list"
+  },
+  "6.7.2.6": {
+   "title": "Does response to request match source list ?",
+   "page": "",
+   "id": "match-response-to-source-list"
+  },
+  "6.7.2.7": {
+   "title": "Does url match source list in origin with redirect count ?",
+   "page": "",
+   "id": "match-url-to-source-list"
+  },
+  "6.7.2.8": {
+   "title": "Does url match expression in origin with redirect count ?",
+   "page": "",
+   "id": "match-url-to-source-expression"
+  },
+  "6.7.2.9": {
+   "title": "scheme-part matching",
+   "page": "",
+   "id": "match-schemes"
+  },
+  "6.7.2.10": {
+   "title": "host-part matching",
+   "page": "",
+   "id": "match-hosts"
+  },
+  "6.7.2.11": {
+   "title": "port-part matching",
+   "page": "",
+   "id": "match-ports"
+  },
+  "6.7.2.12": {
+   "title": "path-part matching",
+   "page": "",
+   "id": "match-paths"
+  },
+  "6.7.3": {
+   "title": "Element Matching Algorithms",
+   "page": "",
+   "id": "matching-elements"
+  },
+  "6.7.3.1": {
+   "title": "Is element nonceable?",
+   "page": "",
+   "id": "is-element-nonceable"
+  },
+  "6.7.3.2": {
+   "title": "Does a source list allow all inline behavior for type ?",
+   "page": "",
+   "id": "allow-all-inline"
+  },
+  "6.7.3.3": {
+   "title": "Does element match source list for type and source ?",
+   "page": "",
+   "id": "match-element-to-source-list"
+  },
+  "6.8": {
+   "title": "Directive Algorithms",
+   "page": "",
+   "id": "directive-algorithms"
+  },
+  "6.8.1": {
+   "title": "Get the effective directive for request",
+   "page": "",
+   "id": "effective-directive-for-a-request"
+  },
+  "6.8.2": {
+   "title": "Get the effective directive for inline checks",
+   "page": "",
+   "id": "effective-directive-for-inline-check"
+  },
+  "6.8.3": {
+   "title": "Get fetch directive fallback list",
+   "page": "",
+   "id": "directive-fallback-list"
+  },
+  "6.8.4": {
+   "title": "Should fetch directive execute",
+   "page": "",
+   "id": "should-directive-execute"
+  },
+  "7.1": {
+   "title": "Nonce Reuse",
+   "page": "",
+   "id": "security-nonces"
+  },
+  "7.2": {
+   "title": "Nonce Hijacking",
+   "page": "",
+   "id": "security-nonce-hijacking"
+  },
+  "7.2.1": {
+   "title": "Dangling markup attacks",
+   "page": "",
+   "id": "dangling-markup-attacks"
+  },
+  "7.2.2": {
+   "title": "Nonce exfiltration via content attributes",
+   "page": "",
+   "id": "nonce-exfiltration-content-attributes"
+  },
+  "7.3": {
+   "title": "Nonce Retargeting",
+   "page": "",
+   "id": "security-nonce-retargeting"
+  },
+  "7.4": {
+   "title": "CSS Parsing",
+   "page": "",
+   "id": "security-css-parsing"
+  },
+  "7.5": {
+   "title": "Violation Reports",
+   "page": "",
+   "id": "security-violation-reports"
+  },
+  "7.6": {
+   "title": "Paths and Redirects",
+   "page": "",
+   "id": "source-list-paths-and-redirects"
+  },
+  "7.7": {
+   "title": "Secure Upgrades",
+   "page": "",
+   "id": "security-secure-upgrades"
+  },
+  "7.8": {
+   "title": "CSP Inheriting to avoid bypasses",
+   "page": "",
+   "id": "security-inherit-csp"
+  },
+  "8.1": {
+   "title": "The effect of multiple policies",
+   "page": "",
+   "id": "multiple-policies"
+  },
+  "8.2": {
+   "title": "Usage of \" 'strict-dynamic' \"",
+   "page": "",
+   "id": "strict-dynamic-usage"
+  },
+  "8.3": {
+   "title": "Usage of \" 'unsafe-hashes' \"",
+   "page": "",
+   "id": "unsafe-hashes-usage"
+  },
+  "8.4": {
+   "title": "Allowing external JavaScript via hashes",
+   "page": "",
+   "id": "external-hash"
+  },
+  "8.5": {
+   "title": "Strict CSP",
+   "page": "",
+   "id": "strict-csp"
+  },
+  "8.6": {
+   "title": "Exfiltration",
+   "page": "",
+   "id": "exfiltration"
+  },
+  "9.1": {
+   "title": "Vendor-specific Extensions and Addons",
+   "page": "",
+   "id": "extensions"
+  },
+  "10.1": {
+   "title": "Directive Registry",
+   "page": "",
+   "id": "iana-registry"
+  },
+  "10.2": {
+   "title": "Headers",
+   "page": "",
+   "id": "iana-headers"
+  },
+  "10.2.1": {
+   "title": "Content-Security-Policy",
+   "page": "",
+   "id": "iana-csp"
+  },
+  "10.2.2": {
+   "title": "Content-Security-Policy-Report-Only",
+   "page": "",
+   "id": "iana-cspro"
+  }
+ },
+ "dfns": {
+  "allows all inline behavior": [
+   "6.7.3.2"
+  ],
+  "ancestor source": [
+   "6.4.2"
+  ],
+  "ancestor source list": [
+   "6.4.2"
+  ],
+  "base uri": [
+   "6.3.1"
+  ],
+  "base64 value": [
+   "2.3.1"
+  ],
+  "child src": [
+   "6.1.1"
+  ],
+  "column number": [
+   "2.4"
+  ],
+  "connect src": [
+   "6.1.2"
+  ],
+  "constructor(type eventinitdict)": [
+   "5.1"
+  ],
+  "contains a header delivered content security policy": [
+   "2.2"
+  ],
+  "content security policy": [
+   "1",
+   "3.1"
+  ],
+  "content security policy object": [
+   "2.2"
+  ],
+  "content security policy report only": [
+   "3.2"
+  ],
+  "csp hash report": [
+   "5"
+  ],
+  "csp hash report body": [
+   "5"
+  ],
+  "csp list": [
+   "2.2",
+   "4.2"
+  ],
+  "csp violation report": [
+   "5"
+  ],
+  "default src": [
+   "6.1.3"
+  ],
+  "directive name": [
+   "2.3"
+  ],
+  "directive set": [
+   "2.2"
+  ],
+  "directive value": [
+   "2.3"
+  ],
+  "effective directive": [
+   "2.4",
+   "6.8.1"
+  ],
+  "fetch directives": [
+   "6.1"
+  ],
+  "font src": [
+   "6.1.4"
+  ],
+  "form action": [
+   "6.4.1"
+  ],
+  "frame ancestors": [
+   "6.4.2"
+  ],
+  "frame src": [
+   "6.1.5"
+  ],
+  "global object": [
+   "2.4"
+  ],
+  "hash algorithm": [
+   "2.3.1"
+  ],
+  "hash source": [
+   "2.3.1"
+  ],
+  "host char": [
+   "2.3.1"
+  ],
+  "host part": [
+   "2.3.1"
+  ],
+  "host part match": [
+   "6.7.2.10"
+  ],
+  "host part matches": [
+   "6.7.2.10"
+  ],
+  "host source": [
+   "2.3.1"
+  ],
+  "img src": [
+   "6.1.6"
+  ],
+  "inline check": [
+   "2.3"
+  ],
+  "keyword source": [
+   "2.3.1"
+  ],
+  "line number": [
+   "2.4"
+  ],
+  "manifest src": [
+   "6.1.7"
+  ],
+  "media src": [
+   "6.1.8"
+  ],
+  "navigation response check": [
+   "2.3"
+  ],
+  "nonce source": [
+   "2.3.1"
+  ],
+  "object src": [
+   "6.1.9"
+  ],
+  "optional ascii whitespace": [
+   "2.1"
+  ],
+  "parse a response content security policies": [
+   "2.2.2"
+  ],
+  "parse a serialized csp": [
+   "2.2.1"
+  ],
+  "path part": [
+   "2.3.1"
+  ],
+  "path part match": [
+   "6.7.2.12"
+  ],
+  "path part matches": [
+   "6.7.2.12"
+  ],
+  "port part": [
+   "2.3.1"
+  ],
+  "port part matches": [
+   "6.7.2.11"
+  ],
+  "post request check": [
+   "2.3"
+  ],
+  "pre navigation check": [
+   "2.3"
+  ],
+  "pre request check": [
+   "2.3"
+  ],
+  "report sample": [
+   "2.3.1"
+  ],
+  "report sha256": [
+   "2.3.1"
+  ],
+  "report sha384": [
+   "2.3.1"
+  ],
+  "report sha512": [
+   "2.3.1"
+  ],
+  "report to": [
+   "6.5.2"
+  ],
+  "report uri": [
+   "6.5.1"
+  ],
+  "required ascii whitespace": [
+   "2.1"
+  ],
+  "scheme part": [
+   "2.3.1"
+  ],
+  "scheme part match": [
+   "6.7.2.9"
+  ],
+  "scheme part matches": [
+   "6.7.2.9"
+  ],
+  "scheme source": [
+   "2.3.1"
+  ],
+  "script src": [
+   "6.1.10"
+  ],
+  "script src attr": [
+   "6.1.12"
+  ],
+  "script src elem": [
+   "6.1.11"
+  ],
+  "securitypolicyviolationevent(type eventinitdict)": [
+   "5.1"
+  ],
+  "self origin": [
+   "2.2"
+  ],
+  "serialized csp": [
+   "2.2"
+  ],
+  "serialized csp list": [
+   "2.2"
+  ],
+  "serialized directive": [
+   "2.3"
+  ],
+  "serialized policy": [
+   "2.2"
+  ],
+  "serialized policy list": [
+   "2.2"
+  ],
+  "serialized source list": [
+   "2.3.1"
+  ],
+  "source expression": [
+   "2.3.1"
+  ],
+  "source file": [
+   "2.4"
+  ],
+  "source lists": [
+   "2.3.1"
+  ],
+  "strict dynamic": [
+   "2.3.1"
+  ],
+  "style src": [
+   "6.1.13"
+  ],
+  "style src attr": [
+   "6.1.15"
+  ],
+  "style src elem": [
+   "6.1.14"
+  ],
+  "trusted types eval": [
+   "2.3.1"
+  ],
+  "unsafe allow redirects": [
+   "2.3.1"
+  ],
+  "unsafe eval": [
+   "2.3.1"
+  ],
+  "unsafe hashes": [
+   "2.3.1"
+  ],
+  "unsafe inline": [
+   "2.3.1"
+  ],
+  "unsafe webtransport hashes": [
+   "2.3.1"
+  ],
+  "wasm unsafe eval": [
+   "2.3.1"
+  ],
+  "webrtc pre connect check": [
+   "2.3"
+  ],
+  "worker src": [
+   "6.2.2"
+  ]
+ },
+ "uses": {
+  "allows all inline behavior": {
+   "11": 2
+  },
+  "base64 value": {
+   "6.7.3.3": 2
+  },
+  "column number": {
+   "5.5": 2
+  },
+  "connect src": {
+   "6.1.3": 2
+  },
+  "content security policy": {
+   "11": 2,
+   "6.1.3": 4,
+   "8.1": 2,
+   "8.5": 2,
+   "8.6": 2
+  },
+  "content security policy object": {
+   "3": 2,
+   "5": 3,
+   "11": 2,
+   "2.2.1": 2,
+   "2.3": 8,
+   "2.4": 4,
+   "4.2": 3
+  },
+  "csp list": {
+   "11": 2,
+   "2.2.2": 2,
+   "4.2.2": 2,
+   "7.8": 4
+  },
+  "default src": {
+   "8.6": 2
+  },
+  "directive set": {
+   "2.2.1": 4,
+   "2.2.2": 2,
+   "4.1.4": 2,
+   "5.5": 3
+  },
+  "effective directive": {
+   "11": 2,
+   "5.3": 2,
+   "5.5": 3
+  },
+  "fetch directives": {
+   "6.1.3": 3
+  },
+  "font src": {
+   "6.1.3": 2
+  },
+  "frame ancestors": {
+   "4.2.5": 2,
+   "6.4.2.2": 2
+  },
+  "frame src": {
+   "6.1.3": 2
+  },
+  "global object": {
+   "2.4.1": 2,
+   "5.5": 6
+  },
+  "hash algorithm": {
+   "6.7.2.4": 2,
+   "6.7.3.3": 3
+  },
+  "hash source": {
+   "6.7.2.4": 2
+  },
+  "host source": {
+   "6.7.2.8": 3
+  },
+  "img src": {
+   "6.1.3": 2
+  },
+  "inline check": {
+   "6.1.3.3": 2
+  },
+  "keyword source": {
+   "6.7.3.2": 3,
+   "6.7.3.3": 2
+  },
+  "line number": {
+   "5.5": 2
+  },
+  "manifest src": {
+   "6.1.3": 2
+  },
+  "media src": {
+   "6.1.3": 2
+  },
+  "navigation response check": {
+   "4.2.5": 2
+  },
+  "object src": {
+   "6.1.3": 2
+  },
+  "optional ascii whitespace": {
+   "2.2": 2
+  },
+  "parse a serialized csp": {
+   "2.2.2": 2
+  },
+  "path part": {
+   "6.7.2.8": 2
+  },
+  "post request check": {
+   "6.1.1.2": 2,
+   "6.1.3.2": 2
+  },
+  "pre request check": {
+   "6.1.1.1": 2,
+   "6.1.3.1": 2
+  },
+  "report to": {
+   "5.5": 2,
+   "6.5.1": 2
+  },
+  "required ascii whitespace": {
+   "2.3": 2
+  },
+  "scheme part": {
+   "6.7.2.8": 4
+  },
+  "scheme part matches": {
+   "6.7.2.8": 2
+  },
+  "scheme source": {
+   "6.7.2.8": 2
+  },
+  "script src": {
+   "8.2": 2
+  },
+  "script src attr": {
+   "6.1.3": 2,
+   "6.1.10": 2
+  },
+  "script src elem": {
+   "6.1.3": 3,
+   "6.1.10": 2
+  },
+  "securitypolicyviolationevent(type eventinitdict)": {
+   "11": 5
+  },
+  "self origin": {
+   "4.2.5": 2
+  },
+  "serialized csp": {
+   "5.5": 2
+  },
+  "serialized directive": {
+   "11": 2,
+   "2.2": 3
+  },
+  "serialized source list": {
+   "11": 2
+  },
+  "source expression": {
+   "11": 2,
+   "4.4.1": 2,
+   "4.5.1": 2,
+   "6.7.2.4": 2,
+   "8.5": 2
+  },
+  "source file": {
+   "2.4.1": 2,
+   "5.3": 2,
+   "5.5": 6
+  },
+  "source lists": {
+   "6.1.3": 2,
+   "6.7.3.2": 5
+  },
+  "strict dynamic": {
+   "6.7.1.1": 2,
+   "6.7.1.2": 2,
+   "8.2": 5,
+   "8.5": 3
+  },
+  "style src attr": {
+   "6.1.3": 2
+  },
+  "style src elem": {
+   "6.1.3": 2
+  },
+  "unsafe hashes": {
+   "6.7.3.3": 2,
+   "8.3": 2
+  },
+  "unsafe inline": {
+   "6.7.3.2": 2,
+   "7.1": 2
+  },
+  "worker src": {
+   "6.1.3": 2
+  }
+ }
+}

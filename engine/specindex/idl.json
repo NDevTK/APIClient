@@ -1,0 +1,2737 @@
+{
+ "spec": "Web IDL Standard",
+ "key": "idl",
+ "base": "https://webidl.spec.whatwg.org/",
+ "specUpdated": "21 August 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Interface definition language",
+   "page": "",
+   "id": "idl"
+  },
+  "3": {
+   "title": "JavaScript binding",
+   "page": "",
+   "id": "javascript-binding"
+  },
+  "4": {
+   "title": "Common definitions",
+   "page": "",
+   "id": "common"
+  },
+  "5": {
+   "title": "Extensibility",
+   "page": "",
+   "id": "extensibility"
+  },
+  "6": {
+   "title": "Legacy constructs",
+   "page": "",
+   "id": "legacy-constructs"
+  },
+  "7": {
+   "title": "Referencing this specification",
+   "page": "",
+   "id": "referencing"
+  },
+  "8": {
+   "title": "Privacy and Security Considerations",
+   "page": "",
+   "id": "priv-sec"
+  },
+  "2.1": {
+   "title": "Names",
+   "page": "",
+   "id": "idl-names"
+  },
+  "2.2": {
+   "title": "Interfaces",
+   "page": "",
+   "id": "idl-interfaces"
+  },
+  "2.3": {
+   "title": "Interface mixins",
+   "page": "",
+   "id": "idl-interface-mixins"
+  },
+  "2.3.1": {
+   "title": "Using mixins and partials",
+   "page": "",
+   "id": "using-mixins-and-partials"
+  },
+  "2.4": {
+   "title": "Callback interfaces",
+   "page": "",
+   "id": "idl-callback-interfaces"
+  },
+  "2.5": {
+   "title": "Members",
+   "page": "",
+   "id": "idl-members"
+  },
+  "2.5.1": {
+   "title": "Constants",
+   "page": "",
+   "id": "idl-constants"
+  },
+  "2.5.2": {
+   "title": "Attributes",
+   "page": "",
+   "id": "idl-attributes"
+  },
+  "2.5.3": {
+   "title": "Operations",
+   "page": "",
+   "id": "idl-operations"
+  },
+  "2.5.3.1": {
+   "title": "toJSON",
+   "page": "",
+   "id": "idl-tojson-operation"
+  },
+  "2.5.4": {
+   "title": "Constructor operations",
+   "page": "",
+   "id": "idl-constructors"
+  },
+  "2.5.5": {
+   "title": "Stringifiers",
+   "page": "",
+   "id": "idl-stringifiers"
+  },
+  "2.5.6": {
+   "title": "Special operations",
+   "page": "",
+   "id": "idl-special-operations"
+  },
+  "2.5.6.1": {
+   "title": "Indexed properties",
+   "page": "",
+   "id": "idl-indexed-properties"
+  },
+  "2.5.6.2": {
+   "title": "Named properties",
+   "page": "",
+   "id": "idl-named-properties"
+  },
+  "2.5.7": {
+   "title": "Static attributes and operations",
+   "page": "",
+   "id": "idl-static-attributes-and-operations"
+  },
+  "2.5.8": {
+   "title": "Overloading",
+   "page": "",
+   "id": "idl-overloading"
+  },
+  "2.5.8.1": {
+   "title": "Overloading vs. union types",
+   "page": "",
+   "id": "idl-overloading-vs-union"
+  },
+  "2.5.9": {
+   "title": "Iterable declarations",
+   "page": "",
+   "id": "idl-iterable"
+  },
+  "2.5.10": {
+   "title": "Asynchronously iterable declarations",
+   "page": "",
+   "id": "idl-async-iterable-declaration"
+  },
+  "2.5.11": {
+   "title": "Maplike declarations",
+   "page": "",
+   "id": "idl-maplike"
+  },
+  "2.5.12": {
+   "title": "Setlike declarations",
+   "page": "",
+   "id": "idl-setlike"
+  },
+  "2.6": {
+   "title": "Namespaces",
+   "page": "",
+   "id": "idl-namespaces"
+  },
+  "2.7": {
+   "title": "Dictionaries",
+   "page": "",
+   "id": "idl-dictionaries"
+  },
+  "2.8": {
+   "title": "Exceptions",
+   "page": "",
+   "id": "idl-exceptions"
+  },
+  "2.8.1": {
+   "title": "Base DOMException error names",
+   "page": "",
+   "id": "idl-DOMException-error-names"
+  },
+  "2.8.2": {
+   "title": "DOMException derived interfaces",
+   "page": "",
+   "id": "idl-DOMException-derived-interfaces"
+  },
+  "2.8.3": {
+   "title": "Predefined DOMException derived interfaces",
+   "page": "",
+   "id": "idl-DOMException-derived-predefineds"
+  },
+  "2.9": {
+   "title": "Enumerations",
+   "page": "",
+   "id": "idl-enums"
+  },
+  "2.10": {
+   "title": "Callback functions",
+   "page": "",
+   "id": "idl-callback-functions"
+  },
+  "2.11": {
+   "title": "Typedefs",
+   "page": "",
+   "id": "idl-typedefs"
+  },
+  "2.12": {
+   "title": "Objects implementing interfaces",
+   "page": "",
+   "id": "idl-objects"
+  },
+  "2.13": {
+   "title": "Types",
+   "page": "",
+   "id": "idl-types"
+  },
+  "2.13.1": {
+   "title": "any",
+   "page": "",
+   "id": "idl-any"
+  },
+  "2.13.2": {
+   "title": "undefined",
+   "page": "",
+   "id": "idl-undefined"
+  },
+  "2.13.3": {
+   "title": "boolean",
+   "page": "",
+   "id": "idl-boolean"
+  },
+  "2.13.4": {
+   "title": "byte",
+   "page": "",
+   "id": "idl-byte"
+  },
+  "2.13.5": {
+   "title": "octet",
+   "page": "",
+   "id": "idl-octet"
+  },
+  "2.13.6": {
+   "title": "short",
+   "page": "",
+   "id": "idl-short"
+  },
+  "2.13.7": {
+   "title": "unsigned short",
+   "page": "",
+   "id": "idl-unsigned-short"
+  },
+  "2.13.8": {
+   "title": "long",
+   "page": "",
+   "id": "idl-long"
+  },
+  "2.13.9": {
+   "title": "unsigned long",
+   "page": "",
+   "id": "idl-unsigned-long"
+  },
+  "2.13.10": {
+   "title": "long long",
+   "page": "",
+   "id": "idl-long-long"
+  },
+  "2.13.11": {
+   "title": "unsigned long long",
+   "page": "",
+   "id": "idl-unsigned-long-long"
+  },
+  "2.13.12": {
+   "title": "float",
+   "page": "",
+   "id": "idl-float"
+  },
+  "2.13.13": {
+   "title": "unrestricted float",
+   "page": "",
+   "id": "idl-unrestricted-float"
+  },
+  "2.13.14": {
+   "title": "double",
+   "page": "",
+   "id": "idl-double"
+  },
+  "2.13.15": {
+   "title": "unrestricted double",
+   "page": "",
+   "id": "idl-unrestricted-double"
+  },
+  "2.13.16": {
+   "title": "bigint",
+   "page": "",
+   "id": "idl-bigint"
+  },
+  "2.13.17": {
+   "title": "DOMString",
+   "page": "",
+   "id": "idl-DOMString"
+  },
+  "2.13.18": {
+   "title": "ByteString",
+   "page": "",
+   "id": "idl-ByteString"
+  },
+  "2.13.19": {
+   "title": "USVString",
+   "page": "",
+   "id": "idl-USVString"
+  },
+  "2.13.20": {
+   "title": "object",
+   "page": "",
+   "id": "idl-object"
+  },
+  "2.13.21": {
+   "title": "symbol",
+   "page": "",
+   "id": "idl-symbol"
+  },
+  "2.13.22": {
+   "title": "Interface types",
+   "page": "",
+   "id": "idl-interface"
+  },
+  "2.13.23": {
+   "title": "Callback interface types",
+   "page": "",
+   "id": "idl-callback-interface"
+  },
+  "2.13.24": {
+   "title": "Dictionary types",
+   "page": "",
+   "id": "idl-dictionary"
+  },
+  "2.13.25": {
+   "title": "Enumeration types",
+   "page": "",
+   "id": "idl-enumeration"
+  },
+  "2.13.26": {
+   "title": "Callback function types",
+   "page": "",
+   "id": "idl-callback-function"
+  },
+  "2.13.27": {
+   "title": "Nullable types — T ?",
+   "page": "",
+   "id": "idl-nullable-type"
+  },
+  "2.13.28": {
+   "title": "Sequence types — sequence< T >",
+   "page": "",
+   "id": "idl-sequence"
+  },
+  "2.13.29": {
+   "title": "Async sequence types — async_sequence< T >",
+   "page": "",
+   "id": "idl-async-iterable-type"
+  },
+  "2.13.30": {
+   "title": "Record types — record< K , V >",
+   "page": "",
+   "id": "idl-record"
+  },
+  "2.13.31": {
+   "title": "Promise types — Promise< T >",
+   "page": "",
+   "id": ""
+  },
+  "2.13.32": {
+   "title": "Union types",
+   "page": "",
+   "id": "idl-union"
+  },
+  "2.13.33": {
+   "title": "Annotated types",
+   "page": "",
+   "id": "idl-annotated-types"
+  },
+  "2.13.34": {
+   "title": "Buffer source types",
+   "page": "",
+   "id": "idl-buffer-source-types"
+  },
+  "2.13.35": {
+   "title": "Frozen array types — FrozenArray< T >",
+   "page": "",
+   "id": ""
+  },
+  "2.13.36": {
+   "title": "Observable array types — ObservableArray< T >",
+   "page": "",
+   "id": ""
+  },
+  "2.14": {
+   "title": "Extended attributes",
+   "page": "",
+   "id": "idl-extended-attributes"
+  },
+  "3.1": {
+   "title": "JavaScript environment",
+   "page": "",
+   "id": "js-environment"
+  },
+  "3.2": {
+   "title": "JavaScript type mapping",
+   "page": "",
+   "id": "js-type-mapping"
+  },
+  "3.2.1": {
+   "title": "any",
+   "page": "",
+   "id": "js-any"
+  },
+  "3.2.2": {
+   "title": "undefined",
+   "page": "",
+   "id": "js-undefined"
+  },
+  "3.2.3": {
+   "title": "boolean",
+   "page": "",
+   "id": "js-boolean"
+  },
+  "3.2.4": {
+   "title": "Integer types",
+   "page": "",
+   "id": "js-integer-types"
+  },
+  "3.2.4.1": {
+   "title": "byte",
+   "page": "",
+   "id": "js-byte"
+  },
+  "3.2.4.2": {
+   "title": "octet",
+   "page": "",
+   "id": "js-octet"
+  },
+  "3.2.4.3": {
+   "title": "short",
+   "page": "",
+   "id": "js-short"
+  },
+  "3.2.4.4": {
+   "title": "unsigned short",
+   "page": "",
+   "id": "js-unsigned-short"
+  },
+  "3.2.4.5": {
+   "title": "long",
+   "page": "",
+   "id": "js-long"
+  },
+  "3.2.4.6": {
+   "title": "unsigned long",
+   "page": "",
+   "id": "js-unsigned-long"
+  },
+  "3.2.4.7": {
+   "title": "long long",
+   "page": "",
+   "id": "js-long-long"
+  },
+  "3.2.4.8": {
+   "title": "unsigned long long",
+   "page": "",
+   "id": "js-unsigned-long-long"
+  },
+  "3.2.4.9": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "js-integer-types-abstract-ops"
+  },
+  "3.2.5": {
+   "title": "float",
+   "page": "",
+   "id": "js-float"
+  },
+  "3.2.6": {
+   "title": "unrestricted float",
+   "page": "",
+   "id": "js-unrestricted-float"
+  },
+  "3.2.7": {
+   "title": "double",
+   "page": "",
+   "id": "js-double"
+  },
+  "3.2.8": {
+   "title": "unrestricted double",
+   "page": "",
+   "id": "js-unrestricted-double"
+  },
+  "3.2.9": {
+   "title": "bigint",
+   "page": "",
+   "id": "js-bigint"
+  },
+  "3.2.10": {
+   "title": "DOMString",
+   "page": "",
+   "id": "js-DOMString"
+  },
+  "3.2.11": {
+   "title": "ByteString",
+   "page": "",
+   "id": "js-ByteString"
+  },
+  "3.2.12": {
+   "title": "USVString",
+   "page": "",
+   "id": "js-USVString"
+  },
+  "3.2.13": {
+   "title": "object",
+   "page": "",
+   "id": "js-object"
+  },
+  "3.2.14": {
+   "title": "symbol",
+   "page": "",
+   "id": "js-symbol"
+  },
+  "3.2.15": {
+   "title": "Interface types",
+   "page": "",
+   "id": "js-interface"
+  },
+  "3.2.16": {
+   "title": "Callback interface types",
+   "page": "",
+   "id": "js-callback-interface"
+  },
+  "3.2.17": {
+   "title": "Dictionary types",
+   "page": "",
+   "id": "js-dictionary"
+  },
+  "3.2.18": {
+   "title": "Enumeration types",
+   "page": "",
+   "id": "js-enumeration"
+  },
+  "3.2.19": {
+   "title": "Callback function types",
+   "page": "",
+   "id": "js-callback-function"
+  },
+  "3.2.20": {
+   "title": "Nullable types — T ?",
+   "page": "",
+   "id": "js-nullable-type"
+  },
+  "3.2.21": {
+   "title": "Sequences — sequence< T >",
+   "page": "",
+   "id": "js-sequence"
+  },
+  "3.2.21.1": {
+   "title": "Creating a sequence from an iterable",
+   "page": "",
+   "id": "create-sequence-from-iterable"
+  },
+  "3.2.22": {
+   "title": "Async sequences — async_sequence< T >",
+   "page": "",
+   "id": "js-async-iterable"
+  },
+  "3.2.22.1": {
+   "title": "Iterating async sequences",
+   "page": "",
+   "id": "js-async-sequence-iteration"
+  },
+  "3.2.23": {
+   "title": "Records — record< K , V >",
+   "page": "",
+   "id": "js-record"
+  },
+  "3.2.24": {
+   "title": "Promise types — Promise< T >",
+   "page": "",
+   "id": "js-promise"
+  },
+  "3.2.24.1": {
+   "title": "Creating and manipulating Promises",
+   "page": "",
+   "id": "js-promise-manipulation"
+  },
+  "3.2.24.2": {
+   "title": "Examples",
+   "page": "",
+   "id": "js-promise-examples"
+  },
+  "3.2.25": {
+   "title": "Union types",
+   "page": "",
+   "id": "js-union"
+  },
+  "3.2.26": {
+   "title": "Buffer source types",
+   "page": "",
+   "id": "js-buffer-source-types"
+  },
+  "3.2.27": {
+   "title": "Frozen arrays — FrozenArray< T >",
+   "page": "",
+   "id": "js-frozen-array"
+  },
+  "3.2.27.1": {
+   "title": "Creating a frozen array from an iterable",
+   "page": "",
+   "id": "create-frozen-array-from-iterable"
+  },
+  "3.2.28": {
+   "title": "Observable arrays — ObservableArray< T >",
+   "page": "",
+   "id": "js-observable-array"
+  },
+  "3.3": {
+   "title": "Extended attributes",
+   "page": "",
+   "id": "js-extended-attributes"
+  },
+  "3.3.1": {
+   "title": "[AllowResizable]",
+   "page": "",
+   "id": "AllowResizable"
+  },
+  "3.3.2": {
+   "title": "[AllowShared]",
+   "page": "",
+   "id": "AllowShared"
+  },
+  "3.3.3": {
+   "title": "[Clamp]",
+   "page": "",
+   "id": "Clamp"
+  },
+  "3.3.4": {
+   "title": "[CrossOriginIsolated]",
+   "page": "",
+   "id": "CrossOriginIsolated"
+  },
+  "3.3.5": {
+   "title": "[Default]",
+   "page": "",
+   "id": "Default"
+  },
+  "3.3.6": {
+   "title": "[EnforceRange]",
+   "page": "",
+   "id": "EnforceRange"
+  },
+  "3.3.7": {
+   "title": "[Exposed]",
+   "page": "",
+   "id": "Exposed"
+  },
+  "3.3.8": {
+   "title": "[Global]",
+   "page": "",
+   "id": "Global"
+  },
+  "3.3.9": {
+   "title": "[NewObject]",
+   "page": "",
+   "id": "NewObject"
+  },
+  "3.3.10": {
+   "title": "[PutForwards]",
+   "page": "",
+   "id": "PutForwards"
+  },
+  "3.3.11": {
+   "title": "[Replaceable]",
+   "page": "",
+   "id": "Replaceable"
+  },
+  "3.3.12": {
+   "title": "[SameObject]",
+   "page": "",
+   "id": "SameObject"
+  },
+  "3.3.13": {
+   "title": "[SecureContext]",
+   "page": "",
+   "id": "SecureContext"
+  },
+  "3.3.14": {
+   "title": "[Unscopable]",
+   "page": "",
+   "id": "Unscopable"
+  },
+  "3.4": {
+   "title": "Legacy extended attributes",
+   "page": "",
+   "id": "js-legacy-extended-attributes"
+  },
+  "3.4.1": {
+   "title": "[LegacyFactoryFunction]",
+   "page": "",
+   "id": "LegacyFactoryFunction"
+  },
+  "3.4.2": {
+   "title": "[LegacyLenientSetter]",
+   "page": "",
+   "id": "LegacyLenientSetter"
+  },
+  "3.4.3": {
+   "title": "[LegacyLenientThis]",
+   "page": "",
+   "id": "LegacyLenientThis"
+  },
+  "3.4.4": {
+   "title": "[LegacyNamespace]",
+   "page": "",
+   "id": "LegacyNamespace"
+  },
+  "3.4.5": {
+   "title": "[LegacyNoInterfaceObject]",
+   "page": "",
+   "id": "LegacyNoInterfaceObject"
+  },
+  "3.4.6": {
+   "title": "[LegacyNullToEmptyString]",
+   "page": "",
+   "id": "LegacyNullToEmptyString"
+  },
+  "3.4.7": {
+   "title": "[LegacyOverrideBuiltIns]",
+   "page": "",
+   "id": "LegacyOverrideBuiltIns"
+  },
+  "3.4.8": {
+   "title": "[LegacyTreatNonObjectAsNull]",
+   "page": "",
+   "id": "LegacyTreatNonObjectAsNull"
+  },
+  "3.4.9": {
+   "title": "[LegacyUnenumerableNamedProperties]",
+   "page": "",
+   "id": "LegacyUnenumerableNamedProperties"
+  },
+  "3.4.10": {
+   "title": "[LegacyUnforgeable]",
+   "page": "",
+   "id": "LegacyUnforgeable"
+  },
+  "3.4.11": {
+   "title": "[LegacyWindowAlias]",
+   "page": "",
+   "id": "LegacyWindowAlias"
+  },
+  "3.5": {
+   "title": "Security",
+   "page": "",
+   "id": "js-security"
+  },
+  "3.6": {
+   "title": "Overload resolution algorithm",
+   "page": "",
+   "id": "js-overloads"
+  },
+  "3.7": {
+   "title": "Interfaces",
+   "page": "",
+   "id": "js-interfaces"
+  },
+  "3.7.1": {
+   "title": "Interface object",
+   "page": "",
+   "id": "interface-object"
+  },
+  "3.7.2": {
+   "title": "Legacy factory functions",
+   "page": "",
+   "id": "legacy-factory-functions"
+  },
+  "3.7.3": {
+   "title": "Interface prototype object",
+   "page": "",
+   "id": "interface-prototype-object"
+  },
+  "3.7.4": {
+   "title": "Named properties object",
+   "page": "",
+   "id": "named-properties-object"
+  },
+  "3.7.4.1": {
+   "title": "[[GetOwnProperty]]",
+   "page": "",
+   "id": "named-properties-object-getownproperty"
+  },
+  "3.7.4.2": {
+   "title": "[[DefineOwnProperty]]",
+   "page": "",
+   "id": "named-properties-object-defineownproperty"
+  },
+  "3.7.4.3": {
+   "title": "[[Delete]]",
+   "page": "",
+   "id": "named-properties-object-delete"
+  },
+  "3.7.4.4": {
+   "title": "[[SetPrototypeOf]]",
+   "page": "",
+   "id": "named-properties-object-setprototypeof"
+  },
+  "3.7.4.5": {
+   "title": "[[PreventExtensions]]",
+   "page": "",
+   "id": "named-properties-object-preventextensions"
+  },
+  "3.7.5": {
+   "title": "Constants",
+   "page": "",
+   "id": "js-constants"
+  },
+  "3.7.6": {
+   "title": "Attributes",
+   "page": "",
+   "id": "js-attributes"
+  },
+  "3.7.7": {
+   "title": "Operations",
+   "page": "",
+   "id": "js-operations"
+  },
+  "3.7.7.1": {
+   "title": "Default operations",
+   "page": "",
+   "id": "js-default-operations"
+  },
+  "3.7.7.1.1": {
+   "title": "Default toJSON operation",
+   "page": "",
+   "id": "js-default-tojson"
+  },
+  "3.7.8": {
+   "title": "Stringifiers",
+   "page": "",
+   "id": "js-stringifier"
+  },
+  "3.7.9": {
+   "title": "Iterable declarations",
+   "page": "",
+   "id": "js-iterable"
+  },
+  "3.7.9.1": {
+   "title": "Default iterator objects",
+   "page": "",
+   "id": "js-default-iterator-object"
+  },
+  "3.7.9.2": {
+   "title": "Iterator prototype object",
+   "page": "",
+   "id": "js-iterator-prototype-object"
+  },
+  "3.7.10": {
+   "title": "Asynchronous iterable declarations",
+   "page": "",
+   "id": "js-asynchronous-iterable"
+  },
+  "3.7.10.1": {
+   "title": "Default asynchronous iterator objects",
+   "page": "",
+   "id": "js-default-asynchronous-iterator-object"
+  },
+  "3.7.10.2": {
+   "title": "Asynchronous iterator prototype object",
+   "page": "",
+   "id": "js-asynchronous-iterator-prototype-object"
+  },
+  "3.7.11": {
+   "title": "Maplike declarations",
+   "page": "",
+   "id": "js-maplike"
+  },
+  "3.7.11.1": {
+   "title": "size",
+   "page": "",
+   "id": "js-map-size"
+  },
+  "3.7.11.2": {
+   "title": "%Symbol.iterator%",
+   "page": "",
+   "id": "js-map-iterator"
+  },
+  "3.7.11.3": {
+   "title": "entries",
+   "page": "",
+   "id": "js-map-entries"
+  },
+  "3.7.11.4": {
+   "title": "keys",
+   "page": "",
+   "id": "js-map-keys"
+  },
+  "3.7.11.5": {
+   "title": "values",
+   "page": "",
+   "id": "js-map-values"
+  },
+  "3.7.11.6": {
+   "title": "forEach",
+   "page": "",
+   "id": "js-map-forEach"
+  },
+  "3.7.11.7": {
+   "title": "get",
+   "page": "",
+   "id": "js-map-get"
+  },
+  "3.7.11.8": {
+   "title": "has",
+   "page": "",
+   "id": "js-map-has"
+  },
+  "3.7.11.9": {
+   "title": "set",
+   "page": "",
+   "id": "js-map-set"
+  },
+  "3.7.11.10": {
+   "title": "delete",
+   "page": "",
+   "id": "js-map-delete"
+  },
+  "3.7.11.11": {
+   "title": "clear",
+   "page": "",
+   "id": "js-map-clear"
+  },
+  "3.7.12": {
+   "title": "Setlike declarations",
+   "page": "",
+   "id": "js-setlike"
+  },
+  "3.7.12.1": {
+   "title": "size",
+   "page": "",
+   "id": "js-set-size"
+  },
+  "3.7.12.2": {
+   "title": "%Symbol.iterator%",
+   "page": "",
+   "id": "js-set-iterator"
+  },
+  "3.7.12.3": {
+   "title": "entries",
+   "page": "",
+   "id": "js-set-entries"
+  },
+  "3.7.12.4": {
+   "title": "keys",
+   "page": "",
+   "id": "js-set-keys"
+  },
+  "3.7.12.5": {
+   "title": "values",
+   "page": "",
+   "id": "js-set-values"
+  },
+  "3.7.12.6": {
+   "title": "forEach",
+   "page": "",
+   "id": "js-set-forEach"
+  },
+  "3.7.12.7": {
+   "title": "has",
+   "page": "",
+   "id": "js-set-has"
+  },
+  "3.7.12.8": {
+   "title": "add",
+   "page": "",
+   "id": "js-set-add"
+  },
+  "3.7.12.9": {
+   "title": "delete",
+   "page": "",
+   "id": "js-set-delete"
+  },
+  "3.7.12.10": {
+   "title": "clear",
+   "page": "",
+   "id": "js-set-clear"
+  },
+  "3.8": {
+   "title": "Platform objects implementing interfaces",
+   "page": "",
+   "id": "js-platform-objects"
+  },
+  "3.8.1": {
+   "title": "[[SetPrototypeOf]]",
+   "page": "",
+   "id": "platform-object-setprototypeof"
+  },
+  "3.9": {
+   "title": "Legacy platform objects",
+   "page": "",
+   "id": "js-legacy-platform-objects"
+  },
+  "3.9.1": {
+   "title": "[[GetOwnProperty]]",
+   "page": "",
+   "id": "legacy-platform-object-getownproperty"
+  },
+  "3.9.2": {
+   "title": "[[Set]]",
+   "page": "",
+   "id": "legacy-platform-object-set"
+  },
+  "3.9.3": {
+   "title": "[[DefineOwnProperty]]",
+   "page": "",
+   "id": "legacy-platform-object-defineownproperty"
+  },
+  "3.9.4": {
+   "title": "[[Delete]]",
+   "page": "",
+   "id": "legacy-platform-object-delete"
+  },
+  "3.9.5": {
+   "title": "[[PreventExtensions]]",
+   "page": "",
+   "id": "legacy-platform-object-preventextensions"
+  },
+  "3.9.6": {
+   "title": "[[OwnPropertyKeys]]",
+   "page": "",
+   "id": "legacy-platform-object-ownpropertykeys"
+  },
+  "3.9.7": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "legacy-platform-object-abstract-ops"
+  },
+  "3.10": {
+   "title": "Observable array exotic objects",
+   "page": "",
+   "id": "js-observable-arrays"
+  },
+  "3.10.1": {
+   "title": "defineProperty",
+   "page": "",
+   "id": "js-observable-array-defineProperty"
+  },
+  "3.10.2": {
+   "title": "deleteProperty",
+   "page": "",
+   "id": "js-observable-array-deleteProperty"
+  },
+  "3.10.3": {
+   "title": "get",
+   "page": "",
+   "id": "js-observable-array-get"
+  },
+  "3.10.4": {
+   "title": "getOwnPropertyDescriptor",
+   "page": "",
+   "id": "js-observable-array-getOwnPropertyDescriptor"
+  },
+  "3.10.5": {
+   "title": "has",
+   "page": "",
+   "id": "js-observable-array-has"
+  },
+  "3.10.6": {
+   "title": "ownKeys",
+   "page": "",
+   "id": "js-observable-array-ownKeys"
+  },
+  "3.10.7": {
+   "title": "preventExtensions",
+   "page": "",
+   "id": "js-observable-array-preventExtensions"
+  },
+  "3.10.8": {
+   "title": "set",
+   "page": "",
+   "id": "js-observable-array-set"
+  },
+  "3.10.9": {
+   "title": "Abstract operations",
+   "page": "",
+   "id": "js-observable-array-abstract-operations"
+  },
+  "3.11": {
+   "title": "Callback interfaces",
+   "page": "",
+   "id": "js-user-objects"
+  },
+  "3.11.1": {
+   "title": "Legacy callback interface object",
+   "page": "",
+   "id": "legacy-callback-interface-object"
+  },
+  "3.12": {
+   "title": "Invoking callback functions",
+   "page": "",
+   "id": "js-invoking-callback-functions"
+  },
+  "3.13": {
+   "title": "Namespaces",
+   "page": "",
+   "id": "js-namespaces"
+  },
+  "3.13.1": {
+   "title": "Namespace object",
+   "page": "",
+   "id": "namespace-object"
+  },
+  "3.14": {
+   "title": "Exceptions",
+   "page": "",
+   "id": "js-exceptions"
+  },
+  "3.14.1": {
+   "title": "DOMException custom bindings",
+   "page": "",
+   "id": "js-DOMException-specialness"
+  },
+  "3.14.2": {
+   "title": "Exception objects",
+   "page": "",
+   "id": "js-exception-objects"
+  },
+  "3.14.3": {
+   "title": "Creating and throwing exceptions",
+   "page": "",
+   "id": "js-creating-throwing-exceptions"
+  },
+  "3.14.4": {
+   "title": "Handling exceptions",
+   "page": "",
+   "id": "js-handling-exceptions"
+  },
+  "4.1": {
+   "title": "ArrayBufferView",
+   "page": "",
+   "id": "ArrayBufferView"
+  },
+  "4.2": {
+   "title": "BufferSource",
+   "page": "",
+   "id": "BufferSource"
+  },
+  "4.3": {
+   "title": "AllowSharedBufferSource",
+   "page": "",
+   "id": "AllowSharedBufferSource"
+  },
+  "4.4": {
+   "title": "DOMException",
+   "page": "",
+   "id": "idl-DOMException"
+  },
+  "4.5": {
+   "title": "Function",
+   "page": "",
+   "id": "Function"
+  },
+  "4.6": {
+   "title": "VoidFunction",
+   "page": "",
+   "id": "VoidFunction"
+  }
+ },
+ "dfns": {
+  "a new promise": [
+   "3.2.24.1"
+  ],
+  "a promise rejected with": [
+   "3.2.24.1"
+  ],
+  "a promise resolved with": [
+   "3.2.24.1"
+  ],
+  "abort err": [
+   "2.8.1"
+  ],
+  "an exception was thrown": [
+   "3.14.4"
+  ],
+  "annotated types": [
+   "2.13.33"
+  ],
+  "applicable to types": [
+   "2.13.33"
+  ],
+  "associated realm": [
+   "3.1"
+  ],
+  "async iterable": [
+   "2.5.10"
+  ],
+  "async iterator": [
+   "3.2.22.1"
+  ],
+  "async iterators": [
+   "3.2.22.1"
+  ],
+  "async sequence type": [
+   "2.13.29"
+  ],
+  "asynchronous iterator initialization steps": [
+   "2.5.10"
+  ],
+  "asynchronous iterator prototype object": [
+   "3.7.10.2"
+  ],
+  "asynchronous iterator return": [
+   "2.5.10"
+  ],
+  "asynchronously iterable declaration": [
+   "2.5.10"
+  ],
+  "attribute getter": [
+   "3.7.6"
+  ],
+  "attribute setter": [
+   "3.7.6"
+  ],
+  "backing list": [
+   "2.13.36"
+  ],
+  "backing observable array exotic object": [
+   "3.2.28"
+  ],
+  "buffer source types": [
+   "2.13"
+  ],
+  "buffer types": [
+   "2.13"
+  ],
+  "buffer view types": [
+   "2.13"
+  ],
+  "byte length": [
+   "3.2.26"
+  ],
+  "call a user object operation": [
+   "3.11"
+  ],
+  "callback context": [
+   "2.13.23"
+  ],
+  "callback function": [
+   "2.10"
+  ],
+  "callback interface": [
+   "2.4"
+  ],
+  "callback interface member": [
+   "2.4"
+  ],
+  "callback interface members": [
+   "2.4"
+  ],
+  "callback this value": [
+   "3.11"
+  ],
+  "class string": [
+   "3"
+  ],
+  "close an async iterator": [
+   "3.2.22.1"
+  ],
+  "collect attribute values": [
+   "3.7.7.1.1"
+  ],
+  "collect attribute values of an inheritance stack": [
+   "3.7.7.1.1"
+  ],
+  "compute the effective overload set": [
+   "2.5.8"
+  ],
+  "conditionally exposed": [
+   "3.3.7"
+  ],
+  "conforming implementation": [
+   "8"
+  ],
+  "conforming javascript implementation": [
+   "8"
+  ],
+  "conforming set of idl fragments": [
+   "8"
+  ],
+  "constructor steps": [
+   "2.5.4"
+  ],
+  "constructor(message name)": [
+   "4.4"
+  ],
+  "constructor(message options)": [
+   "2.8.3"
+  ],
+  "convert a web idl arguments list to a javascript arguments list": [
+   "3.11"
+  ],
+  "convert arguments for an asynchronous iterator method": [
+   "3.7.10"
+  ],
+  "converted to a javascript value": [
+   "3.2"
+  ],
+  "converted to a numeric type or bigint": [
+   "3.2.9"
+  ],
+  "converted to an ecmascript value": [
+   "3.2"
+  ],
+  "converted to an idl value": [
+   "3.2"
+  ],
+  "converted to ecmascript values": [
+   "3.2"
+  ],
+  "converted to idl values": [
+   "3.2"
+  ],
+  "converted to javascript values": [
+   "3.2"
+  ],
+  "converting arguments for an asynchronous iterator method": [
+   "3.7.10"
+  ],
+  "converttoint( v bitlength signedness )": [
+   "3.2.4.9"
+  ],
+  "create a frozen array": [
+   "3.2.27"
+  ],
+  "create a legacy callback interface object": [
+   "3.11.1"
+  ],
+  "create a legacy factory function": [
+   "3.7.2"
+  ],
+  "create a map iterator": [
+   "3.7.11.2"
+  ],
+  "create a named properties object": [
+   "3.7.4"
+  ],
+  "create a namespace object": [
+   "3.13.1"
+  ],
+  "create a new object implementing the interface": [
+   "3.8"
+  ],
+  "create a set iterator": [
+   "3.7.12.2"
+  ],
+  "create an inheritance stack": [
+   "3.7.7.1.1"
+  ],
+  "create an interface object": [
+   "3.7.1"
+  ],
+  "create an interface prototype object": [
+   "3.7.3"
+  ],
+  "create an observable array exotic object": [
+   "3.10"
+  ],
+  "create an operation function": [
+   "3.7.7"
+  ],
+  "creating a frozen array": [
+   "3.2.27"
+  ],
+  "creating an observable array exotic object": [
+   "3.10"
+  ],
+  "creating an operation function": [
+   "3.7.7"
+  ],
+  "current state": [
+   "2.5.10"
+  ],
+  "data clone err": [
+   "2.8.1"
+  ],
+  "default asynchronous iterator object": [
+   "3.7.10.1"
+  ],
+  "default iterator object": [
+   "3.7.9.1"
+  ],
+  "default method steps": [
+   "3.7.7.1"
+  ],
+  "default tojson steps": [
+   "3.7.7.1.1"
+  ],
+  "default value": [
+   "2.5.3",
+   "2.7"
+  ],
+  "define the asynchronous iteration methods": [
+   "3.7.10"
+  ],
+  "define the attributes": [
+   "3.7.6"
+  ],
+  "define the constants": [
+   "3.7.5"
+  ],
+  "define the global property references": [
+   "3.8"
+  ],
+  "define the iteration methods": [
+   "3.7.9"
+  ],
+  "define the operations": [
+   "3.7.7"
+  ],
+  "define the regular attributes": [
+   "3.7.6"
+  ],
+  "define the regular operations": [
+   "3.7.7"
+  ],
+  "define the static attributes": [
+   "3.7.6"
+  ],
+  "define the static operations": [
+   "3.7.7"
+  ],
+  "define the unforgeable regular attributes": [
+   "3.7.6"
+  ],
+  "define the unforgeable regular operations": [
+   "3.7.7"
+  ],
+  "delete an existing named property": [
+   "2.5.6.2"
+  ],
+  "delete an indexed value": [
+   "2.13.36"
+  ],
+  "determine the value of a named property": [
+   "2.5.6.2"
+  ],
+  "determine the value of an indexed property": [
+   "2.5.6.1"
+  ],
+  "dictionary members": [
+   "2.7"
+  ],
+  "distinguishing argument index": [
+   "2.5.8"
+  ],
+  "domexception names table": [
+   "2.8.1"
+  ],
+  "domexception(message name)": [
+   "4.4"
+  ],
+  "domstring size err": [
+   "4.4"
+  ],
+  "ecmascript throw": [
+   "3"
+  ],
+  "effective overload set": [
+   "2.5.8"
+  ],
+  "end of iteration": [
+   "2.5.10"
+  ],
+  "enumeration value": [
+   "2.9"
+  ],
+  "enumeration values": [
+   "2.9"
+  ],
+  "example term": [
+   "8"
+  ],
+  "exposure set": [
+   "3.3.7"
+  ],
+  "exposure set intersection": [
+   "3.3.7"
+  ],
+  "extended attribute": [
+   "2.14"
+  ],
+  "extended attribute associated with": [
+   "2.13.33"
+  ],
+  "extended attributes associated with": [
+   "2.13.33"
+  ],
+  "flattened member types": [
+   "2.13.32"
+  ],
+  "frozen array type": [
+   "2.13.35"
+  ],
+  "get a copy of the buffer source": [
+   "3.2.26"
+  ],
+  "get a copy of the bytes held by the buffer source": [
+   "3.2.26"
+  ],
+  "get a promise for waiting for all": [
+   "3.2.24.1"
+  ],
+  "get a promise to wait for all": [
+   "3.2.24.1"
+  ],
+  "get an async iterator next value": [
+   "3.2.22.1"
+  ],
+  "get the next iteration result": [
+   "2.5.10"
+  ],
+  "get the next value": [
+   "3.2.22.1"
+  ],
+  "getter steps": [
+   "2.5.2"
+  ],
+  "getting a promise to wait for all": [
+   "3.2.24.1"
+  ],
+  "global names": [
+   "3.3.8"
+  ],
+  "has default method steps": [
+   "3.7.7.1"
+  ],
+  "have default method steps": [
+   "3.7.7.1"
+  ],
+  "hierarchy request err": [
+   "2.8.1"
+  ],
+  "host interfaces": [
+   "2.3"
+  ],
+  "idl fragment": [
+   "2"
+  ],
+  "idl fragments": [
+   "2"
+  ],
+  "implementation check an object": [
+   "3.7"
+  ],
+  "includes a nullable type": [
+   "2.13.32"
+  ],
+  "includes statement": [
+   "2.3"
+  ],
+  "includes undefined": [
+   "2.13.32"
+  ],
+  "inclusive inherited interfaces": [
+   "2.2"
+  ],
+  "index size err": [
+   "2.8.1"
+  ],
+  "indexed property getter": [
+   "2.5.6"
+  ],
+  "indexed property getters": [
+   "2.5.6"
+  ],
+  "indexed property setter": [
+   "2.5.6"
+  ],
+  "indexed property setters": [
+   "2.5.6"
+  ],
+  "inherit its getter": [
+   "2.5.2"
+  ],
+  "inherited dictionaries": [
+   "2.7"
+  ],
+  "inherited interfaces": [
+   "2.2"
+  ],
+  "initial objects": [
+   "3.1"
+  ],
+  "inner type": [
+   "2.13.27",
+   "2.13.33"
+  ],
+  "inner types": [
+   "2.13.33"
+  ],
+  "integer types": [
+   "2.13"
+  ],
+  "integerpart( n )": [
+   "3.2.4.9"
+  ],
+  "interface member": [
+   "2.2"
+  ],
+  "interface members": [
+   "2.2"
+  ],
+  "interface mixin": [
+   "2.3"
+  ],
+  "interface mixin member": [
+   "2.3"
+  ],
+  "interface mixin members": [
+   "2.3"
+  ],
+  "interface object": [
+   "3.7"
+  ],
+  "interface prototype object": [
+   "3.7.3"
+  ],
+  "internally create a new object implementing the interface": [
+   "3.8"
+  ],
+  "inuse attribute err": [
+   "2.8.1"
+  ],
+  "invalid access err": [
+   "2.8.1"
+  ],
+  "invalid character err": [
+   "2.8.1"
+  ],
+  "invalid modification err": [
+   "2.8.1"
+  ],
+  "invalid node type err": [
+   "2.8.1"
+  ],
+  "invalid state err": [
+   "2.8.1"
+  ],
+  "invoke a named property setter": [
+   "3.9.7"
+  ],
+  "invoke an indexed property setter": [
+   "3.9.7"
+  ],
+  "invoke the indexed property setter": [
+   "3.9.7"
+  ],
+  "invoke the named property setter": [
+   "3.9.7"
+  ],
+  "is a platform object": [
+   "3.8"
+  ],
+  "is an array index": [
+   "3.9.7"
+  ],
+  "is finished": [
+   "3.7.10.1"
+  ],
+  "is global prototype chain mutable": [
+   "3.3.8"
+  ],
+  "is not an array index": [
+   "3.9.7"
+  ],
+  "iterable declaration": [
+   "2.5.9"
+  ],
+  "iterator prototype object": [
+   "3.7.9.2"
+  ],
+  "iterator result": [
+   "3.7.9.2"
+  ],
+  "javascript throw": [
+   "3"
+  ],
+  "json type": [
+   "2.5.3.1"
+  ],
+  "json types": [
+   "2.5.3.1"
+  ],
+  "legacy callback interface object": [
+   "3.11.1"
+  ],
+  "legacy factory function": [
+   "3.7"
+  ],
+  "legacy platform objects": [
+   "2.12"
+  ],
+  "legacyfactoryfunction identifier": [
+   "3.4.1"
+  ],
+  "legacywindowalias identifier": [
+   "3.4.11"
+  ],
+  "map entries": [
+   "2.5.11"
+  ],
+  "map size getter": [
+   "3.7.11.1"
+  ],
+  "maplike declaration": [
+   "2.5.11"
+  ],
+  "mark a promise as handled": [
+   "3.2.24.1"
+  ],
+  "mark as handled": [
+   "3.2.24.1"
+  ],
+  "member types": [
+   "2.13.32"
+  ],
+  "method steps": [
+   "2.5.3"
+  ],
+  "named definition": [
+   "2.1"
+  ],
+  "named definitions": [
+   "2.1"
+  ],
+  "named properties object": [
+   "3.7.4"
+  ],
+  "named property deleter": [
+   "2.5.6"
+  ],
+  "named property deleters": [
+   "2.5.6"
+  ],
+  "named property getter": [
+   "2.5.6"
+  ],
+  "named property getters": [
+   "2.5.6"
+  ],
+  "named property setter": [
+   "2.5.6"
+  ],
+  "named property setters": [
+   "2.5.6"
+  ],
+  "named property visibility algorithm": [
+   "3.9.7"
+  ],
+  "namespace err": [
+   "2.8.1"
+  ],
+  "namespace member": [
+   "2.6"
+  ],
+  "namespace members": [
+   "2.6"
+  ],
+  "namespace object": [
+   "3.13"
+  ],
+  "network err": [
+   "2.8.1"
+  ],
+  "new domexception( message name )": [
+   "4.4"
+  ],
+  "new quotaexceedederror( message options )": [
+   "2.8.3"
+  ],
+  "no data allowed err": [
+   "4.4"
+  ],
+  "no modification allowed err": [
+   "2.8.1"
+  ],
+  "not found err": [
+   "2.8.1"
+  ],
+  "not supported err": [
+   "2.8.1"
+  ],
+  "nullable type": [
+   "2.13.27"
+  ],
+  "number of nullable member types": [
+   "2.13.32"
+  ],
+  "numeric types": [
+   "2.13"
+  ],
+  "object types": [
+   "2.13"
+  ],
+  "observable array exotic object": [
+   "3.10"
+  ],
+  "observable array type": [
+   "2.13.36"
+  ],
+  "ongoing promise": [
+   "3.7.10.1"
+  ],
+  "open an async sequence": [
+   "3.2.22.1"
+  ],
+  "optional argument": [
+   "2.5.3"
+  ],
+  "optionality list": [
+   "2.5.8"
+  ],
+  "optionality values": [
+   "2.5.8"
+  ],
+  "overload resolution algorithm": [
+   "3.6"
+  ],
+  "overridden constructor steps": [
+   "3.7.1"
+  ],
+  "own exposure set": [
+   "3.3.7"
+  ],
+  "pair asynchronously iterable declaration": [
+   "2.5.10"
+  ],
+  "pair iterator": [
+   "2.5.9"
+  ],
+  "partial dictionary": [
+   "2.7"
+  ],
+  "partial interface": [
+   "2.2"
+  ],
+  "partial interface mixin": [
+   "2.3"
+  ],
+  "partial namespace": [
+   "2.6"
+  ],
+  "perform a security check": [
+   "3.5"
+  ],
+  "platform object": [
+   "2.12"
+  ],
+  "platform objects": [
+   "2.12"
+  ],
+  "primary interface": [
+   "3.8"
+  ],
+  "primitive types": [
+   "2.13"
+  ],
+  "promise type": [
+   "2.13.31"
+  ],
+  "qualified name": [
+   "2.2"
+  ],
+  "quota exceeded err": [
+   "2.8.1"
+  ],
+  "quotaexceedederror(message options)": [
+   "2.8.3"
+  ],
+  "read only": [
+   "2.5.2"
+  ],
+  "ready promise": [
+   "3.2.24.2"
+  ],
+  "record type": [
+   "2.13.30"
+  ],
+  "regular attribute": [
+   "2.5.2"
+  ],
+  "regular operation": [
+   "2.5.3"
+  ],
+  "rejected promise": [
+   "3.2.24.1"
+  ],
+  "reserved identifiers": [
+   "2.1"
+  ],
+  "resolved promise": [
+   "3.2.24.1"
+  ],
+  "return type": [
+   "2.5.3"
+  ],
+  "security err": [
+   "2.8.1"
+  ],
+  "sequence t": [
+   "2.13.28"
+  ],
+  "sequence type": [
+   "2.13.28"
+  ],
+  "set an indexed value": [
+   "2.13.36"
+  ],
+  "set entries": [
+   "2.5.12"
+  ],
+  "set size getter": [
+   "3.7.12.1"
+  ],
+  "set the indexed value": [
+   "3.10.9"
+  ],
+  "set the length": [
+   "3.10.9"
+  ],
+  "set the value of a new indexed property": [
+   "2.5.6.1"
+  ],
+  "set the value of a new named property": [
+   "2.5.6.2"
+  ],
+  "set the value of an existing indexed property": [
+   "2.5.6.1"
+  ],
+  "set the value of an existing named property": [
+   "2.5.6.2"
+  ],
+  "setlike declaration": [
+   "2.5.12"
+  ],
+  "setter steps": [
+   "2.5.2"
+  ],
+  "setting the indexed value": [
+   "3.10.9"
+  ],
+  "setting the length": [
+   "3.10.9"
+  ],
+  "simple exception": [
+   "2.8"
+  ],
+  "special keyword": [
+   "2.5.6"
+  ],
+  "special operation": [
+   "2.5.6"
+  ],
+  "specific type": [
+   "2.13.1"
+  ],
+  "static attributes": [
+   "2.5.7"
+  ],
+  "static operations": [
+   "2.5.7"
+  ],
+  "string types": [
+   "2.13"
+  ],
+  "stringification behavior": [
+   "2.5.5"
+  ],
+  "support indexed properties": [
+   "2.5.6.1"
+  ],
+  "support named properties": [
+   "2.5.6.2"
+  ],
+  "supported property indices": [
+   "2.5.6.1"
+  ],
+  "supported property names": [
+   "2.5.6.2"
+  ],
+  "syntax err": [
+   "2.8.1"
+  ],
+  "takes a decimal": [
+   "2.14"
+  ],
+  "takes a named argument list": [
+   "2.14"
+  ],
+  "takes a string": [
+   "2.14"
+  ],
+  "takes a wildcard": [
+   "2.14"
+  ],
+  "takes an argument list": [
+   "2.14"
+  ],
+  "takes an identifier": [
+   "2.14"
+  ],
+  "takes an identifier list": [
+   "2.14"
+  ],
+  "takes an integer": [
+   "2.14"
+  ],
+  "takes an integer list": [
+   "2.14"
+  ],
+  "takes no arguments": [
+   "2.14"
+  ],
+  "the given value": [
+   "2.5"
+  ],
+  "timeout err": [
+   "2.8.1"
+  ],
+  "type being given a new name": [
+   "2.11"
+  ],
+  "type list": [
+   "2.5.8"
+  ],
+  "type mismatch err": [
+   "2.8.1"
+  ],
+  "type parameter": [
+   "3.2.22.1"
+  ],
+  "typed array types": [
+   "2.13"
+  ],
+  "underlying buffer": [
+   "3.2.26"
+  ],
+  "underlying record": [
+   "3.2.22.1"
+  ],
+  "unforgeable property name": [
+   "3.9"
+  ],
+  "union type": [
+   "2.13.32"
+  ],
+  "upon fulfillment": [
+   "3.2.24.1"
+  ],
+  "upon rejection": [
+   "3.2.24.1"
+  ],
+  "url mismatch err": [
+   "2.8.1"
+  ],
+  "validation err": [
+   "4.4"
+  ],
+  "value asynchronously iterable declaration": [
+   "2.5.10"
+  ],
+  "value iterator": [
+   "2.5.9"
+  ],
+  "value of string literal tokens": [
+   "2.5.3"
+  ],
+  "value pair": [
+   "2.5.9"
+  ],
+  "value pairs to iterate over": [
+   "2.5.9"
+  ],
+  "wait for all": [
+   "3.2.24.1"
+  ],
+  "waiting for all": [
+   "3.2.24.1"
+  ],
+  "web idl arguments list": [
+   "3.11"
+  ],
+  "wrong document err": [
+   "2.8.1"
+  ]
+ },
+ "uses": {
+  "a new promise": {
+   "3.2.24.2": 5
+  },
+  "abort err": {
+   "8": 2
+  },
+  "an exception was thrown": {
+   "8": 2
+  },
+  "annotated types": {
+   "2.13.32": 4,
+   "3.6": 34
+  },
+  "associated realm": {
+   "3.12": 2
+  },
+  "async sequence type": {
+   "3.6": 2
+  },
+  "asynchronous iterator initialization steps": {
+   "3.7.10": 3
+  },
+  "asynchronous iterator prototype object": {
+   "3.7.10.1": 2
+  },
+  "asynchronous iterator return": {
+   "3.7.10.2": 2
+  },
+  "asynchronously iterable declaration": {
+   "8": 2,
+   "3.7.10": 6
+  },
+  "backing observable array exotic object": {
+   "3.7.6": 3
+  },
+  "buffer source types": {
+   "3.2.26": 7,
+   "3.3.1": 2
+  },
+  "buffer types": {
+   "2.13.34": 5,
+   "3.2.26": 2
+  },
+  "buffer view types": {
+   "3.3.1": 2,
+   "3.3.2": 7
+  },
+  "callback context": {
+   "2.13.26": 2,
+   "3.12": 2
+  },
+  "callback function": {
+   "2.1": 3,
+   "2.4": 3,
+   "2.5.3": 3,
+   "2.5.8": 4,
+   "2.13.26": 3,
+   "3.4.8": 5,
+   "3.12": 2
+  },
+  "callback interface": {
+   "2.1": 3,
+   "2.2": 2,
+   "2.5": 2,
+   "2.5.1": 3,
+   "2.5.3": 3,
+   "3.3.7": 8,
+   "3.11": 3,
+   "3.11.1": 4
+  },
+  "callback interface members": {
+   "2.5.3": 2
+  },
+  "class string": {
+   "3.7.9.1": 2,
+   "3.7.10.1": 2
+  },
+  "compute the effective overload set": {
+   "3.7.1": 2,
+   "3.7.2": 2,
+   "3.7.7": 2
+  },
+  "convert a web idl arguments list to a javascript arguments list": {
+   "3.12": 2
+  },
+  "converted to an idl value": {
+   "8": 2,
+   "3.2.12": 2,
+   "3.2.17": 2,
+   "3.2.20": 2,
+   "3.2.23": 3,
+   "3.2.24.1": 2,
+   "3.2.25": 17,
+   "3.2.26": 11,
+   "3.2.27": 2,
+   "3.6": 2,
+   "3.7.6": 2,
+   "3.7.11.9": 2,
+   "3.9.7": 2,
+   "3.11": 2,
+   "3.12": 4
+  },
+  "converted to javascript values": {
+   "8": 4,
+   "3.2.9": 2,
+   "3.2.17": 2,
+   "3.2.20": 2,
+   "3.2.21": 2,
+   "3.2.23": 3,
+   "3.2.24.1": 4,
+   "3.2.26": 11,
+   "3.2.27": 2,
+   "3.7.7.1.1": 2,
+   "3.7.9.2": 4,
+   "3.9.7": 2
+  },
+  "create a frozen array": {
+   "8": 2,
+   "2.13.35": 3
+  },
+  "create a new object implementing the interface": {
+   "3.14.3": 2
+  },
+  "data clone err": {
+   "8": 2
+  },
+  "default asynchronous iterator object": {
+   "3.7.10": 3,
+   "3.7.10.2": 3
+  },
+  "default iterator object": {
+   "3.7.9": 3,
+   "3.7.9.2": 2
+  },
+  "default value": {
+   "8": 2,
+   "2.5.1": 2,
+   "2.13.17": 2,
+   "2.13.18": 2,
+   "2.13.19": 2,
+   "2.13.25": 2,
+   "3.2.17": 2,
+   "3.6": 4
+  },
+  "dictionary members": {
+   "2.1": 2,
+   "2.13.2": 2,
+   "3.2.17": 2
+  },
+  "distinguishing argument index": {
+   "3.6": 2
+  },
+  "domstring size err": {
+   "8": 2
+  },
+  "end of iteration": {
+   "3.2.22.1": 2
+  },
+  "enumeration values": {
+   "8": 2,
+   "3.2.18": 2
+  },
+  "extended attribute": {
+   "2": 2,
+   "8": 3,
+   "2.2": 4,
+   "2.5.2": 3,
+   "2.5.3": 2,
+   "2.5.8": 4,
+   "2.13.33": 5,
+   "3.2.4.9": 2,
+   "3.2.26": 14,
+   "3.3.1": 5,
+   "3.3.2": 2,
+   "3.3.3": 2,
+   "3.3.4": 5,
+   "3.3.6": 2,
+   "3.3.7": 16,
+   "3.3.8": 8,
+   "3.3.10": 2,
+   "3.3.13": 5,
+   "3.4.1": 2,
+   "3.4.7": 2,
+   "3.4.8": 2,
+   "3.4.10": 3,
+   "3.6": 2,
+   "3.7.3": 9,
+   "3.7.6": 4,
+   "3.7.7": 2,
+   "3.7.7.1.1": 2,
+   "3.8": 5,
+   "3.9.3": 2,
+   "3.9.7": 3
+  },
+  "extended attributes associated with": {
+   "8": 2,
+   "3.2.4.9": 3,
+   "3.2.26": 12,
+   "3.3.3": 2,
+   "3.3.6": 2
+  },
+  "flattened member types": {
+   "2.5.3": 4,
+   "3.6": 17
+  },
+  "get a copy of the bytes held by the buffer source": {
+   "8": 2
+  },
+  "get a promise for waiting for all": {
+   "8": 2,
+   "3.2.24.2": 2
+  },
+  "getter steps": {
+   "2.13.35": 2,
+   "3.7.8": 2
+  },
+  "has default method steps": {
+   "8": 2
+  },
+  "hierarchy request err": {
+   "8": 2
+  },
+  "host interfaces": {
+   "3.3.7": 4
+  },
+  "idl fragments": {
+   "8": 4,
+   "2.1": 5,
+   "2.2": 3,
+   "2.5.3": 4,
+   "2.5.5": 2,
+   "3.1": 2,
+   "3.7.7.1.1": 2
+  },
+  "implementation check an object": {
+   "8": 3
+  },
+  "includes a nullable type": {
+   "2.5.8": 2
+  },
+  "inclusive inherited interfaces": {
+   "3.8": 2
+  },
+  "index size err": {
+   "8": 2
+  },
+  "indexed property getters": {
+   "2.5.6.1": 3
+  },
+  "indexed property setters": {
+   "2.5.6.1": 2
+  },
+  "inherited dictionaries": {
+   "3.2.17": 2
+  },
+  "inherited interfaces": {
+   "2.5.9": 3,
+   "2.5.10": 3,
+   "2.5.11": 4,
+   "2.5.12": 4,
+   "3.7.3": 2
+  },
+  "inner type": {
+   "2.5.3": 2,
+   "2.7": 2,
+   "2.13.32": 3,
+   "3.2.20": 4
+  },
+  "inner types": {
+   "2.13.32": 3,
+   "3.6": 17
+  },
+  "integer types": {
+   "3.3.3": 2,
+   "3.3.6": 2
+  },
+  "interface members": {
+   "2.5.2": 3,
+   "2.5.3": 2,
+   "3.3.4": 2,
+   "3.3.7": 9,
+   "3.3.8": 3,
+   "3.3.13": 2
+  },
+  "interface mixin": {
+   "2.3.1": 3,
+   "2.5": 7,
+   "3.3.4": 2,
+   "3.3.7": 14,
+   "3.3.13": 2,
+   "3.8": 4
+  },
+  "interface mixin members": {
+   "3.3.4": 2,
+   "3.3.7": 15,
+   "3.3.13": 2
+  },
+  "interface object": {
+   "3.4.11": 3,
+   "3.7.1": 8,
+   "3.7.3": 2
+  },
+  "interface prototype object": {
+   "2.5.9": 2,
+   "2.5.10": 2,
+   "3.8": 3
+  },
+  "inuse attribute err": {
+   "8": 2
+  },
+  "invalid access err": {
+   "8": 2
+  },
+  "invalid character err": {
+   "8": 2
+  },
+  "invalid modification err": {
+   "8": 2
+  },
+  "invalid node type err": {
+   "8": 2
+  },
+  "invalid state err": {
+   "8": 2
+  },
+  "is a platform object": {
+   "3.7.6": 2,
+   "3.7.9": 4,
+   "3.7.10": 3,
+   "3.7.10.2": 2
+  },
+  "is an array index": {
+   "8": 2
+  },
+  "is finished": {
+   "3.7.10": 3,
+   "3.7.10.2": 5
+  },
+  "iterator prototype object": {
+   "3.7.9.1": 2
+  },
+  "javascript throw": {
+   "8": 3,
+   "3.2.4.9": 2,
+   "3.2.5": 2,
+   "3.2.21": 2,
+   "3.2.22": 2,
+   "3.2.22.1": 2,
+   "3.2.26": 13,
+   "3.6": 2,
+   "3.7.1": 2,
+   "3.7.6": 3,
+   "3.7.9": 4,
+   "3.7.10": 3
+  },
+  "legacy factory function": {
+   "3.7.2": 2
+  },
+  "legacy platform objects": {
+   "3.9": 2,
+   "3.9.5": 2,
+   "3.9.6": 2
+  },
+  "legacyfactoryfunction identifier": {
+   "3.7.2": 2,
+   "3.8": 2
+  },
+  "legacywindowalias identifier": {
+   "3.7": 3,
+   "3.8": 2
+  },
+  "map entries": {
+   "3.7.11.11": 2
+  },
+  "mark as handled": {
+   "8": 2
+  },
+  "method steps": {
+   "2.5.8.1": 3,
+   "3.9.7": 4
+  },
+  "named properties object": {
+   "3.3.8": 2,
+   "3.7.4.1": 2,
+   "3.7.4.5": 2
+  },
+  "named property deleters": {
+   "2.5.6.2": 2
+  },
+  "named property getters": {
+   "2.5.6.2": 3,
+   "3.4.7": 3
+  },
+  "named property setters": {
+   "2.5.6.2": 2,
+   "3.9.3": 2
+  },
+  "namespace err": {
+   "8": 2
+  },
+  "namespace members": {
+   "2.5.2": 2,
+   "2.5.3": 2,
+   "3.3.4": 2,
+   "3.3.7": 9,
+   "3.3.13": 2
+  },
+  "network err": {
+   "8": 2
+  },
+  "new domexception( message name )": {
+   "8": 7
+  },
+  "new quotaexceedederror( message options )": {
+   "8": 7
+  },
+  "no data allowed err": {
+   "8": 2
+  },
+  "no modification allowed err": {
+   "8": 2
+  },
+  "not found err": {
+   "8": 2
+  },
+  "not supported err": {
+   "8": 2
+  },
+  "nullable type": {
+   "2.5.1": 2,
+   "2.5.3": 3,
+   "2.5.8": 2,
+   "2.7": 2,
+   "2.13.32": 4,
+   "3.2.20": 8,
+   "3.6": 33
+  },
+  "numeric types": {
+   "2.5.8": 5,
+   "2.13.32": 2,
+   "3.2.25": 6,
+   "3.6": 4
+  },
+  "observable array type": {
+   "3.7.6": 3
+  },
+  "ongoing promise": {
+   "3.7.10.2": 10
+  },
+  "optional argument": {
+   "2.5.8": 4,
+   "2.5.8.1": 10
+  },
+  "optionality values": {
+   "3.6": 4
+  },
+  "overload resolution algorithm": {
+   "2.5.8.1": 3
+  },
+  "pair asynchronously iterable declaration": {
+   "3.7.10": 2
+  },
+  "partial interface": {
+   "2.3": 2,
+   "2.5.8": 2,
+   "3.3.4": 2,
+   "3.3.7": 9,
+   "3.3.13": 2,
+   "3.4.7": 2
+  },
+  "partial interface mixin": {
+   "3.3.4": 2,
+   "3.3.7": 11,
+   "3.3.13": 2
+  },
+  "partial namespace": {
+   "3.3.4": 2,
+   "3.3.7": 9,
+   "3.3.13": 2
+  },
+  "perform a security check": {
+   "3.7.6": 2,
+   "3.7.9": 4,
+   "3.7.10": 3,
+   "3.7.10.2": 2
+  },
+  "platform objects": {
+   "3.2.28": 2,
+   "3.3.11": 2,
+   "3.7.7.1.1": 2,
+   "3.8": 9,
+   "3.9.7": 2
+  },
+  "promise type": {
+   "2.5.8": 3,
+   "3.2.24": 3,
+   "3.7.6": 2,
+   "3.12": 3
+  },
+  "quota exceeded err": {
+   "8": 2
+  },
+  "read only": {
+   "3.3.10": 2,
+   "3.3.11": 2,
+   "3.3.12": 2,
+   "3.4.2": 2,
+   "3.7.6": 4
+  },
+  "regular attribute": {
+   "2.3": 2,
+   "2.13.36": 2,
+   "3.2.28": 2,
+   "3.3.14": 2,
+   "3.4.2": 2,
+   "3.4.10": 3,
+   "3.7.6": 5,
+   "3.7.7.1.1": 2
+  },
+  "regular operation": {
+   "2.3": 3,
+   "2.5.3.1": 4,
+   "2.5.8": 4,
+   "2.5.9": 2,
+   "2.5.10": 2,
+   "2.5.11": 2,
+   "2.5.12": 2,
+   "3.3.5": 3,
+   "3.3.9": 2,
+   "3.3.14": 2,
+   "3.7.7": 5,
+   "3.7.7.1": 2
+  },
+  "rejected promise": {
+   "3.2.22.1": 3,
+   "3.2.24.2": 5
+  },
+  "resolved promise": {
+   "3.2.22.1": 3
+  },
+  "return type": {
+   "2.5.8": 2,
+   "3.12": 3
+  },
+  "security err": {
+   "8": 2
+  },
+  "sequence t": {
+   "2.5.3": 3,
+   "2.13.36": 2,
+   "3.2.21": 3,
+   "3.2.21.1": 2,
+   "3.6": 3
+  },
+  "set entries": {
+   "3.7.12.10": 2
+  },
+  "set the indexed value": {
+   "8": 2
+  },
+  "set the length": {
+   "8": 2
+  },
+  "setter steps": {
+   "2.5": 2
+  },
+  "static attributes": {
+   "2.5.2": 3,
+   "3.7.6": 2
+  },
+  "static operations": {
+   "2.5.3": 3,
+   "2.5.8": 3,
+   "3.3.9": 2,
+   "3.4.10": 3,
+   "3.7.7": 5
+  },
+  "string types": {
+   "2.5.8": 2,
+   "3.2.25": 2,
+   "3.6": 4
+  },
+  "support indexed properties": {
+   "2.5.9": 5
+  },
+  "supported property indices": {
+   "3.9.7": 2
+  },
+  "supported property names": {
+   "3.9.7": 2
+  },
+  "syntax err": {
+   "8": 2
+  },
+  "takes a named argument list": {
+   "2.5.8": 2
+  },
+  "takes a wildcard": {
+   "3.3.7": 2
+  },
+  "takes an identifier": {
+   "3.3.7": 2
+  },
+  "takes an identifier list": {
+   "3.3.7": 2
+  },
+  "timeout err": {
+   "8": 2
+  },
+  "type mismatch err": {
+   "8": 2
+  },
+  "union type": {
+   "2.5.3": 4,
+   "2.5.8": 5,
+   "2.5.8.1": 7,
+   "2.13.1": 2,
+   "3.2.25": 5,
+   "3.6": 17
+  },
+  "url mismatch err": {
+   "8": 2
+  },
+  "validation err": {
+   "8": 2
+  },
+  "value pairs to iterate over": {
+   "3.7.9": 2
+  },
+  "wait for all": {
+   "8": 2
+  },
+  "web idl arguments list": {
+   "3.12": 2
+  },
+  "wrong document err": {
+   "8": 2
+  }
+ }
+}

@@ -483,7 +483,7 @@ static int reader_closed_run(JSContext *ctx, StreamWork *w, ReaderData *rd, int 
            cases: the standard marks the arms that REJECT, and §4.9.2's ReadableStreamClose is the arm it does
            not because that one RESOLVES. `reject` already is that question.
            WITHOUT IT THE ENGINE REPORTED ITS OWN SPEC STEP AS THE PAGE'S UNHANDLED REJECTION. Nobody reads
-           `closed` in the normal case — Fetch §5.2's fully-read releases the reader once a body is whole, and
+           `closed` in the normal case — Fetch §2.2.4 "Bodies"'s fully-read releases the reader once a body is whole, and
            an errored stream usually has nothing awaiting it — so the TypeError §4.9.3's release rejects with reached
            solver/result.h's `pageErrors` as an uncaught page error on every run that finished reading a body,
            with a backtrace of one native frame and no script anywhere under it. A page error the ENGINE raised
@@ -2809,7 +2809,7 @@ static const IdlStepDecl js_tee_call_decl = {
    requires and what makes these two declarations of one algorithm rather than two algorithms. */
 static const IdlStepDecl js_tee_clone_decl = {
     js_tee_clone_step, sizeof(JSTeeCallState), js_tee_call_visit, NULL,
-    "Fetch §5.2 clone a body, through §4.9.1 ReadableStreamDefaultTee with cloneForBranch2 set", TC_STEPS
+    "Fetch §2.2.4 \"Bodies\" clone a body, through §4.9.1 ReadableStreamDefaultTee with cloneForBranch2 set", TC_STEPS
 };
 
 /* ---- §4.2's `from` --------------------------------------------------------------------------------------------
@@ -3257,7 +3257,7 @@ static const IdlStepDecl js_from_call_decl = {
     "Streams §4.2 from(asyncIterable), through §4.9.1 ReadableStreamFromIterable", FC_STEPS
 };
 
-/* ---- FETCH §5.2's "FULLY READ" ---------------------------------------------------------------------------
+/* ---- FETCH §2.2.4 "BODIES" — "FULLY READ" ---------------------------------------------------------------------------
  *
  * Draining a stream to a byte sequence. Every read answers a PROMISE, so the loop is a chain of reactions
  * rather than a loop — which is why this lives here, beside the machinery that already does that, rather than
@@ -3304,7 +3304,7 @@ static void drain_gc_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_fun
     JS_MarkValue(rt, dr->funcs[1], mark_func);
 }
 
-/* Append a chunk's bytes. §5.2 says a chunk that is not a Uint8Array is a TypeError, and the union of things
+/* Append a chunk's bytes. §2.2.4 says a chunk that is not a Uint8Array is a TypeError, and the union of things
    that ARE a byte view is what JS_GetArrayBufferView answers for. Returns -1 with a throw live. */
 static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
 {
@@ -3347,11 +3347,11 @@ static int drain_append(JSContext *ctx, DrainData *dr, JSValueConst chunk)
 /* WHERE THIS MACHINE RESTS. It is Fetch §2.2.4 "Bodies"'s "fully read a body" step 5 — "read all bytes from reader" —
    which the Streams standard states as a chain of reads, so each entry is one link of that chain. */
 #define DS_STAGES(X) \
-    X(DS_START, "Fetch §5.2 fully read a body step 5 → Streams read all bytes (what the previous read " \
+    X(DS_START, "Fetch §2.2.4 \"Bodies\" fully read a body step 5 → Streams read all bytes (what the previous read " \
                 "answered: another chunk, the close, or an error)") \
-    X(DS_READ, "Fetch §5.2 fully read a body step 5 (the next read through the reader)") \
-    X(DS_RELEASE, "Fetch §5.2 fully read a body step 5 (releasing the reader once the body is whole)") \
-    X(DS_SETTLE, "Fetch §5.2 consume body step 4 (successSteps: convertBytesToJSValue over the collected " \
+    X(DS_READ, "Fetch §2.2.4 fully read a body step 5 (the next read through the reader)") \
+    X(DS_RELEASE, "Fetch §2.2.4 fully read a body step 5 (releasing the reader once the body is whole)") \
+    X(DS_SETTLE, "Fetch §5.3 \"Body mixin\" consume body step 4 (successSteps: convertBytesToJSValue over the collected " \
                  "bytes, then resolve the promise)")
 enum { DS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const DS_STEPS[] = { DS_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -3398,7 +3398,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         dr = JS_GetOpaque(s->drain, g_drain_class);
         DCHECK(dr != NULL, "a drain reaction captured something that is not a drain record");
         if (s->hdr.arg == DRAIN_ERR) {
-            /* The stream errored. §5.2 rejects the body's promise with the stream's reason, and the reader is
+            /* The stream errored. §2.2.4 rejects the body's promise with the stream's reason, and the reader is
                released with it — there is nothing left to read. */
             s->reject = 1;
             s->value = JS_DupValue(ctx, s->hdr.argc > 0 ? s->hdr.argv[0] : JS_UNDEFINED);
@@ -3459,7 +3459,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
         if (!s->reject) {
             s->value = dr->make(ctx, dr->recv, dr->buf ? (const char *)dr->buf : "", dr->len);
             if (JS_IsException(s->value)) {
-                /* §5.2: an abrupt completion INSIDE the read is what the promise rejects with — which is how
+                /* §2.2.4: an abrupt completion INSIDE the read is what the promise rejects with — which is how
                    `json()`'s SyntaxError reaches the page's `.catch` rather than the call site. */
                 s->value = JS_GetException(ctx);
                 s->reject = 1;
@@ -3482,7 +3482,7 @@ static int js_drain_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 
 #define DRAIN_DEF(i) { sizeof(JSDrainState), js_drain_step, NULL, (i), \
                        .catches_abrupt = 1, .visit = js_drain_visit, \
-                       .algorithm = "Fetch §5.2 fully read a body step 5 (read all bytes from a reader)", \
+                       .algorithm = "Fetch §2.2.4 fully read a body step 5 (read all bytes from a reader)", \
                        .steps = DS_STEPS }
 static const JSTrampStepDef js_drain_defs[DRAIN_N] = { DRAIN_DEF(DRAIN_OK), DRAIN_DEF(DRAIN_ERR) };
 #undef DRAIN_DEF

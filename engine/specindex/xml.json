@@ -1,0 +1,529 @@
+{
+ "spec": "Extensible Markup Language (XML) 1.0 (Fifth Edition)",
+ "key": "xml",
+ "base": "https://www.w3.org/TR/xml/",
+ "specUpdated": "W3C Recommendation 26 November 2008",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "sec-intro"
+  },
+  "2": {
+   "title": "Documents",
+   "page": "",
+   "id": "sec-documents"
+  },
+  "3": {
+   "title": "Logical Structures",
+   "page": "",
+   "id": "sec-logical-struct"
+  },
+  "4": {
+   "title": "Physical Structures",
+   "page": "",
+   "id": "sec-physical-struct"
+  },
+  "5": {
+   "title": "Conformance",
+   "page": "",
+   "id": "sec-conformance"
+  },
+  "6": {
+   "title": "Notation",
+   "page": "",
+   "id": "sec-notation"
+  },
+  "1.1": {
+   "title": "Origin and Goals",
+   "page": "",
+   "id": "sec-origin-goals"
+  },
+  "1.2": {
+   "title": "Terminology",
+   "page": "",
+   "id": "sec-terminology"
+  },
+  "2.1": {
+   "title": "Well-Formed XML Documents",
+   "page": "",
+   "id": "sec-well-formed"
+  },
+  "2.2": {
+   "title": "Characters",
+   "page": "",
+   "id": "charsets"
+  },
+  "2.3": {
+   "title": "Common Syntactic Constructs",
+   "page": "",
+   "id": "sec-common-syn"
+  },
+  "2.4": {
+   "title": "Character Data and Markup",
+   "page": "",
+   "id": "syntax"
+  },
+  "2.5": {
+   "title": "Comments",
+   "page": "",
+   "id": "sec-comments"
+  },
+  "2.6": {
+   "title": "Processing Instructions",
+   "page": "",
+   "id": "sec-pi"
+  },
+  "2.7": {
+   "title": "CDATA Sections",
+   "page": "",
+   "id": "sec-cdata-sect"
+  },
+  "2.8": {
+   "title": "Prolog and Document Type Declaration",
+   "page": "",
+   "id": "sec-prolog-dtd"
+  },
+  "2.9": {
+   "title": "Standalone Document Declaration",
+   "page": "",
+   "id": "sec-rmd"
+  },
+  "2.10": {
+   "title": "White Space Handling",
+   "page": "",
+   "id": "sec-white-space"
+  },
+  "2.11": {
+   "title": "End-of-Line Handling",
+   "page": "",
+   "id": "sec-line-ends"
+  },
+  "2.12": {
+   "title": "Language Identification",
+   "page": "",
+   "id": "sec-lang-tag"
+  },
+  "3.1": {
+   "title": "Start-Tags, End-Tags, and Empty-Element Tags",
+   "page": "",
+   "id": "sec-starttags"
+  },
+  "3.2": {
+   "title": "Element Type Declarations",
+   "page": "",
+   "id": "elemdecls"
+  },
+  "3.2.1": {
+   "title": "Element Content",
+   "page": "",
+   "id": "sec-element-content"
+  },
+  "3.2.2": {
+   "title": "Mixed Content",
+   "page": "",
+   "id": "sec-mixed-content"
+  },
+  "3.3": {
+   "title": "Attribute-List Declarations",
+   "page": "",
+   "id": "attdecls"
+  },
+  "3.3.1": {
+   "title": "Attribute Types",
+   "page": "",
+   "id": "sec-attribute-types"
+  },
+  "3.3.2": {
+   "title": "Attribute Defaults",
+   "page": "",
+   "id": "sec-attr-defaults"
+  },
+  "3.3.3": {
+   "title": "Attribute-Value Normalization",
+   "page": "",
+   "id": "AVNormalize"
+  },
+  "3.4": {
+   "title": "Conditional Sections",
+   "page": "",
+   "id": "sec-condition-sect"
+  },
+  "4.1": {
+   "title": "Character and Entity References",
+   "page": "",
+   "id": "sec-references"
+  },
+  "4.2": {
+   "title": "Entity Declarations",
+   "page": "",
+   "id": "sec-entity-decl"
+  },
+  "4.2.1": {
+   "title": "Internal Entities",
+   "page": "",
+   "id": "sec-internal-ent"
+  },
+  "4.2.2": {
+   "title": "External Entities",
+   "page": "",
+   "id": "sec-external-ent"
+  },
+  "4.3": {
+   "title": "Parsed Entities",
+   "page": "",
+   "id": "TextEntities"
+  },
+  "4.3.1": {
+   "title": "The Text Declaration",
+   "page": "",
+   "id": "sec-TextDecl"
+  },
+  "4.3.2": {
+   "title": "Well-Formed Parsed Entities",
+   "page": "",
+   "id": "wf-entities"
+  },
+  "4.3.3": {
+   "title": "Character Encoding in Entities",
+   "page": "",
+   "id": "charencoding"
+  },
+  "4.4": {
+   "title": "XML Processor Treatment of Entities and References",
+   "page": "",
+   "id": "entproc"
+  },
+  "4.4.1": {
+   "title": "Not Recognized",
+   "page": "",
+   "id": "not-recognized"
+  },
+  "4.4.2": {
+   "title": "Included",
+   "page": "",
+   "id": "included"
+  },
+  "4.4.3": {
+   "title": "Included If Validating",
+   "page": "",
+   "id": "include-if-valid"
+  },
+  "4.4.4": {
+   "title": "Forbidden",
+   "page": "",
+   "id": "forbidden"
+  },
+  "4.4.5": {
+   "title": "Included in Literal",
+   "page": "",
+   "id": "inliteral"
+  },
+  "4.4.6": {
+   "title": "Notify",
+   "page": "",
+   "id": "notify"
+  },
+  "4.4.7": {
+   "title": "Bypassed",
+   "page": "",
+   "id": "bypass"
+  },
+  "4.4.8": {
+   "title": "Included as PE",
+   "page": "",
+   "id": "as-PE"
+  },
+  "4.4.9": {
+   "title": "Error",
+   "page": "",
+   "id": "error"
+  },
+  "4.5": {
+   "title": "Construction of Entity Replacement Text",
+   "page": "",
+   "id": "intern-replacement"
+  },
+  "4.6": {
+   "title": "Predefined Entities",
+   "page": "",
+   "id": "sec-predefined-ent"
+  },
+  "4.7": {
+   "title": "Notation Declarations",
+   "page": "",
+   "id": "Notations"
+  },
+  "4.8": {
+   "title": "Document Entity",
+   "page": "",
+   "id": "sec-doc-entity"
+  },
+  "5.1": {
+   "title": "Validating and Non-Validating Processors",
+   "page": "",
+   "id": "proc-types"
+  },
+  "5.2": {
+   "title": "Using XML Processors",
+   "page": "",
+   "id": "safe-behavior"
+  },
+  "A": {
+   "title": "References",
+   "page": "",
+   "id": "sec-bibliography"
+  },
+  "A.1": {
+   "title": "Normative References",
+   "page": "",
+   "id": "sec-existing-stds"
+  },
+  "A.2": {
+   "title": "Other References",
+   "page": "",
+   "id": "null"
+  },
+  "B": {
+   "title": "Character Classes",
+   "page": "",
+   "id": "CharClasses"
+  },
+  "C": {
+   "title": "XML and SGML (Non-Normative)",
+   "page": "",
+   "id": "sec-xml-and-sgml"
+  },
+  "D": {
+   "title": "Expansion of Entity and Character References (Non-Normative)",
+   "page": "",
+   "id": "sec-entexpand"
+  },
+  "E": {
+   "title": "Deterministic Content Models (Non-Normative)",
+   "page": "",
+   "id": "determinism"
+  },
+  "F": {
+   "title": "Autodetection of Character Encodings (Non-Normative)",
+   "page": "",
+   "id": "sec-guessing"
+  },
+  "F.1": {
+   "title": "Detection Without External Encoding Information",
+   "page": "",
+   "id": "sec-guessing-no-ext-info"
+  },
+  "F.2": {
+   "title": "Priorities in the Presence of External Encoding Information",
+   "page": "",
+   "id": "sec-guessing-with-ext-info"
+  },
+  "G": {
+   "title": "W3C XML Working Group (Non-Normative)",
+   "page": "",
+   "id": "sec-xml-wg"
+  },
+  "H": {
+   "title": "W3C XML Core Working Group (Non-Normative)",
+   "page": "",
+   "id": "sec-core-wg"
+  },
+  "I": {
+   "title": "Production Notes (Non-Normative)",
+   "page": "",
+   "id": "prod-notes"
+  },
+  "J": {
+   "title": "Suggestions for XML Names (Non-Normative)",
+   "page": "",
+   "id": "sec-suggested-names"
+  }
+ },
+ "dfns": {
+  "at user option": [
+   "1.2"
+  ],
+  "attribute default": [
+   "3.3.2"
+  ],
+  "attribute list declaration": [
+   "3.3"
+  ],
+  "attribute name": [
+   "3.1"
+  ],
+  "attribute value": [
+   "3.1"
+  ],
+  "cdata section": [
+   "2.7"
+  ],
+  "character data": [
+   "2.4"
+  ],
+  "character reference": [
+   "4.1"
+  ],
+  "conditional section": [
+   "3.4"
+  ],
+  "content model": [
+   "3.2.1"
+  ],
+  "document entity": [
+   "4.8"
+  ],
+  "document type declaration": [
+   "2.8"
+  ],
+  "element content": [
+   "3.2.1"
+  ],
+  "element type declaration": [
+   "3.2"
+  ],
+  "empty element tag": [
+   "3.1"
+  ],
+  "end tag": [
+   "3.1"
+  ],
+  "entity declaration": [
+   "4.2"
+  ],
+  "entity reference": [
+   "4.1"
+  ],
+  "enumerated attribute values": [
+   "3.3.1"
+  ],
+  "external entity": [
+   "4.2.2"
+  ],
+  "external markup declaration": [
+   "2.9"
+  ],
+  "fatal error": [
+   "1.2"
+  ],
+  "for compatibility": [
+   "1.2"
+  ],
+  "for interoperability": [
+   "1.2"
+  ],
+  "general entity reference": [
+   "4.1"
+  ],
+  "internal entity replacement text": [
+   "4.2.1"
+  ],
+  "literal entity value": [
+   "4.5"
+  ],
+  "markup declaration": [
+   "2.8"
+  ],
+  "mixed content": [
+   "3.2.2"
+  ],
+  "notation declaration": [
+   "4.7"
+  ],
+  "parameter entity": [
+   "4"
+  ],
+  "parameter entity reference": [
+   "4.1"
+  ],
+  "parent child": [
+   "2.1"
+  ],
+  "process declarations": [
+   "5.1"
+  ],
+  "processing instruction": [
+   "2.6"
+  ],
+  "public identifier": [
+   "4.2.2"
+  ],
+  "replacement text": [
+   "4.5"
+  ],
+  "root element": [
+   "2.1"
+  ],
+  "start tag": [
+   "3.1"
+  ],
+  "system identifier": [
+   "4.2.2"
+  ],
+  "text entity": [
+   "4"
+  ],
+  "unparsed entity": [
+   "4"
+  ],
+  "validating processor": [
+   "5.1"
+  ],
+  "validity constraint": [
+   "1.2"
+  ],
+  "well formed": [
+   "2.1"
+  ],
+  "well formedness constraint": [
+   "1.2"
+  ],
+  "xml declaration": [
+   "2.8"
+  ],
+  "xml document": [
+   "2"
+  ],
+  "xml processor": [
+   "1"
+  ]
+ },
+ "uses": {
+  "cdata section": {
+   "3": 2,
+   "2.4": 3
+  },
+  "character reference": {
+   "2.4": 2
+  },
+  "document entity": {
+   "4": 2,
+   "5.1": 2
+  },
+  "fatal error": {
+   "4.3.3": 5
+  },
+  "parameter entity": {
+   "2.8": 2
+  },
+  "parameter entity reference": {
+   "2.8": 4
+  },
+  "parent child": {
+   "3": 3,
+   "3.2.1": 2
+  },
+  "processing instruction": {
+   "3": 2,
+   "2.4": 2
+  },
+  "replacement text": {
+   "2.8": 2
+  },
+  "start tag": {
+   "4.4": 2
+  }
+ }
+}

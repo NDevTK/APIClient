@@ -1,0 +1,467 @@
+{
+ "spec": "XMLHttpRequest Standard",
+ "key": "xhr",
+ "base": "https://xhr.spec.whatwg.org/",
+ "specUpdated": "18 August 2026",
+ "fetched": "2026-08-30",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "3": {
+   "title": "Interface XMLHttpRequest",
+   "page": "",
+   "id": "interface-xmlhttprequest"
+  },
+  "4": {
+   "title": "Interface FormData",
+   "page": "",
+   "id": "interface-formdata"
+  },
+  "5": {
+   "title": "Interface ProgressEvent",
+   "page": "",
+   "id": "interface-progressevent"
+  },
+  "1.1": {
+   "title": "Specification history",
+   "page": "",
+   "id": "specification-history"
+  },
+  "3.1": {
+   "title": "Constructors",
+   "page": "",
+   "id": "constructors"
+  },
+  "3.2": {
+   "title": "Garbage collection",
+   "page": "",
+   "id": "garbage-collection"
+  },
+  "3.3": {
+   "title": "Event handlers",
+   "page": "",
+   "id": "event-handlers"
+  },
+  "3.4": {
+   "title": "States",
+   "page": "",
+   "id": "states"
+  },
+  "3.5": {
+   "title": "Request",
+   "page": "",
+   "id": "request"
+  },
+  "3.5.1": {
+   "title": "The open() method",
+   "page": "",
+   "id": "the-open()-method"
+  },
+  "3.5.2": {
+   "title": "The setRequestHeader() method",
+   "page": "",
+   "id": "the-setrequestheader()-method"
+  },
+  "3.5.3": {
+   "title": "The timeout getter and setter",
+   "page": "",
+   "id": "the-timeout-attribute"
+  },
+  "3.5.4": {
+   "title": "The withCredentials getter and setter",
+   "page": "",
+   "id": "the-withcredentials-attribute"
+  },
+  "3.5.5": {
+   "title": "The upload getter",
+   "page": "",
+   "id": "the-upload-attribute"
+  },
+  "3.5.6": {
+   "title": "The send() method",
+   "page": "",
+   "id": "the-send()-method"
+  },
+  "3.5.7": {
+   "title": "The abort() method",
+   "page": "",
+   "id": "the-abort()-method"
+  },
+  "3.6": {
+   "title": "Response",
+   "page": "",
+   "id": "xmlhttprequest-response"
+  },
+  "3.6.1": {
+   "title": "The responseURL getter",
+   "page": "",
+   "id": "the-responseurl-attribute"
+  },
+  "3.6.2": {
+   "title": "The status getter",
+   "page": "",
+   "id": "the-status-attribute"
+  },
+  "3.6.3": {
+   "title": "The statusText getter",
+   "page": "",
+   "id": "the-statustext-attribute"
+  },
+  "3.6.4": {
+   "title": "The getResponseHeader() method",
+   "page": "",
+   "id": "the-getresponseheader()-method"
+  },
+  "3.6.5": {
+   "title": "The getAllResponseHeaders() method",
+   "page": "",
+   "id": "the-getallresponseheaders()-method"
+  },
+  "3.6.6": {
+   "title": "Response body",
+   "page": "",
+   "id": "response-body"
+  },
+  "3.6.7": {
+   "title": "The overrideMimeType() method",
+   "page": "",
+   "id": "the-overridemimetype()-method"
+  },
+  "3.6.8": {
+   "title": "The responseType getter and setter",
+   "page": "",
+   "id": "the-responsetype-attribute"
+  },
+  "3.6.9": {
+   "title": "The response getter",
+   "page": "",
+   "id": "the-response-attribute"
+  },
+  "3.6.10": {
+   "title": "The responseText getter",
+   "page": "",
+   "id": "the-responsetext-attribute"
+  },
+  "3.6.11": {
+   "title": "The responseXML getter",
+   "page": "",
+   "id": "the-responsexml-attribute"
+  },
+  "3.7": {
+   "title": "Events summary",
+   "page": "",
+   "id": "events"
+  },
+  "5.1": {
+   "title": "Firing events using the ProgressEvent interface",
+   "page": "",
+   "id": "firing-events-using-the-progressevent-interface"
+  },
+  "5.2": {
+   "title": "Suggested names for events using the ProgressEvent interface",
+   "page": "",
+   "id": "suggested-names-for-events-using-the-progressevent-interface"
+  },
+  "5.3": {
+   "title": "Security considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "5.4": {
+   "title": "Example",
+   "page": "",
+   "id": "example"
+  }
+ },
+ "dfns": {
+  "append( name blobvalue filename )": [
+   "4"
+  ],
+  "append( name value )": [
+   "4"
+  ],
+  "append(name blobvalue filename)": [
+   "4"
+  ],
+  "append(name blobvalue)": [
+   "4"
+  ],
+  "author request headers": [
+   "3"
+  ],
+  "constructor(form submitter)": [
+   "4"
+  ],
+  "constructor(type eventinitdict)": [
+   "5"
+  ],
+  "cross origin credentials": [
+   "3"
+  ],
+  "delete( name )": [
+   "4"
+  ],
+  "entry list": [
+   "4"
+  ],
+  "fetch controller": [
+   "3"
+  ],
+  "fire a progress event": [
+   "5.1"
+  ],
+  "formdata(form submitter)": [
+   "4"
+  ],
+  "get a final encoding": [
+   "3.6.6"
+  ],
+  "get a final mime type": [
+   "3.6.6"
+  ],
+  "get a response mime type": [
+   "3.6.6"
+  ],
+  "get a text response": [
+   "3.6.6"
+  ],
+  "get( name )": [
+   "4"
+  ],
+  "getall( name )": [
+   "4"
+  ],
+  "getresponseheader( name )": [
+   "3.6.4"
+  ],
+  "getting a text response": [
+   "3.6.6"
+  ],
+  "handle errors": [
+   "3.5.6"
+  ],
+  "handle response end of body": [
+   "3.5.6"
+  ],
+  "has( name )": [
+   "4"
+  ],
+  "headers received": [
+   "3.4"
+  ],
+  "legacy uppercased byte less than": [
+   "3.6.5"
+  ],
+  "new formdata( form submitter )": [
+   "4"
+  ],
+  "new xmlhttprequest()": [
+   "3.1"
+  ],
+  "open( method url )": [
+   "3.5.1"
+  ],
+  "open( method url async username password )": [
+   "3.5.1"
+  ],
+  "open(method url async username password)": [
+   "3.5.1"
+  ],
+  "open(method url async username)": [
+   "3.5.1"
+  ],
+  "open(method url async)": [
+   "3.5.1"
+  ],
+  "override mime type": [
+   "3"
+  ],
+  "overridemimetype( mime )": [
+   "3.6.7"
+  ],
+  "progressevent(type eventinitdict)": [
+   "5"
+  ],
+  "received bytes": [
+   "3"
+  ],
+  "request body": [
+   "3"
+  ],
+  "request error steps": [
+   "3.5.6"
+  ],
+  "request method": [
+   "3"
+  ],
+  "request url": [
+   "3"
+  ],
+  "response object": [
+   "3"
+  ],
+  "response type": [
+   "3"
+  ],
+  "send( body )": [
+   "3.5.6"
+  ],
+  "send() invoked": [
+   "3"
+  ],
+  "set a document response": [
+   "3.6.6"
+  ],
+  "set( name blobvalue filename )": [
+   "4"
+  ],
+  "set( name value )": [
+   "4"
+  ],
+  "set(name blobvalue filename)": [
+   "4"
+  ],
+  "set(name blobvalue)": [
+   "4"
+  ],
+  "setrequestheader( name value )": [
+   "3.5.2"
+  ],
+  "timed out": [
+   "3"
+  ],
+  "upload complete": [
+   "3"
+  ],
+  "upload listener": [
+   "3"
+  ],
+  "upload object": [
+   "3"
+  ]
+ },
+ "uses": {
+  "append( name blobvalue filename )": {
+   "5.4": 3
+  },
+  "append( name value )": {
+   "5.4": 2
+  },
+  "author request headers": {
+   "3.5.6": 6
+  },
+  "cross origin credentials": {
+   "3.5.4": 2
+  },
+  "delete( name )": {
+   "5.4": 2
+  },
+  "fetch controller": {
+   "3.5.6": 5
+  },
+  "fire a progress event": {
+   "3.5.6": 14
+  },
+  "get( name )": {
+   "5.4": 2
+  },
+  "getall( name )": {
+   "5.4": 2
+  },
+  "getresponseheader( name )": {
+   "5.4": 2
+  },
+  "has( name )": {
+   "5.4": 2
+  },
+  "headers received": {
+   "5.4": 2
+  },
+  "new formdata( form submitter )": {
+   "5.4": 7
+  },
+  "new xmlhttprequest()": {
+   "5.4": 3
+  },
+  "open( method url )": {
+   "5.4": 2
+  },
+  "open( method url async username password )": {
+   "5.4": 4
+  },
+  "override mime type": {
+   "3.6.6": 3,
+   "3.6.7": 3
+  },
+  "overridemimetype( mime )": {
+   "3": 2,
+   "5.4": 2
+  },
+  "progressevent(type eventinitdict)": {
+   "5.4": 5
+  },
+  "received bytes": {
+   "3.5.6": 4,
+   "3.6.6": 4,
+   "3.6.9": 3
+  },
+  "request body": {
+   "3.5.6": 4
+  },
+  "request method": {
+   "3.5.1": 2,
+   "3.5.6": 3
+  },
+  "request url": {
+   "3.5.1": 2,
+   "3.5.6": 2
+  },
+  "response object": {
+   "3.6.9": 7,
+   "3.6.11": 3
+  },
+  "response type": {
+   "3.6.6": 5,
+   "3.6.8": 2,
+   "3.6.9": 5
+  },
+  "send( body )": {
+   "3": 2,
+   "5.4": 3
+  },
+  "send() invoked": {
+   "3.5.2": 2,
+   "3.5.4": 2,
+   "3.5.6": 7
+  },
+  "set( name blobvalue filename )": {
+   "5.4": 3
+  },
+  "set( name value )": {
+   "5.4": 2
+  },
+  "setrequestheader( name value )": {
+   "5.4": 2
+  },
+  "timed out": {
+   "3.5.6": 4
+  },
+  "upload complete": {
+   "3.5.6": 6
+  },
+  "upload listener": {
+   "3.5.6": 6
+  },
+  "upload object": {
+   "3.5.6": 8
+  }
+ }
+}
