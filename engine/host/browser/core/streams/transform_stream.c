@@ -282,10 +282,10 @@ typedef struct {
     uint8_t side;      /* which ending a finish is finishing: 1 flush, 2 source cancel, 3 sink abort */
     uint8_t answer;    /* what this entry answers with: 0 its own, 1 the stream, 2 the change promise */
     uint8_t rethrow;   /* the transform's rejection, re-reported once the stream has been errored */
-    /* A STAGE THAT HOLDS A CALL DECIDES ONCE, AT PHASE 0, AND REMEMBERS. Every predicate this file branches on
-       is one the call it is about to make can CHANGE — enqueuing can error the readable half, closing makes
+    /* A STAGE THAT HOLDS A REQUEST DECIDES ONCE, AT PHASE 0, AND REMEMBERS. Every predicate this file branches
+       on is one the call it is about to make can CHANGE — enqueuing can error the readable half, closing makes
        CanCloseOrEnqueue false, minting the finish promise makes "already finishing" true — so re-reading it on
-       the way back in picks a different branch and walks away from the request. ts_goto asserts that; this is
+       the way back in picks a different branch and walks away from the request. TS_GOTO asserts that; this is
        where the answer is kept so the assert never has to fire. */
     uint8_t choice;
     /* THIS ENTRY IS §9.3.1's SET UP, not §6.2's constructor. The two build the same thing out of the same
@@ -345,32 +345,52 @@ static void ts_clear_algorithms(JSContext *ctx, TsCtrlData *c)
    report at a park, and could not resolve back to a step in a later build. */
 #define TS_BASE(s) ((s)->h == &(s)->hdr ? 0 : IDL_STEP_FIRST)
 static unsigned ts_stage(const JSTsState *s) { return (unsigned)(s->h->stage - TS_BASE(s)); }
-static void ts_set(JSTsState *s, int stage) { s->h->stage = (uint16_t)(stage + TS_BASE(s)); }
 
-/* LEAVING A STAGE WITH A CALL IN FLIGHT IS THE BUG THIS ASSERT EXISTS FOR — the same rule §4.2.4 learned the
-   hard way. A stage that holds a request must reach the same step_call_run to collect its result; deciding
-   differently on the way back in abandons the call and leaves the phase byte set, and the NEXT request then
-   reads that as a resume and answers without ever asking. */
-static void ts_goto(JSTsState *s, int stage)
-{
-    DCHECK(s->w.phase == 0, "a §6 stage was left with a call still in flight");
-    ts_set(s, stage);
-}
+/* EVERY SUB-SEQUENCE THIS MACHINE CAN HAVE IN FLIGHT, which is this component's statement of what it owns and
+   the whole of what STEP_GOTO asserts over. Three, not one:
+     - `w.phase` is step_call_run's, and every §6 call of the page's code goes through it;
+     - `h->get_phase` is the KEYED read's, and §6.2 The TransformStream class's constructor parks on one at
+       three sites — both queuing strategies' members, `new.target.prototype`, and the transformer's six;
+     - `h->num_phase` is the COERCION's, which is why ExtractHighWaterMark's two marks are two STAGES rather
+       than one loop: the sub-sequence keeps one cursor on the header and a second would overwrite it.
+   A private assert over `w.phase` alone stood here and named only the first of the three, so the two the
+   CONSTRUCTOR is made of were the ones it could not see — the same blindness that hid a real defect in
+   §4.9.1 Working with readable streams' ReadableStreamPipeTo until that machine's transitions carried
+   `&hdr->get_phase`.
+   THE HEADER IS `s->h` AND NOT `&s->hdr`, because which header is in force is what TS_BASE is about: the
+   constructor's requests are parked on the IDL declaration's header, every other entry's on the embedded one,
+   and a list naming the embedded one would assert about a cursor the constructor never touches. */
+#define TS_CURSORS(s)  &(s)->w.phase, &(s)->h->get_phase, &(s)->h->num_phase, NULL
 
-/* This entry's own answer, settled at S_RESULT — the promise-returning algorithms and members end here. */
-static int ts_short(JSContext *ctx, JSTsState *s, int reject, JSValue value)
+/* THE STAGE MOVES ONLY THROUGH HERE — quickjs-step.h's STEP_GOTO, in this file's own numbering.
+   A MACRO, AND THAT IS THE POINT: DCHECK stamps the file and line it is WRITTEN at, so the function that used
+   to stand here reported ONE line for all of §6's transitions and said nothing about which stage walked away
+   from its own request. Expanding at the call site is what makes the abort the answer.
+   THE BASE IS APPLIED TO BOTH SIDES, so the comparison STEP_GOTO makes — "is this a transition at all?" — is
+   made in the numbering the header actually holds, and so is the assignment. `to` is evaluated ONCE: STEP_GOTO
+   reads its second argument twice, and several sites here pass a ternary. */
+#define TS_GOTO(s, to) do {                                             \
+        const uint16_t ts_stage_to_ = (uint16_t)((to) + TS_BASE(s));    \
+        STEP_GOTO((s)->h->stage, ts_stage_to_, TS_CURSORS(s));          \
+    } while (0)
+
+/* This entry's own answer, settled at S_RESULT — the promise-returning algorithms and members end here.
+   IT ARMS AND DOES NOT TRANSITION, and its callers write the TS_GOTO themselves, for the reason the macro
+   exists: a transition made inside a helper is stamped at the helper, and this one has three callers while
+   ts_error_arm below has six. An assert naming a line they share names none of them. */
+static int ts_result_arm(JSContext *ctx, JSTsState *s, int reject, JSValue value)
 {
     s->promise = JS_NewPromiseCapability(ctx, s->funcs);
     if (JS_IsException(s->promise)) { JS_FreeValue(ctx, value); return -1; }
     JS_FreeValue(ctx, s->w.value);
     s->w.value = value;
     s->reject = (uint8_t)reject;
-    ts_goto(s, S_RESULT);
     return 0;
 }
 
-/* Enter the shared error sub-sequence, returning to `next` when it finishes. `err` is BORROWED. */
-static void ts_error_enter(JSTsState *s, TsData *t, int both, JSValueConst err, int next, JSContext *ctx)
+/* Arm the shared error sub-sequence, returning to `next` when it finishes. `err` is BORROWED. The caller
+   transitions to S_ERROR_SEQ — see ts_result_arm. */
+static void ts_error_arm(JSTsState *s, TsData *t, int both, JSValueConst err, int next, JSContext *ctx)
 {
     JS_FreeValue(ctx, s->w.err);
     s->w.err = JS_DupValue(ctx, err);
@@ -378,7 +398,6 @@ static void ts_error_enter(JSTsState *s, TsData *t, int both, JSValueConst err, 
     s->w.settle = E_READABLE;
     s->next = (uint8_t)next;
     (void)t;
-    ts_goto(s, S_ERROR_SEQ);
 }
 
 /* THE ONE STAGE LOOP. `entry_op` is the operation for a fresh entry and is ignored on a resume, where the
@@ -415,7 +434,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
                 return JS_STEP_ABRUPT;
             }
             s->answer = 1;
-            ts_set(s, S_STRAT_READ);
+            TS_GOTO(s, S_STRAT_READ);
             goto run;
         }
 
@@ -430,7 +449,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->tr[TR_TRANSFORM] = JS_DupValue(ctx, step_arg(hdr, 0));
             s->tr[TR_FLUSH]     = JS_DupValue(ctx, step_arg(hdr, 1));
             s->tr[TR_CANCEL]    = JS_DupValue(ctx, step_arg(hdr, 2));
-            ts_set(s, S_BUILD);
+            TS_GOTO(s, S_BUILD);
             goto run;
         }
 
@@ -442,7 +461,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             JS_FreeValue(ctx, s->w.func);
             s->w.func = JS_DupValue(ctx, JS_StepClosureData(hdr, op == OP_HELD_OK ? 0 : 1));
             s->next = S_DONE;
-            ts_set(s, S_SETTLE);
+            TS_GOTO(s, S_SETTLE);
             goto run;
         }
 
@@ -480,7 +499,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
             DCHECK(t->backpressure != BP_UNSET, "a §6 write reached a stream whose backpressure was never set");
-            ts_set(s, t->backpressure ? S_WRITE_HOLD : S_TRANSFORM);
+            TS_GOTO(s, t->backpressure ? S_WRITE_HOLD : S_TRANSFORM);
             break;
 
         case OP_BP_READY:
@@ -491,40 +510,41 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->held_funcs[0] = JS_DupValue(ctx, JS_StepClosureData(hdr, 2));   /* the held write's resolve */
             s->held_funcs[1] = JS_DupValue(ctx, JS_StepClosureData(hdr, 3));   /* …and its reject */
             s->held = 1;   /* S_TRANSFORM settles the capability it was handed, not one of its own */
-            ts_set(s, S_TRANSFORM);
+            TS_GOTO(s, S_TRANSFORM);
             break;
 
         case OP_SINK_CLOSE:
-            ts_set(s, S_FLUSH);
+            TS_GOTO(s, S_FLUSH);
             break;
         case OP_SINK_ABORT: case OP_SOURCE_CANCEL:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
             s->side = (uint8_t)(op == OP_SOURCE_CANCEL ? 2 : 3);
-            ts_set(s, S_CANCEL);
+            TS_GOTO(s, S_CANCEL);
             break;
 
         case OP_SOURCE_PULL:
-            ts_set(s, S_PULL);
+            TS_GOTO(s, S_PULL);
             break;
 
         case OP_CTRL_ENQUEUE:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
-            ts_set(s, S_ENQUEUE);
+            TS_GOTO(s, S_ENQUEUE);
             break;
         case OP_CTRL_ERROR:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, step_arg(hdr, 0));
-            ts_set(s, S_ERROR_STREAM);
+            TS_GOTO(s, S_ERROR_STREAM);
             break;
         case OP_CTRL_TERMINATE:
-            ts_set(s, S_TERM_CLOSE);
+            TS_GOTO(s, S_TERM_CLOSE);
             break;
 
         case OP_TRANSFORM_ERR:
             /* §6.3's PerformTransform rejection steps: error the whole stream, then report the same reason. */
-            ts_error_enter(s, t, 1, step_arg(hdr, 0), S_DONE, ctx);
+            ts_error_arm(s, t, 1, step_arg(hdr, 0), S_DONE, ctx);
+            TS_GOTO(s, S_ERROR_SEQ);
             s->rethrow = 1;   /* …and report the same reason once the sequence finishes */
             break;
 
@@ -537,7 +557,7 @@ static int ts_run(JSContext *ctx, JSTsState *s, JSStepHdr *hdr, int op, JSValue 
             s->side = (uint8_t)JS_VALUE_GET_INT(JS_StepClosureData(hdr, 1));
             JS_FreeValue(ctx, s->reason);
             s->reason = JS_DupValue(ctx, JS_StepClosureData(hdr, 2));
-            ts_set(s, S_FINISH_ERRORED);
+            TS_GOTO(s, S_FINISH_ERRORED);
             break;
         }
         goto run;
@@ -582,7 +602,7 @@ run:
                 t->backpressure = s->bp_want;
             }
             s->w.pull = B_IDLE;
-            ts_goto(s, s->next);
+            TS_GOTO(s, s->next);
             continue;
         }
 
@@ -625,10 +645,10 @@ run:
             s->w.settle = E_IDLE;
             if (t->backpressure == 1) {
                 s->bp_want = 0;
-                ts_goto(s, S_SETBP);
+                TS_GOTO(s, S_SETBP);
                 continue;
             }
-            ts_goto(s, s->next);
+            TS_GOTO(s, s->next);
             continue;
         }
 
@@ -658,7 +678,7 @@ run:
             s->member = 0;
             s->whwm = 1;   /* §6.2's defaults: 1 for the writable half, 0 for the readable one */
             s->rhwm = 0;
-            ts_goto(s, S_HWM_W);
+            TS_GOTO(s, S_HWM_W);
             continue;
         }
 
@@ -674,7 +694,7 @@ run:
                 if (r < 0) return JS_STEP_ABRUPT;
                 cb_result = JS_UNDEFINED;
             }
-            ts_goto(s, w ? S_HWM_R : S_CTOR_PROTO);
+            TS_GOTO(s, w ? S_HWM_R : S_CTOR_PROTO);
             continue;
         }
 
@@ -691,7 +711,7 @@ run:
             if (r > 0) return r;
             if (r < 0) return JS_STEP_ABRUPT;
             cb_result = JS_UNDEFINED;
-            ts_goto(s, S_TR_READ);
+            TS_GOTO(s, S_TR_READ);
             continue;
         }
 
@@ -722,7 +742,7 @@ run:
                 stream_callback_member(ctx, s->tr[TR_TRANSFORM], "transformer", "transform") < 0)
                 return JS_STEP_ABRUPT;
             s->member = 0;
-            ts_goto(s, S_BUILD);
+            TS_GOTO(s, S_BUILD);
             continue;
         }
 
@@ -799,7 +819,7 @@ run:
             t = td; c = cd;
             s->bp_want = 1;
             s->next = S_BP_INIT;
-            ts_goto(s, S_SETBP);
+            TS_GOTO(s, S_SETBP);
             continue;
         }
 
@@ -811,7 +831,7 @@ run:
             if (JS_IsException(s->promise)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_DupValue(ctx, s->promise);
-            ts_goto(s, S_START_W);
+            TS_GOTO(s, S_START_W);
             continue;
 
         case S_START_W: case S_START_R: {
@@ -834,7 +854,7 @@ run:
             if ((is_w ? writable_stream_start(ctx, t->writable, s->w.func)
                       : readable_stream_start(ctx, t->readable, s->w.func)) < 0)
                 return JS_STEP_ABRUPT;
-            if (is_w) { ts_goto(s, S_START_R); continue; }
+            if (is_w) { TS_GOTO(s, S_START_R); continue; }
             /* BOTH HALVES HAVE ADOPTED IT, so the shared promise stops being this machine's argument. Left in
                place it became the value S_START_SETTLE resolves the shared capability WITH — a promise resolved
                with itself — on every stream whose transformer has no `start` to overwrite it. */
@@ -845,7 +865,7 @@ run:
             JS_FreeValue(ctx, s->w.func);
             s->w.func = s->tr[TR_START];
             s->tr[TR_START] = JS_UNDEFINED;
-            ts_goto(s, JS_IsFunction(ctx, s->w.func) ? S_START : S_START_SETTLE);
+            TS_GOTO(s, JS_IsFunction(ctx, s->w.func) ? S_START : S_START_SETTLE);
             continue;
         }
 
@@ -860,7 +880,7 @@ run:
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, s->w.value);
             s->w.value = out;
-            ts_goto(s, S_START_SETTLE);
+            TS_GOTO(s, S_START_SETTLE);
             continue;
         }
 
@@ -870,7 +890,7 @@ run:
             JS_FreeValue(ctx, s->w.func);
             s->w.func = JS_DupValue(ctx, s->funcs[0]);
             s->next = S_DONE;
-            ts_goto(s, S_SETTLE);
+            TS_GOTO(s, S_SETTLE);
             continue;
 
         /* ---- the writable half's algorithms --------------------------------------------------------------- */
@@ -897,7 +917,7 @@ run:
                 JS_MarkPromiseHandled(ctx, cap);
                 JS_FreeValue(ctx, cap);
             }
-            ts_goto(s, S_DONE);
+            TS_GOTO(s, S_DONE);
             continue;
         }
 
@@ -917,12 +937,12 @@ run:
                     s->w.func = JS_DupValue(ctx, s->held_funcs[1]);
                     s->held = 0;
                     s->next = S_DONE;
-                    ts_goto(s, S_SETTLE);
+                    TS_GOTO(s, S_SETTLE);
                     continue;
                 }
             }
             if (s->w.phase == 0 && (!c || JS_IsUndefined(c->transform_fn))) {
-                ts_goto(s, S_ENQUEUE);
+                TS_GOTO(s, S_ENQUEUE);
                 continue;
             }
             {
@@ -941,7 +961,8 @@ run:
                    errored the stream; reaching that conclusion here is the same steps without minting a
                    promise for the engine to immediately consume. */
                 JSValue e = JS_GetException(ctx);
-                ts_error_enter(s, t, 1, e, s->held ? S_ENQUEUE_DONE : S_DONE, ctx);
+                ts_error_arm(s, t, 1, e, s->held ? S_ENQUEUE_DONE : S_DONE, ctx);
+                TS_GOTO(s, S_ERROR_SEQ);
                 JS_FreeValue(ctx, e);
                 s->reject = 1;
                 if (!s->held) s->rethrow = 1;
@@ -953,7 +974,7 @@ run:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = out;
             s->choice = 1;
-            ts_goto(s, S_PROMISE_OF);
+            TS_GOTO(s, S_PROMISE_OF);
             continue;
         }
 
@@ -995,7 +1016,7 @@ run:
                 JS_FreeValue(ctx, cap);
             }
             s->choice = 0;
-            ts_goto(s, S_DONE);
+            TS_GOTO(s, S_DONE);
             continue;
         }
 
@@ -1005,7 +1026,8 @@ run:
             if (s->w.phase == 0 && !readable_ctrl_can_close_or_enqueue(ctx, rc)) {
                 JS_ThrowTypeError(ctx, "the transform stream's readable side can no longer be enqueued to");
                 if (op == OP_CTRL_ENQUEUE) return JS_STEP_ABRUPT;
-                if (ts_short(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
+                if (ts_result_arm(ctx, s, 1, JS_GetException(ctx)) < 0) return JS_STEP_ABRUPT;
+                TS_GOTO(s, S_RESULT);
                 continue;
             }
             {
@@ -1021,13 +1043,14 @@ run:
                 /* §6.3 step 4: a failed enqueue errors the WRITABLE half with the enqueue's own reason and
                    then reports the READABLE half's stored error, which need not be the same value. */
                 JSValue e = JS_GetException(ctx);
-                ts_error_enter(s, t, 0, e, S_ENQUEUE_DONE, ctx);
+                ts_error_arm(s, t, 0, e, S_ENQUEUE_DONE, ctx);
+                TS_GOTO(s, S_ERROR_SEQ);
                 JS_FreeValue(ctx, e);
                 s->reject = 1;
                 continue;
             }
             JS_FreeValue(ctx, out);
-            ts_goto(s, S_ENQUEUE_BP);
+            TS_GOTO(s, S_ENQUEUE_BP);
             continue;
         }
 
@@ -1038,10 +1061,10 @@ run:
                 t->backpressure != 1) {
                 s->bp_want = 1;
                 s->next = S_ENQUEUE_DONE;
-                ts_goto(s, S_SETBP);
+                TS_GOTO(s, S_SETBP);
                 continue;
             }
-            ts_goto(s, S_ENQUEUE_DONE);
+            TS_GOTO(s, S_ENQUEUE_DONE);
             continue;
 
         case S_ENQUEUE_DONE:
@@ -1056,13 +1079,14 @@ run:
                     s->w.func = JS_DupValue(ctx, s->held_funcs[1]);
                     s->held = 0;
                     s->next = S_DONE;
-                    ts_goto(s, S_SETTLE);
+                    TS_GOTO(s, S_SETTLE);
                     continue;
                 }
-                if (ts_short(ctx, s, 1, e) < 0) return JS_STEP_ABRUPT;
+                if (ts_result_arm(ctx, s, 1, e) < 0) return JS_STEP_ABRUPT;
+                TS_GOTO(s, S_RESULT);
                 continue;
             }
-            if (op == OP_CTRL_ENQUEUE) { ts_goto(s, S_DONE); continue; }
+            if (op == OP_CTRL_ENQUEUE) { TS_GOTO(s, S_DONE); continue; }
             if (s->held) {
                 /* a HELD write: settle the capability it was handed */
                 JS_FreeValue(ctx, s->w.value);
@@ -1071,16 +1095,18 @@ run:
                 s->w.func = JS_DupValue(ctx, s->held_funcs[0]);
                 s->held = 0;
                 s->next = S_DONE;
-                ts_goto(s, S_SETTLE);
+                TS_GOTO(s, S_SETTLE);
                 continue;
             }
-            if (ts_short(ctx, s, 0, JS_UNDEFINED) < 0) return JS_STEP_ABRUPT;
+            if (ts_result_arm(ctx, s, 0, JS_UNDEFINED) < 0) return JS_STEP_ABRUPT;
+            TS_GOTO(s, S_RESULT);
             continue;
 
         /* ---- §6.3's other members ------------------------------------------------------------------------ */
 
         case S_ERROR_STREAM:
-            ts_error_enter(s, t, 1, s->w.value, S_DONE, ctx);
+            ts_error_arm(s, t, 1, s->w.value, S_DONE, ctx);
+            TS_GOTO(s, S_ERROR_SEQ);
             continue;
 
         case S_TERM_CLOSE: {
@@ -1098,7 +1124,7 @@ run:
                 if (JS_IsException(out)) return JS_STEP_ABRUPT;
                 JS_FreeValue(ctx, out);
             }
-            ts_goto(s, S_TERM_ERROR);
+            TS_GOTO(s, S_TERM_ERROR);
             continue;
         }
 
@@ -1106,7 +1132,8 @@ run:
             JSValue e;
             JS_ThrowTypeError(ctx, "the transform stream has been terminated");
             e = JS_GetException(ctx);
-            ts_error_enter(s, t, 0, e, S_DONE, ctx);
+            ts_error_arm(s, t, 0, e, S_DONE, ctx);
+            TS_GOTO(s, S_ERROR_SEQ);
             JS_FreeValue(ctx, e);
             continue;
         }
@@ -1119,7 +1146,7 @@ run:
             DCHECK(t->backpressure == 1, "§6.2 pulled a transform stream that was not applying backpressure");
             s->bp_want = 0;
             s->next = S_DONE;
-            ts_goto(s, S_SETBP);
+            TS_GOTO(s, S_SETBP);
             /* the answer is the FRESH change promise, so it is taken after the sub-sequence has made one */
             s->answer = 2;
             continue;
@@ -1135,7 +1162,7 @@ run:
                 if (!JS_IsUndefined(c->finish)) {
                     JS_FreeValue(ctx, s->promise);
                     s->promise = JS_DupValue(ctx, c->finish);
-                    ts_goto(s, S_DONE);
+                    TS_GOTO(s, S_DONE);
                     continue;
                 }
                 {
@@ -1179,7 +1206,7 @@ run:
                 s->w.value = JS_GetException(ctx);
                 s->reject = 1;
                 s->side = (uint8_t)(is_flush ? 1 : s->side);
-                ts_goto(s, S_FINISH_ERRORED);
+                TS_GOTO(s, S_FINISH_ERRORED);
                 continue;
             }
             /* PromiseCall again: what the algorithm answered becomes a promise first. */
@@ -1187,7 +1214,7 @@ run:
             JS_FreeValue(ctx, s->w.value);
             s->w.value = out;
             s->choice = 2;
-            ts_goto(s, S_PROMISE_OF);
+            TS_GOTO(s, S_PROMISE_OF);
             continue;
         }
 
@@ -1234,7 +1261,8 @@ run:
                 if (is_source) {
                     /* §6.2's ErrorWritableAndUnblockWrite: ErrorIfNeeded on the writable half, then a write
                        held on backpressure is let go so it fails rather than waiting forever. */
-                    ts_error_enter(s, t, 0, s->w.value, S_FINISH_SETTLE, ctx);
+                    ts_error_arm(s, t, 0, s->w.value, S_FINISH_SETTLE, ctx);
+                    TS_GOTO(s, S_ERROR_SEQ);
                 } else {
                     JSValueConst arg = s->w.value;
                     JSValue op = readable_stream_ctrl_op(ctx, RS_CTRL_ERROR);
@@ -1246,7 +1274,7 @@ run:
                     cb_result = JS_UNDEFINED;
                     if (JS_IsException(out)) return JS_STEP_ABRUPT;
                     JS_FreeValue(ctx, out);
-                    ts_goto(s, S_FINISH_SETTLE);
+                    TS_GOTO(s, S_FINISH_SETTLE);
                 }
                 if (!s->reject) {
                     /* it errored the half with the reason; the promise itself resolves with undefined */
@@ -1260,7 +1288,7 @@ run:
                 s->w.value = is_source ? writable_stream_stored_error(ctx, t->writable)
                                        : readable_stream_stored_error(ctx, t->readable);
                 s->reject = 1;
-                ts_goto(s, S_FINISH_SETTLE);
+                TS_GOTO(s, S_FINISH_SETTLE);
                 continue;
             }
             /* the FLUSH finished cleanly: the readable half closes */
@@ -1278,7 +1306,7 @@ run:
             JS_FreeValue(ctx, out);
             JS_FreeValue(ctx, s->w.value);
             s->w.value = JS_UNDEFINED;
-            ts_goto(s, S_FINISH_SETTLE);
+            TS_GOTO(s, S_FINISH_SETTLE);
             continue;
         }
 
@@ -1286,7 +1314,7 @@ run:
             JS_FreeValue(ctx, s->w.func);
             s->w.func = JS_DupValue(ctx, c->finish_funcs[s->reject]);
             s->next = S_DONE;
-            ts_goto(s, S_SETTLE);
+            TS_GOTO(s, S_SETTLE);
             continue;
 
         /* ---- the two settles ----------------------------------------------------------------------------- */
@@ -1299,7 +1327,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, out);
-            ts_goto(s, s->next);
+            TS_GOTO(s, s->next);
             continue;
         }
 
@@ -1311,7 +1339,7 @@ run:
             cb_result = JS_UNDEFINED;
             if (JS_IsException(out)) return JS_STEP_ABRUPT;
             JS_FreeValue(ctx, out);
-            ts_goto(s, S_DONE);
+            TS_GOTO(s, S_DONE);
             continue;
         }
 
