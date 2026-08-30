@@ -3730,17 +3730,17 @@ void node_install_protos(JSContext *ctx)
        `el.addEventListener(...)` was "not a function" on every element a page wired up, which is where
        testharness.js stopped on eight documents. It belongs here because it is a BASE member, and here it is
        one function shared by every node rather than a fresh closure on each. */
-    node_p = JS_NewObject(ctx);
-    CHECK(!JS_IsException(node_p), "Node.prototype could not be allocated");
+    /* §4.4: `Node : EventTarget`. The three members come down the chain from EventTarget.prototype, which is
+       where §2.7 declares them — installing copies onto Node.prototype said they were declared here. Web IDL
+       §3.7.3 Interface prototype object builds the object OVER that parent, so the chain is established here
+       rather than patched on afterwards. */
+    node_p = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, node_p, "Node");
     node_install_walkers(ctx, node_p);
     JS_SetPropertyFunctionList(ctx, node_p, js_node_base,
                                (int)(sizeof(js_node_base) / sizeof(js_node_base[0])));
     JS_SetPropertyFunctionList(ctx, node_p, js_node_consts,
                                (int)(sizeof(js_node_consts) / sizeof(js_node_consts[0])));
-    /* §4.4: `Node : EventTarget`. The three members come down the chain from EventTarget.prototype, which is
-       where §2.7 declares them — installing copies onto Node.prototype said they were declared here. */
-    event_target_chain(ctx, node_p);
     idl_install_accessor(ctx, node_p, "nodeValue", js_cd_get_data, 1, g_id_nodevalue);
     idl_install_accessor_step(ctx, node_p, "textContent", g_id_textcontent_get, g_id_textcontent);
     idl_install_method(ctx, node_p, "lookupPrefix", 1, g_id_lookup_prefix);

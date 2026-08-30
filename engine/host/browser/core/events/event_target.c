@@ -186,14 +186,17 @@ JSValue event_target_proto(JSContext *ctx)
     return proto;
 }
 
-void event_target_chain(JSContext *ctx, JSValueConst proto)
+/* §3.7.3's proto step for an interface declared `: EventTarget`, performed as §3.7.3 performs it — the parent
+   is resolved FIRST and the object is OrdinaryObjectCreate'd over it, so the prototype never exists unchained.
+   Owned — the caller frees. */
+JSValue event_target_derived_proto(JSContext *ctx)
 {
-    JSValue etp;
+    JSValue etp = event_target_proto(ctx), proto = JS_NewObjectProto(ctx, etp);
 
-    DCHECK(JS_IsObject(proto), "an interface prototype that inherits EventTarget is not an object");
-    etp = event_target_proto(ctx);
-    JS_SetPrototype(ctx, (JSValue)proto, etp);
     JS_FreeValue(ctx, etp);
+    CHECK(!JS_IsException(proto),
+          "the interface prototype object of an interface deriving from EventTarget could not be allocated");
+    return proto;
 }
 
 /* §2.7 declares `constructor()`, so EventTarget IS constructible — `new EventTarget()` is a plain event target,

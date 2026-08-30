@@ -371,13 +371,11 @@ static void permission_status_install_realm(JSContext *ctx)
                             "holding the first PermissionStatus.prototype would answer out of a discarded "
                             "object");
     JS_FreeValue(ctx, prev);
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "PermissionStatus.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "PermissionStatus");
     /* §6.3: `interface PermissionStatus : EventTarget`. addEventListener and the `onchange` handler attribute
        are reached through the chain rather than copied onto each status — which is also what makes
        `status instanceof EventTarget` true and what a page's prototype patch reaches. */
-    event_target_chain(ctx, proto);
+    proto = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, proto, "PermissionStatus");
     event_target_install_handlers(ctx, proto, EH_PERMISSION_STATUS);
     idl_install_accessor(ctx, proto, "state", js_status_get_state, 0, -1);
     idl_install_accessor(ctx, proto, "name", js_status_get_name, 0, -1);

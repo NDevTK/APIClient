@@ -337,12 +337,10 @@ void navigation_history_entry_install_protos(JSContext *ctx)
                             "already holding the first prototype would answer out of a discarded object");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "NavigationHistoryEntry.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "NavigationHistoryEntry");
     /* `interface NavigationHistoryEntry : EventTarget` — a real prototype chain, so the `dispose` listener a
        page registers with `addEventListener` is §2.7's registration and not a second list. */
-    event_target_chain(ctx, proto);
+    proto = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, proto, "NavigationHistoryEntry");
     for (i = 0; i < NHE_N; i++)
         idl_install_accessor(ctx, proto, NHE_NAME[i], js_nhe_get, i, -1);
     idl_install_method(ctx, proto, "getState", 0, g_id_get_state);

@@ -1030,8 +1030,24 @@ int64_t idl_slowest_step(const char **name);
 int64_t idl_step_total(long *count);
 
 /* §3.7.3's @@toStringTag on an interface PROTOTYPE object: the interface's identifier, non-writable,
-   non-enumerable, configurable. Every interface prototype has one, so every interface calls this. */
+   non-enumerable, configurable. Every interface prototype has one, so every interface calls this.
+   IT ALSO ASSERTS §3.7.3's PROTO STEP, against the generated browser/idl_inheritance.h — the [[Prototype]] of
+   the object being tagged must be the interface prototype object of the interface the IDL says it inherits (or
+   this realm's %Object.prototype% / %Error.prototype% on §3.7.3's two intrinsic arms). That is the one fact
+   engine/idlgen.mjs's gap audit STANDS ON and cannot itself check: it credits a base's installed members to
+   everything that inherits it, so a prototype built over the wrong parent reads COMPLETE for every member of
+   the parent the IDL names while a page reaches none of them. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
+
+/* THE SAME CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT, so §3.7.3's proto step does not
+   govern it and is not asserted. Exactly one object needs this: HTML §7.2.3 The WindowProxy exotic object's
+   prototype, which carries WINDOW's class string ("There is no WindowProxy interface object") while the real
+   §3.7.3 Window interface prototype object is a different object core/frame/window.c builds over §3.7.4's named
+   properties object. Deliberately not idl_interface_tag, for the reason idl_namespace_tag and
+   idl_async_iterator_tag are: which KIND of object is tagged is a fact the C states rather than one the auditor
+   guesses — and engine/idl_installed.mjs seeds attribution from both, so the members installed on this object
+   are still credited to the interface it names. */
+void idl_class_string(JSContext *ctx, JSValueConst obj, const char *iface);
 
 /* §3.13.1's CLASS STRING ON A NAMESPACE OBJECT: "The class string of a namespace object is the namespace's
    identifier" — so `Object.prototype.toString.call(console)` is "[object console]", with §3.2's same

@@ -1017,11 +1017,9 @@ void message_port_install_protos(JSContext *ctx)
     DCHECK(JS_IsNull(prev), "message_port_install_protos ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
-    port_p = JS_NewObject(ctx);
-    CHECK(!JS_IsException(port_p), "MessagePort.prototype could not be allocated");
-    idl_interface_tag(ctx, port_p, "MessagePort");
     /* §9.4.4: `interface MessagePort : EventTarget` — the listeners and the two handler attributes. */
-    event_target_chain(ctx, port_p);   /* §9.4.4: `MessagePort : EventTarget` */
+    port_p = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, port_p, "MessagePort");
     /* §9.4.4's own `onclose` is EH_MESSAGE_PORT and not EH_PORT: EH_PORT is the MessageEventTarget mixin's
        two names, which BroadcastChannel includes as well, and §9.5 declares no `onclose` on one. */
     event_target_install_handlers(ctx, port_p, EH_PORT | EH_MESSAGE_PORT);

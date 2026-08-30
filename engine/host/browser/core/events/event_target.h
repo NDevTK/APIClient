@@ -115,10 +115,17 @@ JSValue event_target_nullable_of(JSContext *ctx, JSValueConst v, const char *wha
    both. PER REALM — §3.7 gives each its own, and here that decides ANSWERS and not just identities, because a
    C member runs in the realm that defined it (see event_target.c). OWNED: the caller frees. */
 JSValue event_target_proto(JSContext *ctx);
-/* `interface X : EventTarget` — chain X's prototype to §2.7's, in `ctx`'s realm. Four interfaces declare it and
-   each spelled it as a borrowed read fed straight to JS_SetPrototype; now that the read is per-realm and owned,
-   the pair is written once here rather than four times, all four of them free-or-leak. */
-void event_target_chain(JSContext *ctx, JSValueConst proto);
+/* `interface X : EventTarget` — X's INTERFACE PROTOTYPE OBJECT, CREATED over §2.7's, in `ctx`'s realm. OWNED:
+   the caller frees.
+   IT CREATES RATHER THAN RE-PARENTS, and that is the whole point of it. Web IDL §3.7.3 Interface prototype
+   object establishes the link AT CONSTRUCTION — "set proto to the interface prototype object in realm of that
+   inherited interface", then "Set interfaceProtoObj to OrdinaryObjectCreate(proto)" — so there is no instant at
+   which the object exists outside its chain. This was a JS_SetPrototype applied AFTER the object was built and
+   tagged, which is observably the same only because nothing happened to read in between; the fourteen
+   components that spelled it that way each had a window in which `X.prototype` answered Object.prototype, and
+   idl_args.c's §3.7.3 proto-step assertion — which reads the parent's class string at the tag — is what made
+   that window matter. */
+JSValue event_target_derived_proto(JSContext *ctx);
 /* §2.7's interface object. CONSTRUCTIBLE — `new EventTarget()` is a plain event target, which is how a page
    gives an ordinary object a listener list. */
 void event_target_install_interface(JSContext *ctx, JSValueConst global);

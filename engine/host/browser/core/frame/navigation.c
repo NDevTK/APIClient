@@ -729,12 +729,10 @@ void navigation_install_realm(JSContext *ctx)
                             "first Navigation would answer out of a discarded object");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "Navigation.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "Navigation");
     /* `interface Navigation : EventTarget` — a real prototype chain, so a page's
        `navigation.addEventListener('currententrychange', f)` is §2.7's registration. */
-    event_target_chain(ctx, proto);
+    proto = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, proto, "Navigation");
     idl_install_method(ctx, proto, "entries", 0, g_id_entries);
     idl_install_accessor(ctx, proto, NAV_GETTER_NAME[NAV_CURRENT_ENTRY], js_nav_get, NAV_CURRENT_ENTRY, -1);
     idl_install_method(ctx, proto, "updateCurrentEntry", 1, g_id_update_current_entry);

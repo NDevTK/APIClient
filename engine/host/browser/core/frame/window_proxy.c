@@ -3209,8 +3209,13 @@ void window_proxy_install_proto(JSContext *ctx)
        Without the statement every member installed here belonged to no interface: the Web IDL gap audit could
        attribute none of the twelve below, nor `close`, nor window_message.c's `postMessage` — §9.3.3 Posting
        messages, and NOT §9.4.4, which is Message ports and defines nothing on this interface — which goes onto
-       this same object, 50 installed members whose target interface it could not decide. */
-    idl_interface_tag(ctx, proto, "Window");
+       this same object, 50 installed members whose target interface it could not decide.
+       IT IS idl_class_string AND NOT idl_interface_tag, because this object is not §3.7.3's Window interface
+       prototype object — that one is core/frame/window.c's, built over §3.7.4's named properties object, and
+       idl_args.c asserts THAT chain against the IDL at every tag. Asking §3.7.3's proto-step question about
+       this object would be asking it about an object §3.7.3 does not define. Attribution is unchanged: both
+       forms seed engine/idl_installed.mjs's table, so the members below are still Window's. */
+    idl_class_string(ctx, proto, "Window");
     for (i = 0; i < WP_MEMBER_N; i++) {
         if (i == WP_LENGTH)
             idl_install_accessor_step(ctx, proto, PROXY_MEMBER[i], g_wp_len_getter_id, -1);

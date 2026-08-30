@@ -730,10 +730,8 @@ static void idb_request_install_realm(JSContext *ctx)
     prev = JS_GetClassProto(ctx, g_req_class);
     DCHECK(JS_IsNull(prev), "idb_request_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "IDBRequest.prototype could not be allocated");
+    proto = event_target_derived_proto(ctx);   /* `interface IDBRequest : EventTarget` */
     idl_interface_tag(ctx, proto, "IDBRequest");
-    event_target_chain(ctx, proto);   /* `interface IDBRequest : EventTarget` */
     event_target_install_handlers(ctx, proto, EH_IDB_REQUEST);
     idl_install_accessor(ctx, proto, "result", js_rq_get_result, 0, -1);
     idl_install_accessor(ctx, proto, "error", js_rq_get_error, 0, -1);

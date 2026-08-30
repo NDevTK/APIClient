@@ -1441,12 +1441,10 @@ static void idb_transaction_install_realm(JSContext *ctx)
     prev = JS_GetClassProto(ctx, g_tx_class);
     DCHECK(JS_IsNull(prev), "idb_transaction_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "IDBTransaction.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "IDBTransaction");
     /* `interface IDBTransaction : EventTarget` — addEventListener and the three handler attributes are
        reached through the chain rather than copied onto each transaction. */
-    event_target_chain(ctx, proto);
+    proto = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, proto, "IDBTransaction");
     event_target_install_handlers(ctx, proto, EH_IDB_TRANSACTION);
     idl_install_accessor(ctx, proto, "objectStoreNames", js_tx_get_object_store_names, 0, -1);
     idl_install_accessor(ctx, proto, "mode", js_tx_get_mode, 0, -1);

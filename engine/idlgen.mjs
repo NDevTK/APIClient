@@ -671,6 +671,12 @@ const UNBUILT = {
 const unbuiltSeen = [], unmapped = [], stale = [];
 
 const distinct = new Set();
+/* The two ledger categories, split from `distinct` because they are two different things to do: an ABSENT
+   member is one to write, a js_noop-STUB member is one to replace. `pairs*` is the same fact per INTERFACE —
+   what a page cannot reach, summed — kept beside each so the ledger can print both and neither number has to
+   be recovered from the other. */
+const distinctAbsent = new Set(), distinctNoop = new Set();
+let pairsAbsent = 0, pairsNoop = 0;
 const unresolvedAll = new Map();
 /* WHICH INTERFACES ARE AUDITED IS DERIVED FROM WHAT THE CORPUS DECLARES. The map above is a FILE-LIST
    ANNOTATION on that set; it was the SET itself until this line existed, and a hand-maintained set has exactly
@@ -830,8 +836,8 @@ for (const [iface, paths] of AUDITED) {
   const unproven = open.filter((n) => maybeHere.has(n));
   const noop = spec.filter((n) => stubbed.has(n));
   totalMissing += absent.length + noop.length;
-  for (const n of absent) distinct.add(n);
-  for (const n of noop) distinct.add(n);
+  for (const n of absent) { distinct.add(n); distinctAbsent.add(n); pairsAbsent++; }
+  for (const n of noop) { distinct.add(n); distinctNoop.add(n); pairsNoop++; }
   /* PER INTERFACE, so the verdict names an AREA. An interface with nothing missing is a row too — it is what
      makes the table a census rather than a list of the loudest components. */
   /* WHAT IS THIS INTERFACE'S OWN WORK. An inherited gap is absent on every interface that inherits it, which
@@ -845,9 +851,18 @@ for (const [iface, paths] of AUDITED) {
   const ownNoop = noop.filter((n) => ownSet.has(n)).length;
   gapRows.push({ iface, absent: absent.length, noop: noop.length, unproven: unproven.length,
                  own: ownAbsent + ownNoop });
-  defect("ABSENT members", absent.length);
+  /* THE LEDGER COUNTS MEMBERS, NOT INTERFACE-MEMBER PAIRS, AND THAT IS NOT THE SAME NUMBER — see the two
+     comments above and the ranking below, which both already say that a per-interface sum measures
+     INHERITANCE DEPTH. `absent.length` summed over rows charges ONE unbuilt member once per interface that
+     inherits it: `checkVisibility` is one thing to write in element_view.c and it was 46 of this ledger's
+     count. The verdict's own closing sentence commands "implement the member in its real component", so the
+     number beside it has to be a count of members somebody implements — a count of pairs names no set of
+     actions, and being ten times larger it is also what buried SubtleCrypto's 17 and MouseEvent's 2 in it.
+     Nothing is hidden by this: the pair total is printed in the category's own label and again in the
+     distinct-members line above, and the exit code is unchanged, because a category is non-empty either way.
+     The per-interface rows stay exact — each still names every member a page cannot reach on that interface,
+     which is the honest answer to a different question. */
   defect("UNPROVEN members — installed on a target the audit cannot attribute", unproven.length);
-  defect("js_noop-STUB members", noop.length);
   defect("STALE member exclusions", condStale.length);
   defect("CONTRADICTED member exclusions", condInstalled.length);
   defect("CROSS-CHECK rows naming a file that installs nothing this interface has", strangers.length);
@@ -887,6 +902,9 @@ for (const [iface, paths] of AUDITED) {
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
 }
+defect(`ABSENT members (distinct; ${pairsAbsent} interface-member pairs a page cannot reach)`,
+       distinctAbsent.size);
+defect(`js_noop-STUB members (distinct; ${pairsNoop} interface-member pairs)`, distinctNoop.size);
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members not yet implemented (${totalMissing} across ` +
               `all interfaces, since an inherited gap is absent on each) — implement each at the root, never a stub.`);
@@ -1074,24 +1092,104 @@ const header =
   "#ifndef APICLIENT_PLATFORM_NAMES_H\n#define APICLIENT_PLATFORM_NAMES_H\n\n" +
   "static const char *const PLATFORM_NAMES[] = {\n" +
   names.map((n) => `    "${n}",`).join("\n") + "\n};\n\n#endif\n";
-const OUTH = join(HERE, "host", "browser", "platform_names.h");
-let prev = "";
-try { prev = readFileSync(OUTH, "utf8"); } catch { /* first run */ }
-if (prev === header) {
-  console.log(`[idl-audit] platform_names.h current — ${names.length} global names exposed on Window`);
-} else if (REGEN) {
-  writeFileSync(OUTH, header);
-  console.log(`[idl-audit] platform_names.h REGENERATED — ${names.length} global names exposed on Window`);
-} else {
-  /* THE AUDIT RUN DOES NOT WRITE. What absent.c decides off this table is ReferenceError-vs-fork, so a table
-     that disagrees with the corpus is a page's Web API read forking as app state (or a real injected global
-     throwing) — a wrong answer, not a formatting drift, and one that a build silently rewriting the header
-     would have hidden by fixing it out from under whoever was compiling. */
-  defect("stale generated platform table");
-  console.log(`[idl-audit] platform_names.h STALE — the corpus exposes ${names.length} global names on Window ` +
-              `and the checked-in table is not that. absent.c decides ReferenceError-vs-fork off it, so a stale ` +
-              `table is a wrong answer per name. Regenerate it with \`node engine/idlgen.mjs --regen\` and commit.`);
+/* THE AUDIT RUN DOES NOT WRITE — see the file header. A checked-in table that no longer matches the corpus is a
+   FAILING category like any other gap, because what each table decides is an ANSWER and not a formatting
+   detail; `--regen` is the one command that writes. One emitter for both tables: a second hand-written copy of
+   this three-way is right on the day it is written and silently diverges on the day the first one learns
+   something, which is the reason idl_members.mjs exists one layer up. */
+const emitGenerated = (file, text, what, cost) => {
+  const out = join(HERE, "host", "browser", file);
+  let prev = "";
+  try { prev = readFileSync(out, "utf8"); } catch { /* first run */ }
+  if (prev === text) { console.log(`[idl-audit] ${file} current — ${what}`); return; }
+  if (REGEN) { writeFileSync(out, text); console.log(`[idl-audit] ${file} REGENERATED — ${what}`); return; }
+  defect(`stale generated table (${file})`);
+  console.log(`[idl-audit] ${file} STALE — the corpus says ${what} and the checked-in table is not that. ` +
+              `${cost} Regenerate it with \`node engine/idlgen.mjs --regen\` and commit.`);
+};
+emitGenerated("platform_names.h", header, `${names.length} global names exposed on Window`,
+              "absent.c decides ReferenceError-vs-fork off it, so a stale table is a wrong answer per name.");
+
+/* ---------------------------------------------------------------------------------------------------------
+ * §3.7.3's PROTO STEP, GENERATED, BECAUSE THE AUDIT ABOVE STANDS ON IT AND CANNOT CHECK IT.
+ *
+ * `chainOf` credits a BASE's installed members to every interface that inherits it — `addEventListener` counts
+ * for HTMLSpanElement because HTMLSpanElement inherits EventTarget — and that is right only while the ENGINE's
+ * prototype chain is the IDL's. Nothing established that. The IDL side is read from the corpus and the
+ * installed side is read from the C, and the LINK between them was believed: a component that built its
+ * prototype over the wrong parent would still be credited with every member of the parent the IDL names, so
+ * ~64 members a page cannot reach would read COMPLETE on one row and ~2900 across the HTML family. That is the
+ * false COMPLETE this whole file exists to refuse, at the largest scale in it, minted by the auditor itself.
+ *
+ * It is not checkable HERE: which object a prototype is built over is a RUNTIME fact, per realm, and a static
+ * approximation of it would be a second plausible answer beside the first. So the corpus states the expectation
+ * and the ENGINE asserts it, at the one call every interface prototype object already makes
+ * (core/idl_args.c's idl_interface_tag, Web IDL §3.7.3's own class string) — the two-sided shape every
+ * declaration in this file already has.
+ *
+ * WHAT EACH ROW SAYS is the §3.7.3 class string the object at the other end of the [[Prototype]] link must
+ * carry, taken straight from §3.7.3 Interface prototype object's four proto arms — the named properties object
+ * for a [Global] interface that supports named properties, the inherited interface's prototype, %Error.prototype%
+ * for DOMException, %Object.prototype% otherwise — plus §3.7.4 Named properties object's own two arms for the
+ * object that arm names. A CALLBACK INTERFACE, a MIXIN and a NAMESPACE get no row: §3.7.1 gives a callback
+ * interface no interface prototype object at all, and the other two are never objects. */
+const namedPropsGlobals = new Set();
+for (const n of idl.declarations) {
+  if (n.type !== "interface" || !n.name) continue;
+  if (!(n.extAttrs || []).some((a) => a.name === "Global")) continue;
+  /* §3.7.4: "For every interface declared with the [Global] extended attribute that SUPPORTS NAMED
+     PROPERTIES" — which §3.7.4's own definition makes a NAMED PROPERTY GETTER, not any getter: an indexed
+     getter takes an integer type and defines §3.9's indexed properties instead. */
+  if ((n.members || []).some((m) => m.type === "operation" && m.special === "getter" && m.arguments &&
+                                    m.arguments.length === 1 && m.arguments[0].idlType &&
+                                    m.arguments[0].idlType.idlType === "DOMString"))
+    namedPropsGlobals.add(n.name);
 }
+const inheritRows = [];
+const named = (n) => [`"${n}"`, "IDL_PROTO_INHERITS"];
+const OBJ_PROTO = ["NULL", "IDL_PROTO_OBJECT"], ERR_PROTO = ["NULL", "IDL_PROTO_ERROR"];
+for (const [iface, node] of byName) {
+  if (node.type !== "interface") continue;
+  const base = inheritanceOf.get(iface);
+  inheritRows.push([iface, ...(namedPropsGlobals.has(iface) ? named(`${iface}Properties`)
+                              : base ? named(base) : iface === "DOMException" ? ERR_PROTO : OBJ_PROTO)]);
+  if (namedPropsGlobals.has(iface))
+    inheritRows.push([`${iface}Properties`, ...(base ? named(base) : OBJ_PROTO)]);
+}
+/* strcmp order, because the engine reaches a row with bsearch. Web IDL identifiers are ASCII, so JS's
+   code-unit comparison and strcmp's byte comparison are the same order and there is nothing to keep in step. */
+inheritRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+const ifaceW = Math.max(...inheritRows.map((r) => r[0].length));
+const inheritH =
+  "/* GENERATED by engine/idlgen.mjs from @webref/idl — DO NOT EDIT.\n" +
+  " * Web IDL §3.7.3 Interface prototype object's PROTO STEP and §3.7.4 Named properties object's, per\n" +
+  " * interface: the §3.7.3 class string the object at the other end of this interface prototype object's\n" +
+  " * [[Prototype]] link must carry, or one of the two INTRINSIC spellings §3.7.3 itself uses for an object\n" +
+  " * that carries no class string at all. core/idl_args.c asserts it per realm, at the one call every\n" +
+  " * interface prototype object already makes; engine/idlgen.mjs's own gap audit credits a base's installed\n" +
+  " * members to everything that inherits it and can only do that soundly because this is asserted.\n" +
+  " * Regenerate after `npm install @webref/idl webidl2`, and commit the result — the build has no network\n" +
+  " * and this table is not optional. */\n" +
+  "#ifndef APICLIENT_IDL_INHERITANCE_H\n#define APICLIENT_IDL_INHERITANCE_H\n\n" +
+  "/* WHICH OF §3.7.3's PROTO ARMS DECIDED THE ROW. Two of them name an INTRINSIC rather than an interface —\n" +
+  "   \"set proto to realm.[[Intrinsics]].[[%Object.prototype%]]\" and, for DOMException,\n" +
+  "   \"realm.[[Intrinsics]].[[%Error.prototype%]]\" — and neither object carries a §3.7.3 class string of its\n" +
+  "   own, so those two are checked by OBJECT IDENTITY against the realm's intrinsic and the rest by the tag\n" +
+  "   the inherited interface's prototype object already carries. */\n" +
+  "enum { IDL_PROTO_INHERITS = 0, IDL_PROTO_OBJECT = 1, IDL_PROTO_ERROR = 2 };\n\n" +
+  "typedef struct IdlInherits {\n" +
+  "    const char *iface;   /* the §3.7.3 class string of the interface prototype object */\n" +
+  "    const char *proto;   /* the class string its [[Prototype]] carries; NULL on an intrinsic arm */\n" +
+  "    int         arm;     /* which §3.7.3 (or §3.7.4) proto arm decided it */\n" +
+  "} IdlInherits;\n\n" +
+  "static const IdlInherits IDL_INHERITS[] = {\n" +
+  inheritRows.map(([i, p, a]) =>
+    `    { "${i}",${" ".repeat(ifaceW - i.length)} ${p}, ${a} },`).join("\n") +
+  "\n};\n\n#endif\n";
+emitGenerated("idl_inheritance.h", inheritH,
+              `${inheritRows.length} interface prototype objects and the §3.7.3 [[Prototype]] each must have`,
+              "idl_args.c asserts each realm's chain against it, and this file's own gap audit credits a " +
+              "base's members to everything that inherits it only because that assertion holds.");
 
 /* ---------------------------------------------------------------------------------------------------------
  * THE VERDICT, PER INTERFACE FIRST. §Testing: a gate reports per AREA as well as in total, because one number
@@ -1112,7 +1210,15 @@ if (withGaps.length) {
   /* A DERIVED ROW IS MARKED, because a table that does not say so reads as if every row had been audited all
      along. These are the interfaces no row named — they were in no total until the set became derived, so
      their gaps are not new work appearing, they are existing work becoming visible, and the file that DECLARES
-     each is printed because that is where the work goes. */
+     each is printed because that is where the work goes.
+     THE LABEL SAYS WHAT IT MEANS RATHER THAN WHEN IT HAPPENED. It read NEWLY-AUDITED, which is temporal, and
+     the fact is not: nothing about it changes from run to run, and a reader who takes it at its word looks for
+     what this run added and finds the same rows the last one printed. What it states is that the interface has
+     no hand-written row in INTERFACES above — the audit found it in the corpus, from the §3.7.3 class string
+     the named file tags its prototype with, and audited it on that evidence alone. That is a claim about WHERE
+     THE ROW CAME FROM, and it is worth printing for exactly one reason: a derived row's file list is the set
+     of files that DECLARE the interface, which is narrower than a hand-written row's list of files that build
+     it, so a gap here may belong in a component the annotation does not name. */
   const derivedSet = new Set(derivedIfaces);
   const w = Math.max(...withGaps.map((r) => r.iface.length));
   for (const r of withGaps)
@@ -1120,7 +1226,9 @@ if (withGaps.length) {
                 `  ABSENT ${String(r.absent).padStart(3)}` +
                 (r.noop ? `  js_noop-STUB ${r.noop}` : "") +
                 (r.unproven ? `  UNPROVEN ${r.unproven}` : "") +
-                (derivedSet.has(r.iface) ? `  NEWLY-AUDITED ${(AUDITED.get(r.iface) || []).join(" + ")}` : ""));
+                (derivedSet.has(r.iface)
+                   ? `  NO-ROW — found from its §3.7.3 tag in ${(AUDITED.get(r.iface) || []).join(" + ")}`
+                   : ""));
 }
 console.log("[idl-audit] ── verdict ──");
 if (!defects.size) {

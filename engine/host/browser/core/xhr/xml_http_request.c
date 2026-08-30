@@ -2596,10 +2596,8 @@ void xhr_install_protos(JSContext *ctx)
     /* `interface XMLHttpRequestEventTarget : EventTarget` — the seven event handler attributes and nothing
        else. It is a real prototype in the chain because a page reads it: `XMLHttpRequest.prototype.__proto__
        .__proto__ === EventTarget.prototype`. */
-    et_p = JS_NewObject(ctx);
-    CHECK(!JS_IsException(et_p), "XMLHttpRequestEventTarget.prototype could not be allocated");
+    et_p = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, et_p, "XMLHttpRequestEventTarget");
-    event_target_chain(ctx, et_p);
     event_target_install_handlers(ctx, et_p, EH_XHR);
     JS_SetClassProto(ctx, g_xhr_et_class, et_p);
 

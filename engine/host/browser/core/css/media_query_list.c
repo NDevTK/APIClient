@@ -463,10 +463,8 @@ void media_query_list_install_proto(JSContext *ctx)
     DCHECK(JS_IsNull(prev), "media_query_list_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "MediaQueryList.prototype could not be allocated");
+    proto = event_target_derived_proto(ctx);              /* §4.2: `MediaQueryList : EventTarget` */
     idl_interface_tag(ctx, proto, "MediaQueryList");
-    event_target_chain(ctx, proto);                      /* §4.2: `MediaQueryList : EventTarget` */
     event_target_install_handlers(ctx, proto, EH_MEDIA_QUERY_LIST);
     idl_install_accessor(ctx, proto, "media", js_mql_media, 0, -1);
     idl_install_accessor(ctx, proto, "matches", js_mql_matches, 0, -1);

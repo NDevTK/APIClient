@@ -831,12 +831,10 @@ void file_reader_install_proto(JSContext *ctx)
     DCHECK(JS_IsNull(prev), "file_reader_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "FileReader.prototype could not be allocated");
+    /* `interface FileReader: EventTarget` — the prototype is CREATED over §2.7's, so `addEventListener` is the
+       same function rather than a copy of it, which is what the inheritance MEANS. */
+    proto = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, proto, "FileReader");
-    /* `interface FileReader: EventTarget` — the prototype CHAINS to §2.7's, so `addEventListener` is the same
-       function rather than a copy of it, which is what the inheritance MEANS. */
-    event_target_chain(ctx, proto);
     /* §6.2.1 Event Handler Content Attributes' six, which that section lists ON this interface. */
     event_target_install_handlers(ctx, proto, EH_FILE_READER);
     JS_SetPropertyFunctionList(ctx, proto, FR_CONSTANTS,

@@ -3682,18 +3682,183 @@ int idl_getter_id_step(JSContext *ctx, const IdlStepDecl *decl, int magic)
     return idl_method_id_step(ctx, NULL, 0, NULL, 0, decl, magic);
 }
 
+#if APICLIENT_DEV
+#include "idl_inheritance.h"   /* GENERATED from @webref/idl — §3.7.3's proto step, per interface */
+
+static int idl_inherits_cmp(const void *iface, const void *row)
+{
+    return strcmp((const char *)iface, ((const IdlInherits *)row)->iface);
+}
+
+/* §3.7.3 Interface prototype object's PROTO STEP, ASSERTED — the one fact about this engine that the Web IDL
+ * gap audit STANDS ON and that nothing, until this, established.
+ *
+ * §3.7.3 says it in one sentence: "Otherwise, if interface is declared to inherit from another interface, then
+ * set proto to the interface prototype object IN REALM of that inherited interface", and then
+ * "Set interfaceProtoObj to OrdinaryObjectCreate(proto)". Three other arms cover the rest — a [Global]
+ * interface that supports named properties takes §3.7.4 Named properties object's object, DOMException takes
+ * %Error.prototype%, everything else %Object.prototype%.
+ *
+ * WHY IT IS ASSERTED HERE RATHER THAN CHECKED BY THE AUDIT. engine/idlgen.mjs credits a BASE's installed
+ * members to every interface that inherits it — `addEventListener` counts for HTMLSpanElement because the IDL
+ * says HTMLSpanElement inherits EventTarget — so a prototype built over the WRONG parent reads COMPLETE for
+ * every member of the parent the IDL names while a page reaches none of them. That is ~64 members on one row
+ * and ~2900 across the HTML family: the largest false COMPLETE the auditor could mint, and it would mint it
+ * silently, because the IDL side and the installed side are each read correctly and only the LINK between them
+ * was believed. The link is a RUNTIME fact, PER REALM (a member answers out of the realm that defined it, so a
+ * chain that is right in the agent's first realm and wrong in a child navigable's is two different answers),
+ * so a static approximation of it would be a second plausible answer beside the first rather than a check.
+ *
+ * IT COSTS NOTHING TO REACH, because §3.7.3's own last line already put the answer on the object: "The class
+ * string of an interface prototype object is the interface's qualified name". So the parent IDENTIFIES ITSELF,
+ * with the tag this very function writes, and the check is the tag read back one link up. The two arms that
+ * name an INTRINSIC carry no class string at all, so those compare object identity against the realm's own
+ * %Object.prototype% / %Error.prototype% instead — which is stricter than "carries no tag" and is what stops a
+ * prototype parented to some untagged record from passing.
+ *
+ * ORDER IS PART OF THE INVARIANT AND IS WHY THIS FIRES RATHER THAN WARNS. core/realm.h already states that the
+ * per-realm intrinsics run in DECLARATION order because that is the dependency order — "Event declares before
+ * MessageEvent, so a realm's Event.prototype exists before the prototype that chains to it". A component that
+ * declares itself too early builds its prototype over a parent that does not exist yet, and until now the
+ * result was a silently orphaned chain; now it is an abort naming both interfaces.
+ *
+ * IT READS THE LINK AS §3.7.3 ESTABLISHES IT — AT CONSTRUCTION — AND THAT IS NOT A DETAIL OF WHERE THE CHECK
+ * SITS. §3.7.3 resolves proto and then OrdinaryObjectCreate(proto)s the object, so an interface prototype
+ * object is never observable outside its chain. Fourteen components instead built the object bare, tagged it,
+ * and re-parented it with a JS_SetPrototype a few lines later; every one of those chains was CORRECT by the
+ * time the realm finished, and every one of them would have aborted here, because the question was being asked
+ * in the window the spec does not leave open. The answer was to close the window rather than to move the
+ * question — a check that waits until the realm is finished cannot name the component that built the object,
+ * and a component that re-parents can be read by anything that runs in between. The name of that fix is
+ * event_target_derived_proto: the parent is resolved FIRST and the object is created over it.
+ *
+ * EVERY MESSAGE NAMES THE INTERFACE, because this function is reachable from every interface prototype object
+ * in the engine and a DCHECK stamps the file and line it is WRITTEN at — so without the identifier the abort
+ * would report this one line for all of them and its remedy would name an action with no object. */
+static void idl_assert_inherits(JSContext *ctx, JSValueConst proto, const char *iface)
+{
+    const IdlInherits *row;
+    JSValue parent, tag = JS_UNDEFINED, want;
+    int got;
+
+    row = bsearch(iface, IDL_INHERITS, sizeof IDL_INHERITS / sizeof IDL_INHERITS[0],
+                  sizeof IDL_INHERITS[0], idl_inherits_cmp);
+    DCHECKF(row != NULL,
+            "the interface prototype object tagged \"%s\" carries a class string @webref/idl declares no "
+            "interface for — §3.7.3's proto step has no arm for it, so nothing can say what this object's "
+            "[[Prototype]] must be and every member the audit credits it by inheritance is credited on unread "
+            "ground. Either the identifier is misspelt, or idl_inheritance.h is stale: regenerate it with "
+            "`node engine/idlgen.mjs --regen` and commit", iface);
+
+    parent = JS_GetPrototype(ctx, proto);
+    DCHECKF(JS_IsObject(parent),
+            "the interface prototype object of \"%s\" was built with a NULL [[Prototype]] — §3.7.3's proto step "
+            "asserts \"proto is an Object\" on every one of its four arms, and an object at the end of no chain "
+            "reaches neither its base's members nor Object.prototype's", iface);
+
+    if (row->arm == IDL_PROTO_INHERITS) {
+        const char *have;
+
+        got = JS_GetOwnSlot(ctx, &tag, parent, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG));
+        CHECK(got >= 0, "reading a §3.7.3 class string off an interface prototype object's [[Prototype]] threw "
+                        "— the tag is a plain data property this same function defines, so there is no getter "
+                        "to run and nothing to throw with");
+        DCHECKF(got == 1,
+                "the [[Prototype]] of \"%s\"'s interface prototype object carries NO §3.7.3 class string, so it "
+                "is not the interface prototype object of \"%s\", which is the only object §3.7.3's proto step "
+                "names. Either this component built it over the wrong thing, or it built it BARE and re-parents "
+                "it further down — §3.7.3 resolves proto first and OrdinaryObjectCreate()s over it, so the "
+                "object must never exist unchained", iface, row->proto);
+        have = JS_ToCString(ctx, tag);
+        CHECK(have != NULL, "a §3.7.3 class string could not be read as a C string");
+        DCHECKF(strcmp(have, row->proto) == 0,
+                "the [[Prototype]] of \"%s\"'s interface prototype object is \"%s\"'s, and the IDL says it must "
+                "be \"%s\"'s — §3.7.3's proto step is \"the interface prototype object in realm of that "
+                "inherited interface\". engine/idlgen.mjs credits \"%s\" with every member installed on \"%s\", "
+                "so all of them now read COMPLETE and no page can reach one of them",
+                iface, have, row->proto, iface, row->proto);
+        JS_FreeCString(ctx, have);
+        JS_FreeValue(ctx, tag);
+        JS_FreeValue(ctx, parent);
+        return;
+    }
+
+    /* §3.7.3's two INTRINSIC arms. Identity, not absence-of-tag: an untagged record would pass the weaker
+       test, and a prototype parented to one reaches Object.prototype's members through nothing. */
+    want = JS_GetClassProto(ctx, row->arm == IDL_PROTO_ERROR ? JS_CLASS_ERROR : JS_CLASS_OBJECT);
+    DCHECKF(JS_IsSameValue(ctx, parent, want),
+            "\"%s\" inherits from no interface, so §3.7.3's proto step is this realm's %%Object.prototype%% "
+            "(%%Error.prototype%% for DOMException) and its interface prototype object's [[Prototype]] is some "
+            "other object — either the component built it over the wrong thing, or it was built in a realm "
+            "other than the one installing it, which is the shared-prototype defect core/realm.h exists to "
+            "prevent", iface);
+    JS_FreeValue(ctx, want);
+    JS_FreeValue(ctx, parent);
+}
+#endif
+
+/* THE WRITE ITSELF, shared by the two statements below. §3.7.3 gives the property { writable: false,
+   enumerable: false, configurable: true }, which is JS_PROP_CONFIGURABLE and nothing else.
+   IT IS A PRIVATE HELPER AND NOT ONE OF THEM CALLING THE OTHER, because engine/idl_installed.mjs reads the two
+   public calls as the SEED that says which definition an object's members belong to: a delegation would put a
+   seed call inside a function whose `iface` is a parameter rather than a literal, which is an install target
+   the auditor honestly cannot decide — its own category, reported, and caused entirely by how this file was
+   spelled rather than by anything in the engine. */
+static void idl_tag_write(JSContext *ctx, JSValueConst obj, const char *iface)
+{
+    JS_DefinePropertyValue(ctx, (JSValue)obj, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
+                           JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
+}
+
 /* §3.7.3: EVERY INTERFACE PROTOTYPE OBJECT CARRIES @@toStringTag, whose value is the interface's IDENTIFIER and
    whose attributes are { writable: false, enumerable: false, configurable: true }. It is what makes
    `Object.prototype.toString.call(new Blob())` answer "[object Blob]" — the brand check a page performs without
    `instanceof`, and the one wpt's own assert_class_string makes about every interface it touches.
    NOT ONE INTERFACE IN THIS ENGINE HAD IT. Every one of them answered "[object Object]", which is Web IDL's rule
    missed twenty-two times over — the shape a per-component rule always ends up in, and why this is one call the
-   interface makes rather than a line each of them remembers. */
+   interface makes rather than a line each of them remembers.
+   IT IS ALSO WHERE §3.7.3's PROTO STEP IS ASSERTED, and the two belong at one call for the same reason: the tag
+   is what makes the [[Prototype]] link CHECKABLE, so the object that writes the tag is the object that can read
+   the one above it. The assertion runs BEFORE the write, so a chain built wrong aborts naming the interface it
+   was about to become rather than after it already is one. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
 {
     DCHECK(JS_IsObject(proto), "an interface's @@toStringTag was installed on something that is not an object");
-    JS_DefinePropertyValue(ctx, (JSValue)proto, JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG)),
-                           JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
+    DCHECK(iface != NULL && *iface, "an interface prototype object was tagged with no identifier — §3.7.3 makes "
+                                    "the class string the interface's qualified name, so there is nothing to "
+                                    "write and nothing below can name what this object's [[Prototype]] must be");
+#if APICLIENT_DEV
+    idl_assert_inherits(ctx, proto, iface);
+#endif
+    idl_tag_write(ctx, proto, iface);
+}
+
+/* §3.7.3's CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT — the write above without the
+   proto-step assertion above it, because there is exactly one object in this engine that must carry an
+   interface's class string while §3.7.3 says nothing about its [[Prototype]].
+   THE OBJECT IS §7.2.3 The WindowProxy exotic object's PROTOTYPE, and §7.2.3 is explicit in one sentence:
+   "There is no WindowProxy interface object." A WindowProxy answers out of the [[Window]] it wraps, so the
+   class string a page reads off it is WINDOW's identifier — which is also what §3.7.3's tag would say — and
+   the two objects are still not the same object: core/frame/window.c builds the REAL §3.7.3 Window interface
+   prototype object over §3.7.4's named properties object, which is what IDL_INHERITS states and what the
+   assertion above checks. Sending this object through the same call would ask §3.7.3's proto-step question
+   about an object §3.7.3 does not define, and get a confident wrong answer.
+   IT IS DELIBERATELY ITS OWN FUNCTION rather than a flag, for the reason idl_namespace_tag and
+   idl_async_iterator_tag are: which KIND of object is being tagged is a fact the C states, and
+   engine/idl_installed.mjs reads the statement rather than guessing it from a name — both forms seed the same
+   attribution table, so the fifty members installed on this object are still credited to Window.
+   RESIDUAL, NAMED: this says only that §3.7.3's proto step does not govern this object; it does not yet say
+   what DOES. §7.2.3.1 [[GetPrototypeOf]] returns OrdinaryGetPrototypeOf(W) for a same-origin WindowProxy, so
+   `Object.getPrototypeOf(otherWindow)` should reach the same Window.prototype window.c builds, and this engine
+   gives WindowProxy instances a SECOND object in that position. The next diff makes the two one object rather
+   than two, and its absence shows as a cross-origin-capable page finding
+   `Object.getPrototypeOf(frames[0]) !== Window.prototype` while both answer "[object Window]". */
+void idl_class_string(JSContext *ctx, JSValueConst obj, const char *iface)
+{
+    DCHECK(JS_IsObject(obj), "a §3.7.3 class string was installed on something that is not an object");
+    DCHECK(iface != NULL && *iface, "a §3.7.3 class string was written with no identifier — the class string IS "
+                                    "the interface's qualified name, so there is nothing to write");
+    idl_tag_write(ctx, obj, iface);
 }
 
 /* See idl_args.h. §3.13.1's class string on a NAMESPACE object — the same §3.2 descriptor as an interface

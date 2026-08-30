@@ -1176,16 +1176,14 @@ void abort_install_protos(JSContext *ctx)
 
     /* AbortSignal.prototype FIRST: the controller's prototype does not need it, but a signal minted by
        anything at all does, and `abort_signal_new` is reachable from §5.4 the moment this returns. */
-    sig_p = JS_NewObject(ctx);
-    CHECK(!JS_IsException(sig_p), "the AbortSignal.prototype allocation failed");
+    /* §3.2: AbortSignal INHERITS EventTarget, so `addEventListener` and the `onabort` handler attribute are
+       reached through the chain rather than copied onto each signal. */
+    sig_p = event_target_derived_proto(ctx);   /* §3.2: `AbortSignal : EventTarget` */
     /* Web IDL §3.7.3: the interface prototype object carries the interface's identifier as its @@toStringTag,
        which is what makes `Object.prototype.toString.call(controller.signal)` answer "[object AbortSignal]" —
        the brand check a page performs without `instanceof`, and the one wpt asserts about every interface it
        touches. These two were the last interface prototypes in the engine without it. */
     idl_interface_tag(ctx, sig_p, "AbortSignal");
-    /* §3.2: AbortSignal INHERITS EventTarget, so `addEventListener` and the `onabort` handler attribute are
-       reached through the chain rather than copied onto each signal. */
-    event_target_chain(ctx, sig_p);   /* §3.2: `AbortSignal : EventTarget` */
     event_target_install_handlers(ctx, sig_p, EH_SIGNAL);
     {
         JSAtom a = JS_NewAtom(ctx, "aborted"), r = JS_NewAtom(ctx, "reason");

@@ -389,11 +389,9 @@ void broadcast_channel_install_proto(JSContext *ctx)
     DCHECK(JS_IsNull(prev), "broadcast_channel_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "BroadcastChannel.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "BroadcastChannel");
     /* §9.5: `interface BroadcastChannel : EventTarget`, with the same two handler attributes a port has. */
-    event_target_chain(ctx, proto);   /* §9.5: `BroadcastChannel : EventTarget` */
+    proto = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, proto, "BroadcastChannel");
     event_target_install_handlers(ctx, proto, EH_PORT);
     idl_install_accessor(ctx, proto, "name", js_chan_name, 0, -1);
     idl_install_method(ctx, proto, "postMessage", 1, g_id_post);

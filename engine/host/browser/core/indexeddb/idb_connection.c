@@ -711,10 +711,8 @@ static void idb_connection_install_realm(JSContext *ctx)
     prev = JS_GetClassProto(ctx, g_conn_class);
     DCHECK(JS_IsNull(prev), "idb_connection_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "IDBDatabase.prototype could not be allocated");
+    proto = event_target_derived_proto(ctx);   /* `interface IDBDatabase : EventTarget` */
     idl_interface_tag(ctx, proto, "IDBDatabase");
-    event_target_chain(ctx, proto);            /* `interface IDBDatabase : EventTarget` */
     event_target_install_handlers(ctx, proto, EH_IDB_DATABASE);
     idl_install_accessor(ctx, proto, "name", js_conn_get_name, 0, -1);
     idl_install_accessor(ctx, proto, "version", js_conn_get_version, 0, -1);

@@ -273,12 +273,10 @@ static void visual_viewport_install(JSContext *ctx)
                             "first VisualViewport.prototype would answer out of a discarded object");
     JS_FreeValue(ctx, prev);
 
-    proto = JS_NewObject(ctx);
-    CHECK(!JS_IsException(proto), "VisualViewport.prototype could not be allocated");
-    idl_interface_tag(ctx, proto, "VisualViewport");
     /* `interface VisualViewport : EventTarget` — a real prototype chain, so `addEventListener` on the object is
        §2.7's and not a second listener list. */
-    event_target_chain(ctx, proto);
+    proto = event_target_derived_proto(ctx);
+    idl_interface_tag(ctx, proto, "VisualViewport");
     for (i = 0; i < VV_NAMES; i++)
         idl_install_accessor(ctx, proto, VV_NAME[i], js_vv_get, VV_MAGIC[i], -1);
     /* §12's three event handler IDL attributes, declared ON this interface — the mixin bit is what says so. */
