@@ -12,9 +12,12 @@ is written to be served — including the rewrites (/resources/WebIDLParser.js i
 historical name) that engine/wpt.mjs previously carried as a hand-copied table.
 
 Usage:  python3 engine/wptserve.py <wpt-root> <port>
-It prints `READY <port> <origin>` on stdout once bound, and serves until killed — the port is where a client
-CONNECTS, and the origin is what the corpus is SERVED AS (`{{host}}:{{ports[http][0]}}`, the authority every
-`.sub` document asserts its own URLs against). Those are two different facts and both are decided here.
+It prints `READY <http-port> <http-origin> <https-port> <https-origin>` on stdout once bound, and serves until
+killed. Each PAIR is (where a client CONNECTS, what the corpus is SERVED AS) — the second being
+`{{host}}:{{ports[<scheme>][0]}}`, the authority every `.sub` document asserts its own URLs against. Those are
+two different facts and both are decided here. There are two pairs because WPT decides per TEST which one a
+file belongs to, by the `.https` flag in its name; see the third listener below for what this server does and
+does not provide for that scheme.
 """
 import sys
 import os
@@ -94,13 +97,15 @@ _cfg = wptconfig.ConfigBuilder(_Log(),
                                browser_host="web-platform.test",
                                alternate_hosts={"alt": "not-web-platform.test"},
                                doc_root=root,
-                               # THE SECOND HTTP PORT IS SERVED; the two https ports are DECLARED and not
-                               # served, and that difference is deliberate. A declared-but-unserved port makes
-                               # a test that actually fetches https fail to connect — one honest failure in the
-                               # test that reaches for it. Leaving it out of the config instead makes the
-                               # shared helper 500, which reports nothing for every test that imports it,
-                               # including the ones that never touch https. Serving them needs TLS and a
-                               # certificate, which is the next thing to build here.
+                               # THE SECOND HTTP PORT IS SERVED, AND SO IS `ports[https][0]` — see the third
+                               # listener below for what "served" means for that one and what it deliberately
+                               # is not. `ports[https][1]` is DECLARED and not served: it is the ALTERNATE
+                               # host's https origin (`HTTPS_REMOTE_ORIGIN`), which no test DOCUMENT is hosted
+                               # at by this driver, and a declared-but-unserved port makes a test that actually
+                               # reaches for it fail to connect — one honest failure in that test — while
+                               # leaving it out of this dict makes the shared helper 500, which reports nothing
+                               # for every test that merely imports it, including the ones that never touch
+                               # https.
                                # `ws`/`wss` ARE DECLARED AND NOT SERVED, for the reason the https pair above is
                                # and with the same trade read the same way: a declared-but-unserved port makes
                                # a test that actually OPENS a WebSocket fail to connect — one honest failure in
@@ -150,6 +155,35 @@ with stash.StashServer(_stash_addr, authkey=str(uuid.uuid4())), _cfg as cfg:
                                  rewrites=rewrites,
                                  config=cfg, use_ssl=False, key_file=None, certificate=None)
     httpd2.start()
+    # AND `{{ports[https][0]}}` ANSWERS, OVER CLEARTEXT, WHICH IS THE ONE FICTION IN THIS FILE AND IS STATED
+    # RATHER THAN IMPLIED. A WPT test whose name carries the `.https` feature flag is, in WPT's own words,
+    # "loaded over HTTPS" (web-platform-tests.org/writing-tests/file-names.html, "Test Features"), and the rule
+    # is machine-readable: tools/manifest/item.py's `https` property is true when "https" is among the
+    # dot-separated flags of the file name, and tools/wptrunner/wptrunner/wpttest.py's `server_protocol` returns
+    # "https" for exactly those. That flag is not decoration — Web IDL §3.3.7 [Exposed]'s step 2 removes every
+    # [SecureContext] member from a realm whose settings object is not a secure context, so a `.https.` test run
+    # at an `http://` address is asking the engine a question about a surface the engine has correctly deleted.
+    # Measured: 123 of WebCryptoAPI's 125 test documents are `.https.`, every one of them begins
+    # `var subtle = crypto.subtle`, and the whole family read "cannot read property 'importKey' of undefined".
+    #
+    # WHAT IS REAL HERE AND WHAT IS NOT. The PORT is real — this listener binds `cfg.ports["https"][0]`, the
+    # very number the `sub` pipe substitutes into `{{ports[https][0]}}`, so a document hosted here and a
+    # `get-host-info.sub.js` that names HTTPS_ORIGIN agree about the authority instead of straddling two. The
+    # HOST is real. The SCHEME the runner is told is the scheme WPT's own rule assigns the file. What is NOT
+    # real is TLS: these bytes are cleartext, because engine/host/wpt_runner.c speaks HTTP over a plain
+    # AF_INET socket and has no TLS client at all.
+    # SO THE RESIDUAL, BY NAME: this gate can measure everything a secure context DECIDES — Web IDL §3.3.7's
+    # exposure, and every member behind it — and nothing the HANDSHAKE does. A test whose subject is a
+    # certificate error, a mixed-content block, or an HSTS upgrade is measured here against a connection that
+    # never negotiated anything, and would pass or fail for a reason that is not the one it is testing. The
+    # next diff is a TLS client in wpt_runner.c's connection pool — bound to a library, never hand-rolled —
+    # after which `use_ssl=True` with `cfg.ssl_config`'s generated key and certificate replaces this listener
+    # and this comment goes with it. Its absence shows as a run in which no test can distinguish this server
+    # from one that upgraded it: nothing here will ever report a TLS failure, because nothing here does TLS.
+    httpd3 = server.WebTestHttpd(host="127.0.0.1", port=cfg.ports["https"][0], doc_root=root, routes=routes,
+                                 rewrites=rewrites,
+                                 config=cfg, use_ssl=False, key_file=None, certificate=None)
+    httpd3.start()
     # THE ORIGIN THE CORPUS IS SERVED *AS*, WHICH THE ADDRESS ABOVE DOES NOT STATE. A client connects to a
     # loopback socket; a `.sub` document asserts its own URLs against `{{host}}:{{ports[http][0]}}`, and
     # tools/wptserve/wptserve/pipes.py reads BOTH of those off the config object below — `{{host}}` is
@@ -169,7 +203,16 @@ with stash.StashServer(_stash_addr, authkey=str(uuid.uuid4())), _cfg as cfg:
         # a runner were told, it would be lied to about the other. There is nothing to serve after that.
         sys.exit("wptserve: bound port %d but the config substitutes %d into every .sub document"
                  % (httpd.port, cfg.ports["http"][0]))
-    sys.stdout.write("READY %d http://%s:%d\n" % (httpd.port, cfg.browser_host, cfg.ports["http"][0]))
+    # TWO PAIRS, AND EACH PAIR IS (WHERE A CLIENT DIALS, WHAT THE BYTES ARE SERVED AS). They are two facts per
+    # scheme for the reason the paragraph above gives, and the two SCHEMES are two pairs because which one a
+    # test belongs to is a property of the TEST — WPT's `.https` file-name flag — and not of the run. The
+    # ports inside each pair are the same number by construction (each listener binds the port its own origin
+    # names), which is what lets engine/host/wpt_runner.c keep asserting that the address it dials and the
+    # authority it resolves against name one port: that assert catches a stale origin, and it would have had to
+    # be weakened had the https origin been hosted on the http listener's port.
+    sys.stdout.write("READY %d http://%s:%d %d https://%s:%d\n"
+                     % (httpd.port, cfg.browser_host, cfg.ports["http"][0],
+                        httpd3.port, cfg.browser_host, cfg.ports["https"][0]))
     sys.stdout.flush()
 # WebTestHttpd.start() runs the server on its own thread and returns, so this one blocks until it is killed.
 # There is no join to call — `start`, `get_url` and `stop` are the whole of its surface.

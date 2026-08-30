@@ -1060,9 +1060,11 @@ void idl_async_iterator_tag(JSContext *ctx, JSValueConst aproto, const char *ifa
    rewrite. Returns <0 with an exception pending. */
 int idl_freeze_array(JSContext *ctx, JSValueConst arr);
 
-/* WEB IDL §3.9's EXPOSURE CONDITIONS — the extended attributes that decide whether a member EXISTS in a
- * realm, as opposed to what it answers. §3.9's "is exposed in realm" is four steps and this is the one of them
- * that is not about which global the member is on.
+/* WEB IDL §3.3.7 [Exposed]'s EXPOSURE CONDITIONS — the extended attributes that decide whether a member EXISTS
+ * in a realm, as opposed to what it answers. The "is exposed in realm" algorithm defined under that heading is
+ * four steps and this is the one of them that is not about which global the member is on. (It read §3.9 here
+ * and in idl_args.c, which is "Legacy platform objects" — see the note at idl_exposed for why a number that
+ * RESOLVES to the wrong real section is the one shape engine/citegen.mjs cannot see without a title beside it.)
  *
  * §3.3.13's [SecureContext] REMOVES THE MEMBER. The spec's own example is unambiguous — "in a non-secure
  * context there will be no `calculateSecretResult` property on ExampleFeature.prototype" — so this is never a
@@ -1078,7 +1080,7 @@ int idl_freeze_array(JSContext *ctx, JSValueConst arr);
  * member converges on — is where the condition is asked. A component that states the attribute has done
  * everything the IDL asks of it.
  *
- * THE OTHER TWO §3.9 CONDITIONS ARE HONESTLY ABSENT, and their absence is not a default. [Exposed] is decided
+ * THE OTHER TWO §3.3.7 CONDITIONS ARE HONESTLY ABSENT, and their absence is not a default. [Exposed] is decided
  * by WHICH global a component installs on and this engine has exactly one global kind (there is no
  * WorkerGlobalScope), so every member's exposure set is trivially satisfied. [CrossOriginIsolated] is decided
  * by HTML §7.2.2's cross-origin isolated capability, which core/frame/agent_cluster.h now ANSWERS — false for

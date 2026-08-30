@@ -27,7 +27,8 @@
 #include "quickjs-step.h"
 #include "solver/concolic.h"
 #include "core/idl_args.h"
-#include "core/frame/secure_context.h"   /* §3.9's exposure conditions: HTML §8.1.3.5's answer for this realm */
+#include "core/frame/secure_context.h"   /* §3.3.7 [Exposed]'s conditions: HTML §8.1.3.5 Secure contexts' answer
+                                            for this realm */
 #include "core/frame/window_proxy.h"     /* §3.7.6's `jsValue`: the receiver resolution and its Window brand */
 #include "core/streams/readable_stream.h"
 #include "core/idl_iter.h"
@@ -3784,8 +3785,18 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
     JS_FreeAtom(ctx, a);
 }
 
-/* WEB IDL §3.9's "is exposed in realm", for the conditions this engine models — see idl_args.h for why the
-   question is asked HERE and the answer is stated by the component as data.
+/* WEB IDL §3.3.7 [Exposed]'s "is exposed in realm", for the conditions this engine models — see idl_args.h for
+   why the question is asked HERE and the answer is stated by the component as data.
+   THE NUMBER USED TO READ §3.9, WHICH IS "LEGACY PLATFORM OBJECTS" — a section that exists, is about
+   [[GetOwnProperty]] on a legacy caller and has no exposure step in it at all. That is the wrong-citation
+   failure this project calls worse than none: it reads as authoritative and sends the reader to a section that
+   does not say what the code claims. It also could not be caught, and the reason is exactly the blind spot
+   engine/citegen.mjs is required to state beside itself — the section RESOLVED, because §3.9 is a real
+   section, and the citation carried no TITLE for the checker to disagree with. So it carries one now, which is
+   what makes the next such mistake visible instead of silent.
+   The algorithm is defined under that heading and its steps are numbered there: step 1 is the exposure set,
+   step 2 is "If realm's settings object is not a secure context, and construct is conditionally exposed on
+   [SecureContext], then return false", step 3 is [CrossOriginIsolated], step 4 returns true.
    IT IS `static` DELIBERATELY. A public predicate is an invitation to write `if (idl_exposed(ctx, ...))` at a
    call site, which is the per-member conditional the parameter exists to remove; the only way to reach this is
    to hand an installer the attribute the IDL states. When a [SecureContext] member of a shape that has no
@@ -3795,10 +3806,11 @@ static bool idl_exposed(JSContext *ctx, IdlExposure exposure)
 {
     switch (exposure) {
     case IDL_EXPOSED:        return true;
-    case IDL_SECURE_CONTEXT: return secure_context_is(ctx);   /* §3.9 step 2 */
+    case IDL_SECURE_CONTEXT: return secure_context_is(ctx);   /* §3.3.7 [Exposed] step 2 */
     }
-    DFAIL("a member was installed with an exposure condition Web IDL §3.9 has no step for — every value of "
-          "IdlExposure is one of §3.9's numbered conditions, so a new one is a new step to write here");
+    DFAIL("a member was installed with an exposure condition Web IDL §3.3.7 [Exposed] has no step for — every "
+          "value of IdlExposure is one of that algorithm's numbered conditions, so a new one is a new step to "
+          "write here");
     return true;
 }
 
@@ -3960,7 +3972,7 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
  * DECIDED rather than where the receiver arrives. §3.7.6's TypeError is about `target`, and this file mints
  * the accessor without being told which interface that is — so what it relies on is that every member reaching
  * it belongs to the one [Global] interface this engine has. `target` being the realm's global object IS that
- * fact (idl_args.h's §3.9 note states the same thing from the other side: there is no WorkerGlobalScope here,
+ * fact (idl_args.h's §3.3.7 note states the same thing from the other side: there is no WorkerGlobalScope here,
  * so one global kind means one [Global] interface), and the day a component declares a [Replaceable] or a
  * held-value attribute on an ordinary interface this fires and names the brand that must then become data the
  * component states — the way IdlExposure and IdlAttrForge already are.

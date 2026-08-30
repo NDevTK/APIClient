@@ -560,6 +560,27 @@ function fileFlags(filename) {
            typeFlag: hyphen >= 0 ? parts[0] : null,
            meta: parts.slice(1) };
 }
+/* WHICH SCHEME A TEST IS LOADED OVER — `tools/manifest/item.py`'s `https` property, ported like every other
+   rule here, and read by `tools/wptrunner/wptrunner/wpttest.py`'s `server_protocol` for exactly this purpose.
+   WPT's own file-name documentation states it in one line: `.https` "Indicates that a test is loaded over
+   HTTPS" (web-platform-tests.org/writing-tests/file-names.html, "Test Features"). The two `serviceworker`
+   flags come with it because item.py's property is that same disjunction — a service worker registration
+   requires a secure context, so those files are https whether or not anybody wrote the flag twice.
+   THIS IS NOT A PRESENTATION DETAIL AND IT WAS BEING DROPPED. A test's scheme decides whether its realm is a
+   SECURE CONTEXT, and Web IDL §3.3.7 [Exposed] step 2 — "If realm's settings object is not a secure context,
+   and construct is conditionally exposed on [SecureContext], then return false" — DELETES every such member
+   from a realm that is not one. Running a `.https.` file at an `http://` address therefore does not merely
+   mislabel it: it hands the file a platform surface with a hole in it and reports the hole as the engine's.
+   Measured on WebCryptoAPI, where 123 of 125 test documents are `.https.`: every one begins
+   `var subtle = crypto.subtle`, `crypto.subtle` is `[SecureContext]` (Web Cryptography §10.2.1 "The subtle
+   attribute"), and the family read 9246 failures of "cannot read property 'importKey' of undefined" — a number
+   about HOW the run was configured, reported as a defect in WHAT ran, which is this gate's own recurring
+   defect and the third time it has been this exact shape. */
+function testIsHttps(rel) {
+  const parts = rel.split("/");
+  const meta = fileFlags(parts[parts.length - 1]).meta;
+  return meta.includes("https") || meta.includes("serviceworker") || meta.includes("serviceworker-module");
+}
 /* sourcefile.py's `name_is_non_test` + `in_non_test_dir`. A SUPPORT PATH IS ANY PART OF THE PATH, which is
    what this file had hand-copied as `p !== "common" && !p.endsWith("/resources")` — a list applied to the
    WPT_PATHS ENTRY rather than to the file, so `FileAPI/support` was listed as an area and its support documents
@@ -1135,12 +1156,28 @@ const ready = await new Promise((resolve, reject) => {
       reject(new Error(`wptserve exited (${serverEnded()}) before it reported READY`));
       return;
     }
-    const m = /READY (\d+) (\S+)\n/.exec(readFileSync(SERVER_LOG, "utf8"));
-    if (m) { clearTimeout(fail); clearInterval(poll); resolve({ addr: "127.0.0.1:" + m[1], origin: m[2] }); }
+    /* TWO PAIRS, one per scheme, each (dial, served-as) — see engine/wptserve.py's READY line for why the
+       scheme is a second pair rather than a second field, and `testIsHttps` below for who chooses between
+       them. A pattern that matched only the http pair would resolve the instant the line was written and
+       silently leave every `.https.` test at an http address, which is the state this pair replaces. */
+    const m = /READY (\d+) (\S+) (\d+) (\S+)\n/.exec(readFileSync(SERVER_LOG, "utf8"));
+    if (m) {
+      clearTimeout(fail); clearInterval(poll);
+      resolve({ http:  { addr: "127.0.0.1:" + m[1], origin: m[2] },
+                https: { addr: "127.0.0.1:" + m[3], origin: m[4] } });
+    }
   }, 50);
 }).catch((e) => { console.error("[wpt] " + e.message); process.exit(1); });
-const serverAddr = ready.addr, serverOrigin = ready.origin;
-console.log(`[wpt] wptserve on ${serverAddr}, serving the corpus as ${serverOrigin}; its log: ${SERVER_LOG}`);
+/* THE HTTP PAIR STAYS THIS DRIVER'S OWN, and that is a statement about who is speaking rather than a default.
+   Everything below that uses these two names is the DRIVER talking to the server on its own account — the
+   liveness probe, and the `.sub` substitution fetch that turns a template into the bytes a test is written
+   against — and neither of those is a document with an address. Which origin a TEST is hosted at is a
+   different question, asked per test at the spawn. */
+const serverAddr = ready.http.addr, serverOrigin = ready.http.origin;
+const serverHttps = ready.https;
+console.log(`[wpt] wptserve on ${serverAddr}, serving the corpus as ${serverOrigin} and — over cleartext, ` +
+            `which engine/wptserve.py names as its one fiction — as ${serverHttps.origin} on ` +
+            `${serverHttps.addr}; its log: ${SERVER_LOG}`);
 process.on("exit", () => server.kill());
 
 function serverEnded() {
@@ -1402,6 +1439,10 @@ for (const { file: f, kind, variant } of runs) {
   const path = relative(WPT, f);
   const rel = path + variant;
   const area = byArea(path);
+  /* WHERE THIS TEST IS HOSTED — decided from the FILE, once, here, so the two facts the spawn passes cannot
+     come from different answers. It is asked of `path` and not of `rel`: a variant is a query string on the
+     same file, and WPT reads the scheme flag off the file NAME. */
+  const hosted = testIsHttps(path.split(sep).join("/")) ? serverHttps : { addr: serverAddr, origin: serverOrigin };
   const failures = area.lines;   /* held until this AREA finishes, not until the run does */
   area.runs++;
   attempted++;
@@ -1535,11 +1576,14 @@ for (const { file: f, kind, variant } of runs) {
                          ...(kind === "document" ? ["--test-document"] : []),
                          ...(variant ? ["--variant", variant] : []), HARNESS, ...deps, f],
                         { encoding: "utf8", maxBuffer: 1 << 28, timeout: WALL_BACKSTOP_MS,
-                          env: { ...process.env, WPT_SERVER: serverAddr,
+                          env: { ...process.env, WPT_SERVER: hosted.addr,
                                  /* WHERE TO CONNECT AND WHAT THE BYTES ARE SERVED AS — two facts, both the
                                     server's, neither derivable from the other. The runner asserts they name
-                                    one port (wpt_derive_addresses) and has no literal to fall back to. */
-                                 WPT_TOP_ORIGIN: serverOrigin } });
+                                    one port (wpt_derive_addresses) and has no literal to fall back to.
+                                    WHICH PAIR is `testIsHttps`'s answer for THIS file, so the two stay one
+                                    server: each listener binds the port its own origin names, which is what
+                                    keeps that assert at full strength across both schemes. */
+                                 WPT_TOP_ORIGIN: hosted.origin } });
     const cpuUsed = childCpuDelta(cpu0, childCpuSeconds());
     const out = (r.stdout || "") + (r.stderr || "");
     /* An ABORT is a result about this file, not an accident: it is a DCHECK naming a capability the browser half
