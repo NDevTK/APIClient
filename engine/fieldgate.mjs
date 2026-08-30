@@ -845,10 +845,71 @@ const awaitedMethod = (recv) => {
   return m ? m[1] : null;
 };
 
+/* A FUNCTION WHOSE LAST STATEMENT IS `throw` DOES NOT RETURN, so a catch that calls one is a catch that
+   rethrows — and the NAMES of those functions are COMPUTED here rather than listed, because a list is the one
+   shape that goes short. This gate already knew it needed the concept: `RETHROW_FATAL` is named in the regex
+   below with a paragraph explaining that missing it "reported the most carefully asserted reads in the bridge
+   as concealed ones". The same omission was live for `extension/mojo.js`, whose EVERY catch is
+   `catch (e) { …; this.conn._crash(e); }` and whose `_crash` ends in `throw e` — the transport's own comment
+   says so in as many words ("Both then RETHROW: the assert is the mechanism and a transport that swallowed it
+   would be the one place the ONE assertion mechanism is locally disabled"). Reported as swallowing, that was
+   23 alarms on the most heavily asserted file in the corpus, and adding `_crash` to the regex would have
+   bought the twenty-fourth spelling the same fate. So the question asked is the STRUCTURAL one — does the
+   thing this catch calls always throw — and it is asked of the file's own definitions.
+   ONLY THE SAME FILE IS CONSULTED, deliberately: a name resolved across files would need a module graph this
+   scan does not have, and guessing one would put a plausible answer where §REFUSED demands an unreadable one.
+   A cross-file rethrow helper therefore still reports, which is the direction that under-credits rather than
+   over-credits — the same asymmetry the reader-crediting paragraph below chooses. */
+function alwaysThrowingNames(struct) {
+  const names = new Set();
+  /* THE NAME IS THE LAST SEGMENT OF THE BINDING, which is what a call site spells: `Connection.prototype._crash`
+     is called as `this.conn._crash(…)`, and `[\w$]` cannot cross the dot, so the capture is `_crash` already. */
+  const heads = [
+    /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g,               // function f(…) {…}
+    /([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?function\b/g,   // …x.y.f = function (…) {…}
+    /([A-Za-z_$][\w$]*)\s*:\s*(?:async\s+)?function\b/g,   // { f: function (…) {…} }
+  ];
+  for (const re of heads) {
+    let m;
+    while ((m = re.exec(struct))) {
+      /* The body is the first brace after the parameter list, and the parameter list is the first paren after
+         the head — taken by matching rather than by scanning, so a default value containing a brace cannot
+         move the answer. */
+      const paren = struct.indexOf("(", m.index + m[0].length - 1);
+      if (paren < 0) continue;
+      const afterParams = matchAt(struct, paren);
+      if (afterParams < 0) continue;
+      const open = sig(struct, afterParams, struct.length);
+      if (struct[open] !== "{") continue;
+      const close = matchAt(struct, open);
+      if (close < 0) continue;
+      if (endsInThrow(struct.slice(open + 1, close - 1))) names.add(m[1]);
+    }
+  }
+  return names;
+}
+
+/* Does this body's LAST top-level statement throw? Scanned from the end so a `throw` in some earlier branch
+   does not answer for the whole function — a helper that throws only on one arm still returns on the others,
+   and crediting it would let a genuinely swallowing catch through. */
+function endsInThrow(body) {
+  let end = body.length;
+  while (end > 0 && /[\s;]/.test(body[end - 1])) end--;
+  let depth = 0, start = 0;
+  for (let i = end - 1; i >= 0; i--) {
+    const c = body[i];
+    if (c === ")" || c === "]" || c === "}") depth++;
+    else if (c === "(" || c === "[" || c === "{") { if (--depth < 0) { start = i + 1; break; } }
+    else if (depth === 0 && c === ";") { start = i + 1; break; }
+  }
+  return /^\s*throw\b/.test(body.slice(start, end));
+}
+
 /* A swallowing try: its catch body neither rethrows nor asserts, so every read inside the try is a read whose
    absence the consumer has already decided to survive. §Architecture names `a catch {} around a read` in the
    same breath as `|| 0` for exactly this reason. */
 function swallowingTrySpans(struct) {
+  const rethrowers = alwaysThrowingNames(struct);
   const spans = [];
   const re = /\btry\s*\{/g;
   let m;
@@ -869,6 +930,10 @@ function swallowingTrySpans(struct) {
        that calls it is not swallowing, and missing that reported the most carefully asserted reads in the
        bridge (safeFetch's reply record, DCHECKed field by field) as concealed ones. */
     if (/\bthrow\b|\bDCHECK\b|\bCHECK\b|\bDFAIL\b|\bRETHROW_FATAL\b/.test(body)) continue;
+    /* …AND THE SAME QUESTION ASKED OF WHAT THE BODY CALLS — see `alwaysThrowingNames`. A catch whose whole
+       job is to hand the failure to a helper that ends in `throw` re-raises exactly as a literal `throw`
+       does, and the helper is what a corpus with a real transport in it will always have. */
+    if ([...body.matchAll(/([A-Za-z_$][\w$]*)\s*\(/g)].some((c) => rethrowers.has(c[1]))) continue;
     spans.push([open, close]);
     re.lastIndex = cbEnd;
   }

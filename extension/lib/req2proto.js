@@ -430,13 +430,17 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
       return { error: resp.error, fields: [], metadata: {} };
     }
 
+    /* `resp` IS THE PAGE-CONTEXT RELAY'S RECORD AND lib/schema.js HAS ALREADY PROVEN ITS SHAPE — see
+       `_checkPageFetchReply`, which asserts headers/body/status on every non-error answer. So the `?.` on
+       `headers` is gone: what is genuinely optional is a HEADER, which is a fact about the server this probe
+       is here to learn, and `|| ""` on the key lookup is that fact read as one. */
     const respCt =
-      resp.headers?.["content-type"] || resp.headers?.["Content-Type"] || "";
+      resp.headers["content-type"] || resp.headers["Content-Type"] || "";
 
     // Extract scopes from Www-Authenticate on 403 (gapi-service fetch.go line 12)
     let scopes = null;
     if (resp.status === 403) {
-      const wwwAuth = resp.headers?.["www-authenticate"] || "";
+      const wwwAuth = resp.headers["www-authenticate"] || "";
       const scopeMatch = wwwAuth.match(/scope="([^"]*)"/);
       if (scopeMatch) scopes = scopeMatch[1].split(/\s+/);
     }
@@ -496,6 +500,14 @@ async function sendProbe(url, payload, contentType, headers, fetchFn) {
       raw: jsonBody,
     };
   } catch (err) {
+    /* AN INVARIANT ABORT IS NOT A PROBE THAT FAILED. Everything inside this try runs through the relay —
+       `_requireFetchFn`'s CHECK, `pageContextFetch`'s method DCHECK, and the reply-record assert this file
+       now relies on — and each of those is a THROW on this side (extension/check.js). Without this line a
+       broken relay contract came back as `{ error: <the assert's own message> }`, which every caller reads as
+       "the service refused the probe": the one reading in which nobody looks at this extension, and one that
+       then propagates, because an error probe's whole output is a description of a service derived from what
+       came back. Everything a real probe failure can be is still handled as this catch intends. */
+    RETHROW_FATAL(err);
     return { error: err.message, fields: [], metadata: {} };
   }
 }
@@ -791,16 +803,16 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
 
       // Extract scopes from 403 Www-Authenticate (fetch.go lines 39-45)
       if (resp.status === 403) {
-        const wwwAuth = resp.headers?.["www-authenticate"] || "";
+        const wwwAuth = resp.headers["www-authenticate"] || "";
         const scopeMatch = wwwAuth.match(/scope="([^"]*)"/);
         if (scopeMatch) {
           scopes = scopeMatch[1].split(/\s+/).filter(Boolean);
         }
       }
 
-      // Parse response body for service/method metadata
+      /* Same record, same proof — lib/schema.js's `_checkPageFetchReply`. The optional thing is the HEADER. */
       const respCt =
-        resp.headers?.["content-type"] || resp.headers?.["Content-Type"] || "";
+        resp.headers["content-type"] || resp.headers["Content-Type"] || "";
 
       // ── Binary protobuf response (gapi-service parse.go lines 59-80) ──
       if (resp.bodyEncoding === "base64" || isBinaryContentType(respCt)) {
@@ -822,6 +834,7 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
           // Protobuf error-details decode failed — corrupt or non-standard
           // error envelope. service/method extraction falls through to the
           // next strategy (JSON / JSPB body).
+          RETHROW_FATAL(e);
           if (typeof console !== "undefined") console.debug("[req2proto] protobuf error-details decode failed:", e && e.message || e);
         }
       }
@@ -832,7 +845,7 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
         !respCt.includes("json+protobuf")
       ) {
         try {
-          const body = JSON.parse(resp.body || "");
+          const body = JSON.parse(resp.body);
           if (body?.error?.details) {
             for (const detail of body.error.details) {
               if (detail.metadata?.service)
@@ -845,13 +858,14 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
           // JSON error-details parse failed — body isn't valid JSON despite
           // the application/json content-type (servers misreport). Fall
           // through to JSPB strategy.
+          RETHROW_FATAL(e);
           if (typeof console !== "undefined") console.debug("[req2proto] JSON error-details parse failed:", e && e.message || e);
         }
       }
 
       // ── JSPB / protojson response (parse.go lines 41-45) ──
       else if (respCt.includes("json+protobuf") || (!service && !method)) {
-        const jspbMeta = parseJspbMetadata(resp.body || "");
+        const jspbMeta = parseJspbMetadata(resp.body);
         if (jspbMeta.service) service = service || jspbMeta.service;
         if (jspbMeta.method) method = method || jspbMeta.method;
       }
@@ -868,6 +882,11 @@ async function discoverServiceInfo(url, headers = {}, opts = {}) {
       // If we found everything, stop early
       if (service && method && scopes) break;
     } catch (err) {
+      /* AN INVARIANT ABORT IS NOT A CONTENT-TYPE THAT DID NOT WORK, and this catch is inside the LOOP, which
+         made it the worse of the two shapes: a broken relay contract became one `details` row and the probe
+         went on to try the next content type, so a caller got a full result whose every arm had aborted for
+         the same reason and nothing said so. Everything a real probe failure can be is still a detail row. */
+      RETHROW_FATAL(err);
       details.push({ contentType: ct, error: err.message });
     }
   }

@@ -545,8 +545,12 @@ async function executeSendRequest(documentId, msg) {
     return { error: resp.error, timing };
   }
 
-  // Decode response
-  const respCt = resp.headers?.["content-type"] || "";
+  /* EVERY FIELD READ BELOW IS ONE lib/schema.js's `_checkPageFetchReply` HAS ALREADY PROVEN EXISTS, which is
+     why none of them is read through a default any more. `resp.headers` is an object, so the `?.` is gone; the
+     KEY lookup keeps its `|| ""` because a response legitimately carries no content-type and "" is what the
+     sniffs below are written against — an absent HEADER is a fact about the server, an absent `headers` was a
+     fact about this extension, and only the second was ever being concealed. */
+  const respCt = resp.headers["content-type"] || "";
   let bodyResult;
 
   if (isGrpcWeb(respCt)) {
@@ -576,7 +580,12 @@ async function executeSendRequest(documentId, msg) {
           } catch (e) {
             /* One frame's protobuf decode failed — other frames in the
                same response still process. Surface so a malformed frame
-               on an otherwise-valid response is visible. */
+               on an otherwise-valid response is visible.
+               THE CALLBACK ABOVE RUNS `extractKeysFromText`, WHICH IS THE ENGINE-FACING HALF OF THIS ZONE, so
+               this catch sits directly downstream of code that asserts. Without this line a DCHECK raised in
+               there would be logged once at debug level as one bad protobuf frame, and the loop would carry
+               on over the rest — an invariant abort turned into a per-frame note nobody reads. */
+            RETHROW_FATAL(e);
             console.debug("[brain] send-response grpc-web frame decode failed:", e && e.message || e, "url=" + url);
           }
         }
@@ -594,12 +603,13 @@ async function executeSendRequest(documentId, msg) {
          the raw response, but surface the parse failure so the format
          mismatch (likely a server bug or wrong content-type) is
          diagnosable. */
+      RETHROW_FATAL(e);
       console.warn("[brain] send-response grpc-web parse failed:", e && e.message || e, "url=" + url);
       bodyResult = {
         format: "binary",
         parsed: null,
         raw: resp.body,
-        size: (resp.body || "").length,
+        size: resp.body.length,
       };
     }
   } else if (
@@ -613,7 +623,11 @@ async function executeSendRequest(documentId, msg) {
     bodyResult = {
       format: "binary_download",
       raw: resp.body,
-      bodyEncoding: resp.bodyEncoding || "text",
+      /* THE ABSENCE IS THE STATEMENT, SPELLED AS ONE. content.js writes `bodyEncoding` on its binary arm
+         alone, so "not base64" IS "text" — asserted in lib/schema.js, which admits no third spelling. Written
+         `|| "text"` this said the same word for a relay that declared text and for one that had stopped
+         declaring anything, and the popup would have decoded the second as text on the strength of it. */
+      bodyEncoding: resp.bodyEncoding === "base64" ? "base64" : "text",
       contentType: respCt,
       size,
     };
@@ -635,17 +649,21 @@ async function executeSendRequest(documentId, msg) {
         raw: resp.body,
         size: bytes.length,
       };
-    } catch (_) {
+    } catch (e) {
+      /* A protobuf tree this decoder cannot walk is a DATUM about the bytes — the reviewer still gets the raw
+         response. An invariant abort is not one and travels on, or a broken relay contract would be rendered
+         as a server that answered unparseable protobuf. */
+      RETHROW_FATAL(e);
       bodyResult = {
         format: "binary",
         parsed: null,
         raw: resp.body,
-        size: (resp.body || "").length,
+        size: resp.body.length,
       };
     }
   } else {
     // Try JSON parse (strip Google XSSI prefix if present)
-    let jsonText = resp.body || "";
+    let jsonText = resp.body;
     if (jsonText.trimStart().startsWith(")]}'")) {
       jsonText = jsonText.trimStart().substring(4).trimStart();
     }
@@ -666,7 +684,7 @@ async function executeSendRequest(documentId, msg) {
           format: "protobuf_tree",
           parsed: jspbToTree(parsed),
           raw: resp.body,
-          size: (resp.body || "").length,
+          size: resp.body.length,
           isJspb: true,
         };
       } else {
@@ -674,15 +692,19 @@ async function executeSendRequest(documentId, msg) {
           format: "json",
           parsed,
           raw: resp.body,
-          size: (resp.body || "").length,
+          size: resp.body.length,
         };
       }
-    } catch (_) {
+    } catch (e) {
+      /* "It is not JSON" is a FACT ABOUT THE RESPONSE and the text arm is the right answer to it. An invariant
+         abort is not, and without this line a broken relay record would be rendered to the reviewer as a
+         server that returned plain text. */
+      RETHROW_FATAL(e);
       bodyResult = {
         format: "text",
         parsed: null,
-        raw: resp.body || "",
-        size: (resp.body || "").length,
+        raw: resp.body,
+        size: resp.body.length,
       };
     }
   }
@@ -693,8 +715,12 @@ async function executeSendRequest(documentId, msg) {
   return {
     ok: resp.ok,
     status: resp.status,
-    statusText: resp.statusText || "",
-    headers: resp.headers || {},
+    /* `""` IS A REAL ANSWER HERE, which is exactly why it may not double as a missing one: an HTTP/2 response
+       carries no reason phrase, so `|| ""` said the same two bytes for that server and for a relay that had
+       stopped writing the field. lib/schema.js asserts the string exists; this passes on whichever one it is.
+       (extension/bridge.js's `fetchedXhr` states the same rule for the same reason.) */
+    statusText: resp.statusText,
+    headers: resp.headers,
     body: bodyResult,
     timing,
     discovery, // Pass back latest doc (+ summary/apiKey)

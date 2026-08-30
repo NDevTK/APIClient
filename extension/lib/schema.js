@@ -347,6 +347,50 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
 // opened to the initiator origin so the content script loads and carries the
 // right cookies + Origin.
 
+/* WHAT THE RELAY ANSWERS, ASSERTED WHERE THE RECORD CROSSES BACK INTO THIS ZONE — ONCE, rather than at each
+   of the consumers that read it. `content.js handlePageFetch` has exactly TWO answers and this is the line
+   that says so:
+     • a NETWORK-ERROR arm, `{ error }` — its `fetch()` rejected, which Fetch §5.6 Fetch methods defines as
+       the TypeError a network error becomes. That is an OUTCOME the caller is entitled to, not a broken
+       contract, and it carries no other field.
+     • a SUCCESS record, which that function returns from two `return`s (the binary arm and the text arm) and
+       writes `ok`/`status`/`statusText`/`headers`/`body` on BOTH. `bodyEncoding` is written on the BINARY arm
+       ALONE, so its ABSENCE IS THE POSITIVE STATEMENT "these bytes are text" — the one field here a consumer
+       may legitimately not find, and the reason this asserts `undefined`-or-`"base64"` rather than presence.
+   IT IS ASSERTED HERE BECAUSE THIS IS THE ORIGIN. Every consumer of this record — lib/send.js's manual
+   replay, lib/req2proto.js's error probe — reads the SAME two answers, so a contract checked at each of them
+   is the hand-copied list CLAUDE.md warns about: one copy goes short and the field it stopped naming becomes
+   a default in that consumer alone. Downstream of this line every field named here is a field that EXISTS,
+   which is what lets `resp.body || ""` and `resp.headers?.[k]` be deleted rather than kept "just in case" —
+   and each of those was a place where a relay that stopped writing a field would have rendered an empty
+   response body, or a header list with nothing in it, as the server's own answer.
+   THE ERROR ARM IS CHECKED TOO, and it is not symmetry for its own sake: `{ error: undefined }` reads as a
+   SUCCESS record here and then as a body-less response downstream, so an error whose message went missing is
+   the one shape that would pass through this whole edge saying nothing. */
+function _checkPageFetchReply(reply, url) {
+  DCHECK(!!reply && typeof reply === "object",
+         "the page-context relay answered a PAGE_FETCH with no record at all — content.js returns one from " +
+         "every arm of handlePageFetch and swRpc passes it back verbatim, so an absent one is that relay or " +
+         "the service worker's __rpc envelope broken, for " + url);
+  if ("error" in reply) {
+    DCHECK(typeof reply.error === "string" && reply.error !== "",
+           "the page-context relay answered a PAGE_FETCH with an `error` that names nothing — the reason IS " +
+           "the whole of what this arm carries, and an empty one is reported to the reviewer as a request " +
+           "that failed for no stated cause, for " + url);
+    return;
+  }
+  DCHECK(typeof reply.ok === "boolean" && typeof reply.status === "number" &&
+         typeof reply.statusText === "string" && !!reply.headers && typeof reply.headers === "object" &&
+         typeof reply.body === "string",
+         "the page-context relay answered a PAGE_FETCH with an incomplete response record — handlePageFetch " +
+         "writes ok/status/statusText/headers/body on BOTH of its success returns, and a consumer that finds " +
+         "one missing renders the gap as the server's own answer, for " + url);
+  DCHECK(reply.bodyEncoding === undefined || reply.bodyEncoding === "base64",
+         "the page-context relay named a body encoding this edge does not speak — content.js writes " +
+         "`bodyEncoding: \"base64\"` on its binary arm and NOTHING on its text arm, so absence means text " +
+         "and any third spelling is a body every consumer would decode as the wrong one, for " + url);
+}
+
 /**
  * Send a PAGE_FETCH message to a tab's content script.
  */
@@ -357,19 +401,34 @@ async function _sendPageFetch(tabId, url, opts, documentId) {
   // no target option tabs.sendMessage would broadcast to every frame in the tab.
   // No documentId → refuse rather than risk a wrong-origin / broadcast read.
   if (!documentId) return { error: "blocked: no documentId for page-context fetch" };
-  return swRpc(
+  /* THE METHOD IS THE CALLER'S, NEVER THIS LINE'S. `pageContextFetch` DCHECKs it is a non-empty string before
+     this literal is built and content.js DCHECKs it again where the message lands, so a `|| "GET"` here was a
+     THIRD copy of a default whose only reachable effect is to run a different request than the caller named —
+     the very substitution both of those asserts exist to prevent. `headers` is the same: all three entries
+     write one (possibly empty), so a hole here would be a header list a caller composed and this line quietly
+     replaced with none. */
+  DCHECK(!!opts.headers && typeof opts.headers === "object",
+         "a page-context fetch reached the relay with no headers object — every entry writes one (empty when " +
+         "there is nothing to send), and an absent one is a header list its caller composed and this " +
+         "message would carry none of");
+  const reply = await swRpc(
     "tabs.sendMessage",
     tabId,
     {
       type: "PAGE_FETCH",
       url,
-      method: opts.method || "GET",
-      headers: opts.headers || {},
+      method: opts.method,
+      headers: opts.headers,
+      /* NULL IS THE STATEMENT, not the filler: content.js branches on `msg.body != null`, so a bodyless GET
+         says so with null and never by omission. Same for `bodyEncoding`, whose `undefined` on this side is
+         the caller declaring text. */
       body: opts.body ?? null,
-      bodyEncoding: opts.bodyEncoding || null,
+      bodyEncoding: opts.bodyEncoding ?? null,
     },
     { documentId },
   );
+  _checkPageFetchReply(reply, url);
+  return reply;
 }
 
 /* THE PAGE-CONTEXT EDGE HAS THREE ENTRIES, AND WHICH VERB EACH ONE MAY NAME IS A PROPERTY OF ITS CALLER.
