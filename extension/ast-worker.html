@@ -56,12 +56,6 @@
 <script src="lib/schema.js"></script>
 <script src="lib/keys.js"></script>
 <script src="lib/persistence.js"></script>
-<!-- OWNERSHIP OF EVERY REAL TAB THIS EXTENSION OPENS, and the one place a navigation's address is authorized.
-     Loaded in THIS realm and in the service worker (importScripts, background.js) because the two write
-     disjoint stores of one database and the schema is described once — the same reason mojom.js is loaded
-     into both ends of the renderer boundary. It is loaded before offscreen-brain.js, which reconciles the
-     record against the live tabs at boot and must do so before any flow can claim one. -->
-<script src="lib/owned-navigables.js"></script>
 <script src="lib/grouping.js"></script>
 <!-- ACTIVE DISCOVERY: fetch an API's PUBLISHED description at the well-known addresses lib/discovery.js
      names, diff it against the one already held, and — where a service publishes none — fall back to

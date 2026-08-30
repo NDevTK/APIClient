@@ -620,48 +620,6 @@ async function clearGlobalStore() {
 // Load persisted data on startup — handlers must await this before reading globalStore
 const _globalStoreReady = loadGlobalStore();
 
-// ─── Reconcile the real tabs this extension owns, BEFORE anything can claim one ───────────────────────────
-//
-// CLAUDE.md §"A REAL ARTIFACT OUTLIVES THE ENGINE": a modelled navigable dies with the WASM instance holding
-// it, a tab dies with nothing, and every tab carries the person's cookies — so a tab this extension opened
-// and then lost (an engine crash, an extension reload, a browser restart) is one of the person's own
-// logged-in sessions held open by something that is no longer running. Flows live in the engine instances
-// THIS DOCUMENT hosts, so at the instant this document comes up there is no claimant for any record in the
-// store: everything recorded is unclaimed, by construction rather than by inspection.
-//
-// It runs on its own chain rather than behind _globalStoreReady because it shares nothing with globalStore
-// and must not wait on a learned-data restore; and it runs at load, before astDispatch can accept a document,
-// which is the ordering lib/owned-navigables.js asserts (_ownedClaimsIssued === 0).
-//
-// The two browser edges are swRpc-backed because the offscreen document cannot call chrome.tabs.* at all
-// ("The runtime API is the only extensions API supported by offscreen documents"). These are the first
-// callers `tabs.remove` has ever had — SECURITY.md's standing finding names it, `tabs.create` and `tabs.get`
-// as an unused privilege held open, and this resolves one of the three.
-//
-// NOTHING BINDS THE RESULT, DELIBERATELY. A handle here would be a value with a writer and no reader, and the
-// ordering it would express is already asserted where it matters: `reconcileOwnedNavigables` DCHECKs that no
-// navigable has been opened by this realm yet, so a request path that lands later and opens one before this
-// finishes CRASHES naming the ordering rather than quietly reconciling around its own tab. The diff that adds
-// that path is the diff that binds this and awaits it.
-reconcileOwnedNavigables({
-  listTabs: () => swRpc("tabs.query", {}),
-  closeTab: (tabId) => swRpc("tabs.remove", tabId),
-}).then(function (r) {
-  if (r.closed.length || r.orphaned.length || r.resolved.length) {
-    console.warn("[owned] startup reconciliation: closed=%d orphaned=%d already-gone=%d",
-                 r.closed.length, r.orphaned.length, r.resolved.length);
-  }
-}).catch(function (e) {
-  // An invariant abort travels ON — this catch has a real job (a browser edge can genuinely fail) and must
-  // not become a place where a broken contract turns into a plausible "nothing to reconcile".
-  RETHROW_FATAL(e);
-  // A failed reconciliation leaves every record exactly where it was, so nothing is lost and the person's
-  // view still lists them; what is lost is the automatic close. Surface it — silence here is a tab of theirs
-  // left open by an engine that no longer exists.
-  console.error("[owned] startup reconciliation FAILED — tabs this extension opened may still be open and are " +
-                "still recorded:", e && e.message || e);
-});
-
 // Cold-start delivery race: if the offscreen brain wasn't alive when content.js
 // shipped its initial HTML/SCRIPT_SOURCE at document_idle (Chrome restart, the
 // first nav landing inside the ~ensureOffscreen createDocument window), those
@@ -1897,28 +1855,6 @@ function _onTabRemoved(tabId) {
   // A tab close frees NOTHING else. The document's own analysis buffer is freed by the review reclaim (when
   // its run returns), not by the tab going away, and the cross-session continuation of a closed tab's learning
   // is the GLOBAL frontier's parked recipes rather than a page source held in RAM. Keyed by documentId.
-
-  // ONE THING IS FREED, AND IT IS NOT ANALYSIS STATE: if this was a tab THIS EXTENSION opened, the ownership
-  // record naming it is now a record of an artifact that no longer exists. Dropping it here is what keeps the
-  // person's see-and-stop view a list of live tabs rather than a growing list of ghosts, and what keeps
-  // startup reconciliation from trying to close a tab the person already closed. It is the only close signal
-  // this zone gets — the offscreen document cannot observe tabs at all.
-  forgetOwnedNavigableByTabId(tabId).then(function (gone) {
-    // The records it dropped are READ, not discarded: a person closing a tab this extension opened is the
-    // one signal that they are declining part of a search, and it is the only place that fact is observable.
-    // A computed answer nobody reads is not a mechanism, and `gone` is empty for every tab close that is not
-    // ours — which is nearly all of them — so this stays silent unless something was actually owned.
-    for (const r of gone) {
-      console.warn("[owned] the person closed a tab this extension opened: %s (owner=%s provenance=%s)",
-                   r.url, r.owner, r.provenance);
-    }
-  }).catch(function (e) {
-    RETHROW_FATAL(e);
-    // The record survives, so the tab is over-reported rather than forgotten — the safe direction, since the
-    // next reconciliation finds its id absent from the live set and resolves it. Surface it anyway: a store
-    // that cannot be written is one the next open cannot be recorded in either.
-    console.error("[owned] could not drop the ownership record for closed tab %d:", tabId, e && e.message || e);
-  });
 }
 
 // ─── Send Request: Schema Resolution ─────────────────────────────────────────
