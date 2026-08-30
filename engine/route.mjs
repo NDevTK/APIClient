@@ -69,45 +69,17 @@
        itself (solver/world.h, solver/cold.h's 'g' record). The resumed session therefore mints in a namespace
        disjoint from the one that parked, and `b` materializes new segments instead of answering out of a dead
        flow's. This driver is what makes that decidable — it is the only place both sessions are visible. */
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { createContext, runInContext } from 'node:vm';
+/* THE INTERFACE AND THE ARTIFACT, FROM THE ONE MODULE THAT ANSWERS FOR BOTH. This driver used to load
+   `check.js`/`mojo.js`/`mojom.js` into its own isolated context and walk `Init`'s parameters here; the OTHER
+   raw-ccall driver (engine/solvergate.mjs) did neither, kept a hand-aligned array of values in declaration
+   order, and went short when HTML §3.1.3's ancestor origins statement was added — forty runs of forty aborting
+   in `navigable_root_ancestor_origins`. Two drivers deriving the same list two ways is one derivation too
+   many, so the load, the walk and the built glue's own declared arity live in engine/renderer_abi.mjs and both
+   drivers read them from there. */
+import { GLUE_PATH, abiOperands } from './renderer_abi.mjs';
 
-const ENGINE = dirname(fileURLToPath(import.meta.url));
-const EXT_DIR = join(ENGINE, '..', 'extension');
-const GLUE_PATH = join(EXT_DIR, 'lib', 'qjs', 'qjs.mjs');
 const factory = await import(GLUE_PATH);
 const boot = factory.default ?? factory;
-
-/* THE INTERFACE, BY ITS OWN BYTES — this driver's fourth and fifth hand-aligned copies of `Init`'s parameter
-   list are gone, and this is what replaces them. `extension/mojom.js` is the ONE description of what may cross
-   (its own first paragraph: "an interface only exists if both ends agree on it"), and the other three callers
-   of `qjs_init` are already checked against it — `renderer.html` at bind by `rendererImpl`, and
-   `renderer_host_gate.mjs`/`bridge.js` on send by `mojo.js`'s `checkValues`. This one bypassed mojo
-   entirely, so it was the copy that could go short in silence, and it did: twice.
-   AND THE PLACEMENT COMES FROM THE SAME LOAD, WHICH IS WHY `mojo` IS KEPT RATHER THAN THE DESCRIPTOR ALONE.
-   Turning a declared parameter into wasm operands is `mojo.js`'s `abiPlacement`, over the `type` and
-   `retained` the declaration states — the same function `renderer.html` places by — so this driver's operand
-   count and the extension's are one derivation rather than two readings of one list. A driver that walked the
-   types itself would be the same hand-alignment one layer down: it would answer for the types it knew and
-   silently be wrong about an ownership it never asked about.
-   AN ISOLATED CONTEXT, NOT THIS REALM. `renderer_host_gate.mjs` loads these same three files with
-   `runInThisContext` because it is IMPERSONATING the browser process and wants their globals; this file is a
-   wasm driver that wants one declaration, so evaluating them over its own global would install `mojo`,
-   `DCHECK` and `CHECK` into a realm whose fixtures do not expect them — a driver silently gaining the
-   extension's assert machinery is a difference between what it runs and what production runs. The load order
-   is ast-worker.html's, because mojo.js asserts through check.js and mojom.js declares through mojo.js. */
-const MOJO = (() => {
-  const sandbox = { console };
-  sandbox.self = sandbox;
-  sandbox.globalThis = sandbox;
-  createContext(sandbox);
-  for (const f of ['check.js', 'mojo.js', 'mojom.js'])
-    runInContext(readFileSync(join(EXT_DIR, f), 'utf8'), sandbox, { filename: join(EXT_DIR, f) });
-  return sandbox.mojo;
-})();
-const MOJOM = MOJO.interfaceOf('content.mojom.Renderer');
 
 /* THE READ IS LAST AND BOTH ARMS MAKE IT, so two DIFFERENT worlds ask the same question of one peer — which is
    the case a single-timeline peer cannot answer with one number, and the reason the entry that performs it has
@@ -237,82 +209,26 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
      end the parse at the first one. `bs` is the same helper the reply bodies use, for the same reason. */
   {
     const [hp, hn] = bs(html);
-    /* THE ONE CALLER OF `qjs_init` THAT NOTHING CHECKED AT EITHER END, WHICH IS WHY IT IS THE ONE THAT PRODUCES
-       A NAMELESS ERROR. There are four: `renderer.html`'s placement table (checked at bind by `rendererImpl`
-       and before launch by `assertEngineAbiPairing`), `renderer_host_gate.mjs` and `bridge.js` (both checked
-       on SEND by `mojo.js`'s `checkValues`, which names the two counts and the mojom) — and this one, a raw
-       `ccall` that bypasses mojo entirely and is invisible to a harness gate that reads the extension's table.
-       So when the ABI widened and this side went short, the only thing that spoke was emscripten's own
-       `createExportWrapper` assert: "native function `qjs_init` called with 15 args but expects 14". That
-       message is ACCURATE AND POINTS NOWHERE — it names emscripten and a number, never the parameter, the
-       record, or the commit, so a reader has every reason to suspect their own wasm or the harness.
-       WORSE, IT IS ONE-SIDED. Its own comment says too FEW arguments are zero-filled without an assert, so the
-       reverse skew — a wider engine driven by a narrower caller — is silent here, and the field arrives NULL.
-       This asks the glue what it declares and refuses BOTH directions, naming which side is short. It is the
-       cheap close; routing this list through the one declaration the other three already share is the
-       structural one and is its own diff, because these two arrays are a fourth and fifth hand-aligned copy of
-       a list that has now gone short twice.
-       READ FROM THE GLUE'S SOURCE, NOT FROM THE FUNCTION OBJECT. `nargs` is a closure variable inside
-       `createExportWrapper`'s returned arrow, so `String(M._qjs_init)` does not contain it — a check written
-       that way parses nothing, matches nothing and passes always, which is the vacuous check this whole file's
-       neighbourhood exists to prevent. The declaration is in the emitted text, which is where
-       `assertEngineAbiPairing` already reads it from, so this asks the same artifact the same question.
-       AND THE NUMBER IT IS COMPARED AGAINST IS NO LONGER TYPED HERE. It was `15`, a literal beside two
-       15-element arrays — three hand-kept copies of one fact, which is the shape that went short twice. The
-       operand list is now WALKED off `Init`'s own declared parameters, so the count is derived from the same
-       description the other three callers are checked against and a parameter added to the mojom arrives here
-       as a NAMED hole (`values` has no entry for it) instead of as a silent shift of every later argument. */
-    const want = Number((readFileSync(GLUE_PATH, 'utf8')
-      .match(/createExportWrapper\("qjs_init",\s*wasmExports\["qjs_init"\],\s*(\d+)\)/) || [])[1]);
-    if (!Number.isFinite(want))
-      throw new Error('route.mjs could not read qjs_init\'s declared arity out of ' + GLUE_PATH + ' — the ' +
-        'glue\'s shape changed, and an unanswerable check must say so rather than pass.');
-    /* ONE VALUE PER DECLARED PARAMETER, BY THE MOJOM'S OWN NAME, PLACED BY THE DECLARATION'S OWN ANSWER. A
-       `bytes` placement is the PAIR the C entry takes — the pointer and the length, because a document may
-       contain a 0x00 that a `strlen` would end the parse at — and a `string` is one pointer. Neither is decided
-       here: `abiPlacement` reads the mojom's `type` and `retained` and CRASHES on a shape nobody has described,
-       which is the one thing a driver must not paper over, since an invented operand count reads every later
-       argument of the call one slot early. */
-    const values = {
+    /* ONE VALUE PER DECLARED PARAMETER, BY THE MOJOM'S OWN NAME. There is no operand LIST here at all any
+       more: `renderer_abi.mjs` walks `content.mojom.Renderer.Init`'s own parameters, refuses a declared
+       parameter this record has no value for (a driver OLDER than the interface) and a key the interface
+       declares no parameter of (one NEWER than it, or a misspelling), and compares the count it walked off
+       against what the BUILT GLUE declares the entry accepts. That third comparison is the one neither list
+       can make alone, and it is why this driver's failure used to be emscripten's own "native function
+       `qjs_init` called with 15 args but expects 14" — accurate, and naming a number rather than a parameter.
+       WHAT IS STILL STATED HERE IS THE ONE FACT A MOJOM DOES NOT CARRY: which C entry the method is. An
+       interface declares methods, not symbols in a wasm module, so `Init` → `qjs_init` is written at the call
+       exactly as `renderer.html`'s `ABI` table writes it.
+       AND `cs` IS THIS DRIVER'S MINT, into the module it just booted — the `bytes` pair `bs` built above is
+       passed as the pair, because only this side knows what it wrote into linear memory. */
+    const operands = abiOperands('Init', 'qjs_init', {
       document: [hp, hn], url, docId, headers: headers || '', topLevelUrl,
       inheritedCsp: inheritedCsp || '', inheritedCspSelfOrigin: inheritedCspSelf || '',
       inheritedCoep, inheritedCoepEndpoint,
       inheritedCoepReportOnly, inheritedCoepReportOnlyEndpoint,
       parentNavigable, containerPolicy, ancestorOrigins,
-    };
-    const declared = MOJOM.methods.find((m) => m.name === 'Init').params;
-    const operands = [];
-    for (const p of declared) {
-      if (!Object.prototype.hasOwnProperty.call(values, p.name))
-        throw new Error(`content.mojom.Renderer.Init declares the parameter \`${p.name}\` and route.mjs has ` +
-          'no value for it — this driver is older than the interface, and the ONE thing it must not do is ' +
-          'place its remaining values anyway, which is how every later argument gets read one slot early.');
-      const pl = MOJO.abiPlacement(p);
-      if (pl.form === 'bytes') operands.push(...values[p.name]);
-      else if (pl.form === 'string') operands.push(cs(values[p.name]));
-      else
-        throw new Error(`content.mojom.Renderer.Init declares \`${p.name}\` as \`${p.type}\`, whose placement ` +
-          `form is \`${pl.form}\`, and this driver performs no such placement. A guessed one is an operand ` +
-          'count this driver cannot know.');
-    }
-    /* AND THE OTHER SKEW, WHICH THE WALK ALONE DOES NOT SEE. A declared parameter with no value is a driver
-       OLDER than the interface and refuses above; a value no parameter declares is a driver NEWER than it, or
-       one that misspelled a name — and that one is SILENT under a walk, because a walk only ever asks for the
-       names it was given. The value is then computed, held, and placed nowhere, which is a fact its author
-       believes crossed. `mojo.js`'s `placeParams` refuses both directions for every caller that goes through
-       the transport; this driver bypasses the transport, so it states the same rule itself. */
-    for (const k of Object.keys(values))
-      if (!declared.some((p) => p.name === k))
-        throw new Error(`route.mjs computes a value for \`${k}\` and content.mojom.Renderer.Init declares no ` +
-          'parameter of that name — this driver is newer than the interface or has misspelled one, and either ' +
-          'way the value is placed nowhere while this file reads as though it crossed.');
-    if (operands.length !== want)
-      throw new Error(`route.mjs places ${operands.length} operand(s) into qjs_init — walked off the ` +
-        `${declared.length} parameter(s) content.mojom.Renderer.Init declares — and the built glue declares ` +
-        `${want}. One side of the ABI is older than the other, and emscripten cannot tell you which: its ` +
-        'wrapper asserts only on too MANY (too few are zero-filled silently), and its message names a number ' +
-        'rather than a parameter. Regenerate with `node engine/build.mjs`; ' +
-        'extension/lib/qjs/qjs.mjs.build.json carries the revision the glue was built from.');
+    }, cs);
+
     M.ccall('qjs_init', 'number', operands.map(() => 'number'), operands);
     /* AND THE DOCUMENT'S BLOCK IS NOT FREED, because the declaration says the entry KEEPS it: `mojom.js` marks
        that one parameter `retained`, and what it is retained FOR is the load that fills the parser's input

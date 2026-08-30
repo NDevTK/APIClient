@@ -185,6 +185,67 @@
     throw new TypeError("no wasm ABI placement for the declared type `" + (d && d.type) + "`");
   }
 
+  /* ── AND THE WHOLE PARAMETER LIST PLACED IN ONE WALK, KEYED BY THE DECLARATION'S OWN NAMES. `abiPlacement`
+     above answers for ONE parameter; this is the loop over all of them, and the loop is where the going-short
+     happened. It is the same shape `placeParams` below is for the MOJO transport and it exists for the
+     identical sentence: a positional operand list is a second copy of the parameter list kept by hand at every
+     call site, and the only thing a positional caller can be told is a COUNT.
+     WHAT MAKES IT A COMPONENT RATHER THAN A HELPER: the raw-ccall drivers do not go through the transport at
+     all, so `placeParams`' two refusals never ran for them, and each one carried its own array of values in
+     declaration order. That list went short THREE times now — twice for the reasons this file's `abiPlacement`
+     paragraph records, and once more when HTML §3.1.3's ancestor origins statement was added: every document
+     of the solver's differential gate died in `navigable_root_ancestor_origins` because the fifteenth operand
+     arrived as a zero-filled NULL, which emscripten's wrapper reports on the too-MANY side only.
+     BOTH SKEWS REFUSE BY NAME, and they are opposite: a caller OLDER than the interface has a hole, a caller
+     NEWER than it has a key nobody reads — and a key nobody reads is a value its author believes it sent.
+     `place` IS THE HOST'S, BECAUSE MINTING AN OPERAND IS THE ONE PART THAT IS NOT A PROPERTY OF THE
+     DECLARATION. A renderer holds retained pointers for the life of its frame and frees transient ones after
+     the call; a Node driver mallocs into the module it just booted. So the walk is here and the minting is
+     theirs, and the contract between them is asserted rather than trusted: `place` is handed the value, the
+     placement and the parameter, and must answer with EXACTLY `pl.operands` operands — an answer of another
+     length is an operand count nobody knows, which reads every later argument of the call one slot early. */
+  function abiOperands(m, rec, place) {
+    var out = [], declared = new Set(), i, k, keys, pl, got;
+
+    DCHECK(!!m && typeof m.name === "string" && Array.isArray(m.params),
+           "an ABI call was placed from something that is not a mojom method declaration — the declaration is " +
+           "the only list of what the entry takes, and a caller that supplies its own is the hand-aligned copy " +
+           "this walk replaces");
+    DCHECK(!!rec && typeof rec === "object" && !Array.isArray(rec),
+           "an ABI call to " + (m && m.name) + " was placed from something other than a parameter record — an " +
+           "array here would be the positional list this walk stopped taking, and it stopped taking it " +
+           "because a short one can only report a count and never the name of what is missing");
+    DCHECK(typeof place === "function",
+           "an ABI call to " + (m && m.name) + " was placed with no minting function — how a value becomes a " +
+           "pointer is the host's (retained for the life of a frame, or freed after the call) and the one " +
+           "thing this walk must not do is guess it");
+    for (i = 0; i < m.params.length; i++) {
+      declared.add(m.params[i].name);
+      DCHECK(Object.prototype.hasOwnProperty.call(rec, m.params[i].name),
+             "an ABI call to " + m.name + " has no value for the parameter `" + m.params[i].name + "`, which " +
+             "its mojom declares — " + m.params[i].why + ". This caller is OLDER than the interface, and the " +
+             "one thing it must not do is place the values it does have anyway: that reads every later " +
+             "parameter one operand early, which is a wrong call rather than a missing one");
+      pl = abiPlacement(m.params[i]);
+      got = place(rec[m.params[i].name], pl, m.params[i]);
+      DCHECK(Array.isArray(got) && got.length === pl.operands,
+             "an ABI call to " + m.name + " minted " + (Array.isArray(got) ? got.length : "no") + " operand(s) " +
+             "for the parameter `" + m.params[i].name + "`, whose declared `" + m.params[i].type + "` is " +
+             pl.operands + " — a byte sequence is the PAIR the C entry takes (a pointer and a LENGTH, because " +
+             "a length recovered with `strlen` would end at a 0x00 the sequence may legitimately contain) and " +
+             "a string is one pointer, so a host that answers with another count has placed a different call");
+      for (k = 0; k < got.length; k++) out.push(got[k]);
+    }
+    keys = Object.keys(rec);
+    for (i = 0; i < keys.length; i++)
+      DCHECK(declared.has(keys[i]),
+             "an ABI call to " + m.name + " carries `" + keys[i] + "`, which its mojom declares no parameter " +
+             "of — this caller is NEWER than the interface or has misspelled a name, and either way the value " +
+             "is minted, held, and placed nowhere while its author believes it crossed. A walk is " +
+             "structurally silent about this direction: it only ever asks for the names it was given");
+    return out;
+  }
+
   /* A DECLARATION LIST — a method's parameters, or its reply's. Every entry carries a `why`, and that is not
      documentation: it is the sentence the assert prints when the value is wrong. The two superseded transports
      each held a `checkHeaderFacts` whose real content was those sentences (an absent header is §5.1's undefined
@@ -890,6 +951,11 @@
        a `qjs_*` entry reads it from here: the renderer that performs the call, and the Node drivers that count
        operands against what the built glue declares it accepts. */
     abiPlacement: abiPlacement,
+    /* AND THE WALK OVER A WHOLE DECLARED PARAMETER LIST — see `abiOperands` above. `abiPlacement` answers for
+       one parameter and a caller could still hold its own array of values in declaration order; this is what
+       replaces that array, so the raw-ccall drivers place by the same names the transport's own `placeParams`
+       does and neither direction of skew can be silent. */
+    abiOperands: abiOperands,
     Connection: Connection,
     stats: stats,
   };

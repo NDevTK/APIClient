@@ -99,16 +99,24 @@ import { dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadavg, cpus } from "node:os";
 import { gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
-
-const ENGINE = dirname(fileURLToPath(import.meta.url));
-const SELF = fileURLToPath(import.meta.url);
-const CORPUS = join(ENGINE, "tests", "solver");
 /* THE SHIPPED ARTIFACT, and deliberately not a runner of this gate's own. engine/wpt.mjs builds its own native
    runner because it runs 800 files and an eight-minute wasm link per iteration is a gate nobody runs; this one
    runs a handful of documents through the ENTRY THE EXTENSION LOADS, which costs one import and makes the gate
    a second driver of the production ABI besides engine/route.mjs. §Testing: the shipped entry is the one that
-   rots, and a gate that exercises it is worth more than one that exercises a fixture beside it. */
-const WASM = join(ENGINE, "..", "extension", "lib", "qjs", "qjs.mjs");
+   rots, and a gate that exercises it is worth more than one that exercises a fixture beside it.
+   AND THE PATH IS NOT SPELLED HERE, because this gate and engine/route.mjs are the two drivers that `ccall`
+   that entry RAW — no transport, nothing checking them at either end — and both check their operands against
+   what THAT artifact declares. One fact, one place: engine/renderer_abi.mjs, which also holds the ONE walk of
+   `content.mojom.Renderer.Init`'s own parameter list that both of them place through. This gate used to keep
+   a hand-aligned array of fourteen values in declaration order instead, and when HTML §3.1.3's ancestor
+   origins statement became the fifteenth it went short: emscripten zero-fills the too-FEW direction in
+   silence, so `navigable_root_ancestor_origins` aborted EVERY document under EVERY schedule and the solver's
+   only oracle answered nothing while reading as one document's bug. */
+import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
+
+const ENGINE = dirname(fileURLToPath(import.meta.url));
+const SELF = fileURLToPath(import.meta.url);
+const CORPUS = join(ENGINE, "tests", "solver");
 
 /* THE SCHEDULES, AND EACH ONE IS A PAIR RATHER THAN A NAME. Every knob is one the production host already has
    and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule declares
@@ -414,32 +422,65 @@ async function child(docPath, schedName) {
       const hp = e.M._malloc(u8.length + 1);
       e.M.HEAPU8.set(u8, hp);
       e.M.HEAPU8[hp + u8.length] = 0;
-      /* THE EMPTY CSP PAIR IS HTML §7.1.7's INHERITED POLICY CONTAINER, ABSENT: this gate roots each instance
-         at a fixture document with no creator, so there is no container to clone and CSP §2.2.2's self-origin
-         (this address's origin, which the entry derives) is the right one. The empty pair says that, rather
-         than being an argument this driver forgot when the entry grew one.
-         THE FOUR AFTER IT ARE §7.1.4's EMBEDDER POLICY of that same container, and they are NOT empty — they
-         are the section's own "a new embedder policy", because §7.1.7 gives every container one and there is
-         therefore no absence to spell. The two values are §7.1.4's token strings; main.c refuses one that
-         names none of the three rather than reading it as the default.
-         AND THE SECOND-LAST IS HTML §7.3.1.3's PARENT NAVIGABLE, `u` — this gate's fixture documents are
-         rooted with no embedder, so their navigables are top-level traversables. It is the engine's own
-         encoding for the absence rather than an empty string, because a navigable either has a parent or is a
-         top-level traversable and both are facts a host states.
-         AND THE LAST IS Permissions Policy §9.5's CONTAINER, `null` — the same fact one algorithm over, and it
-         is stated separately for the reason §7.3.1.3 defines the two links separately: a parent is a
+      /* EVERY FACT A DOCUMENT ARRIVAL CARRIES, STATED BY NAME AND NOT BY POSITION. This was two arrays kept
+         in declaration order by hand — a fourteen-long type list and a fourteen-long value list — and every
+         sentence about them was positional ("the second-last is", "the four after it are"), which is prose
+         that goes wrong silently the moment the entry grows a parameter. It did: HTML §3.1.3's ancestor
+         origins statement became the fifteenth, this gate stayed at fourteen, emscripten zero-filled the
+         difference without a word, and every document under every schedule aborted. So the record is keyed by
+         `content.mojom.Renderer.Init`'s own parameter NAMES now and engine/renderer_abi.mjs walks it: a
+         parameter this record has no value for refuses BY NAME instead of shifting every later operand one
+         slot, a key the interface declares no parameter of refuses too, and the operand count the walk
+         produces is compared against what the BUILT GLUE declares the entry accepts.
+         `inheritedCsp`/`inheritedCspSelfOrigin` ARE HTML §7.1.7's INHERITED POLICY CONTAINER, ABSENT: this
+         gate roots each instance at a fixture document with no creator, so there is no container to clone and
+         CSP §2.2.2's self-origin (this address's origin, which the entry derives) is the right one. The empty
+         pair says that, rather than being an argument this driver forgot when the entry grew one.
+         THE FOUR `inheritedCoep*` ARE §7.1.4's EMBEDDER POLICY of that same container, and they are NOT empty
+         — they are the section's own "a new embedder policy", because §7.1.7 gives every container one and
+         there is therefore no absence to spell. The two values are §7.1.4's token strings; main.c refuses one
+         that names none of the three rather than reading it as the default.
+         `parentNavigable` IS HTML §7.3.1.3's PARENT, `u` — this gate's fixture documents are rooted with no
+         embedder, so their navigables are top-level traversables. It is the engine's own encoding for the
+         absence rather than an empty string, because a navigable either has a parent or is a top-level
+         traversable and both are facts a host states.
+         `containerPolicy` IS Permissions Policy §9.5's CONTAINER, `null` — the same fact one algorithm over,
+         and it is stated separately for the reason §7.3.1.3 defines the two links separately: a parent is a
          navigable, a container is the ELEMENT that presents it, and a document can be told about one without
          the other. §9.5 takes "null or an element (container)", and null is what this gate's fixtures are:
          it invents them, so nothing presents them, and §9.7 step 1 then returns "Enabled" for every feature.
          Stating it rather than letting the record default is the whole point — the engine refuses a record
          that states NOTHING for the container, because a silent absence and a stated null are different
-         claims and only one of them is this gate's. */
-      e.M.ccall("qjs_init", "number",
-                ["number", "number", "number", "number", "number", "number", "number", "number",
-                 "number", "number", "number", "number", "number", "number"],
-                [hp, u8.length, e.cs(url), e.cs(name), e.cs(""), e.cs(url), e.cs(""), e.cs(""),
-                 e.cs("unsafe-none"), e.cs(""), e.cs("unsafe-none"), e.cs(""), e.cs("u"), e.cs("null")]);
-      e.M._free(hp);
+         claims and only one of them is this gate's.
+         `ancestorOrigins` IS HTML §3.1.3 "Ancestor origins"' INTERNAL ANCESTOR ORIGIN OBJECTS LIST for the
+         Document this instance builds — a THIRD statement about the same navigable and not a derivation of
+         the two above it. §3.1.3's step 2 takes the Document's CONTAINER DOCUMENT and its step 3 returns the
+         EMPTY output when there is none, which is what a top-level traversable's list is: `none` is that
+         grammar's word for exactly that, a POSITIVE claim this gate is entitled to make about fixtures
+         nothing embeds. An EMPTY FIELD IS NOT THE SAME CLAIM — it is a host that stopped writing the field,
+         which the engine refuses, because reading silence as the empty list is what tells a cross-origin
+         frame it is the top of its own tree, and no page can tell that from the truth. */
+      const operands = abiOperands("Init", "qjs_init", {
+        document: [hp, u8.length], url, docId: name, headers: "", topLevelUrl: url,
+        inheritedCsp: "", inheritedCspSelfOrigin: "",
+        inheritedCoep: "unsafe-none", inheritedCoepEndpoint: "",
+        inheritedCoepReportOnly: "unsafe-none", inheritedCoepReportOnlyEndpoint: "",
+        parentNavigable: "u", containerPolicy: "null", ancestorOrigins: "none",
+      }, e.cs);
+
+      /* THE TYPE LIST IS THE OPERAND LIST'S OWN LENGTH — a wasm operand is a number whatever the declared
+         parameter was, so a literal count beside the call would be one more hand-kept copy of the fact that
+         just went short. */
+      e.M.ccall("qjs_init", "number", operands.map(() => "number"), operands);
+      /* AND THE DOCUMENT'S BLOCK IS NOT FREED, WHICH IS A CHANGE AND NOT AN OVERSIGHT. This line was
+         `e.M._free(hp)`, and `mojom.js` declares `document` as the ONE parameter of this interface the entry
+         RETAINS: the bytes are not copied, the pointer is handed to the load that fills the parser's input
+         byte stream (core/loader/html_document.c holds `html` and an offset and reads through it across the
+         fills the load is cut into), so every fixture this gate ran was being tokenized out of freed memory
+         from the second fill onward. It is emscripten's allocator that made that survivable and nothing else,
+         which is exactly the shape a schedule-invariance oracle must not be built on: a reuse of that block
+         between two fills is a difference between two runs of one document that no flow decided. The block is
+         the instance's lifetime either way — the module is torn down whole. */
     }
     e.M.ccall("qjs_begin", "void", ["number"], [e.cs(recipes)]);
     /* THE HOST'S OWN LEVEL-1 YIELD, SET FROM THE DECLARED FLOOR AND NOT FROM A NAME. Nothing is dropped across
@@ -520,9 +561,15 @@ async function child(docPath, schedName) {
     /* ASKED OF THE ONE SURFACE LIST, never of a second copy of it. This loop named its surfaces literally
        while SURFACES named one more, so a surface emitted before the first pick would have satisfied a
        precondition that had never looked at it — the same field, unclassified in one place and invisible in
-       the other. `surfaceSet` answers for either shape, so the emptiness question is asked once. */
-    for (const surface of SURFACES.keys())
-      if (surfaceSet(first, surface).length !== 0)
+       the other. `surfaceSet` answers for either shape, so the emptiness question is asked once.
+       AND IT IS THE ACCUMULATING SURFACES IT IS ASKED OF, which is the declaration's second fact and not a
+       filter this loop invented. The question here is whether the parking session EMITTED something the
+       resumed session's comparison would have to FOLD, and a reading of the terminal instant is not emitted
+       output: `_wfq` is the census of the residue whose NON-emptiness the check three lines above REQUIRES,
+       so asking one session for a live frontier and for no members standing is asking it for two
+       contradictory things. */
+    for (const [surface, d] of SURFACES)
+      if (d.accumulates && surfaceSet(first, surface).length !== 0)
         gateFail(`the session parked before its first pick still emitted ${surfaceSet(first, surface).length} ` +
                  `${surface} — this gate compares the RESUMED session against the reference on its own, which ` +
                  "is sound only while the parking session emits nothing. It emitted something, so the two " +
@@ -620,22 +667,41 @@ function canonStr(v, path) {
 }
 /* Per SURFACE, so a failure names WHICH one disagreed and by which elements. One canonical string for the
    whole document would say only that something differs, which is the report nobody can act on.
-   EACH SURFACE DECLARES ITS SHAPE, because assuming one is how this list went wrong. THE ONLY SHAPE DECLARED
-   TODAY IS `array`, and the "map" half of `shapeOk`/`surfaceSet` below has no declarer — said plainly here
-   rather than left for a reader to discover, because a mechanism nobody exercises is one nobody knows is
-   broken. It was `probeResults`, error-derived request schemas keyed by the `<METHOD> <host><path>` identity
-   the Send panel resolves a request body with, and the first run of this gate reported it as an unclassified
-   field on all five corpus documents because the coverage check asked `Array.isArray` of a surface that is
-   not one. That surface is gone from result.c: an API's rejection is the answer to a DELIBERATELY MALFORMED
-   request, which this engine cannot issue, so it is read in the trusted zone (extension/lib/req2proto.js) and
-   never crosses the seam this gate compares. Its row is deleted with it rather than left asserting a field no
-   writer produces. */
+   EACH SURFACE DECLARES ITS SHAPE, because assuming one is how this list went wrong. The previous declarer of
+   `map` was `probeResults`, error-derived request schemas keyed by the `<METHOD> <host><path>` identity the
+   Send panel resolves a request body with, and the first run of this gate reported it as an unclassified field
+   on all five corpus documents because the coverage check asked `Array.isArray` of a surface that is not one.
+   That surface is gone from result.c: an API's rejection is the answer to a DELIBERATELY MALFORMED request,
+   which this engine cannot issue, so it is read in the trusted zone (extension/lib/req2proto.js) and never
+   crosses the seam this gate compares. Its row is deleted with it rather than left asserting a field no writer
+   produces.
+   AND `_wfq` IS THE DECLARER NOW, WHICH THIS FILE ALREADY CLAIMED AND DID NOT HAVE. The census row above says
+   in as many words that `_wfq` "IS NOT IN THIS LIST AND THAT IS NOT AN OVERSIGHT … comparing it is free", and
+   that was a claim about a mechanism with no row anywhere: `checkCoverage` requires every key of the result
+   document to be a SURFACE or a named cost, so an unclassified `_wfq` FAILED every document under every
+   schedule with the message telling the reader to classify it. Two prose paragraphs asserting the
+   classification and no line performing it is the read-with-no-writer defect inverted — a rule stated twice
+   and enforced nowhere — and it sat behind an earlier abort where nobody could see it. The argument is the
+   census row's, unchanged: the document this gate compares is the TERMINAL one, which a session reaches by
+   draining or parking, and both leave no members standing, so `{members:0}` is the value under every schedule
+   and a schedule that left work on the frontier says so HERE instead of in a cost nobody reads.
+   AND A SURFACE DECLARES A SECOND FACT, WHICH `_wfq` IS THE FIRST TO ANSWER DIFFERENTLY. `accumulates` is
+   whether a surface's value is EMITTED OUTPUT the run adds to — a finding, which a session boundary can split
+   in half and which two sessions would then have to FOLD — or a READING OF THE TERMINAL INSTANT, which the
+   session that reaches that instant answers alone and which nothing folds. The `park` schedule is where the
+   difference is load-bearing and it is not a distinction invented here: three lines above its emptiness
+   pre-check, the same schedule REQUIRES the parking session's residue to be NON-empty ("the park wrote an
+   EMPTY residue over a frontier that had a seeded flow in it"), and `_wfq` is the census of exactly that
+   residue. Asking one session to have a live frontier and no members standing is asking it for two
+   contradictory things, so the pre-check asks about the surfaces that ACCUMULATE and the comparison below
+   asks about all of them — one list, two questions, neither of them a second literal copy. */
 const SURFACES = new Map([
-  ["fetchCallSites", "array"],
-  ["securitySinks",  "array"],
-  ["pageErrors",     "array"],
+  ["fetchCallSites", { shape: "array", accumulates: true }],
+  ["securitySinks",  { shape: "array", accumulates: true }],
+  ["pageErrors",     { shape: "array", accumulates: true }],
+  ["_wfq",           { shape: "map",   accumulates: false }],
 ]);
-const shapeOk = (v, kind) => kind === "array" ? Array.isArray(v)
+const shapeOk = (v, d) => d.shape === "array" ? Array.isArray(v)
                                               : (!!v && typeof v === "object" && !Array.isArray(v));
 /* AND THE TWO LISTS ARE CHECKED AGAINST THE DOCUMENT, which is what makes "compared by default" a mechanism
    rather than a claim in a comment. A field result.c adds that is in NEITHER list is a finding surface nobody
@@ -650,8 +716,8 @@ const shapeOk = (v, kind) => kind === "array" ? Array.isArray(v)
 function checkCoverage(doc, sched, result) {
   const cost = DROP.get("");
   const unknown = Object.keys(result).filter((k) => !SURFACES.has(k) && !cost.has(k));
-  const absent = [...SURFACES].filter(([k, kind]) => !shapeOk(result[k], kind))
-                              .map(([k, kind]) => `${k} (${kind})`);
+  const absent = [...SURFACES].filter(([k, d]) => !shapeOk(result[k], d))
+                              .map(([k, d]) => `${k} (${d.shape})`);
   if (!unknown.length && !absent.length) return true;
   if (unknown.length)
     console.log(`  FAILED ${doc} [${sched}]\n         the result document carries ${unknown.join(", ")}, which ` +
@@ -673,7 +739,7 @@ function checkCoverage(doc, sched, result) {
    comparison below is one operation over both and never asks which it is holding. */
 function surfaceSet(result, surface) {
   const v = result[surface];
-  if (SURFACES.get(surface) === "array") return v.map((e) => canonStr(e, "." + surface + "[]"));
+  if (SURFACES.get(surface).shape === "array") return v.map((e) => canonStr(e, "." + surface + "[]"));
   return Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + canonStr(v[k], "." + surface + "{}"));
 }
 
