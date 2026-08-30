@@ -520,7 +520,47 @@ int engine_host_answered(uint32_t req, JSValueConst *out) {
 
 /* THE MACHINE TAKES ITS ANSWER and the request leaves the register. Separate from the read above because a
    machine may be re-entered several times before it is ready to consume, and taking it early would leave the
-   next re-entry with nothing. */
+   next re-entry with nothing.
+ *
+ * AND THIS REMOVAL IS THE CAUSE OF THE TWO ABORTS AT THE BOTTOM OF engine_host_answer, WHICH IS WHY THE
+ * LIFETIME INVARIANT IS ASSERTED HERE AND NOT WHERE THE LOSS IS OBSERVED. A peer's document state IS its
+ * flows, so one rendezvous has one answer per peer TIMELINE and all of them are true; the first of them ends
+ * the entry every one of them lands on. An answer that arrives after this line reaches a register naming
+ * nothing — which is the shape observed over there, one seam away from the line that produced it.
+ *
+ * WHAT THIS LINE CAN ASSERT is the half that holds under every design of the fix: an entry destroyed here
+ * carries no answer NOBODY HAS FORKED OVER. flow_step takes one arm per recorded extra BEFORE it resumes the
+ * frame this machine is re-entered from (flow_answer_fork), so `extra` is empty at every healthy take, and a
+ * non-empty one is N peer timelines going into the free list with nothing to say so — the SILENT form of the
+ * abort at the other end, and the one that would arrive the day an answer could be recorded between the fork
+ * and the resume.
+ *
+ * NAMED RESIDUAL — the code below is CORRECT for the peer it covers and NARROWER than §Security's "a delivery
+ * SEEDS a flow whose world is receiver-baseline ∧ the sender's vector", so there is nothing here to crash on.
+ *   NOT COVERED: a peer holding MORE THAN ONE timeline whose answers do not all arrive before the asking flow
+ *     is next resumed. The register then takes the first, this line removes the entry, and every later
+ *     timeline's answer has nowhere to land.
+ *   WHAT THE NEXT DIFF BUILDS — TWO things, and the abort over there asks for only one of them, which is why
+ *     following it literally would fabricate a timeline rather than build the arm. (i) THE SUSPENSION, not
+ *     just the entry: flow_answer_fork clones `f->frame`, and after this line that frame is PAST the call
+ *     site, so an arm forked from it would carry answer k while continuing from a state computed with answer
+ *     0 — a flow neither agent was ever in, which is worse than the drop it replaces. The clone has to be
+ *     taken HERE, where the machine is still suspended at the read, and held with the entry. (ii) A RELEASE
+ *     CRITERION, which the protocol does not carry: its vocabulary is `remoteop.answer` (one per answering
+ *     timeline) and `remoteop.retracted` (the last holder PARKED, handing the question back), and neither
+ *     says that every timeline holding a token has now answered. Without it "hold it while the peer may still
+ *     answer" is undecidable at this end and the only readings left are hold-for-ever or a bound, and a bound
+ *     is §NO BOUNDS'. The record to build is the peer's, it is one line of the answering side's existing
+ *     arithmetic — flow_answer_perform clears the row's token, and `perform_token_held` is the same predicate
+ *     engine_retract_span already decides the LAST-holder question with — and it must be scoped to the ASK
+ *     rather than to the token's spelling, because a retraction re-asks under the token the zone already
+ *     minted.
+ *   HOW ITS ABSENCE SHOWS: a peer with two timelines answering one cross-instance read reaches
+ *     engine_host_answer's door (3) with `extra` and `fixed` both zero — the asking flow took answer 0 through
+ *     this line and no arm was ever forked — under a zone that relays each answer AS IT ARRIVES. A zone that
+ *     holds a token's answers until the peer's own turn drains does not show it, and that batching is a
+ *     property of a driver that owns both pumps rather than a guarantee this seam may be built on: RELAY ON
+ *     ARRIVAL is what the protocol permits, so it is what the register must survive. */
 JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
     Flow *f = flow_running();
     JSValue v;
@@ -541,6 +581,27 @@ JSValue engine_host_take(JSContext *ctx, uint32_t req, int *pcompletion) {
             DCHECK(JS_IsNumber(c), "an answered host request carries no completion type");
             JS_FreeValue(ctx, c);
             *pcompletion = (int)pending_get_int(e, PEND_COMPLETION);
+            /* AND NO PEER TIMELINE IS BEING DESTROYED WITH IT — the one half of the entry's lifetime this
+               line can state, asserted where the entry dies rather than where a lost answer is noticed. Every
+               triple in `extra` is a real completion of a real timeline that no arm carries yet, and
+               pending_remove frees the list with the record; flow_step drains them into arms before the frame
+               this machine came back through was resumed, so a non-empty list here is that ordering having
+               come apart and the loss is silent in every other way.
+               COUNTED ON ITS OWN LINE, and inside the dev guard with it: pending_extra_count INTERNS this
+               file's field atoms, which is a side effect and therefore may not sit inside a DCHECK's
+               condition — the same rule that keeps the answering world's parse out of its check below, and
+               the same shape, so the count exists exactly where its reader is compiled. */
+#if APICLIENT_DEV
+            {
+                int unforked = pending_extra_count(e);
+                DCHECK(unforked == 0,
+                       "a synchronous request is leaving the register still holding a PEER's further answers "
+                       "— each of those is a timeline of the answering document that no arm carries, and "
+                       "freeing the record frees them, so those timelines are explored by nobody and nothing "
+                       "anywhere says so. flow_step forks one arm per extra before it resumes this frame, so "
+                       "the fork and the take have come apart");
+            }
+#endif
             v = pending_get(e, PEND_VALUE);   /* the caller's reference; the register's goes with the entry */
             JS_FreeValue(ctx, e);
             pending_remove(&f->pending, i);
@@ -756,14 +817,26 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
        an arm's answer is FIXED (it is the timeline that took answer k) — so what is missing is the ISSUER's
        entry, and only the issuer's. It left at the take while the arms it forked live on, which is exactly the
        shape that says the arms are being built correctly and the record they were forked from is not being
-       kept. Reachable for a PEER alone: a HOST answering an already-answered entry aborts one loop above. */
+       kept. Reachable for a PEER alone: a HOST answering an already-answered entry aborts one loop above.
+       WHAT TO BUILD IS NAMED IN engine_host_take, WHICH IS THE LINE THAT PRODUCED THIS. This abort used to end
+       "keep the issuer's entry alive past the take … and fork from it as flow_answer_fork already does", and
+       that instruction is WRONG in the way a confidently wrong DFAIL is worse than none: flow_answer_fork
+       clones `f->frame`, and by the take that frame is PAST the read, so an arm built by following this
+       sentence carries answer k while continuing from a state computed with answer 0 — a timeline neither
+       agent was in, arrived at by doing exactly what the crash asked for. The entry is half of it; the
+       SUSPENSION is the other half, and the release criterion for both is a protocol record that does not
+       exist. */
     if (fixed)
         DFAIL("a PEER's answer arrived for a request whose only live entries are ARMS — each of those was "
               "forked over an earlier answer and its answer is FIXED, so the entry that could still take one is "
               "the ISSUER's, and that one left the register when the issuing flow took its first answer. This "
-              "peer timeline has nowhere to land and the arm it would have forked is silently missing. Keep the "
-              "issuer's entry alive past the take while the peer still holds timelines that may answer, and "
-              "fork from it as flow_answer_fork already does");
+              "peer timeline has nowhere to land and the arm it would have forked is silently missing. Build "
+              "the two things engine_host_take's residual names: the issuer's entry AND a clone of its "
+              "suspension, taken at the take while the machine is still at the read (the frame is what the arm "
+              "is a clone of, and after the take it is past the call site), released on a `remoteop.exhausted` "
+              "record this protocol does not yet carry — the answering instance stating that the LAST timeline "
+              "holding the token has answered, which is perform_token_held's question and the one "
+              "engine_retract_span already asks to decide a hand-back");
 
     /* (2) NOTHING NAMES IT AT ALL, and for a value THIS ZONE computed that is innocent: the asking flow is gone
        and nobody is waiting on the answer. */
@@ -772,19 +845,33 @@ int engine_host_answer(JSContext *ctx, uint32_t req, const char *world, JSValueC
 
     /* (3) …and for a PEER's it is the one gap, reached through THREE doors: the asking flow TOOK its first
        answer (engine_host_take removes the entry), or it FINISHED, or it was SOLD to the cold tier while the
-       request was outstanding. The fix is the same one in all three — the entry has to outlive the departure of
-       the flow that held it, for as long as the peer holds timelines that may still answer — but the reader
-       standing here cannot tell which door it was, and the sale is the one this engine can say something about,
-       so it says it in the abort rather than leaving the reader to guess. (The zone does not drop a live
-       asker's rendezvous — bridge.js keeps the token until the instance is finalized precisely so every
-       completion is relayed — so this is not a stale relay.) */
+       request was outstanding. The reader standing here cannot tell which door it was, and the sale is the one
+       this engine can say something about, so it says it in the abort rather than leaving the reader to guess.
+       (The zone does not drop a live asker's rendezvous — bridge.js keeps the token until the instance is
+       finalized precisely so every completion is relayed — so this is not a stale relay.)
+       THE FIRST DOOR IS THE ORDINARY ONE AND IT IS NOT A RARE ORDERING. A cross-instance read plus a peer
+       holding two timelines is the whole of it: the zone relays answer 0 the moment it arrives (which is what
+       a zone must do — it cannot know how many timelines the peer has, so holding one would be picking one),
+       the asker is resumed, engine_host_take drops the entry, and answer 1 lands here. It is invisible to a
+       driver that batches a token's answers until the peer's own turn drains, because that driver owns both
+       pumps and can hold the asker still; the protocol grants no such thing, so the register is what has to
+       survive relay-on-arrival.
+       AND THE THREE DOORS DO NOT WANT THE SAME FIX, which is why this no longer states one. Doors 2 and 3 —
+       finished, or sold — are a flow whose suspension is gone or written down as a recipe, and §Time-travel's
+       answer to the sale is already that the resumed recipe RE-ISSUES the request and is answered with today's
+       value. Door 1 is a flow that is still here and still has the call site, and it is the one this engine
+       can hold: see engine_host_take, which names the entry, the suspension clone, and the
+       `remoteop.exhausted` record that releases them. */
     DFAILF("a PEER's answer arrived for a request NO register holds — the asking flow left and took the "
            "entry with it (it took its first answer, it finished, or it was paged out), so this timeline "
            "of the answering document has nowhere to land and the arm it would have forked is silently "
-           "missing. Keep the entry alive past the flow's departure while the peer still holds timelines "
-           "that may answer, and fork from it as flow_answer_fork already does. This session sold %ld "
-           "flow(s) owing %ld synchronous request(s), which is the only one of the three doors this "
-           "engine can still see from here", g_flows_sold, g_paged_reqs);
+           "missing. If the flow is still live it TOOK its first answer, and what to build is named at "
+           "engine_host_take: hold the entry AND a clone of the suspension the machine is standing in, and "
+           "release both on a `remoteop.exhausted` record — the answering instance saying the last timeline "
+           "holding the token has answered — which this protocol does not carry, so there is no criterion "
+           "for how long to hold them and holding for ever or for a bound are the only readings left. This "
+           "session sold %ld flow(s) owing %ld synchronous request(s), which is the only one of the three "
+           "doors this engine can still see from here", g_flows_sold, g_paged_reqs);
     return 0;
 }
 
