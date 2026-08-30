@@ -65,6 +65,44 @@ const WALL_BACKSTOP_MS = 600_000;
    otherwise be silently dropped), and `dom/nodes` and its siblings are REPORTING refinements — a path with a
    listed ancestor is never walked a second time, and byArea takes the LONGEST match. */
 const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetch/api/resources", "url", "common",
+                   /* THE `.idl` FILES EVERY `idlharness` TEST FETCHES — WITHOUT WHICH THAT WHOLE FAMILY IS AN
+                      EXCLUDED TEST THAT COLLECTS, RUNS, AND PASSES EVERY CHECK THIS FILE MAKES ABOUT ITS OWN
+                      COLLECTION. It is the excluded-test failure at one remove, and it is the hardest-looking
+                      shape of it yet: twenty-three idlharness files ARE named by the entries below, ARE
+                      classified as tests by tools/manifest/sourcefile.py and by this gate alike, ARE handed
+                      their META scripts, and DO run — and every one of them reports exactly two subtests,
+                      `idl_test setup` and `<harness>`, because `resources/idlharness.js`'s `fetch_spec` is
+                      `fetch('/interfaces/' + spec + '.idl')` and this corpus had no `interfaces` directory.
+                      `css/cssom/idlharness.html` is the one that says so in words — `Error fetching
+                      /interfaces/cssom.idl.` — and the other twenty-two time out awaiting that same promise,
+                      which is the same fact wearing the column that hides it. So the family's rows were a
+                      statement about THIS LIST and not about the engine, while the total looked complete.
+                      WHAT WAS THEREFORE NEVER ASKED IS THE ONLY THING IN THIS TREE THAT CAN ASK IT.
+                      engine/idlgen.mjs, engine/idl_members.mjs and engine/idl_installed.mjs diff the spec's
+                      member NAMES against the names each component installs, so they measure PRESENCE and
+                      nothing else — `grep -c variadic` over all three is zero. idlharness.js asserts the
+                      properties a name cannot carry: a function object's `length` (the interface object's, an
+                      operation's minimum argument count, a getter's 0 and a setter's 1), whether a name is an
+                      accessor or a data property (attribute vs operation), the interface object's `name`, its
+                      [[Prototype]] chain against the IDL's `inheritance`, the property attributes
+                      {writable, enumerable, configurable} of every member, `[Exposed]` against the realm, and
+                      `toString.length === 0`. A gate that cannot fail on any of those is what let 460 installs
+                      each remember their own `length` and seven disagree with each other.
+                      IT COSTS NO TEST AND NO SUBTREE. `interfaces` is FLAT at the pinned revision — 336 `.idl`
+                      files plus META.yml and README.md, zero subdirectories — and an `.idl` is neither a
+                      document nor a `.js`, so `testKind` answers null for every one of them and the stray
+                      census at the foot of this file is unmoved. It is checked out to BE USED, with the same
+                      standing as `resources` and `common`. Every spec name the collected files pass to
+                      `idl_test` resolves there at the pinned revision — dom, html, url, streams, encoding,
+                      FileAPI, IndexedDB, webcrypto and its two tentative siblings, fetch, referrer-policy, fs,
+                      storage, storage-buckets, permissions, service-workers, xhr, cssom, cssom-view,
+                      css-pseudo, pointerevents, uievents, SVG, mathml-core, fullscreen, wai-aria, webidl,
+                      observable.tentative — so this one entry is what turns the family on.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT THEY SCORE. Expect bad first numbers and expect them
+                      to be large: an idlharness file is one subtest per interface plus one per member, so a
+                      family that has reported two subtests apiece will report thousands, and what each failure
+                      NAMES is the work queue. */
+                   "interfaces",
                    /* THE STANDARD, THEN ITS COMPONENTS — the same two-level shape as `dom` below, and for the
                       same reason twice over. `FileAPI/blob` and three siblings were listed and the STANDARD was
                       not, so ten test files living at FileAPI's own level — fileReader, unicode, idlharness —
@@ -373,7 +411,29 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       webmessaging files — three broadcastchannel documents and two message-channels scripts —
                       and by five of the back-forward-cache tests this gate now runs. Checked out to BE USED; it
                       contributes no test of its own. */
-                   "service-workers/service-worker/resources"];
+                   "service-workers/service-worker/resources",
+                   /* AND THE SECOND HELPER THE SAME STANDARD'S OWN idlharness NAMES, WHICH THIS GATE HAD
+                      ALREADY DIAGNOSED IN FULL AND NOBODY HAD ACTED ON. `service-workers/idlharness.https.any.js`
+                      is the one member of that family that never ran at all: its META block names
+                      `cache-storage/resources/test-helpers.js` beside the service-worker one, and the run
+                      reported `ABORT [corpus] … it EXISTS at bf4714d81e and this checkout does not have it, so
+                      WPT_PATHS is short of service-workers/cache-storage/resources: add that entry and the file
+                      runs`. That message is this driver at full strength — it asked git, it distinguished a
+                      checkout gap from a file the pinned corpus does not contain, and it named the entry to
+                      add — and the entry still was not here, which is the excluded test surviving its own
+                      diagnosis.
+                      IT COSTS SEVENTEEN TEST FILES AND THAT IS THE DECISION, NOT A SIDE EFFECT — the same
+                      arithmetic `remote-context-helper-tests` carries above. The `resources` directory holds
+                      ten files and no test, but cone mode materializes every directory ON THE PATH, so naming
+                      it puts `service-workers/cache-storage`'s own level on disk: twelve `.https.any.js` /
+                      `.https.window.js` scripts and five documents that load testharness.js. They are claimed
+                      by WPT_OWN_LEVEL below, because a test file on disk that neither list accounts for fails
+                      this gate, and because leaving them out to keep one helper cheap would be buying a smaller
+                      number with an excluded directory. Its `crashtests/` sibling is not on the path to
+                      anything listed and stays absent, which is every unlisted path's standing statement:
+                      untested rather than passing. Expect bad first numbers — every one of those seventeen
+                      opens with `caches`, and there is no CacheStorage component. */
+                   "service-workers/cache-storage/resources"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
@@ -415,7 +475,13 @@ const WPT_OWN_LEVEL = [
      largest population this gate had on disk and did not run. Its five subdirectories
      (ServiceWorkerGlobalScope/, multi-globals/, navigation-preload/, tentative/ and the listed resources/) are
      otherwise not on disk and are claimed by nothing here. */
-  "service-workers", "service-workers/service-worker"];
+  "service-workers", "service-workers/service-worker",
+  /* The seventeen files at cache-storage's own level, on disk because its own `resources` is now listed above
+     for the one helper `service-workers/idlharness.https.any.js` names. A row of its own rather than folding
+     into `service-workers`, for that list's own reason: `service-workers`'s row is the standard's single
+     idlharness file, and burying seventeen CacheStorage tests inside it is a number in which neither subject is
+     visible. */
+  "service-workers/cache-storage"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
