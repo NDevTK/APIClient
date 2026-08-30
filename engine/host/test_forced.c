@@ -3,6 +3,7 @@
  * rewind, no frame snapshot). Runs standalone against clean upstream quickjs + the new solver components. */
 #include "quickjs.h"
 #include "check.h"
+#include "qjs_abi.h"   /* the production `qjs_*` entries — this file's `--abi` arm is a host of them */
 #include "solver/concolic.h"
 #include "solver/decide.h"
 #include "solver/flow.h"
@@ -103,6 +104,7 @@
 #include <lexbor/html/html.h>
 #include <lexbor/dom/dom.h>
 #include <math.h>     /* css-values-4 §10.9.2's signed zero and infinity, which only `signbit`/`isinf` can see */
+#include <limits.h>   /* UINT_MAX — the `--abi` arm's document length is narrowed to the ABI's own parameter */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -10125,8 +10127,278 @@ static void message_source_selftest(void)
     concolic_clear_pins();
 }
 
+/* ─── THE PRODUCTION ABI, DRIVEN BY THIS PROCESS ──────────────────────────────────────────────────────────
+ * CLAUDE.md: "The engine's home is therefore the host that gives it real threads, a real CPU clock, a real
+ * `fork()` and a real sanitizer; a browser vehicle is ONE host among several, driven through the same ABI."
+ * The `qjs_*` entries ARE that ABI, and until this arm existed the only thing anywhere that drove them was
+ * `engine/route.mjs` — a wasm module loaded into node. So every claim about the ABI was a claim about the
+ * emscripten build of it, and the entry itself was linked by no native program at all: §Testing's "a
+ * translation unit no gate compiles is outside the gate", one layer down, where an ENTRY POINT rather than a
+ * component is the thing outside. This arm is the smallest program that makes the sentence true — a document
+ * in, a result out, through the same twenty-two entries the extension calls and no others.
+ *
+ * WHAT IT IS NOT. It is not a second scheduler, a second engine or a second ABI: it holds no semantics, asks
+ * the engine for nothing `bridge.js` does not ask it for, and its whole body below is a record parse, the
+ * three-code step loop and one print. `route.mjs` wrote this driver's logic once already, in JS, against these
+ * same entries; what is here is that protocol with the wasm boundary removed.
+ *
+ * WHAT IT DELIBERATELY CANNOT DO YET, NAMED RATHER THAN FAKED. It cannot PAY the frontier. A pending fetch and
+ * a cross-agent operation are the trusted zone's to answer — SECURITY.md puts every byte of network through
+ * `safe-fetch.js`'s chokepoint and CLAUDE.md's §Attacker-sources makes the FIRING DECISION a policy in that
+ * zone, keyed on the request's provenance and its credential state — and a native host has no such zone yet.
+ * So this arm opens no socket. A stall it cannot pay ABORTS naming what must be built, which is the forcing
+ * function; an unpoliced `fetch()` bolted on here would be the same code with the rule deleted, and the
+ * §Architecture line has no carve-out for a host being native. Peer provisioning is the same refusal one seam
+ * along: `wpt_runner.c` already forks and execs a second instance of this very binary over a pipe, so the
+ * mechanism exists and what is missing is the ROUTING TABLE between instances — which is the trusted zone's
+ * one fact ("which instance holds which document") and is the next diff, not a line of this one. */
+
+/* ONE RECORD OFF STDIN. `getdelim` rather than a `char line[N]` with an abort past it: a real bundle's document
+   is megabytes and its base64 is more, so a fixed line buffer is a document this host would refuse to be
+   handed — and the established primitive already grows, so hand-rolling the realloc loop `wpt_child_read_line`
+   already contains would be a second copy of it in a second program. Returns malloc'd text with the delimiter
+   removed, or NULL at end of input. Only the '\n' is stripped: a stray CR is not silently absorbed, because
+   every field of this record is either an address, a name or base64, and none of the three contains one — so a
+   CR is a writer this driver does not share a grammar with and the decode below says so. */
+static char *abi_line(void)
+{
+    char *buf = NULL;
+    size_t cap = 0;
+    ssize_t n = getdelim(&buf, &cap, '\n', stdin);
+
+    if (n < 0) { free(buf); return NULL; }
+    if (n > 0 && buf[n - 1] == '\n') buf[n - 1] = 0;
+    return buf;
+}
+
+/* ONE FIELD OF THAT RECORD, and a MISSING one is a refusal rather than an empty string. The two are different
+   facts and this channel can say both: an empty header block is the positive statement "the response carried
+   no headers", while a field that is not there at all is a writer and a reader that disagree about the grammar
+   — after which every field beyond the gap is read one slot early and arrives looking like a value. That skew
+   is exactly what emscripten's own wrapper is silent about in this direction, so it is refused here. */
+static char *abi_take(char **p, const char *what)
+{
+    char *f = *p, *tab;
+
+    CHECKF(f != NULL, "the document record carries no field where its %s belongs — this driver and whatever "
+                      "wrote the record disagree about the grammar, and every field after the gap would be "
+                      "read one slot early", what);
+    tab = strchr(f, '\t');
+    if (tab) { *tab = 0; *p = tab + 1; } else *p = NULL;
+    return f;
+}
+
+/* A FIELD THAT CARRIES BYTES, decoded back out of the transport's own text. Fetch §2.2.4 "Bodies" makes a
+   body's source a BYTE SEQUENCE and a document's bytes are one — it may contain a 0x00, which the HTML
+   tokenizer has a rule for per state, and newlines, which this line-oriented channel could not carry raw. So
+   they cross base64'd, in the shape `wpt_runner.c`'s own channel already crosses a payload in
+   (`windowproxy.post`'s record rides it base64), through quickjs's own codec rather than a second one grown
+   here. This is a TRANSPORT ENCODING and never a Fetch §5.3 "Body mixin" DECODE: `text()` is "run consume body
+   with this and UTF-8 decode", which is an algorithm over the bytes that DESTROYS the label HTML §8.1.4.2
+   "Fetching scripts"'s classic-script decode exists to honour — and it is what the trusted zone was running
+   before this byte side-channel existed. Nothing here reads a charset or applies one.
+   THE NUL PAST THE LENGTH IS THE GUARD BYTE `qjs_init` ASSERTS ON — the length is what bounds the read and the
+   terminator is what makes the same buffer safe for the one consumer that still asks for a C string. */
+static char *abi_bytes(const char *b64, size_t *plen, const char *what)
+{
+    size_t n = strlen(b64), cap = JS_Base64DecodedMax(n) + 1;
+    char *bytes = malloc(cap);
+    int err = 0;
+
+    CHECK(bytes != NULL, "OOM decoding a field of the document record — the document this process was handed "
+                         "is the whole of its input, so there is nothing left to run");
+    *plen = JS_Base64Decode((uint8_t *)bytes, cap, b64, n, &err);
+    DCHECKF(!err, "the %s field of the document record is not base64 — this channel is line-oriented, so a "
+                  "byte sequence crosses it encoded, and a raw field is a writer that does not share this "
+                  "driver's grammar", what);
+    bytes[*plen] = 0;
+    return bytes;
+}
+
+/* THE ONE-WAY NOTICES, DRAINED BY THE READ — and every one of them is a document this host cannot provision.
+   Read rather than left standing, because a register nothing ever reads grows for the life of the session and
+   its contents are then invisible; refused rather than dropped, because a `navigable.create` the host drops is
+   a document nothing runs and every read through it parks its flow forever, which from outside is
+   indistinguishable from a page that is merely slow.
+   IT DOES NOT FIRE ON AN ORDINARY DOCUMENT, and that is a property of the register rather than of this host's
+   luck: every writer of a notice is a CROSS-INSTANCE fact (a navigable created, a message posted across, a
+   world whose death a peer must be told of — world_flow_gone answers only for names that actually CROSSED),
+   so a document that reaches no peer emits none. What this refuses is exactly the surface the next diff
+   builds, which is why it is the forcing function for it and not a nuisance in front of it. */
+static void abi_notices(void)
+{
+    const char *n = qjs_host_notices();
+
+    if (!*n) return;
+    DFAILF("this host was handed a one-way NOTICE and has nowhere to put it. Provisioning a peer instance is a "
+           "second process of this same binary — engine/host/wpt_runner.c already does exactly that with "
+           "pipe2(O_CLOEXEC)/fork()/execl and stamps the child's origin from the parent — and ROUTING between "
+           "instances is the trusted zone's one fact, which instance holds which document. Neither exists at "
+           "this entry yet, and answering a notice by discarding it would leave every flow that reads through "
+           "the named document parked for the rest of the session. notices=%s", n);
+}
+
+/* THE FRONTIER STALLED, WHICH IS A BILL. Every member is parked on something only a host can supply, the
+   session is live and every snapshot is intact — so this is not a crash in the engine, it is this host being
+   asked to pay in a currency it does not have. The two registers are both read because a stall names what is
+   owed through their union (main.c asserts exactly that at the entry that produces the code), and reporting
+   one of them would send the reader looking for a request that is on the other list. */
+static void abi_stalled(void)
+{
+    const char *fetches = qjs_pending();
+    const char *ops = qjs_host_requests();
+
+    DFAILF("the frontier STALLED and this host cannot pay it. Every byte of network belongs to the trusted "
+           "zone's chokepoint (SECURITY.md: `safe-fetch.js`) and the decision to FIRE a request at all is a "
+           "per-origin policy over the request's PROVENANCE and its credential state, so a native host that "
+           "opened a socket here would be this project's one rule with the rule deleted. What must be built "
+           "is that zone for this host — a policy that reads the provenance the request declares, performs "
+           "the fetch, and hands the reply back through qjs_provide/qjs_host_answer. Until it exists, a "
+           "document that reaches the network is one this entry cannot drive. fetches=[%s] ops=[%s]",
+           fetches, ops);
+}
+
+/* THE ARM ITSELF. One document in, one result out.
+   THE RECORD IS `document<TAB><address><TAB><name><TAB><headers base64><TAB><document base64>`, verb first and
+   tab separated, which is `wpt_runner.c`'s child channel's own shape rather than a second grammar. Three of
+   its five fields are facts only the zone that fetched the document can state — where it was loaded FROM,
+   what the world registry calls it, and what its response delivered — and none of the three is derivable
+   here. */
+static int abi_main(void)
+{
+    char *rec, *p;
+    const char *verb, *url, *doc_id;
+    char *headers, *html;
+    size_t headers_n = 0, html_n = 0;
+    int r;
+
+    rec = abi_line();
+    CHECK(rec != NULL, "this host was started with no document record at all — a Document is a tree over bytes "
+                       "that arrived from somewhere, and there is no tree to build from nothing");
+    p = rec;
+    verb = abi_take(&p, "verb");
+    CHECKF(!strcmp(verb, "document"), "a record arrived on this host's channel under the verb `%s`, which it "
+                                      "does not carry — one document in, one result out, and a verb this "
+                                      "entry does not know is a caller expecting a capability it has not", verb);
+    url = abi_take(&p, "address");
+    /* NOT AN EMPTY STRING. main.c refuses an unparseable address and owns that check; what is refused HERE is
+       the ABSENCE, because an empty field would reach that check as a different failure and name the wrong
+       side of this seam. */
+    CHECK(*url != '\0', "the document record names no ADDRESS — a document is loaded FROM somewhere, and every "
+                        "relative URL the page builds resolves against it");
+    doc_id = abi_take(&p, "document name");
+    CHECK(*doc_id != '\0', "the document record names no DOCUMENT — an agent is named by its root document and "
+                           "a peer instance names this document's flows by that id, so an unnamed document "
+                           "cannot take part in cross-document time travel");
+    /* THE HEADER BLOCK MAY LEGITIMATELY BE EMPTY and that is a POSITIVE statement rather than a hole: an empty
+       field block is what `header_list_parse_field_lines` reads as "a response that carried no headers", which
+       is the same sentence its serializer writes. So there is no assert on its content — only on the field
+       being present, which `abi_take` already made. */
+    headers = abi_bytes(abi_take(&p, "response header block"), &headers_n, "response header block");
+    /* THE BLOCK'S LENGTH HAS A READER, WHICH IS THIS LINE, and without one it would be a number computed and
+       consumed by nothing — the mirror of the field a consumer defaults. The two facts have to agree because
+       the block crosses this channel as a BYTE SEQUENCE and reaches `qjs_init` as a C STRING: a NUL inside it
+       would end the field-line parse early, so every header past it would be one the response sent and this
+       engine never saw — a `Content-Security-Policy` silently absent, and the sink it kills then reported as
+       a working exploit. */
+    DCHECK(headers_n == strlen(headers),
+           "the response header block carries a NUL — it crosses this channel as a byte sequence and reaches "
+           "the ABI as a C string, so everything past that byte is a header the response delivered and this "
+           "engine will never be shown");
+    html = abi_bytes(abi_take(&p, "document bytes"), &html_n, "document bytes");
+    /* THE ABI'S LENGTH PARAMETER IS `unsigned`, so this is where a document larger than one can name stops
+       being a document and becomes a PREFIX of one — and a prefix PARSES, which is what makes it worth an
+       assert rather than a cast. There is no NUL check to pair with it: a document MAY contain a 0x00 and the
+       tokenizer has a rule for it per state, which is the whole reason the length crosses beside the bytes. */
+    DCHECK(html_n <= (size_t)UINT_MAX,
+           "the document is longer than the ABI's length parameter can name — the truncated value would be "
+           "accepted and parsed, so this instance would run a PREFIX of the page and report its findings as "
+           "the page's");
+    /* AND NOTHING AFTER IT. A record with a field this driver does not read is a writer NEWER than this reader,
+       which a left-to-right walk is structurally silent about — it only ever asks for what it was told to
+       expect — so the value would be computed, sent, and consumed by nothing while its author believed it
+       crossed. `route.mjs` refuses both directions of that skew for the same reason and this is the C half. */
+    CHECKF(p == NULL, "the document record carries a field after its last — this driver is OLDER than whatever "
+                      "wrote the record, and the trailing value crossed to a reader that never looks at it. "
+                      "trailing=[%s]", p ? p : "");
+
+    /* HTML §7.5.1 "Shared document creation infrastructure"'s Document, out of the fifteen facts a document
+       arrival carries. Three came on the record above; the rest are the SPEC's OWN ANSWERS for a TOP-LEVEL
+       TRAVERSABLE, which is what this entry roots, and every one of them is a positive statement rather than a
+       default — which is exactly why they are spelled here rather than left off.
+         · HTML §8.1.3.1 "Environments"' TOP-LEVEL CREATION URL is this document's own address, because this
+           document IS the top of its tree. A NESTED document's is its EMBEDDER's, which only the zone that
+           created it knows — and that zone is the peer provisioning this entry does not have yet, so the day
+           a `--document` arm exists it carries its own, exactly as `wpt_runner.c`'s child does.
+         · HTML §7.1.7 "Policy containers"' inherited container is EMPTY IN BOTH HALVES, because §7.1.7 clones
+           a CREATOR's and a top-level traversable this process was handed has none. It is two fields because
+           CSP §2.2 "Policies" makes a CSP list "a struct consisting of policies (a list of policies) and a
+           self-origin", and the second cannot be recovered from the first — CSP §2.2.2 "Parse response's
+           Content Security Policies" states it from outside the policy bytes. This document's OWN policy is
+           not this line's business at all: it arrives in the header block above, where a server put it.
+         · HTML §7.1.4 "Cross-origin embedder policies"' item of that same container has NO empty spelling —
+           §7.1.7 gives every container one — so a container with no creator states §7.1.4's own initial value
+           rather than nothing, which is what the four slots say.
+         · HTML §7.3.1.3 "Child navigables" defines "is a child navigable" as "its parent is non-null", so `u`
+           — core/frame/remote_object.h's undefined — is the positive statement that this navigable has none.
+         · Permissions Policy §9.5 "Create a Permissions Policy for a navigable" is given "null or an element
+           (container) and an origin", and the answer here is that grammar's `null`: nothing embeds this
+           navigable, so nothing presents it.
+         · HTML §3.1.3 "Ancestor origins"' list is `none`, that grammar's word for "there are no ancestors",
+           by the same sentence read one algorithm along. */
+    r = qjs_init(html, (unsigned)html_n, url, doc_id, headers, /*top_level_url*/ url,
+                 /*inherited_csp*/ "", /*inherited_csp_self_origin*/ "",
+                 /*inherited_coep*/ "unsafe-none", /*endpoint*/ "",
+                 /*report_only*/ "unsafe-none", /*report_only_endpoint*/ "",
+                 /*parent_navigable*/ "u", /*container_policy*/ "null", /*ancestor_origins*/ "none");
+    DCHECK(r == 0, "qjs_init refused the document this process was handed");
+    /* THE BLOCK IS PARSED AND COPIED (core/fetch/headers.c allocates its own name and value per field line),
+       and the list it was parsed into is released inside the entry above, so these bytes are done. The
+       DOCUMENT's are not — see the free at the bottom. */
+    free(headers);
+
+    /* NO RESIDUE, STATED. `qjs_begin`'s argument is the parked frontier a previous session left, and the empty
+       string is the positive statement that this session continues none. A cross-session resume is a field on
+       the record above and a shelf behind it, which is a diff of its own; what must not happen is this entry
+       inventing one. */
+    qjs_begin("");
+
+    for (;;) {
+        int step = qjs_step();
+
+        /* THE NOTICES ARE DRAINED ON EVERY ROUND, including the one that ends the session: an emission the
+           last step produced is exactly the one a drain placed before the terminator would lose. */
+        abi_notices();
+        if (step == ENGINE_STEP_DONE) break;
+        if (step == ENGINE_STEP_STALLED) { abi_stalled(); break; }
+        /* ENGINE_STEP_YIELD — the thread was ASKED FOR, not a payment, so a host with nothing else to do
+           steps straight back in. There is no membership assert on `step` here and that is deliberate:
+           `qjs_step` asserts it at the entry that PRODUCES the code, and a rule spelled at both is two. */
+    }
+
+    /* THE RESULT, on the same @RESULT line every other host of this engine writes — the one the harnesses
+       already read, rather than a marker invented here that no shipped path emits. */
+    printf("@RESULT %s\n", qjs_result());
+    fflush(stdout);
+    qjs_teardown();
+    /* AFTER THE TEARDOWN, because the entry KEEPS these bytes: the parser's input byte stream reads THROUGH
+       this pointer rather than copying it, which is why the extension's own placement marks that one parameter
+       retained and why `route.mjs` stopped freeing it. The document is destroyed by the teardown above, so
+       this is the first moment nothing can read them. `rec` goes with it because the address and the name are
+       slices of it and this entry never copied them. */
+    free(html);
+    free(rec);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     JSRuntime *rt;
+    /* THE ABI ARM IS TAKEN FIRST, BEFORE ANY OF THE FIXTURE'S OWN STATE EXISTS. `qjs_init` roots an agent —
+       its runtime, its class registrations, its world namespace and its frontier — and the selftests below
+       root a second one under the name "fixture". Two agents in one process is not a smaller version of one;
+       it is the state SECURITY.md's one-instance-per-cluster rule exists to prevent, with the frontier's own
+       registry initialised twice. So this is a return, not a branch. */
+    if (arg_has(argc, argv, "--abi")) return abi_main();
     trusted_types_selftest();
     policy_container_selftest();
     /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would

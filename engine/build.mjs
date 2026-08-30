@@ -943,31 +943,26 @@ if (NATIVE) {
     "-O1", "-g", "-fno-omit-frame-pointer",
     ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
     ...NATIVE_DIALECT,
-    /* THE SMOKE ENTRY, always: this target BUILDS AND RUNS a fixture, and main.c has no main() to run. */
-    ...SHARED_SOURCES, ENTRY_SMOKE, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
+    /* BOTH ENTRIES. `main.c` owns the `qjs_*` ABI and has no `main()`, so it contributes no entry point and
+       cannot collide with the fixture's — every other symbol in either file is `static`. What it contributes
+       is the ABI ITSELF, which `test_forced.c`'s `--abi` arm is now a host of, so the two are one program:
+       run with no arguments it is the fixture, run with `--abi` it drives a document through the same
+       twenty-two entries the extension calls.
+       THIS SUPERSEDES A COMPILE-ONLY GATE THAT STOOD HERE and is deleted with it rather than kept beside it.
+       That gate was `clang -fsyntax-only` over ENTRY_ABI, and its own comment gave the reason it existed:
+       §Testing's "A TRANSLATION UNIT NO GATE COMPILES IS OUTSIDE THE GATE, AND THE SHIPPED ENTRY POINT IS THE
+       ONE THAT ROTS" — this exact file having stopped compiling across many commits in which every gate was
+       green. A LINK is strictly stronger than a syntax check and answers the same question plus the one the
+       syntax check explicitly could not: syntax-only "catches a missing #include and a bad declaration and
+       catches NOTHING about an undefined symbol", which is the emcc path's own sentence about why it links
+       both. And the run below carries it further still — the shipped entry is now EXECUTED natively, under
+       the sanitizers this target exists for, which is what CLAUDE.md means by the engine's home being the
+       host with a real sanitizer. Keeping the weaker check beside the stronger one would be a second gate
+       whose only possible contribution is to disagree. */
+    ...SHARED_SOURCES, ENTRY_SMOKE, ENTRY_ABI, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
   ], { stdio: "inherit" });
   if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
-  console.log("[build] OK -> " + bin);
-  /* THE ENTRY THIS TARGET DID NOT LINK — the rule the emcc path below already follows, applied to the half that
-     did not. `main.c` owns the `qjs_*` ABI and has no `main()`, so it cannot be linked into a program that RUNS
-     a fixture; the link above therefore takes ENTRY_SMOKE and ENTRY_ABI is in NO native build at all. That is
-     §Testing's own defect by name — "A TRANSLATION UNIT NO GATE COMPILES IS OUTSIDE THE GATE, AND THE SHIPPED
-     ENTRY POINT IS THE ONE THAT ROTS" — and it has already happened once to this exact file, which stopped
-     compiling across many commits in which every gate was green.
-     IT MATTERS MORE THAN THE WASM CASE, not less: `main.c` is the ONLY translation unit whose portability the
-     engine's host-independence rests on, so a gate that never compiles it for the native target is a gate that
-     cannot notice the day an edit makes the shipped entry emscripten-only. Compile-only, one TU, and it takes
-     NATIVE_DIALECT — the same list the link above took — so the two cannot come to disagree about what
-     "natively" means. Syntax-only is the right depth here and not a shortcut: what is being asserted is that
-     this entry's declarations resolve for a non-emscripten target, which is exactly what would rot. */
-  const abi = spawnSync("clang", ["-fsyntax-only", ...NATIVE_DIALECT, ENTRY_ABI], { stdio: "inherit" });
-  if (abi.status !== 0) {
-    console.error("[build] the SHIPPED ABI entry does not compile for this target rc=" + abi.status +
-                  " — " + ENTRY_ABI + " is linked by no native program, so nothing else here would have " +
-                  "said so. It is the one translation unit the engine's host-independence rests on.");
-    process.exit(abi.status || 1);
-  }
-  console.log("[build] OK -> " + ENTRY_ABI + " compiles natively (entry linked by no native program)");
+  console.log("[build] OK -> " + bin + " (both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
   /* THE CROSS-SESSION ROUND TRIP: TWO INVOCATIONS OVER ONE SHELF.
    *
    * §Time-travel-resume's whole claim is that the frontier persists as suspended snapshots ACROSS SESSIONS, and
@@ -1076,8 +1071,13 @@ const ABI_LIST = abiCheck("renderer", join(HOST, "main.c"), "QJS_EXPORT", "qjs_"
    bad declaration and catches NOTHING about an undefined symbol; a qjs_* body calling a function deleted from
    the tree passed that check and would have failed only in the extension. §Testing's rule is that the shipped
    entry is the one that rots, and half a check is how it rots quietly.
-   The two programs differ ONLY in which entry object enters the link, so compiling once into shared objects
-   and linking twice costs one extra link and closes that hole completely. */
+   The two programs differ ONLY in which ENTRY OBJECTS enter the link, so compiling once into shared objects
+   and linking twice costs one extra link and closes that hole completely.
+   ONE OF THEM TAKES BOTH, AND THAT IS NOT A BLURRING OF THE TWO. `main.c` has no `main()`, so it is an entry
+   only in the sense of owning the `qjs_*` bodies — and `test_forced.c` is now a HOST of those bodies (its
+   `--abi` arm drives a document through them), so the smoke program needs them the way it needs any other
+   component. The ABI program does NOT take the smoke object in return: `test_forced.c` owns `main()` and the
+   whole fixture graph behind it, and neither belongs in the artifact the extension loads. */
 /* THE WARNING LIST, ONE COPY. Two existed, and the comment above the second said it was "taken from the same
    place rather than restated" while restating it — a second copy of a build's configuration, which is the same
    defect as a second copy of its source list. Turning one diagnostic back on had to be done twice or the
@@ -1393,8 +1393,11 @@ const OBJS_SHARED = SHARED_SOURCES.map(mustObj);
    AND NEITHER LINK IS A DOOR IN FRONT OF THE OTHER: a failing smoke link used to take the production ABI link
    — and with it the only two-instance drive in the tree — out of the run entirely. Both are attempted, both
    are reported, and a program that did not link makes its OWN drive a SKIP with that reason. */
-function link(what, entryObj, ldflags, out) {
-  const l = spawnSync(EMCC, [...OBJS_SHARED, entryObj, ...LDFLAGS_COMMON, ...ldflags, "-o", out],
+/* `entryObjs` is a LIST because one of the two programs takes two of them — see the note above LDFLAGS: the
+   smoke program is a host of the `qjs_*` bodies now, and a parameter that could only ever name one would have
+   to be worked around at the one call site that needs both. */
+function link(what, entryObjs, ldflags, out) {
+  const l = spawnSync(EMCC, [...OBJS_SHARED, ...entryObjs, ...LDFLAGS_COMMON, ...ldflags, "-o", out],
                       { stdio: "inherit", shell: true, cwd: QJS });
   if (l.status !== 0) {
     console.error("[build] " + what + " LINK FAILED rc=" + l.status);
@@ -1403,11 +1406,11 @@ function link(what, entryObj, ldflags, out) {
   console.log("[build] OK -> " + out);
   return { label: what + " link", verdict: "PASS", code: 0 };
 }
-const SMOKE_LINK = link("smoke", mustObj(ENTRY_SMOKE), LDFLAGS_SMOKE, join(OUT, "qjs.js"));
+const SMOKE_LINK = link("smoke", [mustObj(ENTRY_SMOKE), mustObj(ENTRY_ABI)], LDFLAGS_SMOKE, join(OUT, "qjs.js"));
 const ABI_LINK = ABI_LIST.code
   ? skipped("production ABI link", "the renderer ABI list and main.c's QJS_EXPORT bodies disagree, so this "
                                  + "link's --export= list is known wrong")
-  : link("production ABI", mustObj(ENTRY_ABI), LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
+  : link("production ABI", [mustObj(ENTRY_ABI)], LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
 
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old

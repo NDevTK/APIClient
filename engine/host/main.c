@@ -104,13 +104,13 @@
 #include "solver/world.h"
 #include "solver/result.h"
 #include "solver/solve.h"
-
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#define QJS_EXPORT EMSCRIPTEN_KEEPALIVE
-#else
-#define QJS_EXPORT
-#endif
+/* THE ENTRIES BELOW ARE DECLARED THERE AND DEFINED HERE, so the compiler checks the two against each other.
+   `QJS_EXPORT` came with them: the marker and the signature are one fact about an entry, and this file held
+   both while no C caller existed to disagree with either. One does now (`test_forced.c --abi`), and a caller
+   that wrote its own declarations would be the hand-aligned copy route.mjs's own comment records going short
+   twice — with emscripten's wrapper silent about the direction that matters, since too FEW arguments are
+   zero-filled and reach a `const char *` parameter as NULL. */
+#include "qjs_abi.h"
 
 /* One WASM instance per ORIGIN-KEYED AGENT CLUSTER (SECURITY.md), and these are the ROOT document's: the parse
  * the host handed over, its script inventory, and the one engine that runs the agent's whole frontier. Nothing
