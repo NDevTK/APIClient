@@ -57,7 +57,8 @@
 #include "core/idl_args.h"
 #include "core/realm.h"
 #include "core/dom/document.h"
-#include "core/dom/element.h"   /* element_prefix — §4.4's three namespace lookups read the name §4.5 stored */
+#include "core/dom/element.h"   /* element_create_ns / element_free — §4.4 "clone a node"'s element half */
+#include "core/dom/node_ns.h"   /* §4.4's two namespace WALKS, which its three lookup members each call once */
 #include "core/dom/attr_list.h"    /* dom_attr_clone / dom_attr_attach — §4.4 step 2's attribute half */
 #include "core/loader/data_block.h"   /* HTML §4.12.1: the two doors a data block's own text leaves by */
 #include "core/dom/name_intern.h"  /* §4.4's names in the COPY's document — see clone_element_into */
@@ -2695,53 +2696,86 @@ static JSValue js_node_insert(JSContext *ctx, JSValueConst this_val, int argc, J
     return JS_DupValue(ctx, argv[1]);             /* STEP 11 — replaceChild returns the node it REMOVED */
 }
 
-/* §4.4 lookupPrefix / lookupNamespaceURI / isDefaultNamespace — the three namespace lookups, one walk. Lexbor
-   interns both halves, so this reads the element's own namespace and prefix rather than re-deriving them from
-   an xmlns attribute the tree builder already consumed. magic 0 = lookupPrefix, 1 = lookupNamespaceURI,
-   2 = isDefaultNamespace. */
+/* DOM §4.4 "Interface Node"'s lookupPrefix / lookupNamespaceURI / isDefaultNamespace — THE THREE MEMBERS, AND
+   THE ALGORITHM IS NOT HERE. §4.4 defines two walks ("locate a namespace", "locate a namespace prefix") and
+   then three members that
+   are each a coercion plus one call into one of them, so that is what these are; core/dom/node_ns.h is the
+   walks, and its head comment says why they are a component rather than this body with a magic.
+   WHAT THIS FILE USED TO DO INSTEAD, because none of it was visible as a crash: it climbed to the NEAREST
+   ANCESTOR ELEMENT (§4.4 says PARENT element, one step, and only if that parent is an element) and then read
+   that one element's interned namespace and prefix and stopped. So there was no ancestor walk — step 6 of the
+   Element arm — and no step 4 at all, which is the `xmlns:p="…"` / `xmlns="…"` ATTRIBUTE lookup that is the
+   only thing that answers for a prefix the context element does not itself carry. `<r xmlns:p="urn:x"><q/></r>`
+   answered `q.lookupNamespaceURI("p")` as null, and an `xmlns=""` undeclaration inherited the very binding it
+   exists to remove. The two prefixes Namespaces in XML §3 binds BY DEFINITION (`xml`, `xmlns`) were absent
+   too, so `lookupNamespaceURI("xml")` was null on every element in every document.
+   magic 0 = lookupPrefix, 1 = lookupNamespaceURI, 2 = isDefaultNamespace. */
 static JSValue js_node_lookup_ns(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
 {
     lxb_dom_node_t *n = node_of(this_val);
-    const char *arg = NULL;
+    /* TWO NAMES FOR ONE STRING, and they are not redundant. `owned` is what JS_ToCStringLen handed back and is
+       what must be freed; `arg` is the STANDARD'S ARGUMENT, which each member's step 1 may set to null without
+       the string ceasing to exist. Freeing through `arg` after that coercion frees nothing and leaks the
+       CString on every `lookupNamespaceURI("")` a page makes. */
+    const char *owned = NULL, *arg = NULL;
+    size_t arg_len = 0, out_len = 0;
     JSValue r;
 
     if (!n) return magic == 2 ? JS_FALSE : JS_NULL;
-    /* The argument is `DOMString?` and the declaration converted it, so this reads a string or the IDL null. */
+    /* The argument is `DOMString?` and the declaration converted it, so this reads a string or the IDL null.
+       LEN AND NOT strlen: a namespace name is a page-supplied DOMString and may contain a U+0000, which
+       `strlen` would truncate at — and a truncated namespace matches a DIFFERENT declaration rather than
+       failing to match, which is a wrong answer that looks like a right one. */
     if (argc > 0 && JS_IsString(argv[0]))
-        arg = JS_ToCString(ctx, argv[0]);
+        owned = arg = JS_ToCStringLen(ctx, &arg_len, argv[0]);
 
-    /* §4.4: the lookup starts at the nearest ELEMENT — a Text node's namespace is its parent element's. */
-    while (n && n->type != LXB_DOM_NODE_TYPE_ELEMENT)
-        n = n->parent;
-    if (!n) {
-        if (arg) JS_FreeCString(ctx, arg);
-        return magic == 2 ? JS_FALSE : JS_NULL;
-    }
-    {
-        lxb_dom_element_t *el = lxb_dom_interface_element(n);
-        size_t nl = 0, pl = 0;
-        const lxb_char_t *ns = lxb_ns_by_id(n->owner_document->ns, n->ns, &nl);
-        /* element_prefix and NOT lxb_dom_element_prefix: that one leaves `*len` at whatever the caller
-           initialised it to on its success path, so every branch below read "this element has no prefix" —
-           and `lookupNamespaceURI(null)`'s match IS that condition, so a prefixed element answered as the
-           default namespace's holder. See core/dom/element.c. */
-        const lxb_char_t *px = (const lxb_char_t *)element_prefix(el, &pl);
+    switch (magic) {
+    /* "The lookupNamespaceURI(prefix) method steps are: 1. If prefix is the empty string, then set it to null.
+       2. Return the result of running locate a namespace for this using prefix." STEP 1 IS THE MEMBER'S and is
+       why the walk is handed a coerced argument rather than asked to coerce: the empty string and null are
+       different arguments to the walk, and only this member maps one onto the other. */
+    case 1: {
+        const char *ns;
 
-        if (magic == 1) {   /* lookupNamespaceURI(prefix): the namespace of the element carrying that prefix */
-            bool match = arg ? (pl == strlen(arg) && pl && memcmp(px, arg, pl) == 0)
-                             : (pl == 0);   /* a null prefix asks for the DEFAULT namespace */
-            r = (match && ns && nl) ? JS_NewStringLen(ctx, (const char *)ns, nl) : JS_NULL;
-        } else if (magic == 0) {   /* lookupPrefix(namespace): the prefix this element uses for it */
-            bool match = arg && ns && nl == strlen(arg) && memcmp(ns, arg, nl) == 0;
-            r = (match && px && pl) ? JS_NewStringLen(ctx, (const char *)px, pl) : JS_NULL;
-        } else {                   /* isDefaultNamespace(namespace) */
-            DCHECK(magic == 2, "a namespace lookup was declared with a magic this table does not name");
-            if (!arg || !*arg) r = JS_NewBool(ctx, !ns || nl == 0);
-            else               r = JS_NewBool(ctx, pl == 0 && ns && nl == strlen(arg) &&
-                                                   memcmp(ns, arg, nl) == 0);
-        }
+        if (arg != NULL && arg_len == 0) arg = NULL;
+        ns = node_locate_namespace(n, arg, arg_len, &out_len);
+        r = ns ? JS_NewStringLen(ctx, ns, out_len) : JS_NULL;
+        break;
     }
-    if (arg) JS_FreeCString(ctx, arg);
+
+    /* "The lookupPrefix(namespace) method steps are: 1. If namespace is null or the empty string, then return
+       null. 2. Switch on the interface this implements: …" — and every arm of that switch reaches the same
+       algorithm over some element, which is what node_ns_start_element answers. */
+    case 0: {
+        lxb_dom_element_t *el;
+        const char *px;
+
+        if (arg == NULL || arg_len == 0) { r = JS_NULL; break; }
+        el = node_ns_start_element(n);
+        px = el ? node_locate_namespace_prefix(el, arg, arg_len, &out_len) : NULL;
+        r = px ? JS_NewStringLen(ctx, px, out_len) : JS_NULL;
+        break;
+    }
+
+    /* "The isDefaultNamespace(namespace) method steps are: 1. If namespace is the empty string, then set it to
+       null. 2. Let defaultNamespace be the result of running locate a namespace for this using NULL. 3. Return
+       true if defaultNamespace is the same as namespace; otherwise false."
+       THE COMPARISON INCLUDES THE NULL CASE, which is why it is written as one test over two possibly-null
+       slices rather than as `if (!arg)` beside it: `isDefaultNamespace(null)` is TRUE exactly when the element
+       is in no default namespace, and that is the same sentence, not an exception to it. */
+    default: {
+        const char *ns;
+
+        DCHECK(magic == 2, "a namespace lookup was declared with a magic this table does not name");
+        if (arg != NULL && arg_len == 0) arg = NULL;
+        ns = node_locate_namespace(n, NULL, 0, &out_len);
+        r = JS_NewBool(ctx, (ns == NULL && arg == NULL) ||
+                            (ns != NULL && arg != NULL && out_len == arg_len &&
+                             memcmp(ns, arg, out_len) == 0));
+        break;
+    }
+    }
+    if (owned) JS_FreeCString(ctx, owned);
     return r;
 }
 
