@@ -16,9 +16,10 @@
  * clock it never advanced. §Time-travel-resume's razor calls that a CAP: a resume that is not byte-identical.
  *
  * SO THE RECORD IS A HEAP OBJECT, whose property writes the per-flow COW delta already captures — the same
- * mechanism §8.12 Animation frames's map of animation frame callbacks and §9.4.2's port message queue use, for the same reason
- * CLAUDE.md gives: platform data a flow queues is a JS value, never malloc'd C. It is built at agent init,
- * which is pre-boot, so it is BASELINE and every flow's writes to it are captured rather than shared.
+ * mechanism §8.12 Animation frames's map of animation frame callbacks and §9.4.4 Message ports's port
+ * message queue use, for the same reason CLAUDE.md gives: platform data a flow queues is a JS value, never
+ * malloc'd C. It is built at agent init, which is pre-boot, so it is BASELINE and every flow's writes to it
+ * are captured rather than shared.
  *
  * IT IS PER-AGENT AND NOT PER-REALM, which is the other half of the answer. §8.1.7 gives one event loop to a
  * similar-origin window agent, and a document and its same-origin iframe are ordered by that ONE loop: a
@@ -59,6 +60,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_TIMING_EVENT_LOOP_H
 #define ENGINE_HOST_BROWSER_CORE_TIMING_EVENT_LOOP_H
 
+#include <stdint.h>
+
 #include "quickjs.h"
 
 /* Declared ONCE PER AGENT, before any page script runs — the record must be in the pre-boot baseline. */
@@ -67,16 +70,131 @@ void event_loop_init(JSContext *ctx);
    this gives back is the agent's and not any realm's. */
 void event_loop_free(JSRuntime *rt);
 
+/* THE CLOCK HAS TWO MOVERS AND FOR A LONG TIME IT HAD ONE, WHICH IS WHY EVERY DURATION THIS ENGINE MEASURED
+ * WITHIN ONE TASK WAS EXACTLY ZERO.
+ *
+ * A TASK SOURCE BECOMING DUE moves it absolutely (event_loop_advance_to, below): the loop jumps to the moment
+ * the next thing it selected is due at. Those are the only two callers this file ever had — a timer expiry and
+ * a rendering frame — and BOTH of them run BETWEEN tasks. So within one task nothing moved the clock at all,
+ * and for the agent's first realm, whose HIGH RESOLUTION TIME Level 3 §4 Time Origin is stamped from this
+ * clock at creation, that number was 0 and stayed 0.
+ *
+ * HTML §8.1.7.3 Processing model SAYS OTHERWISE IN ITS OWN STEPS. Its continual list reads the unsafe shared
+ * current time TWICE around one task — step 2.2 "Set taskStartTime to the unsafe shared current time", then,
+ * after step 2.6 "Perform oldestTask's steps" and step 2.8's microtask checkpoint have both run, step 3 "Let
+ * taskEndTime be the unsafe shared current time" — and step 4 hands both to "Report long tasks". A pair of
+ * reads bracketing one task, differenced, is the standard stating that TIME PASSES WHILE THE TASK'S STEPS RUN.
+ * On a clock only a task SELECTION moves, taskEndTime is taskStartTime, every long task is 0ms long, every
+ * `performance.now()` delta inside a handler is 0, and a page that waits for time to pass inside one task —
+ * a busy-wait spinner, a frame-budget guard, a benchmark loop — has no exit condition it can ever satisfy.
+ * Nothing is capped and no bound is violated when that happens: the loop is preemptible bytecode and the flow
+ * parks and resumes for ever. It simply never emits again, which is worse than a crash, because it looks like
+ * exploration.
+ *
+ * SO THE SECOND MOVER IS THE WORK THE RUNNING FLOW PERFORMED, AND IT IS NOT A WALL CLOCK. That is a design
+ * constraint of this whole project rather than a simplification, and it is the same one core/timing/hr_time.h
+ * gives for declining the jitter HIGH RESOLUTION TIME Level 3 §3 Tools for Specification Authors permits (its
+ * `coarsen time` step 3, "In an implementation-defined manner, coarsen and POTENTIALLY JITTER timestamp such
+ * that its resolution will not exceed time resolution"): §Testing's solver differential is the only oracle
+ * the SOLVER's semantics have, and its entire content is that ONE build must agree with ITSELF about one
+ * document across several schedules. A real clock is not a function of the flow's path — it is a function of
+ * the machine, the load average and which sibling held the thread — so every timestamp under it becomes a
+ * disagreement the gate reports as a scheduling bug, and a flow parked to the cold tier on Monday resumes
+ * into a clock that moved without it. §Time-travel-resume's razor calls exactly that a CAP: a resume that is
+ * not byte-identical. Work-derived, the clock is a pure function of the flow's own path, so a park is invisible to it.
+ *
+ * HIGH RESOLUTION TIME Level 3 §2.1 Clocks IS WHAT MAKES THAT CONFORMING RATHER THAN A LIBERTY TAKEN. It
+ * requires of the monotonic clock exactly two things: its unsafe current time "never decreases", and it "only
+ * exists within a single execution of the user agent, so it can't be used to compare events that might happen
+ * in different executions". Both hold here — advance_to's monotonicity invariant is the first, and a virtual
+ * clock is the second by construction. What §2.1 says about matching real-world time is deliberately NOT a
+ * requirement: "All clocks on the web platform ATTEMPT to count 1 millisecond of clock time per 1 millisecond
+ * of real-world time, but they differ in how they handle cases where they can't be exactly correct." An engine
+ * with no wall clock to attempt it against is such a case, and §2.2 Moments and Durations says the rest — a
+ * moment is "a point in time" that "can't be directly stored as numbers", and a duration is a distance between
+ * two of them on THE SAME clock. Nothing a page can read compares this clock to another one.
+ *
+ * THE UNIT OF WORK IS OPCODES RETIRED BY THE RUNNING FLOW, and the two nearby quantities that are NOT it are
+ * worth naming, because each was reached for and each breaks the razor in a different place.
+ *   — solver/engine.h's `engine_work_done` is AGENT-GLOBAL: forks taken, flows created, jobs run, context
+ *     switches. A flow's clock would move because a SIBLING forked, so the same flow on two schedules reads
+ *     two clocks and a resume observes moments its own path never produced.
+ *   — the count of times the interpreter's yield POLL was reached is schedule-dependent for a subtler reason:
+ *     a poll happens when the request byte is raised, the quantum's CPU-time edge raises it asynchronously,
+ *     and "last raise wins" means an asynchronous raise landing on an already-raised byte adds no poll while
+ *     one landing on a clear byte adds one. The number of polls is therefore a fact about the machine.
+ * Opcodes retired is neither: it is what the flow DID, in the order its own bytecode says, and it is identical
+ * on every schedule and across a park.
+ *
+ * THE CLOCK IS THEREFORE STORED AS TWO FIELDS AND NOT ONE — A BASE AND A RETIRED-WORK COUNT — WHICH IS AN
+ * ANSWER TO FLOATING-POINT ORDER AND NOT AN OPTIMISATION. Folding each batch of retired work into the moment
+ * as it arrives would make the moment depend on HOW THE BATCHES WERE SPLIT, because floating-point addition is
+ * not associative; and how they are split is precisely the schedule-dependent poll count above. Held as an
+ * exact integer count and divided once at the read, the moment is a pure function of the TOTAL, so a run that
+ * polled twice and a run that polled two hundred times over the same opcodes answer the same number. That is
+ * the razor discharged by construction rather than by an invariant somebody has to remember.
+ *
+ * BOTH FIELDS RIDE THE PER-FLOW COW DELTA, like every other field of this record and for the reason the note
+ * at the top of this file gives. Two siblings that each retire work each write their own count into their own
+ * delta over the shared baseline, so neither moves the other; a sibling that is DISCARDED has its delta
+ * released and the baseline it was layered over is untouched, so its time never happened. There is nothing to
+ * reconcile and nothing to merge, which is the whole reason the clock is a heap record rather than a static.
+ *
+ * THE RATE IS A CALIBRATION AND NOT A GRANULARITY, so §NO BOUNDS' rule about naming a policy input does not
+ * reach it: a granularity decides how often a flow OFFERS to rest and a bound decides that work will not
+ * happen, while this decides only how fast MODELLED time runs against modelled work — no flow runs less far
+ * under any value of it. It is fixed here rather than made tunable for the same reason the coarsening declines
+ * the jitter HIGH RESOLUTION TIME Level 3 §3 Tools for Specification Authors' `coarsen time` permits: a clock
+ * that is a function of a SETTING is a clock two configurations of one build disagree about, and the
+ * differential's whole content is that they must not. */
+#define EVENT_LOOP_WORK_PER_MS 100000.0
+
 /* The VIRTUAL clock, in ms since the agent started — the one clock every task source is ordered by, and the
    one an Event's `timeStamp` and a file's modification time are stamped from. A moment: a number, or unknown
-   external input. OWNED. */
+   external input. It is the BASE plus the work retired since the base was set, which is why it is computed
+   rather than read; with no work retired it is the base value itself and not a sum equal to it, because
+   §8.1.7.1's last render opportunity time is asserted IDENTICAL to it and a derivation of an unknown moment is
+   not identical to that moment. OWNED. */
 JSValue event_loop_now(JSContext *ctx);
+
+/* THE SECOND MOVER — `units` of work the RUNNING FLOW has just retired, in opcodes. See the note above for why
+   the unit is that and not one of the two quantities beside it, and why the count is accumulated exactly
+   rather than folded into the moment.
+   IT IS NOT event_loop_advance_to AND MUST NOT BECOME IT. advance_to's second invariant is that the loop may
+   not step OVER a task source that is already due, which is a statement about SELECTING a task; time passing
+   while a task's steps run steps over a due timer all the time, and that is what a browser does — HTML
+   §8.1.7.3's continual list runs one task's steps to completion (step 2.6) before it ever selects another, so
+   a timer whose expiry passes mid-task is due at the next selection and not before it. Applying advance_to's
+   invariant here would assert against the spec. */
+void event_loop_work_advance(JSContext *ctx, uint64_t units);
+/* RESIDUAL — NARROWER THAN HIGH RESOLUTION TIME Level 3 §2.1 Clocks, AND NAMED SO THE NEXT DIFF IS THE THING
+ * AND NOT THE SEARCH FOR IT.
+ *   WHAT IS NOT COVERED: nothing counts retired opcodes yet, so this operation has no caller and the clock
+ *     still moves only between tasks. The count is not something that can be read from where the clock lives:
+ *     the interpreter's per-opcode attention check counts NOTHING today — `DISPATCH` loads the thread-local
+ *     yield-request byte and branches, and `do_yield_poll`'s own comment says "Nothing counts and nothing is
+ *     bounded here" — and no per-flow retired-work quantity is exported by quickjs.h.
+ *   WHAT THE NEXT DIFF BUILDS: a retired-opcode counter incremented at `DISPATCH` beside the `sf->cur_pc`
+ *     store it already makes, thread-local for the same reason the yield request is, taken to zero when the
+ *     scheduler switches a flow IN (so the count handed over is always the running flow's own), and handed to
+ *     this operation from `do_yield_poll` BEFORE it asks the preempt policy — so that a flow which parks there
+ *     has already banked the work it did to reach that point. Batching is free of consequence by the
+ *     accumulate-exactly rule above, which is what lets the hand-over sit at the poll rather than at every
+ *     opcode.
+ *   HOW ITS ABSENCE SHOWS: every `Event.timeStamp` read within one task is the same number and every delta
+ *     between two of them is exactly 0; `performance.now()` differences inside one handler are 0; the agent's
+ *     first realm's time origin is 0 until a timer or a frame fires; and
+ *     `dom/events/Event-timestamp-safe-resolution.html`'s `do { … } while (delta == 0)` has no exit at any
+ *     resolution. When the counter lands, all four move together. */
 
 /* MOVE THE CLOCK to the moment a task source becomes due. `due` is the earliest moment ANOTHER source is
    already due at, or JS_UNDEFINED when none is — the caller has it, because it is what decided this move.
    Both invariants are asserted here rather than trusted to the caller: time may not run backwards, and the
    loop may not step OVER a source that becomes due first. Both are read from what the caller's own ask
-   decided (see the header note); neither is re-evaluated, because over an unknown that is a fork. */
+   decided (see the header note); neither is re-evaluated, because over an unknown that is a fork.
+   IT IS AN ABSOLUTE MOVE, so it also RETIRES the work counted since the last one: `when` is a moment on this
+   clock that the caller has already established is at or after the moment the loop stands at, and the work
+   that got the loop there is subsumed by it rather than added to it. */
 void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due);
 
 /* §8.1.7.1's LAST RENDER OPPORTUNITY TIME — the moment the rendering task source last became due. OWNED. */

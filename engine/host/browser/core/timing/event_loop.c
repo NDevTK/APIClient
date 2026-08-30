@@ -8,6 +8,7 @@
 #include "core/timing/event_loop.h"
 #include "solver/concolic.h"   /* a moment can be unknown external input, and its ordering is a predicate */
 #include "solver/decide.h"     /* …asked as a restartable branch, and read back by this file's invariants */
+#include "solver/flow.h"       /* the clock's second mover writes into the RUNNING flow's delta, and asserts it */
 
 /* THE RECORD, held for the AGENT. A module static is the CORRECT scope here and the wrong one for a prototype:
    §8.1.7 gives one event loop to a similar-origin window agent, so one record answering every realm IS the
@@ -15,7 +16,7 @@
    that is answered by the object's properties riding the per-flow COW delta rather than by a second object. */
 static JSValue g_rec = JS_UNDEFINED;
 static JSAtom  g_atom_now = JS_ATOM_NULL, g_atom_render = JS_ATOM_NULL, g_atom_seq = JS_ATOM_NULL,
-               g_atom_nest = JS_ATOM_NULL;
+               g_atom_nest = JS_ATOM_NULL, g_atom_work = JS_ATOM_NULL;
 
 /* A FIELD OF THE RECORD, as the VALUE it is. OWNED. The two moments may be unknown external input; the
    insertion counter may not, and el_num_get below is where that half is asserted. */
@@ -45,9 +46,12 @@ static void el_set(JSContext *ctx, JSAtom key, JSValueConst v)
 }
 
 /* A COUNTER FIELD, which is the kind that can never be unknown — the INSERTION ORDER (§8.1.7 hands out a real
-   number at every set, and a tie broken by an unknown would be a tie broken by nothing) and §8.7 Timers's
+   number at every set, and a tie broken by an unknown would be a tie broken by nothing), §8.7 Timers's
    TIMER NESTING LEVEL of the currently running task (a count of nested invocations of one algorithm, which is
-   something this engine performed rather than something a page supplied). */
+   something this engine performed rather than something a page supplied), and the RETIRED-WORK count that
+   moves the clock inside a task (opcodes this flow executed — a fact about what the engine did, and the one
+   field whose exactness the razor rests on, since a count folded into a float would make the moment depend on
+   how the work was batched). */
 static double el_num_get(JSContext *ctx, JSAtom key)
 {
     JSValue v = el_get(ctx, key);
@@ -120,8 +124,9 @@ void event_loop_init(JSContext *ctx)
     g_atom_render = JS_NewAtom(ctx, "lastRenderOpportunityTime");
     g_atom_seq = JS_NewAtom(ctx, "taskInsertionOrder");
     g_atom_nest = JS_NewAtom(ctx, "runningTimerNestingLevel");
+    g_atom_work = JS_NewAtom(ctx, "retiredWorkSinceBase");
     CHECK(g_atom_now != JS_ATOM_NULL && g_atom_render != JS_ATOM_NULL && g_atom_seq != JS_ATOM_NULL
-          && g_atom_nest != JS_ATOM_NULL,
+          && g_atom_nest != JS_ATOM_NULL && g_atom_work != JS_ATOM_NULL,
           "event loop: the record's own keys could not be interned");
     /* NULL-PROTOTYPED, like §8.12 Animation frames's map: this is the loop's own storage and never the page's object, so it
        carries no members a page could have replaced. */
@@ -134,9 +139,13 @@ void event_loop_init(JSContext *ctx)
        Initially, this is null." Null is level 0 here — see event_loop.h on why 0 is the positive statement
        and not an absence. */
     JS_SetProperty(ctx, g_rec, g_atom_nest, JS_NewFloat64(ctx, 0));
+    /* NO WORK HAS BEEN RETIRED AT THE BASE, which is what makes the clock's value at agent init the base
+       itself rather than a sum that happens to equal it — see event_loop_now on why that distinction is load
+       bearing for §8.1.7.1's last render opportunity time. */
+    JS_SetProperty(ctx, g_rec, g_atom_work, JS_NewFloat64(ctx, 0));
     /* THE CLOCK STARTS AT A KNOWN MOMENT and becomes unknown only where a task source's own due moment is —
-       which is what makes HR-TIME §4's time origin, stamped from this clock at every realm's creation, a real
-       number for every document created before the first such task fires. */
+       which is what makes HIGH RESOLUTION TIME Level 3 §4 Time Origin, stamped from this clock at every
+       realm's creation, a real number for every document created before the first such task fires. */
     /* WHAT THIS COMPONENT HOLDS FOR THE AGENT, DECLARED — core/agent_state.h. The RECORD is also this init's
        own latch (`JS_IsUndefined(g_rec)` above), which is exactly the slot the header says must be given back:
        a second agent whose event_loop_init returned early would hold a clock object minted in a runtime that
@@ -152,6 +161,9 @@ void event_loop_init(JSContext *ctx)
                      "HTML §8.1.7 Event loops's task-insertion-order key on that record");
     agent_state_atom("event_loop", &g_atom_nest,
                      "HTML §8.7 Timers's timer-nesting-level-of-the-currently-running-task key on that record");
+    agent_state_atom("event_loop", &g_atom_work,
+                     "the retired-work key on that record — the clock's second mover, the work performed since "
+                     "the base was last set absolutely");
 }
 
 /* THE RUNTIME, NOT A REALM, and it is core/platform.c's release column that calls it — see core/platform.h.
@@ -173,10 +185,71 @@ void event_loop_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_render);
     JS_FreeAtomRT(rt, g_atom_seq);
     JS_FreeAtomRT(rt, g_atom_nest);
-    g_atom_now = g_atom_render = g_atom_seq = g_atom_nest = JS_ATOM_NULL;
+    JS_FreeAtomRT(rt, g_atom_work);
+    g_atom_now = g_atom_render = g_atom_seq = g_atom_nest = g_atom_work = JS_ATOM_NULL;
 }
 
-JSValue event_loop_now(JSContext *ctx) { return el_get(ctx, g_atom_now); }
+/* THE CLOCK IS THE BASE PLUS THE WORK RETIRED SINCE THE BASE — see event_loop.h for why it is stored as two
+   fields and computed here rather than folded as it arrives.
+   THE ZERO CASE RETURNS THE BASE ITSELF AND NOT A SUM EQUAL TO IT, and that is a correctness requirement
+   rather than an economy. Over an UNKNOWN base, `M + 0` is a fresh derivation whose identity is not `M`'s, so
+   event_loop_set_last_render's `el_identical(when, now)` — which §8.1.7.3's in-parallel list step 2 makes an
+   equality and not a comparison, because a comparison over an unknown is a fork — would fail on the very path
+   that made the base unknown. Adding nothing must therefore BE nothing, not an addition of zero. */
+JSValue event_loop_now(JSContext *ctx)
+{
+    JSValue base = el_get(ctx, g_atom_now), elapsed, sum;
+    double work = el_num_get(ctx, g_atom_work);
+
+    if (work == 0)
+        return base;
+    /* ONE DIVISION OVER THE TOTAL, which is what makes the moment independent of how the work was batched:
+       floating-point addition is not associative, and how many batches there were is a fact about the
+       schedule (see the header's note on the poll count). The count itself is an exact integer. */
+    elapsed = JS_NewFloat64(ctx, work / EVENT_LOOP_WORK_PER_MS);
+    sum = event_loop_moment_plus(ctx, base, elapsed);
+    JS_FreeValue(ctx, elapsed);
+    JS_FreeValue(ctx, base);
+    return sum;
+}
+
+/* THE CLOCK'S SECOND MOVER — HTML §8.1.7.3 Processing model's continual list brackets ONE task with two reads
+   of the unsafe shared current time (step 2.2's taskStartTime, step 3's taskEndTime) and differences them, so
+   time passes while step 2.6 performs the task's steps. See event_loop.h for the whole of why the quantity is
+   the flow's own retired opcodes, why it is accumulated exactly, and why this is not event_loop_advance_to. */
+void event_loop_work_advance(JSContext *ctx, uint64_t units)
+{
+    double work;
+
+    DCHECK(units > 0,
+           "the event loop's clock was moved by NO work — a zero-unit advance is a call the seam should not "
+           "have made, and it hides the case this whole mechanism exists to end: a clock that is asked to "
+           "move and does not is indistinguishable from one nothing ever asks");
+    /* THE COUNT IS EXACT OR THE RAZOR IS GONE. Above 2^53 a double stops holding consecutive integers, so
+       `work + units` would silently round and two runs that retired the same opcodes in different batch sizes
+       would answer different moments — which is the schedule-dependence the two-field representation exists
+       to remove, reappearing inside the field that was supposed to remove it. */
+    DCHECK((double)units <= 9007199254740992.0,
+           "a single batch of retired work is not exactly representable — the clock's work count is an EXACT "
+           "integer and everything that makes a resume byte-identical rests on that");
+    /* THE WRITE MUST LAND IN A FLOW'S DELTA, AND THIS IS WHERE THAT IS CHECKABLE. With no flow running the
+       capture route is off, so this property write goes into the SHARED BASELINE — and then every sibling and
+       every flow created afterwards inherits a moment that ONE flow's path produced, while the flow that
+       produced it, resumed later, finds the clock already moved. That is §Time-travel-resume's razor exactly:
+       a resume that is not byte-identical, which that section calls a CAP. It is asserted here rather than at
+       the read because here is where the damage is done; a reader can only observe that it already was. */
+    DCHECK(flow_running() != NULL,
+           "the event loop's clock was moved by WORK with no flow running — the clock's second mover is the "
+           "work the RUNNING FLOW performed, so outside a flow there is no timeline for it to belong to and "
+           "the write lands in the shared baseline, where it moves every sibling's clock and every later "
+           "flow's time origin by an amount none of their own paths produced");
+    work = el_num_get(ctx, g_atom_work);
+    DCHECK(work >= 0 && work + (double)units > work,
+           "the event loop's retired-work count did not increase — either it was negative (nothing but this "
+           "function writes it, and only upwards) or the sum has left the exactly-representable integers, at "
+           "which point the clock silently stops moving inside a task exactly as it did before this existed");
+    el_num_set(ctx, g_atom_work, work + (double)units);
+}
 
 /* THE ORDER THIS CLOCK TAKES IN A SESSION THAT EXPLORES NOTHING — HTML §8.1.7.3 Processing model step 2.1's
  * own freedom, exercised on the only facts the moments carry.
@@ -305,7 +378,15 @@ JSValue event_loop_moment_plus(JSContext *ctx, JSValueConst moment, JSValueConst
 
 void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
 {
-    JSValue now = el_get(ctx, g_atom_now);
+    /* AGAINST THE MOMENT THE LOOP STANDS AT, which is the base PLUS the work retired since it — not the bare
+       base field. Reading the field here would compare a task source's due moment against a moment the loop
+       left behind, and every timer whose expiry the running task overran would then look like a backwards
+       move to an assert and like a forwards one to the caller.
+       THE IDENTITY OF A COMPUTED MOMENT IS STABLE, which is what lets this read discharge what the CALLER's
+       own ask decided over its own copy of the same sum: an operator's hook composes a derived value's
+       identity from the operator and its operands' identities (solver/concolic.h), so two computations of
+       `base + elapsed` over the same two fields are one identity and therefore one predicate key. */
+    JSValue now = event_loop_now(ctx);
 
     /* READ, NEVER RE-EVALUATED. Over an unknown a comparison is an arm to take, and an assertion that forks
        would mint a sibling whose only content is the violated invariant. The caller reached this move by
@@ -322,13 +403,22 @@ void event_loop_advance_to(JSContext *ctx, JSValueConst when, JSValueConst due)
            "to outlast)");
     JS_FreeValue(ctx, now);
     el_set(ctx, g_atom_now, when);
+    /* THE MOVE IS ABSOLUTE, SO THE WORK IT SUBSUMED IS SPENT. `when` is at or after the moment the loop stood
+       at — which is what the invariant above establishes and what the caller's own ask decided — and that
+       moment already INCLUDED the work counted here. Leaving the count standing would add it a second time on
+       top of the new base, so a task source becoming due would move the clock further than the moment it
+       became due at, which is the one thing §8.1.7's order forbids in the other direction. */
+    el_num_set(ctx, g_atom_work, 0);
 }
 
 JSValue event_loop_last_render(JSContext *ctx) { return el_get(ctx, g_atom_render); }
 
 void event_loop_set_last_render(JSContext *ctx, JSValueConst when)
 {
-    JSValue now = el_get(ctx, g_atom_now);
+    /* THE CLOCK'S VALUE, not the base field — §8.1.7.3 Processing model's in-parallel list step 2 says "Set
+       eventLoop's last render opportunity time to the unsafe shared current time", and the unsafe shared
+       current time in this engine is what event_loop_now answers, work included. */
+    JSValue now = event_loop_now(ctx);
 
     DCHECK(el_identical(ctx, when, now),
            "§8.1.7.1 Definitions' last render opportunity time was set to a moment the clock does not stand "
