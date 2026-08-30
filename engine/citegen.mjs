@@ -239,6 +239,21 @@ const SPECS = [
      the ones the tree actually writes in front of a §. It is bikeshed, so it needs no reader of its own. */
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", anchors: ["hr-time", "hrtime", "high resolution time"] },
+  /* THE FIRST LEVELLED CSS MODULE IN THIS TABLE, AND THE LEVEL IS PART OF THE ANCHOR RATHER THAN NOISE ON IT.
+     A CSS module's levels are different documents with different numbering that this tree cites SIDE BY SIDE:
+     css-images-3 §2 "Image Values: the <image> type" is `<url> | <gradient>`, and css-images-4 §2 "2D Image
+     Values: the <image> type" widens the same production — so an anchor of `css images` would answer BOTH with
+     Level 3's numbers, which is a wrong answer rather than a coverage gap. That is why LEVELLED exists and why
+     this row is anchored ONLY by the hyphenated levelled shortname: it is the one spelling that names a
+     document. THE CONSEQUENCE IS THAT `CSS Images 3 §4.1` — a spelling this tree also writes — is NOT covered
+     by this row, and must not be made so by trimming the trailing level, which would collapse it onto the same
+     name Level 4 trims to. Those sites are normalized at the citation, not papered over here.
+     WHAT THE SILENCE COST, since a levelled shortname is recognized by a PATTERN and so can reach a real site
+     count with nobody having written its name down anywhere: a DFAIL naming the six-arm css-images-4 <image>
+     production stood beside a component implementing the two-arm css-images-3 one, and the audit reported
+     nothing about either — an unindexed standard's citations are counted and never checked. */
+  { key: "cssimages3", label: "CSS Images Module Level 3", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-images-3/", anchors: ["css-images-3"] },
   { key: "xml", label: "Extensible Markup Language (XML) 1.0 (Fifth Edition)", kind: "xmlspec",
     base: "https://www.w3.org/TR/xml/", anchors: ["xml"] },
 ];
@@ -1261,9 +1276,33 @@ function audit(argv, opts = {}) {
   console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site), ` +
     `${stat.unverified} carry no title and no term any index knows, ${stat.multiSpec} name a term more than one standard defines`);
   console.log(`  ${stat.foreignTerm} name a term only ANOTHER standard defines, so the standard they cite numbers nothing this audit could hold them to`);
-  if (byOther.size) console.log(`  standards seen but not indexed: ${[...byOther].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  /* A TRUNCATED LIST THAT DOES NOT SAY IT IS TRUNCATED IS READ AS THE WHOLE LIST, AND THESE TWO LINES ARE THE
+   * ONLY PLACE THIS REPORT DISCLOSES WHAT IT DID NOT LOOK AT. CLAUDE.md calls an unindexed standard "COUNTED
+   * and never CHECKED, which is a silent zero rather than a clean bill" — that silence is only broken if a
+   * reader can tell "these are all of them" from "these are the loudest fourteen". `css-images-3` sat at
+   * thirty-one unchecked sites while a DFAIL in that area named the WRONG LEVEL of its own standard, and a
+   * levelled shortname is recognized by a PATTERN rather than by any list, so nothing anywhere had its name
+   * written down. THE FIX IS LEGIBILITY, NEVER SEVERITY: this file reports and does not fail, because a
+   * citation is prose and a build that cannot land a spelling fix stops every lane. So the tail is COUNTED
+   * rather than printed — naming a hundred CSS modules would bury the fourteen that matter — and the count is
+   * what tells a reader there is a tail at all. The `>= 8` floor below is disclosed for the same reason: a
+   * threshold nobody can see is indistinguishable from an empty result. */
+  const tail = (all, shown) => {
+    const rest = all.length - shown.length;
+    if (!rest) return "";
+    return `; ${rest} more not listed, ${all.slice(shown.length).reduce((n, [, v]) => n + v, 0)} citations between them`;
+  };
+  if (byOther.size) {
+    const all = [...byOther].sort((a, b) => b[1] - a[1]), shown = all.slice(0, 14);
+    console.log(`  standards seen but not indexed: ${shown.map(([k, v]) => `${k}=${v}`).join(" ")}${tail(all, shown)}`);
+  }
   const gaps = [...unknownTok].filter(([, v]) => v >= 8).sort((a, b) => b[1] - a[1]);
-  if (gaps.length) console.log(`  capitalised tokens in front of a § that no list knows (a standard among these is coverage this audit is not getting): ${gaps.slice(0, 20).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+  if (gaps.length) {
+    const shown = gaps.slice(0, 20);
+    console.log(`  capitalised tokens in front of a § that no list knows (a standard among these is coverage this audit is not getting): ` +
+      `${shown.map(([k, v]) => `${k}=${v}`).join(" ")}${tail(gaps, shown)}` +
+      `; tokens seen fewer than 8 times are not listed`);
+  }
 
   if (argv.includes("--titles")) {
     /* WHERE A TITLE WOULD BUY THE MOST. The unverified population is a COUNT, not a list of findings — but it
