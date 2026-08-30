@@ -26,6 +26,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "solver/engine.h"
+#include "core/agent_state.h"          /* the hook this component installs is what it holds for the agent */
 #include "core/fetch/scheme_fetch.h"   /* Fetch §4.3, which decides who answers a module load's fetch */
 #include "core/loader/module_loader.h"
 
@@ -59,14 +60,31 @@ static JSModuleDef *module_load(JSContext *ctx, const char *module_name, void *o
     return NULL;
 }
 
+/* THE RUNTIME THIS AGENT'S HOOK WENT INTO. Deleting the specifier register took this component's only
+   core/agent_state.h declaration with it, and the comment that replaced it said "there is no address for
+   core/agent_state.h to name" — which core/platform.c refuted at the next build, because a row with a release
+   and no declaration is the arm whose pairing cannot be checked. The claim was also simply false:
+   `agent_state_ptr`'s own header names this case in as many words ("a recorded JSRuntime, … a hook this
+   component installed into another"), and core/fetch/fetch.c's `g_fetch_rt` is the same slot for the same
+   reason. What this component holds for the agent is not the LIST it used to keep, it is the HOOK — so the
+   runtime it installed into is the slot, and NULLing it is what the release has to be caught forgetting. */
+static JSRuntime *g_module_rt;
+
 void module_loader_install(JSRuntime *rt)
 {
     DCHECK(rt != NULL, "the module loader was installed on no runtime");
-    /* WHAT THIS COMPONENT HOLDS FOR THE AGENT IS ONE THING AND IT IS NOT A STATIC HERE: §16.2.1.10
-       HostLoadImportedModule is the RUNTIME's hook, so there is no address for core/agent_state.h to name and
-       the release below is the whole of the declaration. The register of specifiers that used to sit beside it
-       — and that used to be the thing this pairing was about — is gone with the side list it fed. */
+    /* A SECOND AGENT IN ONE PROCESS IS WHY THIS IS AN ASSERT AND NOT AN `if (g_module_rt) return;`. That latch
+       is the shape core/agent_state.h opens by recording: `fetch_init` returned early on a slot its own release
+       had never given back, so the second agent got a component reporting itself installed with every handle
+       stale. Here the stale value would be a runtime that is GONE, and §16.2.1.10 HostLoadImportedModule would
+       be reached on the live one through a hook nobody re-registered. */
+    DCHECK(g_module_rt == NULL, "the module loader is already installed for this agent — its release either "
+                                "did not run or did not give the runtime back, and a re-install would leave "
+                                "ECMAScript §16.2.1.10 HostLoadImportedModule pointing at the agent that went");
     JS_SetModuleLoaderFunc(rt, NULL, module_load, NULL);
+    g_module_rt = rt;
+    agent_state_ptr("module_loader", &g_module_rt, "the runtime ECMAScript §16.2.1.10 HostLoadImportedModule "
+                                                   "was installed into");
 }
 
 /* THE HOOK IS THE AGENT'S AND WAS GIVEN BACK BY NOTHING. This row was on core/platform.c's list with an EMPTY
@@ -77,5 +95,11 @@ void module_loader_install(JSRuntime *rt)
 void module_loader_free(JSRuntime *rt)
 {
     DCHECK(rt != NULL, "the module loader was released against no runtime");
+    /* THE RELEASE MUST BE ABOUT THE RUNTIME THE INSTALL CLAIMED, and the two are independently supplied — the
+       host hands `rt` down its own teardown list while the install recorded its own. Un-hooking a runtime this
+       component never hooked would report success and leave the claimed one holding the hook. */
+    DCHECK(g_module_rt == rt, "the module loader is being released against a runtime it was not installed "
+                              "into — the hook it claimed is on a different one and would survive this agent");
     JS_SetModuleLoaderFunc(rt, NULL, NULL, NULL);
+    g_module_rt = NULL;
 }
