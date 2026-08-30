@@ -51,9 +51,17 @@
 
 #include "quickjs.h"
 
-/* §7.3.1's DESTROY A CHILD NAVIGABLE, steps 4-5 — the container has already dropped its content navigable
-   (that is step 3, and it belongs to the element, which is where the slot is). What is left is the part that
-   is about the DOCUMENT: destroy it and everything below it, as a job.
+/* §7.3.1.6 "Navigable destruction"'s DESTROY A CHILD NAVIGABLE, STEP 5 — the container has already dropped its
+   content navigable (step 3, which belongs to the element, since that is where the slot is) and its Navigation
+   has already been informed (step 4, which belongs to §7.2.6.8, since that is where the standard defines it).
+   What is left is the part that is about the DOCUMENT: destroy it and everything below it, as a job.
+   IT SAID "STEPS 4-5" AND PERFORMED ONLY ONE OF THEM, and so did the removing steps that call it — the same
+   two numbers written twice, agreeing with each other and with nothing else. Step 4 is a whole algorithm that
+   runs the page's code, and the effect of describing it as done was that a child navigable removed mid-navigate
+   kept an ongoing navigate event for ever: no `abort` at the AbortSignal a `navigate` listener handed to a
+   `fetch()`, no `navigateerror`, and then step 7 below dropped its queued tasks underneath it. A step number is
+   a claim the next reader can check; a range that names a step the body does not contain is the one kind of
+   citation that cannot be checked at all, because it reads as coverage.
    `proxy` is the child navigable's WindowProxy. Calling it for a navigable whose active document has already
    been destroyed is a no-op, which is §7.5.10's own answer for a document that is not fully active. */
 void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy);

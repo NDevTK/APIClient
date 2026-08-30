@@ -266,7 +266,7 @@ typedef struct {
  * instead of into each other's.
  *
  * THE COUNT IS PER OPERATION, and that is not symmetry for its own sake: a page's `unload` listener may remove
- * an `<iframe>`, which is §7.3.1's destroy-a-child-navigable, which starts a DESTROY over a subtree while an
+ * an `<iframe>`, which is §7.3.1.6's destroy-a-child-navigable, which starts a DESTROY over a subtree while an
  * UNLOAD is still counting children in the same tree. One count would have let that destroy's report empty the
  * unload's wait and run a parent's unload before its children had finished theirs.
  *
@@ -943,7 +943,8 @@ void document_lifecycle_window_close(JSContext *ctx, JSValueConst proxy)
 void document_lifecycle_destroy_child(JSContext *ctx, JSValueConst proxy)
 {
     DCHECK(window_proxy_is(proxy),
-           "§7.3.1 was asked to destroy something that is not a navigable's WindowProxy");
+           "§7.3.1.6's destroy-a-child-navigable step 5 was asked to destroy the active document of something "
+           "that is not a navigable's WindowProxy");
     descend_enqueue(ctx, proxy, LC_DESTROY, LC_AFTER_NONE);
 }
 

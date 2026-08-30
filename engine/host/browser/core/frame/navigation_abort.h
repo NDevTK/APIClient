@@ -80,4 +80,36 @@ int navigation_abort_ongoing_run(JSContext *ctx, NavigationAbortWork *w, JSValue
 int navigation_abort_inform_run(JSContext *ctx, NavigationAbortWork *w, JSValue in,
                                 JSValue **out_cb, int *out_argc);
 
+/* HTML §7.2.6.8 "Ongoing navigation tracking"'s INFORM THE NAVIGATION API ABOUT CHILD NAVIGABLE DESTRUCTION —
+ * which is HTML §7.3.1.6 "Navigable destruction"'s DESTROY A CHILD NAVIGABLE STEP 4. It is a step of THAT
+ * algorithm that THIS standard defines, which is why it lives beside the loop it opens with rather than beside
+ * the destruction it is a step of.
+ *
+ * IT WAS THE ONE STEP OF THE NINE WITH NO IMPLEMENTATION AND NO CRASH, AND TWO SITES SAID IT WAS DONE. The
+ * container's own removing steps and the destruction entry both read "destroy-a-child-navigable steps 4-5"
+ * while performing only step 5, so a removed `<iframe>` whose Navigation had an ONGOING NAVIGATE EVENT kept it
+ * for ever: no `abort` at the event's AbortSignal, so a `fetch(url, {signal: event.signal})` a `navigate`
+ * listener started was never cancelled; no `navigateerror`; and then §7.5.10 step 7 dropped the queued tasks
+ * and step 8 nulled the browsing context underneath it. Nothing crashed and nothing could — the step was
+ * described as performed, which is the failure mode a missing step does not have.
+ *
+ * `cctx` IS THE DESTROYED NAVIGABLE'S OWN REALM AND NEVER THE CONTAINER'S. All four steps are written over
+ * `navigable`: step 1 informs the navigation API about aborting navigation IN NAVIGABLE, and steps 2-4 read
+ * "navigable's active window's navigation API". Handing this the realm that removed the `<iframe>` would abort
+ * the PARENT's ongoing navigation and reject the parent's trackers — a wrong answer indistinguishable from a
+ * right one, because the parent has a Navigation of its own and the algorithm would run to completion on it.
+ *
+ * THE CALLER DECIDES WHETHER THERE IS A REALM AT ALL, because that is a question about the NAVIGABLE and this
+ * component holds none. An UNMATERIALIZED navigable answers "nothing to do" as a COMPUTED result rather than a
+ * skip: script has never run in a realm that does not exist, so nothing can have started a navigation in it and
+ * nothing can have called a traversal method on its Navigation. Asking for its realm anyway would BUILD one in
+ * order to abort nothing. A navigable whose active document is a PEER INSTANCE's is that instance's to inform,
+ * for the same reason its unload listeners are the peer's to fire.
+ *
+ * IT IS SYNCHRONOUS, WHICH IS THE STANDARD'S ORDER: step 4 runs between step 3's clearing of the container's
+ * content navigable and step 5's queued destruction, so a page that removes an `<iframe>` has had this happen
+ * by the time its next line runs. What that costs when the loop actually has a turn to take is stated where it
+ * is paid — see the assert in the body. */
+void navigation_abort_child_destroyed(JSContext *cctx);
+
 #endif

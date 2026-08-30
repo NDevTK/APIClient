@@ -250,3 +250,61 @@ int navigation_abort_inform_run(JSContext *ctx, NavigationAbortWork *w, JSValue 
 {
     return nab_run(ctx, w, /*loop*/ true, in, out_cb, out_argc);
 }
+
+/* §7.2.6.8's INFORM THE NAVIGATION API ABOUT CHILD NAVIGABLE DESTRUCTION — §7.3.1.6's destroy-a-child-navigable
+   step 4. See navigation_abort.h for whose realm this is and why the caller decides there is one. */
+void navigation_abort_child_destroyed(JSContext *cctx)
+{
+    NavigationAbortWork w;
+    JSValue *cb = NULL;
+    int argc = 0, r;
+
+    /* STEP 1: "INFORM THE NAVIGATION API ABOUT ABORTING NAVIGATION in navigable" — the loop above, driven in
+       the navigable's OWN realm. That algorithm's step 1 is already true here: a same-origin child is in this
+       agent's heap (SECURITY.md's origin-keyed agent cluster), so the container's removal and the child's
+       window share one event loop, and a child in another INSTANCE never reaches this at all. */
+    navigation_abort_work_start(&w);
+    r = navigation_abort_inform_run(cctx, &w, JS_UNDEFINED, &cb, &argc);
+    /* AND THE ONE THING THIS CALL CANNOT DO IS REST, WHICH IS WHY THE ASSERT IS ON THE RETURN AND NOT ON A
+       GUESS AHEAD OF IT. With no ongoing navigate event the loop's while condition is false on its first read
+       and the machine answers 0 having run nothing — which is every removal of a frame that is not mid-navigate,
+       and is what makes iframe removal ATOMIC from the parent's DOM (wpt dom/nodes/insertion-removing-steps
+       states exactly that: the removing steps "do not synchronously run script during child navigable
+       destruction"). With one, the loop's first turn signals abort on the event's AbortSignal and fires
+       `navigateerror` — the page's own code, at a point §4.2.3's removing-steps walk has no rest point for.
+       Asking the condition first and refusing would be the same crash placed one step earlier, and it would be
+       a guess about the machine rather than a fact from it. */
+    DCHECK(r == 0,
+           "§7.3.1.6's destroy-a-child-navigable step 4 reached a child navigable whose Navigation has an "
+           "ONGOING NAVIGATE EVENT, and §7.2.6.8's abort of it RUNS THE PAGE'S CODE — `abort` at the event's "
+           "AbortSignal, then `navigateerror` at the Navigation — so this step needs a rest point and its "
+           "caller is a plain C body inside §4.2.3's insertion/removing-steps walk. BUILD IT: that walk is "
+           "already a step machine with a per-node phase (core/dom/element.c's TS_NODE_*), so give the REMOVING "
+           "side a phase of its own and a NavigationAbortWork to drive navigation_abort_inform_run from — and "
+           "note its state buffer is visited as a PLAIN BUFFER today (nothing in it holds a reference), so the "
+           "work record's JSValues need a visit of their own rather than riding that byte copy, or a fork "
+           "mid-abort hands two arms one undup'd dispatch");
+    navigation_abort_work_release(cctx, &w);
+
+    /* STEPS 2-4: "let navigation be navigable's active window's navigation API", "let traversalAPIMethodTrackers
+       be a CLONE of navigation's UPCOMING TRAVERSE API METHOD TRACKERS", and reject the finished promise of each
+       with a new "AbortError" DOMException. The map is EMPTY BY CONSTRUCTION here — its only producer is
+       §7.2.6.7 "Initiating navigations"' add-an-upcoming-traverse-API-method-tracker, reached from that
+       section's PERFORM A NAVIGATION API TRAVERSAL, whose three callers are `traverseTo()`, `back()` and
+       `forward()` and nothing else — so the "for each" runs zero times, exactly as §7.5.10's worker loops do
+       and for the same reason: the set has no producer. That is asserted rather than written down, because a
+       comment states it once and never checks it again. The CLONE is why the standard's step 3 exists at all
+       (rejecting a promise runs the page's reaction jobs, which may add trackers), and it is therefore part of
+       what the day this fires has to write, not a detail of it. */
+    realm_awaits(cctx, "Navigation.prototype.traverseTo",
+                 "HTML §7.2.6.8's INFORM THE NAVIGATION API ABOUT CHILD NAVIGABLE DESTRUCTION steps 2-4 are "
+                 "reachable now that §7.2.6.7's PERFORM A NAVIGATION API TRAVERSAL can ADD AN UPCOMING TRAVERSE "
+                 "API METHOD TRACKER. Write them here: CLONE the Navigation's upcoming traverse API method "
+                 "trackers "
+                 "and, for each, REJECT THE FINISHED PROMISE with a new \"AbortError\" DOMException created in "
+                 "the Navigation's relevant realm — the clone is load-bearing, because a rejection runs the "
+                 "page's reaction jobs and those can add trackers to the map being walked. It is a DIFFERENT "
+                 "field from the ONGOING API METHOD TRACKER that ABORT A NavigateEvent step 5 reads, and that "
+                 "step keeps its own assertion above under its own producer — a traverse tracker only becomes "
+                 "the ongoing one later, so neither of the two asserts can stand in for the other");
+}

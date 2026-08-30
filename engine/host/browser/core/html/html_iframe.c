@@ -35,6 +35,7 @@
 #include "core/events/event_target.h"
 #include "core/frame/document_lifecycle.h"
 #include "core/frame/navigable.h"
+#include "core/frame/navigation_abort.h"   /* §7.3.1.6's destroy-a-child-navigable step 4 lives in §7.2.6.8 */
 #include "core/frame/sandboxing.h"
 #include "core/frame/window_proxy.h"
 #include "core/url/url.h"   /* §4.8.5's shared attribute processing steps ask whether a url MATCHES about:blank */
@@ -374,19 +375,45 @@ void iframe_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const char *ns, 
    happened and never would: the child's Document, its Window, its realm, its queued tasks and its whole
    subtree were left exactly as they were, and the announcement is what made that invisible. The proxy a page
    is still holding does stay the same object and does end up reporting `closed` — a WindowProxy outlives the
-   navigable it named — but it reports it because the destruction ran, not instead of it. */
+   navigable it named — but it reports it because the destruction ran, not instead of it.
+   AND THE STEPS RUN IN THE STANDARD'S ORDER NOW, WHICH IS THE OTHER HALF OF THAT SPLIT. This ran step 5's
+   enqueue before step 3's slot clear and called the pair "steps 4-5" while performing neither 3 nor 4 in place
+   — a claim about the algorithm that no reader could check against the code, since the numbers named steps the
+   body did not contain. Step 4 is now here, between them, where §7.3.1.6 puts it. */
 void iframe_destroy_navigable(JSContext *ctx, JSValueConst wrap)
 {
-    JSValue proxy = iframe_navigable(ctx, wrap);
+    JSValue proxy = iframe_navigable(ctx, wrap);   /* step 1: navigable is container's content navigable */
 
     if (JS_IsUndefined(proxy)) return;   /* this flow never had one — destroy-a-child-navigable step 2 */
-    document_lifecycle_destroy_child(ctx, proxy);   /* destroy-a-child-navigable steps 4-5 */
-    JS_FreeValue(ctx, proxy);
-    /* CLEARED, not deleted: the slot is non-configurable so it cannot be deleted, and it does not need to be —
+    /* STEP 3: "set container's content navigable to null", BEFORE steps 4 and 5 read the navigable — which they
+       do through the reference taken above, not through the container, so the order the standard writes is the
+       order that runs.
+       CLEARED, not deleted: the slot is non-configurable so it cannot be deleted, and it does not need to be —
        an empty slot is what "this element has no navigable" means everywhere it is read. It is an ordinary
        property write on the wrapper, so the heap COW delta isolates it: a sibling arm that never removed the
        element still sees the frame it knew. */
     JS_DefinePropertyValue(ctx, (JSValue)wrap, g_atom_navigable, JS_UNDEFINED, JS_PROP_WRITABLE);
+    /* STEP 4: "INFORM THE NAVIGATION API ABOUT CHILD NAVIGABLE DESTRUCTION given navigable" — §7.2.6.8's
+       algorithm, run in the CHILD's realm because every one of its steps is written over the navigable being
+       destroyed and not over the container (core/frame/navigation_abort.h).
+       WHICH NAVIGABLES HAVE A REALM TO ASK IS TWO FACTS BEHIND ONE PREDICATE, and both are answers rather than
+       skips. An UNMATERIALIZED navigable holds the initial about:blank Document §7.4 created it with and no
+       script has ever run in it, so it has no ongoing navigate event and no traversal tracker — and asking for
+       its realm would BUILD one in order to abort nothing. A navigable whose active document is a PEER
+       INSTANCE's has no realm here either, and its step 4 is the peer's to run for the same reason its unload
+       listeners are: that case is not silently skipped, it CRASHES BY NAME one line below, where
+       document_lifecycle.c's descend_enqueue states the cross-instance route this whole destruction needs. */
+    if (window_proxy_materialized(proxy))
+        navigation_abort_child_destroyed(window_proxy_realm(ctx, proxy));
+    /* STEP 5: destroy a document and its descendants given navigable's active document — the JOB half.
+       STEPS 6-8 ALL REST ON THE PARENT DOCUMENT STATE'S NESTED HISTORIES: 6 and 7 remove the one whose id is
+       this navigable's, and 8's update-for-navigable-creation/destruction applies the traversable's current
+       history step, whose walk is over those same lists. Nothing in this build ever appends one — the append
+       belongs to §7.3.1.3 "Child navigables"' create-a-new-child-navigable — and core/frame/session_history.c
+       crashes by name at the read that wants it, which is where that whole structure arrives. Removing an entry
+       from a list nobody builds is not a step this can perform early. STEP 9 is WebDriver BiDi. */
+    document_lifecycle_destroy_child(ctx, proxy);
+    JS_FreeValue(ctx, proxy);
 }
 
 /* HTML §4.8.5's IFRAME LOAD EVENT STEPS. Seven steps in the standard; five of them are one pair of flags and a
