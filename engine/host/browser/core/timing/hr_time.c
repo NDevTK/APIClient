@@ -140,11 +140,72 @@ JSValue hr_time_coarsen(JSContext *ctx, JSValueConst unsafe_moment)
     }
 }
 
+/* HR-TIME §4 Time Origin's UNSAFE SHARED CURRENT TIME — verbatim: "must return the unsafe current time of the
+ * monotonic clock". IT IS ITS OWN OPERATION AND NOT A LINE INSIDE `current high resolution time`, because §4
+ * gives it two readers (`current high resolution time` and `coarsened shared current time`) and because it is
+ * the ONE place in this engine that reads the monotonic clock — the day the clock's own definition changes,
+ * there is one site to change and no second answer to disagree with it.
+ *
+ * WHICH CLOCK IT IS. There is no wall clock in a headless run, and a second time source would order a timestamp
+ * against the queue that runs the listeners observing it differently from the queue itself. So the monotonic
+ * clock here IS the event loop's virtual clock (core/timing/event_loop.h), which is per-flow, time-travels with
+ * the flow that reads it, and never decreases — HR-TIME §2.1 Clocks' one hard requirement on the monotonic
+ * clock ("The monotonic clock's unsafe current time never decreases"), asserted at its own origin by
+ * event_loop_advance_to.
+ *
+ * NAMED RESIDUAL — THE CLOCK DOES NOT COUNT WHILE A TASK RUNS.
+ * WHAT IS NOT COVERED: §2.1's other sentence — "All clocks on the web platform attempt to count 1 millisecond
+ *   of clock time per 1 millisecond of real-world time" — is narrower here than in a real UA. This clock moves
+ *   only when a task source becomes due (a timer's expiry, a rendering opportunity), so every moment read
+ *   inside ONE task is the SAME moment and every duration between two of them is exactly zero. That is CORRECT
+ *   for everything this engine currently orders by time, which is why this is a residual and not a crash: a
+ *   task's timestamps genuinely all belong to the moment the task ran, the value is a real duration from a real
+ *   time origin, and §4's coarsening below is performed rather than skipped.
+ * WHAT THE NEXT DIFF BUILDS: the clock advances as a function of WORK THE RUNNING FLOW PERFORMED, in
+ *   core/timing/event_loop.c, driven from the per-opcode attention check that is already the one thing counting
+ *   a flow's own progress. It must NOT be a wall clock: a real clock is not a function of the flow's path, so
+ *   every timestamp becomes a disagreement §Testing's solver differential reports as a scheduling bug, and a
+ *   resume stops being byte-identical. Work-derived it stays deterministic, per-flow and COW-captured, which is
+ *   the only shape both halves of this project accept.
+ * HOW ITS ABSENCE SHOWS: a page that waits for time to pass inside one task never leaves the loop —
+ *   `do { e2 = new MouseEvent('t'); } while (e2.timeStamp - e1.timeStamp === 0)` has no exit, and
+ *   wpt dom/events/Event-timestamp-safe-resolution.html is that loop written out. The flow is preemptible
+ *   bytecode, so the scheduler is not violated and nothing is capped; the flow simply never emits again and the
+ *   harness's CPU backstop is what reports it, which is a signal about the harness rather than about the page. */
+static JSValue hr_time_unsafe_shared_current(JSContext *ctx)
+{
+    return event_loop_now(ctx);
+}
+
 JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
 {
-    JSValue coarse = hr_time_coarsen(ctx, unsafe_moment);
-    JSValue origin = hr_time_origin(ctx);
+    JSValue coarse, origin;
     JSValue sp[2];
+
+    /* §4's argument is "an unsafe moment FROM THE MONOTONIC CLOCK", and §2.1 Clocks says what a clock reports:
+       "the unsafe current time that an algorithm step is executing". A moment this clock has not reached was
+       reported by nothing, so it is not a moment of this clock at all — it is a moment some caller COMPUTED
+       (§8.1.7.3's next rendering opportunity is one) and handed to the wrong operation, and the timestamp that
+       came back would let a page observe an occurrence before the event loop reached it.
+       READ, NEVER ASKED, for the reason the negative-duration invariant below is: over an unknown moment a
+       comparison is an arm to take rather than a fact to test, so this fires on a DECIDED contradiction and
+       stays silent on uncertainty. The clock READ is inside the guard because it is the assertion's operand
+       and nothing else's — DCHECKs are free in release, and one that left a property read behind would not be. */
+#if APICLIENT_DEV
+    {
+        JSValue now = hr_time_unsafe_shared_current(ctx);
+
+        DCHECK(event_loop_before_decided(ctx, now, unsafe_moment) != 1,
+               "HR-TIME §4's relative high resolution time was given a moment the monotonic clock HAS NOT "
+               "REACHED — §2.1 Clocks reports the moment an algorithm step is executing, so a later moment is "
+               "one this caller computed rather than one the clock handed it, and the timestamp would date an "
+               "occurrence into the event loop's future");
+        JS_FreeValue(ctx, now);
+    }
+#endif
+
+    coarse = hr_time_coarsen(ctx, unsafe_moment);
+    origin = hr_time_origin(ctx);
 
     /* §4: "the duration from global's relevant settings object's time origin to coarseTime". A NEGATIVE
        duration would be a moment this environment can observe that precedes the environment's own creation,
@@ -191,11 +252,10 @@ JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment)
 
 JSValue hr_time_current(JSContext *ctx)
 {
-    /* §4: "the result of relative high resolution time given UNSAFE SHARED CURRENT TIME and current global".
-       There is no wall clock in a headless run and a second time source would order a timestamp against the
-       queue that runs the listeners observing it differently from the queue itself, so the unsafe shared
-       current time is the event loop's one virtual clock. */
-    JSValue now = event_loop_now(ctx), r = hr_time_relative(ctx, now);
+    /* §4's CURRENT HIGH RESOLUTION TIME, in its own words: "the result of relative high resolution time given
+       unsafe shared current time and current global". Both halves are the named operations above, so this
+       clause is the composition the standard writes and holds no arithmetic of its own. */
+    JSValue now = hr_time_unsafe_shared_current(ctx), r = hr_time_relative(ctx, now);
 
     JS_FreeValue(ctx, now);
     return r;

@@ -3,10 +3,11 @@
  *
  * WHY THIS IS A COMPONENT AND NOT A SUBTRACTION AT EACH SITE. Three algorithms in this build each answered
  * "what number does the page see for this moment" for themselves, out of the raw virtual clock:
- *   - DOM §2.5's inner event creation steps initialize `timeStamp` to "the RELATIVE high resolution coarse
- *     time given time and event's relevant global object", and the constructor to "the result of calling
- *     CURRENT high resolution time with this's relevant global object" — core/events/event.c wrote
- *     `event_loop_now(ctx)`.
+ *   - DOM §2.5 Constructing events' inner event creation steps step 3 initializes `timeStamp` to "the RELATIVE
+ *     high resolution coarse time given time and event's relevant global object", and DOM §4.5 Interface
+ *     Document's `createEvent()` step 7 to "the result of calling CURRENT high resolution time with this's
+ *     relevant global object" — TWO DIFFERENT §4 OPERATIONS, in two different sections, and this file used to
+ *     put both sentences in §2.5. core/events/event.c wrote `event_loop_now(ctx)` for them.
  *   - HTML §6.4.1's three activation questions are all "the CURRENT high resolution time given W" compared
  *     against a stored timestamp — core/html/user_activation.c wrote its own `ua_now` over the same clock,
  *     and its comment said so.
@@ -108,7 +109,12 @@ JSValue hr_time_coarsen(JSContext *ctx, JSValueConst unsafe_moment);
 JSValue hr_time_relative(JSContext *ctx, JSValueConst unsafe_moment);
 
 /* §4's CURRENT HIGH RESOLUTION TIME given a global object — the relative high resolution time of the unsafe
-   shared current time, which in this engine is the event loop's virtual clock (core/timing/event_loop.h). */
+   shared current time, which in this engine is the event loop's virtual clock (core/timing/event_loop.h).
+   WHAT IT RESOLVES TO: §4's grid, 0.1 ms for an ordinary environment and 0.005 ms for a cross-origin isolated
+   one — but the clock UNDERNEATH it moves only when a task source becomes due, so two calls inside one task
+   answer the SAME number however much work runs between them. hr_time.c's named residual at the unsafe shared
+   current time states what that costs and what the next diff builds; a caller measuring elapsed work must not
+   read it as a wall clock. */
 JSValue hr_time_current(JSContext *ctx);   /* OWNED */
 
 #endif

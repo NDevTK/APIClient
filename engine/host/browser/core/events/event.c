@@ -52,6 +52,7 @@
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
 #include "core/timing/hr_time.h"
+#include "solver/concolic.h"   /* §2.2's timeStamp is a duration off a clock a moment may be unknown on */
 
 /* The private key the event's internal slots hang off — a Symbol, so a page enumerating the object cannot see
    it and cannot collide with it, for the reason the platform uses internal slots. */
@@ -397,16 +398,44 @@ static JSValue event_make_proto(JSContext *ctx, JSValueConst proto, JSValueConst
     JS_SetPropertyStr(ctx, slots, "cancelable", JS_NewBool(ctx, cancelable));
     JS_SetPropertyStr(ctx, slots, "composed", JS_NewBool(ctx, composed));
     JS_SetPropertyStr(ctx, slots, "isTrusted", JS_NewBool(ctx, trusted));
-    /* §2.5 timeStamp — "the result of calling CURRENT HIGH RESOLUTION TIME with this's relevant global object"
-       for the constructor, and "the RELATIVE high resolution coarse time given time and event's relevant global
-       object" for the inner event creation steps, whose `time` for every fire in this engine is now. Both are
-       HR-TIME §4's one operation over the moment the event was created, so this asks the component that owns it
-       (core/timing/hr_time.h) rather than reading the raw clock: the number a page sees is measured from ITS
-       OWN environment's TIME ORIGIN and coarsened to the resolution §4 gives THAT environment, which is what
-       its cross-origin isolated capability decides. `ctx` IS the relevant global object — an Event is minted
-       in the realm whose algorithm is firing it, which is what makes a child document's `event.timeStamp` its
-       own clock's. */
-    JS_SetPropertyStr(ctx, slots, "timeStamp", hr_time_current(ctx));
+    /* §2.2's timeStamp, initialized by THREE algorithms that name TWO different HIGH RESOLUTION TIME
+     * operations — core/timing/hr_time.h carries that standard's number and title for each. This comment used
+     * to attribute both sentences to §2.5, which is the wrong SECTION for one of them and the wrong OPERATION
+     * for the other.
+     *   - DOM §2.5 Constructing events' INNER EVENT CREATION STEPS step 3: "Initialize event's timeStamp
+     *     attribute to the RELATIVE HIGH RESOLUTION COARSE TIME given time and event's relevant global
+     *     object." That is what a constructor runs (§2.5's constructor step 1 passes `now`, which the spec
+     *     leaves as plain prose rather than a defined term) and what `create an event` runs (its step 3 passes
+     *     "the time of the occurrence that the event is signaling").
+     *   - DOM §4.5 Interface Document's createEvent() step 7: "Initialize event's timeStamp attribute to the
+     *     result of calling CURRENT HIGH RESOLUTION TIME with this's relevant global object."
+     * ONE CALL ANSWERS ALL THREE HERE, and the reason is arithmetic rather than convenience: current high
+     * resolution time IS the relative high resolution time of the unsafe shared current time, which IS the
+     * relative high resolution coarse time of that moment coarsened at this environment's own grid. So the two
+     * operations differ only in WHICH moment they are given, and every event this engine mints is minted at
+     * the moment of its own occurrence — the fire is a task, and the task ran now.
+     * THE OCCURRENCE MOMENT IS NOT A PARAMETER OF THIS MINT, which is the narrowing to watch: an event whose
+     * occurrence genuinely precedes its mint (an input event queued while a flow was parked) would want §2.5's
+     * `time` threaded from the caller, and it would show as a timestamp later than the occurrence a page
+     * correlates it against. Nothing in this engine mints one yet.
+     * `ctx` IS the relevant global object — an Event is minted in the realm whose algorithm is firing it, which
+     * is what makes a child document's `event.timeStamp` its own environment's time origin and its own
+     * coarsening grid rather than the root's. */
+    {
+        JSValue ts = hr_time_current(ctx);
+
+        /* THE PRODUCER'S SHAPE IS CHECKED AT THE CONSUMER, never defaulted. §2.2 types this attribute
+           DOMHighResTimeStamp, whose typedef is a double, and the duration hr_time_current answers is a number
+           or — when the clock stands at a moment nothing computed (core/timing/event_loop.h: a timer whose
+           delay was unknown external input) — a derivation of one. Anything else means the producer answered
+           with something that is not a duration, and a page reading `ev.timeStamp` would get it as a plausible
+           datum rather than as a crash. */
+        DCHECK(JS_IsNumber(ts) || concolic_is(ts),
+               "an Event's timeStamp is neither a DOMHighResTimeStamp nor a derivation of one — "
+               "current high resolution time answers the duration from this environment's time origin to the "
+               "unsafe shared current time, and both ends of that come off the event loop's clock");
+        JS_SetPropertyStr(ctx, slots, "timeStamp", ts);
+    }
     JS_SetPropertyStr(ctx, slots, "canceled", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopPropagation", JS_FALSE);
     JS_SetPropertyStr(ctx, slots, "stopImmediate", JS_FALSE);
