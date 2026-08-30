@@ -843,11 +843,19 @@ typedef struct {
     IdlStepBody body;
     size_t      state_size;
     void      (*visit)(JSContext *ctx, void *state, JSStepVisit *v);
-    /* WHAT THE DECLARATION CANNOT NAME, and nothing else: a lexbor handle, a foreign C allocation, a global or
-       per-object FLAG the algorithm took and must give back on every exit (§4.13.4 step 14's "regardless of
-       whether the above steps threw", HTML §4.10.22.3 step 8's constructing-entry-list flag). It runs BEFORE
-       the declaration is discharged, so it may READ an owned value — those flags live on one — and idl_args.c
-       asserts across the call that it FREED none. A member with nothing of that kind declares NULL. */
+    /* WHAT THE DECLARATION CANNOT NAME, AND WHAT HOLDS NO REFERENCE — a lexbor handle, a foreign C allocation,
+       a global or per-object FLAG the algorithm took and must give back on every exit (§4.13.4 step 14's
+       "regardless of whether the above steps threw", HTML §4.10.22.3 step 8's constructing-entry-list flag).
+       It runs BEFORE the declaration is discharged, so it may READ an owned value — those flags live on one —
+       and idl_args.c folds the declaration into a number on each side of the call and requires the two to
+       agree. A member with nothing of that kind declares NULL.
+       THE SECOND HALF OF THAT SENTENCE IS NOT DECORATION: the fold measures the HEAP's count of every declared
+       value, and a count states how many holders an object has and never which — so a give-back that drops
+       ANOTHER holder's reference to an object a declared slot also names is not distinguishable there from a
+       `release` that discharged the declaration itself. Both are refused. A give-back that mutates the agent's
+       own JS object graph (§4.13.4's active custom element constructor map, whose entries are keyed BY a
+       constructor) is declared to the machine instead — see idl_active_ctor_owed — and performed at the
+       teardown below that bracket. */
     void      (*release)(JSContext *ctx, void *state);
     /* WHICH ALGORITHM THIS MEMBER IS, AND WHICH OF ITS STEPS EACH STAGE RESTS AT — the host half of
        JSTrampStepDef's own declaration, and it lands on the same field of the same definition: the pool builds
@@ -1028,6 +1036,26 @@ int idl_method_id_step(JSContext *ctx, const IdlArgType *types, int nargs,
    header instead, which is the same place the receiver and the arguments come from — one declaration serving two
    members (innerHTML and outerHTML are one walk with two starting points) is exactly what a magic is for. */
 int idl_step_magic(const JSStepHdr *hdr);
+
+/* DECLARE THAT THIS INVOCATION ENTERED §4.13.4'S ACTIVE CUSTOM ELEMENT CONSTRUCTOR MAP, so the machine gives
+ * the entry back at its teardown. `ctor` is DOM §4.9 create an element step 5.1.1's `C`, BORROWED — the machine
+ * takes its own reference and drops it when it leaves.
+ *
+ * WHY A MEMBER CANNOT SIMPLY DO THIS IN ITS `release`, which is where every other give-back on this machine
+ * lives. Steps 5.1.5-5.1.6 must run at the exit a discarded flow takes — it is parked on the page's
+ * constructor and no resume ever comes back — so the teardown is the only place they CAN run; but the map is a
+ * map of constructors to registries, so giving an entry back DROPS A REFERENCE to `C`, and `C` is a value the
+ * member's own `visit` names for the whole bracket. idl_args.c folds that declaration into a number on each
+ * side of `release` and requires the two to agree, and a reference count states how many holders an object has
+ * and never which — so a give-back that drops the MAP's reference is indistinguishable there from a `release`
+ * that discharged the DECLARATION's. The rule the bracket can actually enforce is therefore the wider one: a
+ * `release` performs no operation that can move a reference count. This is the door for the give-back that
+ * cannot meet it, and it puts DOM §4.9's bracket exactly where §4.13.5 "Upgrades"' already was — below the
+ * bracket, in the same teardown, unwound in nesting order.
+ *
+ * ONE PER INVOCATION, asserted: the pair nests one deep per declared member, because the one bracket a member
+ * enters directly brackets a single Construct. */
+void idl_active_ctor_owed(JSContext *ctx, JSStepHdr *hdr, JSValueConst ctor);
 
 /* READ a member of the dictionary the declaration built. An `optional D options = {}` argument that the page
    did not pass is not there at all, so a body that reads it with JS_GetPropertyStr calls a property get on

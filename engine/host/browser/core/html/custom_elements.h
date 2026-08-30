@@ -134,11 +134,17 @@ JSValue custom_elements_definition_constructor(JSContext *ctx, JSValueConst def)
    The leave takes `ctor` back so the assert it carries is an IDENTITY question: a pair that ran out of order
    would otherwise restore some other algorithm's previousRegistry with nothing to say so.
    THE LEAVE OWES EVERY EXIT, TEARDOWN INCLUDED. "Regardless of whether the above steps threw" covers the flow
-   that is DISCARDED while parked on the page's constructor, which no resume ever comes back from — so a step
-   machine that entered declares the leave through IdlStepDecl's `release`, which is that field's stated
-   purpose ("a global or per-object FLAG the algorithm took and must give back on every exit"). The map is
+   that is DISCARDED while parked on the page's constructor, which no resume ever comes back from. The map is
    agent-wide, so an entry left on it answers every later `new C()` in the agent, in flows that never named
-   this registry — and nothing reports it, because the entry is a live value on a live object. */
+   this registry — and nothing reports it, because the entry is a live value on a live object.
+   IT IS NOT AN IdlStepDecl `release`, AND THE REASON IS THAT AN ENTRY IS NOT A FLAG. That field's stated
+   purpose is what no declaration can name — a lexbor handle, a foreign allocation, a flag to lower — and
+   idl_args.c enforces the sharper form it can measure: a `release` moves no reference count. This map holds
+   CONSTRUCTORS as keys, so the leave drops a reference to `C`, which is a value the entering member's own
+   declaration names for the whole bracket. A step machine that enters therefore declares the leave with
+   core/idl_args.h's idl_active_ctor_owed, and the machine performs it at its teardown, below that bracket.
+   §4.13.5 "Upgrades"' half is given back the same way and at the same point, through
+   custom_elements_queue_unlock; the two unwind in nesting order. */
 void custom_elements_active_ctor_enter(JSContext *ctx, JSValueConst ctor, JSValueConst registry);
 void custom_elements_active_ctor_leave(JSContext *ctx, JSValueConst ctor);
 /* DOM §4.9 steps 5.1.4.2-11: the checks the spec runs on what the page's constructor RETURNED, and the state

@@ -897,15 +897,19 @@ typedef struct {
     JSValue local;      /* the local name the operation was given (owned) — step 5.1.4.8 compares against it */
     JSValue result;     /* what the page's constructor answered (owned) */
     JSValue exc;        /* step 5.1.4's caught exception (owned), held across the report's own park */
-    /* STEP 5.1.1'S `C`, HELD BECAUSE STEP 5.1.6 NAMES IT AND STEP 5.1.6 RUNS AT AN EXIT THIS STATE MAY NOT
-       REACH. The definition is on `def` and the constructor could be re-read off it, but the restore runs from
-       `release`, which is entered for a flow discarded mid-construct as well as for a completion — and a
-       re-read there would ask a definition that another arm's `define` may have replaced which constructor
-       this algorithm entered the map with. Owned. */
+    /* STEP 5.1.1'S `C`, HELD BECAUSE STEP 5.1.4 CONSTRUCTS IT ACROSS A PARK. The definition is on `def` and the
+       constructor could be re-read off it at each re-entry, but a `define` running inside the page's own
+       constructor may have replaced the definition's entry — and the class step 5.1.4 resumes into must be the
+       one step 5.1.1 named. Owned, because a parked machine's operands are not kept alive by a call that is no
+       longer on any stack. The RESTORE that step 5.1.6 owes is the machine's and holds its own reference to
+       this same `C`; see idl_active_ctor_owed for why it cannot be this state's. */
     JSValue ctor;
-    /* WHETHER STEPS 5.1.2-5.1.3 RAN, so step 5.1.5-5.1.6's restore runs exactly once and only for a state that
-       entered. It is a plain flag rather than `JS_IsObject(s->ctor)` because those are two different facts the
-       day an enter is made conditional on something other than having a constructor. */
+    /* WHETHER STEPS 5.1.2-5.1.3 RAN. The restore they pair with is the MACHINE's (idl_active_ctor_owed), so
+       this is no longer what decides whether it runs — it is what step 5.1.4 asserts before Constructing, which
+       is the fact worth having a flag for: an unentered map means HTML §3.2.3 "HTML element constructors" step
+       3 is about to answer out of the document's registry for a creation that may have named a scoped one. It
+       is a plain flag rather than `JS_IsObject(s->ctor)` because those are two different facts the day an enter
+       is made conditional on something other than having a constructor. */
     uint8_t entered;
     ReportExceptionWork rw;
 } DocCreateElState;
@@ -924,22 +928,24 @@ static void doc_create_el_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* WHAT THIS ALGORITHM TOOK FROM OUTSIDE ITSELF AND OWES BACK ON EVERY EXIT — §8.1.4.6 step 5's error-reporting
-   flag on the global, and DOM §4.9 STEPS 5.1.5-5.1.6, the restore half of the active custom element
-   constructor map pair steps 5.1.2-5.1.3 entered. Every VALUE this state holds is named by doc_create_el_visit
-   instead, which is the one list the teardown discharges; neither of these is a value, which is why they are
-   here and why this function reads an owned one (`ctor`) without freeing it.
-   THE MAP IS WHY THIS ARM MATTERS RATHER THAN BEING TIDINESS. Step 5.1.4 parks on the page's constructor, so a
-   flow discarded there never resumes to run 5.1.5-5.1.6 by itself — and the entry it would have removed is
-   AGENT-WIDE, so HTML §3.2.3 "HTML element constructors" step 3 would answer that constructor out of this
-   creation's registry for every later `new C()` in the agent, in flows that never named it. */
+   flag on the global. Every VALUE this state holds is named by doc_create_el_visit instead, which is the one
+   list the teardown discharges; a flag is not a value, which is why it is here.
+   DOM §4.9 STEPS 5.1.5-5.1.6 ARE NOT HERE, AND THE REASON IS OWNERSHIP RATHER THAN PLACEMENT. They still owe
+   every exit — step 5.1.4 parks on the page's constructor, so a flow discarded there never resumes to run them
+   by itself, and the entry they would remove is AGENT-WIDE, so HTML §3.2.3 "HTML element constructors" step 3
+   would answer that constructor out of this creation's registry for every later `new C()` in the agent, in
+   flows that never named it. But §4.13.4's map is a map of constructors to REGISTRIES, so removing the entry
+   drops a reference to `C` — and `C` is `s->ctor`, which doc_create_el_visit names. A `release` runs inside
+   idl_args.c's fingerprint bracket, whose comparison is over the heap's count of every declared value, and a
+   count says how many holders an object has and never which: the map's give-back and a `release` that
+   discharged the declaration move that number identically. So the give-back is DECLARED to the machine at the
+   enter (idl_active_ctor_owed) and performed at the machine's teardown, below the bracket, beside the
+   §4.13.5 half of the same pair. */
 static void doc_create_el_release(JSContext *ctx, void *st)
 {
     DocCreateElState *s = st;
 
     report_exception_work_unlock(ctx, &s->rw);
-    if (!s->entered) return;
-    custom_elements_active_ctor_leave(ctx, s->ctor);   /* STEPS 5.1.5-5.1.6 */
-    s->entered = 0;
 }
 
 static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
@@ -1000,6 +1006,12 @@ static int js_doc_create_element_step(JSContext *ctx, JSStepHdr *hdr, void *st, 
            the exits from it are three (the checks completed, the report completed, or this flow was discarded
            mid-construct) and only `release` is common to all of them — see doc_create_el_release. */
         custom_elements_active_ctor_enter(ctx, s->ctor, registry);
+        /* …AND THE RESTORE IS OWED TO THE MACHINE, not written after the Construct and not written into this
+           member's `release`. Step 5.1.4 parks on the page's code, so the exits from it are three (the checks
+           completed, the report completed, or this flow was discarded mid-construct) and only the machine's
+           teardown is common to all of them; `release` is inside that teardown but inside its ownership
+           bracket too, and this give-back drops a reference to `C` — see doc_create_el_release. */
+        idl_active_ctor_owed(ctx, hdr, s->ctor);
         s->entered = 1;
         JS_FreeValue(ctx, registry);
         /* Step 5.1.4.8 compares what the constructor made against the name this operation was GIVEN, which the
